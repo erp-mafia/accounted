@@ -80,6 +80,10 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
  * Baseline 2026-07-26: 346 (145 dynamic-payload, 116 dynamic-select,
  * 48 dynamic-logical, 32 spread-payload, 4 dynamic-column, 1 computed key).
  *
+ * 2026-08-01: 361 after the white-label build (WL-17: brands, teams.kind,
+ * cockpit, brand mail). The growth is spread across ordinary feature queries;
+ * ceiling raised 360 -> 370 to restore headroom.
+ *
  * Raised 2026-08-06 for the sandbox seed's payroll + ledger-history builders.
  * app/api/sandbox/seed/ follows the pure-row-builder pattern the existing
  * customers.ts / pending-operations.ts modules established: the builder returns
@@ -113,8 +117,15 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
  * of an inbound Peppol document through one helper (five literal shapes:
  * routed / unrouted / converted / failed, all partial); the column set is
  * pinned by peppol-inbound.test.ts and the pg-real immutability test.
+ *
+ * 2026-08-26 merge of add/white-label-infra with main: both sides' growth
+ * lands at once (WL queries + everything above). Count on the merged tree:
+ * 383 (162 dynamic-payload, 125 dynamic-select, 50 dynamic-logical,
+ * 39 spread-payload, 5 dynamic-column, 2 computed key); ceiling re-baselined
+ * with the usual headroom. The later catch-up merge of #1954 (byte-exact SIE
+ * upload) brought the merged count to 386.
  */
-const UNRESOLVED_CEILING = 382
+const UNRESOLVED_CEILING = 388
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

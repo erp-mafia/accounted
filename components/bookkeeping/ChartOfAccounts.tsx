@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { guardBrowserWrite } from '@/lib/company/tab-guard'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -31,6 +32,9 @@ export default function ChartOfAccounts() {
   const [sruValue, setSruValue] = useState('')
 
   async function updateSRUCode(accountId: string, newSruCode: string) {
+    // Cross-tab guard (WL-09): browser-direct Supabase write, outside the
+    // patched-fetch seam. The blocking dialog is the user feedback.
+    if (!guardBrowserWrite()) return
     const supabase = createClient()
     const trimmed = newSruCode.trim() || null
     await supabase

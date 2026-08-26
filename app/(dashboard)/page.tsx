@@ -1,11 +1,14 @@
 import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
+import { cookies } from 'next/headers'
 import DashboardContent from '@/components/dashboard/DashboardContent'
 import { ChecklistSkeleton, PanesSkeleton } from '@/components/dashboard/HemSkeletons'
+import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
 import {
   getDashboardAuthContext,
   getDashboardCompanyId,
   getDashboardSettings,
+  getDashboardTeamMemberships,
   getResolvedDashboardAgentProfile,
 } from './request-context'
 import { HemChecklistSection, HemNoticesSection, HemPanesSection } from './hem-sections'
@@ -38,6 +41,25 @@ export default async function DashboardPage() {
 
   if (!companyId) {
     redirect('/onboarding')
+  }
+
+  // Byrå landing: every byrå team member (owner, admin AND member: widened
+  // from owner/admin on the founder's call 2026-08-05, so invited consultants
+  // land right too) homes to the cockpit, not to an auto-resolved client
+  // company. companyId above can be the middleware's first-membership
+  // fallback (which it also writes back to user_preferences, so the DB can't
+  // tell picked from auto-picked); the session cookie stamped by
+  // setActiveCompany is the explicit-choice signal. Once they enter a client
+  // this session, "/" is that company's Hem again. Memberships are
+  // request-cached and shared with the layout.
+  const [cookieStore, teamMemberships] = await Promise.all([
+    cookies(),
+    getDashboardTeamMemberships(),
+  ])
+  if (!cookieStore.has(COMPANY_PICKED_COOKIE)) {
+    if (teamMemberships.some((m) => m.teams?.kind === 'byra')) {
+      redirect('/byra')
+    }
   }
 
   const now = new Date()

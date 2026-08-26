@@ -15,6 +15,7 @@ import { apiPathSkipsMfaGate } from '@/lib/auth/api-mfa-gate'
 import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from '@/i18n/config'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import { normalizeHost, resolveBrandByHost } from '@/lib/branding/resolve'
 import {
   apiRequestSkipsSessionTimeout,
   createSessionTimeoutState,
@@ -38,6 +39,14 @@ import {
 } from '@/lib/auth/session-timeout-shared'
 
 const log = createLogger('proxy')
+
+/**
+ * Host-scoped marker that the signed-in user is on their home domain, so the
+ * affinity check below costs zero queries on the hot path. Expiry re-runs the
+ * check, which bounds staleness after team-membership changes.
+ */
+const HOME_DOMAIN_OK_COOKIE = 'gnubok-home-ok'
+const HOME_DOMAIN_OK_MAX_AGE = 15 * 60
 
 /**
  * Auth proxy entry point. Wraps the real work so every response carries a
@@ -320,6 +329,35 @@ async function updateSessionInner(
     return bounceToAuth(request, '/login')
   }
 
+  // ── Home-domain affinity (WL, founder call 2026-08-05) ──────────────────
+  // Every signed-in user has a home domain: byrå team members home on their
+  // brand's domain, everyone else on the platform app URL, except a byrå's
+  // client users, whose home is the byrå domain their companies live under.
+  // On a mismatch the request is redirected to the home domain's root:
+  // sessions are per domain, so the user lands on the RIGHT branded login
+  // and signs in there ("the domain corrects itself"). This complements the
+  // WL-01 signpost, which handles per-company homing INSIDE a domain and
+  // stays the answer for multi-domain company rosters. Exemption: byrå
+  // staff who also have canonical-homed companies stay put on the canonical
+  // host; the signpost handles per-company homing.
+  const homeOutcome = await resolveHomeDomainOutcome(supabase, user.id, request)
+  if (homeOutcome.redirectTo) {
+    return NextResponse.redirect(homeOutcome.redirectTo)
+  }
+  if (homeOutcome.cacheOk) {
+    supabaseResponse.cookies.set(
+      HOME_DOMAIN_OK_COOKIE,
+      normalizeHost(request.nextUrl.hostname),
+      {
+        path: '/',
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: HOME_DOMAIN_OK_MAX_AGE,
+      },
+    )
+  }
+
   // /mfa/enroll: gate behind has-password. BankID-only users who reach this
   // page can lock themselves out: Supabase requires AAL2 to change password
   // or unenroll MFA, and AAL2 needs a prior password sign-in. Force them to
@@ -459,6 +497,34 @@ async function updateSessionInner(
     // onboarding wizard again on a transient failure (issue #1053).
     if (degraded) {
       return supabaseResponse
+    }
+
+    // Byrå team members (any role: widened from owner/admin, founder call
+    // 2026-08-05) with zero client companies (a fresh byrå) home to the
+    // EMPTY cockpit, never to the company onboarding wizard: clients are
+    // created from the cockpit, and forcing the wizard here would make a
+    // byrå user create a personal company just to get in. Cockpit-shaped
+    // paths pass through (the dashboard layout renders its no-company shell);
+    // everything else is steered to /byra. API requests pass through so the
+    // routes' own guards answer with JSON instead of an HTML redirect.
+    // The query runs only in the rare no-company state: zero hot-path cost.
+    const { data: byraRows } = await supabase
+      .from('team_members')
+      .select('role, teams:team_id!inner(kind)')
+      .eq('user_id', user.id)
+      .eq('teams.kind', 'byra')
+    const isByraMember = (byraRows ?? []).length > 0
+    if (isByraMember) {
+      const isByraNoCompanyAllowed =
+        pathname.startsWith('/byra') ||
+        pathname.startsWith('/clients') ||
+        pathname.startsWith('/companies/new') ||
+        pathname.startsWith('/settings') ||
+        pathname.startsWith('/api/')
+      if (isByraNoCompanyAllowed) {
+        return supabaseResponse
+      }
+      return NextResponse.redirect(new URL('/byra', request.url))
     }
 
     // Enrichment lives in the user-keyed `bankid_enrichment` table (migration
@@ -648,6 +714,167 @@ function bounceToAuth(
     url.search = `${AUTH_DESTINATION_PARAM[target]}=${encodeURIComponent(destination)}`
   }
   return NextResponse.redirect(url)
+}
+
+/**
+ * Hosts that carry no brand affinity: local dev and direct Vercel
+ * deployment URLs must never bounce a signed-in user to a product domain.
+ */
+function isAffinityExemptHost(host: string): boolean {
+  return (
+    !host ||
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.vercel.app') ||
+    /^\d{1,3}(\.\d{1,3}){3}$/.test(host)
+  )
+}
+
+/**
+ * Decide whether this signed-in request sits on the user's home domain.
+ *
+ * Rules (founder call 2026-08-05):
+ *   1. A byrå team member's home is their brand's domain: any other product
+ *      host (a foreign byrå domain OR the platform domain) redirects there,
+ *      EXCEPT on the canonical platform host when the member also has a
+ *      company homed there (a company whose team has no brand): they stay,
+ *      and the WL-01 signpost handles per-company homing.
+ *   2. A non-member on a brand domain redirects to the platform app URL,
+ *      UNLESS one of their companies is homed under that brand's team (the
+ *      byrå's own client users log in on the byrå domain).
+ *   3. Everyone else stays put.
+ *
+ * `cacheOk` marks a positive "this is home" verdict, cached in a host-scoped
+ * cookie by the caller. Query failures fail open with no caching, so a
+ * transient error neither locks anyone out nor sticks for a TTL window.
+ */
+async function resolveHomeDomainOutcome(
+  supabase: ReturnType<typeof createServerClient>,
+  userId: string,
+  request: NextRequest,
+): Promise<{ redirectTo: URL | null; cacheOk: boolean }> {
+  const stay = { redirectTo: null, cacheOk: false }
+  const host = normalizeHost(request.nextUrl.hostname)
+  if (isAffinityExemptHost(host)) return stay
+  if (request.cookies.get(HOME_DOMAIN_OK_COOKIE)?.value === host) return stay
+
+  // Rule 1: the user's own byrå brand domains (RLS: members read their brand).
+  const { data: byraRows, error: byraError } = await supabase
+    .from('team_members')
+    .select('teams:team_id!inner(kind, brands(domain))')
+    .eq('user_id', userId)
+    .eq('teams.kind', 'byra')
+  if (byraError) {
+    console.error('[middleware] home-domain byrå lookup failed', byraError)
+    return stay
+  }
+
+  const byraDomains: string[] = []
+  for (const row of byraRows ?? []) {
+    const teams = (row as { teams?: { brands?: unknown } | null }).teams
+    const brands = teams?.brands
+    // One brand per team (brands.team_id unique): PostgREST returns an
+    // object, but tolerate the array shape too.
+    const list = Array.isArray(brands) ? brands : brands ? [brands] : []
+    for (const entry of list) {
+      const domain = (entry as { domain?: unknown }).domain
+      if (typeof domain === 'string' && domain) byraDomains.push(normalizeHost(domain))
+    }
+  }
+  if (byraDomains.length > 0) {
+    if (byraDomains.includes(host)) return { redirectTo: null, cacheOk: true }
+
+    // Exemption: a byrå member who ALSO belongs to a company homed on the
+    // canonical domain (its team has no brand, or no team at all) must be
+    // able to reach that company somewhere, and the canonical host is its
+    // only home. Redirecting them off canonical made their own company
+    // deterministically unreachable: on the brand host it renders as a
+    // non-clickable signpost pointing right back at canonical. So on the
+    // canonical host, stay when such a company exists (host-stable verdict,
+    // so it is cacheable); a foreign brand host still redirects, since
+    // nothing of the user's is homed there. Cost: one extra query, only for
+    // byrå members on the canonical host without a fresh home-ok cookie.
+    const canonicalHost = normalizeHost(
+      new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://app.gnubok.se').hostname,
+    )
+    if (host === canonicalHost) {
+      const { data: companyRows, error: companyError } = await supabase
+        .from('company_members')
+        .select('companies!inner(team_id, teams(brands(id)))')
+        .eq('user_id', userId)
+      if (companyError) {
+        console.error(
+          '[middleware] home-domain canonical-company lookup failed',
+          companyError,
+        )
+        return stay
+      }
+      if ((companyRows ?? []).some(rowHasCanonicalHomedCompany)) {
+        return { redirectTo: null, cacheOk: true }
+      }
+    }
+    // Carry the original path and query across the hop so deep links (invite
+    // accepts, direct object URLs) survive the domain correction.
+    return {
+      redirectTo: new URL(
+        `${request.nextUrl.pathname}${request.nextUrl.search}`,
+        `https://${byraDomains[0]}`,
+      ),
+      cacheOk: false,
+    }
+  }
+
+  // Rule 2: not a byrå member, so only a brand host can be foreign.
+  const hostBrand = await resolveBrandByHost(host)
+  if (!hostBrand) return { redirectTo: null, cacheOk: true }
+
+  const { data: clientRows, error: clientError } = await supabase
+    .from('company_members')
+    .select('company_id, companies!inner(team_id)')
+    .eq('user_id', userId)
+    .eq('companies.team_id', hostBrand.teamId)
+    .limit(1)
+  if (clientError) {
+    console.error('[middleware] home-domain client lookup failed', clientError)
+    return stay
+  }
+  if ((clientRows ?? []).length > 0) return { redirectTo: null, cacheOk: true }
+
+  const platformUrl = new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://app.gnubok.se')
+  if (normalizeHost(platformUrl.hostname) === host) return { redirectTo: null, cacheOk: true }
+  // Preserve path + query for the same deep-link reason as the byrå hop.
+  return {
+    redirectTo: new URL(
+      `${request.nextUrl.pathname}${request.nextUrl.search}`,
+      platformUrl.origin,
+    ),
+    cacheOk: false,
+  }
+}
+
+/**
+ * Whether a company_members row (carrying the companies → teams → brands
+ * embed) points at a company homed on the canonical domain: no team at all,
+ * or a team without a brands row. The brand null-check happens HERE in JS on
+ * purpose: a PostgREST `.is()` filter on an embedded resource does not
+ * filter the parent rows, so filtering server-side would silently match
+ * every membership. Embeds arrive as object or array depending on the
+ * relationship shape, so both are tolerated (same as the byraRows parsing).
+ */
+function rowHasCanonicalHomedCompany(row: unknown): boolean {
+  const companies = (row as { companies?: unknown }).companies
+  const companyList = Array.isArray(companies) ? companies : companies ? [companies] : []
+  for (const company of companyList) {
+    const teams = (company as { teams?: unknown }).teams
+    if (!teams) return true
+    const teamList = Array.isArray(teams) ? teams : [teams]
+    for (const team of teamList) {
+      const brands = (team as { brands?: unknown }).brands
+      const brandList = Array.isArray(brands) ? brands : brands ? [brands] : []
+      if (brandList.length === 0) return true
+    }
+  }
+  return false
 }
 
 /**

@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dialog'
 import { SETTINGS_SECTIONS } from './sections'
 import { SettingsShell } from './SettingsShell'
+import { useByraSettingsScope } from './useSettingsNavItems'
 
 /**
  * The settings popup. Rendered only by the intercepting route
@@ -34,11 +35,15 @@ export function SettingsModal({ sectionId }: { sectionId?: string }) {
   // sectionId route param only covers the very first intercepted render.
   // Bare /settings (or an unknown section) defaults to company, or to account
   // when there is no active company (the no-company escape hatch).
+  // Byrå scope (?ctx=byra, settings opened from the cockpit): account-level
+  // sections only, no company kicker, and the fallback section is Konto: the
+  // cockpit is above the companies, so no company may read as "the" company.
+  const byraScope = useByraSettingsScope()
   const urlSection = pathname.split('/')[2] ?? sectionId
   const resolved =
     urlSection && SETTINGS_SECTIONS[urlSection]
       ? urlSection
-      : company
+      : company && !byraScope
         ? 'company'
         : 'account'
 
@@ -67,8 +72,9 @@ export function SettingsModal({ sectionId }: { sectionId?: string }) {
         <div className="flex shrink-0 items-center gap-3 border-b border-border px-6 py-3">
           <div className="min-w-0">
             {/* The modal covers the sidebar's CompanySwitcher, so the active
-                company must stay visible here as the kicker over the title. */}
-            {company ? (
+                company must stay visible here as the kicker over the title.
+                Not in byrå scope: the cockpit has no active company. */}
+            {company && !byraScope ? (
               <p className="truncate text-xs text-muted-foreground">{company.name}</p>
             ) : null}
             <DialogTitle className="font-display text-lg tracking-tight">

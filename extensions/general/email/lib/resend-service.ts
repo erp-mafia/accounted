@@ -36,8 +36,14 @@ const FROM_ADDRESS_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}@[a-z0-9.-]{4,253}$/
 /**
  * Builds the From header. With an explicit `from` (company's own verified
  * sending domain) the mail leaves as "<name> <address>" and the platform
- * sender is not involved at all. Otherwise the platform default:
- * "<fromName> via <App> <RESEND_FROM_EMAIL>" or "<App> <RESEND_FROM_EMAIL>".
+ * sender is not involved at all. `fromAddress` is only ever set by
+ * lib/email/brand-sender.ts for VERIFIED brand sender domains (WL-13).
+ * Otherwise the platform default: "<fromName> <RESEND_FROM_EMAIL>" or
+ * "<App> <RESEND_FROM_EMAIL>". A fromName WITHOUT an explicit address (a
+ * brand or company riding the platform address) shows the name ALONE
+ * (founder call 2026-08-05: no "via <platform>" in the display name; the
+ * platform stays visible in the actual From address until a sender domain
+ * is verified).
  *
  * Strip CRLF and angle brackets from name parts to prevent header injection.
  * Resend's API does its own validation, but defense in depth: fromName and
@@ -48,6 +54,7 @@ const FROM_ADDRESS_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}@[a-z0-9.-]{4,253}$/
 export function buildFromHeader(input: {
   fromName?: string
   from?: { name: string; address: string }
+  fromAddress?: string
 }): string {
   const safeAppName = sanitizeHeaderPart(getBranding().appName)
 
@@ -62,8 +69,14 @@ export function buildFromHeader(input: {
   }
 
   const safeFromName = input.fromName ? sanitizeHeaderPart(input.fromName) : null
+  const safeFromAddress = input.fromAddress ? sanitizeHeaderPart(input.fromAddress) : null
+  if (safeFromAddress) {
+    return safeFromName
+      ? `${encodeDisplayName(safeFromName)} <${safeFromAddress}>`
+      : safeFromAddress
+  }
   return safeFromName
-    ? `${encodeDisplayName(`${safeFromName} via ${safeAppName}`)} <${DEFAULT_FROM_EMAIL}>`
+    ? `${encodeDisplayName(safeFromName)} <${DEFAULT_FROM_EMAIL}>`
     : `${encodeDisplayName(safeAppName)} <${DEFAULT_FROM_EMAIL}>`
 }
 
@@ -91,13 +104,13 @@ function isResendConfigured(): boolean {
 
 export class ResendEmailService implements EmailService {
   async sendEmail(options: SendEmailOptions): Promise<SendEmailResult> {
-    const { to, cc, bcc, subject, html, text, replyTo, fromName, attachments } = options
+    const { to, cc, bcc, subject, html, text, replyTo, fromName, fromAddress, attachments } = options
 
     if (!this.isConfigured()) {
       return { success: false, error: 'Email service is not configured' }
     }
 
-    const from = buildFromHeader({ fromName, from: options.from })
+    const from = buildFromHeader({ fromName, from: options.from, fromAddress })
     const platformFrom = buildFromHeader({ fromName })
 
     try {

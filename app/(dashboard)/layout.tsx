@@ -13,16 +13,24 @@ import { SessionTimeoutController } from '@/components/auth/SessionTimeoutContro
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import TrialExpiredDialog from '@/components/billing/TrialExpiredDialog'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
-import { CompanyProvider } from '@/contexts/CompanyContext'
+import { CompanyProvider, type ByraTeamRef } from '@/contexts/CompanyContext'
 import { ReferenceDataSeed } from '@/components/providers/ReferenceDataSeed'
 import { getCompanyEntitlements } from '@/lib/entitlements/has-capability'
 import { getDashboardNavFlags } from '@/lib/dashboard/nav-flags'
 import { getBranding } from '@/lib/branding/service'
+import { resolveBrandByHost } from '@/lib/branding/resolve'
+import { resolveBrandsForTeams } from '@/lib/branding/team-brands'
+import {
+  partitionCompaniesByHomeDomain,
+  isCompanyHomedOnHost,
+} from '@/lib/company/home-domain'
+import HomeDomainSignpost from '@/components/dashboard/HomeDomainSignpost'
 import type { AccountingFramework, EntityType, CompanyRole, Team } from '@/types'
 import {
   getDashboardAuthContext,
   getDashboardCompanyId,
   getDashboardSettings,
+  getDashboardTeamMemberships,
   getResolvedDashboardAgentProfile,
 } from './request-context'
 
@@ -67,16 +75,16 @@ export default async function DashboardLayout({
   // `getActiveCompanyId` reads from user_preferences, matching what RLS
   // sees via `current_active_company_id()`. Keeping both sides on the same
   // source avoids cross-tab / cookie divergence.
-  // Team membership (with the team row embedded) only depends on user.id,
-  // so it resolves in parallel, this layout is on the critical path of
-  // every dashboard page, so sequential round-trips are wall-clock time.
+  // Team memberships come from the request-cached getDashboardTeamMemberships
+  // (ALL rows: multi-team is the supported shape after WL-08) so the home
+  // page's byrå landing redirect reuses the same single query.
   // Wave 1: everything keyed on the user alone runs alongside the company
   // resolution. The memberships join carries the active company's row and
   // role too, so wave 2 no longer re-reads companies / company_members.
   const [
     companyId,
     headerStore,
-    { data: teamMembership },
+    teamMemberships,
     { data: userProfile },
     { data: userPrefs },
     { data: allMemberships },
@@ -84,12 +92,7 @@ export default async function DashboardLayout({
     getDashboardCompanyId(),
     // Read the pathname forwarded by middleware so we can branch on it.
     headers(),
-    supabase
-      .from('team_members')
-      .select('team_id, role, teams:team_id(*)')
-      .eq('user_id', user.id)
-      .limit(1)
-      .maybeSingle(),
+    getDashboardTeamMemberships(),
     // The signed-in user's profile, shown in the bottom-left account
     // popover (full_name + initial) so it's clear which user is logged
     // in, distinct from the active company shown at the top.
@@ -106,15 +109,46 @@ export default async function DashboardLayout({
     pathname.startsWith(p)
   )
 
+  // Team now carries `kind` directly (types/index.ts, WL-08).
+  const membershipRows = teamMemberships
+  const byraMembership = membershipRows.find((m) => m.teams?.kind === 'byra') ?? null
+  // Byrå team membership gates the cockpit ("Klienter" nav + /clients).
+  const byraTeam: ByraTeamRef | null = byraMembership?.teams
+    ? {
+        id: byraMembership.teams.id,
+        name: byraMembership.teams.name,
+        role:
+          byraMembership.role === 'owner' || byraMembership.role === 'admin'
+            ? byraMembership.role
+            : 'member',
+      }
+    : null
+  // Legacy single-team fields: the byrå team when present (the one consumers
+  // care about), else the first membership: same value as before for
+  // single-team users.
   const team: Team | null =
-    (teamMembership?.teams as unknown as Team | null) ?? null
-  const isTeamMember = !!teamMembership
+    (byraMembership?.teams as Team | null) ??
+    (membershipRows[0]?.teams as Team | null) ??
+    null
+  const isTeamMember = membershipRows.length > 0
 
   // No companies: redirect to onboarding, except for allowed escape-hatch
   // routes (so the user can still reach /settings/account to delete their
-  // account after archiving their last company).
+  // account after archiving their last company) and byrå team members (any
+  // role, founder call 2026-08-05), whose home is the EMPTY cockpit (mirrors
+  // the middleware's byrå exception): they render the no-company shell on
+  // cockpit routes and are steered to /byra everywhere else, never to the
+  // company wizard.
   if (!companyId) {
-    if (!isNoCompanyAllowed) {
+    const isByraMember = !!byraTeam
+    const isByraShellPath =
+      pathname.startsWith('/byra') ||
+      pathname.startsWith('/clients') ||
+      pathname.startsWith('/settings')
+    if (!isNoCompanyAllowed && !(isByraMember && isByraShellPath)) {
+      if (isByraMember) {
+        redirect('/byra')
+      }
       redirect('/onboarding')
     }
 
@@ -126,6 +160,8 @@ export default async function DashboardLayout({
           companies: [],
           isTeamMember,
           team,
+          byraTeam,
+          foreignCompanies: [],
           isSandbox: false,
           capabilities: [],
           trialEndsAt: null,
@@ -167,6 +203,14 @@ export default async function DashboardLayout({
   const companyRow = (activeMembership?.companies as unknown as import('@/types').Company | null) ?? null
   const memberRow = activeMembership ? { role: activeMembership.role } : null
 
+  // Home-domain rule (WL-01): which brand serves this host, and which brand
+  // (if any) each membership company's team owns. Both resolvers are ~60s
+  // cached; unknown hosts and brandless teams resolve to null/absent, so the
+  // canonical no-brands hot path stays byte-identical. Both only depend on
+  // wave-1 data, so they ride in the wave-2 batch below.
+  const hostHeader =
+    headerStore.get('x-forwarded-host') ?? headerStore.get('host') ?? ''
+
   // Wave 2: everything keyed on the company. Nav badge counts are NOT fetched
   // here: DashboardNav loads them client-side after mount
   // (lib/hooks/use-worklist-badges). The four nav-visibility probes
@@ -179,6 +223,8 @@ export default async function DashboardLayout({
     navFlags,
     { data: seedFiscalPeriods },
     { data: seedCashAccounts },
+    hostBrand,
+    brandByTeam,
   ] = await Promise.all([
     getDashboardSettings(),
     // Agent identity, name + avatar, surfaced on the FAB and chat
@@ -210,9 +256,23 @@ export default async function DashboardLayout({
       .eq('company_id', companyId)
       .order('is_primary', { ascending: false })
       .order('ledger_account', { ascending: true }),
+    hostHeader ? resolveBrandByHost(hostHeader) : Promise.resolve(null),
+    resolveBrandsForTeams(
+      (allMemberships || []).map(
+        (m) => (m.companies as { team_id?: string | null } | null)?.team_id ?? null,
+      ),
+    ),
   ])
   const hasWebshop = navFlags.hasWebshop
   const hasMileageTrips = navFlags.hasMileageTrips
+
+  const canonicalDomain = (() => {
+    try {
+      return new URL(getBranding().appUrl).hostname
+    } catch {
+      return ''
+    }
+  })()
 
   // company_id -> current display name for every company the user belongs to.
   const nameByCompany = new Map(
@@ -234,6 +294,8 @@ export default async function DashboardLayout({
       }),
       isTeamMember,
       team,
+      byraTeam,
+      foreignCompanies: [],
       isSandbox: false,
       capabilities: [],
       trialEndsAt: null,
@@ -304,10 +366,9 @@ export default async function DashboardLayout({
   const uiState = (userPrefs?.ui_state ?? {}) as import('@/types').UserUiState
   const navCollapsed = uiState.nav_collapsed === true
 
-  const companyContextValue = {
-    company: companyWithName,
-    role: memberRow.role as CompanyRole,
-    companies: (allMemberships || []).map((m) => {
+  const allCompanyEntries = (allMemberships || [])
+    .filter((m) => m.companies)
+    .map((m) => {
       const c = m.companies as unknown as import('@/types').Company
       // Current display name for every company (company_settings.company_name,
       // falling back to the frozen companies.name) so non-active switcher rows
@@ -316,15 +377,57 @@ export default async function DashboardLayout({
         company: { ...c, name: nameByCompany.get(c.id) || c.name },
         role: m.role as CompanyRole,
       }
-    }),
+    })
+
+  // Home-domain rule (WL-01): the switcher offers only companies homed on
+  // THIS host; companies homed elsewhere become "Hanteras via <domain>"
+  // signpost entries. With no brands anywhere both lists reduce to
+  // visible = everything, foreign = [] : the additive guarantee.
+  const homePartition = partitionCompaniesByHomeDomain({
+    companies: allCompanyEntries,
+    getTeamId: (entry) => entry.company.team_id ?? null,
+    brandByTeam,
+    hostBrandTeamId: hostBrand?.teamId ?? null,
+    canonicalDomain,
+    canonicalAppName: getBranding().appName,
+  })
+  const foreignCompanies = homePartition.foreign.map((f) => ({
+    id: f.item.company.id,
+    name: f.item.company.name,
+    domain: f.domain,
+  }))
+
+  const companyContextValue = {
+    company: companyWithName,
+    role: memberRow.role as CompanyRole,
+    companies: homePartition.visible,
     isTeamMember,
     team,
+    byraTeam,
+    foreignCompanies,
     isSandbox,
     capabilities: entitlements.capabilities,
     trialEndsAt: entitlements.trialEndsAt,
     entitlementState: entitlements.entitlementState,
     trialExpiredAt: entitlements.trialExpiredAt,
   }
+
+  // Signpost gate (WL-01): a company is opened ONLY on its home domain. When
+  // the active company is homed elsewhere, the dashboard body is replaced by
+  // the signpost (never the wrong company's data), except on account-level
+  // and byrå-cockpit routes, which are not company surfaces. Navigation rule
+  // only: RLS/membership remain the security boundary, and middleware is
+  // untouched (the layout is the clean seam: brand lookups don't belong on
+  // the Edge hot path).
+  const activeCompanyHomed = isCompanyHomedOnHost({
+    companyTeamId: (companyRow.team_id as string | null) ?? null,
+    brandByTeam,
+    hostBrandTeamId: hostBrand?.teamId ?? null,
+  })
+  const SIGNPOST_ALLOWED_PATHS = ['/settings/account', '/clients', '/byra']
+  const showSignpost =
+    !activeCompanyHomed &&
+    !SIGNPOST_ALLOWED_PATHS.some((p) => pathname.startsWith(p))
 
   return (
     <CompanyProvider value={companyContextValue}>
@@ -374,7 +477,20 @@ export default async function DashboardLayout({
             initialUiState={uiState}
           />
           <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
-            <MainContainer companyId={companyId}>{children}</MainContainer>
+            <MainContainer companyId={companyId}>
+              {showSignpost ? (
+                <HomeDomainSignpost
+                  activeCompanyName={displayName}
+                  homedCompanies={homePartition.visible.map((entry) => ({
+                    id: entry.company.id,
+                    name: entry.company.name,
+                  }))}
+                  foreignCompanies={foreignCompanies}
+                />
+              ) : (
+                children
+              )}
+            </MainContainer>
           </main>
           <AgentTrigger hidden={userPrefs?.hide_assistant_fab === true} />
           {/* One-time expired-trial notice. Sandbox/anonymous demo users have

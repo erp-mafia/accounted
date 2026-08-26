@@ -34,6 +34,19 @@ const supabaseWsUrl =
   process.env.NEXT_PUBLIC_SUPABASE_WS_URL ??
   supabaseUrl.replace(/^http(s?):/, "ws$1:");
 
+// Brand logos (WL-12 slice A3) are served from Supabase Storage public
+// objects and rendered via next/image, which requires the host to be
+// allowlisted. The pattern stays narrow: public storage objects only.
+// try/catch because Docker builds may bake a sentinel value that is not a
+// parseable URL; no hostname simply means no remote images are allowed,
+// exactly as before.
+let supabaseImageHostname = "";
+try {
+  supabaseImageHostname = supabaseUrl ? new URL(supabaseUrl).hostname : "";
+} catch {
+  supabaseImageHostname = "";
+}
+
 const cspDirectives = [
   "default-src 'self'",
   // No analytics hosts here on purpose. PostHog replaced Recapt and is
@@ -68,6 +81,19 @@ const nextConfig: NextConfig = {
   // system env var on every Vercel build; self-hosted and local builds keep
   // the standalone directory.
   output: process.env.VERCEL ? undefined : 'standalone',
+  ...(supabaseImageHostname
+    ? {
+        images: {
+          remotePatterns: [
+            {
+              protocol: "https" as const,
+              hostname: supabaseImageHostname,
+              pathname: "/storage/v1/object/public/**",
+            },
+          ],
+        },
+      }
+    : {}),
   // Build id inlined into the client bundle so a running tab can tell when a
   // newer deploy is live (see components/system/DeployReloadPrompt). On Vercel
   // this is the commit SHA; empty elsewhere (dev / self-hosted), which disables

@@ -170,15 +170,22 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
     })
   }
 
-  // Team: explicit, else the caller's first (usually personal) team, same as
-  // the web wizard. create_company_for_user re-checks membership.
+  // Team: explicit, else the caller's PERSONAL team only (WL-08: companies
+  // created through the normal flow always attach to the personal team;
+  // cockpit flows pass the byrå team id explicitly). Picking the first
+  // membership regardless of kind attached a consultant's private company to
+  // the byrå team, exposing their books to the whole byrå and suppressing the
+  // trial. Mirrors ensure_user_team: earliest teams row with kind='personal'.
+  // create_company_for_user re-checks membership (and byrå role) in the DB.
   let teamId: string | null = setup.team_id ?? null
   if (!teamId) {
     const { data: membership } = await ctx.supabase
       .from('team_members')
-      .select('team_id')
+      .select('team_id, teams!inner(kind, created_at)')
       .eq('user_id', ctx.userId)
-      .order('created_at', { ascending: true })
+      .eq('teams.kind', 'personal')
+      .order('teams(created_at)', { ascending: true })
+      .order('teams(id)', { ascending: true })
       .limit(1)
       .maybeSingle()
     teamId = (membership?.team_id as string | undefined) ?? null

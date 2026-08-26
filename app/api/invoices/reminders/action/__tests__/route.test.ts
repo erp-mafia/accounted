@@ -31,6 +31,11 @@ vi.mock('@supabase/ssr', () => {
   }
 })
 
+const resolveBrandForCompanyMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandForCompany: resolveBrandForCompanyMock,
+}))
+
 import { GET } from '../route'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
@@ -42,11 +47,13 @@ interface ActionPayload {
   reminderFeeCurrency: string
   totalDue: number
   feeDueSeparately: number
+  brand: { appName: string; logoUrl: string | null; brandColor: string } | null
 }
 
 function makeReminderRow(currency: string, total: number) {
   return {
     id: 'reminder-1',
+    company_id: 'company-1',
     reminder_level: 1,
     sent_at: '2026-05-20T08:00:00Z',
     response_type: null,
@@ -81,6 +88,7 @@ async function callGet() {
 describe('GET /api/invoices/reminders/action', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    resolveBrandForCompanyMock.mockResolvedValue(null)
   })
 
   it('returns 400 without a token', async () => {
@@ -127,5 +135,29 @@ describe('GET /api/invoices/reminders/action', () => {
     expect(body.reminderFeeCurrency).toBe('SEK')
     expect(body.reminderFee).toBe(60)
     expect(body.totalDue).toBe(510)
+  })
+
+  it('returns the company brand for the public page when one exists (WL-13)', async () => {
+    resolveBrandForCompanyMock.mockResolvedValue({
+      appName: 'Siffra',
+      logoUrl: 'https://cdn.example/siffra.png',
+      brandColor: '#123456',
+      domain: 'app.siffra.se',
+    })
+    queued = { data: makeReminderRow('SEK', 10_000), error: null }
+    const { body } = await callGet()
+
+    expect(resolveBrandForCompanyMock).toHaveBeenCalledWith('company-1')
+    expect(body.brand).toEqual({
+      appName: 'Siffra',
+      logoUrl: 'https://cdn.example/siffra.png',
+      brandColor: '#123456',
+    })
+  })
+
+  it('returns brand: null for a brandless company (page unchanged)', async () => {
+    queued = { data: makeReminderRow('SEK', 10_000), error: null }
+    const { body } = await callGet()
+    expect(body.brand).toBeNull()
   })
 })

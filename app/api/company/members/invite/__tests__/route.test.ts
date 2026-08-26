@@ -46,10 +46,18 @@ vi.mock('@/lib/email/service', () => ({
   getEmailService: () => ({ isConfigured: isConfiguredMock, sendEmail: sendEmailMock }),
 }))
 
-const generateInviteEmailHtmlMock = vi.fn(() => '<p>html</p>')
+const brandSenderMock = vi.hoisted(() => ({
+  getSenderForCompany: vi.fn(),
+  getBaseUrlForBrand: vi.fn(),
+}))
+vi.mock('@/lib/email/brand-sender', () => brandSenderMock)
+
+const generateInviteEmailHtmlMock = vi.hoisted(() =>
+  vi.fn((data: { inviteUrl: string }) => `<p>${data.inviteUrl}</p>`),
+)
 vi.mock('@/lib/email/invite-templates', () => ({
   generateInviteEmailSubject: () => 'subject',
-  generateInviteEmailHtml: (...args: unknown[]) => generateInviteEmailHtmlMock(...args),
+  generateInviteEmailHtml: generateInviteEmailHtmlMock,
   generateInviteEmailText: () => 'text',
 }))
 
@@ -81,6 +89,13 @@ beforeEach(() => {
   requireWriteMock.mockResolvedValue({ ok: true })
   isConfiguredMock.mockReturnValue(true)
   sendEmailMock.mockResolvedValue({ success: true, messageId: 'msg-1' })
+  brandSenderMock.getSenderForCompany.mockResolvedValue({
+    fromName: null,
+    fromAddress: null,
+    replyTo: null,
+    brand: null,
+  })
+  brandSenderMock.getBaseUrlForBrand.mockReturnValue('http://localhost:3000')
   inviteUserByEmailMock.mockResolvedValue({ data: { user: { id: 'new-user' } }, error: null })
 })
 
@@ -148,6 +163,65 @@ describe('POST /api/company/members/invite', () => {
     expect(sendEmailMock).toHaveBeenCalledWith(
       expect.objectContaining({ to: 'client@example.com' })
     )
+  })
+
+  it('sends the branded invite: brand link base, brand appName, brand sender', async () => {
+    brandSenderMock.getSenderForCompany.mockResolvedValue({
+      fromName: 'Siffra',
+      fromAddress: 'noreply@post.siffra.se',
+      replyTo: 'support@siffra.se',
+      brand: { appName: 'Siffra', domain: 'app.siffra.se' },
+    })
+    brandSenderMock.getBaseUrlForBrand.mockReturnValue('https://app.siffra.se')
+
+    enqueue({ data: { role: 'owner' } })
+    enqueue({ data: [] })
+    enqueue({ data: null })
+    enqueue({ data: { name: 'Kund AB' } })
+    enqueue({ data: null })
+
+    const { status } = await parseJsonResponse(
+      await post({ email: 'client@example.com' })
+    )
+
+    expect(status).toBe(200)
+    expect(generateInviteEmailHtmlMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inviteUrl: 'https://app.siffra.se/invite/tok-plain',
+        appName: 'Siffra',
+      })
+    )
+    expect(sendEmailMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fromName: 'Siffra',
+        fromAddress: 'noreply@post.siffra.se',
+        replyTo: 'support@siffra.se',
+      })
+    )
+  })
+
+  it('keeps the canonical link and platform sender for an unbranded company', async () => {
+    enqueue({ data: { role: 'owner' } })
+    enqueue({ data: [] })
+    enqueue({ data: null })
+    enqueue({ data: { name: 'Kund AB' } })
+    enqueue({ data: null })
+
+    const { status } = await parseJsonResponse(
+      await post({ email: 'client@example.com' })
+    )
+
+    expect(status).toBe(200)
+    expect(generateInviteEmailHtmlMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inviteUrl: 'https://app.accounted.test/invite/tok-plain',
+        appName: undefined,
+      })
+    )
+    const options = sendEmailMock.mock.calls[0][0]
+    expect(options.fromName).toBeUndefined()
+    expect(options.fromAddress).toBeUndefined()
+    expect(options.replyTo).toBeUndefined()
   })
 
   it('reports email_sent=false when the send fails (invite still created)', async () => {

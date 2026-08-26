@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { AttnLine } from '@/components/ui/attn-line'
+import { useBranding } from '@/lib/branding/brand-context'
 import type { Notice, NoticeCategory } from '@/lib/notices/types'
 
 interface NoticeLinesProps {
@@ -26,6 +27,9 @@ interface NoticeLinesProps {
  */
 export default function NoticeLines({ notices, actionOverrides = {} }: NoticeLinesProps) {
   const t = useTranslations('notices')
+  // Brand-aware app name for messages that mention the platform (WL-12);
+  // identical to the default on unbranded hosts.
+  const { appName } = useBranding()
   const [expanded, setExpanded] = useState(false)
   const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set())
 
@@ -81,7 +85,7 @@ export default function NoticeLines({ notices, actionOverrides = {} }: NoticeLin
               </>
             }
           >
-            {t(notice.messageKey, notice.messageParams)}
+            {t(notice.messageKey, { appName, ...notice.messageParams })}
           </AttnLine>
         )
       })}

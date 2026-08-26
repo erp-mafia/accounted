@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/server'
 import { claimsPinned, userFromClaims } from '@/lib/auth/claims'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
+import type { Team } from '@/types'
 
 /**
  * Request-local dashboard auth context. React cache shares the Supabase client
@@ -47,6 +48,34 @@ export const getDashboardCompanyId = cache(async () => {
   const { supabase, user } = await getDashboardAuthContext()
   return user ? getActiveCompanyId(supabase, user.id) : null
 })
+
+export interface DashboardTeamMembership {
+  team_id: string
+  role: string
+  teams: Team | null
+}
+
+/**
+ * Request-local team memberships with the team row embedded. ALL memberships:
+ * multi-team membership (own personal team + byrå team) is the supported
+ * shape after WL-08; a `.limit(1)` would pick an arbitrary row and could hide
+ * a consultant's byrå membership. Shared between the dashboard layout (byrå
+ * cockpit gate) and the home page (byrå landing redirect), so the byrå check
+ * costs no extra query.
+ */
+export const getDashboardTeamMemberships = cache(
+  async (): Promise<DashboardTeamMembership[]> => {
+    const { supabase, user } = await getDashboardAuthContext()
+    if (!user) return []
+
+    const { data } = await supabase
+      .from('team_members')
+      .select('team_id, role, teams:team_id(*)')
+      .eq('user_id', user.id)
+
+    return (data ?? []) as unknown as DashboardTeamMembership[]
+  },
+)
 
 export const getDashboardSettings = cache(async () => {
   const [{ supabase }, companyId] = await Promise.all([

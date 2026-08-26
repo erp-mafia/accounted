@@ -11,6 +11,7 @@ import { parseStartMonthDay } from '@/lib/company/first-year-defaults'
 import { fetchCompanyLookup } from '@/lib/company-lookup/fetch-company-lookup'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import { useBranding } from '@/lib/branding/brand-context'
 import posthog from 'posthog-js'
 import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
 import {
@@ -98,6 +99,7 @@ export default function OnboardingJourney({
 }: OnboardingJourneyProps) {
   const router = useRouter()
   const t = useTranslations('onboarding')
+  const { appName } = useBranding()
   const locale = useLocale()
   const ticEnabled = ENABLED_EXTENSION_IDS.has('tic')
 
@@ -704,7 +706,7 @@ export default function OnboardingJourney({
       <div className="jny-dawn" aria-hidden="true" />
       {mode === 'add' && state.step !== 'done' ? (
         <Link href="/" className="jny-btn-quiet jny-escape">
-          &lsaquo; {t('journey_cancel_add')}
+          &lsaquo; {t('journey_cancel_add', { appName })}
         </Link>
       ) : null}
       <div className="jny-center">
@@ -749,7 +751,7 @@ export default function OnboardingJourney({
                 {dupName && station === 0 ? (
                   <span className="jny-f is-on" style={{ transitionDelay: `${lookupFacts.length * 150}ms` }}>
                     {lookupFacts.length > 0 ? ' · ' : ''}
-                    {t('journey_dup_note', { name: dupName })}
+                    {t('journey_dup_note', { name: dupName, appName })}
                   </span>
                 ) : null}
                 {!dupName && dupElsewhere && station === 0 ? (
@@ -759,7 +761,7 @@ export default function OnboardingJourney({
                   // more specific hint.
                   <span className="jny-f is-on is-warn" style={{ transitionDelay: `${lookupFacts.length * 150}ms` }}>
                     {lookupFacts.length > 0 ? ' · ' : ''}
-                    {t('journey_dup_elsewhere_note')}
+                    {t('journey_dup_elsewhere_note', { appName })}
                   </span>
                 ) : null}
               </div>
@@ -1030,6 +1032,7 @@ function DoneStep({
   onOpen: () => void
   onContinue: () => void
 }) {
+  const { appName } = useBranding()
   const s = state.settings
   const shortName = (s.company_name ?? '').split(' ')[0] || ''
   const rows: [string, string][] = [
@@ -1089,7 +1092,7 @@ function DoneStep({
       ) : (
         <div className="jny-qactions">
           <button type="button" className="jny-btn" onClick={onOpen}>
-            {t('journey_open_app')}
+            {t('journey_open_app', { appName })}
           </button>
         </div>
       )}
