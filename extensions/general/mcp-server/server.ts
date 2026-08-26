@@ -3144,7 +3144,7 @@ export const tools: McpTool[] = [
         )
       } else if (firstYear.isFirstFiscalYear) {
         stillToAsk.push(
-          `fiscal year: no closed period in the registry, so this is the FIRST räkenskapsår; suggest first_fiscal_year start ${registrationIso ?? firstYear.firstYearStart} (registration date) and end 31 December (max 18 months from start; an enskild firma's first year must end 31 December), ask only "stämmer det?"`
+          `fiscal year: no closed period in the registry, so this is likely the FIRST räkenskapsår; suggest first_fiscal_year start ${registrationIso ?? firstYear.firstYearStart} (registration date). End: an enskild firma MUST end 31 December; an AB may pick ANY end within 18 months of start (BFL 3 kap 3 §), 31 December is merely the common default. Ask "stämmer det?" with the choice visible`
         )
       } else {
         stillToAsk.push('fiscal year: calendar year or broken year (no registry data)')

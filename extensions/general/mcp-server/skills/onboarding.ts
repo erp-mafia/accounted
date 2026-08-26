@@ -60,8 +60,11 @@ Rules baked into that split (same as the web onboarding):
 - **Enskild firma name**: verksamhetsnamnet is freely choosable; suggest the
   registered name but let the user pick. An AB's registered name is a fact.
 - **Fiscal year**: registry data becomes a confirm question, never an open
-  one. No closed period in the registry = FIRST räkenskapsår: suggest
-  registration date to 31 December (up to 18 months, BFL 3 kap 3 §).
+  one. No closed period in the registry = FIRST räkenskapsår: suggest a
+  start at the registration date. The end differs by form: an enskild
+  firma MUST end 31 December; an AB may pick any end within 18 months of
+  the start (BFL 3 kap 3 §), with 31 December as the common default, so
+  present the AB's choice rather than assuming it.
 
 \`not_found\`/\`unavailable\`: fall back to asking the \`still_to_ask\` list and
 continue. Only \`aktiebolag\` and \`enskild_firma\` are supported today.
