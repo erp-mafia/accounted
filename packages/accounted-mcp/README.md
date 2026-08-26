@@ -63,8 +63,18 @@ codex mcp add accounted --url \
 ```
 
 Claude.ai and Claude Desktop: Settings > Connectors > Add custom connector,
-paste the URL. The connector works before you connect (documentation tools);
-the first company-scoped call opens the Connect prompt.
+paste the URL, then in step 2 choose:
+
+- **Authentication: "Required when the server asks."** Claude auto-detects
+  "None" because the server answers the handshake without credentials; with
+  "None" the first company-scoped call shows an error instead of the sign-in.
+- **OAuth client: "No client ID, register one automatically" (DCR).** The
+  server does not advertise Anthropic's hosted client metadata (CIMD) yet.
+- No additional headers; transport stays Streamable HTTP.
+
+The connector works before you connect (documentation tools); the first
+company-scoped call opens the sign-in prompt, where a new user creates the
+account.
 
 ## Compatibility
 
