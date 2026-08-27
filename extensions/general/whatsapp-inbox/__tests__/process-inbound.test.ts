@@ -289,6 +289,105 @@ describe('processInboundMessage (media intake)', () => {
     expect(reopen).toBeUndefined()
   })
 
+  it('clears the dead company question when the sender resolves as single (state, options, pending)', async () => {
+    const kick = createQueuedMockSupabase()
+    kickClient.current = kick.supabase
+    kick.enqueue({ data: null })
+
+    const deadQuestion = {
+      company_options: [
+        { id: 'company-1', name: 'Alpha AB' },
+        { id: 'company-2', name: 'Alpha AB' },
+      ],
+      pending_question: { type: 'company', inbox_item_id: null, asked_at: '2026-08-01T09:30:00Z' },
+      budget: { day_key: '2026-08-01', count: 1 },
+    }
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeRow() }) // load row
+    enqueue({ data: { id: 'msg-1' } }) // claim
+    enqueue({ data: makeLink() }) // load link
+    enqueue({ data: makeConversation({ state: 'awaiting_company', context: deadQuestion }) })
+    enqueue({ data: [{ company_id: 'company-1' }] }) // sole live membership (company-2 archived)
+    enqueue({ data: [{ id: 'stg-1' }] }) // drain: one row was parked
+    enqueue({ data: [makeConversation({ state: 'idle', context: { budget: deadQuestion.budget } })] }) // guarded clear won
+    enqueue({ data: null }) // sha256 dup check: none
+    enqueue({ data: null }) // item channel_context load
+    enqueue({ data: null }) // item channel_context update
+    enqueue({ data: null }) // final markStatus done
+
+    const outcome = await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+    expect(outcome).toEqual({ kind: 'media_processed', conversationId: 'conv-1' })
+
+    // The conversation is released: idle, no options to re-offer (one of
+    // them is the archived company), no company pending_question, and the
+    // rest of the context (budget) untouched.
+    const clears = findCalls('whatsapp_conversations', 'update')
+    expect(clears).toHaveLength(1)
+    const patch = clears[0][0] as { state: string; context: Record<string, unknown> }
+    expect(patch.state).toBe('idle')
+    expect(patch.context).toEqual({ budget: deadQuestion.budget })
+    // Guarded on the revision it read, same idiom as every context write.
+    expect(findCalls('whatsapp_conversations', 'eq')).toContainEqual([
+      'updated_at',
+      '2026-08-01T09:00:00Z',
+    ])
+    kickClient.current = null
+  })
+
+  it('clears company_options kept past the 48h TTL (idle conversation) once the sender resolves as single', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeRow() })
+    enqueue({ data: { id: 'msg-1' } })
+    enqueue({ data: makeLink() })
+    enqueue({
+      data: makeConversation({
+        state: 'idle',
+        context: { company_options: [{ id: 'company-1', name: 'A' }, { id: 'company-2', name: 'B' }] },
+      }),
+    })
+    enqueue({ data: [{ company_id: 'company-1' }] }) // sole live membership
+    enqueue({ data: [] }) // drain: the parked rows already expired
+    enqueue({ data: [makeConversation()] }) // guarded clear won
+    enqueue({ data: null }) // dup check
+    enqueue({ data: null }) // item context load
+    enqueue({ data: null }) // item context update
+    enqueue({ data: null }) // markStatus done
+
+    await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+
+    const clears = findCalls('whatsapp_conversations', 'update')
+    expect(clears).toHaveLength(1)
+    const patch = clears[0][0] as { state: string; context: Record<string, unknown> }
+    expect(patch.state).toBe('idle')
+    expect(patch.context).toEqual({})
+  })
+
+  it('leaves a representation question alone when the sender resolves as single', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeRow() })
+    enqueue({ data: { id: 'msg-1' } })
+    enqueue({ data: makeLink() })
+    enqueue({
+      data: makeConversation({
+        state: 'awaiting_representation',
+        context: {
+          pending_question: { type: 'representation', inbox_item_id: 'item-0', asked_at: '2026-08-01T09:30:00Z' },
+        },
+      }),
+    })
+    enqueue({ data: [{ company_id: 'company-1' }] }) // sole live membership
+    enqueue({ data: [] }) // drain: nothing parked
+    enqueue({ data: null }) // dup check
+    enqueue({ data: null }) // item context load
+    enqueue({ data: null }) // item context update
+    enqueue({ data: null }) // markStatus done
+
+    await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+
+    // Not a company question: nothing to clear, no conversation write.
+    expect(findCalls('whatsapp_conversations', 'update')).toHaveLength(0)
+  })
+
   it('does nothing when the claim is lost (already processing)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeRow() })

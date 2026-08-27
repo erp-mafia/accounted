@@ -279,6 +279,22 @@ interface ResolvedCompany {
 }
 
 /**
+ * True when a company question is still open on the conversation, in any of
+ * the shapes it survives in: the awaiting_company state, the options behind a
+ * digit answer (kept past the 48h TTL for a late reply), or the company
+ * pending_question. Once the sender resolves as 'single' none of them can be
+ * answered any more.
+ */
+function hasDeadCompanyQuestion(conversation: WhatsAppConversation): boolean {
+  const context = getContext(conversation)
+  return (
+    conversation.state === 'awaiting_company' ||
+    (context.company_options?.length ?? 0) > 0 ||
+    context.pending_question?.type === 'company'
+  )
+}
+
+/**
  * Conversation pin (live + still a member, sliding 8h) -> default company
  * (still a member) -> sole membership -> null (ask).
  *
@@ -544,6 +560,29 @@ async function processMediaMessage(
           count: parkedIds.length,
         })
         kickInboundProcessing(parkedIds)
+      }
+      // The question itself is as dead as the rows behind it. Left in place,
+      // state 'awaiting_company' turns every typed word into a company_retry
+      // that re-offers the archived company, swallows 'byt', and keeps
+      // finalizeBurst from asking anything about the drained receipts until
+      // the 48h TTL sweep. Guarded and re-checked against fresh state, so a
+      // concurrent worker that already cleared it is a no-op, and only the
+      // company question is touched: a representation/context question that
+      // opened in between stays.
+      if (hasDeadCompanyQuestion(conversation)) {
+        await updateConversation(supabase, conversation, (current, currentContext) => {
+          if (!hasDeadCompanyQuestion(current)) return null
+          const nextContext: ConversationContext = { ...currentContext }
+          delete nextContext.company_options
+          if (nextContext.pending_question?.type === 'company') delete nextContext.pending_question
+          return {
+            state: current.state === 'awaiting_company' ? 'idle' : current.state,
+            context: nextContext,
+          }
+        })
+        log.info('cleared the dead company question on a single-company conversation', {
+          conversationId: conversation.id,
+        })
       }
     }
 
