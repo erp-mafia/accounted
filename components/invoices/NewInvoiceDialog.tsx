@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Dialog, DialogContent, DialogTitle, DialogVeil } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { createClient } from '@/lib/supabase/client'
@@ -112,21 +112,9 @@ export default function NewInvoiceDialog({ open, onOpenChange, copyFromId = null
   const copyInitial = copyLoad.sourceId === copyFromId ? copyLoad.initial : null
   const copyLoadFailed = copyLoad.sourceId === copyFromId && copyLoad.failed
 
-  // The dialog is non-modal so the agent sheet (a body-level sibling at
-  // z-[60]) stays clickable and focusable above it: Radix modal mode sets
-  // body pointer-events: none and traps focus, which left the visible chat
-  // input dead. Page modality is restored by hand instead: `inert` on the
-  // dash shell blocks pointer, keyboard, and AT access to the page behind,
-  // while the agent sheet (outside the shell) stays live.
-  useEffect(() => {
-    if (!open) return
-    const shell = document.getElementById('dash-shell')
-    if (!shell) return
-    shell.inert = true
-    return () => {
-      shell.inert = false
-    }
-  }, [open])
+  // Non-modal dialog (see below): page modality is restored by hand so the
+  // agent sheet stays live. See useDashShellInert in components/ui/dialog.tsx.
+  useDashShellInert(open)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange} modal={false}>

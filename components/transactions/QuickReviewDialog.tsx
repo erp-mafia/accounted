@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -202,6 +202,10 @@ export default function QuickReviewDialog({
       cancelled = true
     }
   }, [open, transaction, t])
+
+  // Non-modal dialog (see the Dialog below): hand-restore page modality so
+  // the agent sheet stays live. See useDashShellInert in ui/dialog.tsx.
+  useDashShellInert(open)
 
   if (!transaction || !category) return null
 
@@ -432,7 +436,11 @@ export default function QuickReviewDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={isProcessing ? undefined : (o) => {
+    // Non-modal so the agent sheet and its trigger stay usable during review
+    // (useDashShellInert above hand-restores page modality). Existing
+    // dismissal semantics kept: Esc/veil-click close unless processing, and
+    // assistant clicks never dismiss (data-agent-ui counts as inside).
+    <Dialog modal={false} open={open} onOpenChange={isProcessing ? undefined : (o) => {
       if (!o) {
         setUploadedFiles([])
         setPickedInboxDocs([])
@@ -440,7 +448,11 @@ export default function QuickReviewDialog({
       }
       onOpenChange(o)
     }}>
-      <DialogContent className={preAttachedDocumentId ? 'max-w-6xl max-h-[90vh] overflow-y-auto' : 'max-w-md sm:max-w-lg max-h-[85vh] overflow-y-auto'}>
+      <DialogVeil />
+      {/* Both variants cap at the space left of a docked agent sheet so the
+          right edge never lands unreachable under it (sheet is z-60).
+          --agent-sheet-w is docked-only: sheet closed = the old widths. */}
+      <DialogContent className={preAttachedDocumentId ? 'max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto' : 'max-w-[min(28rem,calc(100vw-var(--agent-sheet-w,0px)))] sm:max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[85vh] overflow-y-auto'}>
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>
