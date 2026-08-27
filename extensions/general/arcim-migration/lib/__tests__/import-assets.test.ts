@@ -5,6 +5,8 @@ import {
   mapFortnoxAsset,
   isImportableStatus,
   importProviderAssets,
+  fortnoxAssetMarker,
+  fortnoxNumberFromNotes,
   FortnoxAssetScopesRequiredError,
   FALLBACK_USEFUL_LIFE_MONTHS,
   type FortnoxAsset,
@@ -55,7 +57,7 @@ function routeFetch(
 
 /** Chainable supabase mock answering the existing-assets dedupe read. */
 function mockSupabaseWithExistingAssets(
-  rows: { name: string; acquisition_date: string }[],
+  rows: { name: string; acquisition_date: string; notes?: string | null }[],
 ) {
   const builder = {
     select: vi.fn().mockReturnThis(),
@@ -178,6 +180,15 @@ describe('mapFortnoxAsset', () => {
   })
 })
 
+describe('fortnoxNumberFromNotes', () => {
+  it('round-trips the marker and tolerates surrounding text', () => {
+    expect(fortnoxNumberFromNotes(fortnoxAssetMarker('A-1'))).toBe('A-1')
+    expect(fortnoxNumberFromNotes(`${fortnoxAssetMarker('7')} Avskriven t.o.m. 2026-06-30.`)).toBe('7')
+    expect(fortnoxNumberFromNotes('Egen anteckning utan markör')).toBeNull()
+    expect(fortnoxNumberFromNotes(null)).toBeNull()
+  })
+})
+
 describe('importProviderAssets', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>
 
@@ -232,7 +243,7 @@ describe('importProviderAssets', () => {
     expect(engine.createDraftEntry).not.toHaveBeenCalled()
   })
 
-  it('skips assets that already exist in the register (re-run)', async () => {
+  it('skips an already-imported asset by its Fortnox number even after a rename', async () => {
     routeFetch(fetchSpy, [
       { match: '/assets/types', respond: () => jsonResponse({ Types: [EQUIPMENT_TYPE] }) },
       { match: '/assets', respond: () => jsonResponse({ Assets: [LAPTOP] }) },
@@ -241,7 +252,13 @@ describe('importProviderAssets', () => {
     const result = await importProviderAssets({
       ...options,
       supabase: mockSupabaseWithExistingAssets([
-        { name: 'MacBook Pro', acquisition_date: '2024-03-01' },
+        // Renamed locally after the first import: only the notes marker
+        // still ties the row to Fortnox asset A-1.
+        {
+          name: 'Bärbar dator (byt namn)',
+          acquisition_date: '2024-03-01',
+          notes: fortnoxAssetMarker('A-1'),
+        },
       ]),
     })
 
@@ -252,6 +269,42 @@ describe('importProviderAssets', () => {
       skipReasons: { duplicate: 1 },
     })
     expect(createAssetMock).not.toHaveBeenCalled()
+  })
+
+  it('falls back to name + acquisition date for rows without a marker', async () => {
+    routeFetch(fetchSpy, [
+      { match: '/assets/types', respond: () => jsonResponse({ Types: [EQUIPMENT_TYPE] }) },
+      { match: '/assets', respond: () => jsonResponse({ Assets: [{ ...LAPTOP, Number: null }] }) },
+    ])
+
+    const result = await importProviderAssets({
+      ...options,
+      supabase: mockSupabaseWithExistingAssets([
+        { name: 'MacBook Pro', acquisition_date: '2024-03-01', notes: null },
+      ]),
+    })
+
+    expect(result).toMatchObject({ imported: 0, skipped: 1, skipReasons: { duplicate: 1 } })
+    expect(createAssetMock).not.toHaveBeenCalled()
+  })
+
+  it('imports two assets sharing name and date when their Fortnox numbers differ', async () => {
+    routeFetch(fetchSpy, [
+      { match: '/assets/types', respond: () => jsonResponse({ Types: [EQUIPMENT_TYPE] }) },
+      {
+        match: '/assets',
+        respond: () =>
+          jsonResponse({ Assets: [LAPTOP, { ...LAPTOP, Number: 'A-9' }] }),
+      },
+    ])
+
+    const result = await importProviderAssets({
+      ...options,
+      supabase: mockSupabaseWithExistingAssets([]),
+    })
+
+    expect(result).toMatchObject({ total: 2, imported: 2, skipped: 0 })
+    expect(createAssetMock).toHaveBeenCalledTimes(2)
   })
 
   it('throws FortnoxAssetScopesRequiredError on a scope/licence refusal', async () => {

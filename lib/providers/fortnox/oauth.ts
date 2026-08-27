@@ -35,7 +35,7 @@ export const FORTNOX_DOCUMENT_SCOPES = ['archive', 'connectfile'];
  */
 export const FORTNOX_DOCUMENT_SCOPES_APPROVED: boolean = true;
 
-/** Anläggningsregistret: what the asset register import reads. */
+/** The asset register (anläggningsregistret): what the asset import reads. */
 export const FORTNOX_ASSET_SCOPES = ['assets'];
 
 /**

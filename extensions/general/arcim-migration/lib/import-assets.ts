@@ -126,6 +126,25 @@ export interface MappedAsset {
   notes: string
 }
 
+/**
+ * Provenance marker written into the imported asset's notes. It doubles as
+ * the re-run identity: the register has no provider-id column, so the marker
+ * is what lets a re-run recognize an already-imported Fortnox asset even
+ * after it was renamed in either system.
+ */
+export function fortnoxAssetMarker(number: string): string {
+  return `Importerad från Fortnox (tillgång ${number}).`
+}
+
+const FORTNOX_ASSET_MARKER_RE = /Importerad från Fortnox \(tillgång ([^)]+)\)\./
+
+/** Extract the Fortnox asset number from an imported asset's notes, if any. */
+export function fortnoxNumberFromNotes(notes: string | null | undefined): string | null {
+  if (!notes) return null
+  const match = FORTNOX_ASSET_MARKER_RE.exec(notes)
+  return match ? match[1] : null
+}
+
 function accountString(value: number | string | null | undefined): string | null {
   if (value === null || value === undefined) return null
   const text = String(value)
@@ -171,7 +190,7 @@ export function mapFortnoxAsset(
     (asset.Number ? `Tillgång ${asset.Number}` : 'Importerad tillgång')
 
   const noteParts = [
-    asset.Number ? `Importerad från Fortnox (tillgång ${asset.Number}).` : 'Importerad från Fortnox.',
+    asset.Number ? fortnoxAssetMarker(asset.Number) : 'Importerad från Fortnox.',
   ]
   const depreciatedTo = isoDateOrNull(asset.DepreciatedTo)
   if (depreciatedTo) {
@@ -281,16 +300,28 @@ export async function importProviderAssets(
   }
 
   // Dedupe against register rows that already exist (re-run of the wizard).
-  const existing = await fetchAllRows<{ name: string | null; acquisition_date: string | null }>(
+  // Primary identity is the Fortnox asset number recovered from the notes
+  // marker, which survives renames in either system; name + acquisition date
+  // is the fallback for rows that predate the marker or were edited free.
+  const existing = await fetchAllRows<{
+    name: string | null
+    acquisition_date: string | null
+    notes: string | null
+  }>(
     ({ from, to }) =>
       supabase
         .from('assets')
-        .select('name, acquisition_date')
+        .select('name, acquisition_date, notes')
         .eq('company_id', companyId)
         .range(from, to),
   )
   const existingKeys = new Set(
     existing.map((row) => `${row.name ?? ''}|${row.acquisition_date ?? ''}`),
+  )
+  const existingFortnoxNumbers = new Set(
+    existing
+      .map((row) => fortnoxNumberFromNotes(row.notes))
+      .filter((n): n is string => n !== null),
   )
 
   let imported = 0
@@ -315,12 +346,17 @@ export async function importProviderAssets(
       continue
     }
 
+    const fortnoxNumber = asset.Number?.trim() || null
     const key = `${mapped.input.name}|${mapped.input.acquisition_date}`
-    if (existingKeys.has(key)) {
+    const alreadyImported = fortnoxNumber
+      ? existingFortnoxNumbers.has(fortnoxNumber)
+      : existingKeys.has(key)
+    if (alreadyImported) {
       skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
       skipped++
       continue
     }
+    if (fortnoxNumber) existingFortnoxNumbers.add(fortnoxNumber)
     existingKeys.add(key)
 
     try {
