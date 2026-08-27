@@ -270,10 +270,20 @@ describe('tools/list payload size guard', () => {
     //     nothing tested it, so this bump buys no new catalog surface. It
     //     re-points an existing ceiling at the payload new installs actually
     //     receive; the gnubok projection still sits ~320 tokens under it.
-    // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
-    // fires again, prefer trimming descriptions or making a tool opt-in via search
-    // before bumping further.
-    expect(approxTokens).toBeLessThan(63_600)
+    //   * 63.6K DOWN to 63.1K, the first tightening in this ledger. Two
+    //     changes, net -549 tokens on the guarded (accounted) projection:
+    //     gnubok_get_agent_briefing's outputSchema went 7,743 to 4,565 chars
+    //     by condensing four sub-schemas whose interiors were documentation
+    //     rather than contract (ledger_context, dimensions,
+    //     skatteverket_connection, recommended_tools: agent-briefing.test.ts
+    //     pins their RUNTIME shape, so nothing was left unguarded), against
+    //     +~245 for the new gnubok_call_tool.
+    // Long-term answer to growth is no longer a ceiling bump. gnubok_call_tool
+    // makes `catalogVisibility: 'search'` usable for READ tools on hosts that
+    // can only invoke what tools/list showed them, which is the constraint that
+    // forced gnubok_reconcile_match back into the default catalog on
+    // 2026-08-26. Demote a read to search-only before proposing a bump.
+    expect(approxTokens).toBeLessThan(63_100)
   })
 
   it('keeps the accounted_* namespace as the measured worst case', () => {
