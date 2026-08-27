@@ -1,4 +1,5 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
+import { pdfNumberText } from '@/lib/pdf/number-text'
 import { getBranding } from '@/lib/branding/service'
 
 /**
@@ -247,7 +248,11 @@ export interface PayslipLineItem {
 }
 
 function fmt(amount: number): string {
-  return new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount)
+  // pdfNumberText: Intl's U+2212 has no glyph in the bundled Helvetica/Courier,
+  // so a deduction would print as an addition (issue #1982).
+  return pdfNumberText(
+    new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount),
+  )
 }
 
 const MONTH_NAMES = [

@@ -1,4 +1,5 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
+import { pdfNumberText } from '@/lib/pdf/number-text'
 import type { ArsredovisningData, StatementRow } from './types'
 
 const styles = StyleSheet.create({
@@ -99,8 +100,10 @@ const styles = StyleSheet.create({
 })
 
 function fmt(amount: number): string {
-  // sv-SE thousands grouping, no decimals: typical for K2 ÅR.
-  return Math.round(amount).toLocaleString('sv-SE')
+  // sv-SE thousands grouping, no decimals: typical for K2 ÅR. The locale's
+  // U+2212 minus has no glyph in the bundled Helvetica, so a loss would print
+  // unsigned (issue #1982): map it to the ASCII hyphen.
+  return pdfNumberText(Math.round(amount).toLocaleString('sv-SE'))
 }
 
 /**
