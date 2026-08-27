@@ -129,3 +129,35 @@ export function resolveLandingPath(opts: {
   // Canonical host: only a brandless byrå homes its cockpit here.
   return opts.byraTeams.some((t) => !t.hasBrand) ? '/clients' : '/'
 }
+
+/**
+ * Href for the pinned "Tillbaka till klienter" link: the byrå cockpit lives
+ * on the byrå's home domain (its brand domain when the team has a brand, else
+ * the canonical domain, same rule as WL-14's resolveLandingPath). Relative
+ * '/clients' when the current host IS that home; an absolute URL otherwise,
+ * so a byrå member working a company homed on a different host (e.g. a
+ * pre-byrå company on canonical) is sent to their white-label cockpit.
+ *
+ * Navigation rule only, like everything in this file: the hop lands on the
+ * brand host's login when there is no session there (per-host sessions,
+ * WL-01), and WL-14 then lands the user on /clients.
+ */
+export function resolveCockpitHref(opts: {
+  /** teams.id of the user's byrå team. */
+  byraTeamId: string
+  brandByTeam: Map<string, TeamBrandRef>
+  /** teams.id of the brand serving the current host, null on canonical. */
+  hostBrandTeamId: string | null
+  canonicalDomain: string
+}): string {
+  const brand = opts.brandByTeam.get(opts.byraTeamId)
+  if (brand) {
+    return opts.hostBrandTeamId === opts.byraTeamId
+      ? '/clients'
+      : `https://${brand.domain}/clients`
+  }
+  // Brandless byrå: the cockpit is homed on the canonical domain.
+  return opts.hostBrandTeamId === null
+    ? '/clients'
+    : `https://${opts.canonicalDomain}/clients`
+}

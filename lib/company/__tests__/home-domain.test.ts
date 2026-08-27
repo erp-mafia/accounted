@@ -4,6 +4,7 @@ import {
   isCompanyHomedOnHost,
   isCockpitLandingRole,
   resolveLandingPath,
+  resolveCockpitHref,
   type TeamBrandRef,
 } from '../home-domain'
 
@@ -198,5 +199,79 @@ describe('resolveLandingPath', () => {
   it('non-byrå users always land on / (byte-identical flow)', () => {
     expect(resolveLandingPath({ hostBrandTeamId: null, byraTeams: [] })).toBe('/')
     expect(resolveLandingPath({ hostBrandTeamId: 'byra-1', byraTeams: [] })).toBe('/')
+  })
+})
+
+describe('resolveCockpitHref', () => {
+  const brandByTeam = new Map([['byra-1', siffraBrand]])
+  const canonicalDomain = CANONICAL.canonicalDomain
+
+  it('brandless byrå on the canonical host stays relative', () => {
+    expect(
+      resolveCockpitHref({
+        byraTeamId: 'byra-1',
+        brandByTeam: new Map(),
+        hostBrandTeamId: null,
+        canonicalDomain,
+      }),
+    ).toBe('/clients')
+  })
+
+  it('branded byrå on its own brand host stays relative', () => {
+    expect(
+      resolveCockpitHref({
+        byraTeamId: 'byra-1',
+        brandByTeam,
+        hostBrandTeamId: 'byra-1',
+        canonicalDomain,
+      }),
+    ).toBe('/clients')
+  })
+
+  it('branded byrå on the canonical host points at the brand domain (problem 4)', () => {
+    expect(
+      resolveCockpitHref({
+        byraTeamId: 'byra-1',
+        brandByTeam,
+        hostBrandTeamId: null,
+        canonicalDomain,
+      }),
+    ).toBe('https://app.siffra.se/clients')
+  })
+
+  it("branded byrå on someone ELSE's brand host points at its own brand domain", () => {
+    expect(
+      resolveCockpitHref({
+        byraTeamId: 'byra-1',
+        brandByTeam,
+        hostBrandTeamId: 'byra-2',
+        canonicalDomain,
+      }),
+    ).toBe('https://app.siffra.se/clients')
+  })
+
+  it('brandless byrå on a foreign brand host points home to canonical (WL-14 symmetry)', () => {
+    expect(
+      resolveCockpitHref({
+        byraTeamId: 'byra-1',
+        brandByTeam: new Map(),
+        hostBrandTeamId: 'byra-2',
+        canonicalDomain,
+      }),
+    ).toBe('https://app.gnubok.se/clients')
+  })
+
+  it('byrå with zero client companies still resolves via its own brand entry', () => {
+    // The layout adds the byrå team id to the resolveBrandsForTeams id list
+    // precisely so this map entry exists even when no membership company
+    // belongs to the byrå (pre-byrå companies have team_id null).
+    expect(
+      resolveCockpitHref({
+        byraTeamId: 'byra-1',
+        brandByTeam: new Map([['byra-1', siffraBrand]]),
+        hostBrandTeamId: null,
+        canonicalDomain,
+      }),
+    ).toBe('https://app.siffra.se/clients')
   })
 })

@@ -23,6 +23,7 @@ import { resolveBrandsForTeams } from '@/lib/branding/team-brands'
 import {
   partitionCompaniesByHomeDomain,
   isCompanyHomedOnHost,
+  resolveCockpitHref,
 } from '@/lib/company/home-domain'
 import HomeDomainSignpost from '@/components/dashboard/HomeDomainSignpost'
 import type { AccountingFramework, EntityType, CompanyRole, Team } from '@/types'
@@ -258,9 +259,15 @@ export default async function DashboardLayout({
       .order('ledger_account', { ascending: true }),
     hostHeader ? resolveBrandByHost(hostHeader) : Promise.resolve(null),
     resolveBrandsForTeams(
-      (allMemberships || []).map(
-        (m) => (m.companies as { team_id?: string | null } | null)?.team_id ?? null,
-      ),
+      // The byrå team's own id rides along so its brand resolves even when
+      // none of the user's companies belong to it (pre-byrå companies have
+      // team_id null; a fresh byrå may have zero clients). Batched and
+      // cached, so this is free on the common path.
+      (allMemberships || [])
+        .map(
+          (m) => (m.companies as { team_id?: string | null } | null)?.team_id ?? null,
+        )
+        .concat(byraTeam ? [byraTeam.id] : []),
     ),
   ])
   const hasWebshop = navFlags.hasWebshop
@@ -279,6 +286,22 @@ export default async function DashboardLayout({
     (allSettingsNames || []).map((s) => [s.company_id, s.company_name as string | null]),
   )
 
+  // Where "Tillbaka till klienter" points: the byrå cockpit's home domain
+  // (WL-01), relative when this host already is that home. The no-company
+  // branch above renders before brands resolve, so only these two branches
+  // carry the href; DashboardNav falls back to '/clients'.
+  const byraTeamWithHref: ByraTeamRef | null = byraTeam
+    ? {
+        ...byraTeam,
+        cockpitHref: resolveCockpitHref({
+          byraTeamId: byraTeam.id,
+          brandByTeam,
+          hostBrandTeamId: hostBrand?.teamId ?? null,
+          canonicalDomain,
+        }),
+      }
+    : null
+
   if (!companyRow || !memberRow) {
     // Stale cookie pointing to a deleted/inaccessible company.
     // Render the empty-state dashboard so user can switch or create a company.
@@ -294,7 +317,7 @@ export default async function DashboardLayout({
       }),
       isTeamMember,
       team,
-      byraTeam,
+      byraTeam: byraTeamWithHref,
       foreignCompanies: [],
       isSandbox: false,
       capabilities: [],
@@ -403,7 +426,7 @@ export default async function DashboardLayout({
     companies: homePartition.visible,
     isTeamMember,
     team,
-    byraTeam,
+    byraTeam: byraTeamWithHref,
     foreignCompanies,
     isSandbox,
     capabilities: entitlements.capabilities,
