@@ -34,14 +34,14 @@ The self-service boundary is intentionally narrow:
 - The caller must be an owner, not merely an admin or member.
 - No company lock date may exist, and no fiscal period may be locked, closed,
   or marked closed in the previous bookkeeping system.
-- No journal entry may exist in any status or source. Drafts, imported entries,
-  opening balances, postings, reversals, and corrections all block the reset.
-- No voucher-sequence row may exist, including a zero-valued sequence. This
-  prevents the same legal entity from receiving two independently restarted
-  voucher-number namespaces.
-- No customer or supplier invoice may exist, even without a journal entry.
-  Issued invoices, credit-note references, and received supplier invoices are
-  retained accounting documents and cannot be stranded in a hidden source.
+- Journal entries, voucher sequences, and customer or supplier invoices do not
+  block (since migration 20260826150000; the 2026-08-18 rule blocked on the
+  first of any of them). They stay unchanged in the retained source, which is
+  write-closed and downloadable from the replacement. The replacement starts a
+  fresh voucher namespace and continues the invoice and arrival-number
+  counters. The unchecked "Radera företag" path produced the same two
+  companies with none of the retention guards, so blocking here only routed
+  owners into a dead end.
 - No bank connection may be pending or active. This prevents the service-role
   sync job from writing new transactions into the retained source after reset.
 - No SIE, bank-file, or tax-account-file import may be pending or processing.
@@ -99,11 +99,12 @@ The following stay on the archived source company unchanged:
 - fiscal periods and their lock or close state
 - documents, hashes, version chains, and voucher links
 - customers and suppliers
+- journal entries, journal-entry lines, and voucher sequences
+- customer and supplier invoices
 - authority and general audit logs
 - extension runtime state, including any non-blocking provider history
 
-Eligibility requires journal-entry, voucher-sequence, customer-invoice, and
-supplier-invoice counts to be zero.
+Their counts are recorded in `company_migration_resets.source_counts`.
 Those tables remain covered by the immutable-source guards and audit counts as
 defense in depth. The replacement company intentionally has no fiscal period,
 journal entry, transaction, document, import record, or voucher sequence. The
@@ -139,7 +140,7 @@ reuse ordinary write-capable screens.
 
 The replacement represents the same legal entity, not a newly formed business.
 Its `next_invoice_number` and `next_arrival_number` therefore continue from the
-source settings even when eligibility confirms that no invoice rows exist.
+source settings whether or not invoice rows exist on the source.
 Those counters can reflect an imported or previously allocated series, and
 resetting them to 1 could reuse a number or conceal a gap. Do not manually reset
 either counter as part of migration recovery. Escalate a suspected numbering
@@ -196,15 +197,9 @@ an incident requiring investigation. Do not repair it by editing the source.
   disposable sandbox data into a retained migration archive.
 - `locked_or_closed_periods`: a company lock date or finalized period exists.
   Do not clear or unlock it to enable reset.
-- `journal_entries_exist`: at least one draft or committed journal entry exists,
-  regardless of whether it came from an import. Do not delete, reverse, or edit
-  the entry to enable reset. Continue in the existing company or escalate for
-  case-specific review.
-- `voucher_sequence_state_exists`: at least one voucher sequence has been
-  created. Do not renumber or remove it to enable reset.
-- `invoice_records_exist`: at least one customer or supplier invoice exists.
-  Do not delete, cancel, credit, or detach it to enable reset. Continue in the
-  existing company or escalate for case-specific review.
+- Journal entries, voucher sequences, and invoices are reported in the retained
+  counts and no longer block (20260826150000). They stay on the source; never
+  delete, reverse, renumber, or detach any of them.
 - `authority_submission_detected`: Accounted has evidence of an authority
   interaction, including a persisted VAT draft, an AGI upload awaiting BankID
   signing, or any generated ROT/RUT payout file. Do not reset even if the owner
@@ -235,7 +230,8 @@ The migration files are
 and
 `supabase/migrations/20260818143004_close_migration_reset_archive_gaps.sql` and
 `supabase/migrations/20260818224000_block_vat_state_migration_reset.sql` and
-`supabase/migrations/20260818231500_block_external_filing_staging_state.sql`.
+`supabase/migrations/20260818231500_block_external_filing_staging_state.sql` and
+`supabase/migrations/20260826150000_allow_migration_reset_with_accounting_records.sql`.
 Apply them only to the permitted `erpbase` staging branch through the normal
 migration workflow, then deploy application code. Never deploy the UI/API
 before all listed migrations exist.
@@ -262,8 +258,7 @@ applied migration file.
 
 Escalate to Emil and an accounting/legal reviewer when the owner cannot make
 the external-filing attestation, the company is outside the 30-day window, a
-period is closed or locked, any journal entry or voucher sequence exists, or a
-customer or supplier invoice exists, or a known authority submission exists. A
+period is closed or locked, or a known authority submission exists. A
 live bank connection is operational, not a legal override case: disconnect it
 before retrying. The safe fallback is to
 retain the source company and perform no reset.
