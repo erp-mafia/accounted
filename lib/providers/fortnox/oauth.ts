@@ -38,8 +38,11 @@ export function fortnoxScopeFlag(
   envValue: string | undefined,
   hostedDefault: boolean,
 ): boolean {
-  if (envValue === undefined || envValue === '') return hostedDefault;
-  return envValue === 'true';
+  // Trimmed: a stray space in a hand-edited .env line must not silently
+  // flip a scope off and read as a missing feature.
+  const value = envValue?.trim();
+  if (value === undefined || value === '') return hostedDefault;
+  return value === 'true';
 }
 
 /**

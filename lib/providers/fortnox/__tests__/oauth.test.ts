@@ -60,6 +60,7 @@ describe('Fortnox OAuth scopes', () => {
     expect(fortnoxScopeFlag(undefined, false)).toBe(false);
     expect(fortnoxScopeFlag('', true)).toBe(true);
     expect(fortnoxScopeFlag('true', false)).toBe(true);
+    expect(fortnoxScopeFlag(' true ', false)).toBe(true);
     expect(fortnoxScopeFlag('false', true)).toBe(false);
     expect(fortnoxScopeFlag('yes', true)).toBe(false);
   });
