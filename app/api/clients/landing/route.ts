@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { withRouteContext } from '@/lib/api/with-route-context'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { resolveLandingDestination } from '@/lib/company/landing-server'
 
 /**
@@ -10,10 +10,20 @@ import { resolveLandingDestination } from '@/lib/company/landing-server'
  * auth surfaces (login and MFA-verify pages) that cannot call it in-process.
  * Called when no explicit destination was requested; any failure degrades to
  * '/' at the caller.
+ *
+ * Uses requireAuth() directly (the sanctioned withRouteContext opt-out, MFA
+ * still enforced) because the decision needs no active company. Byrå staff
+ * without a company of their own are the cockpit's primary persona and must
+ * still land on /clients; withRouteContext would 4xx them with
+ * COMPANY_CONTEXT_MISSING.
  */
-export const GET = withRouteContext('clients.landing', async (request, ctx) => {
+export async function GET(request: Request) {
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
+  const { user, supabase } = auth
+
   const host =
     request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? ''
-  const destination = await resolveLandingDestination(ctx.supabase, ctx.user.id, host)
+  const destination = await resolveLandingDestination(supabase, user.id, host)
   return NextResponse.json({ data: { destination } })
-})
+}

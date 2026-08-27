@@ -21,11 +21,18 @@ export async function resolveLandingDestination(
 ): Promise<'/clients' | '/'> {
   const hostBrand = host ? await resolveBrandByHost(host) : null
 
-  const { data: memberships } = await supabase
+  const { data: memberships, error } = await supabase
     .from('team_members')
     .select('team_id, teams:team_id!inner(kind)')
     .eq('user_id', userId)
     .eq('teams.kind', 'byra')
+
+  if (error) {
+    // Degrading to '/' is safe but must not be silent: a persistent query
+    // failure would otherwise look identical to "no byrå membership".
+    console.error('[landing-server] byra membership query failed:', error)
+    return '/'
+  }
 
   const byraTeamIds = (memberships ?? []).map((m) => m.team_id as string)
   if (byraTeamIds.length === 0) return '/'

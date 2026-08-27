@@ -35,6 +35,30 @@ vi.mock('@/lib/company/landing-server', () => ({
 
 import { GET } from '../route'
 
+// Shared by the MCP OAuth consent and WL-14 describe blocks: an SSR client
+// whose team_members lookup finds an existing membership.
+function clientWithTeamMembership() {
+  const chain: Record<string, ReturnType<typeof vi.fn>> = {
+    select: vi.fn(() => chain),
+    eq: vi.fn(() => chain),
+    limit: vi.fn(() => chain),
+    maybeSingle: vi.fn().mockResolvedValue({ data: { team_id: 'team-1' }, error: null }),
+  }
+  return {
+    auth: {
+      verifyOtp,
+      exchangeCodeForSession,
+      getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
+      mfa: {
+        getAuthenticatorAssuranceLevel: vi.fn().mockResolvedValue({ data: null }),
+        listFactors: vi.fn().mockResolvedValue({ data: null }),
+      },
+    },
+    from: vi.fn(() => chain),
+    rpc: vi.fn(),
+  }
+}
+
 describe('GET /auth/callback: recovery flow', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -168,28 +192,6 @@ describe('GET /auth/callback: resuming an MCP OAuth consent flow (issue #1814)',
   // for a fresh session; anything else still lands on the dashboard.
   const CONSENT = '/api/mcp-oauth/authorize?response_type=code&state=xyz'
 
-  function clientWithTeamMembership() {
-    const chain: Record<string, ReturnType<typeof vi.fn>> = {
-      select: vi.fn(() => chain),
-      eq: vi.fn(() => chain),
-      limit: vi.fn(() => chain),
-      maybeSingle: vi.fn().mockResolvedValue({ data: { team_id: 'team-1' }, error: null }),
-    }
-    return {
-      auth: {
-        verifyOtp,
-        exchangeCodeForSession,
-        getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
-        mfa: {
-          getAuthenticatorAssuranceLevel: vi.fn().mockResolvedValue({ data: null }),
-          listFactors: vi.fn().mockResolvedValue({ data: null }),
-        },
-      },
-      from: vi.fn(() => chain),
-      rpc: vi.fn(),
-    }
-  }
-
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(createServerClient).mockImplementation(() => clientWithTeamMembership() as never)
@@ -249,28 +251,6 @@ describe('GET /auth/callback: resuming an MCP OAuth consent flow (issue #1814)',
 })
 
 describe('GET /auth/callback: WL-14 cockpit landing', () => {
-  function clientWithTeamMembership() {
-    const chain: Record<string, ReturnType<typeof vi.fn>> = {
-      select: vi.fn(() => chain),
-      eq: vi.fn(() => chain),
-      limit: vi.fn(() => chain),
-      maybeSingle: vi.fn().mockResolvedValue({ data: { team_id: 'team-1' }, error: null }),
-    }
-    return {
-      auth: {
-        verifyOtp,
-        exchangeCodeForSession,
-        getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
-        mfa: {
-          getAuthenticatorAssuranceLevel: vi.fn().mockResolvedValue({ data: null }),
-          listFactors: vi.fn().mockResolvedValue({ data: null }),
-        },
-      },
-      from: vi.fn(() => chain),
-      rpc: vi.fn(),
-    }
-  }
-
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(createServerClient).mockImplementation(() => clientWithTeamMembership() as never)

@@ -13,19 +13,12 @@ vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
-vi.mock('@/lib/company/context', () => ({
-  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
-  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
-}))
-
 const resolveLandingDestinationMock = vi.fn()
 vi.mock('@/lib/company/landing-server', () => ({
   resolveLandingDestination: (...args: unknown[]) => resolveLandingDestinationMock(...args),
 }))
 
 import { GET } from '../route'
-
-const noParams = { params: Promise.resolve({}) }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -40,7 +33,7 @@ describe('GET /api/clients/landing', () => {
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
 
-    const res = await GET(createMockRequest('/api/clients/landing'), noParams)
+    const res = await GET(createMockRequest('/api/clients/landing'))
     expect(res.status).toBe(401)
   })
 
@@ -51,13 +44,14 @@ describe('GET /api/clients/landing', () => {
     const res = await GET(
       createMockRequest('/api/clients/landing', {
         headers: { 'x-forwarded-host': 'app.amnas.se' },
-      }),
-      noParams
+      })
     )
     const { status, body } = await parseJsonResponse<{ data: { destination: string } }>(res)
 
     expect(status).toBe(200)
     expect(body.data.destination).toBe('/clients')
+    // No active-company requirement: byrå staff without a company of their
+    // own (the cockpit's primary persona) must still get a destination.
     expect(resolveLandingDestinationMock).toHaveBeenCalledWith(supabase, 'user-1', 'app.amnas.se')
   })
 })
