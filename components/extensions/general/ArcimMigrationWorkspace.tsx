@@ -219,28 +219,14 @@ function apiErrorCode(data: unknown): string | null {
   return null
 }
 
-interface SkipReasons {
-  duplicate?: number
-  inactive?: number
-  failed?: number
-  noMatch?: number
-}
-
-interface MigrationStepError {
-  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'assets' | 'reconciliation'
-  code: string | null
-  message: string
-}
-
-interface MigrationResults {
-  companyInfo?: { imported: boolean }
-  customers?: { total: number; imported: number; updated?: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
-  suppliers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
-  salesInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
-  supplierInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
-  assets?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons & { unsupported?: number }; errorSample?: string; scopesMissing?: boolean }
-  stepErrors?: MigrationStepError[]
-}
+// The migration result contract is owned by the extension: a second
+// hand-written copy here would drift from the API. Type-only import, same
+// pattern as the other extension workspaces.
+import type {
+  MigrationResults,
+  MigrationStepError,
+  SkipReasons,
+} from '@/extensions/general/arcim-migration/types'
 import AccountMappingStep from '@/components/import/AccountMappingStep'
 import ArcimMigrationTheater from '@/components/extensions/general/ArcimMigrationTheater'
 import TheaterCanvas from '@/components/import/TheaterCanvas'
@@ -918,25 +904,33 @@ function PreviewStep({
           </div>
         )}
 
-        {/* SIE stats: one quiet statline, the same grammar as the import
-            reveal, instead of a boxed summary. */}
-        {preview?.sieAvailable && preview.sieStats && (
-          <p className="animate-fade-in mt-3 text-[13px] text-muted-foreground tabular-nums">
-            {preview.sieStats.accountCount.toLocaleString('sv-SE')} konton
-            {' · '}
-            {preview.sieStats.transactionCount.toLocaleString('sv-SE')} verifikationer
-            {' · '}
-            {preview.sieStats.fiscalYears.length === 1
-              ? `räkenskapsåret ${preview.sieStats.fiscalYears[0]}`
-              : `${preview.sieStats.fiscalYears.length} räkenskapsår: ${preview.sieStats.fiscalYears.join(', ')}`}
-            {preview.assetStats && preview.assetStats.importable > 0 && (
-              <>
-                {' · '}
-                {preview.assetStats.importable.toLocaleString('sv-SE')} anläggningstillgångar
-              </>
-            )}
-          </p>
-        )}
+        {/* SIE + asset stats: one quiet statline, the same grammar as the
+            import reveal, instead of a boxed summary. The asset count renders
+            on its own when the SIE fetch failed: the preview endpoint sets
+            them independently. */}
+        {(() => {
+          const sieStats = preview?.sieAvailable ? preview.sieStats : null
+          const assetCount = preview?.assetStats?.importable ?? 0
+          if (!sieStats && assetCount === 0) return null
+          const parts: string[] = []
+          if (sieStats) {
+            parts.push(`${sieStats.accountCount.toLocaleString('sv-SE')} konton`)
+            parts.push(`${sieStats.transactionCount.toLocaleString('sv-SE')} verifikationer`)
+            parts.push(
+              sieStats.fiscalYears.length === 1
+                ? `räkenskapsåret ${sieStats.fiscalYears[0]}`
+                : `${sieStats.fiscalYears.length} räkenskapsår: ${sieStats.fiscalYears.join(', ')}`,
+            )
+          }
+          if (assetCount > 0) {
+            parts.push(`${assetCount.toLocaleString('sv-SE')} anläggningstillgångar`)
+          }
+          return (
+            <p className="animate-fade-in mt-3 text-[13px] text-muted-foreground tabular-nums">
+              {parts.join(' · ')}
+            </p>
+          )
+        })()}
 
         {preview && !preview.sieAvailable && !isLoading && preview.hasSieData && (
           <p className="animate-fade-in mt-3 text-[13px] text-muted-foreground">
@@ -1772,7 +1766,7 @@ function ResultStep({
         ? fyCount === 1
           ? `${totalJournalEntries.toLocaleString('sv-SE')} verifikationer är på plats.`
           : `${totalJournalEntries.toLocaleString('sv-SE')} verifikationer över ${fyCount} räkenskapsår är på plats.`
-        : !allSieSucceeded || totalErrors > 0
+        : (sieResults.length > 0 && !allSieSucceeded) || totalErrors > 0
           ? 'Migreringen är klar, med anmärkningar.'
           : 'Migreringen är klar.'
 
@@ -1844,7 +1838,7 @@ function ResultStep({
         detail: results.assets.scopesMissing
           ? 'Fortnox-anslutningen saknar behörighet till anläggningsregistret (assets-scope). Bokförda värden är ändå med via SIE.'
           : results.assets.skipped > 0
-            ? `${results.assets.skipped} hoppades över${results.assets.skipReasons?.duplicate ? ` (${results.assets.skipReasons.duplicate} fanns redan)` : ''}`
+            ? formatSkipReasons(results.assets.skipReasons, 'asset', results.assets.errorSample) ?? `${results.assets.skipped} hoppades över`
             : undefined,
         failed: !results.assets.scopesMissing &&
           entityRowStatus(results.assets.imported, results.assets.skipReasons) === 'error',
@@ -2008,14 +2002,21 @@ function groupStepErrors(errors: MigrationStepError[]): { message: string; steps
 }
 
 function formatSkipReasons(
-  reasons?: SkipReasons,
-  entityType?: 'customer' | 'supplier' | 'invoice',
+  reasons?: SkipReasons & { unsupported?: number },
+  entityType?: 'customer' | 'supplier' | 'invoice' | 'asset',
   errorSample?: string,
 ): string | undefined {
   if (!reasons) return undefined
   const parts: string[] = []
   if (reasons.duplicate) parts.push(`${reasons.duplicate} fanns redan`)
-  if (reasons.inactive) parts.push(`${reasons.inactive} inaktiv${reasons.inactive > 1 ? 'a' : ''}`)
+  if (reasons.inactive) {
+    parts.push(
+      entityType === 'asset'
+        ? `${reasons.inactive} avyttrad${reasons.inactive > 1 ? 'e' : ''} eller annullerad${reasons.inactive > 1 ? 'e' : ''}`
+        : `${reasons.inactive} inaktiv${reasons.inactive > 1 ? 'a' : ''}`,
+    )
+  }
+  if (reasons.unsupported) parts.push(`${reasons.unsupported} kunde inte tolkas`)
   if (reasons.noMatch) {
     const matchLabel = entityType === 'invoice' ? 'utan matchning' : 'utan matchning'
     parts.push(`${reasons.noMatch} ${matchLabel}`)

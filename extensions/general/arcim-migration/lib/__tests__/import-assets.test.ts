@@ -288,6 +288,30 @@ describe('importProviderAssets', () => {
     expect(createAssetMock).not.toHaveBeenCalled()
   })
 
+  it('skips a numbered asset colliding with a markerless existing row on name and date', async () => {
+    routeFetch(fetchSpy, [
+      { match: '/assets/types', respond: () => jsonResponse({ Types: [EQUIPMENT_TYPE] }) },
+      { match: '/assets', respond: () => jsonResponse({ Assets: [LAPTOP] }) },
+    ])
+
+    const result = await importProviderAssets({
+      ...options,
+      supabase: mockSupabaseWithExistingAssets([
+        // Hand-created before any import: no marker ties it to Fortnox, but
+        // re-inserting A-1 over it would duplicate the asset.
+        { name: 'MacBook Pro', acquisition_date: '2024-03-01', notes: null },
+      ]),
+    })
+
+    expect(result).toMatchObject({
+      total: 1,
+      imported: 0,
+      skipped: 1,
+      skipReasons: { duplicate: 1 },
+    })
+    expect(createAssetMock).not.toHaveBeenCalled()
+  })
+
   it('imports two assets sharing name and date when their Fortnox numbers differ', async () => {
     routeFetch(fetchSpy, [
       { match: '/assets/types', respond: () => jsonResponse({ Types: [EQUIPMENT_TYPE] }) },

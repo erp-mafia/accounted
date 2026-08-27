@@ -1,9 +1,9 @@
 /**
- * Asset register import: fetch anläggningsregistret from the provider and
+ * Asset register import: fetch the provider asset register and
  * create matching rows in the local asset register.
  *
  * Fortnox only. The SIE import already carries the bookkeeping VALUES
- * (anskaffningskonton 1xxx and ackumulerade avskrivningar), so this import
+ * (the 1xxx acquisition accounts and accumulated depreciation), so this import
  * writes NO journal entries: it recreates the register metadata (per-asset
  * acquisition data, useful life, account triple) that SIE cannot express, so
  * the depreciation engine can keep depreciating after the migration.
@@ -76,7 +76,7 @@ export interface AssetsStepResult {
 /**
  * BAS account class → asset category, mirroring the ranges documented on the
  * assets table (migration 20260516120000). The account is the TYPE's
- * anskaffningskonto as configured in Fortnox, which is the most reliable
+ * acquisition account (anskaffningskonto) as configured in Fortnox, which is the most reliable
  * category signal the API exposes.
  */
 export function categoryForAssetAccount(account: string | null): AssetCategory | null {
@@ -111,7 +111,7 @@ export function monthsBetween(fromIso: string, toIso: string): number {
   return Math.max(1, Math.round(months))
 }
 
-/** K2 schablon (5 år) when the source gives no usable depreciation window. */
+/** K2 standard useful life (schablon, 5 years) when the source gives no usable depreciation window. */
 export const FALLBACK_USEFUL_LIFE_MONTHS = 60
 
 export interface MappedAsset {
@@ -180,8 +180,9 @@ export function mapFortnoxAsset(
 
   // Account triple from the Fortnox type where it is shaped like the BAS
   // account the column expects; anything else falls back to the category
-  // defaults inside createAsset. AccountDepreciation is the 1xx9 ackumulerade
-  // konto and AccountValueLoss the 78xx cost account in Fortnox's model.
+  // defaults inside createAsset. AccountDepreciation is the 1xx9 accumulated-
+  // depreciation account and AccountValueLoss the 78xx cost account in
+  // Fortnox's model.
   const accumulated = accountString(type?.AccountDepreciation)
   const expense = accountString(type?.AccountValueLoss)
 
@@ -323,6 +324,17 @@ export async function importProviderAssets(
       .map((row) => fortnoxNumberFromNotes(row.notes))
       .filter((n): n is string => n !== null),
   )
+  // Pre-existing rows WITHOUT a marker (created by hand, or with edited
+  // notes) can still collide with a numbered source asset on name + date:
+  // a numbered asset must not re-insert over such a row just because no
+  // marker ties them together. Snapshot of the initial state only: newly
+  // imported numbered assets are deliberately NOT added here, so two source
+  // assets that legitimately share name and date both import.
+  const markerlessExistingKeys = new Set(
+    existing
+      .filter((row) => fortnoxNumberFromNotes(row.notes) === null)
+      .map((row) => `${row.name ?? ''}|${row.acquisition_date ?? ''}`),
+  )
 
   let imported = 0
   let skipped = 0
@@ -349,7 +361,7 @@ export async function importProviderAssets(
     const fortnoxNumber = asset.Number?.trim() || null
     const key = `${mapped.input.name}|${mapped.input.acquisition_date}`
     const alreadyImported = fortnoxNumber
-      ? existingFortnoxNumbers.has(fortnoxNumber)
+      ? existingFortnoxNumbers.has(fortnoxNumber) || markerlessExistingKeys.has(key)
       : existingKeys.has(key)
     if (alreadyImported) {
       skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
