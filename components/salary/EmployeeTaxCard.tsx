@@ -23,6 +23,12 @@ export interface EmployeeTaxValue {
   jamkning_percentage: number | null
   jamkning_valid_from: string | null
   jamkning_valid_to: string | null
+  /**
+   * True once the user edited any of the three jämkning inputs this session.
+   * Hosts use it (via jamkningPatch) to leave a stored beslut alone on
+   * unrelated edits instead of re-sending or wiping it.
+   */
+  jamkning_touched: boolean
 }
 
 interface EmployeeTaxCardProps {
@@ -83,6 +89,11 @@ export default function EmployeeTaxCard({
   )
   const [jamkningFrom, setJamkningFrom] = useState(initial?.jamkning_valid_from ?? '')
   const [jamkningTo, setJamkningTo] = useState(initial?.jamkning_valid_to ?? '')
+  // Set by the three jämkning handlers. Until then the seeded beslut is shown
+  // as-is: a row stored through the API/MCP without an end date (allowed by
+  // the schema) must not block the form's native validation on an unrelated
+  // edit, and must not be re-sent either (see jamkningPatch).
+  const [jamkningTouched, setJamkningTouched] = useState(false)
 
   const requiresTable = fSkatt === 'a_skatt' && !sido
 
@@ -90,9 +101,17 @@ export default function EmployeeTaxCard({
     const n = parseFloat(jamkningPct)
     return Number.isFinite(n) ? n : null
   })()
-  // Jämkning only reaches the engine for A-skatt without sidoinkomst, so like
-  // tax_table_number it is reported as null (= clear the beslut) otherwise.
+  // The jämkning inputs are only rendered for A-skatt without sidoinkomst, so
+  // like tax_table_number they are reported as null otherwise. Hosts must not
+  // treat that null as "clear the beslut": the edit page routes the value
+  // through jamkningPatch, which omits the keys whenever the inputs were
+  // hidden or untouched, so a stored beslut survives toggling the status.
   const hasJamkning = requiresTable && jamkningValue !== null
+  // Seeded beslut missing a date: the engine will not apply it. Shown as a
+  // non-blocking hint until the user edits the fields, at which point the
+  // native `required` on both dates takes over.
+  const jamkningIncomplete =
+    !jamkningTouched && jamkningValue !== null && (!jamkningFrom || !jamkningTo)
 
   const derivedColumn = useMemo(
     () => deriveTaxColumn(personnummer, incomeYear),
@@ -121,6 +140,7 @@ export default function EmployeeTaxCard({
       jamkning_percentage: hasJamkning ? jamkningValue : null,
       jamkning_valid_from: hasJamkning ? jamkningFrom || null : null,
       jamkning_valid_to: hasJamkning ? jamkningTo || null : null,
+      jamkning_touched: jamkningTouched,
     })
   }, [
     fSkatt,
@@ -133,6 +153,7 @@ export default function EmployeeTaxCard({
     jamkningValue,
     jamkningFrom,
     jamkningTo,
+    jamkningTouched,
   ])
 
   const body = (
@@ -290,10 +311,12 @@ export default function EmployeeTaxCard({
 
             {/* Jämkning: a Skatteverket beslut overrides the table with a fixed
                 percentage for a bounded period. The engine only applies it when
-                BOTH dates are set, so both are required as soon as a percentage
-                is entered (native `required`: both hosts render this inside a
-                <form>). The table fields stay visible above: they apply again
-                once the beslut expires. */}
+                BOTH dates are set, so both are required as soon as the user
+                edits the beslut (native `required`: both hosts render this
+                inside a <form>). A seeded beslut is never blocked on: the API
+                keeps valid_to optional, so a row stored that way must stay
+                editable elsewhere. The table fields stay visible above: they
+                apply again once the beslut expires. */}
             <div className="space-y-2">
               <Label htmlFor="jamkning_percentage">
                 <InfoTooltip content={t('tax_jamkning_tooltip')}>
@@ -308,7 +331,10 @@ export default function EmployeeTaxCard({
                 step="any"
                 inputMode="decimal"
                 value={jamkningPct}
-                onChange={(e) => setJamkningPct(e.target.value)}
+                onChange={(e) => {
+                  setJamkningPct(e.target.value)
+                  setJamkningTouched(true)
+                }}
                 disabled={disabled}
               />
               <p className="text-xs text-muted-foreground">{t('tax_jamkning_hint')}</p>
@@ -326,8 +352,11 @@ export default function EmployeeTaxCard({
                       id="jamkning_valid_from"
                       type="date"
                       value={jamkningFrom}
-                      onChange={(e) => setJamkningFrom(e.target.value)}
-                      required
+                      onChange={(e) => {
+                        setJamkningFrom(e.target.value)
+                        setJamkningTouched(true)
+                      }}
+                      required={jamkningTouched}
                       disabled={disabled}
                     />
                   </div>
@@ -341,13 +370,20 @@ export default function EmployeeTaxCard({
                       type="date"
                       value={jamkningTo}
                       min={jamkningFrom || undefined}
-                      onChange={(e) => setJamkningTo(e.target.value)}
-                      required
+                      onChange={(e) => {
+                        setJamkningTo(e.target.value)
+                        setJamkningTouched(true)
+                      }}
+                      required={jamkningTouched}
                       disabled={disabled}
                     />
                   </div>
                 </div>
-                <p className="text-xs text-muted-foreground">{t('tax_jamkning_dates_hint')}</p>
+                {jamkningIncomplete ? (
+                  <p className="text-xs text-attn">{t('tax_jamkning_incomplete_hint')}</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">{t('tax_jamkning_dates_hint')}</p>
+                )}
               </div>
             )}
           </>

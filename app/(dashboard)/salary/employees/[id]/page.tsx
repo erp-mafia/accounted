@@ -34,6 +34,7 @@ import type { EmployeeMasked } from '@/types'
 import { EmployeeBenefitsPanel } from '@/components/salary/EmployeeBenefitsPanel'
 import { OpeningBalancesPanel } from '@/components/salary/OpeningBalancesPanel'
 import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/EmployeeTaxCard'
+import { jamkningPatch } from '@/lib/salary/jamkning-patch'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 
 const EMPLOYMENT_LABEL_KEYS: Record<string, string> = {
@@ -175,17 +176,14 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       tax_table_number: tax?.tax_table_number ?? undefined,
       tax_column: tax?.tax_column ?? undefined,
       tax_municipality: tax?.tax_municipality || undefined,
-      // Jämkning is the exception to the sparse-patch rule above: an explicit
-      // null is intentional (null = clear the beslut; the route spreads the
-      // body so null reaches the UPDATE). Guarded on `tax` so a card that has
-      // not reported yet can never wipe a stored beslut.
-      ...(tax
-        ? {
-            jamkning_percentage: tax.jamkning_percentage,
-            jamkning_valid_from: tax.jamkning_valid_from,
-            jamkning_valid_to: tax.jamkning_valid_to,
-          }
-        : {}),
+      // Jämkning: the three keys are sent with explicit values (null = clear
+      // the beslut; the route spreads the body so null reaches the UPDATE)
+      // only when the inputs were visible (A-skatt, not sidoinkomst) and the
+      // user edited them. Hidden or untouched, the keys are omitted like any
+      // other sparse field, so toggling sidoinkomst / FA-skatt or fixing a
+      // phone number never wipes a stored beslut. Guarded on `tax` so a card
+      // that has not reported yet sends nothing.
+      ...(tax ? jamkningPatch(tax) : {}),
       email: form.get('email') as string || undefined,
       phone: form.get('phone') as string || undefined,
       address_line1: form.get('address_line1') as string || undefined,

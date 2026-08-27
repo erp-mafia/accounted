@@ -129,6 +129,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
     jamkning_percentage: null,
     jamkning_valid_from: null,
     jamkning_valid_to: null,
+    jamkning_touched: false,
   })
 
   function setDimension(dimNo: string, code: string | null) {

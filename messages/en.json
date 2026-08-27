@@ -7506,6 +7506,7 @@
     "tax_jamkning_valid_from": "Valid from",
     "tax_jamkning_valid_to": "Valid to",
     "tax_jamkning_dates_hint": "Both dates are required: the decision is only applied within its validity period.",
+    "tax_jamkning_incomplete_hint": "The decision is missing a start or end date and is not applied until both are set.",
     "tax_jamkning_detail_period": "{from} to {to}",
     "benefits_title": "Benefits",
     "benefits_add": "Add benefit",
