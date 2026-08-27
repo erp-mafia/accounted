@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   partitionCompaniesByHomeDomain,
   isCompanyHomedOnHost,
+  isCockpitLandingRole,
   resolveLandingPath,
   type TeamBrandRef,
 } from '../home-domain'
@@ -135,6 +136,25 @@ describe('isCompanyHomedOnHost', () => {
         hostBrandTeamId: 'byra-1',
       }),
     ).toBe(false)
+  })
+})
+
+describe('isCockpitLandingRole', () => {
+  it('owner gets the automatic cockpit landing', () => {
+    expect(isCockpitLandingRole('owner')).toBe(true)
+  })
+
+  it('admin gets the automatic cockpit landing', () => {
+    expect(isCockpitLandingRole('admin')).toBe(true)
+  })
+
+  it('plain member lands like a regular user', () => {
+    expect(isCockpitLandingRole('member')).toBe(false)
+  })
+
+  it('unknown roles default to the regular landing (allowlist)', () => {
+    expect(isCockpitLandingRole('viewer')).toBe(false)
+    expect(isCockpitLandingRole('')).toBe(false)
   })
 })
 
