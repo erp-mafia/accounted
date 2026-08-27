@@ -6,7 +6,7 @@ import {
   parseJsonResponse,
 } from '@/tests/helpers'
 
-const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -77,6 +77,10 @@ describe('GET /api/clients/landing', () => {
     const { body } = await parseJsonResponse<{ data: { destination: string } }>(res)
 
     expect(body.data.destination).toBe('/clients')
+    // The mock returns fixtures regardless of the select string, so pin the
+    // role column into the query: dropping it would send every owner to '/'
+    // while these tests stayed green.
+    expect(findCall('team_members', 'select')?.[0]).toContain('role')
   })
 
   it('byrå admin on the canonical host lands in the cockpit', async () => {

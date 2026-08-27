@@ -91,8 +91,21 @@ export default async function DashboardPage() {
     throw new Error(`company_settings fetch failed: ${settingsError.message}`)
   }
 
-  // If onboarding is not complete, redirect to onboarding
+  // If onboarding is not complete, redirect to onboarding. Exception: a byrå
+  // member who did NOT explicitly pick this company this session goes to the
+  // cockpit instead. The auto-resolved company can be onboarding-incomplete
+  // through no action of theirs (a client mid migration-reset repoints every
+  // member's active_company_id), and the first-run wizard is a dead end for
+  // role 'member': WL-15 refuses client creation and the shell has no nav.
+  // Before the owner/admin landing gate the /byra bounce above shielded every
+  // byrå member from this path; this keeps that shield without the gate.
   if (!settings?.onboarding_complete) {
+    if (
+      !cookieStore.has(COMPANY_PICKED_COOKIE) &&
+      teamMemberships.some((m) => m.teams?.kind === 'byra')
+    ) {
+      redirect('/byra')
+    }
     redirect('/onboarding')
   }
 
