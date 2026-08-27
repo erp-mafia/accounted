@@ -194,13 +194,14 @@ describe('POST /api/supplier-invoices/payment-batches', () => {
   })
 
   it('creates a batch and returns 201', async () => {
+    // Queue is shared between from() and rpc(): the last entry is the
+    // create_supplier_payment_batch RPC result.
     enqueueMany([
       { data: companyRow },
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
-      { data: batchRow() },
-      { data: null },
+      { data: { ok: true, batch: batchRow() } },
     ])
     const response = await createBatch(
       createMockRequest('/api/supplier-invoices/payment-batches', {
