@@ -79,10 +79,16 @@ describe('Turnstile integration contract', () => {
     expect(login).toContain('action="accounted_login"')
     expect(login).toContain('action="accounted_password_reset"')
 
+    // The register page's email flow moved server-side (invite-only brand
+    // domain gate, 2026-08-27): the captcha token must travel to
+    // POST /api/auth/signup, and that route must forward it into the GoTrue
+    // signUp call, so the CAPTCHA still guards the flow end to end.
     expect(register).toMatch(
-      /signUp\([\s\S]*?captchaTokenOptions\(captchaToken\)/,
+      /fetch\('\/api\/auth\/signup'[\s\S]*?captchaTokenOptions\(captchaToken\)/,
     )
     expect(register).toContain('action="accounted_signup"')
+    const signupRoute = readRepoFile('app/api/auth/signup/route.ts')
+    expect(signupRoute).toMatch(/signUp\(\{[\s\S]*?captchaToken/)
 
     expect(sandbox).toMatch(
       /signInAnonymously\([\s\S]*?captchaTokenOptions\(captchaToken\)/,
