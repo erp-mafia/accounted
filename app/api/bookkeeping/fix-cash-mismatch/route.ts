@@ -210,11 +210,22 @@ export const POST = withRouteContext(
         if (relinkPayErr) throw relinkPayErr
 
         // Re-link the transaction too, so /transactions reflects the correct
-        // voucher when the user clicks through.
+        // voucher when the user clicks through. reverseEntry (step 1) resets
+        // the whole booked state on the linked row: journal_entry_id,
+        // is_business, category, reconciliation_method (the #1950 return-to-
+        // Att-bokfora fix), so restoring only the pointer would leave a booked
+        // row with is_business NULL, visible in Att bokfora and the nav badge
+        // (worklist predicate: is_business IS NULL). Restore the full booked
+        // triple, mirroring the match-invoice route's final update.
         if (t.transaction_id) {
           const { error: relinkTxErr } = await supabase
             .from('transactions')
-            .update({ journal_entry_id: clearing.id })
+            .update({
+              journal_entry_id: clearing.id,
+              is_business: true,
+              category: 'income_services',
+              reconciliation_method: null,
+            })
             .eq('id', t.transaction_id)
             .eq('company_id', companyId)
           if (relinkTxErr) {
