@@ -34,6 +34,7 @@ const brandRow = {
   sender_domain: null,
   sender_domain_status: 'unverified',
   resend_domain_id: null,
+  signup_mode: 'open',
 }
 
 let mock: ReturnType<typeof createQueuedMockSupabase>
@@ -78,6 +79,7 @@ describe('resolveBrandByHost', () => {
       senderDomain: null,
       senderDomainStatus: 'unverified',
       resendDomainId: null,
+      signupMode: 'open',
     })
     expect(mock.findCall('brands', 'eq')).toEqual(['domain', 'app.siffra.se'])
   })

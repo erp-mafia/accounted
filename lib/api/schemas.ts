@@ -3839,3 +3839,21 @@ export const FiscalYearResetSchema = z.object({
 export const NoticeDismissSchema = z.object({
   notice_id: z.string().min(1).max(200),
 })
+
+/**
+ * Brand signup access (invite-only white-label domains, 2026-08-27).
+ * Emails are lowercased here so they match the CHECK-enforced lowercase
+ * storage in brand_signup_allowlist.
+ */
+export const BrandSignupModeSchema = z.object({
+  signup_mode: z.enum(['open', 'invite_only']),
+})
+
+export const BrandAllowlistAddSchema = z.object({
+  email: z.string().trim().toLowerCase().max(320).pipe(z.string().email()),
+  note: z.string().trim().max(200).optional(),
+})
+
+export const BrandAllowlistRemoveSchema = z.object({
+  id: z.string().uuid(),
+})

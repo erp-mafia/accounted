@@ -53,6 +53,15 @@ export async function createCompanyCore(
   supabase: SupabaseClient,
   input: CreateCompanyInput,
   createCompanyRow: () => PromiseLike<{ data: unknown; error: unknown }>,
+  // Client used for rollback deletes. Defaults to `supabase`, but a caller
+  // whose createCompanyRow ran under the SERVICE role (the brand-signup path,
+  // lib/company/actions.ts) MUST pass the service client here: `companies`
+  // has RLS enabled and no FOR DELETE policy, so a cookie-session delete of
+  // the companies row is a silent 0-row no-op. Rolling back a service-created
+  // company with the session client would strip its members but leave the
+  // orphaned companies row behind, attached to whichever team it was created
+  // on. The service client bypasses RLS, so its delete actually removes it.
+  rollbackClient: SupabaseClient = supabase,
 ): Promise<CreateCompanyResult> {
   // Org-number format validation. We intentionally do NOT enforce
   // uniqueness: the same org number may legitimately appear on multiple
@@ -84,11 +93,11 @@ export async function createCompanyCore(
   const rollback = async (reason: string, err: unknown) => {
     console.error(`[createCompany] rolling back ${newCompanyId}: ${reason}`, err)
     const deletions: Array<[table: string, run: () => PromiseLike<{ error: unknown }>]> = [
-      ['company_settings', () => supabase.from('company_settings').delete().eq('company_id', newCompanyId)],
-      ['fiscal_periods', () => supabase.from('fiscal_periods').delete().eq('company_id', newCompanyId)],
-      ['chart_of_accounts', () => supabase.from('chart_of_accounts').delete().eq('company_id', newCompanyId)],
-      ['company_members', () => supabase.from('company_members').delete().eq('company_id', newCompanyId)],
-      ['companies', () => supabase.from('companies').delete().eq('id', newCompanyId)],
+      ['company_settings', () => rollbackClient.from('company_settings').delete().eq('company_id', newCompanyId)],
+      ['fiscal_periods', () => rollbackClient.from('fiscal_periods').delete().eq('company_id', newCompanyId)],
+      ['chart_of_accounts', () => rollbackClient.from('chart_of_accounts').delete().eq('company_id', newCompanyId)],
+      ['company_members', () => rollbackClient.from('company_members').delete().eq('company_id', newCompanyId)],
+      ['companies', () => rollbackClient.from('companies').delete().eq('id', newCompanyId)],
     ]
     for (const [table, run] of deletions) {
       const { error: deleteError } = await run()

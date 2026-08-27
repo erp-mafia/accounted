@@ -57,6 +57,11 @@ export interface V1ErrorContext {
   status?: number
   /** Agent-actionable next-step suggestions: { unlock_endpoint, next_open_period }. */
   validAlternatives?: Record<string, unknown>
+  /**
+   * Seconds to advertise in `Retry-After`. Set on retryable throttles so an
+   * unattended client can pace itself instead of backing off blindly.
+   */
+  retryAfterSeconds?: number
 }
 
 function docsUrlFor(code: string): string {
@@ -119,6 +124,12 @@ async function rewriteEnvelope(
 function finalize(res: NextResponse, ctx: V1ErrorContext): NextResponse {
   res.headers.set('X-Request-Id', ctx.requestId)
   res.headers.set(API_V1_VERSION_HEADER, API_V1_VERSION)
+  // The published skill tells agents to honor Retry-After on a 429. Until
+  // this landed, /api/v1 never sent one, so that instruction pointed at a
+  // header that did not exist.
+  if (ctx.retryAfterSeconds !== undefined) {
+    res.headers.set('Retry-After', String(ctx.retryAfterSeconds))
+  }
   return res
 }
 

@@ -12,6 +12,7 @@ import {
   validateApiKey,
   createServiceClientNoCookies,
   hasScope,
+  RATE_LIMIT_RETRY_AFTER_SECONDS,
   TOOL_SCOPE_MAP,
   type ApiKeyMode,
   type ApiKeyScope,
@@ -2895,6 +2896,64 @@ function projectMcpPayload<T>(value: T, namespace: McpToolNamespace): T {
 
 export const tools: McpTool[] = [
   {
+    // The bridge that makes `catalogVisibility: 'search'` usable on hosts that
+    // can only invoke what tools/list showed them.
+    //
+    // Server-side, every tool has always been callable: the tools/call
+    // dispatcher resolves the name against the whole `tools` array and
+    // `isDefaultCatalogTool` gates only what tools/list SHOWS. The failure was
+    // purely client-side (Claude.ai cannot name a tool it never saw), which is
+    // why search-only tools shipped unreachable there.
+    //
+    // This tool is never executed. `tools/call` rewrites a
+    // gnubok_call_tool({tool, arguments}) request into a direct call on the
+    // inner tool BEFORE resolution, so scope checks, the unknown-argument
+    // guard, company routing, the staging contract and telemetry all apply to
+    // the real target rather than to a wrapper that would have bypassed them.
+    name: 'gnubok_call_tool',
+    title: 'Call a Read Tool by Name',
+    description:
+      'Invoke any read-only tool by name, including ones absent from tools/list. Find the name with gnubok_search_tools first. Writes are refused: call a write tool directly so its approval contract stays visible.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        tool: {
+          type: 'string',
+          description: 'Canonical name of the read-only tool to invoke, e.g. "gnubok_get_reconciliation_status".',
+        },
+        arguments: {
+          type: 'object',
+          description: "Arguments for that tool, validated against its own inputSchema. Omit for a tool that takes none.",
+        },
+      },
+      required: ['tool'],
+    },
+    // The response is whatever the inner tool returns, so no fixed shape can
+    // be declared. Every tool must carry an object outputSchema, and an open
+    // object is the only honest one here.
+    outputSchema: {
+      type: 'object',
+      additionalProperties: true,
+      description: 'The inner tool\'s own result, unchanged.',
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute() {
+      // Unreachable: the dispatcher rewrites the call before resolution. If
+      // this ever throws, the rewrite was removed and every call would have
+      // silently skipped the read-only check.
+      throw codedError(
+        'VALIDATION_ERROR',
+        'gnubok_call_tool is resolved by the dispatcher and has no direct implementation.',
+      )
+    },
+  },
+  {
     name: 'gnubok_search_tools',
     title: 'Search MCP Tools',
     description: 'Search available tools by keyword and choose the returned schema detail level.',
@@ -4434,127 +4493,19 @@ export const tools: McpTool[] = [
         },
         dimensions: {
           type: 'object',
-          additionalProperties: false,
-          description: 'Dimension registry snapshot (kostnadsställe/projekt). OMITTED when the company has none registered; presence means lines can be tagged via the dims bag on gnubok_create_voucher.',
-          properties: {
-            enabled: { type: 'boolean', description: 'When true, dims-bag values are validated against the registry.' },
-            dimensions: {
-              type: 'array',
-              items: {
-                type: 'object',
-                additionalProperties: false,
-                properties: {
-                  sie_dim_no: { type: 'number' },
-                  name: { type: 'string' },
-                  active_value_count: { type: 'number' },
-                  required_on_accounts: {
-                    type: 'array',
-                    description: 'BAS accounts with an active required-rule: postings there are refused without a value for this dimension.',
-                    items: { type: 'string' },
-                  },
-                  default_on_accounts: {
-                    type: 'array',
-                    description: 'BAS accounts where a default/fixed rule auto-applies a value at draft creation.',
-                    items: { type: 'string' },
-                  },
-                  top_values: {
-                    type: 'array',
-                    description: 'Up to 10 active values; full list via gnubok_list_dimension_values.',
-                    items: {
-                      type: 'object',
-                      additionalProperties: false,
-                      properties: {
-                        code: { type: 'string' },
-                        name: { type: 'string' },
-                      },
-                      required: ['code', 'name'],
-                    },
-                  },
-                },
-                required: ['sie_dim_no', 'name', 'active_value_count', 'required_on_accounts', 'default_on_accounts', 'top_values'],
-              },
-            },
-          },
-          required: ['enabled', 'dimensions'],
+          description:
+            'Dimension registry snapshot (kostnadsställe/projekt): an enabled flag plus the registered dimensions with their codes, counts and top values. OMITTED when the company has none registered; presence means lines can be tagged via the dims bag on gnubok_create_voucher, and enabled=true means dims-bag values are validated against the registry.',
         },
         ledger_context: {
           type: 'object',
-          additionalProperties: false,
-          description: 'Digest of how this company books things: top-5 counterparty + top-3 supplier patterns. Full picture (account usage, explicit rules, VAT profile, conventions) in the Accounted://ledger/context resource. Evidence is historical frequency, NOT permission to auto-book: weigh seen count AND recency, never a ratio alone. OMITTED when not computable.',
-          properties: {
-            resource_uri: { type: 'string', description: 'URI of the full ledger-context resource.' },
-            window_from: { type: 'string', description: 'Start of the rolling stats window (ISO date).' },
-            posted_entries_window: { type: 'number', description: 'Posted journal entries in the window. Low = thin evidence: treat patterns as weak.' },
-            top_counterparty_patterns: {
-              type: 'array',
-              description: 'Most frequent booked bank-feed counterparties with dominant booking. evidence = seen N in 12m, M agreed, last booked; below 0.7 agreement excluded.',
-              items: {
-                type: 'object',
-                additionalProperties: false,
-                properties: {
-                  counterparty: { type: 'string' },
-                  dominant_category: { type: 'string' },
-                  dominant_account_number: { type: ['string', 'null'] },
-                  evidence: {
-                    type: 'object',
-                    additionalProperties: false,
-                    properties: {
-                      seen_12m: { type: 'number' },
-                      agree: { type: 'number' },
-                      last_booked: { type: 'string' },
-                    },
-                    required: ['seen_12m', 'agree', 'last_booked'],
-                  },
-                },
-                required: ['counterparty', 'dominant_category', 'dominant_account_number', 'evidence'],
-              },
-            },
-            top_supplier_patterns: {
-              type: 'array',
-              description: 'Most invoiced suppliers (AP side) with dominant expense account and VAT treatment. Same evidence semantics.',
-              items: {
-                type: 'object',
-                additionalProperties: false,
-                properties: {
-                  supplier: { type: 'string' },
-                  dominant_account_number: { type: 'string' },
-                  vat_treatment: { type: ['string', 'null'] },
-                  evidence: {
-                    type: 'object',
-                    additionalProperties: false,
-                    properties: {
-                      seen_12m: { type: 'number' },
-                      agree: { type: 'number' },
-                      last_booked: { type: 'string' },
-                    },
-                    required: ['seen_12m', 'agree', 'last_booked'],
-                  },
-                },
-                required: ['supplier', 'dominant_account_number', 'vat_treatment', 'evidence'],
-              },
-            },
-          },
-          required: ['resource_uri', 'window_from', 'posted_entries_window', 'top_counterparty_patterns', 'top_supplier_patterns'],
+          description:
+            'Digest of how this company books things: top-5 counterparty + top-3 supplier patterns, each with an evidence block (seen_12m, agree, share, last_booked) and the rolling window it was computed over. Evidence is historical frequency, NOT permission to auto-book: weigh seen count AND recency, never a ratio alone. OMITTED when not computable. Field-by-field detail, plus account usage, explicit rules, VAT profile and conventions, is in the Accounted://ledger/context resource.',
         },
         recommended_tools: {
           type: 'array',
+          items: { type: 'object' },
           description:
-            'Per-workflow tool loadouts, ordered by call sequence. Deferred-loading harnesses batch-load a whole cluster in one call (ToolSearch select:a,b,c). Static; validated against the registry.',
-          items: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              workflow: { type: 'string', description: 'Stable workflow key.' },
-              description: { type: 'string' },
-              skill: { type: 'string', description: 'Slug for gnubok_load_skill (full playbook).' },
-              tools: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Exact tool names, ordered.',
-              },
-            },
-            required: ['workflow', 'description', 'skill', 'tools'],
-          },
+            'Per-workflow tool loadouts, ordered by call sequence: each entry names a workflow, describes it, and lists the exact registry tools it needs. Deferred-loading harnesses batch-load a whole cluster in one call (ToolSearch select:a,b,c). Static; validated against the registry at module load.',
         },
         feedback_channel: {
           type: 'object',
@@ -4569,19 +4520,8 @@ export const tools: McpTool[] = [
         },
         skatteverket_connection: {
           type: 'object',
-          additionalProperties: false,
           description:
-            'Present only when a Skatteverket connection exists. needs_reconsent: only a person can fix it (BankID under Inställningar → Skatteverket); warn the user before starting SKV work.',
-          properties: {
-            status: { type: 'string', enum: ['active', 'needs_reconsent'] },
-            source: { type: 'string', enum: ['user', 'system'] },
-            connected_at: {
-              type: ['string', 'null'],
-              description: 'Personal sessions last ~65 min from this time; absent for system (ombud) connections.',
-            },
-            message: { type: 'string' },
-          },
-          required: ['status', 'source'],
+            'Present only when a Skatteverket connection exists. Carries status ("active" or "needs_reconsent") and the grant detail behind it. needs_reconsent: only a person can fix it (BankID under Inställningar → Skatteverket); warn the user before starting SKV work.',
         },
       },
       required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory', 'recommended_tools'],
@@ -19492,7 +19432,7 @@ function emitToolCallTelemetry(payload: {
   success: boolean
   isError: boolean
   errorCode: string | null
-  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'unknown_tool' | 'test_key_write_blocked' | null
+  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'unknown_tool' | 'test_key_write_blocked' | 'bridge_refused' | null
   errorMessage: string | null
   requestId: string | number | null
   userId: string
@@ -19802,7 +19742,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       if (status === 429) {
         return new Response(authResult.error, {
           status: 429,
-          headers: { 'Content-Type': 'text/plain', 'Retry-After': '60' },
+          headers: {
+            'Content-Type': 'text/plain',
+            'Retry-After': String(RATE_LIMIT_RETRY_AFTER_SECONDS),
+          },
         })
       }
       return unauthorized()
@@ -19957,7 +19900,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                 ]
               : []),
             'Discovery:',
-            '• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools: it ranks all capabilities; pass detail="name"|"summary"|"full" to control payload size.',
+            '• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools: it ranks all capabilities; pass detail="name"|"summary"|"full" to control payload size. If your client cannot invoke a tool that is not in tools/list, reach any READ tool through gnubok_call_tool({tool, arguments}); writes must be named directly.',
             '• gnubok_get_agent_briefing returns recommended_tools: ordered per-workflow tool loadouts (categorize_month, close_period, invoice_run, vat_declaration, payroll_month). If your harness defers tool loading, batch-load a whole workflow in one call (e.g. Claude Code ToolSearch select:a,b,c) instead of searching cluster by cluster.',
             `• This connection can work with every non-archived company the API-key user belongs to. Call gnubok_list_companies to discover company_id values. Omit company_id to use the API key default (${companyId ?? 'none yet: this account has no company. Create it with gnubok_create_company (preview first, then confirm=true); the "onboarding" skill walks the whole setup'}); when selecting another company, repeat company_id on every company-data call, including approval.`,
             '• MCP resources use the API key default company. For a selected non-default company, call gnubok_get_agent_briefing with company_id instead of relying on Accounted://company/current or other company-data resources.',
@@ -20067,18 +20010,85 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 
     case 'tools/call': {
       const rawRequestedToolName = (params as Record<string, unknown>)?.name
-      const requestedToolName =
+      const outerToolName =
         typeof rawRequestedToolName === 'string' ? rawRequestedToolName : ''
-      const toolName = toCanonicalToolName(requestedToolName)
-      const rawToolArgs = ((params as Record<string, unknown>)?.arguments ?? {}) as Record<
+      const outerToolArgs = ((params as Record<string, unknown>)?.arguments ?? {}) as Record<
         string,
         unknown
       >
 
+      // gnubok_call_tool bridge. Rewrite {tool, arguments} into a direct call
+      // on the inner tool BEFORE resolution, so the scope check, the
+      // unknown-argument guard, company routing, the test-key write block, the
+      // staging _meta and telemetry below all apply to the real target. A
+      // wrapper that called the inner tool's execute() itself would have
+      // skipped every one of them.
+      const viaBridge = toCanonicalToolName(outerToolName) === 'gnubok_call_tool'
+      const requestedToolName = viaBridge
+        ? typeof outerToolArgs.tool === 'string'
+          ? outerToolArgs.tool
+          : ''
+        : outerToolName
+      const toolName = toCanonicalToolName(requestedToolName)
+      const rawToolArgs = viaBridge
+        ? ((outerToolArgs.arguments ?? {}) as Record<string, unknown>)
+        : outerToolArgs
+
       const tool = tools.find((t) => t.name === toolName)
+
       // The pre-auth gate already refused anonymous calls to anything outside
       // PUBLIC_TOOLS; re-checked here so the dispatcher never depends on it.
+      // Ordered ahead of the bridge refusal below so an anonymous caller is
+      // turned away before it learns whether a named tool is read-only.
+      //
+      // The bridge cannot widen anonymous reach, and is doubly closed: the
+      // pre-auth gate keys on the OUTER name, and gnubok_call_tool is not in
+      // PUBLIC_TOOLS, so an anonymous bridged call is refused before it gets
+      // here; this line then re-checks the INNER name. Nothing is lost by
+      // that, because all three public tools are in the default catalog and
+      // an anonymous caller never needs the bridge to name them.
       if (isAnonymous && !isPublicTool(toolName)) return unauthorized()
+
+      // The bridge reaches reads only. A write must be named directly so the
+      // client sees its own annotations and its staging/approval contract
+      // rather than a generic wrapper's. An unknown-but-named target falls
+      // through to the unknown-tool handler below, which lists what exists.
+      if (viaBridge && (!requestedToolName || (tool && tool.annotations.readOnlyHint !== true))) {
+        const bridgeError = toToolError(
+          codedError(
+            'VALIDATION_ERROR',
+            requestedToolName
+              ? `${requestedToolName} is not a read-only tool, so gnubok_call_tool will not invoke it. Call ${requestedToolName} directly by name.`
+              : 'gnubok_call_tool requires a "tool" argument naming the read-only tool to invoke.',
+          ),
+          { toolName: 'gnubok_call_tool' },
+        )
+        emitToolCallTelemetry({
+          tool: 'gnubok_call_tool',
+          requiredScope: null,
+          actor,
+          latencyMs: 0,
+          success: false,
+          isError: true,
+          errorCode: bridgeError.error.code,
+          errorKind: 'bridge_refused',
+          errorMessage: bridgeError.error.message_sv,
+          requestId: id ?? null,
+          userId,
+          companyId,
+        })
+        return NextResponse.json(
+          jsonRpc(id ?? null, decorate({
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(projectMcpPayload(bridgeError, toolNamespace), null, 2),
+              },
+            ],
+            isError: true,
+          }))
+        )
+      }
       if (!tool) {
         emitToolCallTelemetry({
           tool: toolName ?? '<unknown>',
