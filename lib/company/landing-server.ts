@@ -1,14 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveBrandByHost } from '@/lib/branding/resolve'
 import { resolveBrandsForTeams } from '@/lib/branding/team-brands'
-import { resolveLandingPath } from '@/lib/company/home-domain'
+import { isCockpitLandingRole, resolveLandingPath } from '@/lib/company/home-domain'
 
 /**
  * Post-login landing decision (WL-14), callable server-side without an HTTP
- * round-trip: byrå staff land in the cockpit ('/clients') when `host` is
- * their byrå's home domain: the byrå's brand domain, or the canonical domain
- * for a byrå without white label (WL-01). Everyone else gets '/' so their
- * flow stays byte-identical.
+ * round-trip: byrå owners/admins land in the cockpit ('/clients') when `host`
+ * is their byrå's home domain: the byrå's brand domain, or the canonical
+ * domain for a byrå without white label (WL-01). Plain byrå members and
+ * everyone else get '/' so their flow stays byte-identical (role gate
+ * 2026-08-27, see isCockpitLandingRole).
  *
  * `supabase` must be authenticated as `userId` (RLS scopes the membership
  * query). Callers that redirect on the result should degrade to '/' on any
@@ -23,7 +24,7 @@ export async function resolveLandingDestination(
 
   const { data: memberships, error } = await supabase
     .from('team_members')
-    .select('team_id, teams:team_id!inner(kind)')
+    .select('team_id, role, teams:team_id!inner(kind)')
     .eq('user_id', userId)
     .eq('teams.kind', 'byra')
 
@@ -34,7 +35,9 @@ export async function resolveLandingDestination(
     return '/'
   }
 
-  const byraTeamIds = (memberships ?? []).map((m) => m.team_id as string)
+  const byraTeamIds = (memberships ?? [])
+    .filter((m) => isCockpitLandingRole(m.role as string))
+    .map((m) => m.team_id as string)
   if (byraTeamIds.length === 0) return '/'
 
   const brandByTeam = await resolveBrandsForTeams(byraTeamIds)

@@ -25,6 +25,10 @@ beforeEach(() => {
   reset()
 })
 
+// The landing rule itself (role gate, brand/host matching, WL-01 canonical
+// fallback, error degradation) is covered where it lives:
+// lib/company/__tests__/landing-server.test.ts. This suite covers only the
+// HTTP wrapper contract.
 describe('GET /api/clients/landing', () => {
   it('returns 401 when unauthenticated', async () => {
     requireAuthMock.mockResolvedValue({

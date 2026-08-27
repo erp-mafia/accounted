@@ -8,8 +8,9 @@ import { resolveLandingDestination } from '@/lib/company/landing-server'
  * Post-login landing decision (WL-14): thin HTTP wrapper around
  * resolveLandingDestination (lib/company/landing-server.ts), for the client
  * auth surfaces (login and MFA-verify pages) that cannot call it in-process.
- * Called when no explicit destination was requested; any failure degrades to
- * '/' at the caller.
+ * The helper carries the whole rule, including the owner/admin role gate
+ * (2026-08-27). Called when no explicit destination was requested; any
+ * failure degrades to '/' at the caller.
  *
  * Uses requireAuth() directly (the sanctioned withRouteContext opt-out, MFA
  * still enforced) because the decision needs no active company. Byrå staff

@@ -96,10 +96,24 @@ export function isCompanyHomedOnHost(opts: {
 }
 
 /**
+ * Whether a byrå team role gets the AUTOMATIC cockpit landing (2026-08-27:
+ * owner/admin only, superseding the 2026-08-05 all-members widening). Plain
+ * members land like regular users; they can still open the cockpit manually
+ * (nav visibility and access are membership-based, unchanged). Callers drop
+ * non-qualifying memberships BEFORE resolveLandingPath, which stays pure.
+ * Allowlist, not `role !== 'member'`, so any future role defaults to the
+ * regular landing.
+ */
+export function isCockpitLandingRole(role: string): boolean {
+  return role === 'owner' || role === 'admin'
+}
+
+/**
  * Post-login landing (WL-14): byrå staff land in the cockpit on the byrå's
  * home domain: the brand domain when the team has a brand, else the canonical
  * domain (a byrå team without white label is a valid state, WL-01). Everyone
- * else keeps today's '/' byte-identically.
+ * else keeps today's '/' byte-identically. Callers pass only memberships that
+ * pass isCockpitLandingRole.
  */
 export function resolveLandingPath(opts: {
   /** teams.id of the brand serving the current host, null on canonical. */
