@@ -378,8 +378,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   // Where "Tillbaka till klienter" points (home-domain rule, WL-01): absolute
   // URL when the byrå cockpit is homed on another host (resolveCockpitHref in
   // the layout), relative '/clients' otherwise. The layout's pre-brand
-  // no-company branch leaves cockpitHref unset; the link never renders there,
-  // so the relative fallback is safe. Cross-host hops render a plain <a>
+  // no-company branch leaves cockpitHref unset; there the relative fallback
+  // reproduces the pre-cockpitHref link exactly on the cockpit/settings
+  // surfaces that branch can render. Cross-host hops render a plain <a>
   // (no client-router prefetch across origins) and carry a "Hanteras via"
   // hint, since the other host will ask for a login (per-host sessions).
   const cockpitHref = byraTeam?.cockpitHref ?? '/clients'
@@ -913,7 +914,15 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                       className="group flex items-center px-3 py-[7px] text-[13px] rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors duration-150"
                     >
                       <ArrowLeft className="mr-2.5 h-[15px] w-[15px] flex-shrink-0 text-muted-foreground group-hover:text-foreground" />
-                      <span className="flex-1">{tNav('back_to_clients')}</span>
+                      <span className="flex-1 min-w-0">
+                        <span className="block">{tNav('back_to_clients')}</span>
+                        {/* Visible cross-host hint: title alone never surfaces
+                            on touch, and the hop lands on the other host's
+                            login (per-host sessions), so say where it goes. */}
+                        <span className="block truncate text-[11px] text-muted-foreground">
+                          {cockpitHint}
+                        </span>
+                      </span>
                     </a>
                   ) : (
                     <NavLink
@@ -1152,12 +1161,17 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                   {cockpitExternal ? (
                     <a
                       href={cockpitHref}
-                      title={cockpitHint ?? undefined}
                       onClick={closeMobileMenu}
                       className="flex items-center gap-3 px-3 min-h-[44px] rounded-lg text-foreground active:bg-muted/60 transition-colors"
                     >
                       <ArrowLeft className="h-[18px] w-[18px] flex-shrink-0 text-muted-foreground" />
-                      <span className="text-sm flex-1">{tNav('back_to_clients')}</span>
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-sm">{tNav('back_to_clients')}</span>
+                        {/* Visible cross-host hint: touch has no title tooltip. */}
+                        <span className="block truncate text-[11px] text-muted-foreground">
+                          {cockpitHint}
+                        </span>
+                      </span>
                     </a>
                   ) : (
                     <NavLink

@@ -15,7 +15,8 @@ export interface ByraTeamRef {
    * is the byrå cockpit's home domain, else an absolute URL to that home
    * (resolveCockpitHref). Optional: the no-company layout branch renders
    * before brands resolve and leaves it unset; consumers fall back to
-   * '/clients' (safe there, the back-link never renders without a company).
+   * '/clients', which on that branch's cockpit/settings surfaces matches the
+   * pre-cockpitHref behavior exactly.
    */
   cockpitHref?: string
 }
