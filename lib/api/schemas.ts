@@ -2873,9 +2873,10 @@ export const CreateEmployeeSchema = EmployeeSchemaBase.superRefine((data, ctx) =
     })
   }
 
-  // Jämkning: a percentage without a start date is meaningless (the engine
-  // gates on jamkning_valid_from <= payment_date). End date is optional
-  // (beslut often run until year-end implicitly).
+  // Jämkning: a percentage without a start date is meaningless. Note that the
+  // engine (isJamkningValid in lib/salary/calculation-engine.ts) applies the
+  // beslut only when BOTH dates are set; the API keeps valid_to optional for
+  // compatibility and the UI requires it.
   if (
     data.jamkning_percentage !== null &&
     data.jamkning_percentage !== undefined &&
