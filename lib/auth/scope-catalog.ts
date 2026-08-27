@@ -246,6 +246,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_update_article:                  'articles:write',
   // Invoices
   gnubok_list_invoices:                   'invoices:read',
+  gnubok_get_invoice:                     'invoices:read',
   gnubok_get_invoice_deliveries:          'invoices:read',
   gnubok_create_invoice:                  'invoices:write',
   gnubok_update_invoice:                  'invoices:write',

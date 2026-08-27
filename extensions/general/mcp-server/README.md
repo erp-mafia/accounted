@@ -21,7 +21,7 @@ For internal Anthropic API usage (the SDK is called from `lib/ai/provider.ts` an
 
 ## Payload-size watchdog
 
-`payload-size.bench.test.ts` enforces a `tools/list` JSON payload ceiling. If the test fires, the right answer is rarely "raise the ceiling". Instead, trim descriptions or set specialized wide tools to `catalogVisibility: 'search'`. Those tools remain discoverable with full schemas through `gnubok_search_tools` and callable through `tools/call` without bloating the default catalog.
+`payload-size.bench.test.ts` enforces a `tools/list` JSON payload ceiling. If the test fires, the right answer is rarely "raise the ceiling". Instead, trim descriptions or set specialized wide tools to `catalogVisibility: 'search'`. Those tools remain discoverable with full schemas through `gnubok_search_tools` and callable through `tools/call` on the wire without bloating the default catalog. Claude.ai only calls tools present in `tools/list`, so a tool that a user or a skill must call directly stays in the default catalog.
 
 ## Where things live
 

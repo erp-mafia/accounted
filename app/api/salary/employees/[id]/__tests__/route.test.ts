@@ -210,3 +210,130 @@ describe('personnummer contract on /api/salary/employees/[id]', () => {
     expect(JSON.stringify(body)).not.toContain('"0008"')
   })
 })
+
+/**
+ * Jämkning (Skatteverket beslut om ändrad beräkning av skatteavdrag) on the
+ * legacy PATCH route, which is the one the employee edit page calls. #1913:
+ * the merged-state check mirrors the v1 route so a percentage without a
+ * start date gets a 400 instead of being stored as a silently inert beslut,
+ * while explicit nulls must survive to the UPDATE (null = clear the beslut).
+ */
+describe('jämkning on PATCH /api/salary/employees/[id]', () => {
+  const JAMKNING_START_REQUIRED = 'Jämkningens startdatum måste anges när jämkningsprocent sätts'
+  const JAMKNING_ORDER = 'Jämkningens slutdatum måste vara efter startdatumet'
+
+  function useRow(existing: Record<string, unknown>) {
+    const mock = employeeSupabase(existing)
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: mock.supabase })
+    return mock.captured
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  it('400 when a percentage is set with an explicit null start date', async () => {
+    const captured = useRow({ ...EXISTING_ROW, jamkning_percentage: null, jamkning_valid_from: null, jamkning_valid_to: null })
+
+    const response = await PATCH(
+      patchRequest({ jamkning_percentage: 20, jamkning_valid_from: null, jamkning_valid_to: null }),
+      params,
+    )
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain(JAMKNING_START_REQUIRED)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 when only the percentage is sent and the stored row has no start date (sparse patch)', async () => {
+    const captured = useRow({ ...EXISTING_ROW, jamkning_percentage: null, jamkning_valid_from: null, jamkning_valid_to: null })
+
+    const response = await PATCH(patchRequest({ jamkning_percentage: 20 }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain(JAMKNING_START_REQUIRED)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 when the end date precedes the start date within the body', async () => {
+    const captured = useRow({ ...EXISTING_ROW })
+
+    const response = await PATCH(
+      patchRequest({ jamkning_percentage: 20, jamkning_valid_from: '2026-06-01', jamkning_valid_to: '2026-01-31' }),
+      params,
+    )
+
+    expect(response.status).toBe(400)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 when a new end date precedes the stored start date (merged ordering)', async () => {
+    const captured = useRow({
+      ...EXISTING_ROW,
+      jamkning_percentage: 20,
+      jamkning_valid_from: '2026-06-01',
+      jamkning_valid_to: '2026-12-31',
+    })
+
+    const response = await PATCH(patchRequest({ jamkning_valid_to: '2026-01-31' }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain(JAMKNING_ORDER)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('200 and writes percentage + both dates (happy path)', async () => {
+    const captured = useRow({ ...EXISTING_ROW, jamkning_percentage: null, jamkning_valid_from: null, jamkning_valid_to: null })
+
+    const response = await PATCH(
+      patchRequest({ jamkning_percentage: 20, jamkning_valid_from: '2026-01-01', jamkning_valid_to: '2026-12-31' }),
+      params,
+    )
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(response)
+
+    expect(status).toBe(200)
+    expect(captured.updates).toEqual({
+      jamkning_percentage: 20,
+      jamkning_valid_from: '2026-01-01',
+      jamkning_valid_to: '2026-12-31',
+    })
+    expect(body.data.jamkning_percentage).toBe(20)
+  })
+
+  it('200 and clears a stored beslut with explicit nulls (nulls must survive, not be dropped)', async () => {
+    const captured = useRow({
+      ...EXISTING_ROW,
+      jamkning_percentage: 20,
+      jamkning_valid_from: '2026-01-01',
+      jamkning_valid_to: '2026-12-31',
+    })
+
+    const response = await PATCH(
+      patchRequest({ jamkning_percentage: null, jamkning_valid_from: null, jamkning_valid_to: null }),
+      params,
+    )
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(response)
+
+    expect(status).toBe(200)
+    expect(captured.updates).toEqual({
+      jamkning_percentage: null,
+      jamkning_valid_from: null,
+      jamkning_valid_to: null,
+    })
+    expect(body.data.jamkning_percentage).toBeNull()
+  })
+
+  it('200 on an unrelated edit to a legacy row with inconsistent jamkning state (touched-gate)', async () => {
+    const captured = useRow({ ...EXISTING_ROW, jamkning_percentage: 15, jamkning_valid_from: null, jamkning_valid_to: null })
+
+    const response = await PATCH(patchRequest({ first_name: 'Ny' }), params)
+
+    expect(response.status).toBe(200)
+    expect(captured.updates).toEqual({ first_name: 'Ny' })
+  })
+})

@@ -139,6 +139,8 @@ Accounted currently creates PDF invoices and can send them by email. It does not
 - \`gnubok_credit_invoice\`: kreditfaktura (legal undo)
 - \`gnubok_convert_invoice\`: proforma → real invoice
 - \`gnubok_list_invoices\`: find existing invoices
+- \`gnubok_get_invoice\`: one invoice with its lines (article_id, revenue_account, vat_rate); read it before editing
+- \`gnubok_update_invoice\`: edit a draft; \`items\` is a FULL REPLACE, so pass every line back (with \`article_id\`) from \`gnubok_get_invoice\`
 `
 
 export const invoicingRulesSkill: Skill = {

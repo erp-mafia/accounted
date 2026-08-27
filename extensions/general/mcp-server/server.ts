@@ -56,6 +56,7 @@ import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
 import { eventBus } from '@/lib/events/bus'
 import { getVatRules, getPermittedVatRates, getArticleVatRateAdoptionSet } from '@/lib/invoices/vat-rules'
+import { validateDeductionLines } from '@/lib/invoices/rot-rut-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { getBranding } from '@/lib/branding/service'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
@@ -289,6 +290,7 @@ import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoic
 // ── Actor context ────────────────────────────────────────────
 
 type StagedInvoiceLineInput = {
+  line_type?: 'product' | 'text'
   description?: string
   quantity: number
   unit?: string
@@ -296,6 +298,19 @@ type StagedInvoiceLineInput = {
   vat_rate?: number
   article_id?: string
   revenue_account?: string | null
+  // ROT/RUT claim fields (CreateInvoiceItemSchema parity). The housing
+  // columns are property identifiers, never the personnummer: the stored
+  // personnummer exists only as ciphertext and never crosses the MCP surface.
+  deduction_type?: 'rot' | 'rut' | null
+  labor_hours?: number | null
+  work_type?: string | null
+  housing_designation?: string | null
+  apartment_number?: string | null
+  brf_org_number?: string | null
+  // Periodisering (förutbetald intäkt): pass-through to the builder.
+  accrual_period_start?: string | null
+  accrual_period_end?: string | null
+  accrual_balance_account?: string | null
   dimensions?: unknown
 }
 
@@ -333,6 +348,23 @@ function resolveInvoiceLineFromArticle(
   index: number,
 ): ResolvedInvoiceLine {
   const lineNo = index + 1
+  // Free-text / spacer rows (web parity, CreateInvoiceItemSchema): no
+  // amounts, never book, exempt from the quantity/description/unit/price
+  // gates. Normalized to the exact zeroed shape build-invoice-write stores so
+  // a gnubok_get_invoice line passes back verbatim.
+  if (item.line_type === 'text') {
+    if (item.article_id) {
+      throw new Error(`Item ${lineNo}: a text row cannot carry article_id (drop line_type or article_id)`)
+    }
+    return {
+      ...item,
+      description: item.description ?? '',
+      quantity: 0,
+      unit: '',
+      unit_price: 0,
+      vat_rate: 0,
+    }
+  }
   if (!item.quantity || item.quantity <= 0) throw new Error(`Item ${lineNo}: quantity must be positive`)
   if (item.article_id && !article) {
     throw new Error(`Item ${lineNo}: article ${item.article_id} not found in this company. Use gnubok_list_articles to find valid IDs.`)
@@ -5744,7 +5776,6 @@ export const tools: McpTool[] = [
       idempotentHint: true,
       openWorldHint: false,
     },
-    catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
       const changes: Record<string, unknown> = {}
       for (const key of [
@@ -6158,6 +6189,188 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_get_invoice',
+    title: 'Get Invoice',
+    description: 'One invoice: header plus every line with article_id, revenue_account, vat_rate and dimensions. Read it before gnubok_update_invoice (items are a FULL REPLACE) so each line goes back with its article linkage. editable_draft tells whether an edit is possible.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        invoice_id: { type: 'string', description: 'UUID from gnubok_list_invoices' },
+      },
+      required: ['invoice_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        invoice_id: { type: 'string' },
+        invoice_number: { type: ['string', 'null'], description: 'null until sent' },
+        status: { type: 'string' },
+        document_type: { type: 'string', description: 'invoice, proforma or delivery_note' },
+        customer_id: { type: 'string' },
+        customer_name: { type: ['string', 'null'] },
+        invoice_date: { type: 'string' },
+        due_date: { type: ['string', 'null'] },
+        delivery_date: { type: ['string', 'null'] },
+        currency: { type: 'string' },
+        subtotal: { type: 'number' },
+        vat_amount: { type: 'number' },
+        total: { type: 'number' },
+        paid_amount: { type: 'number' },
+        remaining_amount: { type: ['number', 'null'] },
+        your_reference: { type: ['string', 'null'] },
+        our_reference: { type: ['string', 'null'] },
+        notes: { type: ['string', 'null'] },
+        default_dimensions: { type: 'object', additionalProperties: { type: 'string' } },
+        editable_draft: { type: 'boolean', description: 'true when gnubok_update_invoice can edit it' },
+        items: {
+          type: 'array',
+          description: 'Lines in display order; pass them back to gnubok_update_invoice verbatim: article, ROT/RUT, accrual and account fields survive only if passed back.',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              invoice_item_id: { type: 'string' },
+              line_type: { type: 'string', description: 'product or text' },
+              description: { type: 'string' },
+              quantity: { type: 'number' },
+              unit: { type: 'string' },
+              unit_price: { type: 'number' },
+              line_total: { type: 'number' },
+              vat_rate: { type: 'number' },
+              vat_amount: { type: 'number' },
+              article_id: { type: ['string', 'null'] },
+              revenue_account: { type: ['string', 'null'], description: 'Posting-account override; null books by VAT treatment' },
+              deduction_type: { type: ['string', 'null'], description: 'rot, rut or null' },
+              labor_hours: { type: ['number', 'null'] },
+              work_type: { type: ['string', 'null'] },
+              housing_designation: { type: ['string', 'null'], description: 'Fastighetsbeteckning (ROT); property id, not personal data' },
+              apartment_number: { type: ['string', 'null'] },
+              brf_org_number: { type: ['string', 'null'] },
+              accrual_period_start: { type: ['string', 'null'] },
+              accrual_period_end: { type: ['string', 'null'] },
+              accrual_balance_account: { type: ['string', 'null'] },
+              dimensions: { type: 'object', additionalProperties: { type: 'string' } },
+            },
+            required: ['invoice_item_id', 'line_type', 'description', 'quantity', 'unit', 'unit_price', 'line_total', 'vat_rate'],
+          },
+        },
+        item_count: { type: 'number' },
+      },
+      required: ['invoice_id', 'status', 'currency', 'editable_draft', 'items', 'item_count'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    // Round-trip read surface for gnubok_update_invoice (issue #1642). Kept
+    // out of the default tools/list: payload-size.bench.test.ts sits at its
+    // ceiling, and the update tool that needs it is search-only as well.
+    catalogVisibility: 'search',
+    async execute(args, companyId, userId, supabase) {
+      const invoiceId = args.invoice_id as string
+      if (!invoiceId) throw new Error('invoice_id is required. Use gnubok_list_invoices to find IDs.')
+
+      // Explicit column list on purpose: invoices carries the encrypted
+      // ROT/RUT personnummer columns, which must never reach the MCP surface.
+      const { data: invoice, error } = await supabase
+        .from('invoices')
+        .select(
+          'id, invoice_number, status, document_type, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
+        )
+        .eq('id', invoiceId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      if (error) throw new Error(`Database error: ${error.message}`)
+      if (!invoice) throw new Error('Invoice not found. Use gnubok_list_invoices to find valid IDs.')
+
+      type InvoiceLineRow = {
+        id: string
+        sort_order: number | null
+        line_type: string | null
+        description: string
+        quantity: number
+        unit: string
+        unit_price: number
+        line_total: number
+        vat_rate: number
+        vat_amount: number | null
+        article_id: string | null
+        revenue_account: string | null
+        deduction_type: string | null
+        labor_hours: number | null
+        work_type: string | null
+        housing_designation: string | null
+        apartment_number: string | null
+        brf_org_number: string | null
+        accrual_period_start: string | null
+        accrual_period_end: string | null
+        accrual_balance_account: string | null
+        dimensions: Record<string, string> | null
+      }
+      // PostgREST returns embedded rows unordered: sort here, never rely on
+      // insertion order.
+      const rows = ((invoice.items ?? []) as InvoiceLineRow[])
+        .slice()
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+      const items = rows.map((row) => ({
+        invoice_item_id: row.id,
+        line_type: row.line_type ?? 'product',
+        description: row.description,
+        quantity: row.quantity,
+        unit: row.unit,
+        unit_price: row.unit_price,
+        line_total: row.line_total,
+        vat_rate: row.vat_rate,
+        vat_amount: row.vat_amount ?? 0,
+        article_id: row.article_id ?? null,
+        revenue_account: row.revenue_account ?? null,
+        deduction_type: row.deduction_type ?? null,
+        labor_hours: row.labor_hours ?? null,
+        work_type: row.work_type ?? null,
+        // Property identifiers for the ROT claim, needed for the update round
+        // trip; the encrypted personnummer stays out of this surface.
+        housing_designation: row.housing_designation ?? null,
+        apartment_number: row.apartment_number ?? null,
+        brf_org_number: row.brf_org_number ?? null,
+        accrual_period_start: row.accrual_period_start ?? null,
+        accrual_period_end: row.accrual_period_end ?? null,
+        accrual_balance_account: row.accrual_balance_account ?? null,
+        dimensions: row.dimensions ?? {},
+      }))
+
+      return {
+        invoice_id: invoice.id,
+        invoice_number: invoice.invoice_number ?? null,
+        status: invoice.status,
+        document_type: invoice.document_type ?? 'invoice',
+        customer_id: invoice.customer_id,
+        customer_name: (invoice.customer as { name?: string } | null)?.name ?? null,
+        invoice_date: invoice.invoice_date,
+        due_date: invoice.due_date ?? null,
+        delivery_date: invoice.delivery_date ?? null,
+        currency: invoice.currency,
+        subtotal: invoice.subtotal,
+        vat_amount: invoice.vat_amount,
+        total: invoice.total,
+        paid_amount: invoice.paid_amount ?? 0,
+        remaining_amount: invoice.remaining_amount ?? null,
+        your_reference: invoice.your_reference ?? null,
+        our_reference: invoice.our_reference ?? null,
+        notes: invoice.notes ?? null,
+        default_dimensions: (invoice.default_dimensions as Record<string, string> | null) ?? {},
+        editable_draft: isEditableInvoiceDraft(invoice),
+        items,
+        item_count: items.length,
+      }
+    },
+  },
+
+  {
     name: 'gnubok_create_invoice',
     title: 'Create Customer Invoice',
     description: 'Stage a new invoice. Validates inputs, calculates VAT preview. Items accept dims bags. Approval creates a draft; the invoice number is assigned on send or mark-as-sent.',
@@ -6181,6 +6394,8 @@ export const tools: McpTool[] = [
                 type: 'string',
                 description: 'Optional article UUID from gnubok_list_articles. Prefills description, unit, unit_price, revenue account and, only when compatible with the customer VAT rules, vat_rate. Values set on the line win.',
               },
+              line_type: { type: 'string', enum: ['product', 'text'], description: 'text = free-text row: no amounts, never books.' },
+              revenue_account: { type: ['string', 'null'], description: 'BAS class 1-3 posting-account override.' },
               dimensions: {
                 type: 'object',
                 additionalProperties: { type: 'string' },
@@ -16137,7 +16352,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_update_invoice',
     title: 'Update Draft Invoice',
-    description: 'Stage an edit to a DRAFT invoice: header fields (incl. default_dimensions) and/or items (items = FULL REPLACE). Drafts only: no verifikat, not self-billed, not a credit note. Sent/paid invoices need gnubok_credit_invoice. Find invoice_id with gnubok_list_invoices.',
+    description: 'Stage an edit to a DRAFT invoice: header fields (incl. default_dimensions) and/or items (FULL REPLACE: read current lines with gnubok_get_invoice first; lines accept article_id). Drafts only, no verifikat, not self-billed, not a credit note; otherwise use gnubok_credit_invoice.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
       type: 'object',
@@ -16160,15 +16375,37 @@ export const tools: McpTool[] = [
               unit: { type: 'string', description: 'st, tim, dag, mån' },
               unit_price: { type: 'number', description: 'Price per unit excl. VAT' },
               vat_rate: { type: 'number', description: 'VAT rate 0-100 (optional override)' },
+              article_id: {
+                type: 'string',
+                description: 'Optional article UUID from gnubok_list_articles. Prefills description, unit, unit_price, revenue account and, only when compatible with the customer VAT rules, vat_rate. Values set on the line win. Pass it back on every line that should keep its article linkage.',
+              },
+              line_type: {
+                type: 'string',
+                enum: ['product', 'text'],
+                description: 'text = free-text/spacer row: no amounts, never books; the quantity/description/unit/price rules are skipped.',
+              },
+              revenue_account: {
+                type: ['string', 'null'],
+                description: 'BAS class 1-3 posting-account override; null books by VAT treatment. Pass back to keep a manual override.',
+              },
+              deduction_type: { type: ['string', 'null'], description: 'rot or rut; pass back or the ROT/RUT-avdrag is removed by the replace.' },
+              labor_hours: { type: ['number', 'null'] },
+              work_type: { type: ['string', 'null'], description: 'Skatteverket arbetstypskod for the deduction line.' },
+              housing_designation: { type: ['string', 'null'], description: 'Fastighetsbeteckning; required on ROT lines.' },
+              apartment_number: { type: ['string', 'null'] },
+              brf_org_number: { type: ['string', 'null'] },
+              accrual_period_start: { type: ['string', 'null'], description: 'YYYY-MM-DD; with accrual_period_end defers the revenue (periodisering). Pass back or the deferral is removed.' },
+              accrual_period_end: { type: ['string', 'null'] },
+              accrual_balance_account: { type: ['string', 'null'], description: '29xx interim account; null = default.' },
               dimensions: {
                 type: 'object',
                 additionalProperties: { type: 'string' },
                 description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}. Wins per key over default_dimensions.',
               },
             },
-            required: ['description', 'quantity', 'unit', 'unit_price'],
+            required: ['quantity'],
           },
-          description: 'FULL REPLACE: when provided, every existing line is deleted and this array becomes the new line set. Omit to keep the current lines.',
+          description: 'FULL REPLACE: every existing line is deleted and this array becomes the new line set. Read the current lines with gnubok_get_invoice first and pass unchanged lines back verbatim (article, ROT/RUT, accrual and account fields survive only if passed back). Omit to keep the current lines.',
         },
         default_dimensions: {
           type: 'object',
@@ -16191,66 +16428,45 @@ export const tools: McpTool[] = [
       const invoiceId = args.invoice_id as string
       if (!invoiceId) throw new Error('invoice_id is required. Use gnubok_list_invoices to find IDs.')
 
-      const rawItems = args.items as
-        | Array<{
-            description: string
-            quantity: number
-            unit: string
-            unit_price: number
-            vat_rate?: number
-            dimensions?: unknown
-          }>
-        | undefined
+      const rawItems = args.items as StagedInvoiceLineInput[] | undefined
 
+      // Cheap pre-query gates. description/unit/unit_price are checked after
+      // the article prefill (resolveInvoiceLineFromArticle), since a line
+      // carrying article_id legitimately omits all three.
       if (rawItems !== undefined) {
         if (!Array.isArray(rawItems) || rawItems.length === 0) {
-          throw new Error('items must be a non-empty array: it fully REPLACES every existing line on the draft.')
+          throw new Error(
+            'items must be a non-empty array: it fully REPLACES every existing line on the draft. ' +
+            'Read the current lines with gnubok_get_invoice first.',
+          )
         }
         for (const [i, item] of rawItems.entries()) {
-          if (!item.description?.trim()) throw new Error(`Item ${i + 1}: description is required`)
+          // Text rows are stored with quantity 0 and legitimately come back
+          // that way from gnubok_get_invoice (web parity: the canonical
+          // CreateInvoiceItemSchema exempts them from the quantity rule).
+          if (item.line_type === 'text') continue
           if (!item.quantity || item.quantity <= 0) throw new Error(`Item ${i + 1}: quantity must be positive`)
-          if (!item.unit?.trim()) throw new Error(`Item ${i + 1}: unit is required (st, tim, dag)`)
-          if (item.unit_price == null) throw new Error(`Item ${i + 1}: unit_price is required`)
         }
       }
 
-      // Resolve-don't-select (same pass as gnubok_create_invoice): parse the
-      // default bag + each item's bag, then resolve codes AND names against
-      // the registry in one go (zero queries when nothing is tagged).
-      const defaultDimensions = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
-      const { bags: resolvedDimBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
-        supabase,
-        companyId,
-        [
-          defaultDimensions,
-          ...(rawItems ?? []).map((item, i) => parseDimensionsArg(item.dimensions, `items[${i}].dimensions`)),
-        ],
-      )
-      const resolvedDefaultDimensions = resolvedDimBags[0]
-      const stagedItems = rawItems?.map((item, i) => {
-        const { dimensions: _rawDimensions, ...rest } = item
-        const bag = resolvedDimBags[i + 1]
-        return bag && Object.keys(bag).length > 0 ? { ...rest, dimensions: bag } : rest
-      })
-
-      const changes: Record<string, unknown> = {}
+      const headerChanges: Record<string, unknown> = {}
       for (const key of ['notes', 'invoice_date', 'due_date', 'delivery_date', 'your_reference', 'our_reference']) {
-        if (args[key] !== undefined) changes[key] = args[key]
+        if (args[key] !== undefined) headerChanges[key] = args[key]
       }
-      if (stagedItems) changes.items = stagedItems
-      // The bag replaces wholesale, never merges: {} clears every tag.
-      if (args.default_dimensions !== undefined) changes.default_dimensions = resolvedDefaultDimensions ?? {}
-
-      const parsed = UpdateInvoiceParamsSchema.safeParse({ invoice_id: invoiceId, changes })
-      if (!parsed.success) {
-        const issue = parsed.error.issues[0]
-        throw new Error(`Invalid invoice update: ${issue ? `${issue.path.join('.')}: ${issue.message}` : 'validation failed'}`)
+      if (rawItems === undefined && args.default_dimensions === undefined && Object.keys(headerChanges).length === 0) {
+        throw new Error('Invalid invoice update: at least one invoice field must be supplied')
       }
 
+      // The draft first: its customer (VAT rules for the article prefill) and
+      // its currency (article price prefill) are structural and come from the
+      // stored row, never from the arguments.
+      // deduction_personnummer_encrypted is fetched ONLY as a presence check
+      // for the ROT/RUT staging gate below; the ciphertext is never staged,
+      // previewed, or returned.
       const { data: invoice, error } = await supabase
         .from('invoices')
-        .select('id, invoice_number, status, document_type, journal_entry_id, is_self_billed, credited_invoice_id, total, currency, customer:customers(name)')
-        .eq('id', parsed.data.invoice_id)
+        .select('id, invoice_number, status, document_type, journal_entry_id, is_self_billed, credited_invoice_id, total, currency, customer_id, deduction_personnummer_encrypted, customer:customers(name)')
+        .eq('id', invoiceId)
         .eq('company_id', companyId)
         .maybeSingle()
 
@@ -16269,7 +16485,182 @@ export const tools: McpTool[] = [
         )
       }
 
+      const currency = ((invoice.currency as string) || 'SEK') as Currency
       const customerName = (invoice.customer as { name?: string } | null)?.name
+
+      // Items branch (issue #1642): article prefill + default-set VAT
+      // adoption exactly like gnubok_create_invoice, the permitted-set VAT
+      // gate at staging so the agent sees the error here rather than at
+      // approval, and a snapshot of the lines being replaced so the approver
+      // can see a rebooking (revenue_account / vat_rate) in the preview.
+      let items: ResolvedInvoiceLine[] | undefined
+      let defaultVatRate = 0
+      let subtotal = 0
+      let vatAmount = 0
+      let currentItems: Array<Record<string, unknown>> | undefined
+      if (rawItems !== undefined) {
+        // personal_number is fetched ONLY as a presence check for the ROT/RUT
+        // staging gate below (commit falls back to the kundkort personnummer
+        // for individuals); never decrypted, staged, or returned here.
+        const { data: customer, error: custError } = await supabase
+          .from('customers')
+          .select('customer_type, vat_number_validated, personal_number')
+          .eq('id', invoice.customer_id)
+          .eq('company_id', companyId)
+          .single()
+        if (custError || !customer) {
+          throw new Error('Customer not found: they may have been deleted. The draft cannot be edited without its customer.')
+        }
+
+        const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
+        defaultVatRate = vatRules.rate
+        const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated)
+
+        const articleIds = Array.from(new Set(rawItems.map((i) => i.article_id).filter((a): a is string => !!a)))
+        const articlesById = new Map<string, InvoiceLineArticle>()
+        if (articleIds.length > 0) {
+          const { data: articleRows, error: articleError } = await supabase
+            .from('articles')
+            .select('id, name, unit, price_excl_vat, vat_rate, revenue_account, currency, active')
+            .eq('company_id', companyId)
+            .in('id', articleIds)
+          if (articleError) throw new Error(`Failed to load articles: ${articleError.message}`)
+          for (const row of articleRows ?? []) articlesById.set(row.id, row)
+        }
+
+        items = rawItems.map((item, i) =>
+          resolveInvoiceLineFromArticle(
+            item,
+            item.article_id ? articlesById.get(item.article_id) : undefined,
+            currency,
+            adoptableVatRates,
+            i,
+          ),
+        )
+
+        // Same PERMITTED-set gate as create (taxed-where-performed supplies
+        // carry Swedish VAT even to a foreign business); the default stays
+        // vatRules.rate, so a Swedish rate only lands here when set on the
+        // line or adopted from an article within the default set.
+        const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated)
+        const allowedRates = new Set(permittedRates.map((r) => r.rate))
+        for (const item of items) {
+          // Text rows carry no amounts and never book: exclude them from the
+          // VAT gate and the totals, like commitCreateInvoice's billableItems.
+          if (item.line_type === 'text') continue
+          const itemRate = item.vat_rate ?? vatRules.rate
+          if (!allowedRates.has(itemRate)) {
+            throw new Error(
+              `VAT rate ${itemRate}% is not allowed for customer type "${customer.customer_type}". ` +
+              `Allowed rates: ${permittedRates.map((r) => r.rate + '%').join(', ')}`
+            )
+          }
+          const lineTotal = item.quantity * item.unit_price
+          subtotal += lineTotal
+          vatAmount += roundOre(lineTotal * itemRate / 100)
+        }
+
+        // ROT/RUT staging gate: everything buildInvoiceWriteData would refuse
+        // at commit time that this staged set already determines must fail
+        // HERE, where the agent can fix it, not after approval. (The staging
+        // VAT gate above exists for the same reason.)
+        const deductionLines = items.filter((item) => item.line_type !== 'text' && item.deduction_type)
+        if (deductionLines.length > 0) {
+          const claimErrors = validateDeductionLines(
+            deductionLines.map((item) => ({
+              unit_price: item.unit_price,
+              quantity: item.quantity,
+              deduction_type: item.deduction_type ?? null,
+              vat_rate: item.vat_rate ?? vatRules.rate,
+              labor_hours: item.labor_hours ?? null,
+              work_type: item.work_type ?? null,
+            })),
+          )
+          if (claimErrors.length > 0) {
+            throw new Error(`ROT/RUT: ${claimErrors.join(' ')} Read the current lines with gnubok_get_invoice and pass the deduction fields back.`)
+          }
+          // Commit derives the invoice-level property info from the FIRST
+          // deduction line (commitUpdateInvoice), mirrored here.
+          const firstDeduction = deductionLines[0]
+          const housingProvided =
+            Boolean(firstDeduction.housing_designation?.trim()) ||
+            (Boolean(firstDeduction.apartment_number?.trim()) && Boolean(firstDeduction.brf_org_number?.trim()))
+          if (deductionLines.some((item) => item.deduction_type === 'rot') && !housingProvided) {
+            throw new Error(
+              'ROT lines need housing_designation (fastighetsbeteckning), or apartment_number + brf_org_number, on the first deduction line. ' +
+              'gnubok_get_invoice returns them; pass them back or the update will fail at approval.',
+            )
+          }
+          // The stored personnummer exists only as ciphertext and cannot be
+          // supplied through MCP: without one on the invoice or on an
+          // individual's kundkort, approval is guaranteed to fail.
+          const personnummerAvailable =
+            Boolean(invoice.deduction_personnummer_encrypted) ||
+            (customer.customer_type === 'individual' && Boolean(customer.personal_number))
+          if (!personnummerAvailable) {
+            throw new Error(
+              'ROT/RUT lines need a personnummer, which cannot be passed through MCP. ' +
+              'Add it on the invoice in the web UI or on the customer card first, then retry.',
+            )
+          }
+        }
+
+        // Snapshot of the lines this replace deletes, for the approval
+        // preview only (the executor re-reads at commit time). deduction_type
+        // and the accrual period are shown so the approver can see a ROT/RUT
+        // or periodisering removal; no personnummer column exists here and
+        // the property columns are not needed for the preview.
+        const { data: currentRows, error: currentError } = await supabase
+          .from('invoice_items')
+          .select('line_type, description, quantity, unit, unit_price, line_total, vat_rate, revenue_account, article_id, deduction_type, accrual_period_start, accrual_period_end')
+          .eq('invoice_id', invoice.id)
+          .order('sort_order', { ascending: true })
+        if (currentError) throw new Error(`Database error: ${currentError.message}`)
+        currentItems = (currentRows ?? []).map((row: Record<string, unknown>) => ({
+          line_type: row.line_type ?? 'product',
+          description: row.description,
+          quantity: row.quantity,
+          unit: row.unit,
+          unit_price: row.unit_price,
+          line_total: row.line_total,
+          vat_rate: row.vat_rate,
+          revenue_account: row.revenue_account ?? null,
+          article_id: row.article_id ?? null,
+          deduction_type: row.deduction_type ?? null,
+          accrual_period_start: row.accrual_period_start ?? null,
+          accrual_period_end: row.accrual_period_end ?? null,
+        }))
+      }
+
+      // Resolve-don't-select (same pass as gnubok_create_invoice): parse the
+      // default bag + each RESOLVED item's bag, then resolve codes AND names
+      // against the registry in one go (zero queries when nothing is tagged).
+      const defaultDimensions = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
+      const { bags: resolvedDimBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
+        supabase,
+        companyId,
+        [
+          defaultDimensions,
+          ...(items ?? []).map((item, i) => parseDimensionsArg(item.dimensions, `items[${i}].dimensions`)),
+        ],
+      )
+      const resolvedDefaultDimensions = resolvedDimBags[0]
+      const stagedItems = items?.map((item, i) => {
+        const { dimensions: _rawDimensions, ...rest } = item
+        const bag = resolvedDimBags[i + 1]
+        return bag && Object.keys(bag).length > 0 ? { ...rest, dimensions: bag } : rest
+      })
+
+      const changes: Record<string, unknown> = { ...headerChanges }
+      if (stagedItems) changes.items = stagedItems
+      // The bag replaces wholesale, never merges: {} clears every tag.
+      if (args.default_dimensions !== undefined) changes.default_dimensions = resolvedDefaultDimensions ?? {}
+
+      const parsed = UpdateInvoiceParamsSchema.safeParse({ invoice_id: invoiceId, changes })
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0]
+        throw new Error(`Invalid invoice update: ${issue ? `${issue.path.join('.')}: ${issue.message}` : 'validation failed'}`)
+      }
 
       return stagePendingOperation(supabase, companyId, userId, 'update_invoice',
         `Uppdatera fakturautkast: ${customerName ?? invoice.invoice_number ?? invoice.id}`,
@@ -16279,9 +16670,35 @@ export const tools: McpTool[] = [
           invoice_number: invoice.invoice_number ?? null,
           customer_name: customerName ?? null,
           status: invoice.status,
+          currency,
           changes: parsed.data.changes,
-          ...(parsed.data.changes.items
-            ? { items_replace: true, item_count: parsed.data.changes.items.length }
+          ...(stagedItems
+            ? {
+                items_replace: true,
+                item_count: stagedItems.length,
+                // Effective per-line booking, so the approver sees a revenue
+                // account or VAT rate change instead of only a row count.
+                // deduction_type and the accrual period ride along so a
+                // ROT/RUT or periodisering change is visible too.
+                items: stagedItems.map((item) => ({
+                  line_type: item.line_type ?? 'product',
+                  description: item.description,
+                  quantity: item.quantity,
+                  unit: item.unit,
+                  unit_price: item.unit_price,
+                  line_total: roundOre(item.quantity * item.unit_price),
+                  vat_rate: item.line_type === 'text' ? 0 : (item.vat_rate ?? defaultVatRate),
+                  revenue_account: item.revenue_account ?? null,
+                  article_id: item.article_id ?? null,
+                  deduction_type: item.deduction_type ?? null,
+                  accrual_period_start: item.accrual_period_start ?? null,
+                  accrual_period_end: item.accrual_period_end ?? null,
+                })),
+                current_items: currentItems ?? [],
+                subtotal: roundOre(subtotal),
+                vat_amount: roundOre(vatAmount),
+                total: roundOre(subtotal + vatAmount),
+              }
             : {}),
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
         },

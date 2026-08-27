@@ -289,3 +289,44 @@ describe('gnubok_create_invoice: article_id on items', () => {
     ).rejects.toThrow(/description is required/)
   })
 })
+
+describe('gnubok_create_invoice: free-text rows (issue #1642 follow-up)', () => {
+  it('declares line_type and revenue_account on items so agents know they exist', () => {
+    const items = (createInvoice.inputSchema.properties as Record<string, unknown>).items as {
+      items: { properties: Record<string, unknown> }
+    }
+    expect(items.items.properties.line_type).toBeDefined()
+    expect(items.items.properties.revenue_account).toBeDefined()
+  })
+
+  it('accepts a text spacer row without amounts and keeps it out of the totals', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // No article on any line: customers, period layers x2, pending_operations.
+    enqueue({ data: CUSTOMER, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'op-text-1' }, error: null })
+
+    const result = (await createInvoice.execute(
+      {
+        customer_id: 'cust-1',
+        invoice_date: '2026-05-12',
+        items: [
+          { line_type: 'text', description: 'Avser sprint 12', quantity: 0 },
+          { description: 'Konsultation', quantity: 2, unit: 'tim', unit_price: 1000, vat_rate: 25 },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: { items: Array<Record<string, unknown>>; subtotal: number; vat_amount: number; total: number } }
+
+    expect(result.staged).toBe(true)
+    // The text row is normalized to the zeroed stored shape and contributes
+    // nothing to the totals (commitCreateInvoice billableItems parity).
+    expect(result.preview.items[0]).toMatchObject({ line_type: 'text', quantity: 0, unit_price: 0, line_total: 0 })
+    expect(result.preview.subtotal).toBe(2000)
+    expect(result.preview.vat_amount).toBe(500)
+    expect(result.preview.total).toBe(2500)
+  })
+})
