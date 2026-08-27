@@ -4,6 +4,7 @@ import { cookies } from 'next/headers'
 import DashboardContent from '@/components/dashboard/DashboardContent'
 import { ChecklistSkeleton, PanesSkeleton } from '@/components/dashboard/HemSkeletons'
 import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
+import { isCockpitLandingRole } from '@/lib/company/home-domain'
 import {
   getDashboardAuthContext,
   getDashboardCompanyId,
@@ -43,10 +44,12 @@ export default async function DashboardPage() {
     redirect('/onboarding')
   }
 
-  // Byrå landing: every byrå team member (owner, admin AND member: widened
-  // from owner/admin on the founder's call 2026-08-05, so invited consultants
-  // land right too) homes to the cockpit, not to an auto-resolved client
-  // company. companyId above can be the middleware's first-membership
+  // Byrå landing: byrå owners/admins home to the cockpit, not to an
+  // auto-resolved client company. Role-gated 2026-08-27 (superseding the
+  // 2026-08-05 all-members widening): plain members land like regular users
+  // and open the cockpit from the nav when they want it; the middleware's
+  // zero-company steer stays ungated since a member with no client companies
+  // has nowhere else to land. companyId above can be the middleware's
   // fallback (which it also writes back to user_preferences, so the DB can't
   // tell picked from auto-picked); the session cookie stamped by
   // setActiveCompany is the explicit-choice signal. Once they enter a client
@@ -57,7 +60,11 @@ export default async function DashboardPage() {
     getDashboardTeamMemberships(),
   ])
   if (!cookieStore.has(COMPANY_PICKED_COOKIE)) {
-    if (teamMemberships.some((m) => m.teams?.kind === 'byra')) {
+    if (
+      teamMemberships.some(
+        (m) => m.teams?.kind === 'byra' && isCockpitLandingRole(m.role),
+      )
+    ) {
       redirect('/byra')
     }
   }
