@@ -25,6 +25,12 @@ vi.mock('@/lib/auth/invite-tokens', () => ({
   hashInviteToken: vi.fn(),
 }))
 
+const acceptPendingTeamInviteByTokenMock = vi.fn()
+vi.mock('@/lib/company/pending-invites', () => ({
+  acceptPendingTeamInviteByToken: (...args: unknown[]) =>
+    acceptPendingTeamInviteByTokenMock(...args),
+}))
+
 // Default '/' keeps every pre-WL-14 expectation intact: the helper resolving
 // '/' is byte-identical to the old hardcoded dashboard redirect.
 const resolveLandingDestinationMock = vi.fn()
@@ -297,5 +303,54 @@ describe('GET /auth/callback: WL-14 cockpit landing', () => {
 
     expect(response.headers.get('location')).toBe(`http://localhost:3000${consent}`)
     expect(resolveLandingDestinationMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /auth/callback: byrå-team invite acceptance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(createServerClient).mockImplementation(() => clientWithTeamMembership() as never)
+    acceptPendingTeamInviteByTokenMock.mockResolvedValue({ status: 'invalid' })
+  })
+
+  it('accepts a byrå-team invite from the cookie, lands the admin in /clients, and clears the cookie', async () => {
+    verifyOtp.mockResolvedValue({ error: null })
+    acceptPendingTeamInviteByTokenMock.mockResolvedValue({
+      status: 'accepted',
+      teamId: 'team-1',
+      teamName: 'Byrån',
+    })
+    // Membership now exists, so the landing helper resolves the cockpit.
+    resolveLandingDestinationMock.mockResolvedValue('/clients')
+
+    const request = new NextRequest(
+      'http://localhost:3000/auth/callback?token_hash=abc&type=signup',
+      { headers: { cookie: 'gnubok-invite-token=gnubok_inv_team', 'x-forwarded-host': 'app.amnas.se' } }
+    )
+    const response = await GET(request)
+
+    expect(acceptPendingTeamInviteByTokenMock).toHaveBeenCalledWith(
+      { id: 'user-1', email: undefined },
+      'gnubok_inv_team'
+    )
+    expect(response.headers.get('location')).toBe('http://localhost:3000/clients')
+    // Membership exists now, so the cookie is cleared instead of left for a
+    // retry that would only 409.
+    expect(response.headers.get('set-cookie') ?? '').toContain('gnubok-invite-token=;')
+  })
+
+  it('keeps the cookie for the onboarding retry when the team invite is not (yet) accepted', async () => {
+    verifyOtp.mockResolvedValue({ error: null })
+    acceptPendingTeamInviteByTokenMock.mockResolvedValue({ status: 'invalid' })
+    resolveLandingDestinationMock.mockResolvedValue('/')
+
+    const request = new NextRequest(
+      'http://localhost:3000/auth/callback?token_hash=abc&type=signup',
+      { headers: { cookie: 'gnubok-invite-token=gnubok_inv_team' } }
+    )
+    const response = await GET(request)
+
+    // Not consumed: the cookie is not actively deleted here (no max-age=0).
+    expect(response.headers.get('set-cookie') ?? '').not.toContain('gnubok-invite-token=;')
   })
 })
