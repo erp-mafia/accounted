@@ -1518,7 +1518,10 @@
     "step_receipts_description": "Fota kvittot eller vidarebefordra mejlet till er inkorgsadress, så tolkas underlaget och väntar på dig.",
     "step_receipts_action": "Öppna inkorgen",
     "step_receipts_channels": "Mejl · WhatsApp · uppladdning",
-    "step_receipts_channels_no_wa": "Mejl · uppladdning"
+    "step_receipts_channels_no_wa": "Mejl · uppladdning",
+    "step_claude_title": "Anslut till Claude",
+    "step_claude_description": "Bokför via chatten: släpp kvitton och SIE-filer, stäm av skattekontot och ställ frågor om siffrorna. Allt är redan kopplat.",
+    "step_claude_action": "Anslut till Claude"
   },
   "tax_assessment_notices": {
     "title": "Slutskattebesked och kvarskatt",
