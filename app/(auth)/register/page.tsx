@@ -77,6 +77,9 @@ function RegisterPageContent() {
   const [isCancelling, setIsCancelling] = useState(false)
   const [isRegistered, setIsRegistered] = useState(false)
   const [duplicateEmail, setDuplicateEmail] = useState<string | null>(null)
+  // Invite-only brand domain (signup gate said no): the form is replaced by
+  // an interstitial pointing at the canonical Accounted signup.
+  const [inviteOnlyBlocked, setInviteOnlyBlocked] = useState(false)
   const [inviteEmail, setInviteEmail] = useState<string | null>(null)
   const [bankIdUser, setBankIdUser] = useState<{ givenName?: string; surname?: string } | null>(null)
   const [bankIdFlowId, setBankIdFlowId] = useState<string | null>(null)
@@ -220,6 +223,11 @@ function RegisterPageContent() {
       const json = await res.json()
 
       if (!res.ok) {
+        if (json.error === 'signup_not_allowed') {
+          // Invite-only brand domain: same interstitial as the email path.
+          setInviteOnlyBlocked(true)
+          return
+        }
         if (json.error === 'already_linked') {
           // email_exists kind: the alert renders a sign-in link, which is the
           // recovery path for both "BankID taken" and "email taken".
@@ -335,20 +343,51 @@ function RegisterPageContent() {
     setIsLoading(true)
 
     try {
-      // The confirmation link lands on /auth/callback; carry the consent
-      // destination along so the confirmed session resumes it.
-      const confirmationCallback = new URL('/auth/callback', window.location.origin)
-      if (nextPath !== '/') confirmationCallback.searchParams.set('next', nextPath)
-      const { data, error } = await supabase.auth.signUp({
-        email: emailValue,
-        password: passwordValue,
-        options: {
-          emailRedirectTo: confirmationCallback.toString(),
-          ...captchaTokenOptions(captchaToken),
-        },
+      // Server-side signup (POST /api/auth/signup): the route performs the
+      // GoTrue signUp and enforces the invite-only brand-domain gate, which
+      // a direct browser call to Supabase would bypass. It builds the
+      // /auth/callback confirmation URL from the request host and carries
+      // `next` along, so the mail flow is unchanged.
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: emailValue,
+          password: passwordValue,
+          captchaToken: captchaTokenOptions(captchaToken).captchaToken ?? null,
+          next: nextPath !== '/' ? nextPath : null,
+        }),
       })
+      const json = await res.json().catch(() => ({}))
 
-      if (error) {
+      if (!res.ok) {
+        const error = {
+          code: json?.error?.code,
+          message: json?.error?.message ?? t('register_failed_default'),
+          status: res.status,
+        }
+        if (error.code === 'signup_not_allowed') {
+          // Invite-only brand domain: swap the form for the interstitial
+          // that sends the visitor to the canonical Accounted signup.
+          setInviteOnlyBlocked(true)
+          return
+        }
+        if (error.code === 'brand_lookup_failed') {
+          // Transient brand-lookup error (the gate failed safe rather than
+          // guess). Ask the user to retry instead of implying they were
+          // turned away. Localized here, not from the raw response envelope.
+          setFormError({ kind: 'unknown', message: t('error_temporary') })
+          return
+        }
+        // The route's validateBody rejection is a flat envelope with no
+        // `code`; the client already gates password strength and presence
+        // before this fetch, so a 400 without a code is an email Zod
+        // rejected (e.g. user@localhost, which passes the browser's
+        // type=email). Surface the specific field message, not the generic.
+        if (!error.code && res.status === 400) {
+          setFormError({ kind: 'email_invalid', message: t('error_email_invalid') })
+          return
+        }
         console.error('[register] signUp error', error.message)
         const kind = classifyAuthError(error)
         if (kind === 'weak_password') {
@@ -375,7 +414,7 @@ function RegisterPageContent() {
       persistLoginMethodHint('email')
 
       // If auto-confirmed (local dev), process invite immediately and redirect
-      if (data.session) {
+      if (json?.data?.status === 'session') {
         const cookieMatch = document.cookie.match(/gnubok-invite-token=([^;]+)/)
         const inviteToken = cookieMatch?.[1]
 
@@ -405,10 +444,10 @@ function RegisterPageContent() {
       }
 
       // Supabase obfuscates duplicate signups (to prevent user enumeration):
-      // when the email already belongs to a confirmed account, it returns
-      // data.user with identities: [] and no error, and sends no email.
-      // Detect that case so we don't show a misleading "check your email" screen.
-      if (data.user && (data.user.identities?.length ?? 0) === 0) {
+      // when the email already belongs to a confirmed account, no mail is
+      // sent. The route surfaces that as 'duplicate' so we don't show a
+      // misleading "check your email" screen.
+      if (json?.data?.status === 'duplicate') {
         setDuplicateEmail(emailValue)
         return
       }
@@ -425,6 +464,57 @@ function RegisterPageContent() {
       turnstileRef.current?.reset()
       setIsLoading(false)
     }
+  }
+
+  if (inviteOnlyBlocked) {
+    // Deliberately no email in the outbound URL: the canonical register page
+    // never reads one, and an address in a URL lands in browser history,
+    // Referer headers and proxy logs. The visitor retypes it.
+    const canonicalRegisterHref = `${branding.appUrl.replace(/\/+$/, '')}/register`
+
+    return (
+      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
+        <div className="w-full max-w-sm animate-slide-up space-y-8">
+          <div className="flex justify-center">
+            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
+              <Mail className="h-7 w-7 text-primary" />
+            </div>
+          </div>
+
+          <div className="text-center space-y-2">
+            <h1 className="text-2xl tracking-tight">
+              {t('invite_only_title', { appName: branding.appName })}
+            </h1>
+            <p className="text-muted-foreground text-sm leading-relaxed">
+              {t('invite_only_body', { appName: branding.appName })}
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-border bg-background p-4">
+            <p className="text-sm text-muted-foreground text-center leading-relaxed">
+              {t('invite_only_hint')}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Button className="w-full" asChild>
+              <a href={canonicalRegisterHref}>
+                {t('invite_only_cta')}
+                <ExternalLink className="ml-2 h-4 w-4" />
+              </a>
+            </Button>
+            <Button
+              variant="ghost"
+              className="w-full text-muted-foreground"
+              onClick={() => setInviteOnlyBlocked(false)}
+            >
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              {t('back')}
+            </Button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   if (duplicateEmail) {

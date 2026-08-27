@@ -46,6 +46,7 @@ function makeBrand(overrides: Partial<Brand> = {}): Brand {
     senderDomain: 'post.siffra.se',
     senderDomainStatus: 'verified',
     resendDomainId: 'rd-1',
+    signupMode: 'open',
     ...overrides,
   }
 }
