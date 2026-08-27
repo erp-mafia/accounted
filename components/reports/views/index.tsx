@@ -19,6 +19,11 @@ import { SegmentedControl } from '@/components/ui/segmented-control'
 import { EmptyState } from '@/components/ui/empty-state'
 import { FyPicker } from '@/components/common/FyPicker'
 import { mostRecentEndedVatPeriod } from '@/lib/vat/period-defaults'
+import { resolveInitialVatPeriodSelection } from '@/lib/vat/period-selection'
+import {
+  readStoredVatCadence,
+  writeStoredVatCadence,
+} from '@/components/common/vat-period-storage'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { cn, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -1517,34 +1522,47 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   // Company settings drive both the momsregistrerad gate and the default
   // periodicity (moms_period in Inställningar). Applied once per company the
   // first time its settings settle — as a render-phase adjustment, not an
-  // effect. A later manual change to the picker is preserved, and a company
-  // switch re-applies the new company's setting. `useCompanySettings` only
-  // refetches when the active company changes, so this never clobbers a
-  // manual selection mid-session.
+  // effect. A manual cadence change is persisted per company and restored on
+  // the next visit as long as moms_period is unchanged (only the cadence:
+  // the concrete period always re-seeds to the most recently ended one, the
+  // one that can actually be filed; the current one can never be, so seeding
+  // it forced a step-back click on every filing visit and a year-boundary
+  // trap in January). A company switch re-applies that resolution for the
+  // new company. `useCompanySettings` only refetches when the active company
+  // changes, so this never clobbers a manual selection mid-session.
   const { settings, isLoading: settingsLoading, refetch: refetchSettings } = useCompanySettings()
   const [appliedCompany, setAppliedCompany] = useState<string | null>(null)
   const companyKey = settingsLoading ? null : (settings?.company_id ?? 'none')
   if (companyKey !== null && appliedCompany !== companyKey) {
     setAppliedCompany(companyKey)
-    const configured = settings?.moms_period ?? 'quarterly'
-    setPeriodType(configured)
-    if (configured === 'monthly' || configured === 'quarterly') {
-      // Default to the period whose declaration is actually open: the current
-      // one can never be filed, so seeding it forced a step-back click on
-      // every filing visit (and a year-boundary trap in January).
-      const ended = mostRecentEndedVatPeriod(configured, new Date(), {
-        over40m: settings?.vat_taxable_base_over_40m === true,
-      })
-      setYear(ended.year)
-      setPeriod(ended.period)
-    } else {
-      setPeriod(1)
-    }
+    const stored = settings?.company_id ? readStoredVatCadence(settings.company_id) : null
+    const initial = resolveInitialVatPeriodSelection({
+      stored,
+      momsPeriod: settings?.moms_period ?? null,
+      over40m: settings?.vat_taxable_base_over_40m === true,
+    })
+    setPeriodType(initial.periodType)
+    setYear(initial.year)
+    setPeriod(initial.period)
+  }
+
+  const persistCadence = (periodTypeValue: VatPeriodType) => {
+    if (!settings?.company_id) return
+    writeStoredVatCadence(settings.company_id, {
+      periodType: periodTypeValue,
+      momsPeriod: settings.moms_period ?? null,
+    })
   }
 
   // Settings row present and the company answered "not VAT-registered" —
   // the declaration is meaningless, so the whole view is gated below.
   const notVatRegistered = !settingsLoading && settings !== null && !settings.vat_registered
+  // No company_settings row at all (company created outside onboarding):
+  // VAT registration AND periodicity are both unknown. This used to fall
+  // through every gate and render a silently guessed quarterly declaration;
+  // the wrong period type for an årsmoms company is a compliance hazard, so
+  // it now gates like the other unknowns.
+  const settingsRowMissing = !settingsLoading && settings === null
   // Registered but never picked a redovisningsperiod (rare — onboarding
   // requires it, but companies created outside that flow can miss it).
   const momsPeriodMissing = settings?.vat_registered === true && !settings.moms_period
@@ -1564,6 +1582,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
     } else {
       setPeriod(1)
     }
+    persistCadence(value)
   }
 
   // Annual VAT (helårsmoms) is reported per räkenskapsår, not per calendar year.
@@ -1586,7 +1605,11 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   // gated, or no redovisningsperiod configured); any change to it triggers a
   // refetch and stale responses are discarded.
   const fetchKey =
-    periodType === null || notVatRegistered || momsPeriodMissing || awaitingFiscalPeriod
+    periodType === null ||
+    notVatRegistered ||
+    settingsRowMissing ||
+    momsPeriodMissing ||
+    awaitingFiscalPeriod
       ? null
       : `${periodType}:${year}:${period}:${isYearly ? fiscalPeriodId : ''}:${retryKey}`
 
@@ -1793,6 +1816,21 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
             <Skeleton className="h-64" />
           </CardContent>
         </Card>
+      </div>
+    )
+  }
+
+  if (settingsRowMissing) {
+    return (
+      <div className="space-y-8">
+        {bareHeader}
+        <EmptyState
+          icon={Percent}
+          title="Skatteinställningar saknas"
+          description="Momsdeklarationen bygger på företagets skatteinställningar, men inga är angivna ännu. Ange momsregistrering och redovisningsperiod (månad, kvartal eller helår) i inställningarna, så visas deklarationen för rätt period."
+          actionLabel="Öppna skatteinställningar"
+          actionHref="/settings/tax"
+        />
       </div>
     )
   }
