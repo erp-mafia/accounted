@@ -124,6 +124,22 @@ export function extractBearerToken(request: Request): string | null {
  */
 export type ApiKeyMode = 'live' | 'test'
 
+/**
+ * Seconds a rate-limited caller should wait before retrying.
+ *
+ * `validate_and_increment_api_key` enforces a FIXED one-minute tumbling
+ * window per key row (`rate_limit_window_start`), and the limited branch
+ * deliberately does not slide the window, so the current window can never
+ * have more than 60 seconds left to run. 60 is therefore an exact upper
+ * bound rather than a guess, which is what `Retry-After` requires.
+ *
+ * The exact reset instant is `rate_limit_window_start + 1 minute` and is
+ * known inside the RPC, but its RETURNS TABLE carries no window column, so
+ * TypeScript cannot see it. Emitting the IETF `RateLimit` / `RateLimit-Policy`
+ * fields (draft-ietf-httpapi-ratelimit-headers) needs that column first.
+ */
+export const RATE_LIMIT_RETRY_AFTER_SECONDS = 60
+
 export async function validateApiKey(
   key: string
 ): Promise<

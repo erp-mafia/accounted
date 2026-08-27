@@ -242,7 +242,8 @@ export type CoreEvent =
       success: boolean                              // true iff the tool returned without throwing AND was invoked (not denied)
       isError: boolean                              // matches the JSON-RPC tool-result isError flag returned to the client
       errorCode: string | null                      // structured error code from tool-result.toToolError when applicable
-      errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'unknown_tool' | 'test_key_write_blocked' | null
+      errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'unknown_tool' | 'test_key_write_blocked' | 'bridge_refused' | null
+                                                    // bridge_refused: gnubok_call_tool was pointed at a write tool, or at nothing.
       errorMessage: string | null                   // human-readable error message (truncated to 500 chars), null on success.
                                                     // Raw material for clustering real agent failures into curated gotchas:
                                                     // errorCode alone can't distinguish "period locked" from "unbalanced".

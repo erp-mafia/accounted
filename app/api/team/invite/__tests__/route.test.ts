@@ -57,6 +57,7 @@ const SIFFRA_BRAND = {
   senderDomain: 'post.siffra.se',
   senderDomainStatus: 'verified',
   resendDomainId: 'rd-1',
+  signupMode: 'open',
 }
 
 const mockUser = { id: 'user-1', email: 'admin@byra.se' }

@@ -296,6 +296,26 @@ function successResponse(op) {
 }
 
 /**
+ * A media-type `example` rendered as a fenced JSON block.
+ *
+ * A condensed schema tells an agent the shape of a field; a worked example
+ * tells it the conventions the shape cannot express (id formats, which
+ * optional fields normally travel together, plausible values). Both are
+ * cheap to read and only one of them is derivable from types.
+ */
+function renderExample(label, value) {
+  if (value === undefined || value === null) return []
+  let json
+  try {
+    json = JSON.stringify(value, null, 2)
+  } catch {
+    return []
+  }
+  if (!json) return []
+  return [`${label}:`, '```json', json, '```', '']
+}
+
+/**
  * Full Markdown block for one operation: what a reference file is built from.
  */
 export function renderOperationMd(spec, entry) {
@@ -328,7 +348,8 @@ export function renderOperationMd(spec, entry) {
     lines.push('')
   }
 
-  const body = op.requestBody?.content?.['application/json']?.schema
+  const jsonBody = op.requestBody?.content?.['application/json']
+  const body = jsonBody?.schema
   const multipart = op.requestBody?.content?.['multipart/form-data']?.schema
   if (body) {
     lines.push('Request body:')
@@ -336,6 +357,7 @@ export function renderOperationMd(spec, entry) {
     lines.push(condenseSchema(spec, body))
     lines.push('```')
     lines.push('')
+    lines.push(...renderExample('Example request', jsonBody.example))
   } else if (multipart) {
     lines.push('Request body (`multipart/form-data`):')
     lines.push('```ts')
@@ -345,13 +367,15 @@ export function renderOperationMd(spec, entry) {
   }
 
   const [code, response] = successResponse(op)
-  const responseSchema = response?.content?.['application/json']?.schema
+  const jsonResponse = response?.content?.['application/json']
+  const responseSchema = jsonResponse?.schema
   if (responseSchema) {
     lines.push(`Response \`${code}\`:`)
     lines.push('```ts')
     lines.push(condenseSchema(spec, responseSchema))
     lines.push('```')
     lines.push('')
+    lines.push(...renderExample(`Example response \`${code}\``, jsonResponse.example))
   } else if (response) {
     const contentTypes = Object.keys(response.content ?? {})
     lines.push(
