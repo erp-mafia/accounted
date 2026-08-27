@@ -8,7 +8,7 @@ import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -350,6 +350,9 @@ export default function TransactionsPage() {
   // Template picker dialog
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false)
   const [templatePickerTransaction, setTemplatePickerTransaction] = useState<TransactionWithInvoice | null>(null)
+  // The picker renders non-modal (agent sheet stays usable); hand-restore
+  // page modality while it is open. See useDashShellInert in ui/dialog.tsx.
+  useDashShellInert(templatePickerOpen)
 
   // Invoice picker dialog (manual match)
   const [invoicePickerOpen, setInvoicePickerOpen] = useState(false)
@@ -4020,8 +4023,17 @@ export default function TransactionsPage() {
         />
       )}
 
-      {templatePickerOpen && <Dialog open onOpenChange={setTemplatePickerOpen}>
-        <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+      {/* Non-modal so the agent sheet and its trigger stay usable while
+          picking (useDashShellInert above hand-restores page modality).
+          Esc and veil-click still close: the picker holds no user input.
+          Clicks in the assistant don't dismiss: data-agent-ui counts as
+          inside (see DialogContent). */}
+      {templatePickerOpen && <Dialog open onOpenChange={setTemplatePickerOpen} modal={false}>
+        <DialogVeil />
+        {/* Width capped at the space left of a docked sheet (--agent-sheet-w
+            is docked-only) so the picker never clips off-screen left on
+            narrow desktops; sheet closed = the old max-w-lg. */}
+        <DialogContent className="max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Bokför transaktion</DialogTitle>
           </DialogHeader>

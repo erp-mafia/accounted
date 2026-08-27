@@ -10,6 +10,15 @@ export interface ByraTeamRef {
   id: string
   name: string
   role: 'owner' | 'admin' | 'member'
+  /**
+   * Where "Tillbaka till klienter" points: '/clients' when the current host
+   * is the byrå cockpit's home domain, else an absolute URL to that home
+   * (resolveCockpitHref). Optional: the no-company layout branch renders
+   * before brands resolve and leaves it unset; consumers fall back to
+   * '/clients', which on that branch's cockpit/settings surfaces matches the
+   * pre-cockpitHref behavior exactly.
+   */
+  cockpitHref?: string
 }
 
 /**

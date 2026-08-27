@@ -18,6 +18,7 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { InitialSetupPath, InitialSetupState } from '@/types'
+import { useBranding } from '@/lib/branding/brand-context'
 
 interface NewUserChecklistProps {
   initialState: InitialSetupState
@@ -78,6 +79,7 @@ export default function NewUserChecklist({
   sieSweep = null,
 }: NewUserChecklistProps) {
   const t = useTranslations('initial_setup')
+  const { appName } = useBranding()
   const router = useRouter()
   const showError = useErrorToast()
   const { formatDateLong } = useFormat()
@@ -217,9 +219,17 @@ export default function NewUserChecklist({
     captureSetup('onboarding_setup_step_started', { step: 'receipts' })
     router.push(hasAi ? '/e/general/invoice-inbox' : '/settings/billing')
   }
-  const goAssistant = () => {
-    captureSetup('onboarding_setup_step_started', { step: 'assistant' })
-    router.push(hasAi ? '/onboarding/agent' : '/settings/billing')
+  // Founder call 2026-08-27: the closing CTA is "Anslut till Claude", not the
+  // in-app assistant calibration (still reachable from the assistant page).
+  // A user who finishes the hosted onboarding lands in Claude with everything
+  // already connected, where the MCP onboarding skill opens with findings and
+  // the Att göra-list instead of setup. The connector URL is built from the
+  // page origin so self-hosted and white-label domains link to themselves.
+  const goClaude = () => {
+    captureSetup('onboarding_setup_step_started', { step: 'claude' })
+    const serverUrl = `${window.location.origin}/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted`
+    const link = `https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=${encodeURIComponent(appName)}&connectorUrl=${encodeURIComponent(serverUrl)}`
+    window.open(link, '_blank', 'noopener')
   }
   const dismiss = () =>
     void persist({ dismissed: true }, 'dismiss').then((updated) => {
@@ -387,16 +397,15 @@ export default function NewUserChecklist({
           number={numbers.assistant}
           done={step5Done}
           active={activeStep === 5}
-          title={t('step_assistant_title')}
-          badge={t('step_assistant_beta')}
+          title={t('step_claude_title')}
           last
           action={(variant) => (
-            <Button size="sm" variant={variant} onClick={goAssistant}>
-              {t('step_assistant_action')}
+            <Button size="sm" variant={variant} onClick={goClaude}>
+              {t('step_claude_action')}
             </Button>
           )}
         >
-          {t('step_assistant_description')}
+          {t('step_claude_description')}
         </Step>
       </ol>
     </section>
