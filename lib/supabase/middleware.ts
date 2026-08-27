@@ -499,8 +499,10 @@ async function updateSessionInner(
       return supabaseResponse
     }
 
-    // Byrå team members (any role: widened from owner/admin, founder call
-    // 2026-08-05) with zero client companies (a fresh byrå) home to the
+    // Byrå team members (any role: deliberately NOT gated by
+    // isCockpitLandingRole even after the 2026-08-27 owner/admin landing
+    // gate, because a plain member with zero companies has nowhere else to
+    // land) with zero client companies (a fresh byrå) home to the
     // EMPTY cockpit, never to the company onboarding wizard: clients are
     // created from the cockpit, and forcing the wizard here would make a
     // byrå user create a personal company just to get in. Cockpit-shaped
