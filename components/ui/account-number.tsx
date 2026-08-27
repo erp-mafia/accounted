@@ -2,6 +2,7 @@
 
 import { getAccountDescription, type AccountType } from '@/lib/bookkeeping/account-descriptions'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
+import { useCompanyAccountNames } from '@/lib/bookkeeping/use-company-account-names'
 import {
   Tooltip,
   TooltipTrigger,
@@ -45,11 +46,15 @@ export function AccountNumber({
   // Loads the BAS chart chunk after mount and re-renders once names and
   // descriptions for non-hardcoded accounts are available.
   useBasReference()
+  const companyNames = useCompanyAccountNames()
   const desc = getAccountDescription(number)
   // The company's own account name wins over the BAS reference name: a chart
   // row is user-editable data and must never be visually overridden by our
-  // hardcoded copy. The tooltip still shows the BAS name as reference.
-  const displayName = name || desc?.name
+  // hardcoded copy. Call sites that already know the row pass `name`; the
+  // rest (verifikat views) fall back to the shared company map, so
+  // off-catalog accounts (e.g. SIE-imported 1580) still get their names.
+  // The tooltip still shows the BAS name as reference.
+  const displayName = name || companyNames?.get(number) || desc?.name
 
   const numberElement = (
     <span
