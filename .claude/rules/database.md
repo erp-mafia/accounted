@@ -60,6 +60,7 @@ Use the `/supabase-migration` skill for new migrations.
 - `user_company_ids()`: RLS helper returning user's company IDs
 - `current_active_company_id()`: RLS-side read of `user_preferences.active_company_id`; the same value the middleware resolves, so Next.js and RLS agree
 - `claim_due_webhook_deliveries()`: Concurrent-safe claim of due `automation_webhooks` deliveries for the cron sender
+- `create_supplier_payment_batch()`: Atomic betalfil batch creation (locks invoices, rechecks active batches in-transaction, header + items together)
 - `get_unlinked_1930_lines()`: Bank reconciliation helper
 - `cleanup_sandbox_user()`, `cleanup_expired_sandbox_users()`: Sandbox lifecycle
 

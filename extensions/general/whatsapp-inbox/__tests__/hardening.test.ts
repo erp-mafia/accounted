@@ -141,6 +141,9 @@ describe('company question is not one-shot when the send fails', () => {
 
   it('rolls the question back so the next receipt re-asks', async () => {
     sendButtonsMock.mockResolvedValue({ ok: false, wamid: null, errorDetail: 'Send failed (HTTP 500)' })
+    // The numbered text fallback (#1589) must fail too before anything rolls
+    // back; with the default ok:true text mock the question would stay armed.
+    sendTextMock.mockResolvedValue({ ok: false, wamid: null, errorDetail: 'Send failed (HTTP 500)' })
     const mock = createQueuedMockSupabase()
     enqueueAsk(mock)
     mock.enqueue({
@@ -162,6 +165,11 @@ describe('company question is not one-shot when the send fails', () => {
     })
 
     expect(asked).toBe('not_asked')
+    // The numbered fallback was tried once, with the same template id, before
+    // giving up.
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m6CompanyQuestion)
+    expect(sendTextMock.mock.calls[0][1].body).toContain('1. Bolag A AB')
     const updates = mock
       .findCalls('whatsapp_conversations', 'update')
       .map((args) => args[0] as { state?: string; context?: Record<string, unknown> })

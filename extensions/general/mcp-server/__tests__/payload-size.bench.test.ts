@@ -278,12 +278,20 @@ describe('tools/list payload size guard', () => {
     //     skatteverket_connection, recommended_tools: agent-briefing.test.ts
     //     pins their RUNTIME shape, so nothing was left unguarded), against
     //     +~245 for the new gnubok_call_tool.
+    //   * 63.1K to 63.8K with gnubok_update_customer promoted to the default
+    //     catalog (#1706, #1876). gnubok_call_tool (above) only bridges READ
+    //     tools and refuses writes, so a search-only WRITE tool is still
+    //     uncallable on Claude.ai; the reporter read the tool as missing twice.
+    //     The +761 tokens are the 19-property partial-update wire contract plus
+    //     the staging envelope; the description is already 152 chars.
+    //     Measured 63 761 on the accounted projection after merging #1993
+    //     (line_type and revenue_account declared on the create item schema).
     // Long-term answer to growth is no longer a ceiling bump. gnubok_call_tool
     // makes `catalogVisibility: 'search'` usable for READ tools on hosts that
     // can only invoke what tools/list showed them, which is the constraint that
     // forced gnubok_reconcile_match back into the default catalog on
     // 2026-08-26. Demote a read to search-only before proposing a bump.
-    expect(approxTokens).toBeLessThan(63_100)
+    expect(approxTokens).toBeLessThan(63_800)
   })
 
   it('keeps the accounted_* namespace as the measured worst case', () => {

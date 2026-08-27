@@ -178,17 +178,18 @@ describe('createSupplierPaymentBatch', () => {
     eventBus.clear()
   })
 
-  // from() order for create: companies, settings (debtor first), then
-  // supplier_invoices, batch items, then the two inserts.
-  it('creates a batch with snapshotted payee rows and a derived msg_id', async () => {
+  // Queue order for create (shared between from() and rpc()): companies,
+  // settings (debtor first), then supplier_invoices, batch items (active-batch
+  // fast path), then the single create_supplier_payment_batch RPC call that
+  // writes header + items atomically.
+  it('creates a batch through the atomic RPC with snapshotted payee rows and a derived msg_id', async () => {
     const mock = createQueuedMockSupabase()
     mock.enqueueMany([
       { data: companyRow },
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
-      { data: batchRow() },
-      { data: null },
+      { data: { ok: true, batch: batchRow() } },
     ])
 
     const result = await createSupplierPaymentBatch(
@@ -198,21 +199,21 @@ describe('createSupplierPaymentBatch', () => {
       { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
     )
 
-    expect(result.ok).toBe(true)
+    expect(result).toEqual({ ok: true, batch: batchRow() })
 
-    const batchInsert = mock.findCall('supplier_payment_batches', 'insert')?.[0] as Record<
-      string,
-      unknown
-    >
-    expect(batchInsert).toMatchObject({
-      company_id: COMPANY_ID,
-      user_id: USER_ID,
-      format: 'pain001',
-      status: 'created',
-      currency: 'SEK',
-      total_amount: 737.5,
-      item_count: 1,
-      debtor_snapshot: {
+    // No direct table writes: the RPC is the only write path.
+    expect(mock.findCall('supplier_payment_batches', 'insert')).toBeUndefined()
+    expect(mock.findCall('supplier_payment_batch_items', 'insert')).toBeUndefined()
+
+    expect(mock.supabase.rpc).toHaveBeenCalledTimes(1)
+    const [fnName, args] = mock.supabase.rpc.mock.calls[0] as [string, Record<string, unknown>]
+    expect(fnName).toBe('create_supplier_payment_batch')
+    expect(args).toMatchObject({
+      p_company_id: COMPANY_ID,
+      p_user_id: USER_ID,
+      p_format: 'pain001',
+      p_confirm_already_batched: false,
+      p_debtor_snapshot: {
         name: 'Testbolaget AB',
         org_number: '556677-8899',
         iban: 'SE3550000000054910000003',
@@ -221,27 +222,157 @@ describe('createSupplierPaymentBatch', () => {
         city: 'Stockholm',
       },
     })
-    const msgId = batchInsert.msg_id as string
+    expect(args.p_batch_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    const msgId = args.p_msg_id as string
     expect(msgId.startsWith('ACCOUNTED-5566778899-B')).toBe(true)
     expect(msgId.length).toBeLessThanOrEqual(35)
 
-    const itemsInsert = mock.findCall('supplier_payment_batch_items', 'insert')?.[0] as Array<
-      Record<string, unknown>
-    >
-    expect(itemsInsert).toHaveLength(1)
-    expect(itemsInsert[0]).toMatchObject({
-      batch_id: batchInsert.id,
-      company_id: COMPANY_ID,
+    const items = args.p_items as Array<Record<string, unknown>>
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
       supplier_invoice_id: 'inv-1',
       amount: 737.5,
       payment_date: '2099-08-20',
       payee_type: 'bankgiro',
       payee_bankgiro: '50501055',
+      payee_plusgiro: null,
+      payee_clearing: null,
+      payee_account: null,
       payee_name: 'Derome Bygg & Industri AB',
       payee_city: 'Veddige',
       reference_type: 'invoice_number',
       reference: 'CD3014794407',
     })
+    // batch_id and company_id come from p_batch_id / p_company_id in SQL.
+    expect(items[0]).not.toHaveProperty('batch_id')
+    expect(items[0]).not.toHaveProperty('company_id')
+  })
+
+  it('maps an in-transaction already_batched refusal from the RPC onto the same result', async () => {
+    // The app-side pre-check saw no active batch (empty map), but a concurrent
+    // create committed one before the RPC took its lock: the RPC's recheck
+    // refuses and the service must surface it exactly like the pre-check does.
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: companyRow },
+      { data: settingsRow },
+      { data: [invoiceRow()] },
+      { data: [] },
+      {
+        data: {
+          ok: false,
+          code: 'already_batched',
+          details: [{ id: 'inv-1', batch_id: 'batch-9' }],
+        },
+      },
+    ])
+
+    const result = await createSupplierPaymentBatch(
+      mock.supabase as unknown as SupabaseClient,
+      COMPANY_ID,
+      USER_ID,
+      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+    )
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'already_batched',
+      details: [{ id: 'inv-1', batch_id: 'batch-9' }],
+    })
+  })
+
+  it('maps in-transaction ineligible and amount refusals from the RPC', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: companyRow },
+      { data: settingsRow },
+      { data: [invoiceRow()] },
+      { data: [] },
+      { data: { ok: false, code: 'ineligible', details: [{ id: 'inv-1', reason: 'not_payable' }] } },
+      { data: companyRow },
+      { data: settingsRow },
+      { data: [invoiceRow()] },
+      { data: [] },
+      { data: { ok: false, code: 'amount_exceeds_remaining', details: [{ id: 'inv-1' }] } },
+    ])
+    const input = { format: 'pain001' as const, items: [{ supplier_invoice_id: 'inv-1' }] }
+
+    const ineligible = await createSupplierPaymentBatch(
+      mock.supabase as unknown as SupabaseClient,
+      COMPANY_ID,
+      USER_ID,
+      input,
+    )
+    expect(ineligible).toEqual({
+      ok: false,
+      code: 'ineligible',
+      details: [{ id: 'inv-1', reason: 'not_payable' }],
+    })
+
+    const excessive = await createSupplierPaymentBatch(
+      mock.supabase as unknown as SupabaseClient,
+      COMPANY_ID,
+      USER_ID,
+      input,
+    )
+    expect(excessive).toEqual({
+      ok: false,
+      code: 'amount_exceeds_remaining',
+      details: [{ id: 'inv-1' }],
+    })
+  })
+
+  it('maps an RPC error (constraint violation, guard) to create_failed', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: companyRow },
+      { data: settingsRow },
+      { data: [invoiceRow()] },
+      { data: [] },
+      { error: { message: 'payee_fields_match', code: '23514' } },
+    ])
+
+    const result = await createSupplierPaymentBatch(
+      mock.supabase as unknown as SupabaseClient,
+      COMPANY_ID,
+      USER_ID,
+      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+    )
+
+    expect(result).toEqual({ ok: false, code: 'create_failed' })
+  })
+
+  it('maps an unknown RPC refusal code and an empty RPC payload to create_failed', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: companyRow },
+      { data: settingsRow },
+      { data: [invoiceRow()] },
+      { data: [] },
+      { data: { ok: false, code: 'something_new' } },
+      { data: companyRow },
+      { data: settingsRow },
+      { data: [invoiceRow()] },
+      { data: [] },
+      { data: null },
+    ])
+    const input = { format: 'pain001' as const, items: [{ supplier_invoice_id: 'inv-1' }] }
+
+    const unknown = await createSupplierPaymentBatch(
+      mock.supabase as unknown as SupabaseClient,
+      COMPANY_ID,
+      USER_ID,
+      input,
+    )
+    expect(unknown).toEqual({ ok: false, code: 'create_failed' })
+
+    const empty = await createSupplierPaymentBatch(
+      mock.supabase as unknown as SupabaseClient,
+      COMPANY_ID,
+      USER_ID,
+      input,
+    )
+    expect(empty).toEqual({ ok: false, code: 'create_failed' })
   })
 
   it('rejects the whole batch when any invoice is ineligible', async () => {
@@ -268,7 +399,7 @@ describe('createSupplierPaymentBatch', () => {
       code: 'ineligible',
       details: [{ id: 'inv-2', reason: 'foreign_currency' }],
     })
-    expect(mock.findCall('supplier_payment_batches', 'insert')).toBeUndefined()
+    expect(mock.supabase.rpc).not.toHaveBeenCalled()
   })
 
   it('rejects an amount override above the remaining amount', async () => {
@@ -292,6 +423,7 @@ describe('createSupplierPaymentBatch', () => {
       code: 'amount_exceeds_remaining',
       details: [{ id: 'inv-1' }],
     })
+    expect(mock.supabase.rpc).not.toHaveBeenCalled()
   })
 
   it('refuses an invoice already in an active batch unless confirmed', async () => {
@@ -318,9 +450,10 @@ describe('createSupplierPaymentBatch', () => {
       code: 'already_batched',
       details: [{ id: 'inv-1', batch_id: 'batch-9' }],
     })
+    expect(mock.supabase.rpc).not.toHaveBeenCalled()
   })
 
-  it('proceeds past an active batch when explicitly confirmed', async () => {
+  it('proceeds past an active batch when explicitly confirmed and forwards the confirmation to the RPC', async () => {
     const mock = createQueuedMockSupabase()
     const activeItems = [
       { supplier_invoice_id: 'inv-1', batch: { id: 'batch-9', status: 'created' } },
@@ -330,8 +463,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: activeItems },
-      { data: batchRow() },
-      { data: null },
+      { data: { ok: true, batch: batchRow() } },
     ])
 
     const result = await createSupplierPaymentBatch(
@@ -346,6 +478,10 @@ describe('createSupplierPaymentBatch', () => {
     )
 
     expect(result.ok).toBe(true)
+    expect(mock.supabase.rpc).toHaveBeenCalledWith(
+      'create_supplier_payment_batch',
+      expect.objectContaining({ p_confirm_already_batched: true }),
+    )
   })
 
   it('fails closed when the active-batch lookup errors instead of skipping the guard', async () => {
@@ -363,7 +499,7 @@ describe('createSupplierPaymentBatch', () => {
         items: [{ supplier_invoice_id: 'inv-1' }],
       }),
     ).rejects.toBeTruthy()
-    expect(mock.findCall('supplier_payment_batches', 'insert')).toBeUndefined()
+    expect(mock.supabase.rpc).not.toHaveBeenCalled()
   })
 
   it('fails up front when the debtor is incomplete', async () => {
@@ -378,6 +514,7 @@ describe('createSupplierPaymentBatch', () => {
     )
 
     expect(result).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'iban' })
+    expect(mock.supabase.rpc).not.toHaveBeenCalled()
   })
 
   it('drops an invalid company bankgiro from the snapshot instead of debiting it', async () => {
@@ -387,8 +524,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: { ...settingsRow, bankgiro: '1234-5678' } },
       { data: [invoiceRow()] },
       { data: [] },
-      { data: batchRow() },
-      { data: null },
+      { data: { ok: true, batch: batchRow() } },
     ])
 
     const result = await createSupplierPaymentBatch(
@@ -399,10 +535,10 @@ describe('createSupplierPaymentBatch', () => {
     )
 
     expect(result.ok).toBe(true)
-    const batchInsert = mock.findCall('supplier_payment_batches', 'insert')?.[0] as {
-      debtor_snapshot: { bankgiro: string | null }
+    const args = mock.supabase.rpc.mock.calls[0][1] as {
+      p_debtor_snapshot: { bankgiro: string | null }
     }
-    expect(batchInsert.debtor_snapshot.bankgiro).toBeNull()
+    expect(args.p_debtor_snapshot.bankgiro).toBeNull()
   })
 
   it('requires an organisation number for the InitgPty OrgId', async () => {
@@ -420,6 +556,7 @@ describe('createSupplierPaymentBatch', () => {
     )
 
     expect(result).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'org_number' })
+    expect(mock.supabase.rpc).not.toHaveBeenCalled()
   })
 })
 

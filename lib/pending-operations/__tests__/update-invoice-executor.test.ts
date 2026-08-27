@@ -62,6 +62,19 @@ const NEW_ITEMS = [
   { description: 'Konsultation', quantity: 2, unit: 'tim', unit_price: 1000, vat_rate: 25 },
 ]
 
+const ARTICLE_ID = '44444444-4444-4444-8444-444444444444'
+const ARTICLE_ITEMS = [
+  {
+    description: 'Konsulttimme',
+    quantity: 3,
+    unit: 'tim',
+    unit_price: 1200,
+    vat_rate: 25,
+    article_id: ARTICLE_ID,
+    revenue_account: '3041',
+  },
+]
+
 beforeEach(() => {
   vi.clearAllMocks()
   eventBus.clear()
@@ -232,6 +245,65 @@ describe('commitPendingOperation: update_invoice', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
+  })
+
+  it('keeps article_id and revenue_account on replaced items (issue #1642)', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-invoice-1' } }) // claim pending -> committing
+    enqueue({ data: existingDraft() }) // invoices: existing draft
+    enqueue({ data: makeCustomer({ id: CUSTOMER_ID }) }) // customers
+    enqueue({ data: [{ id: ARTICLE_ID }] }) // articles: company-scope gate
+    enqueue({ data: { vat_registered: true } }) // company_settings (builder VAT gate)
+    enqueue({ data: [{ account_number: '3041' }] }) // chart_of_accounts: override account
+    enqueue({ data: [{ id: INVOICE_ID }] }) // invoices update (draft-guarded)
+    enqueue({ data: [] }) // invoice_items snapshot (replaceInvoiceItems)
+    enqueue({ data: null }) // invoice_items delete
+    enqueue({ data: null }) // invoice_items insert
+    enqueue({ data: null }) // pending_operations final status update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ invoice_id: INVOICE_ID, changes: { items: ARTICLE_ITEMS } }),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ subtotal: 3600, vat_amount: 900, total: 4500, items_replaced: true })
+    expect(supabase.from).toHaveBeenNthCalledWith(4, 'articles')
+    // The rewritten line keeps its article linkage and the 3041 override:
+    // the quantity fix must not rebook revenue to the VAT-derived default.
+    const inserted = findCall('invoice_items', 'insert')?.[0] as Array<Record<string, unknown>>
+    expect(inserted).toHaveLength(1)
+    expect(inserted[0]).toMatchObject({
+      invoice_id: INVOICE_ID,
+      article_id: ARTICLE_ID,
+      revenue_account: '3041',
+      quantity: 3,
+      vat_rate: 25,
+    })
+  })
+
+  it('rejects a staged article outside the company before writing anything', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-invoice-1' } }) // claim
+    enqueue({ data: existingDraft() }) // invoices
+    enqueue({ data: makeCustomer({ id: CUSTOMER_ID }) }) // customers
+    enqueue({ data: [] }) // articles: no company-scoped hit
+    enqueue({ data: null }) // final status update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ invoice_id: INVOICE_ID, changes: { items: ARTICLE_ITEMS } }),
+    )
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toMatch(/finns inte i företaget/)
+    expect(findCall('invoices', 'update')).toBeUndefined()
+    expect(findCall('invoice_items', 'insert')).toBeUndefined()
   })
 
   it('rejects tampered staged params before reading the invoice', async () => {
