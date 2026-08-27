@@ -106,14 +106,17 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     )
   })
 
-  it('returns a race conflict when the guarded update matches no row without creating an entry', async () => {
+  it('returns a race conflict and stornos the orphan when the guarded update matches no row', async () => {
+    // Pre-#1947 this scenario reached the guarded update via a null engine
+    // return; a null entry now fails closed BEFORE the update (see
+    // categorize-core.fail-closed.test.ts), so the race is exercised with a
+    // posted entry, whose orphan must be reversed.
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'fp-1' }] })
-    enqueue({ data: [] })
-    mockCreateJE.mockResolvedValueOnce(null)
+    enqueue({ data: [] }) // guarded update: no row matched (concurrent categorization)
 
     const result = await categorizeMatchedTransaction(
       supabase as never,
@@ -124,7 +127,13 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     )
 
     expect(result.status).toBe(409)
-    expect(mockReverseOrphanedJE).not.toHaveBeenCalled()
+    expect(mockReverseOrphanedJE).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'je-override-1',
+      expect.any(String),
+    )
   })
 
   it('posts the entry with the override on the business side', async () => {
