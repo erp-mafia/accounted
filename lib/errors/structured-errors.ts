@@ -465,6 +465,17 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Transaktionen kategoriserades av en annan förfrågan. Ladda om och försök igen.',
     message_en: 'Transaction was already categorized by another request.',
   },
+  TX_CATEGORIZE_JOURNAL_ENTRY_FAILED: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen kunde inte skapas, så transaktionen är inte bokförd. Den ligger kvar under Att bokföra.',
+    message_en:
+      'The journal entry could not be created, so the transaction was not booked and stays in the unbooked list.',
+    remediation: {
+      description:
+        'Fix the cause in details.cause (PERIOD_LOCKED / BOOKKEEPING_DATABASE_ERROR with a locked-period message: unlock the period or use gnubok_unlock_period; NO_OPEN_PERIOD_FOR_DATE: create or open the fiscal year) and retry the same request. Nothing was written.',
+    },
+  },
   TX_CATEGORIZE_IGNORED_CONFLICT: {
     httpStatus: 409,
     message_sv:
