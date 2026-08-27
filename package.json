@@ -23,6 +23,7 @@
     "validate:packs": "npx tsx scripts/validate-packs.ts",
     "validate:registry": "npx tsx scripts/validate-registry.ts",
     "check:lint": "node scripts/checks/no-new-lint-errors.mjs",
+    "check:types": "node scripts/checks/no-new-type-errors.mjs",
     "test": "vitest run --project unit",
     "test:pg": "vitest run --project pg-real",
     "tools:pg:reset": "bash scripts/tool-pg/reset.sh",

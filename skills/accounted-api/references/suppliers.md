@@ -42,6 +42,38 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "id": "0e9c…",
+      "supplier_id": "a8f1…",
+      "supplier_name": "Office Depot AB",
+      "arrival_number": 42,
+      "supplier_invoice_number": "2026-1234",
+      "invoice_date": "2026-05-10",
+      "due_date": "2026-06-09",
+      "status": "registered",
+      "currency": "SEK",
+      "subtotal": 1000,
+      "vat_amount": 250,
+      "total": 1250,
+      "paid_amount": 0,
+      "remaining_amount": 1250,
+      "is_credit_note": false,
+      "paid_at": null,
+      "created_at": "2026-05-13T15:00:00Z"
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12",
+    "next_cursor": null
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/supplier-invoices`
@@ -92,6 +124,27 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "supplier_id": "a8f1…",
+  "supplier_invoice_number": "2026-1234",
+  "invoice_date": "2026-05-10",
+  "due_date": "2026-06-09",
+  "default_dimensions": {
+    "6": "P001"
+  },
+  "items": [
+    {
+      "description": "Office supplies",
+      "amount": 1000,
+      "account_number": "5410",
+      "vat_rate": 0.25
+    }
+  ]
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -118,6 +171,25 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "supplier_id": "a8f1…",
+    "arrival_number": 42,
+    "supplier_invoice_number": "2026-1234",
+    "status": "registered",
+    "total": 1250,
+    "registration_journal_entry_id": "7b3a…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -183,6 +255,29 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "supplier_id": "a8f1…",
+    "arrival_number": 42,
+    "supplier_invoice_number": "2026-1234",
+    "status": "registered",
+    "currency": "SEK",
+    "subtotal": 1000,
+    "vat_amount": 250,
+    "total": 1250,
+    "remaining_amount": 1250,
+    "is_credit_note": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `PATCH /api/v1/companies/{companyId}/supplier-invoices/{id}`
@@ -214,6 +309,13 @@ Request body:
   delivery_date?: string | "",
   payment_reference?: string,
   notes?: string
+}
+```
+
+Example request:
+```json
+{
+  "payment_reference": "OCR-1234567890"
 }
 ```
 
@@ -257,6 +359,20 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "payment_reference": "OCR-1234567890"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/supplier-invoices/{id}/approve`
@@ -294,6 +410,22 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "status": "approved",
+    "arrival_number": 42,
+    "supplier_invoice_number": "2026-1234"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -341,6 +473,23 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "credit_note_id": "4d2a…",
+    "original_id": "0e9c…",
+    "arrival_number": 43,
+    "supplier_invoice_number": "KREDIT-2026-1234",
+    "registration_journal_entry_id": "9c2f…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/supplier-invoices/{id}/mark-paid`
@@ -378,6 +527,13 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "payment_date": "2026-05-13"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -396,6 +552,25 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "status": "paid",
+    "total": 1250,
+    "paid_amount": 1250,
+    "remaining_amount": 0,
+    "paid_at": "2026-05-13",
+    "payment_journal_entry_id": "7b3a…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -431,6 +606,31 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "id": "a8f1…",
+      "name": "Office Depot AB",
+      "supplier_type": "swedish_business",
+      "email": "invoices@officedepot.example",
+      "org_number": "556677-8899",
+      "vat_number": "SE556677889901",
+      "default_payment_terms": 30,
+      "default_currency": "SEK",
+      "archived_at": null,
+      "created_at": "2026-04-12T08:30:00Z"
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12",
+    "next_cursor": null
   }
 }
 ```
@@ -485,6 +685,20 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "name": "Office Depot AB",
+  "supplier_type": "swedish_business",
+  "email": "invoices@officedepot.example",
+  "org_number": "556677-8899",
+  "bankgiro": "123-4567",
+  "default_expense_account": "5410",
+  "default_payment_terms": 30,
+  "default_currency": "SEK"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -520,6 +734,30 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "name": "Office Depot AB",
+    "supplier_type": "swedish_business",
+    "email": "invoices@officedepot.example",
+    "org_number": "556677-8899",
+    "bankgiro": "123-4567",
+    "default_expense_account": "5410",
+    "default_payment_terms": 30,
+    "default_currency": "SEK",
+    "archived_at": null,
+    "created_at": "2026-05-13T15:00:00Z",
+    "updated_at": "2026-05-13T15:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -584,6 +822,30 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "a8f1…",
+    "name": "Office Depot AB",
+    "supplier_type": "swedish_business",
+    "email": "invoices@officedepot.example",
+    "org_number": "556677-8899",
+    "bankgiro": "123-4567",
+    "default_expense_account": "5410",
+    "default_payment_terms": 30,
+    "default_currency": "SEK",
+    "archived_at": null,
+    "created_at": "2026-04-12T08:30:00Z",
+    "updated_at": "2026-04-30T11:22:09Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `PATCH /api/v1/companies/{companyId}/suppliers/{id}`
@@ -634,6 +896,14 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "default_payment_terms": 14,
+  "notes": "New payment terms agreed 2026-05-12."
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -669,6 +939,22 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "name": "Office Depot AB",
+    "default_payment_terms": 14,
+    "notes": "New payment terms agreed 2026-05-12."
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -727,6 +1013,24 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "suppliers": [
+    {
+      "name": "Office Depot AB",
+      "supplier_type": "swedish_business",
+      "org_number": "556677-8899"
+    },
+    {
+      "name": "Cloud Hosting GmbH",
+      "supplier_type": "eu_business",
+      "vat_number": "DE123456789"
+    }
+  ]
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -740,6 +1044,41 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "results": [
+      {
+        "ok": true,
+        "request_index": 0,
+        "data": {
+          "id": "0e9c…",
+          "name": "Office Depot AB"
+        }
+      },
+      {
+        "ok": true,
+        "request_index": 1,
+        "data": {
+          "id": "4d2a…",
+          "name": "Cloud Hosting GmbH"
+        }
+      }
+    ],
+    "summary": {
+      "total": 2,
+      "succeeded": 2,
+      "failed": 0
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```

@@ -43,6 +43,23 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "operation_id": "op_a8f1…",
+    "type": "import.bank",
+    "status": "queued",
+    "poll_url": "/api/v1/operations/op_a8f1…",
+    "webhook_event": "operation.completed"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/imports/sie`
@@ -81,6 +98,23 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "operation_id": "op_a8f1…",
+    "type": "import.sie",
+    "status": "queued",
+    "poll_url": "/api/v1/operations/op_a8f1…",
+    "webhook_event": "operation.completed"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/reconciliation/accounts`
@@ -115,6 +149,68 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "accounts": [
+      {
+        "account_key": "bank:11111111-1111-4111-8111-111111111111",
+        "kind": "bank",
+        "account_number": "1930",
+        "name": "Swedbank företagskonto",
+        "currency": "SEK",
+        "logo_url": null,
+        "source": {
+          "type": "psd2",
+          "synced_at": "2026-08-20T06:40:00.000Z",
+          "stale": false
+        },
+        "status": {
+          "state": "open",
+          "as_of": "2026-08-20T09:00:00.000Z",
+          "unexplained_difference": 0,
+          "open_counts": {
+            "proposed": 0,
+            "unmatched_external": 1,
+            "unmatched_ledger": 1
+          }
+        },
+        "superseded_by": null
+      },
+      {
+        "account_key": "skattekonto",
+        "kind": "skattekonto",
+        "account_number": "1630",
+        "name": "Skattekonto",
+        "currency": "SEK",
+        "logo_url": "/logos/skatteverket_color.svg",
+        "source": {
+          "type": "skatteverket_api",
+          "synced_at": "2026-08-20T04:00:12.000Z",
+          "stale": false
+        },
+        "status": {
+          "state": "open",
+          "as_of": "2026-08-20T04:00:12.000Z",
+          "unexplained_difference": 0,
+          "open_counts": {
+            "proposed": 2,
+            "unmatched_external": 3,
+            "unmatched_ledger": 1
+          }
+        },
+        "superseded_by": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -175,6 +271,84 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "account_key": "skattekonto",
+    "kind": "skattekonto",
+    "account_number": "1630",
+    "currency": "SEK",
+    "window": {
+      "from": null,
+      "to": null
+    },
+    "as_of": "2026-08-20T04:00:12.000Z",
+    "stale": false,
+    "external_balance": 53395,
+    "ledger_balance": 30342,
+    "difference": 23053,
+    "unexplained_difference": 0,
+    "is_reconciled": false,
+    "bridge": [
+      {
+        "key": "external_balance",
+        "label_sv": "Saldo hos Skatteverket",
+        "label_en": "Balance at Skatteverket",
+        "amount": 53395,
+        "count": null,
+        "items_bucket": null
+      },
+      {
+        "key": "unmatched_external",
+        "label_sv": "Händelser som saknas i bokföringen",
+        "label_en": "Events missing from the ledger",
+        "amount": -35553,
+        "count": 5,
+        "items_bucket": "unmatched_external"
+      },
+      {
+        "key": "unmatched_ledger",
+        "label_sv": "Rader på 1630 utan händelse hos Skatteverket",
+        "label_en": "1630 lines without a Skatteverket event",
+        "amount": 12500,
+        "count": 1,
+        "items_bucket": "unmatched_ledger"
+      },
+      {
+        "key": "ledger_balance",
+        "label_sv": "Bokfört på 1630",
+        "label_en": "Booked on 1630",
+        "amount": 30342,
+        "count": null,
+        "items_bucket": null
+      }
+    ],
+    "counts": {
+      "proposed": 2,
+      "unmatched_external": 3,
+      "unmatched_ledger": 1,
+      "matched": 41,
+      "ignored": 0
+    },
+    "skattekonto": {
+      "saldo_skatteverket": 53395,
+      "fetched_at": "2026-08-20T04:00:12.000Z",
+      "history_start": "2025-01-17",
+      "opening_difference": 0,
+      "upcoming_count": 3,
+      "upcoming_total": -18450,
+      "ledger_balance_before_start": 0
+    },
+    "bank": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/items`
@@ -219,6 +393,53 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "items": [
+      {
+        "item_id": "33333333-3333-4333-8333-333333333333",
+        "item_type": "skattekonto_transaction",
+        "side": "external",
+        "bucket": "proposed",
+        "date": "2026-08-12",
+        "description": "Inbetalning bokförd",
+        "amount": 30000,
+        "currency": "SEK",
+        "proposal": {
+          "journal_entry_id": "44444444-4444-4444-8444-444444444444",
+          "voucher_number": 214,
+          "voucher_series": "A",
+          "entry_date": "2026-08-11",
+          "description": "Inbetalning skattekonto",
+          "entry_status": "posted",
+          "confidence": 0.95,
+          "reasons": [
+            "exakt belopp på 1630",
+            "1 dagars avstånd"
+          ]
+        },
+        "actions": [
+          "match",
+          "book",
+          "ignore"
+        ]
+      }
+    ],
+    "count": 1,
+    "total_count": 1,
+    "has_more": false,
+    "next_cursor": null,
+    "older_unmatched_count": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/items/{itemId}/ignore`
@@ -246,6 +467,13 @@ Request body:
 { ignored?: boolean }
 ```
 
+Example request:
+```json
+{
+  "ignored": true
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -256,6 +484,20 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "external_id": "33333333-3333-4333-8333-333333333333",
+    "is_ignored": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -292,6 +534,14 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "use_proposals": true,
+  "confidence_threshold": 0.9
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -307,6 +557,41 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "dry_run": false,
+    "considered": 2,
+    "applied": [
+      {
+        "external_id": "33333333-3333-4333-8333-333333333333",
+        "journal_entry_id": "44444444-4444-4444-8444-444444444444",
+        "via": "line"
+      }
+    ],
+    "skipped": [
+      {
+        "pair": {
+          "external_ids": [
+            "55555555-5555-4555-8555-555555555555"
+          ],
+          "journal_entry_ids": [
+            "66666666-6666-4666-8666-666666666666"
+          ]
+        },
+        "code": "ALREADY_LINKED",
+        "message": "Verifikatet är redan kopplat till en annan skattekonto-transaktion."
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -347,6 +632,20 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "external_id": "33333333-3333-4333-8333-333333333333",
+    "previous_journal_entry_id": "44444444-4444-4444-8444-444444444444"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/residual`
@@ -380,6 +679,17 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "external_ids": [
+    "22222222-2222-4222-8222-222222222222"
+  ],
+  "journal_entry_id": "44444444-4444-4444-8444-444444444444",
+  "kind": "bank_fee"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -397,6 +707,28 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "dry_run": false,
+    "residual_journal_entry_id": "55555555-5555-4555-8555-555555555555",
+    "residual_amount": -10,
+    "applied": [
+      {
+        "external_id": "22222222-2222-4222-8222-222222222222",
+        "journal_entry_id": "44444444-4444-4444-8444-444444444444"
+      }
+    ],
+    "skipped": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -437,6 +769,34 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "signoffs": [
+      {
+        "id": "77777777-7777-4777-8777-777777777777",
+        "account_key": "skattekonto",
+        "through_date": "2026-07-31",
+        "external_balance": 12450,
+        "ledger_balance": 12450,
+        "unexplained_difference": 0,
+        "note": null,
+        "signed_by": "88888888-8888-4888-8888-888888888888",
+        "signed_at": "2026-08-03T09:12:00Z",
+        "reopened_at": null,
+        "reopened_by": null,
+        "reopen_reason": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/signoff`
@@ -464,6 +824,13 @@ Request body:
 { through_date: string, note?: string, force?: boolean, external_balance?: number }
 ```
 
+Example request:
+```json
+{
+  "through_date": "2026-07-31"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -478,6 +845,33 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "dry_run": false,
+    "signoff": {
+      "id": "77777777-7777-4777-8777-777777777777",
+      "account_key": "skattekonto",
+      "through_date": "2026-07-31",
+      "external_balance": 12450,
+      "ledger_balance": 12450,
+      "unexplained_difference": 0,
+      "note": null,
+      "signed_by": "88888888-8888-4888-8888-888888888888",
+      "signed_at": "2026-08-03T09:12:00Z",
+      "reopened_at": null,
+      "reopened_by": null,
+      "reopen_reason": null
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -509,6 +903,13 @@ Request body:
 { reason?: string }
 ```
 
+Example request:
+```json
+{
+  "reason": "Sen bankrad 31 juli kom in 3 augusti."
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -521,6 +922,32 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signoff": {
+      "id": "77777777-7777-4777-8777-777777777777",
+      "account_key": "skattekonto",
+      "through_date": "2026-07-31",
+      "external_balance": 12450,
+      "ledger_balance": 12450,
+      "unexplained_difference": 0,
+      "note": null,
+      "signed_by": "88888888-8888-4888-8888-888888888888",
+      "signed_at": "2026-08-03T09:12:00Z",
+      "reopened_at": "2026-08-04T07:30:00Z",
+      "reopened_by": "88888888-8888-4888-8888-888888888888",
+      "reopen_reason": "Sen bankrad 31 juli kom in 3 augusti."
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -553,6 +980,15 @@ Request body:
 { date_from?: string, date_to?: string, account_number?: string, confidence_threshold?: number }
 ```
 
+Example request:
+```json
+{
+  "date_from": "2026-05-01",
+  "date_to": "2026-05-31",
+  "confidence_threshold": 0.9
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -568,6 +1004,22 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "matches": [],
+    "applied": 0,
+    "errors": 0,
+    "skipped_below_threshold": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -625,6 +1077,33 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "bank_transaction_total": 48150,
+    "ignored_transaction_total": 0,
+    "ignored_transaction_count": 0,
+    "gl_1930_balance": 98150,
+    "gl_1930_period_movement": 48150,
+    "gl_1930_opening_balance": 50000,
+    "gl_1930_correction_adjustment": 0,
+    "difference": 0,
+    "is_reconciled": true,
+    "matched_count": 142,
+    "unmatched_transaction_count": 3,
+    "unmatched_transaction_total": 1250,
+    "unmatched_gl_line_count": 2,
+    "unmatched_gl_line_total": 1250,
+    "unexplained_difference": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/transactions`
@@ -656,6 +1135,30 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "id": "a8f1…",
+      "date": "2026-05-12",
+      "description": "ICA MAXI",
+      "amount": -349.5,
+      "currency": "SEK",
+      "merchant_name": "ICA MAXI",
+      "journal_entry_id": null,
+      "is_business": null,
+      "category": null
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12",
+    "next_cursor": null
   }
 }
 ```
@@ -719,6 +1222,24 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "a8f1…",
+    "date": "2026-05-12",
+    "amount": -349.5,
+    "currency": "SEK",
+    "journal_entry_id": null,
+    "is_business": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/transactions/{id}/categorize`
@@ -760,6 +1281,14 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "is_business": true,
+  "category": "expense_office"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -778,6 +1307,22 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "success": true,
+    "journal_entry_created": true,
+    "journal_entry_id": "je_…",
+    "category": "expense_office"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -816,6 +1361,13 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "invoice_id": "inv_…"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -834,6 +1386,24 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "success": true,
+    "invoice_status": "paid",
+    "paid_amount": 12500,
+    "remaining_amount": 0,
+    "journal_entry_id": "je_…",
+    "category": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -869,6 +1439,13 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "supplier_invoice_id": "si_…"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -885,6 +1462,23 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "success": true,
+    "invoice_status": "paid",
+    "paid_amount": 5000,
+    "remaining_amount": 0,
+    "journal_entry_id": "je_…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -925,6 +1519,20 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "success": true,
+    "reversed_journal_entry_id": "je_…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/transactions/batch-categorize`
@@ -954,6 +1562,21 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "items": [
+    {
+      "transaction_id": "tx_1",
+      "categorization": {
+        "is_business": true,
+        "category": "expense_office"
+      }
+    }
+  ]
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -967,6 +1590,33 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "results": [
+      {
+        "ok": true,
+        "request_index": 0,
+        "transaction_id": "tx_1",
+        "data": {
+          "journal_entry_id": "je_…"
+        }
+      }
+    ],
+    "summary": {
+      "total": 1,
+      "succeeded": 1,
+      "failed": 0
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -1004,6 +1654,22 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "transactions": [
+    {
+      "date": "2026-05-12",
+      "description": "ICA MAXI",
+      "amount": -349.5,
+      "currency": "SEK",
+      "external_id": "csv-line-42",
+      "merchant_name": "ICA MAXI"
+    }
+  ]
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -1022,6 +1688,20 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "imported": 1,
+    "skipped_duplicates": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```

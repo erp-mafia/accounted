@@ -58,6 +58,19 @@ jobs:
         # baseline ratchets down as legacy errors get fixed.
         run: npm run check:lint
 
+      - name: Typecheck ratchet (no new TypeScript errors)
+        # `npm test` does not typecheck: vitest transpiles and discards types,
+        # so a type error passes all 18 000 tests and only surfaces in the
+        # build. That happened twice on 2026-08-27. This also covers __tests__
+        # files, which the Next.js build never compiles, so it is not merely a
+        # faster copy of the build job.
+        #
+        # Baselined per FILE in scripts/checks/typecheck-baseline.json (539
+        # legacy errors across 83 files, all in test files) and ratchets down.
+        # Per-file rather than per-error-code on purpose: a code-keyed budget
+        # would let a real regression hide behind a legacy fix elsewhere.
+        run: npm run check:types
+
       - name: Antipattern ratchet (no new MFA-bypassing routes / naive öre-rounding)
         # Fails only if a PR ADDS a route that hand-rolls supabase.auth.getUser()
         # instead of the MFA-enforcing guard, or a new Math.round(x*100)/100.
