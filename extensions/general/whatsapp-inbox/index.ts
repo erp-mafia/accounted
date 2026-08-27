@@ -51,6 +51,7 @@ import { kickInboundProcessing } from './lib/process-inbound'
 import { CHAT_ALLOWED_MIME_TYPES, normalizeChatMime } from './lib/chat-mime'
 import {
   DEBOUNCE_WINDOW_MS,
+  badCodeThrottled,
   getContext,
   getOrCreateConversation,
   greetingThrottled,
@@ -67,6 +68,13 @@ const log = createLogger('whatsapp-inbox')
 // ── Unknown-sender budgets ───────────────────────────────────
 // Pre-binding limiter (check_and_increment_whatsapp_sender_quota): caps how
 // much handling an unbound phone can consume at all. Beyond it: silence.
+// When the limiter itself cannot be reached (RPC error or throw), the sender
+// falls through to the greeting path instead (#1599): its own throttle
+// (greetingThrottled in lib/conversation.ts: 1 M1 per hour for text, a
+// 10-minute burst window for media, 3 per day, fail-closed on its own read
+// error) remains the outbound volume cap. M2 (bad code) gets its own small
+// fail-closed throttle in that mode (badCodeThrottled in lib/conversation.ts:
+// 1 per 10 minutes, 3 per day) since this quota no longer bounds it.
 const UNKNOWN_SENDER_MINUTE_MAX = 15
 const UNKNOWN_SENDER_DAY_MAX = 200
 // Declined-message trace rows (issue #1552) are capped per hash and day so an
@@ -164,47 +172,72 @@ async function recordUnknownSenderMessage(
  * Unknown/unlinked sender. Hard rules: never download media, never persist
  * message content or raw payloads, never touch any LLM. The only DB writes
  * are the quota counters, a consumed link code, and outbound reply rows.
+ * The quota RPC failing open (#1599) never relaxes these: the degraded path
+ * is the same greeting path, under the same hard rules.
  */
 async function handleUnknownSender(
   supabase: SupabaseClient,
   msg: ParsedInboundMessage,
   phoneHash: string,
 ): Promise<void> {
-  const { data: quota, error: quotaError } = await supabase.rpc(
-    'check_and_increment_whatsapp_sender_quota',
-    {
-      p_phone_hash: phoneHash,
-      p_minute_max: UNKNOWN_SENDER_MINUTE_MAX,
-      p_day_max: UNKNOWN_SENDER_DAY_MAX,
-    },
-  )
-  if (quotaError) {
-    // Fail closed for unknown senders: without the limiter we send nothing.
-    // The decline itself is still recorded (#1552): support must be able to
-    // answer "what happened to my message" even for this path.
-    log.warn('sender quota RPC failed; staying silent', { error: quotaError.message })
-    await recordUnknownSenderMessage(
-      supabase, msg, phoneHash, 'skipped', 'Unknown sender: quota check failed, declined fail-closed',
+  // Fail OPEN when the limiter is unavailable (#1599): a transient DB error
+  // must not silence a first-time sender at the linking moment. The greeting
+  // throttle below (itself fail-closed) remains the outbound cap and the
+  // link-code claim is single-use regardless. Over-quota (ok: false) stays
+  // silent by design. No fail-closed trace insert here: the path below writes
+  // this message's trace row (#1552), and a second insert would 23505 on the
+  // wamid and be misread as a redelivery.
+  let quota: { ok?: boolean } | null = null
+  let quotaUnavailable = false
+  try {
+    const { data, error } = await supabase.rpc(
+      'check_and_increment_whatsapp_sender_quota',
+      {
+        p_phone_hash: phoneHash,
+        p_minute_max: UNKNOWN_SENDER_MINUTE_MAX,
+        p_day_max: UNKNOWN_SENDER_DAY_MAX,
+      },
     )
-    return
+    if (error) {
+      quotaUnavailable = true
+      log.warn('sender quota RPC failed; failing open to the throttled greeting path', {
+        error: error.message,
+      })
+    } else {
+      quota = data as { ok?: boolean } | null
+    }
+  } catch (err) {
+    quotaUnavailable = true
+    log.warn('sender quota RPC threw; failing open to the throttled greeting path', {
+      error: err instanceof Error ? err.message : String(err),
+    })
   }
-  if ((quota as { ok?: boolean } | null)?.ok === false) {
+  if (quota?.ok === false) {
     await recordUnknownSenderMessage(
       supabase, msg, phoneHash, 'skipped', 'Unknown sender: over pre-binding quota, declined',
     )
     return
   }
+  // Disposition suffix (never a prefix: lib/last-event.ts matches these by
+  // startsWith) so support can tell a degraded-mode greeting from a normal one.
+  const degraded = quotaUnavailable ? ' (quota limiter unavailable)' : ''
 
   const copy = botCopy('sv')
 
   if (msg.type === 'text' && looksLikeLinkCode(msg.text)) {
     const consumed = await consumeLinkCode(supabase, msg.text ?? '')
-    if (!consumed) {
+    // A bad code earns M2. Normally the pre-binding quota bounds M2; in
+    // degraded mode it gets its own small fail-closed throttle instead
+    // (badCodeThrottled: 1 per 10 min, 3 per day), so a sender greeted with
+    // M1 inside the last hour who then sends an expired or mistyped code is
+    // still told the code was rejected instead of falling into silence.
+    // The short-circuit keeps the extra read off the normal path.
+    if (!consumed && (!quotaUnavailable || !(await badCodeThrottled(supabase, phoneHash)))) {
       // Trace row first: a Meta redelivery of a message already answered
       // (including a redelivered CONSUMED code, whose row the success path
       // wrote) dedupes on the wamid instead of earning a second reply.
       const traced = await recordUnknownSenderMessage(
-        supabase, msg, phoneHash, 'done', 'Unknown sender: invalid link code, M2 sent',
+        supabase, msg, phoneHash, 'done', `Unknown sender: invalid link code, M2 sent${degraded}`,
       )
       if (traced === 'duplicate') return
       await sendText(supabase, {
@@ -216,53 +249,59 @@ async function handleUnknownSender(
       return
     }
 
-    const { link, conversationId } = await createPhoneLink(supabase, {
-      userId: consumed.userId,
-      phone: msg.from,
-      profileName: msg.profileName,
-    })
+    if (consumed) {
+      const { link, conversationId } = await createPhoneLink(supabase, {
+        userId: consumed.userId,
+        phone: msg.from,
+        profileName: msg.profileName,
+      })
 
-    // Persist a content-free row for the code message so a Meta redelivery
-    // of the same wamid dedupes instead of falling into the keyword path.
-    await supabase.from('whatsapp_messages').insert({
-      direction: 'inbound',
-      wamid: msg.wamid,
-      sender_phone_hash: phoneHash,
-      phone_link_id: link.id,
-      conversation_id: conversationId,
-      message_type: 'text',
-      processing_status: 'done',
-    })
+      // Persist a content-free row for the code message so a Meta redelivery
+      // of the same wamid dedupes instead of falling into the keyword path.
+      await supabase.from('whatsapp_messages').insert({
+        direction: 'inbound',
+        wamid: msg.wamid,
+        sender_phone_hash: phoneHash,
+        phone_link_id: link.id,
+        conversation_id: conversationId,
+        message_type: 'text',
+        processing_status: 'done',
+      })
 
-    // Non-archived only: the greeting must describe what the channel will
-    // then do (name the sole live company, or say it will ask), not count a
-    // company receipts can never be filed into (#1589).
-    const { data: memberships } = await supabase
-      .from('company_members')
-      .select('company_id, companies!inner(archived_at)')
-      .eq('user_id', consumed.userId)
-      .is('companies.archived_at', null)
-    const companyIds = [...new Set((memberships ?? []).map((m) => m.company_id as string))]
+      // Non-archived only: the greeting must describe what the channel will
+      // then do (name the sole live company, or say it will ask), not count a
+      // company receipts can never be filed into (#1589).
+      const { data: memberships } = await supabase
+        .from('company_members')
+        .select('company_id, companies!inner(archived_at)')
+        .eq('user_id', consumed.userId)
+        .is('companies.archived_at', null)
+      const companyIds = [...new Set((memberships ?? []).map((m) => m.company_id as string))]
 
-    let companyName: string | null = null
-    if (companyIds.length === 1) {
-      const { data: company } = await supabase
-        .from('companies')
-        .select('name')
-        .eq('id', companyIds[0])
-        .maybeSingle()
-      companyName = (company as { name?: string } | null)?.name ?? null
+      let companyName: string | null = null
+      if (companyIds.length === 1) {
+        const { data: company } = await supabase
+          .from('companies')
+          .select('name')
+          .eq('id', companyIds[0])
+          .maybeSingle()
+        companyName = (company as { name?: string } | null)?.name ?? null
+      }
+
+      await sendText(supabase, {
+        to: msg.from,
+        body: copy.m3Linked({ companyName, companyCount: Math.max(companyIds.length, 1) }),
+        template: TEMPLATE.m3Linked,
+        senderPhoneHash: phoneHash,
+        phoneLinkId: link.id,
+        conversationId,
+      })
+      return
     }
 
-    await sendText(supabase, {
-      to: msg.from,
-      body: copy.m3Linked({ companyName, companyCount: Math.max(companyIds.length, 1) }),
-      template: TEMPLATE.m3Linked,
-      senderPhoneHash: phoneHash,
-      phoneLinkId: link.id,
-      conversationId,
-    })
-    return
+    // Limiter unavailable and the M2 throttle declined (repeat bad codes,
+    // or its window was unreadable): fall through to the throttled M1
+    // below, which also tells the sender how to fetch a fresh code.
   }
 
   // Anything else from an unknown number: the AI-disclosure greeting, hard
@@ -273,12 +312,12 @@ async function handleUnknownSender(
   const carriesMedia = msg.type === 'image' || msg.type === 'document'
   if (await greetingThrottled(supabase, phoneHash, { media: carriesMedia })) {
     await recordUnknownSenderMessage(
-      supabase, msg, phoneHash, 'skipped', 'Unknown sender: greeting throttled, declined',
+      supabase, msg, phoneHash, 'skipped', `Unknown sender: greeting throttled, declined${degraded}`,
     )
     return
   }
   const traced = await recordUnknownSenderMessage(
-    supabase, msg, phoneHash, 'done', 'Unknown sender: greeted, M1 sent',
+    supabase, msg, phoneHash, 'done', `Unknown sender: greeted, M1 sent${degraded}`,
   )
   if (traced === 'duplicate') return
   await sendText(supabase, {
