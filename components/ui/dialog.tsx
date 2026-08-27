@@ -56,11 +56,13 @@ const DialogContent = React.forwardRef<
         // there, so one long description widens every sibling past the dialog
         // edge. minmax(0,1fr) caps the track at the content box.
         // left: centered in the viewport MINUS the docked agent sheet.
-        // --agent-dock-w is set on <html> only while the sheet is docked open
-        // (AgentSheetProvider), so with the sheet closed or floating this is
-        // exactly left-[50%]. Without it a wide dialog centers under the
-        // sheet and its right edge becomes unreachable (sheet is z-60).
-        "fixed left-[calc((100vw-var(--agent-dock-w,0px))/2)] top-[50%] z-50 grid grid-cols-[minmax(0,1fr)] w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-[var(--shadow-md)] max-h-[calc(100dvh-2rem)] overflow-y-auto scrollbar-visible data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-98 data-[state=open]:zoom-in-98 sm:rounded-xl",
+        // --agent-sheet-w exists as an inline var on <html> ONLY while the
+        // sheet is docked open (AgentSheetProvider); closed/floating falls to
+        // the 0px fallback, making this exactly left-[50%]. Do NOT read
+        // --agent-dock-w here: globals.css seeds that at 10px permanently.
+        // Without the shift a wide dialog centers under the sheet and its
+        // right edge becomes unreachable (sheet is z-60).
+        "fixed left-[calc((100vw-var(--agent-sheet-w,0px))/2)] top-[50%] z-50 grid grid-cols-[minmax(0,1fr)] w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-[var(--shadow-md)] max-h-[calc(100dvh-2rem)] overflow-y-auto scrollbar-visible data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-98 data-[state=open]:zoom-in-98 sm:rounded-xl",
         className
       )}
       {...props}

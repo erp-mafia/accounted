@@ -449,9 +449,10 @@ export default function QuickReviewDialog({
       onOpenChange(o)
     }}>
       <DialogVeil />
-      {/* Wide variant caps at the space left of a docked agent sheet so the
-          right edge never lands unreachable under it (sheet is z-60). */}
-      <DialogContent className={preAttachedDocumentId ? 'max-w-[min(72rem,calc(100vw-var(--agent-dock-w,0px)-2rem))] max-h-[90vh] overflow-y-auto' : 'max-w-md sm:max-w-lg max-h-[85vh] overflow-y-auto'}>
+      {/* Both variants cap at the space left of a docked agent sheet so the
+          right edge never lands unreachable under it (sheet is z-60).
+          --agent-sheet-w is docked-only: sheet closed = the old widths. */}
+      <DialogContent className={preAttachedDocumentId ? 'max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto' : 'max-w-[min(28rem,calc(100vw-var(--agent-sheet-w,0px)))] sm:max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[85vh] overflow-y-auto'}>
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>

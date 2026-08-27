@@ -260,10 +260,11 @@ export default function TransactionBookingDialog({
     }} modal={false}>
       <DialogVeil />
       <DialogContent
-        // Width caps at the space left of a docked agent sheet (with 2rem
-        // breathing room) so the form's right edge, and the Granska button,
-        // never end up unreachable under the sheet (z-60 over z-50).
-        className="max-w-[min(72rem,calc(100vw-var(--agent-dock-w,0px)-2rem))] max-h-[90vh] overflow-y-auto"
+        // Width caps at the space left of a docked agent sheet so the form's
+        // right edge, and the Granska button, never end up unreachable under
+        // the sheet (z-60 over z-50). --agent-sheet-w is docked-only, so with
+        // the sheet closed this is exactly the old max-w-6xl.
+        className="max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto"
         // Non-modal so the agent sheet (fixed z-[60], portaled outside this
         // dialog) stays interactive beside a booking in progress; a click in
         // its text field must not count as outside-dismissal. A half-booked

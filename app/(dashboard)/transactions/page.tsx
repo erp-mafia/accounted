@@ -4030,7 +4030,10 @@ export default function TransactionsPage() {
           inside (see DialogContent). */}
       {templatePickerOpen && <Dialog open onOpenChange={setTemplatePickerOpen} modal={false}>
         <DialogVeil />
-        <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+        {/* Width capped at the space left of a docked sheet (--agent-sheet-w
+            is docked-only) so the picker never clips off-screen left on
+            narrow desktops; sheet closed = the old max-w-lg. */}
+        <DialogContent className="max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Bokför transaktion</DialogTitle>
           </DialogHeader>
