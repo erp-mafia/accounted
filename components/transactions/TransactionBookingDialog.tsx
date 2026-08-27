@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -158,6 +158,10 @@ export default function TransactionBookingDialog({
     return { bankAccount: account, bankAccountName: matched?.name ?? null }
   }, [transaction, cashAccounts, cashAccountsLoading])
 
+  // Non-modal dialog (see below): page modality is restored by hand so the
+  // agent sheet stays live. See useDashShellInert in components/ui/dialog.tsx.
+  useDashShellInert(open)
+
   if (!transaction) return null
 
   const isIncome = transaction.amount > 0
@@ -253,8 +257,25 @@ export default function TransactionBookingDialog({
         setInboxPickerOpen(false)
       }
       onOpenChange(o)
-    }}>
-      <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+    }} modal={false}>
+      <DialogVeil />
+      <DialogContent
+        // Width caps at the space left of a docked agent sheet so the form's
+        // right edge, and the Granska button, never end up unreachable under
+        // the sheet (z-60 over z-50). --agent-sheet-w is docked-only, so with
+        // the sheet closed this is exactly the old max-w-6xl.
+        className="max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto"
+        // Non-modal so the agent sheet (fixed z-[60], portaled outside this
+        // dialog) stays interactive beside a booking in progress; a click in
+        // its text field must not count as outside-dismissal. A half-booked
+        // transaction must also survive a stray Escape or backdrop click.
+        // Closing is explicit: the header X. Same convention as
+        // NewInvoiceDialog (which pairs non-modality with the inert effect
+        // above).
+        onEscapeKeyDown={(e) => e.preventDefault()}
+        onPointerDownOutside={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription className="sr-only">

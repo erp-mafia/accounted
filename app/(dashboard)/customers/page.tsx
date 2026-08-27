@@ -1,7 +1,8 @@
 'use client'
 
 import { useState, useEffect, useMemo, useCallback, Suspense } from 'react'
-import { useCompanySettings } from '@/lib/reference-data/hooks'
+import { useCompanySettings, useCustomers } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import dynamic from 'next/dynamic'
 import { useLocale, useTranslations } from 'next-intl'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
@@ -68,8 +69,12 @@ function compareStrings(a: string, b: string): number {
 
 function CustomersPageInner() {
   const { canWrite } = useCanWrite()
-  const [customers, setCustomers] = useState<Customer[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  // The roster from the session cache (lib/reference-data): /api/customers
+  // masks the personnummer column server-side (see the note that used to sit
+  // on fetchCustomers), the list is shared with every customer picker, and
+  // a revisit renders from cache. Skeleton only on the very first load.
+  const { customers, isLoading: customersLoading, error: customersError } = useCustomers()
+  const isLoading = customersLoading && customers.length === 0
   const [searchTerm, setSearchTerm] = useState('')
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
@@ -115,44 +120,14 @@ function CustomersPageInner() {
     [searchParams, sortColumn, sortDir, router, pathname]
   )
 
-  /**
-   * Read the roster through the API, not straight from Supabase.
-   *
-   * personal_number holds AES-256-GCM ciphertext (migration 20260726110000).
-   * A browser-side select('*') handed this page 76 to 82 hex characters and
-   * getIdentifier() rendered them into the nowrap identifier cell, which is
-   * what shredded the table layout for companies with private customers.
-   * GET /api/customers maps every row through maskCustomerRow, so the
-   * ciphertext now never leaves the server and the column shows the same
-   * '********-1234' the detail view does.
-   *
-   * No `company` guard: the route resolves the active company server-side, so
-   * the fetch no longer has to wait for CompanyContext to hydrate. The old
-   * guard could leave the list empty on a slow context load, because the
-   * effect below runs once and never retries.
-   */
-  async function fetchCustomers() {
-    setIsLoading(true)
-    try {
-      const response = await fetch('/api/customers')
-      if (!response.ok) throw new Error('Failed to load customers')
-      const { data } = await response.json()
-      setCustomers(data || [])
-    } catch {
-      toast({
-        title: t('load_failed_title'),
-        description: t('load_failed_description'),
-        variant: 'destructive',
-      })
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
   useEffect(() => {
-    fetchCustomers()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (!customersError) return
+    toast({
+      title: t('load_failed_title'),
+      description: t('load_failed_description'),
+      variant: 'destructive',
+    })
+  }, [customersError, toast, t])
 
   async function handleCreateCustomer(data: CreateCustomerInput) {
     setIsCreating(true)
@@ -176,7 +151,9 @@ function CustomersPageInner() {
         title: t('created_title'),
         description: t('created_description', { name: data.name }),
       })
-      setCustomers([...customers, result.data])
+      // Every picker shares the cached list: refresh it instead of patching
+      // this page's copy.
+      await invalidateReferenceData('ref:customers')
       setIsDialogOpen(false)
     }
 

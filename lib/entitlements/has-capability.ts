@@ -321,9 +321,36 @@ const PAYING_SUBSCRIPTION_STATUSES = ['active', 'trialing', 'past_due']
  * CompanyContext so the UI can hide/disable/upsell gated features.
  * Self-hosted holds everything.
  */
+function normalizeTeamId(raw: string | null | undefined): string | null {
+  return raw && isUuid(raw) ? raw : null
+}
+
+function readGrants(supabase: SupabaseClient, companyId: string, teamId: string | null) {
+  const scopeFilter = teamId
+    ? `company_id.eq.${companyId},team_id.eq.${teamId}`
+    : `company_id.eq.${companyId}`
+  return supabase
+    .from('capability_grants')
+    .select('capability_key, expires_at, source')
+    .in('capability_key', PAID_CAPABILITIES as unknown as string[])
+    .or(scopeFilter)
+}
+
+export interface GetCompanyEntitlementsOptions {
+  /**
+   * The company's team_id when the caller already has it (the dashboard
+   * layout reads it off the membership join): skips the companies lookup and
+   * lets the grants read run in the same wave as the other two, one round
+   * trip instead of two on the layout's critical path. Pass null for a
+   * company without a team.
+   */
+  teamId?: string | null
+}
+
 export async function getCompanyEntitlements(
   supabase: SupabaseClient,
   companyId: string,
+  options: GetCompanyEntitlementsOptions = {},
 ): Promise<CompanyEntitlements> {
   if (isPaywallBypassed()) {
     return {
@@ -345,8 +372,11 @@ export async function getCompanyEntitlements(
   // per RLS) distinguishes a churned payer from an expired trial: cancelled
   // subscriptions have their stripe grants deleted, so the grants alone
   // cannot tell the two apart.
-  const [{ data: company }, { data: configs }, { data: subscription }] = await Promise.all([
-    supabase.from('companies').select('team_id').eq('id', companyId).maybeSingle(),
+  const knownTeam = options.teamId !== undefined
+  const [{ data: company }, { data: configs }, { data: subscription }, earlyGrants] = await Promise.all([
+    knownTeam
+      ? Promise.resolve({ data: { team_id: options.teamId } })
+      : supabase.from('companies').select('team_id').eq('id', companyId).maybeSingle(),
     supabase
       .from('company_capability_config')
       .select('capability_key, enabled')
@@ -357,18 +387,12 @@ export async function getCompanyEntitlements(
       .select('status')
       .eq('company_id', companyId)
       .maybeSingle(),
+    // With the team known up front the grants read joins this wave.
+    knownTeam ? readGrants(supabase, companyId, normalizeTeamId(options.teamId)) : Promise.resolve(null),
   ])
-  const rawTeamId = (company as { team_id: string | null } | null)?.team_id ?? null
-  const teamId = rawTeamId && isUuid(rawTeamId) ? rawTeamId : null
+  const teamId = normalizeTeamId((company as { team_id: string | null } | null)?.team_id ?? null)
 
-  const scopeFilter = teamId
-    ? `company_id.eq.${companyId},team_id.eq.${teamId}`
-    : `company_id.eq.${companyId}`
-  const { data: grants } = await supabase
-    .from('capability_grants')
-    .select('capability_key, expires_at, source')
-    .in('capability_key', PAID_CAPABILITIES as unknown as string[])
-    .or(scopeFilter)
+  const { data: grants } = earlyGrants ?? (await readGrants(supabase, companyId, teamId))
 
   const now = Date.now()
   const entitled = new Set<string>()

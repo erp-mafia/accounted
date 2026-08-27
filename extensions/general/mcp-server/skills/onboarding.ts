@@ -16,12 +16,34 @@ continue straight into import or categorization. Staged writes still go
 through their normal approval, but that approval IS the conversation, not an
 extra pause around it.
 
+**Brevity rule: this is onboarding, not a course.** Keep every reply under
+~8 short lines. At most ONE warning per step, one line, and only when it
+changes what the user should do right now. No legal essays, no deadline
+tables, no cross-checks the user did not ask about (bolagsstämma dates,
+EU-moms edge cases, K-regelverk). The user can always ask for depth; the
+flow must never make them scroll past it.
+
+**Memory first, memory back.** Before asking the opening questions, check
+what you already know about the user (memory, earlier conversation):
+orgnr, company name, bank, previous system. Ask only for what is
+genuinely missing. AFTER the company is created, save the durable facts
+to memory (orgnr, company name, bank, fiscal year, moms period, previous
+system, that Accounted is set up): the user's next conversation should
+need zero of these questions.
+
 ## When to use
 
 - "Sätt upp bokföring för mitt AB / min enskilda firma"
 - "Jag har precis startat bolag, hur kommer jag igång?"
 - "Lägg till ett nytt bolag" (an existing user adding a second company)
 - A byrå/consultant onboarding a new client company (pass \`team_id\`)
+
+**Already set up? Deliver value immediately instead.** When
+\`gnubok_get_agent_briefing\` shows a company that already exists with
+data and connections (the user onboarded via the web app), do NOT walk
+the setup steps: go straight to the Step 4b reconciliation pass and the
+Att göra-list, and open with the findings: a numbered list with amounts
+in your FIRST reply. That first impression is the product.
 
 ## Step 0: connect
 
@@ -43,6 +65,9 @@ Open with exactly three questions, together:
 3. **Vilken bank har företaget?** (so the bank connect link later opens that
    bank's consent directly instead of a picker)
 
+Never re-ask a question the user already answered in this conversation
+(the opening round included): reuse the answer.
+
 Then call \`gnubok_lookup_company\` with the org number. The registry answers
 most of the form; present the facts as a SHORT summary to confirm ("Jag
 hittade Example AB, Storgatan 1 i Stockholm, godkänd för F-skatt och
@@ -54,9 +79,14 @@ Rules baked into that split (same as the web onboarding):
 - **F-skatt** from the registry is a fact, both true and false.
 - **VAT** is a fact ONLY when positively registered. "No VAT registration
   found" is a question, never an assumption (ML 17 kap 24 §).
-- **Moms period** and **accounting method** are ALWAYS the user's answer.
-  Rules of thumb if unsure: under 1 MSEK turnover may report VAT yearly,
-  under 40 MSEK quarterly, above monthly; cash method only under 3 MSEK.
+- **Moms period** is ALWAYS the user's answer when VAT-registered. Rules of
+  thumb if unsure: under 1 MSEK turnover may report VAT yearly, under 40
+  MSEK quarterly, above monthly.
+- **Accounting method is NOT a question**: it defaults by form (AB =
+  faktureringsmetoden, enskild firma = kontantmetoden) and the preview
+  flags the default. Name it in the readback ("faktureringsmetoden,
+  standard för AB, säg till om du vill ha kontantmetoden") so the user can
+  override in the same "ja". Cash requires turnover under 3 MSEK.
 - **Enskild firma name**: verksamhetsnamnet is freely choosable; suggest the
   registered name but let the user pick. An AB's registered name is a fact.
 - **Fiscal year**: registry data becomes a confirm question, never an open
@@ -84,31 +114,56 @@ When the user had a previous system, history comes before the bank: it is
 the fastest path to a ledger that shows real value, and bank history rarely
 reaches far enough back anyway.
 
-1. Tell them where to export: **Fortnox** Register → Exportera → SIE 4,
-   **Visma eEkonomi** Bokföring → Export SIE, **Bokio** Inställningar →
-   Exportera data → SIE, **Björn Lundén / Briox / Wint** under Export.
-   Every Swedish system exports SIE4 (.se/.sie); ask them to attach the
-   file here in the chat.
-2. When the file arrives, call \`gnubok_sie_preflight\` with its content
-   (\`file_content\` as read, or \`file_content_base64\` when exact bytes are
-   available: that preserves åäö in CP437 exports). Summarize the scan:
-   source system, fiscal years, verifikat count, balance status, org-number
-   match, warnings. This is the "does it look correct" moment: surface
-   problems BEFORE anything is written.
-3. On their go-ahead: \`gnubok_import_sie\` with the same file and the
-   preflight's \`mappings\`. It stages for approval; after commit verify with
-   \`gnubok_get_trial_balance\`.
+1. Branch on WHICH system they name:
+   - **Fortnox / Björn Lundén / Briox / Wint** (API-connected systems):
+     offer TWO paths and recommend by need. The FULL migration: call
+     \`gnubok_connect_migration\` with the provider; it renders a connect
+     card (same feel as bank/Skatteverket) whose button opens the wizard
+     that logs into the old system and fetches every fiscal year PLUS
+     invoices, customers, suppliers and documents: recommend it when they
+     have open fakturor or want underlag along. The QUICK path is a SIE
+     export dropped here (Fortnox: Register → Exportera → SIE 4): ledger
+     only, fastest. Either way the result lands in the same books.
+   - **Visma eEkonomi / Bokio**: no API export exists; ask for the SIE
+     file (Visma: Bokföring → Export SIE; Bokio: Inställningar →
+     Exportera data → SIE) and use the drop card FIRST. Then
+     \`gnubok_connect_migration\` with the provider renders the card that
+     complements with invoices and customers.
+   - **Annat/okänt system**: every Swedish system exports SIE4
+     (.se/.sie); ask them to export it and drop it here.
+2. As soon as SIE import is the next step, call
+   \`gnubok_create_sie_upload\`. On claude.ai/Desktop it renders a
+   DRAG-AND-DROP card: the user drops the file on it and the card itself
+   runs the preflight and stages the import with exact bytes; you only
+   narrate the verdict and handle the approval. Without the card: PUT the
+   raw bytes to \`upload_url\` (from your code sandbox), compute sha256,
+   and call \`gnubok_sie_preflight\` with \`upload_id\` + \`sha256\` +
+   \`filename\`; smaller files may go inline as \`file_content_base64\` +
+   \`sha256\`. NEVER reproduce a large file token by token: unhashed
+   oversized inline content is refused because a mid-verifikat truncation
+   imports silently incomplete bookkeeping.
+3. THE CARD ACTS WITHOUT YOU SEEING IT: it stages the import and can
+   approve it too. When the user writes after a card was shown, your
+   FIRST call is \`gnubok_list_pending_operations\`: an empty ledger does
+   NOT mean the file never arrived; the import may be staged (approve it
+   on the user's word) or already booked. Without the card: summarize the
+   preflight in a few lines and stage \`gnubok_import_sie\` with the
+   preflight's \`mappings\`. After commit: \`gnubok_get_trial_balance\`
+   and \`gnubok_explain_voucher_gap\` for any skipped numbers (BFNAR
+   2013:2; unexplained gaps block year-end).
 4. Multiple fiscal years = multiple files: import oldest first so IB/UB
-   chains. If the file is very large for chat, the web wizard at
-   \`/import?mode=sie\` is the fallback; Fortnox users can also run the full
-   API migration (invoices, customers, documents) at
+   chains. The web wizard at \`/import?mode=sie\` is the fallback when no
+   upload path works; Fortnox users can also run the full API migration
+   (invoices, customers, documents) at
    \`/import?mode=migration&provider=fortnox\`.
 
 ## Step 4: connect bank and Skatteverket (together, no pause)
 
 Call \`gnubok_connect_bank\` (pass \`bank\` from step 1 so the link opens that
 bank's consent directly) AND \`gnubok_connect_skatteverket\` in the same
-turn; on claude.ai/Desktop both render connect cards with buttons.
+turn; on claude.ai/Desktop both render connect cards with buttons. When a
+card rendered, do NOT paste the URL as text too: the card button IS the
+link, and duplicate raw URLs read as clutter.
 
 - Bank: BankID + PSD2 consent, then an **account selection dialog** in the
   browser: transactions start syncing when the user saves it. Banks cap
@@ -118,6 +173,44 @@ turn; on claude.ai/Desktop both render connect cards with buttons.
 
 When the user says they are done (or comes back), re-call
 \`gnubok_connect_bank\` to verify \`connected\`, then go DIRECTLY to step 5.
+
+## Step 3b: DIRECTLY after the import: verify and PREPARE (before the bank)
+
+The moment the import commits, run a fast pass so the connections land in
+a book that is READY for them: the user should feel value before the bank
+even connects.
+
+- \`gnubok_get_trial_balance\`: balances, and matches the SIE's UB.
+- Sanity-read the content: no income accounts? liabilities that look
+  already-paid? Say so in one line each; do not fix yet.
+- PREPARE the chart for what the connections will bring: if the import
+  lacks 1630 (skattekonto), 8423 (kostnadsränta skattekonto), 8314
+  (skattefri intäktsränta) or 6992 (ej avdragsgilla avgifter), create
+  them NOW so tax payments and fees book correctly from the first sync.
+- Voucher gaps: explain each with \`gnubok_explain_voucher_gap\`.
+
+## Step 4b: after the connections: reconcile (this is where trust is won)
+
+Once bank + Skatteverket deliver data, run the reconciliation pass and
+fix findings through the normal staged flow, a few lines per finding:
+
+- Bank rows covered by the SIE period: MATCH them against existing
+  verifikat with \`gnubok_reconcile_match\` (per account; \`dry_run\`
+  first): never categorize them again, that double-books salaries and
+  everything else. Only rows after the SIE's last date get booked fresh.
+- Skattekonto vs 1630: reconcile the events against the ledger. Common
+  finds: paid payroll taxes still standing on 2710/2731, ränta/avgifter
+  unbooked (8423/8314/6992: never ordinary cost accounts, or the
+  year-end tax computation goes wrong). End state must match
+  Skatteverket's saldo to the öre.
+- Auto-created bank accounts (1930/1931/1935) named after the company:
+  suggest proper names.
+- Underlag coverage: verifikat over ~5 000 kr without documents (BFL 5
+  kap 6 §): list them, offer the receipt-matcher flow.
+
+Present findings as a short numbered list with amounts, fix in priority
+order on the user's go-ahead, and re-verify the reconciled balances match
+external truth (skattekonto saldo, bank balance) to the krona.
 
 ## Step 5: first bookkeeping, immediately
 
@@ -131,9 +224,11 @@ message instead of making them ask.
 
 - \`gnubok_lookup_company\`: registry facts + prefill from the orgnr; call first
 - \`gnubok_create_company\`: preview (no confirm) then create (confirm=true)
+- \`gnubok_create_sie_upload\`: byte-exact upload URL for the SIE file
 - \`gnubok_sie_preflight\`: scan a shared SIE file, nothing written
 - \`gnubok_import_sie\`: staged import; use the preflight's mappings
 - \`gnubok_connect_bank\` / \`gnubok_connect_skatteverket\`: status + connect links
+- \`gnubok_connect_migration\`: connect card into the previous-system wizard
 - \`gnubok_list_companies\`, \`gnubok_get_agent_briefing\`: state checks
 - \`gnubok_list_uncategorized_transactions\`: the first real bookkeeping step
 

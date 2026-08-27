@@ -18,6 +18,7 @@ import {
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
 import { Box, Cloud, ExternalLink, Loader2, RefreshCw, Unplug } from 'lucide-react'
+import { useBranding } from '@/lib/branding/brand-context'
 import type {
   CloudBackupStatus,
   CloudLastSync,
@@ -41,6 +42,7 @@ const PROVIDER_META: Record<CloudProviderId, { label: string; icon: typeof Cloud
 export default function CloudBackupCard() {
   const t = useTranslations('extensions')
   const { toast } = useToast()
+  const { appName } = useBranding()
   const searchParams = useSearchParams()
 
   const [status, setStatus] = useState<CloudBackupStatus | null>(null)
@@ -160,7 +162,7 @@ export default function CloudBackupCard() {
       */}
       {destinations.length > 0 && (
         <p className="mt-4 px-1 text-xs leading-5 text-muted-foreground">
-          {t('ext_cloud_backup_legal_note', { provider: destinations })}
+          {t('ext_cloud_backup_legal_note', { provider: destinations, appName })}
         </p>
       )}
     </div>
@@ -251,6 +253,7 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
   const { toast } = useToast()
   const t = useTranslations('extensions')
   const { dialogProps, confirm } = useDestructiveConfirm()
+  const { appName } = useBranding()
 
   const [isSyncing, setIsSyncing] = useState(false)
   const [isDisconnecting, setIsDisconnecting] = useState(false)
@@ -390,7 +393,7 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
   const supportingLine = status.connected
     ? status.account_email
     : status.configured
-      ? t(scopeKey)
+      ? t(scopeKey, { appName })
       : null
 
   return (

@@ -14,9 +14,9 @@ import { useToast } from '@/components/ui/use-toast'
 import { Check, Loader2, Mail, ArrowLeft, ExternalLink, Eye, EyeOff } from 'lucide-react'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { isBankIdEnabled } from '@/lib/auth/bankid'
+import { isBankIdEnabled } from '@/lib/auth/bankid-flags'
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
-import { getBranding } from '@/lib/branding/service'
+import { useBranding } from '@/lib/branding/brand-context'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
 import {
   consumeInviteCookie,
@@ -38,8 +38,6 @@ import {
 import { persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { cn } from '@/lib/utils'
-
-const branding = getBranding()
 
 const BankIdAuth = dynamic(
   () => import('@/components/auth/BankIdAuth').then((module) => module.BankIdAuth),
@@ -99,6 +97,9 @@ function RegisterPageContent() {
   const router = useRouter()
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
+  // Per-request brand merged over getBranding() defaults (WL-12): identical
+  // values on default hosts, brand values on branded hosts.
+  const branding = useBranding()
   const googleAuthEnabled = isGoogleAuthEnabled()
   const t = useTranslations('register')
   const tAuth = useTranslations('auth')
@@ -861,11 +862,23 @@ function RegisterPageContent() {
 
         <p className="mt-3 text-center text-xs text-muted-foreground/80 leading-relaxed">
           {t('terms_prefix')}{' '}
-          <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
+          {/* Same targets as the login page: platform terms on the marketing
+              site, in-app /privacy (host-relative for branded domains). */}
+          <a
+            href="https://accounted.se/terms"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-foreground transition-colors"
+          >
             {t('terms_link')}
           </a>{' '}
           {t('terms_and')}{' '}
-          <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
+          <a
+            href="/privacy"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-foreground transition-colors"
+          >
             {t('privacy_link')}
           </a>
           .

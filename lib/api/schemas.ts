@@ -3612,6 +3612,16 @@ export const DimensionTaggingApplySchema = z.object({
   reason: z.string().trim().min(3).max(500),
 })
 
+/**
+ * Body for PATCH /api/byra/brand. The app name is byra-editable (WL-17):
+ * shown beside the sidebar logo and across branded chrome. Trimmed and
+ * capped so it stays a name, not a paragraph; domain and colors are NOT
+ * accepted here (ops-managed).
+ */
+export const ByraBrandUpdateSchema = z.object({
+  appName: z.string().trim().min(1).max(60),
+})
+
 // ============================================================
 // Körjournal (mileage trips)
 // ============================================================

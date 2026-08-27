@@ -106,6 +106,7 @@ registerEndpoint({
     'first_fiscal_year is only for a company in its first year (BFL 3 kap.: up to 18 months). Omit it for an established company.',
     'Not idempotent, and Idempotency-Key is not honoured on this company-less route: a retry after a network failure creates a second company. List GET /api/v1/companies before retrying.',
     'org_number is required for a VAT-registered company (the invoice momsregistreringsnummer derives from it), and f_skatt must be stated explicitly: F-skatt approval is never assumed.',
+    'accounting_method may be omitted: it then defaults by form (aktiebolag accrual, enskild firma cash) and the response shows the resolved value. The cash default is only legal when turnover normally stays under 3 MSEK (BFL 4 kap 4 §): send accrual explicitly for a larger enskild firma.',
   ],
   example: {
     request: {
@@ -169,15 +170,22 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
     })
   }
 
-  // Team: explicit, else the caller's first (usually personal) team, same as
-  // the web wizard. create_company_for_user re-checks membership.
+  // Team: explicit, else the caller's PERSONAL team only (WL-08: companies
+  // created through the normal flow always attach to the personal team;
+  // cockpit flows pass the byrå team id explicitly). Picking the first
+  // membership regardless of kind attached a consultant's private company to
+  // the byrå team, exposing their books to the whole byrå and suppressing the
+  // trial. Mirrors ensure_user_team: earliest teams row with kind='personal'.
+  // create_company_for_user re-checks membership (and byrå role) in the DB.
   let teamId: string | null = setup.team_id ?? null
   if (!teamId) {
     const { data: membership } = await ctx.supabase
       .from('team_members')
-      .select('team_id')
+      .select('team_id, teams!inner(kind, created_at)')
       .eq('user_id', ctx.userId)
-      .order('created_at', { ascending: true })
+      .eq('teams.kind', 'personal')
+      .order('teams(created_at)', { ascending: true })
+      .order('teams(id)', { ascending: true })
       .limit(1)
       .maybeSingle()
     teamId = (membership?.team_id as string | undefined) ?? null
@@ -190,7 +198,7 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
     org_number: (plan.input.settings.org_number as string | null) ?? null,
     vat_registered: setup.vat_registered,
     moms_period: setup.vat_registered ? setup.moms_period ?? null : null,
-    accounting_method: setup.accounting_method,
+    accounting_method: plan.resolved.accountingMethod,
     fiscal_period: {
       start_date: plan.fiscalPeriod.startDate,
       end_date: plan.fiscalPeriod.endDate,

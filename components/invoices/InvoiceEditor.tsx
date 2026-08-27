@@ -50,6 +50,7 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useBranding } from '@/lib/branding/brand-context'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { InvoiceReviewContent } from '@/components/invoices/InvoiceReviewContent'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -178,6 +179,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const ts = useTranslations('self_billing')
   const ta = useTranslations('accruals')
   const tCommon = useTranslations('common')
+  const { appName } = useBranding()
   // Normal customer invoice (default) or a received self-billing invoice
   // (mottagen självfaktura, ML 17 kap 15§). The mode is chosen upstream in
   // the Ny faktura split button (?self=1) and is fixed for the editor's
@@ -1780,7 +1782,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         window.URL.revokeObjectURL(url)
         toast({
           title: t('preview_pdf_failed'),
-          description: tCommon('popup_blocked_description'),
+          description: tCommon('popup_blocked_description', { appName }),
           variant: 'destructive',
         })
         return

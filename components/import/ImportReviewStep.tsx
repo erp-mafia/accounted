@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -72,6 +73,8 @@ export default function ImportReviewStep({
 }: ImportReviewStepProps) {
   const { canWrite } = useCanWrite()
   const { company } = useCompany()
+  const { settings: companySettings } = useCompanySettings()
+  const companyDefaultVoucherSeries = companySettings?.default_voucher_series || null
   const t = useTranslations('import')
   const [options, setOptions] = useState<ImportExecuteOptions>({
     createFiscalPeriod: true,
@@ -116,15 +119,9 @@ export default function ImportReviewStep({
           : Promise.resolve({ count: 0, error: null })
 
       const [
-        { data: settingsData, error: settingsError },
         { data: sequencesData, error: sequencesError },
         { count: ibCount, error: ibCountError },
       ] = await Promise.all([
-        supabase
-          .from('company_settings')
-          .select('default_voucher_series')
-          .eq('company_id', company.id)
-          .maybeSingle(),
         supabase
           .from('voucher_sequences')
           .select('voucher_series')
@@ -134,9 +131,6 @@ export default function ImportReviewStep({
 
       if (cancelled) return
 
-      if (settingsError) {
-        console.error('Failed to load company settings for voucher series', settingsError)
-      }
       if (sequencesError) {
         console.error('Failed to load voucher sequences', sequencesError)
       }
@@ -144,7 +138,8 @@ export default function ImportReviewStep({
         console.error('Failed to check for existing opening-balance vouchers', ibCountError)
       }
 
-      const companyDefault = settingsData?.default_voucher_series || null
+      // From the session-cached settings row (lib/reference-data).
+      const companyDefault = companyDefaultVoucherSeries
       const sequences = new Set<string>((sequencesData || []).map((row) => row.voucher_series))
       const existingIb = ibCountError ? 0 : (ibCount ?? 0)
 
@@ -176,7 +171,7 @@ export default function ImportReviewStep({
     return () => {
       cancelled = true
     }
-  }, [company?.id, preview.fiscalYearStart, preview.fiscalYearEnd, preview.openingBalanceTotal])
+  }, [company?.id, companyDefaultVoucherSeries, preview.fiscalYearStart, preview.fiscalYearEnd, preview.openingBalanceTotal])
 
   // Block browser close/refresh during import
   useUnsavedChanges(isLoading)

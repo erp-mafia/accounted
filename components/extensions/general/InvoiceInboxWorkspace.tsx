@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -59,6 +60,7 @@ import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
 import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
 import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { useBranding } from '@/lib/branding/brand-context'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import type { InboxChannelContext, InvoiceExtractionResult, InboxItemSource } from '@/types'
 import { renderChannelParticipant } from '@/lib/documents/channel-context-notes'
@@ -391,7 +393,11 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // Cash method users see "Bokför direkt" as the primary CTA; accrual users
   // see "Skapa leverantörsfaktura". Defaults to 'accrual' until we've read
   // the company settings so we don't flicker the CTA order on first paint.
-  const [accountingMethod, setAccountingMethod] = useState<AccountingMethod>('accrual')
+  // The company's bookkeeping method drives the CTA hierarchy; read from the
+  // session-cached settings row (lib/reference-data), no request of its own.
+  const { settings: companySettings } = useCompanySettings()
+  const accountingMethod: AccountingMethod =
+    companySettings?.accounting_method === 'cash' ? 'cash' : 'accrual'
 
   // ── Data loading ───────────────────────────────────────────
 
@@ -451,16 +457,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   useEffect(() => {
     fetchItems()
     fetchInboxAddress()
-    // Resolve the company's bookkeeping method: drives CTA hierarchy.
-    fetch('/api/settings')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body) => {
-        const method = body?.data?.accounting_method
-        if (method === 'cash' || method === 'accrual') {
-          setAccountingMethod(method)
-        }
-      })
-      .catch(() => { /* keep 'accrual' default */ })
   }, [fetchItems, fetchInboxAddress])
 
   // Realtime: refetch when any invoice_inbox_items row changes for this
@@ -2693,6 +2689,7 @@ function FieldsRail({
 }) {
   const { toast } = useToast()
   const hasAi = useCapability(CAPABILITY.ai)
+  const { appName } = useBranding()
   const data = item.extracted_data
   const [proposal, setProposal] = useState<SuggestedBooking | null>(null)
   const [editOpen, setEditOpen] = useState(false)
@@ -3052,7 +3049,7 @@ function FieldsRail({
               AI-tolkning ingår i abonnemanget
             </div>
             <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
-              Uppgradera för att låta Accounted läsa av leverantör, belopp och
+              Uppgradera för att låta {appName} läsa av leverantör, belopp och
               moms automatiskt. Du kan fortfarande fylla i fälten manuellt eller
               koppla dokumentet till en transaktion nedan.
             </p>

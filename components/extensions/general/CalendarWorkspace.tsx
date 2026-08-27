@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { guardBrowserWrite } from '@/lib/company/tab-guard'
 import { useToast } from '@/components/ui/use-toast'
 import { PaymentCalendar } from '@/extensions/general/calendar/components/PaymentCalendar'
 import type { DeadlineFormValues } from '@/components/deadlines/DeadlineForm'
@@ -62,6 +63,9 @@ export default function CalendarWorkspace({ userId }: WorkspaceComponentProps) {
   }, [fetchData])
 
   const handleDeadlineCreate = async (data: DeadlineFormValues) => {
+    // Cross-tab guard (WL-09): browser-direct Supabase write, outside the
+    // patched-fetch seam. The blocking dialog is the user feedback.
+    if (!guardBrowserWrite()) return
     try {
       const { error } = await supabase.from('deadlines').insert([data])
 
@@ -83,6 +87,7 @@ export default function CalendarWorkspace({ userId }: WorkspaceComponentProps) {
   }
 
   const handleDeadlineToggle = async (deadline: Deadline) => {
+    if (!guardBrowserWrite()) return
     try {
       const { error } = await supabase
         .from('deadlines')

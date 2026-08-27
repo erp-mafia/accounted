@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -188,6 +189,9 @@ function ProfileSkeleton() {
 export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
   const { getByKey, save, isLoading: isDataLoading } = useExtensionData('general', 'tic')
   const { toast } = useToast()
+  // org_number from the session-cached settings row (lib/reference-data):
+  // the profile fetch no longer pays a /api/settings round trip first.
+  const { settings: companySettings, error: settingsError } = useCompanySettings()
   const t = useTranslations('tic_workspace')
   const [profile, setProfile] = useState<TICCompanyProfile | null>(null)
   const [isFetching, setIsFetching] = useState(false)
@@ -216,14 +220,13 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
     setFetchFailed(false)
 
     try {
-      // Get org_number from company settings
-      const settingsRes = await fetch('/api/settings')
-      if (!settingsRes.ok) {
+      // Get org_number from company settings (settled without a row = the
+      // same failure the old fetch reported).
+      if (settingsError) {
         toast({ title: t('toast_settings_failed'), variant: 'destructive' })
         return
       }
-      const { data: settings } = await settingsRes.json()
-      const orgNumber = settings?.org_number
+      const orgNumber = companySettings?.org_number
 
       if (!orgNumber) {
         setNoOrgNumber(true)
@@ -255,7 +258,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
     } finally {
       setIsFetching(false)
     }
-  }, [save, toast, t])
+  }, [save, toast, t, companySettings, settingsError])
 
   // Auto-fetch on first visit when no cached data
   useEffect(() => {

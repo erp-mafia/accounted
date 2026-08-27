@@ -222,7 +222,15 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       // the page declares a bottom action bar (body[data-page-bottom-bar],
       // set by e.g. the standalone invoice editor): lift above it so the FAB
       // never covers the bar's primary button.
-      className={`fixed right-4 z-30 ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-full bg-foreground text-background shadow-lg bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] md:bottom-4 md:[body[data-page-bottom-bar]_&]:bottom-20`}
+      // z-[45]: above the DialogVeil (z-40) so the assistant can be OPENED
+      // while a non-modal dialog (booking, invoice) holds the page inert, but
+      // below dialog content (z-50). Under a true modal dialog Radix sets
+      // pointer-events: none on <body>, which keeps the trigger dead there
+      // regardless of z.
+      // data-agent-ui: opening the assistant must not dismiss an open
+      // non-modal dialog (DialogContent treats this as inside).
+      data-agent-ui=""
+      className={`fixed right-4 z-[45] ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-full bg-foreground text-background shadow-lg bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] md:bottom-4 md:[body[data-page-bottom-bar]_&]:bottom-20`}
     >
       <button
         onClick={handleClick}

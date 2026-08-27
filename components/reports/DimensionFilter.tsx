@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { X } from 'lucide-react'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/select'
 import DimensionCombobox from '@/components/dimensions/DimensionCombobox'
 import { useCompanySettings } from '@/components/settings/useSettings'
-import { fetchDimensions, type DimensionDto } from '@/components/dimensions/types'
+import { useDimensions } from '@/lib/reference-data/hooks'
 
 export type DimensionFilterValue = {
   /** SIE dimension number as a string ('1' kostnadsställe, '6' projekt). */
@@ -43,26 +43,12 @@ interface Props {
  */
 export function DimensionFilter({ value, onChange }: Props) {
   const { settings } = useCompanySettings()
-  const [dims, setDims] = useState<DimensionDto[]>([])
+  // Registry from the session cache (lib/reference-data).
+  const { dimensions: dims } = useDimensions()
   // Which dimension the picker targets while no value is selected yet;
   // once a value is picked, `value.dimNo` is the source of truth.
   const [pendingDimNo, setPendingDimNo] = useState('6')
   const enabled = settings?.dimensions_enabled === true
-
-  useEffect(() => {
-    if (!enabled) return
-    let cancelled = false
-    fetchDimensions()
-      .then((rows) => {
-        if (!cancelled) setDims(rows)
-      })
-      .catch(() => {
-        // Best-effort: without the registry the filter simply doesn't render.
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [enabled])
 
   if (!enabled || dims.length === 0) return null
 

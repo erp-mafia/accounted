@@ -210,6 +210,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_lookup_company:                  'companies:read',
   gnubok_connect_bank:                    'companies:read',
   gnubok_connect_skatteverket:            'companies:read',
+  gnubok_connect_migration:               'companies:read',
   gnubok_get_company_settings:            'companies:read',
   gnubok_update_company_settings:         'companies:write',
   // Transactions
@@ -340,6 +341,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_export_sie:                      'reports:read',
   gnubok_audit_package:                   'reports:read',
   gnubok_import_sie:                      'bookkeeping:write',
+  // Byte-exact SIE upload URL feeding gnubok_import_sie (same write intent).
+  gnubok_create_sie_upload:               'bookkeeping:write',
   // Rot/rut begäran om utbetalning (records a payout request on generate)
   gnubok_generate_rot_rut_file:           'invoices:write',
   // Supplier CRUD

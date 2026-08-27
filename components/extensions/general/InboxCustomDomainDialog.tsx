@@ -20,6 +20,7 @@ import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/
 import { useFormat } from '@/lib/hooks/use-format'
 import { useCompany } from '@/contexts/CompanyContext'
 import { copyToClipboard } from '@/lib/browser/copy-to-clipboard'
+import { useBranding } from '@/lib/branding/brand-context'
 
 const BASE = '/api/extensions/ext/invoice-inbox/inbox/domain'
 
@@ -43,6 +44,7 @@ interface Props {
 // server-side: this surface only manages the claim lifecycle.
 export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
   const { toast } = useToast()
+  const { appName } = useBranding()
   const t = useTranslations('inbox_custom_domain')
   const { locale, formatDateLong } = useFormat()
   const errorLocale = locale as ErrorLocale
@@ -131,7 +133,7 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
 
   const handleRemove = useCallback(async () => {
     if (!domain) return
-    if (!confirm(t('remove_confirm', { domain: domain.domain }))) return
+    if (!confirm(t('remove_confirm', { domain: domain.domain, appName }))) return
     setIsRemoving(true)
     try {
       const res = await fetch(BASE, { method: 'DELETE' })
@@ -148,7 +150,7 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
     } finally {
       setIsRemoving(false)
     }
-  }, [domain, errorLocale, t, toast])
+  }, [domain, errorLocale, t, toast, appName])
 
   const handleCopy = useCallback(
     async (value: string) => {
@@ -208,7 +210,7 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
               <div className="space-y-1">
                 <p className="font-medium">{t('warning_title')}</p>
                 <p className="text-muted-foreground">
-                  {t('warning_before_subdomain')}{' '}
+                  {t('warning_before_subdomain', { appName })}{' '}
                   <code className="font-mono text-xs">faktura.dittbolag.se</code>{' '}
                   {t('warning_after_subdomain')}
                 </p>

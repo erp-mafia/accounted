@@ -1,11 +1,15 @@
 import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
+import { cookies } from 'next/headers'
 import DashboardContent from '@/components/dashboard/DashboardContent'
 import { ChecklistSkeleton, PanesSkeleton } from '@/components/dashboard/HemSkeletons'
+import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
+import { isCockpitLandingRole } from '@/lib/company/home-domain'
 import {
   getDashboardAuthContext,
   getDashboardCompanyId,
   getDashboardSettings,
+  getDashboardTeamMemberships,
   getResolvedDashboardAgentProfile,
 } from './request-context'
 import { HemChecklistSection, HemNoticesSection, HemPanesSection } from './hem-sections'
@@ -40,6 +44,31 @@ export default async function DashboardPage() {
     redirect('/onboarding')
   }
 
+  // Byrå landing: byrå owners/admins home to the cockpit, not to an
+  // auto-resolved client company. Role-gated 2026-08-27 (superseding the
+  // 2026-08-05 all-members widening): plain members land like regular users
+  // and open the cockpit from the nav when they want it; the middleware's
+  // zero-company steer stays ungated since a member with no client companies
+  // has nowhere else to land. companyId above can be the middleware's
+  // fallback (which it also writes back to user_preferences, so the DB can't
+  // tell picked from auto-picked); the session cookie stamped by
+  // setActiveCompany is the explicit-choice signal. Once they enter a client
+  // this session, "/" is that company's Hem again. Memberships are
+  // request-cached and shared with the layout.
+  const [cookieStore, teamMemberships] = await Promise.all([
+    cookies(),
+    getDashboardTeamMemberships(),
+  ])
+  if (!cookieStore.has(COMPANY_PICKED_COOKIE)) {
+    if (
+      teamMemberships.some(
+        (m) => m.teams?.kind === 'byra' && isCockpitLandingRole(m.role),
+      )
+    ) {
+      redirect('/byra')
+    }
+  }
+
   const now = new Date()
 
   const [settingsRes, { data: profile }, agentProfile, { count: skatteverketTokenCount }] =
@@ -62,8 +91,21 @@ export default async function DashboardPage() {
     throw new Error(`company_settings fetch failed: ${settingsError.message}`)
   }
 
-  // If onboarding is not complete, redirect to onboarding
+  // If onboarding is not complete, redirect to onboarding. Exception: a byrå
+  // member who did NOT explicitly pick this company this session goes to the
+  // cockpit instead. The auto-resolved company can be onboarding-incomplete
+  // through no action of theirs (a client mid migration-reset repoints every
+  // member's active_company_id), and the first-run wizard is a dead end for
+  // role 'member': WL-15 refuses client creation and the shell has no nav.
+  // Before the owner/admin landing gate the /byra bounce above shielded every
+  // byrå member from this path; this keeps that shield without the gate.
   if (!settings?.onboarding_complete) {
+    if (
+      !cookieStore.has(COMPANY_PICKED_COOKIE) &&
+      teamMemberships.some((m) => m.teams?.kind === 'byra')
+    ) {
+      redirect('/byra')
+    }
     redirect('/onboarding')
   }
 

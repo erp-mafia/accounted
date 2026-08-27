@@ -8,7 +8,7 @@ import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -350,6 +350,9 @@ export default function TransactionsPage() {
   // Template picker dialog
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false)
   const [templatePickerTransaction, setTemplatePickerTransaction] = useState<TransactionWithInvoice | null>(null)
+  // The picker renders non-modal (agent sheet stays usable); hand-restore
+  // page modality while it is open. See useDashShellInert in ui/dialog.tsx.
+  useDashShellInert(templatePickerOpen)
 
   // Invoice picker dialog (manual match)
   const [invoicePickerOpen, setInvoicePickerOpen] = useState(false)
@@ -3600,10 +3603,15 @@ export default function TransactionsPage() {
       <TransactionStatusBar onOpenCreateDialog={() => setIsDialogOpen(true)} />
 
 
-      {skvNeedsReconnect && effectiveSourceFilter === 'skatteverket' ? (
-        // Only when the user is actually looking at skattekonto rows: as a
-        // permanent page-wide line it read as noise (feedback 2026-08-14).
-        // The skattekonto page keeps its own reconnect line.
+      {skvNeedsReconnect ? (
+        // Shown on every source filter, not just 'skatteverket'. The original
+        // gate (feedback 2026-08-14) predates the deletion of the
+        // connection-expired email (DECISIONS 2026-08-25), which left the
+        // banner as the ONLY proactive channel a web-only user has for a dead
+        // Skatteverket connection. A filter most users never select is not a
+        // channel, and hiding it is what let a dead connection sit unnoticed
+        // for days. The line is not noise: it renders only while the
+        // connection is actually broken and disappears the moment it works.
         <AttnLine action={{ label: t('skv_reconnect_cta'), href: '/settings/tax' }}>
           {t('skv_reconnect_body')}
         </AttnLine>
@@ -4015,8 +4023,17 @@ export default function TransactionsPage() {
         />
       )}
 
-      {templatePickerOpen && <Dialog open onOpenChange={setTemplatePickerOpen}>
-        <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+      {/* Non-modal so the agent sheet and its trigger stay usable while
+          picking (useDashShellInert above hand-restores page modality).
+          Esc and veil-click still close: the picker holds no user input.
+          Clicks in the assistant don't dismiss: data-agent-ui counts as
+          inside (see DialogContent). */}
+      {templatePickerOpen && <Dialog open onOpenChange={setTemplatePickerOpen} modal={false}>
+        <DialogVeil />
+        {/* Width capped at the space left of a docked sheet (--agent-sheet-w
+            is docked-only) so the picker never clips off-screen left on
+            narrow desktops; sheet closed = the old max-w-lg. */}
+        <DialogContent className="max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Bokför transaktion</DialogTitle>
           </DialogHeader>

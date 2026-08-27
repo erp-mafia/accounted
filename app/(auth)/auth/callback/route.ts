@@ -3,6 +3,7 @@ import { type NextRequest, NextResponse } from 'next/server'
 import { hashInviteToken } from '@/lib/auth/invite-tokens'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import { resolveLandingDestination } from '@/lib/company/landing-server'
 
 /**
  * The one `next` destination this callback honours for a fresh session: the
@@ -240,8 +241,24 @@ export async function GET(request: NextRequest) {
 
       // Redirect to the dashboard (it handles zero-company and incomplete
       // states), unless the session was created to resume an MCP OAuth
-      // consent flow: that page handles the zero-company state too.
-      redirectPath = resumeOAuth ?? '/'
+      // consent flow: that page handles the zero-company state too. With no
+      // explicit destination, byrå staff on their byrå's home domain land in
+      // the cockpit instead (WL-14): this callback is the OAuth/magic-link
+      // twin of the login page's resolvePostLoginDestination call, covering
+      // only AAL1 sessions (MFA-enrolled users exited to /mfa/verify above,
+      // which applies the same rule). Any failure degrades to '/'.
+      if (resumeOAuth) {
+        redirectPath = resumeOAuth
+      } else {
+        try {
+          const host =
+            request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? ''
+          redirectPath = await resolveLandingDestination(supabase, user.id, host)
+        } catch (err) {
+          console.error('[auth/callback] landing resolution failed:', err)
+          redirectPath = '/'
+        }
+      }
     }
 
     // Create redirect and explicitly set auth cookies on the response

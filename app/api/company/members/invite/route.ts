@@ -7,6 +7,7 @@ import { validateBody } from '@/lib/api/validate'
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getEmailService } from '@/lib/email/service'
+import { getSenderForCompany, getBaseUrlForBrand } from '@/lib/email/brand-sender'
 import {
   generateInviteEmailSubject,
   generateInviteEmailHtml,
@@ -213,15 +214,22 @@ export const POST = withRouteContext(
     // Send email. email_sent is surfaced in the response so the UI can tell
     // the user when the invitation exists but the mail never went out:
     // previously a send failure was invisible (invite looked sent).
+    // Brand mail (WL-13): sender identity and the invite link follow the
+    // brand of the company the invite concerns; a company without a brand
+    // uses the validated request origin (appOrigin) and sender exactly as
+    // before.
+    const sender = await getSenderForCompany(companyId)
+    const appUrl = sender.brand ? getBaseUrlForBrand(sender.brand) : appOrigin
     const emailService = getEmailService()
     let emailSent = false
     if (emailService.isConfigured()) {
-      const inviteUrl = `${appOrigin}/invite/${token}`
+      const inviteUrl = `${appUrl}/invite/${token}`
 
       const emailData = {
         companyName: company?.name || 'Företag',
         inviterEmail: user.email || '',
         inviteUrl,
+        appName: sender.brand?.appName,
       }
 
       const result = await emailService.sendEmail({
@@ -229,6 +237,9 @@ export const POST = withRouteContext(
         subject: generateInviteEmailSubject(emailData),
         html: generateInviteEmailHtml(emailData),
         text: generateInviteEmailText(emailData),
+        fromName: sender.fromName ?? undefined,
+        fromAddress: sender.fromAddress ?? undefined,
+        replyTo: sender.replyTo ?? undefined,
       })
 
       if (result.success) {
@@ -243,7 +254,7 @@ export const POST = withRouteContext(
 
     // In development, return the invite URL directly (no email service)
     const isDev = process.env.NODE_ENV === 'development'
-    const devInviteUrl = isDev ? `${appOrigin}/invite/${token}` : undefined
+    const devInviteUrl = isDev ? `${appUrl}/invite/${token}` : undefined
 
     return NextResponse.json({
       data: {

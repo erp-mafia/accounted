@@ -54,12 +54,13 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { fetchDimensions, type DimensionDto } from '@/components/dimensions/types'
+import { useDimensions } from '@/lib/reference-data/hooks'
 import { DetailPager } from '@/components/common/DetailPager'
 import { listContextKey } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
+import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
 // Snapshot of a struck line, as stored in journal_entry_rattelse_log.
 type StruckLineSnapshot = {
@@ -159,7 +160,10 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // Dimension registry, fetched once when any line carries a dimensions map:
   // used to resolve display names for the per-line dimension text ('KS: Butik');
   // it falls back to raw codes when the fetch fails or a code is unregistered.
-  const [registryDims, setRegistryDims] = useState<DimensionDto[] | null>(null)
+  // Dimension names for tagged lines, from the session-cached registry
+  // (lib/reference-data); null until it is there, raw codes render meanwhile.
+  const { dimensions } = useDimensions()
+  const registryDims = dimensions.length > 0 ? dimensions : null
   // Tier-2 retro-tagging (dimensions plan PR6): pencil on posted lines opens
   // the audited retag dialog; the log renders as a history section below.
   // Both render only when dimensions are enabled for the company.
@@ -169,21 +173,6 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [retagLog, setRetagLog] = useState<
     { id: string; line_id: string; old_dimensions: Record<string, string>; new_dimensions: Record<string, string>; reason: string; created_at: string }[]
   >([])
-
-  useEffect(() => {
-    if (registryDims !== null) return
-    const entryLines = (entry?.lines || []) as JournalEntryLine[]
-    if (!entryLines.some((l) => l.dimensions && Object.keys(l.dimensions).length > 0)) return
-    let cancelled = false
-    fetchDimensions()
-      .then((dims) => {
-        if (!cancelled) setRegistryDims(dims)
-      })
-      .catch(() => {/* display-only, raw codes are fine */})
-    return () => {
-      cancelled = true
-    }
-  }, [entry, registryDims])
 
   const fetchData = useCallback(async () => {
     setIsLoading(true)
@@ -356,12 +345,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   }, [fetchData])
 
   if (isLoading) {
-    return (
-      <div className="flex flex-col items-center justify-center py-24">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground mb-3" />
-        <p className="text-sm text-muted-foreground">{t('loading')}</p>
-      </div>
-    )
+    return <DetailPageSkeleton />
   }
 
   if (error || !entry) {

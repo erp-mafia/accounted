@@ -2,7 +2,7 @@
   "name": "accounted",
   "displayName": "Accounted",
   "description": "Official Accounted plugin: Swedish double-entry bookkeeping flows for Claude. Connects your ledger over MCP and ships short workflow skills (daily bookkeeping, health check, month close, VAT, payroll, year-end) that work from the company's live data and load Swedish accounting knowledge from the product when needed. Every write is staged for your approval; nothing is booked on its own.",
-  "version": "1.2.0",
+  "version": "1.2.2",
   "author": {
     "name": "Accounted (erp-mafia)"
   },

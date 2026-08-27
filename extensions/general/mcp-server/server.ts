@@ -257,8 +257,11 @@ import {
   createPendingDocumentUpload,
   uploadDocument,
   MAX_DOCUMENT_SIZE,
+  buildPendingDocumentStoragePath,
+  DOCUMENTS_BUCKET,
 } from '@/lib/core/documents/document-service'
 import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
+import { createHash } from 'node:crypto'
 import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema, AgentExtractionSchema } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 import { mirrorExtractionToDocument } from '@/extensions/general/invoice-inbox/lib/mirror-extraction'
 // Skatteverket filing tools (PR5). Cross-extension lib import, same sanctioned
@@ -1445,21 +1448,104 @@ export function isDefaultCatalogTool(tool: { catalogVisibility?: 'default' | 'se
 }
 
 /**
- * Resolve SIE file content from tool args: plain text (the model read the
- * attachment) or base64 (exact bytes, e.g. from a code-execution sandbox).
- * The base64 path runs the same encoding detection as the HTTP upload route,
- * so CP437 exports keep their åäö instead of arriving pre-mangled through a
- * host's UTF-8 read. Returns null when neither field is usable.
+ * Inline SIE content above this length is refused: a model reproducing tens
+ * of thousands of tokens verbatim WILL eventually truncate mid-#VER, and a
+ * truncated file that still parses imports silently incomplete bookkeeping.
+ * Larger files go through gnubok_create_sie_upload (raw bytes, no model in
+ * the path). ~120k chars ≈ a few thousand verifikat rows.
  */
-async function decodeSieToolContent(args: Record<string, unknown>): Promise<string | null> {
-  if (typeof args.file_content === 'string' && args.file_content.length > 0) {
-    return args.file_content
+const MAX_INLINE_SIE_CHARS = 120_000
+
+/**
+ * Resolve SIE file content from tool args, three sources in priority order:
+ *
+ *   - upload_id: raw bytes PUT to a gnubok_create_sie_upload URL. The only
+ *     path with no model in the loop; required for large files.
+ *   - file_content_base64: exact bytes base64-encoded (e.g. from a
+ *     code-execution sandbox).
+ *   - file_content: plain text as the model read the attachment.
+ *
+ * Byte paths run the same encoding detection as the HTTP upload route, so
+ * CP437 exports keep their åäö. An optional sha256 (hex, of the RAW BYTES)
+ * is verified on the two byte-exact paths and proves the content was not
+ * truncated or altered in transit; it cannot be checked for plain text
+ * (the model's read may legitimately differ from the file's bytes).
+ * Returns null when no source is usable.
+ */
+async function resolveSieToolContent(
+  args: Record<string, unknown>,
+  companyId: string,
+  userId: string
+): Promise<string | null> {
+  const sha256 = typeof args.sha256 === 'string' ? args.sha256.trim().toLowerCase() : null
+  const verifyBytes = (buffer: Buffer, source: string) => {
+    if (!sha256) return
+    const actual = createHash('sha256').update(buffer).digest('hex')
+    if (actual !== sha256) {
+      throw Object.assign(
+        new Error(
+          `sha256 mismatch on ${source}: expected ${sha256}, got ${actual}. The content was truncated or altered; re-send it.`
+        ),
+        { code: 'VALIDATION_ERROR' }
+      )
+    }
   }
-  if (typeof args.file_content_base64 === 'string' && args.file_content_base64.length > 0) {
-    const { detectEncoding, decodeBuffer } = await import('@/lib/import/sie-parser')
-    const buffer = Buffer.from(args.file_content_base64, 'base64')
+
+  const { detectEncoding, decodeBuffer } = await import('@/lib/import/sie-parser')
+
+  if (typeof args.upload_id === 'string' && args.upload_id.length > 0) {
+    const fileName = typeof args.filename === 'string' ? args.filename : ''
+    if (!fileName) {
+      throw Object.assign(new Error('filename is required together with upload_id'), {
+        code: 'VALIDATION_ERROR',
+      })
+    }
+    const service = createServiceClientNoCookies()
+    const pendingPath = buildPendingDocumentStoragePath(companyId, userId, args.upload_id, fileName)
+    const { data, error } = await service.storage.from(DOCUMENTS_BUCKET).download(pendingPath)
+    if (error || !data) {
+      throw Object.assign(
+        new Error(
+          'No uploaded file found for this upload_id. PUT the raw file bytes to the upload_url from gnubok_create_sie_upload first (same upload_id and filename).'
+        ),
+        { code: 'NOT_FOUND' }
+      )
+    }
+    const buffer = Buffer.from(await data.arrayBuffer())
+    verifyBytes(buffer, 'the uploaded file')
     const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
     return decodeBuffer(arrayBuffer, detectEncoding(arrayBuffer))
+  }
+
+  if (typeof args.file_content_base64 === 'string' && args.file_content_base64.length > 0) {
+    // The inline cap exists to stop a MODEL from retyping a large file with
+    // silent truncation. A caller that provides sha256 (the drop-card widget
+    // always does) has byte-exact content and the hash check below IS the
+    // truncation guard, so the cap does not apply.
+    if (!sha256 && args.file_content_base64.length > MAX_INLINE_SIE_CHARS) {
+      throw Object.assign(
+        new Error(
+          'File too large to pass inline safely without a sha256. Use gnubok_create_sie_upload (drag-and-drop card / PUT to its upload_url) and pass the upload_id here, or include sha256 of the raw bytes.'
+        ),
+        { code: 'VALIDATION_ERROR' }
+      )
+    }
+    const buffer = Buffer.from(args.file_content_base64, 'base64')
+    verifyBytes(buffer, 'file_content_base64')
+    const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+    return decodeBuffer(arrayBuffer, detectEncoding(arrayBuffer))
+  }
+
+  if (typeof args.file_content === 'string' && args.file_content.length > 0) {
+    if (args.file_content.length > MAX_INLINE_SIE_CHARS) {
+      throw Object.assign(
+        new Error(
+          'File too large to pass inline safely (silent mid-verifikat truncation risk). Use gnubok_create_sie_upload, PUT the raw bytes to its upload_url, and pass the upload_id here instead.'
+        ),
+        { code: 'VALIDATION_ERROR' }
+      )
+    }
+    return args.file_content
   }
   return null
 }
@@ -1481,16 +1567,23 @@ function connectLinkBaseUrl(): string {
 
 /**
  * The team a company created through the API/MCP path attaches to when the
- * caller does not name one: the user's first (usually the silent personal)
- * team, mirroring what the web wizard passes. null when the user has no
- * team at all; create_company_for_user then leaves team_id NULL.
+ * caller does not name one: the user's PERSONAL team only (WL-08: companies
+ * created through the normal flow always attach to the personal team; cockpit
+ * flows pass the byrå team id explicitly). Picking the first membership
+ * regardless of kind attached a consultant's private company to their byrå
+ * team, exposing their books to the whole byrå and suppressing the trial.
+ * Mirrors ensure_user_team: earliest teams row with kind='personal'. null
+ * when the user has no personal team; create_company_for_user then leaves
+ * team_id NULL. Explicit team_id args are authorized by the DB gate instead.
  */
 async function defaultTeamForUser(supabase: SupabaseClient, userId: string): Promise<string | null> {
   const { data, error } = await supabase
     .from('team_members')
-    .select('team_id')
+    .select('team_id, teams!inner(kind, created_at)')
     .eq('user_id', userId)
-    .order('created_at', { ascending: true })
+    .eq('teams.kind', 'personal')
+    .order('teams(created_at)', { ascending: true })
+    .order('teams(id)', { ascending: true })
     .limit(1)
     .maybeSingle()
   if (error) {
@@ -3126,7 +3219,19 @@ export const tools: McpTool[] = [
       if (!vatIsFact) stillToAsk.push('vat_registered (the registry shows no VAT registration; confirm with the user)')
       if (vatIsFact) stillToAsk.push('moms_period (monthly, quarterly or yearly; never guess)')
       else stillToAsk.push('moms_period IF vat_registered turns out true')
-      stillToAsk.push('accounting_method (accrual = faktureringsmetoden, cash = kontantmetoden; never guess)')
+      // accounting_method is deliberately NOT in this list: gnubok_create_company
+      // defaults it by form (AB accrual, EF cash) and flags the default in the
+      // preview, where the user confirms or overrides it in the same "ja".
+      //
+      // Two flow questions the agent must ask in the SAME round (E2E #5: the
+      // agent skipped both and the user landed on a generic bank picker with
+      // no history import):
+      stillToAsk.push(
+        "bank (vilken bank har företaget? pass it to gnubok_connect_bank as bank so the connect link opens that bank's consent directly)"
+      )
+      stillToAsk.push(
+        'previous_system (har bokföringen legat i ett annat system? if yes: SIE import comes FIRST, before any bank connect: PSD2 history rarely covers the fiscal year)'
+      )
 
       const startMonth = parseStartMonthDay(lookup.fiscalYear?.startMonthDay)
       // No closed fiscal period in the registry = no annual report filed yet
@@ -3182,7 +3287,7 @@ export const tools: McpTool[] = [
         still_to_ask: stillToAsk,
         warnings,
         instructions:
-          'Present the company facts as a short summary for the user to CONFIRM (name, address, F-skatt, VAT status; do not re-ask them). Then ask ONLY the still_to_ask questions, merge the answers into suggested_create_company_input, and call gnubok_create_company (preview first, read it back, then confirm=true).',
+          'Present the company facts as a short summary for the user to CONFIRM (name, address, F-skatt, VAT status; do not re-ask them). An established company with F-skatt/VAT is the NORMAL case even when the user says "nytt bolag" (new = new to Accounted): never refuse or second-guess the orgnr because the company looks established. Ask ONLY the still_to_ask questions, merge answers into suggested_create_company_input, and call gnubok_create_company (preview, read back incl. the defaulted accounting method, then confirm=true).',
       }
     },
   },
@@ -3191,7 +3296,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_create_company',
     title: 'Create Company',
     description:
-      'Create a NEW company for the connected user, set up for bookkeeping (chart, settings, first fiscal period, tax deadlines; 30-day trial). Call gnubok_lookup_company FIRST to prefill facts from the orgnr. Preview (no confirm), read it back, then confirm=true. Skill: onboarding.',
+      'Create a NEW company, set up for bookkeeping (chart, settings, first fiscal period, tax deadlines; 30-day trial). Ask ONLY orgnr + moms period: gnubok_lookup_company prefills the rest, accounting_method defaults by form. Preview (no confirm), read back, then confirm=true.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -3201,7 +3306,7 @@ export const tools: McpTool[] = [
         org_number: { type: 'string', description: '10 digits; required when VAT-registered' },
         vat_registered: { type: 'boolean' },
         moms_period: { type: 'string', enum: ['monthly', 'quarterly', 'yearly'], description: 'Required when vat_registered' },
-        accounting_method: { type: 'string', enum: ['accrual', 'cash'] },
+        accounting_method: { type: 'string', enum: ['accrual', 'cash'], description: 'Omit to default by form: aktiebolag accrual, enskild firma cash; the preview flags the default' },
         f_skatt: { type: 'boolean' },
         fiscal_year_start_month: { type: 'integer', minimum: 1, maximum: 12 },
         first_fiscal_year: {
@@ -3217,7 +3322,7 @@ export const tools: McpTool[] = [
         team_id: { type: 'string', format: 'uuid' },
         confirm: { type: 'boolean', description: 'true creates; omitted = preview' },
       },
-      required: ['name', 'entity_type', 'vat_registered', 'accounting_method', 'f_skatt'],
+      required: ['name', 'entity_type', 'vat_registered', 'f_skatt'],
     },
     outputSchema: {
       type: 'object',
@@ -3258,7 +3363,18 @@ export const tools: McpTool[] = [
         vat_registered: parsed.data.vat_registered,
         vat_number: (plan.input.settings.vat_number as string | null) ?? null,
         moms_period: parsed.data.vat_registered ? parsed.data.moms_period ?? null : null,
-        accounting_method: parsed.data.accounting_method,
+        accounting_method: plan.resolved.accountingMethod,
+        // Present, never silent: the readback must name the defaulted method
+        // so the user can override it before confirm. The cash default also
+        // carries its eligibility condition (BFL 4 kap 4 §): the registry
+        // cannot verify turnover, so the human must.
+        ...(plan.resolved.accountingMethodDefaulted ? { accounting_method_defaulted: true } : {}),
+        ...(plan.resolved.accountingMethodDefaulted && plan.resolved.accountingMethod === 'cash'
+          ? {
+              accounting_method_note:
+                'Kontantmetoden förutsätter en omsättning som normalt understiger 3 MSEK (BFL 4 kap 4 §); annars gäller faktureringsmetoden. Bekräfta detta med användaren.',
+            }
+          : {}),
         f_skatt: parsed.data.f_skatt,
         fiscal_period: plan.fiscalPeriod,
         team_id: teamId,
@@ -3270,7 +3386,7 @@ export const tools: McpTool[] = [
           requires_confirmation: true,
           preview,
           message:
-            'Nothing was created. Read the preview back to the user (especially the fiscal period dates and the VAT setup), then call gnubok_create_company again with the same arguments and confirm=true.',
+            'Nothing was created. Read the preview back to the user (especially the fiscal period dates, the VAT setup, and the accounting method when accounting_method_defaulted is true: name the default and let them override), then call gnubok_create_company again with the same arguments and confirm=true.',
         }
       }
 
@@ -3287,15 +3403,30 @@ export const tools: McpTool[] = [
         throw Object.assign(new Error(result.error), { code })
       }
 
+      // A fiscal period that started well before today means bookkeeping
+      // already happened somewhere: history import comes BEFORE the bank
+      // (PSD2 reaches ~90 days back; the rest only arrives via SIE).
+      const periodStartMs = Date.parse(plan.fiscalPeriod.startDate)
+      const daysOfHistory = Number.isFinite(periodStartMs)
+        ? Math.floor((Date.now() - periodStartMs) / 86_400_000)
+        : 0
+      const historyFirst = daysOfHistory > 90
+
       return {
         created: true,
         company_id: result.companyId,
         ...preview,
         trial: 'A 30-day trial with every paid capability (bank sync, Skatteverket, AI, e-mail) is active from now.',
-        message:
-          'Company created and ready for bookkeeping. This connection uses it automatically from the next call. Remaining setup: bank connection, Skatteverket connection, and the first transactions.',
+        ...(historyFirst
+          ? {
+              history_note: `The fiscal period started ${daysOfHistory} days ago but bank PSD2 history reaches ~90 days: ask which system the bookkeeping lived in and run the SIE import BEFORE connecting the bank (call gnubok_create_sie_upload to render the drag-and-drop import card).`,
+            }
+          : {}),
+        message: historyFirst
+          ? 'Company created; this connection uses it automatically from the next call. Remaining setup IN ORDER: (1) import existing bookkeeping via SIE (see history_note), (2) bank connection (pass bank=<name>), (3) Skatteverket.'
+          : 'Company created and ready for bookkeeping. This connection uses it automatically from the next call. Remaining setup: bank connection (pass bank=<name> for a direct consent link), Skatteverket connection, and the first transactions.',
         next: {
-          description: 'Load the onboarding skill for the remaining setup steps (bank, Skatteverket, first transactions).',
+          description: 'Load the onboarding skill for the remaining setup steps (history import, bank, Skatteverket, first transactions).',
           tool: 'gnubok_load_skill',
           args: { slug: 'onboarding' },
         },
@@ -3307,7 +3438,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_connect_bank',
     title: 'Connect Bank',
     description:
-      'Bank connection status plus the browser link where the user connects a bank (PSD2, BankID consent; must be logged in to Accounted there). Ask WHICH bank they use first and pass it as bank: the link then starts that bank\'s consent directly instead of a picker.',
+      'Bank connection status plus the browser connect link (PSD2, BankID; user must be logged in to Accounted). When the user has NAMED their bank, pass it as bank on the FIRST call (a bare call renders a redundant generic card): the link then starts that bank\'s consent directly.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -3363,7 +3494,10 @@ export const tools: McpTool[] = [
         instructions:
           active.length > 0
             ? 'At least one bank is connected and syncing. To add another bank, give the user the connect_url.'
-            : 'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there. With bank passed, the link starts that bank\'s consent directly; otherwise they pick the bank first. They approve with BankID (consent up to 180 days), then CONFIRM WHICH ACCOUNTS to sync in the dialog that opens; the first transactions arrive within a minute of that save. Banks cap PSD2 history (often ~90 days): older history comes via SIE import, not the bank. When the user is back, call this tool again to verify status=active, then continue straight to gnubok_list_uncategorized_transactions without asking.',
+            : (requestedBank
+                ? ''
+                : 'BETTER LINK AVAILABLE: if you know (or can ask) which bank the company uses, call this tool again with bank=<name>; the link then opens that bank\'s consent directly instead of a picker. ') +
+              'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there. They approve with BankID (consent up to 180 days), then CONFIRM WHICH ACCOUNTS to sync in the dialog that opens; the first transactions arrive within a minute of that save. Banks cap PSD2 history (often ~90 days): older history comes via SIE import, not the bank. When the user is back, call this tool again to verify status=active, then continue straight to gnubok_list_uncategorized_transactions without asking.',
       }
     },
   },
@@ -3419,6 +3553,72 @@ export const tools: McpTool[] = [
           : connected
             ? 'Skatteverket is connected. Skattekonto syncs automatically; momsdeklaration and AGI can be filed from here (each filing stages for approval).'
             : 'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there; Skatteverket asks them to identify with BankID as firmatecknare and approve the access, then they land back in Accounted. Tell them to come back here when done.',
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_connect_migration',
+    title: 'Connect Previous System',
+    description:
+      'Connect card into the migration wizard for a NAMED previous system. API systems (fortnox/bjornlunden/briox/wint) fetch all fiscal years plus invoices, customers and documents; visma/bokio complement AFTER a SIE import. Same one-click feel as the bank/Skatteverket cards.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        provider: {
+          type: 'string',
+          enum: ['fortnox', 'bjornlunden', 'briox', 'wint', 'visma', 'bokio'],
+          description: 'The previous system the user named',
+        },
+      },
+      required: ['provider'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        provider: { type: 'string' },
+        provider_name: { type: 'string' },
+        api_connected: { type: 'boolean', description: 'true = the wizard fetches SIE directly from the system; false = a SIE file import comes first' },
+        connect_url: { type: 'string' },
+        instructions: { type: 'string' },
+      },
+      required: ['provider', 'provider_name', 'api_connected', 'connect_url', 'instructions'],
+    },
+    _meta: { ui: { resourceUri: 'ui://connect-card/app.html' } },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args) {
+      const PROVIDERS: Record<string, { name: string; api: boolean }> = {
+        fortnox: { name: 'Fortnox', api: true },
+        bjornlunden: { name: 'Björn Lundén', api: true },
+        briox: { name: 'Briox', api: true },
+        wint: { name: 'Wint', api: true },
+        visma: { name: 'Visma eEkonomi', api: false },
+        bokio: { name: 'Bokio', api: false },
+      }
+      const provider = String(args.provider ?? '')
+      const info = PROVIDERS[provider]
+      if (!info) {
+        throw Object.assign(
+          new Error(`Unknown provider "${provider}". Supported: ${Object.keys(PROVIDERS).join(', ')}.`),
+          { code: 'VALIDATION_ERROR' }
+        )
+      }
+      const connectUrl = `${connectLinkBaseUrl()}/import?mode=migration&provider=${provider}`
+      return {
+        provider,
+        provider_name: info.name,
+        api_connected: info.api,
+        connect_url: connectUrl,
+        instructions: info.api
+          ? `On claude.ai/Claude Desktop a connect card with an open-in-browser button renders with this result; elsewhere give the user the connect_url. The wizard connects to ${info.name} (login there), fetches every fiscal year and imports bookkeeping PLUS invoices, customers, suppliers and documents. The user comes back here when the wizard reports done.`
+          : `${info.name} has no API export: run the SIE-file import FIRST (gnubok_create_sie_upload drop card). This wizard link then complements with invoices and customers. On claude.ai/Desktop a connect card renders; elsewhere give the user the connect_url.`,
       }
     },
   },
@@ -10652,7 +10852,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_reconciliation_items',
     title: 'Reconciliation Items',
-    description: 'Rows behind one account\'s reconciliation bridge, bucketed (proposed, unmatched_external, unmatched_ledger, matched, ignored, upcoming): side, qualified id, amount, proposal with confidence + reasons, allowed actions. Link via gnubok_reconcile_match (search).',
+    description: 'Rows behind one account\'s reconciliation bridge, bucketed (proposed, unmatched_external, unmatched_ledger, matched, ignored, upcoming): side, qualified id, amount, proposal with confidence + reasons, allowed actions. Link via gnubok_reconcile_match.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -10705,10 +10905,11 @@ export const tools: McpTool[] = [
     name: 'gnubok_reconcile_match',
     title: 'Reconcile: Link Pairs',
     description: 'Link outside rows (bank or skattekonto) to existing verifikat on one account; no new bokföring. Pass pairs, or use_proposals to apply the persisted proposals. Stages. dry_run previews.',
-    // Search-only to stay under the tools/list payload ceiling: the default
-    // catalog carries the reads (status + items); this write is reached via
-    // gnubok_search_tools, the close_period loadout and the items tool's hint.
-    catalogVisibility: 'search',
+    // Default catalog since E2E #12: the onboarding efterkontroll instructs
+    // matching SIE-covered bank rows against existing verifikat, and
+    // Claude.ai cannot call search-only tools: the agent misread the
+    // uncallable tool as a missing reconciliation:write scope and punted the
+    // whole matching step to the web app.
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -16158,16 +16359,81 @@ export const tools: McpTool[] = [
   },
 
   {
-    name: 'gnubok_sie_preflight',
-    title: 'SIE Preflight Scan',
+    name: 'gnubok_create_sie_upload',
+    title: 'Create SIE Upload',
     description:
-      'Scan a SIE file BEFORE import: parse, validate (balances, IB, encoding), duplicate check, orgnr match against the company, suggested account mappings. Read-only, stages nothing. Call FIRST when the user shares a SIE file; pass the returned mappings to gnubok_import_sie.',
+      'The SIE-file intake: on claude.ai/Desktop this renders a DRAG-AND-DROP card that reads exact bytes, preflights and imports: call it as soon as an SIE import is next. Elsewhere: PUT raw bytes (max 50 MB) to upload_url, then pass upload_id + sha256 to preflight/import.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        file_content: { type: 'string', description: 'Full SIE file contents as text' },
-        file_content_base64: { type: 'string', description: 'Exact file bytes base64-encoded (preferred when available: preserves CP437 åäö)' },
+        filename: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 255,
+          description: 'File name with extension, for example "export.se"',
+        },
+      },
+      required: ['filename'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        upload_id: { type: 'string' },
+        upload_url: { type: 'string' },
+        expires_at: { type: 'string' },
+      },
+      required: ['upload_id', 'upload_url', 'expires_at'],
+    },
+    _meta: { ui: { resourceUri: 'ui://sie-drop/app.html' } },
+    annotations: {
+      // readOnlyHint MUST stay true on widget-bearing tools: Claude.ai
+      // accepts always-render widgets only on read-only tools and DROPS a
+      // write-annotated one from the connector entirely (the tool flapped
+      // into the Interactive list and vanished, E2E #9 2026-08-26; every
+      // surviving widget tool was readOnly). Honest too: this only mints a
+      // short-lived upload URL; the actual write is the staged
+      // gnubok_import_sie, same shape as receipt_matcher (read-only tool,
+      // writes via separate approval-gated tools).
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase) {
+      const fileName = args.filename as string
+      const lower = fileName.toLowerCase()
+      if (!lower.endsWith('.se') && !lower.endsWith('.sie') && !lower.endsWith('.si')) {
+        throw Object.assign(new Error('filename must end in .se, .sie or .si'), {
+          code: 'VALIDATION_ERROR',
+        })
+      }
+      const uploadId = crypto.randomUUID()
+      const reservation = await createPendingDocumentUpload(supabase, companyId, userId, uploadId, fileName)
+      // Served from the app origin: agent sandboxes only reach the MCP host,
+      // not <project>.supabase.co. See storage-proxy.ts.
+      return {
+        upload_id: reservation.uploadId,
+        upload_url: toSameOriginStorageUrl(reservation.signedUrl),
+        expires_at: reservation.expiresAt,
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_sie_preflight',
+    title: 'SIE Preflight Scan',
+    description:
+      'Scan a SIE file BEFORE import: parse, validate (balances, IB, encoding), duplicates, orgnr match, suggested mappings. Read-only. Call gnubok_create_sie_upload FIRST: its card/URL carries exact bytes; NEVER retype a large file. Mappings feed gnubok_import_sie.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        file_content: { type: 'string', description: 'Full SIE file contents as text (small files only)' },
+        file_content_base64: { type: 'string', description: 'Exact file bytes base64-encoded (preserves CP437 åäö)' },
+        upload_id: { type: 'string', description: 'From gnubok_create_sie_upload after PUTting the bytes; the only safe path for large files' },
+        sha256: { type: 'string', description: 'Hex sha256 of the raw file bytes; verified on upload_id/base64 paths to prove nothing was truncated' },
         filename: { type: 'string' },
       },
       required: ['filename'],
@@ -16192,11 +16458,13 @@ export const tools: McpTool[] = [
       idempotentHint: true,
       openWorldHint: false,
     },
-    async execute(args, companyId, _userId, supabase) {
-      const content = await decodeSieToolContent(args)
+    async execute(args, companyId, userId, supabase) {
+      const content = await resolveSieToolContent(args, companyId, userId)
       if (!content) {
         throw Object.assign(
-          new Error('Provide the SIE file as file_content (text) or file_content_base64 (exact bytes).'),
+          new Error(
+            'Provide the SIE file as upload_id (from gnubok_create_sie_upload), file_content_base64, or file_content.'
+          ),
           { code: 'VALIDATION_ERROR' }
         )
       }
@@ -16323,13 +16591,15 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_import_sie',
     title: 'Import SIE File',
-    description: 'Stage SIE-file import (types 1-4, CP437/UTF-8/Latin-1). On commit creates fiscal period, opening balances, and journal entries. High-risk, always staged. Run gnubok_sie_preflight first for the scan and the mappings.',
+    description: 'Stage SIE-file import (types 1-4, CP437/UTF-8/Latin-1). On commit creates fiscal period, opening balances, and journal entries. Always staged. Run gnubok_sie_preflight first; large files arrive byte-exact via gnubok_create_sie_upload (card/URL), NEVER retyped inline.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        file_content: { type: 'string', description: 'Full SIE file contents' },
+        file_content: { type: 'string', description: 'Full SIE file contents (small files only)' },
         file_content_base64: { type: 'string', description: 'Exact file bytes base64-encoded; alternative to file_content (preserves CP437 åäö)' },
+        upload_id: { type: 'string', description: 'From gnubok_create_sie_upload after PUTting the bytes; the only safe path for large files' },
+        sha256: { type: 'string', description: 'Hex sha256 of the raw file bytes; verified on upload_id/base64 paths' },
         filename: { type: 'string', description: 'Original filename' },
         mappings: {
           type: 'array',
@@ -16350,12 +16620,12 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       // Decoded once here; the staged params carry the decoded text so
       // commitImportSie re-parses exactly what was previewed.
-      const fileContent = await decodeSieToolContent(args)
+      const fileContent = await resolveSieToolContent(args, companyId, userId)
       const filename = args.filename as string
       const mappings = args.mappings as unknown[] | undefined
 
       if (!fileContent || !filename || !Array.isArray(mappings)) {
-        throw new Error('file_content (or file_content_base64), filename, and mappings are required')
+        throw new Error('file content (upload_id, file_content_base64 or file_content), filename, and mappings are required')
       }
 
       // Parse + validate at stage time so the approver sees real content (which
@@ -18722,7 +18992,13 @@ const JSONRPC_UNSUPPORTED_PROTOCOL_VERSION = -32022
 // change only on deploy; skills live in the DB and can change between
 // deploys; data resources are live ledger state and must never be cached.
 // Everything is served behind Authorization, so cacheScope stays private.
-const CACHE_STATIC = { ttlMs: 3_600_000, cacheScope: 'private' } as const
+// "Static" content (tools/list, widget HTML, prompts) is static only within
+// one deploy: every deploy can add tools and change widgets. The 1-hour hint
+// this used to carry made Claude.ai serve a pre-deploy catalog for up to an
+// hour after a release: a freshly shipped tool flapped in and out of the
+// connector's tool list depending on which fetch hit the client cache
+// (E2E #7/#8, 2026-08-26). 5 minutes bounds that window to one coffee sip.
+const CACHE_STATIC = { ttlMs: 300_000, cacheScope: 'private' } as const
 const CACHE_SKILLS = { ttlMs: 300_000, cacheScope: 'private' } as const
 const CACHE_LIVE = { ttlMs: 0, cacheScope: 'private' } as const
 

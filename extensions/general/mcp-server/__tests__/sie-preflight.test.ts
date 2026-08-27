@@ -184,4 +184,57 @@ describe('gnubok_sie_preflight', () => {
   it('rejects a call with neither content field', async () => {
     await expect(run({})).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
   })
+
+  it('refuses oversized inline content instead of risking silent mid-verifikat truncation', async () => {
+    const huge = VALID_SIE + '\n' + '#KONTO 9999 "x"\n'.repeat(10_000)
+    await expect(run({ file_content: huge })).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+      message: expect.stringContaining('gnubok_create_sie_upload'),
+    })
+  })
+
+  it('accepts oversized base64 WHEN a matching sha256 proves the bytes are complete', async () => {
+    // The drop-card widget path: byte-exact content, hash-verified, so the
+    // anti-retyping cap does not apply.
+    const huge = Buffer.from(VALID_SIE + '\n' + '#KONTO 9999 "x"\n'.repeat(10_000), 'utf8')
+    const { createHash } = await import('node:crypto')
+    const result = await run({
+      file_content_base64: huge.toString('base64'),
+      sha256: createHash('sha256').update(huge).digest('hex'),
+    })
+    expect(result.verdict).toBeDefined()
+  })
+
+  it('verifies sha256 on the base64 path and rejects a mismatch as truncation', async () => {
+    const bytes = Buffer.from(VALID_SIE, 'utf8')
+    const { createHash } = await import('node:crypto')
+    const good = createHash('sha256').update(bytes).digest('hex')
+
+    const ok = await run({ file_content_base64: bytes.toString('base64'), sha256: good })
+    expect(ok.verdict).toBe('ok')
+
+    await expect(
+      run({ file_content_base64: bytes.toString('base64'), sha256: 'a'.repeat(64) })
+    ).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+      message: expect.stringContaining('sha256 mismatch'),
+    })
+  })
+})
+
+describe('gnubok_create_sie_upload', () => {
+  const uploadTool = tools.find((t) => t.name === 'gnubok_create_sie_upload')!
+
+  it('is registered with the filename-only contract', () => {
+    expect(uploadTool).toBeDefined()
+    expect(
+      (uploadTool.inputSchema as { required: string[] }).required
+    ).toEqual(['filename'])
+  })
+
+  it('rejects a filename that is not a SIE file', async () => {
+    await expect(
+      uploadTool.execute({ filename: 'export.xlsx' }, COMPANY_ID, 'user-1', {} as never)
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+  })
 })

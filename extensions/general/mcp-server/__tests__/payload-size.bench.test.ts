@@ -230,9 +230,21 @@ describe('tools/list payload size guard', () => {
     //     the scan-before-import step the skill instructs for shared SIE
     //     files, so default-catalog for the same Claude.ai reason; ~390
     //     tokens (schema carries the mappings-passthrough contract).
+    //   * 62K to 62.4K with gnubok_create_sie_upload + upload_id/sha256 on the
+    //     two SIE tools: the byte-exact upload path after a real 104 KB file
+    //     dead-ended in chat (a model cannot reproduce 30k tokens verbatim
+    //     without silent-truncation risk); skill-instructed, so default catalog.
+    //   * 62.4K to 63K with gnubok_connect_migration (the previous-system
+    //     connect card, same one-click feel as bank/Skatteverket): the skill
+    //     instructs calling it when the user names Fortnox/BL/Briox/Wint, so
+    //     default catalog for the standing Claude.ai reason.
+    //   * 63K to 63.4K with gnubok_reconcile_match promoted to the default
+    //     catalog: the onboarding efterkontroll instructs matching bank rows
+    //     against SIE verifikat, and a search-only tool is uncallable on
+    //     Claude.ai (E2E #12 punted to the web app over it).
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(62_000)
+    expect(approxTokens).toBeLessThan(63_400)
   })
 })

@@ -1,4 +1,5 @@
-import { getBASReference, ACCOUNT_CLASS_LABELS } from './bas-reference'
+import { ACCOUNT_CLASS_LABELS } from './bas-labels'
+import { getBasLoadedByNumber } from './bas-lazy'
 
 export type AccountType = 'asset' | 'liability' | 'equity' | 'revenue' | 'expense' | 'untaxed_reserves'
 
@@ -17,12 +18,11 @@ const ACCOUNT_DESCRIPTIONS: Record<string, AccountDescription> = {
     type: 'asset',
     explanation: 'Pengar som kunder är skyldiga dig för skickade fakturor som inte betalats ännu.',
   },
-  '1580': {
-    name: 'Fordran för skatt',
-    classLabel: 'Tillgångar',
-    type: 'asset',
-    explanation: 'Pengar du har att fordra från Skatteverket, t.ex. överskjutande moms.',
-  },
+  // 1580 is intentionally absent: BAS moved card/coupon acquirer receivables
+  // from 1580 to 1686, and 1580 is excluded from the BAS 2026 catalog as
+  // non-standard (see bas-reference.test.ts). A hardcoded entry here once
+  // mislabeled it as a tax receivable (that is 1640/1650); companies with a
+  // legacy 1580 see their own account name instead.
   '1630': {
     name: 'Skattekonto',
     classLabel: 'Tillgångar',
@@ -333,20 +333,20 @@ export function getAccountDescription(accountNumber: string): AccountDescription
   const hardcoded = ACCOUNT_DESCRIPTIONS[accountNumber]
   if (hardcoded) return hardcoded
 
-  // Fall back to BAS reference data for accounts not in the hardcoded list
-  try {
-    const ref = getBASReference(accountNumber)
-    if (ref) {
-      const classLabel = ACCOUNT_CLASS_LABELS[ref.account_class] || ''
-      return {
-        name: ref.account_name,
-        classLabel,
-        type: ref.account_type,
-        explanation: ref.description,
-      }
+  // Fall back to the BAS chart for accounts not in the hardcoded list. The
+  // chart is a lazily loaded chunk (lib/bookkeeping/bas-lazy.ts): callers
+  // that want this fallback call useBasReference() so they re-render once
+  // it has arrived; until then (and on the server) only the hardcoded set
+  // answers, which keeps SSR and hydration in agreement.
+  const ref = getBasLoadedByNumber(accountNumber)
+  if (ref) {
+    const classLabel = ACCOUNT_CLASS_LABELS[ref.account_class] || ''
+    return {
+      name: ref.account_name,
+      classLabel,
+      type: ref.account_type,
+      explanation: ref.description,
     }
-  } catch {
-    // BAS reference not available: that's fine
   }
 
   return undefined

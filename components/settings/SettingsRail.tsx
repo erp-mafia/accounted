@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import {
@@ -32,6 +32,7 @@ interface SettingsRailProps {
 export function SettingsRail({ variant, display, activeId }: SettingsRailProps) {
   const router = useRouter()
   const pathname = usePathname()
+  const searchParams = useSearchParams()
   const t = useTranslations('settings_nav')
   const { items, groups } = useSettingsNavItems()
 
@@ -40,11 +41,16 @@ export function SettingsRail({ variant, display, activeId }: SettingsRailProps) 
     items.find((i) => pathname.startsWith(i.href))?.id ??
     items[0]?.id
 
+  // Byrå settings scope travels as ?ctx=byra: section switches must carry it
+  // along or the rail would snap back to the full company section list.
+  const withCtx = (href: string) =>
+    searchParams.get('ctx') === 'byra' ? `${href}?ctx=byra` : href
+
   function navigate(href: string) {
     // Shallow update: Next syncs usePathname() from the native History API,
     // so SettingsModal re-resolves the section without a route transition.
-    if (variant === 'modal') window.history.replaceState(null, '', href)
-    else router.push(href)
+    if (variant === 'modal') window.history.replaceState(null, '', withCtx(href))
+    else router.push(withCtx(href))
   }
 
   if (display === 'select') {
@@ -100,7 +106,7 @@ export function SettingsRail({ variant, display, activeId }: SettingsRailProps) 
                     </button>
                   ) : (
                     <Link
-                      href={i.href}
+                      href={withCtx(i.href)}
                       aria-current={isActive ? 'page' : undefined}
                       className={rowClass}
                     >
