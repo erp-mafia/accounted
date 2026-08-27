@@ -5804,7 +5804,6 @@ export const tools: McpTool[] = [
       idempotentHint: true,
       openWorldHint: false,
     },
-    catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
       const changes: Record<string, unknown> = {}
       for (const key of [

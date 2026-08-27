@@ -242,9 +242,14 @@ describe('tools/list payload size guard', () => {
     //     catalog: the onboarding efterkontroll instructs matching bank rows
     //     against SIE verifikat, and a search-only tool is uncallable on
     //     Claude.ai (E2E #12 punted to the web app over it).
+    //   * 63.4K to 64.1K with gnubok_update_customer promoted to the default
+    //     catalog (#1706, #1876): search-only tools are uncallable on Claude.ai,
+    //     and the reporter read the tool as missing twice. The +761 tokens are
+    //     the 19-property partial-update wire contract plus the staging
+    //     envelope; the description is already 152 chars.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(63_400)
+    expect(approxTokens).toBeLessThan(64_100)
   })
 })

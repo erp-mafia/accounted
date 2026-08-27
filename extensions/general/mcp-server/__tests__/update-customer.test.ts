@@ -4,7 +4,7 @@ import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
 import { hashRequest } from '@/lib/api/idempotency'
 import { decryptPersonnummer, encryptPersonnummer } from '@/lib/salary/personnummer'
-import { tools } from '../server'
+import { tools, isDefaultCatalogTool } from '../server'
 
 const CUSTOMER_ID = '11111111-1111-4111-8111-111111111111'
 const tool = () => tools.find((candidate) => candidate.name === 'gnubok_update_customer')!
@@ -38,7 +38,8 @@ describe('gnubok_update_customer: registration', () => {
     expect(tool().inputSchema.additionalProperties).toBe(false)
     expect(tool().annotations.readOnlyHint).toBe(false)
     expect(tool().annotations.idempotentHint).toBe(true)
-    expect(tool().catalogVisibility).toBe('search')
+    expect(isDefaultCatalogTool(tool())).toBe(true)
+    expect(tools.filter(isDefaultCatalogTool).map((t) => t.name)).toContain('gnubok_update_customer')
     expect(TOOL_SCOPE_MAP.gnubok_update_customer).toBe('customers:write')
     expect(OPERATION_RISK_TIERS.update_customer).toBe('low')
   })
@@ -48,7 +49,7 @@ describe('gnubok_update_customer: registration', () => {
     expect(properties.personal_number).toMatchObject({ type: ['string', 'null'] })
   })
 
-  it('keeps the wide write schema discoverable through tool search', async () => {
+  it('is also discoverable through tool search', async () => {
     const search = tools.find((candidate) => candidate.name === 'gnubok_search_tools')!
     const result = (await search.execute(
       {
