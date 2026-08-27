@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation'
-import { headers } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import DashboardNav from '@/components/dashboard/DashboardNav'
 import { MainContainer } from '@/components/dashboard/MainContainer'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
@@ -19,6 +19,8 @@ import { getCompanyEntitlements } from '@/lib/entitlements/has-capability'
 import { getDashboardNavFlags } from '@/lib/dashboard/nav-flags'
 import { getBranding } from '@/lib/branding/service'
 import { resolveBrandByHost } from '@/lib/branding/resolve'
+import { resolveBrandDomainBounce } from '@/lib/auth/brand-signup-gate'
+import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
 import { resolveBrandsForTeams } from '@/lib/branding/team-brands'
 import {
   partitionCompaniesByHomeDomain,
@@ -133,6 +135,31 @@ export default async function DashboardLayout({
     null
   const isTeamMember = membershipRows.length > 0
 
+  // Invite-only brand-domain gate (2026-08-27): on a gated brand host, a
+  // session with no tie to the brand (team, company, allowlist entry, or
+  // pending invite) is sent to the canonical domain instead of getting a
+  // branded shell. Runs before the zero-company branch below, because that
+  // branch would otherwise walk a stranger into /onboarding under the
+  // partner's brand. Navigation-level like WL-01; RLS is the data boundary.
+  const hostHeader =
+    headerStore.get('x-forwarded-host') ?? headerStore.get('host') ?? ''
+  const bounceUrl = await resolveBrandDomainBounce({
+    host: hostHeader,
+    userEmail: user.email,
+    teamIds: membershipRows
+      .map((m) => m.teams?.id)
+      .filter((id): id is string => typeof id === 'string'),
+    companyTeamIds: (allMemberships || []).map(
+      (m) => (m.companies as { team_id?: string | null } | null)?.team_id,
+    ),
+    hasPendingInviteCookie:
+      (await cookies()).get(INVITE_COOKIE_NAME)?.value != null,
+    canonicalAppUrl: getBranding().appUrl,
+  })
+  if (bounceUrl) {
+    redirect(bounceUrl)
+  }
+
   // No companies: redirect to onboarding, except for allowed escape-hatch
   // routes (so the user can still reach /settings/account to delete their
   // account after archiving their last company) and byrå team members (any
@@ -206,11 +233,9 @@ export default async function DashboardLayout({
 
   // Home-domain rule (WL-01): which brand serves this host, and which brand
   // (if any) each membership company's team owns. Both resolvers are ~60s
-  // cached; unknown hosts and brandless teams resolve to null/absent, so the
-  // canonical no-brands hot path stays byte-identical. Both only depend on
-  // wave-1 data, so they ride in the wave-2 batch below.
-  const hostHeader =
-    headerStore.get('x-forwarded-host') ?? headerStore.get('host') ?? ''
+  // cached (the domain-gate lookup above already warmed the host entry);
+  // unknown hosts and brandless teams resolve to null/absent, so the
+  // canonical no-brands hot path stays byte-identical.
 
   // Wave 2: everything keyed on the company. Nav badge counts are NOT fetched
   // here: DashboardNav loads them client-side after mount

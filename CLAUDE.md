@@ -60,6 +60,7 @@ npm test                 # All Vitest tests
 npx vitest run <dir>     # Tests in one directory
 npm run test:pg          # pg-real tests against real Postgres
 npm run check:guards     # Ratchet guard (e.g. no hand-rolled route auth)
+npm run check:types      # Typecheck ratchet. `npm test` does NOT typecheck: run this before the build
 npm run setup:extensions # Regenerate extension registry from extensions.config.json
 npm run skills:generate  # Regenerate agent_atom_registry seed after editing an atom SKILL.md
 ```
