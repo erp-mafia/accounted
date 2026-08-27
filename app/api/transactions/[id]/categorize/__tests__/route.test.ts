@@ -7,7 +7,7 @@ import {
   makeTransaction,
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
-import { JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
+import { BookkeepingDatabaseError, JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
 
 const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
@@ -226,35 +226,6 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(
       findCalls('transactions', 'eq').filter(([column]) => column === 'company_id'),
     ).toHaveLength(2)
-  })
-
-  it('returns a race conflict when the guarded update matches no row without creating an entry', async () => {
-    const tx = makeTransaction({
-      id: 'tx-1',
-      amount: -500,
-      merchant_name: null,
-      journal_entry_id: null,
-    })
-
-    enqueue({ data: tx, error: null })
-    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
-    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
-    enqueue({ data: [{ id: 'period-1' }], error: null })
-    mockCreateTransactionJournalEntry.mockResolvedValueOnce(null)
-    enqueue({ data: [], error: null })
-
-    const response = await POST(
-      createMockRequest('/api/transactions/tx-1/categorize', {
-        method: 'POST',
-        body: { is_business: false },
-      }),
-      createMockRouteParams({ id: 'tx-1' }),
-    )
-    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
-
-    expect(status).toBe(409)
-    expect(body.error.code).toBe('TX_CATEGORIZE_RACE')
-    expect(mockReverseOrphanedJournalEntry).not.toHaveBeenCalled()
   })
 
   it('creates journal entry for business expense', async () => {
@@ -574,80 +545,97 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(mockSupabase.from).not.toHaveBeenCalledWith('document_attachments')
   })
 
-  it('returns success with error when journal entry creation fails (non-blocking)', async () => {
-    const tx = makeTransaction({
-      id: 'tx-1',
-      amount: -500,
-      merchant_name: 'Test',
-      journal_entry_id: null,
+  describe('fails closed when the verifikat cannot be created (issue #1947)', () => {
+    // Queue order up to the engine call: tx fetch, settings, settlement
+    // accounts, ensureFiscalPeriod. Nothing after that: a refused verifikat
+    // must not reach the transactions update.
+    const enqueueUpToEngine = () => {
+      const tx = makeTransaction({
+        id: 'tx-1',
+        amount: -500,
+        merchant_name: 'Test',
+        journal_entry_id: null,
+      })
+      enqueue({ data: tx, error: null })
+      enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+      enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+      enqueue({ data: [{ id: 'period-1' }], error: null })
+    }
+
+    const categorize = async () => {
+      const request = createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_software' },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+      return parseJsonResponse<{
+        error: { code: string; message: string; details?: { cause?: string } }
+      }>(response)
+    }
+
+    it('refuses the booking and leaves the row untouched when the period is locked', async () => {
+      enqueueUpToEngine()
+      mockCreateTransactionJournalEntry.mockRejectedValue(
+        new BookkeepingDatabaseError('commit_entry', 'Cannot write to locked/closed fiscal period "2025"'),
+      )
+
+      const { status, body } = await categorize()
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('TX_CATEGORIZE_JOURNAL_ENTRY_FAILED')
+      expect(body.error.message).toBe(
+        'Perioden är låst. Verifikationen kan inte skapas i en stängd eller låst period.',
+      )
+      expect(body.error.details?.cause).toBe('BOOKKEEPING_DATABASE_ERROR')
+      // Nothing persisted: is_business/category stay NULL so the row keeps
+      // matching the worklist predicate and stays in "Att bokföra".
+      expect(findCalls('transactions', 'update')).toEqual([])
+      expect(mockSaveUserMappingRule).not.toHaveBeenCalled()
+      expect(mockReverseOrphanedJournalEntry).not.toHaveBeenCalled()
     })
 
-    enqueue({ data: tx, error: null })
-    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
-    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
-    enqueue({ data: [{ id: 'period-1' }], error: null })
+    it('translates typed engine errors to Swedish in the refusal (issue #337)', async () => {
+      enqueueUpToEngine()
+      mockCreateTransactionJournalEntry.mockRejectedValue(new JournalEntryNotBalancedError(100, 80))
 
-    mockCreateTransactionJournalEntry.mockRejectedValue(new Error('Period locked'))
+      const { status, body } = await categorize()
 
-    // Update transaction
-    enqueue({ data: [{ ...tx, is_business: true, category: 'expense_software' }], error: null })
-
-    const request = createMockRequest('/api/transactions/tx-1/categorize', {
-      method: 'POST',
-      body: { is_business: true, category: 'expense_software' },
-    })
-    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse<{
-      success: boolean
-      journal_entry_created: boolean
-      journal_entry_error: string
-    }>(response)
-
-    expect(status).toBe(200)
-    expect(body.success).toBe(true)
-    expect(body.journal_entry_created).toBe(false)
-    // Untyped errors no longer leak their raw English message (issue #337):
-    // they map to the Swedish transaction-context fallback.
-    expect(body.journal_entry_error).toBe('Kunde inte hantera transaktionen. Försök igen.')
-  })
-
-  it('translates typed engine errors to Swedish in journal_entry_error (issue #337)', async () => {
-    const tx = makeTransaction({
-      id: 'tx-1',
-      amount: -500,
-      merchant_name: 'Test',
-      journal_entry_id: null,
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('TX_CATEGORIZE_JOURNAL_ENTRY_FAILED')
+      expect(body.error.message).toContain('balanserar inte')
+      expect(body.error.message).toMatch(/100/)
+      expect(body.error.message).toMatch(/80/)
+      expect(body.error.message).not.toContain('not balanced')
+      expect(body.error.message).not.toContain('check constraint')
+      expect(findCalls('transactions', 'update')).toEqual([])
     })
 
-    enqueue({ data: tx, error: null })
-    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
-    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
-    enqueue({ data: [{ id: 'period-1' }], error: null })
+    it('maps untyped errors to the Swedish transaction fallback without leaking the raw text', async () => {
+      enqueueUpToEngine()
+      mockCreateTransactionJournalEntry.mockRejectedValue(new Error('boom'))
 
-    mockCreateTransactionJournalEntry.mockRejectedValue(new JournalEntryNotBalancedError(100, 80))
+      const { status, body } = await categorize()
 
-    // Update transaction
-    enqueue({ data: [{ ...tx, is_business: true, category: 'expense_software' }], error: null })
-
-    const request = createMockRequest('/api/transactions/tx-1/categorize', {
-      method: 'POST',
-      body: { is_business: true, category: 'expense_software' },
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('TX_CATEGORIZE_JOURNAL_ENTRY_FAILED')
+      expect(body.error.message).toBe('Kunde inte hantera transaktionen. Försök igen.')
+      expect(body.error.message).not.toContain('boom')
+      expect(findCalls('transactions', 'update')).toEqual([])
     })
-    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse<{
-      success: boolean
-      journal_entry_created: boolean
-      journal_entry_error: string
-    }>(response)
 
-    expect(status).toBe(200)
-    expect(body.success).toBe(true)
-    expect(body.journal_entry_created).toBe(false)
-    expect(body.journal_entry_error).toContain('balanserar inte')
-    expect(body.journal_entry_error).toMatch(/100/)
-    expect(body.journal_entry_error).toMatch(/80/)
-    expect(body.journal_entry_error).not.toContain('not balanced')
-    expect(body.journal_entry_error).not.toContain('check constraint')
+    it('returns NO_OPEN_PERIOD_FOR_DATE when the engine finds no covering period (null entry)', async () => {
+      enqueueUpToEngine()
+      mockCreateTransactionJournalEntry.mockResolvedValue(null)
+
+      const { status, body } = await categorize()
+
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('NO_OPEN_PERIOD_FOR_DATE')
+      // Refused before the CAS write: no update, no orphan, so no storno.
+      expect(findCalls('transactions', 'update')).toEqual([])
+      expect(mockSaveUserMappingRule).not.toHaveBeenCalled()
+      expect(mockReverseOrphanedJournalEntry).not.toHaveBeenCalled()
+    })
   })
 
   it('returns 500 when transaction update fails', async () => {

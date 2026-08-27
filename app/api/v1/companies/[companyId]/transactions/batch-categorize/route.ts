@@ -340,7 +340,6 @@ async function categorizeOne(
   }
 
   let journalEntryId: string | null = null
-  let journalEntryError: string | null = null
   try {
     const je = await createTransactionJournalEntry(
       supabase,
@@ -372,10 +371,37 @@ async function categorizeOne(
         },
       }
     }
-    if (isBookkeepingError(err)) {
-      journalEntryError = getErrorMessage(err, { context: 'transaction' })
-    } else {
-      journalEntryError = err instanceof Error ? err.message : 'Unknown error'
+    // Fail closed (issue #1947): the verifikat IS the booking. Any other
+    // engine failure is a per-item refusal with nothing written, so the row
+    // keeps matching the worklist predicate (is_business IS NULL) instead of
+    // vanishing from "Att bokföra" as categorized-but-unbooked.
+    return {
+      ok: false,
+      request_index: index,
+      transaction_id: transactionId,
+      error: {
+        code: 'TX_CATEGORIZE_JOURNAL_ENTRY_FAILED',
+        message: getErrorMessage(err, { context: 'transaction' }),
+        details: { cause: getStructuredError(err).code },
+      },
+    }
+  }
+
+  // createTransactionJournalEntry returns null (no throw) when no fiscal
+  // period covers the date and the pre-FY clamp does not apply. Same
+  // fail-closed rule: refuse the item rather than mark it categorized-but-unbooked.
+  if (!journalEntryId) {
+    return {
+      ok: false,
+      request_index: index,
+      transaction_id: transactionId,
+      error: {
+        code: 'NO_OPEN_PERIOD_FOR_DATE',
+        message:
+          getErrorEntry('NO_OPEN_PERIOD_FOR_DATE')?.message_sv ??
+          'Det finns ingen räkenskapsperiod som täcker det valda datumet.',
+        details: { transaction_date: transaction.date },
+      },
     }
   }
 
@@ -459,7 +485,9 @@ async function categorizeOne(
     data: {
       journal_entry_created: !!journalEntryId,
       journal_entry_id: journalEntryId,
-      journal_entry_error: journalEntryError,
+      // Always null: a failed verifikat is a per-item refusal above (#1947).
+      // Kept for response-shape compatibility.
+      journal_entry_error: null,
       category: finalCategory,
     },
   }

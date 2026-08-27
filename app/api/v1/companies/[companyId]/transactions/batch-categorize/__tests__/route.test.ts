@@ -237,24 +237,21 @@ describe('POST batch-categorize', () => {
     )
   })
 
-  it('returns a per-item race conflict when the guarded update matches no row without creating an entry', async () => {
-    const { supabase } = makeFlexibleSupabase({
+  it('returns a per-item NO_OPEN_PERIOD_FOR_DATE and writes nothing when the engine finds no covering period', async () => {
+    const { supabase, updates } = makeFlexibleSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      transactions: [
-        {
-          data: {
-            id: TX_A,
-            company_id: COMPANY_ID,
-            date: '2026-05-12',
-            amount: -349.5,
-            currency: 'SEK',
-            merchant_name: 'ICA',
-            journal_entry_id: null,
-          },
-          error: null,
+      transactions: {
+        data: {
+          id: TX_A,
+          company_id: COMPANY_ID,
+          date: '2026-05-12',
+          amount: -349.5,
+          currency: 'SEK',
+          merchant_name: 'ICA',
+          journal_entry_id: null,
         },
-        { data: [], error: null },
-      ],
+        error: null,
+      },
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
       fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
     })
@@ -272,8 +269,12 @@ describe('POST batch-categorize', () => {
     )
 
     const body = await res.json()
-    expect(body.data.results[0].error.code).toBe('TX_CATEGORIZE_RACE')
+    expect(body.data.results[0].ok).toBe(false)
+    expect(body.data.results[0].error.code).toBe('NO_OPEN_PERIOD_FOR_DATE')
+    expect(body.data.results[0].error.details.transaction_date).toBe('2026-05-12')
     expect(body.data.summary).toEqual({ total: 1, succeeded: 0, failed: 1 })
+    // Refused before the CAS write (issue #1947): no update, no orphan, no storno.
+    expect(updates.transactions).toBeUndefined()
     expect(reverseEntryMock).not.toHaveBeenCalled()
   })
 
@@ -590,6 +591,82 @@ describe('POST batch-categorize', () => {
     expect(body.data.results[0].error.code).toBe('ACCOUNTS_NOT_IN_CHART')
     expect(body.data.results[0].error.details.account_numbers).toEqual(['5410'])
     expect(body.data.summary).toEqual({ total: 1, succeeded: 0, failed: 1 })
+  })
+
+  it('refuses the item and writes nothing when the journal entry cannot be created, while a clean sibling still books (issue #1947)', async () => {
+    const { supabase, updates } = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        // 1: item A fetch. 2: item B fetch. 3: item B CAS update (item A
+        // never reaches its update: the refusal returns first).
+        {
+          data: {
+            company_id: COMPANY_ID,
+            date: '2026-05-12',
+            amount: -349.5,
+            currency: 'SEK',
+            merchant_name: 'ICA',
+            journal_entry_id: null,
+          },
+          error: null,
+        },
+        {
+          data: {
+            company_id: COMPANY_ID,
+            date: '2026-05-13',
+            amount: -120,
+            currency: 'SEK',
+            merchant_name: 'Coop',
+            journal_entry_id: null,
+          },
+          error: null,
+        },
+        { data: [{ id: TX_B }], error: null },
+      ],
+      company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    const { BookkeepingDatabaseError } = await import('@/lib/bookkeeping/errors')
+    createTxJE.mockRejectedValueOnce(
+      new BookkeepingDatabaseError('commit_entry', 'Cannot write to locked/closed fiscal period "2026"'),
+    )
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        {
+          items: [
+            { transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } },
+            { transaction_id: TX_B, categorization: { is_business: true, category: 'expense_office' } },
+          ],
+        },
+      ),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.results).toHaveLength(2)
+    expect(body.data.results[0].ok).toBe(false)
+    expect(body.data.results[0].transaction_id).toBe(TX_A)
+    expect(body.data.results[0].error.code).toBe('TX_CATEGORIZE_JOURNAL_ENTRY_FAILED')
+    expect(body.data.results[0].error.message).toBe(
+      'Perioden är låst. Verifikationen kan inte skapas i en stängd eller låst period.',
+    )
+    expect(body.data.results[0].error.details.cause).toBe('BOOKKEEPING_DATABASE_ERROR')
+    expect(body.data.results[1].ok).toBe(true)
+    expect(body.data.results[1].data.journal_entry_id).toBe('je-fresh')
+    expect(body.data.summary).toEqual({ total: 2, succeeded: 1, failed: 1 })
+
+    // Only the clean sibling reached the transactions update: the refused
+    // item stays uncategorized so it remains in the unbooked queue.
+    expect(updates.transactions).toHaveLength(1)
+    expect(updates.transactions[0]).toEqual(
+      expect.objectContaining({ is_business: true, journal_entry_id: 'je-fresh' }),
+    )
+    expect(propagateUnderlagMock).toHaveBeenCalledTimes(1)
+    expect(propagateUnderlagMock).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, TX_B, 'je-fresh')
   })
 
   it('documents the stranded voucher with the real voucher_gap_explanations columns when the CAS-race storno fails', async () => {

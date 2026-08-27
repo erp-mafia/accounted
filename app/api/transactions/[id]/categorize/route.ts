@@ -13,7 +13,7 @@ import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/m
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { upsertCounterpartyTemplate, buildMappingResultFromCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode, getStructuredError } from '@/lib/errors/get-structured-error'
 import {
   DUPLICATE_AMOUNT_TOLERANCE_PCT,
   DUPLICATE_DATE_WINDOW_DAYS,
@@ -782,7 +782,6 @@ export const POST = withRouteContext(
 
     let journalEntryCreated = false
     let journalEntryId: string | null = null
-    let journalEntryError: string | null = null
     let documentLinkWarning: string | null = null
 
     try {
@@ -809,13 +808,33 @@ export const POST = withRouteContext(
       if (err instanceof AccountsNotInChartError) {
         return accountsNotInChartResponse(err)
       }
-      // All errors map to Swedish via getErrorMessage: the raw message is
-      // already logged above and must never reach the user verbatim (issue
-      // #337). The categorization is preserved either way so the user can
-      // still re-book the verifikation manually.
-      journalEntryError = getErrorMessage(err, { context: 'transaction' })
+      // Fail closed (issue #1947): the verifikat IS the booking. Writing
+      // is_business/category without one used to drop the row out of the
+      // canonical worklist predicate in lib/worklist/types.ts (is_business IS
+      // NULL) while it was still unbooked, so it vanished from "Att bokföra"
+      // and the nav badge with no reminder to finish it. Nothing is persisted
+      // when the entry fails: the row stays uncategorized and visible. The
+      // Swedish reason comes from getErrorMessage; the raw message is already
+      // logged above and must never reach the user verbatim (issue #337).
+      return errorResponseFromCode('TX_CATEGORIZE_JOURNAL_ENTRY_FAILED', txLog, {
+        requestId,
+        messageSv: getErrorMessage(err, { context: 'transaction' }),
+        details: { cause: getStructuredError(err).code },
+      })
     }
 
+    // createTransactionJournalEntry returns null (no throw) when no fiscal
+    // period covers the date and the pre-FY clamp does not apply. Same
+    // fail-closed rule: refuse rather than mark the row categorized-but-unbooked.
+    if (!journalEntryId) {
+      return errorResponseFromCode('NO_OPEN_PERIOD_FOR_DATE', txLog, {
+        requestId,
+        details: { transaction_date: transaction.date },
+      })
+    }
+
+    // Learning writes (mapping rule, counterparty template) run only after a
+    // posted verifikat, so they never learn from a booking that did not happen.
     // direction_mismatch = a mirrored refund/repayment booking; learning it
     // as a rule would store backwards accounts for the merchant.
     if (is_business && transaction.merchant_name && !mappingResult.direction_mismatch) {
@@ -1027,21 +1046,13 @@ export const POST = withRouteContext(
       },
     })
 
-    if (journalEntryError) {
-      // Categorization stuck but the verifikation didn't make it through.
-      // Surface as a structured warning: the response below carries the
-      // user-facing message in `journal_entry_error`.
-      txLog.warn('partial outcome: journal entry creation failed', {
-        reason: 'journal_entry_creation_failed',
-        message: journalEntryError,
-      })
-    }
-
+    // journal_entry_error is always null here: a failed verifikat now returns
+    // a typed 409 above (issue #1947). The field stays for client compatibility.
     return NextResponse.json({
       success: true,
       journal_entry_created: journalEntryCreated,
       journal_entry_id: journalEntryId,
-      journal_entry_error: journalEntryError,
+      journal_entry_error: null,
       document_link_warning: documentLinkWarning,
       category: finalCategory,
     })
