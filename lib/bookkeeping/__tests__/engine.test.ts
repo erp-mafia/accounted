@@ -875,10 +875,17 @@ describe('reverseEntry: storno guard', () => {
 
 describe('reverseEntry: bank transaction unlink', () => {
   // After a reversal the booked bank transaction must return to "Att bokföra"
-  // (journal_entry_id cleared) so the user can book it again. The agent paths
-  // in lib/pending-operations/commit.ts did this manually; the engine now owns
+  // so the user can book it again. The agent paths in
+  // lib/pending-operations/commit.ts did this manually; the engine now owns
   // it so the dashboard reverse route behaves the same.
-  it('clears transactions.journal_entry_id for rows booked by the reversed entry', async () => {
+  //
+  // "Att bokföra" is is_business IS NULL AND is_ignored = false
+  // (lib/worklist/types.ts), not journal_entry_id IS NULL: bulk-booked and
+  // multi-allocated rows keep journal_entry_id NULL while booked. Clearing
+  // only the link therefore left the stornoed row out of the list and the nav
+  // badge (#1950), so the engine resets the same triple the uncategorize
+  // paths write, plus reconciliation_method since the link it described is gone.
+  it('resets journal_entry_id, is_business and category so the row returns to Att bokföra (#1950)', async () => {
     const original = {
       id: 'entry-1',
       company_id: 'company-1',
@@ -958,7 +965,10 @@ describe('reverseEntry: bank transaction unlink', () => {
     const result = await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
 
     expect(result.id).toBe('reversal-1')
-    expect(txUpdatePayloads).toEqual([{ journal_entry_id: null }])
+    expect(txUpdatePayloads).toEqual([
+      { journal_entry_id: null, is_business: null, category: null, reconciliation_method: null },
+    ])
+    // Scoped to rows linked to the reversed entry only: never a company-wide reset.
     expect(txFilters).toMatchObject({ company_id: 'company-1', journal_entry_id: 'entry-1' })
   })
 })

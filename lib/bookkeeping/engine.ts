@@ -1241,9 +1241,23 @@ export async function reverseEntry(
   // as bokförd forever, and has no re-booking affordance: the agent paths
   // (lib/pending-operations/commit.ts) already did this manually after every
   // reverseEntry call; the dashboard reverse route did not.
+  //
+  // The worklist's "unbooked" predicate is is_business IS NULL (see
+  // lib/worklist/types.ts), not journal_entry_id IS NULL, so clearing only the
+  // link left the stornoed row invisible in Att bokföra and in the nav badge
+  // (#1950) while the storno dialog (reverse_warning) promised the return.
+  // The engine therefore resets the same triple the uncategorize paths write
+  // (is_business, category, journal_entry_id), plus reconciliation_method:
+  // it describes how the link was made, and the link is gone (the koppla-bort
+  // path in lib/reconciliation/bank-reconciliation.ts resets it the same way).
   const { error: unlinkError } = await supabase
     .from('transactions')
-    .update({ journal_entry_id: null })
+    .update({
+      journal_entry_id: null,
+      is_business: null,
+      category: null,
+      reconciliation_method: null,
+    })
     .eq('company_id', companyId)
     .eq('journal_entry_id', entryId)
   if (unlinkError) {
