@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildFortnoxAuthUrl,
   fortnoxConsentScopes,
+  fortnoxScopeFlag,
   FORTNOX_DOCUMENT_SCOPES,
   FORTNOX_DOCUMENT_SCOPES_APPROVED,
   FORTNOX_ASSET_SCOPES,
@@ -47,6 +48,20 @@ describe('Fortnox OAuth scopes', () => {
     expect(fortnoxConsentScopes({ documents: true })).toContain('connectfile');
     expect(fortnoxConsentScopes()).not.toContain('archive');
     expect(fortnoxConsentScopes()).not.toContain('connectfile');
+  });
+
+  // The env override exists for self-hosted deployments running their own
+  // Fortnox app, whose portal registration differs from hosted's. Unset (or
+  // empty, which is how a commented-out .env line arrives) means the hosted
+  // default; anything but the string "true" is false, so a typo fails toward
+  // not requesting a scope rather than toward invalid_scope at authorize.
+  it('lets env override the hosted scope-approval defaults', () => {
+    expect(fortnoxScopeFlag(undefined, true)).toBe(true);
+    expect(fortnoxScopeFlag(undefined, false)).toBe(false);
+    expect(fortnoxScopeFlag('', true)).toBe(true);
+    expect(fortnoxScopeFlag('true', false)).toBe(true);
+    expect(fortnoxScopeFlag('false', true)).toBe(false);
+    expect(fortnoxScopeFlag('yes', true)).toBe(false);
   });
 
   // The asset register scope is gated on its own portal approval. While the
