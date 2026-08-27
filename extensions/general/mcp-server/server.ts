@@ -12,6 +12,7 @@ import {
   validateApiKey,
   createServiceClientNoCookies,
   hasScope,
+  RATE_LIMIT_RETRY_AFTER_SECONDS,
   TOOL_SCOPE_MAP,
   type ApiKeyMode,
   type ApiKeyScope,
@@ -19384,7 +19385,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       if (status === 429) {
         return new Response(authResult.error, {
           status: 429,
-          headers: { 'Content-Type': 'text/plain', 'Retry-After': '60' },
+          headers: {
+            'Content-Type': 'text/plain',
+            'Retry-After': String(RATE_LIMIT_RETRY_AFTER_SECONDS),
+          },
         })
       }
       return unauthorized()
