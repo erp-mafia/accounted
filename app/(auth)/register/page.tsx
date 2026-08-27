@@ -372,6 +372,15 @@ function RegisterPageContent() {
           setInviteOnlyBlocked(true)
           return
         }
+        // The route's validateBody rejection is a flat envelope with no
+        // `code`; the client already gates password strength and presence
+        // before this fetch, so a 400 without a code is an email Zod
+        // rejected (e.g. user@localhost, which passes the browser's
+        // type=email). Surface the specific field message, not the generic.
+        if (!error.code && res.status === 400) {
+          setFormError({ kind: 'email_invalid', message: t('error_email_invalid') })
+          return
+        }
         console.error('[register] signUp error', error.message)
         const kind = classifyAuthError(error)
         if (kind === 'weak_password') {

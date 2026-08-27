@@ -5,6 +5,7 @@ import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { setActiveCompany, CompanyContextError } from '@/lib/company/context'
 import { revalidatePath } from 'next/cache'
 import { createCompanyCore } from '@/lib/company/create-company'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -137,6 +138,15 @@ async function createCompanyFromOnboardingImpl(params: {
         p_entity_type: entityType,
         p_team_id: params.teamId,
       })
+  // When the row is created under the service role (brand-signup path below),
+  // rollback must also run under the service role: `companies` has RLS and no
+  // FOR DELETE policy, so a cookie-session rollback of a service-created
+  // company deletes nothing and strands a member-less orphan on the brand's
+  // team. Stays null on the normal path, where the session client is correct.
+  // Once the rollback delete lands, user_preferences.active_company_id (which
+  // the RPC set) auto-clears via its ON DELETE SET NULL FK, so no dangling
+  // active company survives.
+  let rollbackClient: SupabaseClient | undefined
 
   if ((teamRow as { kind?: string } | null)?.kind !== 'byra' && user.email) {
     // Dynamic imports: this file is imported by client components (through
@@ -157,6 +167,7 @@ async function createCompanyFromOnboardingImpl(params: {
       (await isEmailOnBrandAllowlist(hostBrand.id, user.email))
     ) {
       const serviceClient = createServiceClient()
+      rollbackClient = serviceClient
       createCompanyRow = () =>
         serviceClient.rpc('create_company_for_brand_signup', {
           p_user_id: user.id,
@@ -181,6 +192,7 @@ async function createCompanyFromOnboardingImpl(params: {
       ticLookup: params.ticLookup,
     },
     createCompanyRow,
+    rollbackClient,
   )
   if (created.error !== undefined) {
     return { error: created.error }
