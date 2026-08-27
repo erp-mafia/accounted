@@ -40,11 +40,13 @@ const DialogContent = React.forwardRef<
       // are portaled to document.body so this content's overflow-y-auto can
       // never clip them. DOM-wise that puts them OUTSIDE the dialog, so Radix
       // would otherwise dismiss the dialog on a pointerdown inside them:
-      // anything marked data-dialog-companion counts as inside.
+      // anything marked data-dialog-companion counts as inside. The agent
+      // sheet and its trigger (data-agent-ui) count as inside for the same
+      // reason: writing to the assistant must never dismiss a dialog.
       onInteractOutside={(event) => {
         onInteractOutside?.(event)
         const target = event.target
-        if (target instanceof Element && target.closest('[data-dialog-companion]')) {
+        if (target instanceof Element && target.closest('[data-dialog-companion], [data-agent-ui]')) {
           event.preventDefault()
         }
       }}
@@ -53,7 +55,12 @@ const DialogContent = React.forwardRef<
         // child's min-content, and nowrap text (truncate) counts at full width
         // there, so one long description widens every sibling past the dialog
         // edge. minmax(0,1fr) caps the track at the content box.
-        "fixed left-[50%] top-[50%] z-50 grid grid-cols-[minmax(0,1fr)] w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-[var(--shadow-md)] max-h-[calc(100dvh-2rem)] overflow-y-auto scrollbar-visible data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-98 data-[state=open]:zoom-in-98 sm:rounded-xl",
+        // left: centered in the viewport MINUS the docked agent sheet.
+        // --agent-dock-w is set on <html> only while the sheet is docked open
+        // (AgentSheetProvider), so with the sheet closed or floating this is
+        // exactly left-[50%]. Without it a wide dialog centers under the
+        // sheet and its right edge becomes unreachable (sheet is z-60).
+        "fixed left-[calc((100vw-var(--agent-dock-w,0px))/2)] top-[50%] z-50 grid grid-cols-[minmax(0,1fr)] w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-[var(--shadow-md)] max-h-[calc(100dvh-2rem)] overflow-y-auto scrollbar-visible data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-98 data-[state=open]:zoom-in-98 sm:rounded-xl",
         className
       )}
       {...props}
@@ -83,6 +90,32 @@ const DialogVeil = () => (
     />
   </DialogPortal>
 )
+
+// Ref-counted so overlapping non-modal dialogs (e.g. the template picker
+// closing in the same commit as the booking dialog opens) cannot fight over
+// the flag: the shell stays inert until the LAST open dialog releases it.
+let dashShellInertCount = 0
+
+/**
+ * Hand-rolled page modality for `modal={false}` dialogs. Radix non-modal mode
+ * drops the focus trap, aria-hiding, and body pointer-events lock, so the
+ * page behind the DialogVeil would stay keyboard/AT/tap-reachable. `inert` on
+ * the dash shell blocks all of that while the agent sheet and its trigger
+ * (both outside the shell) stay live. Pair with DialogVeil.
+ */
+const useDashShellInert = (open: boolean) => {
+  React.useEffect(() => {
+    if (!open) return
+    const shell = document.getElementById('dash-shell')
+    if (!shell) return
+    dashShellInertCount++
+    shell.inert = true
+    return () => {
+      dashShellInertCount--
+      if (dashShellInertCount <= 0) shell.inert = false
+    }
+  }, [open])
+}
 
 const DialogHeader = ({
   className,
@@ -151,6 +184,7 @@ export {
   DialogTrigger,
   DialogContent,
   DialogVeil,
+  useDashShellInert,
   DialogHeader,
   DialogFooter,
   DialogTitle,

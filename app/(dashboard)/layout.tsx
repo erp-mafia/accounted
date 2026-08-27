@@ -492,7 +492,6 @@ export default async function DashboardLayout({
               )}
             </MainContainer>
           </main>
-          <AgentTrigger hidden={userPrefs?.hide_assistant_fab === true} />
           {/* One-time expired-trial notice. Sandbox/anonymous demo users have
               no billing (their companies carry trial grants too), so the gate
               lives here where both flags are known. Acknowledgement persists
@@ -510,6 +509,10 @@ export default async function DashboardLayout({
           <SettingsHotkey />
           {settingsModal}
         </div>
+        {/* Outside #dash-shell on purpose: non-modal dialogs (booking,
+            invoice) set `inert` on the shell while open, and the assistant
+            entry point must stay clickable then, like the sheet itself. */}
+        <AgentTrigger hidden={userPrefs?.hide_assistant_fab === true} />
         {!isSandbox && (
           <AnalyticsIdentify
             user={{
