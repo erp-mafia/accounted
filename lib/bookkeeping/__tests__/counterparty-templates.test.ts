@@ -1110,6 +1110,116 @@ describe('dimensions propagation (PR7)', () => {
 
 // ── learning-loop repair (issue #865) ────────────────────────
 
+describe('line-pattern rounding diff on 3740 (issue #1898)', () => {
+  const expenseTriple = (ratio: number): LinePatternEntry[] => [
+    { account: '6110', type: 'business', side: 'debit', ratio },
+    { account: '6212', type: 'business', side: 'debit', ratio },
+    { account: '6991', type: 'business', side: 'debit', ratio },
+  ]
+
+  function entrySums(
+    tx: Parameters<typeof buildTransactionEntryLines>[0],
+    result: Parameters<typeof buildTransactionEntryLines>[1],
+  ) {
+    const lines = buildTransactionEntryLines(tx, result)
+    return {
+      debits: roundOre(lines.reduce((s, l) => s + l.debit_amount, 0)),
+      credits: roundOre(lines.reduce((s, l) => s + l.credit_amount, 0)),
+    }
+  }
+
+  it('books an over-allocating pattern rounding diff on 3740 opposite the business side', () => {
+    const template = makeCategorizationTemplate({
+      debit_account: '6110',
+      credit_account: '1930',
+      line_pattern: expenseTriple(0.3334),
+    })
+    const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.9 }
+    const tx = makeTransaction({ amount: -100 })
+
+    const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+    // 3 x 33.34 = 100.02 over-allocates by 0.02: 3740 must offset on the credit side
+    for (const account of ['6110', '6212', '6991']) {
+      expect(result.vat_lines.find((l) => l.account_number === account)?.debit_amount).toBe(33.34)
+    }
+    const rounding = result.vat_lines.find((l) => l.account_number === '3740')
+    expect(rounding?.credit_amount).toBe(0.02)
+    expect(rounding?.debit_amount).toBe(0)
+    const { debits, credits } = entrySums(tx, result)
+    expect(debits).toBe(100.02)
+    expect(credits).toBe(100.02)
+  })
+
+  it('balances a normalized 50/50 pattern on an odd-ore amount', () => {
+    const template = makeCategorizationTemplate({
+      debit_account: '6110',
+      credit_account: '1930',
+      line_pattern: [
+        { account: '6110', type: 'business', side: 'debit', ratio: 0.5 },
+        { account: '6212', type: 'business', side: 'debit', ratio: 0.5 },
+      ],
+    })
+    const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.9 }
+    const tx = makeTransaction({ amount: -100.03 })
+
+    const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+    // 50.015 rounds to 50.02 twice: ratios that sum to exactly 1 still over-allocate
+    expect(result.vat_lines.find((l) => l.account_number === '6110')?.debit_amount).toBe(50.02)
+    expect(result.vat_lines.find((l) => l.account_number === '6212')?.debit_amount).toBe(50.02)
+    const rounding = result.vat_lines.find((l) => l.account_number === '3740')
+    expect(rounding?.credit_amount).toBe(0.01)
+    expect(rounding?.debit_amount).toBe(0)
+    const { debits, credits } = entrySums(tx, result)
+    expect(debits).toBe(credits)
+  })
+
+  it('keeps an under-allocating diff on the business side', () => {
+    const template = makeCategorizationTemplate({
+      debit_account: '6110',
+      credit_account: '1930',
+      line_pattern: expenseTriple(0.333),
+    })
+    const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.9 }
+    const tx = makeTransaction({ amount: -100 })
+
+    const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+    // 3 x 33.30 = 99.90 under-allocates by 0.10: unchanged business-side placement
+    const rounding = result.vat_lines.find((l) => l.account_number === '3740')
+    expect(rounding?.debit_amount).toBe(0.1)
+    expect(rounding?.credit_amount).toBe(0)
+    const { debits, credits } = entrySums(tx, result)
+    expect(debits).toBe(100)
+    expect(credits).toBe(100)
+  })
+
+  it('mirrors the over-allocation rounding leg on sign mismatch', () => {
+    const template = makeCategorizationTemplate({
+      debit_account: '6110',
+      credit_account: '1930',
+      line_pattern: expenseTriple(0.3334),
+    })
+    const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.9 }
+    const tx = makeTransaction({ amount: 100 }) // refund of a three-way expense
+
+    const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+    expect(result.direction_mismatch).toBe(true)
+    for (const account of ['6110', '6212', '6991']) {
+      expect(result.vat_lines.find((l) => l.account_number === account)?.credit_amount).toBe(33.34)
+    }
+    // Mirrored business side is credit, so the over-allocation offset lands on debit
+    const rounding = result.vat_lines.find((l) => l.account_number === '3740')
+    expect(rounding?.debit_amount).toBe(0.02)
+    expect(rounding?.credit_amount).toBe(0)
+    const { debits, credits } = entrySums(tx, result)
+    expect(debits).toBe(100.02)
+    expect(credits).toBe(100.02)
+  })
+})
+
 describe('learning-loop repair (issue #865)', () => {
   /** Queue-based mock that records insert payloads per table (see PR7 block). */
   function createCapturingSupabase(results: Array<{ data?: unknown; error?: unknown }>) {
