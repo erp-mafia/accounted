@@ -319,7 +319,7 @@ export async function replaceSIEImport(
       .single()
 
     if (period?.is_closed || period?.locked_at) {
-      return { success: false, deletedEntries: 0, error: 'Kan inte ersätta import i ett låst eller stängt räkenskapsår. Öppna perioden först.', code: 'period_locked' }
+      return { success: false, deletedEntries: 0, error: 'Kan inte ersätta import i ett låst eller stängt räkenskapsår. Lås upp eller öppna räkenskapsåret först under Inställningar > Bokföring > Räkenskapsår.', code: 'period_locked' }
     }
   }
 
@@ -400,7 +400,7 @@ export async function undoSIEImport(
       .single()
 
     if (period?.is_closed || period?.locked_at) {
-      return { success: false, deletedEntries: 0, error: 'Kan inte ångra import i ett låst eller stängt räkenskapsår. Öppna perioden först.' }
+      return { success: false, deletedEntries: 0, error: 'Kan inte ångra import i ett låst eller stängt räkenskapsår. Lås upp eller öppna räkenskapsåret först under Inställningar > Bokföring > Räkenskapsår.' }
     }
   }
 
