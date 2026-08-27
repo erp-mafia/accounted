@@ -24,7 +24,9 @@
  * gross = 14 mod 28 ore and the entry goes off by 1 ore), why the fiktiv-moms
  * pair uses the engine's plain rounding (roundOre's EPSILON nudge diverges at
  * exact-half floats like 8.62 * 0.25), and why sign-mismatched counterparty
- * matches are mirrored exactly as the server mirrors them.
+ * matches are mirrored exactly as the server mirrors them. The 3740 rounding
+ * leg follows the engine's sign rule too: business side when the ratios
+ * under-allocate, opposite side when they over-allocate (#1898).
  *
  * The resulting booking still goes through JournalEntryForm's normal manual
  * validation and the bookkeeping engine: nothing here writes to the ledger.
@@ -251,8 +253,15 @@ export function computeProposalLines(input: ProposalLinesInput): ProposalLine[] 
     const totalAllocated = engineRound(totalVat + allocated)
     const diff = engineRound(absAmount - totalAllocated)
     if (diff !== 0) {
+      // ENGINE PARITY (#1898, buildMultiLineMappingResult step 4): a positive
+      // diff (under-allocation) lands on the mirrored business side, a
+      // negative diff (over-allocation) on the opposite side. The flip is
+      // applied AFTER the mirror, exactly as the engine does it.
       const businessSide = linePattern.find(e => e.type === 'business')?.side ?? 'credit'
-      result.push({ side: side(businessSide), account: '3740', amount: Math.abs(diff) })
+      const effectiveBusinessSide = side(businessSide)
+      const roundingSide: 'debet' | 'kredit' =
+        diff > 0 ? effectiveBusinessSide : (effectiveBusinessSide === 'debet' ? 'kredit' : 'debet')
+      result.push({ side: roundingSide, account: '3740', amount: Math.abs(diff) })
     }
 
     return result
