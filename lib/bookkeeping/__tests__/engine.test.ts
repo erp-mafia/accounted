@@ -885,25 +885,40 @@ describe('reverseEntry: bank transaction unlink', () => {
   // only the link therefore left the stornoed row out of the list and the nav
   // badge (#1950), so the engine resets the same triple the uncategorize
   // paths write, plus reconciliation_method since the link it described is gone.
-  it('resets journal_entry_id, is_business and category so the row returns to Att bokföra (#1950)', async () => {
-    const original = {
-      id: 'entry-1',
-      company_id: 'company-1',
-      status: 'posted',
-      fiscal_period_id: 'period-1',
-      voucher_series: 'A',
-      voucher_number: 7,
-      entry_date: '2026-02-02',
-      description: 'ALMI AB - Innovationslån',
-      source_type: 'manual',
-      source_id: null,
-      lines: [
-        { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
-        { account_number: '2350', debit_amount: 0, credit_amount: 1000 },
-      ],
-    }
-    const reversal = { id: 'reversal-1', reverses_id: 'entry-1', source_type: 'storno' }
+  //
+  // Second anchor: bulk-booked rows (bulk_book_transactions RPC) point at the
+  // verifikat through transaction_voucher_links, and for N>1 that junction is
+  // the only anchor. The engine deletes those link rows and releases the rows
+  // that have no anchor left; a row still anchored elsewhere (residual booking:
+  // main verifikat in journal_entry_id, junction row to the residual verifikat)
+  // stays booked.
+  const original = {
+    id: 'entry-1',
+    company_id: 'company-1',
+    status: 'posted',
+    fiscal_period_id: 'period-1',
+    voucher_series: 'A',
+    voucher_number: 7,
+    entry_date: '2026-02-02',
+    description: 'ALMI AB - Innovationslån',
+    source_type: 'manual',
+    source_id: null,
+    lines: [
+      { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '2350', debit_amount: 0, credit_amount: 1000 },
+    ],
+  }
+  const reversal = { id: 'reversal-1', reverses_id: 'entry-1', source_type: 'storno' }
 
+  type Filter = [op: string, column: string, value: unknown]
+  interface RecordedWrite { payload?: unknown; op?: string; filters: Filter[] }
+
+  /**
+   * Mock for reverseEntry. `voucherLinks` are the transaction ids the junction
+   * holds for entry-1; `remainingLinks` what it still holds for those ids after
+   * the delete (a row anchored to some other verifikat too).
+   */
+  function setup(opts: { voucherLinks?: string[]; remainingLinks?: string[] } = {}) {
     let jeCall = 0
     const jeResults = [
       { data: original, error: null },                   // fetch original (.single)
@@ -922,8 +937,33 @@ describe('reverseEntry: bank transaction unlink', () => {
       return b
     }
 
-    const txUpdatePayloads: unknown[] = []
-    const txFilters: Record<string, unknown> = {}
+    const txWrites: RecordedWrite[] = []
+    const linkOps: RecordedWrite[] = []
+    let linkSelectCall = 0
+
+    function recorder(list: RecordedWrite[], resolveWith: (current: RecordedWrite) => unknown) {
+      const b: Record<string, unknown> = {}
+      let current: RecordedWrite = { filters: [] }
+      const start = (op: string) =>
+        vi.fn().mockImplementation((payload?: unknown) => {
+          current = { op, payload, filters: [] }
+          list.push(current)
+          return b
+        })
+      const filter = (op: string) =>
+        vi.fn().mockImplementation((column: string, value: unknown) => {
+          current.filters.push([op, column, value])
+          return b
+        })
+      b.update = start('update')
+      b.select = start('select')
+      b.delete = start('delete')
+      b.eq = filter('eq')
+      b.in = filter('in')
+      b.is = filter('is')
+      b.then = (resolve: (v: unknown) => void) => resolve(resolveWith(current))
+      return b
+    }
 
     const supabase = {
       rpc: vi.fn().mockResolvedValue({ data: 8, error: null }),
@@ -945,31 +985,112 @@ describe('reverseEntry: bank transaction unlink', () => {
         if (table === 'journal_entry_lines') {
           return { insert: vi.fn().mockResolvedValue({ error: null }) }
         }
-        if (table === 'transactions') {
-          const b: Record<string, unknown> = {}
-          b.update = vi.fn().mockImplementation((payload: unknown) => {
-            txUpdatePayloads.push(payload)
-            return b
+        if (table === 'transactions') return recorder(txWrites, () => ({ error: null }))
+        if (table === 'transaction_voucher_links') {
+          return recorder(linkOps, (current) => {
+            if (current.op !== 'select') return { error: null }
+            const ids = linkSelectCall++ === 0 ? opts.voucherLinks ?? [] : opts.remainingLinks ?? []
+            return { data: ids.map((transaction_id) => ({ transaction_id })), error: null }
           })
-          b.eq = vi.fn().mockImplementation((col: string, val: unknown) => {
-            txFilters[col] = val
-            return b
-          })
-          b.then = (resolve: (v: unknown) => void) => resolve({ error: null })
-          return b
         }
         return createMockChain()
       }),
     }
 
+    return { supabase, txWrites, linkOps }
+  }
+
+  it('resets journal_entry_id, is_business and category so the row returns to Att bokföra (#1950)', async () => {
+    const { supabase, txWrites, linkOps } = setup()
+
     const result = await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
 
     expect(result.id).toBe('reversal-1')
-    expect(txUpdatePayloads).toEqual([
-      { journal_entry_id: null, is_business: null, category: null, reconciliation_method: null },
-    ])
+    expect(txWrites).toHaveLength(1)
+    expect(txWrites[0].payload).toEqual({
+      journal_entry_id: null,
+      is_business: null,
+      category: null,
+      reconciliation_method: null,
+    })
     // Scoped to rows linked to the reversed entry only: never a company-wide reset.
-    expect(txFilters).toMatchObject({ company_id: 'company-1', journal_entry_id: 'entry-1' })
+    expect(txWrites[0].filters).toEqual([
+      ['eq', 'company_id', 'company-1'],
+      ['eq', 'journal_entry_id', 'entry-1'],
+    ])
+    // The junction is consulted for this entry only; nothing to delete or
+    // release when it holds no rows.
+    expect(linkOps).toEqual([
+      {
+        op: 'select',
+        payload: 'transaction_id',
+        filters: [
+          ['eq', 'company_id', 'company-1'],
+          ['eq', 'journal_entry_id', 'entry-1'],
+        ],
+      },
+    ])
+  })
+
+  it('deletes transaction_voucher_links rows and releases bulk-booked rows with no anchor left', async () => {
+    // Samlingsverifikat over three bank rows (journal_entry_id NULL on all
+    // three, one junction row each). tx-c is also anchored to another
+    // verifikat through the junction and must stay booked.
+    const { supabase, txWrites, linkOps } = setup({
+      voucherLinks: ['tx-a', 'tx-b', 'tx-c'],
+      remainingLinks: ['tx-c'],
+    })
+
+    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(linkOps).toEqual([
+      {
+        op: 'select',
+        payload: 'transaction_id',
+        filters: [
+          ['eq', 'company_id', 'company-1'],
+          ['eq', 'journal_entry_id', 'entry-1'],
+        ],
+      },
+      {
+        op: 'delete',
+        payload: undefined,
+        filters: [
+          ['eq', 'company_id', 'company-1'],
+          ['eq', 'journal_entry_id', 'entry-1'],
+        ],
+      },
+      {
+        op: 'select',
+        payload: 'transaction_id',
+        filters: [
+          ['eq', 'company_id', 'company-1'],
+          ['in', 'transaction_id', ['tx-a', 'tx-b', 'tx-c']],
+        ],
+      },
+    ])
+
+    expect(txWrites).toHaveLength(2)
+    expect(txWrites[1].payload).toEqual({ is_business: null, category: null, reconciliation_method: null })
+    // Only rows with no anchor left, and never a row whose journal_entry_id
+    // still points at another verifikat (residual booking).
+    expect(txWrites[1].filters).toEqual([
+      ['eq', 'company_id', 'company-1'],
+      ['in', 'id', ['tx-a', 'tx-b']],
+      ['is', 'journal_entry_id', null],
+    ])
+  })
+
+  it('leaves the rows alone when every junction-linked row is still anchored elsewhere', async () => {
+    const { supabase, txWrites, linkOps } = setup({
+      voucherLinks: ['tx-a'],
+      remainingLinks: ['tx-a'],
+    })
+
+    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(linkOps.map((o) => o.op)).toEqual(['select', 'delete', 'select'])
+    expect(txWrites).toHaveLength(1)
   })
 })
 
