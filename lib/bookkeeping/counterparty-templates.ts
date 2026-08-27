@@ -624,7 +624,8 @@ function buildLegacyMismatchResult(
  * Build a MappingResult from a multi-line counterparty template pattern.
  *
  * VAT is computed from rate (exact), business/tax from ratio against non-VAT subtotal.
- * Rounding difference goes to 3740 (Öresutjämning).
+ * Rounding difference goes to 3740 (Öresutjämning): on the business side when
+ * the ratios under-allocate, on the opposite side when they over-allocate (#1898).
  * Settlement line always equals the exact transaction amount.
  */
 function buildMultiLineMappingResult(
@@ -688,12 +689,18 @@ function buildMultiLineMappingResult(
   const totalAllocated = Math.round((totalVat + nonVatAllocated) * 100) / 100
   const roundingDiff = Math.round((absAmount - totalAllocated) * 100) / 100
   if (roundingDiff !== 0) {
-    // Determine the side for the rounding line (same side as business lines)
+    // A positive diff means the ratios under-allocated: 3740 fills the gap on
+    // the business side. A negative diff means they over-allocated (three
+    // 0.3334 ratios on 100.00 kr give 3 x 33.34 = 100.02): 3740 offsets on
+    // the OPPOSITE side so the non-settlement lines net to absAmount (#1898).
+    // businessSide is already mirror-applied via side(), so flip after it.
     const businessSide = side(pattern.find(e => e.type === 'business')?.side ?? 'credit')
+    const roundingSide: 'debit' | 'credit' =
+      roundingDiff > 0 ? businessSide : (businessSide === 'debit' ? 'credit' : 'debit')
     allLines.push({
       account_number: '3740',
-      debit_amount: businessSide === 'debit' ? Math.abs(roundingDiff) : 0,
-      credit_amount: businessSide === 'credit' ? Math.abs(roundingDiff) : 0,
+      debit_amount: roundingSide === 'debit' ? Math.abs(roundingDiff) : 0,
+      credit_amount: roundingSide === 'credit' ? Math.abs(roundingDiff) : 0,
       description: 'Öresutjämning',
     })
   }
