@@ -132,7 +132,7 @@ describe('POST /api/salary/employees', () => {
   function supabaseWithInsert(returned: Record<string, unknown>) {
     const single = vi.fn(() => Promise.resolve({ data: returned, error: null }))
     const select = vi.fn(() => ({ single }))
-    const insert = vi.fn(() => ({ select }))
+    const insert = vi.fn((_payload: Record<string, unknown>) => ({ select }))
     return { supabase: { from: vi.fn(() => ({ insert })) }, insert }
   }
 
