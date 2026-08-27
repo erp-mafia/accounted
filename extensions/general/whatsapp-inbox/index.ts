@@ -51,6 +51,7 @@ import { kickInboundProcessing } from './lib/process-inbound'
 import { CHAT_ALLOWED_MIME_TYPES, normalizeChatMime } from './lib/chat-mime'
 import {
   DEBOUNCE_WINDOW_MS,
+  badCodeThrottled,
   getContext,
   getOrCreateConversation,
   greetingThrottled,
@@ -71,8 +72,9 @@ const log = createLogger('whatsapp-inbox')
 // falls through to the greeting path instead (#1599): its own throttle
 // (greetingThrottled in lib/conversation.ts: 1 M1 per hour for text, a
 // 10-minute burst window for media, 3 per day, fail-closed on its own read
-// error) remains the outbound volume cap. M2 (bad code) is withheld in that
-// mode because only this quota bounds it (see recordUnknownSenderMessage).
+// error) remains the outbound volume cap. M2 (bad code) gets its own small
+// fail-closed throttle in that mode (badCodeThrottled in lib/conversation.ts:
+// 1 per 10 minutes, 3 per day) since this quota no longer bounds it.
 const UNKNOWN_SENDER_MINUTE_MAX = 15
 const UNKNOWN_SENDER_DAY_MAX = 200
 // Declined-message trace rows (issue #1552) are capped per hash and day so an
@@ -224,12 +226,18 @@ async function handleUnknownSender(
 
   if (msg.type === 'text' && looksLikeLinkCode(msg.text)) {
     const consumed = await consumeLinkCode(supabase, msg.text ?? '')
-    if (!consumed && !quotaUnavailable) {
+    // A bad code earns M2. Normally the pre-binding quota bounds M2; in
+    // degraded mode it gets its own small fail-closed throttle instead
+    // (badCodeThrottled: 1 per 10 min, 3 per day), so a sender greeted with
+    // M1 inside the last hour who then sends an expired or mistyped code is
+    // still told the code was rejected instead of falling into silence.
+    // The short-circuit keeps the extra read off the normal path.
+    if (!consumed && (!quotaUnavailable || !(await badCodeThrottled(supabase, phoneHash)))) {
       // Trace row first: a Meta redelivery of a message already answered
       // (including a redelivered CONSUMED code, whose row the success path
       // wrote) dedupes on the wamid instead of earning a second reply.
       const traced = await recordUnknownSenderMessage(
-        supabase, msg, phoneHash, 'done', 'Unknown sender: invalid link code, M2 sent',
+        supabase, msg, phoneHash, 'done', `Unknown sender: invalid link code, M2 sent${degraded}`,
       )
       if (traced === 'duplicate') return
       await sendText(supabase, {
@@ -287,9 +295,9 @@ async function handleUnknownSender(
       return
     }
 
-    // Limiter unavailable and the code did not bind: M2 is bounded only by
-    // the quota, so fall through to the throttled M1 below, which already
-    // tells the sender how to fetch a fresh code.
+    // Limiter unavailable and the M2 throttle declined (repeat bad codes,
+    // or its window was unreadable): fall through to the throttled M1
+    // below, which also tells the sender how to fetch a fresh code.
   }
 
   // Anything else from an unknown number: the AI-disclosure greeting, hard
