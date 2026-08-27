@@ -34,6 +34,7 @@ import {
   unlockPeriod,
   closePeriod,
   markPeriodClosedExternally,
+  reopenExternallyClosedPeriod,
   createNextPeriod,
   findNextPeriod,
   resolvePeriodStatusForDate,
@@ -763,6 +764,84 @@ describe('markPeriodClosedExternally', () => {
     await expect(
       markPeriodClosedExternally(supabase as never, 'company-1', 'user-1', 'fp-1')
     ).rejects.toThrow('Kan inte klarmarkera period')
+  })
+})
+
+describe('reopenExternallyClosedPeriod', () => {
+  it('reopens a klarmarkerad period, clears the lock, and writes the audit row', async () => {
+    const period = makeFiscalPeriod({
+      id: 'fp-1',
+      is_closed: true,
+      closed_at: '2026-08-27T09:20:13Z',
+      closed_externally: true,
+      locked_at: '2026-08-27T09:20:13Z',
+      closing_entry_id: null,
+    })
+    const reopened = {
+      ...period,
+      is_closed: false,
+      closed_at: null,
+      closed_externally: false,
+      locked_at: null,
+    }
+    results = [
+      { data: period, error: null },    // fetch
+      { data: reopened, error: null },  // update
+      { data: null, error: null },      // audit_log insert
+    ]
+
+    const handler = vi.fn()
+    eventBus.on('period.unlocked', handler)
+
+    const supabase = makeClient()
+    const result = await reopenExternallyClosedPeriod(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.is_closed).toBe(false)
+    expect(result.closed_externally).toBe(false)
+    expect(result.locked_at).toBeNull()
+    expect(handler).toHaveBeenCalledOnce()
+    // Three table touches: fetch, update, audit_log.
+    expect(supabase.from).toHaveBeenCalledWith('audit_log')
+  })
+
+  it('rejects an open period', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closed_externally: false })
+    results = [{ data: period, error: null }]
+
+    const supabase = makeClient()
+    await expect(
+      reopenExternallyClosedPeriod(supabase as never, 'company-1', 'user-1', 'fp-1')
+    ).rejects.toThrow('not closed')
+  })
+
+  it('rejects a period closed by a year-end run (closing entry, not klarmarkera)', async () => {
+    const period = makeFiscalPeriod({
+      id: 'fp-1',
+      is_closed: true,
+      closed_externally: false,
+      closing_entry_id: 'ce-1',
+    })
+    results = [{ data: period, error: null }]
+
+    const supabase = makeClient()
+    await expect(
+      reopenExternallyClosedPeriod(supabase as never, 'company-1', 'user-1', 'fp-1')
+    ).rejects.toThrow('year-end run')
+  })
+
+  it('rejects a klarmarkerad period that later got its own closing entry', async () => {
+    const period = makeFiscalPeriod({
+      id: 'fp-1',
+      is_closed: true,
+      closed_externally: true,
+      closing_entry_id: 'ce-1',
+    })
+    results = [{ data: period, error: null }]
+
+    const supabase = makeClient()
+    await expect(
+      reopenExternallyClosedPeriod(supabase as never, 'company-1', 'user-1', 'fp-1')
+    ).rejects.toThrow('year-end run')
   })
 })
 

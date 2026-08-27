@@ -1523,8 +1523,18 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
   },
   PERIOD_UNLOCK_CLOSED: {
     httpStatus: 409,
-    message_sv: 'Ett stängt räkenskapsår kan inte låsas upp.',
-    message_en: 'A closed fiscal year cannot be unlocked.',
+    message_sv: 'Ett stängt räkenskapsår kan inte låsas upp. Klarmarkerades året som avslutat i ett tidigare program kan du i stället öppna det igen under Räkenskapsår.',
+    message_en: 'A closed fiscal year cannot be unlocked. If the year was marked as closed in a previous system, reopen it from Fiscal years instead.',
+  },
+  PERIOD_REOPEN_NOT_CLOSED: {
+    httpStatus: 409,
+    message_sv: 'Räkenskapsåret är inte stängt.',
+    message_en: 'Fiscal year is not closed.',
+  },
+  PERIOD_REOPEN_NOT_EXTERNAL: {
+    httpStatus: 409,
+    message_sv: 'Räkenskapsåret stängdes med ett bokslut i Accounted och kan inte öppnas igen här.',
+    message_en: 'The fiscal year was closed with a year-end run in Accounted and cannot be reopened here.',
   },
   FISCAL_YEAR_RESET_NOT_FOUND: {
     httpStatus: 404,
