@@ -1521,7 +1521,11 @@
     "step_receipts_channels_no_wa": "Email · upload",
     "step_claude_title": "Connect to Claude",
     "step_claude_description": "Do your bookkeeping from the chat: drop receipts and SIE files, reconcile the tax account and ask about your numbers. Everything is already connected.",
-    "step_claude_action": "Connect to Claude"
+    "step_claude_action": "Connect to Claude",
+    "step_claude_chatgpt_link": "Using ChatGPT?",
+    "step_claude_chatgpt_steps": "In ChatGPT (Plus, Pro or Business): Settings → Apps → Advanced settings → turn on Developer mode. Choose Add custom connector, name it {appName} and paste the server address. Then start a new chat and ask for a walkthrough of your books.",
+    "step_claude_chatgpt_copy": "Copy server address",
+    "step_claude_chatgpt_copied": "Copied"
   },
   "tax_assessment_notices": {
     "title": "Final tax notices and remaining tax",
