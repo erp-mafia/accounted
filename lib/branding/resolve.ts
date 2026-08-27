@@ -136,12 +136,28 @@ export function normalizeHost(host: string): string {
  * the additive guarantee (unknown host = default Accounted, bit for bit).
  */
 export async function resolveBrandByHost(host: string): Promise<Brand | null> {
+  return (await resolveBrandResultByHost(host)).brand
+}
+
+/**
+ * Brand resolution that distinguishes "this host has no brand" from "the
+ * lookup itself failed". Callers that only pick chrome/branding want the
+ * null-means-default behavior of resolveBrandByHost. A caller enforcing a
+ * SECURITY decision on the result (the invite-only signup gate,
+ * lib/auth/brand-signup-gate.ts) must NOT read a transient DB error as an
+ * unbranded host, which would fail open: a blip on the brands table would
+ * let anyone sign up on an invite-only domain. `lookupFailed` lets that
+ * caller fail safe (503 / retry) instead.
+ */
+export async function resolveBrandResultByHost(
+  host: string,
+): Promise<{ brand: Brand | null; lookupFailed: boolean }> {
   const normalized = normalizeHost(host)
-  if (!normalized) return null
+  if (!normalized) return { brand: null, lookupFailed: false }
 
   const key = `host:${normalized}`
   const hit = readCache(key)
-  if (hit) return hit.value
+  if (hit) return { brand: hit.value, lookupFailed: false }
 
   const supabase = createServiceClientNoCookies()
   const { data, error } = await supabase
@@ -152,13 +168,14 @@ export async function resolveBrandByHost(host: string): Promise<Brand | null> {
 
   if (error) {
     // Transient failure: fall back to defaults without caching, so a live
-    // brand is not masked for a whole TTL window by one failed query.
-    return null
+    // brand is not masked for a whole TTL window by one failed query. The
+    // flag lets a security caller tell this apart from a real unbranded host.
+    return { brand: null, lookupFailed: true }
   }
 
   const brand = data ? mapRow(data as BrandRow) : null
   writeCache(key, brand)
-  return brand
+  return { brand, lookupFailed: false }
 }
 
 /**

@@ -27,7 +27,12 @@ import 'server-only'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
 import { hashInviteToken } from '@/lib/auth/invite-tokens'
-import { normalizeHost, resolveBrandByHost, type Brand } from '@/lib/branding/resolve'
+import {
+  normalizeHost,
+  resolveBrandByHost,
+  resolveBrandResultByHost,
+  type Brand,
+} from '@/lib/branding/resolve'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('brand-signup-gate')
@@ -40,6 +45,10 @@ export type BrandSignupGateResult =
       via: 'no_brand' | 'open' | 'allowlist' | 'invite'
     }
   | { allowed: false; brand: Brand }
+  // The brands lookup itself failed (transient DB error). The caller must
+  // fail SAFE (retry / 503), never treat this as an unbranded host, or a
+  // blip would open invite-only signup.
+  | { allowed: false; brand: null; lookupFailed: true }
 
 /**
  * Whether `email` is on the brand's signup allowlist. Case-insensitive: the
@@ -115,7 +124,15 @@ export async function evaluateBrandSignupGate(opts: {
   email: string
   inviteToken?: string | null
 }): Promise<BrandSignupGateResult> {
-  const brand = opts.host ? await resolveBrandByHost(opts.host) : null
+  const { brand, lookupFailed } = opts.host
+    ? await resolveBrandResultByHost(opts.host)
+    : { brand: null, lookupFailed: false }
+  if (lookupFailed) {
+    // Do not fall through to no_brand: a transient brands-table error must
+    // not open an invite-only domain. The caller turns this into a 503.
+    log.error('brand lookup failed; refusing to decide signup gate')
+    return { allowed: false, brand: null, lookupFailed: true }
+  }
   if (!brand) return { allowed: true, brand: null, via: 'no_brand' }
   if (brand.signupMode !== 'invite_only') return { allowed: true, brand, via: 'open' }
 

@@ -51,6 +51,20 @@ export async function POST(request: Request) {
   const inviteToken = readInviteTokenFromCookieHeader(request.headers.get('cookie'))
 
   const gate = await evaluateBrandSignupGate({ host, email, inviteToken })
+  if (!gate.allowed && 'lookupFailed' in gate) {
+    // Transient brands-table error: fail safe, do not create the account.
+    // 503 tells the client to retry rather than the misleading "not allowed".
+    return NextResponse.json(
+      {
+        error: {
+          code: 'brand_lookup_failed',
+          message: 'Tillfälligt fel. Försök igen om en stund.',
+          message_en: 'Temporary error. Please try again shortly.',
+        },
+      },
+      { status: 503 },
+    )
+  }
   if (!gate.allowed) {
     return NextResponse.json(
       {

@@ -1128,6 +1128,17 @@ export const ticExtension: Extension = {
             email: trimmedEmail!,
             inviteToken: readInviteTokenFromCookieHeader(request.headers.get('cookie')),
           })
+          if (!gateResult.allowed && 'lookupFailed' in gateResult) {
+            // Transient brands-table error: fail safe, do not create the
+            // account. Not settled, so the completed BankID flow can retry.
+            return NextResponse.json(
+              {
+                error: 'brand_lookup_failed',
+                message: 'Tillfälligt fel. Försök igen om en stund.',
+              },
+              { status: 503 }
+            )
+          }
           if (!gateResult.allowed) {
             return NextResponse.json(
               {

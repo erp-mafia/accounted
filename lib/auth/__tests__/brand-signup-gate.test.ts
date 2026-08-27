@@ -9,12 +9,17 @@ vi.mock('@/lib/auth/api-keys', () => ({
   createServiceClientNoCookies: vi.fn(() => serviceClient.current),
 }))
 
+// The gate resolves via resolveBrandResultByHost ({ brand, lookupFailed });
+// resolveBrandDomainBounce still uses resolveBrandByHost. Mock both off one
+// brand value, and let tests override lookupFailed when they need it.
 const resolveBrandByHostMock = vi.hoisted(() => vi.fn())
+const resolveBrandResultMock = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/branding/resolve', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/branding/resolve')>()
   return {
     ...actual,
     resolveBrandByHost: (...args: unknown[]) => resolveBrandByHostMock(...args),
+    resolveBrandResultByHost: (...args: unknown[]) => resolveBrandResultMock(...args),
   }
 })
 
@@ -29,14 +34,14 @@ function makeBrand(overrides: Partial<Brand> = {}): Brand {
   return {
     id: 'brand-1',
     teamId: 'team-1',
-    domain: 'ziffr.accounted.se',
-    appName: 'Ziffr',
+    domain: 'app.siffra.se',
+    appName: 'Siffra',
     logoUrl: null,
     faviconUrl: null,
     brandColor: '#123456',
     chromeColor: null,
     fontKey: 'default',
-    supportEmail: 'support@ziffr.se',
+    supportEmail: 'support@siffra.se',
     authEmailFrom: null,
     senderDomain: null,
     senderDomainStatus: 'unverified',
@@ -52,6 +57,13 @@ beforeEach(() => {
   vi.clearAllMocks()
   mock = createQueuedMockSupabase()
   serviceClient.current = mock.supabase
+  // By default the strict resolver mirrors resolveBrandByHostMock's value
+  // with lookupFailed:false, so the existing tests keep configuring one mock.
+  // The fail-safe test overrides this to return lookupFailed:true.
+  resolveBrandResultMock.mockImplementation(async (host: string) => ({
+    brand: await resolveBrandByHostMock(host),
+    lookupFailed: false,
+  }))
 })
 
 describe('evaluateBrandSignupGate', () => {
@@ -73,7 +85,7 @@ describe('evaluateBrandSignupGate', () => {
   it('allows on an open brand without touching the allowlist', async () => {
     resolveBrandByHostMock.mockResolvedValue(makeBrand({ signupMode: 'open' }))
     const result = await evaluateBrandSignupGate({
-      host: 'ziffr.accounted.se',
+      host: 'app.siffra.se',
       email: 'anyone@example.com',
     })
     expect(result.allowed).toBe(true)
@@ -86,7 +98,7 @@ describe('evaluateBrandSignupGate', () => {
     mock.enqueue({ data: { id: 'entry-1' } })
 
     const result = await evaluateBrandSignupGate({
-      host: 'ziffr.accounted.se',
+      host: 'app.siffra.se',
       email: '  Kund@Example.COM ',
     })
 
@@ -105,11 +117,24 @@ describe('evaluateBrandSignupGate', () => {
     mock.enqueue({ data: null })
 
     const result = await evaluateBrandSignupGate({
-      host: 'ziffr.accounted.se',
+      host: 'app.siffra.se',
       email: 'stranger@example.com',
     })
 
     expect(result).toEqual({ allowed: false, brand })
+  })
+
+  it('fails safe (lookupFailed) when the brand lookup itself errors', async () => {
+    resolveBrandResultMock.mockResolvedValue({ brand: null, lookupFailed: true })
+
+    const result = await evaluateBrandSignupGate({
+      host: 'app.siffra.se',
+      email: 'anyone@example.com',
+    })
+
+    // Must NOT degrade to allowed no_brand: a transient DB error cannot open
+    // an invite-only domain.
+    expect(result).toEqual({ allowed: false, brand: null, lookupFailed: true })
   })
 
   it('fails closed when the allowlist lookup errors', async () => {
@@ -117,7 +142,7 @@ describe('evaluateBrandSignupGate', () => {
     mock.enqueue({ data: null, error: { message: 'boom' } })
 
     const result = await evaluateBrandSignupGate({
-      host: 'ziffr.accounted.se',
+      host: 'app.siffra.se',
       email: 'kund@example.com',
     })
 
@@ -139,7 +164,7 @@ describe('evaluateBrandSignupGate', () => {
     ])
 
     const result = await evaluateBrandSignupGate({
-      host: 'ziffr.accounted.se',
+      host: 'app.siffra.se',
       email: 'invitee@example.com',
       inviteToken: 'gnubok_inv_abc',
     })
@@ -167,7 +192,7 @@ describe('evaluateBrandSignupGate', () => {
     ])
 
     const result = await evaluateBrandSignupGate({
-      host: 'ziffr.accounted.se',
+      host: 'app.siffra.se',
       email: 'stranger@example.com',
       inviteToken: 'gnubok_inv_abc',
     })
@@ -189,7 +214,7 @@ describe('evaluateBrandSignupGate', () => {
     ])
 
     const result = await evaluateBrandSignupGate({
-      host: 'ziffr.accounted.se',
+      host: 'app.siffra.se',
       email: 'invitee@example.com',
       inviteToken: 'gnubok_inv_abc',
     })
@@ -207,7 +232,7 @@ describe('isEmailOnBrandAllowlist', () => {
 
 describe('resolveBrandDomainBounce', () => {
   const base = {
-    host: 'ziffr.accounted.se',
+    host: 'app.siffra.se',
     userEmail: 'user@example.com',
     teamIds: [] as string[],
     companyTeamIds: [] as Array<string | null>,
@@ -258,7 +283,7 @@ describe('resolveBrandDomainBounce', () => {
     expect(
       await resolveBrandDomainBounce({
         ...base,
-        canonicalAppUrl: 'https://ziffr.accounted.se',
+        canonicalAppUrl: 'https://app.siffra.se',
       }),
     ).toBeNull()
   })

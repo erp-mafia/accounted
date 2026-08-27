@@ -372,6 +372,13 @@ function RegisterPageContent() {
           setInviteOnlyBlocked(true)
           return
         }
+        if (error.code === 'brand_lookup_failed') {
+          // Transient brand-lookup error (the gate failed safe rather than
+          // guess). Ask the user to retry instead of implying they were
+          // turned away. Localized here, not from the raw response envelope.
+          setFormError({ kind: 'unknown', message: t('error_temporary') })
+          return
+        }
         // The route's validateBody rejection is a flat envelope with no
         // `code`; the client already gates password strength and presence
         // before this fetch, so a 400 without a code is an email Zod

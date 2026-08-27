@@ -51,12 +51,25 @@ describe('POST /api/auth/signup', () => {
     gateMock.mockResolvedValue({ allowed: false, brand: { id: 'brand-1' } })
 
     const res = await POST(
-      makeRequest(validBody, { host: 'ziffr.accounted.se' }),
+      makeRequest(validBody, { host: 'app.siffra.se' }),
     )
     const { body: json } = await parseJsonResponse<{ error: { code: string } }>(res)
 
     expect(res.status).toBe(403)
     expect(json.error.code).toBe('signup_not_allowed')
+    expect(signUpMock).not.toHaveBeenCalled()
+  })
+
+  it('503s (fail safe) when the brand lookup errors, without creating an account', async () => {
+    gateMock.mockResolvedValue({ allowed: false, brand: null, lookupFailed: true })
+
+    const res = await POST(
+      makeRequest(validBody, { host: 'app.siffra.se' }),
+    )
+    const { body: json } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(res.status).toBe(503)
+    expect(json.error.code).toBe('brand_lookup_failed')
     expect(signUpMock).not.toHaveBeenCalled()
   })
 
@@ -66,14 +79,14 @@ describe('POST /api/auth/signup', () => {
         { ...validBody, email: '  Kund@Example.COM ' },
         {
           host: 'internal',
-          'x-forwarded-host': 'ziffr.accounted.se',
+          'x-forwarded-host': 'app.siffra.se',
           cookie: 'gnubok-invite-token=gnubok_inv_x',
         },
       ),
     )
 
     expect(gateMock).toHaveBeenCalledWith({
-      host: 'ziffr.accounted.se',
+      host: 'app.siffra.se',
       email: 'kund@example.com',
       inviteToken: 'gnubok_inv_x',
     })
@@ -82,7 +95,7 @@ describe('POST /api/auth/signup', () => {
   it('signs up with a confirmation callback on the originating host', async () => {
     const res = await POST(
       makeRequest(validBody, {
-        'x-forwarded-host': 'ziffr.accounted.se',
+        'x-forwarded-host': 'app.siffra.se',
         'x-forwarded-proto': 'https',
       }),
     )
@@ -94,7 +107,7 @@ describe('POST /api/auth/signup', () => {
       email: 'kund@example.com',
       password: 'Str0ng!Pass',
       options: {
-        emailRedirectTo: 'https://ziffr.accounted.se/auth/callback',
+        emailRedirectTo: 'https://app.siffra.se/auth/callback',
       },
     })
   })

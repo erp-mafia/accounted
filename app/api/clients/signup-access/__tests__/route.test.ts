@@ -34,8 +34,8 @@ import { GET, PATCH, POST, DELETE } from '../route'
 const BRAND = {
   id: 'brand-1',
   teamId: 'team-1',
-  domain: 'ziffr.accounted.se',
-  appName: 'Ziffr',
+  domain: 'app.siffra.se',
+  appName: 'Siffra',
   signupMode: 'invite_only',
 }
 

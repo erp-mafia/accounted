@@ -1191,6 +1191,7 @@
     "password_error_requirements": "The password doesn't meet all the requirements yet.",
     "error_email_invalid": "That email address doesn't look valid. Check the spelling.",
     "error_rate_limited": "Too many attempts. Wait a moment and try again.",
+    "error_temporary": "Temporary error. Please try again shortly.",
     "error_signup_disabled": "Account registration is turned off on this installation. Contact the person who invited you or your administrator to get an account.",
     "create_account": "Create account",
     "creating": "Creating account...",

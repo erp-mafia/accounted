@@ -115,7 +115,13 @@ export default function SignupAccessManager({ canEdit }: { canEdit: boolean }) {
         })
         return
       }
-      setData({ ...data, entries: [json.data as AllowlistEntry, ...data.entries] })
+      // Functional update: a concurrent mode toggle or remove must not be
+      // clobbered by the `data` snapshot captured when this request started.
+      setData((current) =>
+        current
+          ? { ...current, entries: [json.data as AllowlistEntry, ...current.entries] }
+          : current,
+      )
       setEmail('')
       setNote('')
     } catch {
@@ -135,7 +141,13 @@ export default function SignupAccessManager({ canEdit }: { canEdit: boolean }) {
         body: JSON.stringify({ id }),
       })
       if (!res.ok) throw new Error(`DELETE failed: ${res.status}`)
-      setData({ ...data, entries: data.entries.filter((entry) => entry.id !== id) })
+      // Functional update: see addEntry. Avoids clobbering a concurrent
+      // mode toggle or add with a stale snapshot.
+      setData((current) =>
+        current
+          ? { ...current, entries: current.entries.filter((entry) => entry.id !== id) }
+          : current,
+      )
     } catch {
       toast({ title: t('access_save_failed'), variant: 'destructive' })
     } finally {

@@ -37,7 +37,7 @@ async function insertBrand(teamId: string, signupMode?: string): Promise<string>
   const id = randomUUID()
   await getPool().query(
     `INSERT INTO public.brands (id, team_id, domain, app_name, brand_color, support_email, signup_mode)
-     VALUES ($1, $2, $3, 'Ziffr', '#2563eb', 'support@ziffr.se', COALESCE($4, 'open'))`,
+     VALUES ($1, $2, $3, 'Siffra', '#2563eb', 'support@siffra.se', COALESCE($4, 'open'))`,
     [id, teamId, `${randomUUID().slice(0, 8)}.accounted.se`, signupMode ?? null],
   )
   return id
@@ -175,6 +175,10 @@ describe('brand_signup_allowlist: RLS', () => {
     await addTeamMember(teamId, member, 'member')
     const brandId = await insertBrand(teamId)
 
+    // Admin INSERT passes the WITH CHECK (no 42501). withUserContext always
+    // rolls back, so this asserts the policy allows the write; it does not
+    // persist. The persistent row for the DELETE assertions is seeded on the
+    // superuser pool below.
     await withUserContext(admin, async (client) => {
       await client.query(
         `INSERT INTO public.brand_signup_allowlist (brand_id, email, created_by)
@@ -197,6 +201,11 @@ describe('brand_signup_allowlist: RLS', () => {
     }
     expect(sqlstate).toBe('42501')
 
+    // Seed a row that persists (superuser pool, no rollback) so the DELETE
+    // assertions below act on a real row: member DELETE must be RLS-filtered
+    // to zero, owner DELETE must remove the one row.
+    await insertAllowlistEntry(brandId, 'target@example.com')
+
     // Plain member DELETE is silently filtered to zero rows.
     await withUserContext(member, async (client) => {
       const deleted = await client.query(
@@ -206,6 +215,7 @@ describe('brand_signup_allowlist: RLS', () => {
       expect(deleted.rowCount).toBe(0)
     })
 
+    // The member's rolled-back DELETE left the row intact; owner removes it.
     await withUserContext(owner, async (client) => {
       const deleted = await client.query(
         `DELETE FROM public.brand_signup_allowlist WHERE brand_id = $1`,
