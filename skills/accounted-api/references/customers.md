@@ -44,6 +44,39 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "articles": [
+      {
+        "id": "0e9c…",
+        "article_number": "A-0001",
+        "name": "Takarbete",
+        "name_en": null,
+        "type": "tjanst",
+        "unit": "tim",
+        "price_excl_vat": 850,
+        "currency": "SEK",
+        "vat_rate": 25,
+        "revenue_account": null,
+        "cost_price": null,
+        "ean": null,
+        "housework_type": "BYGG",
+        "notes": null,
+        "active": true,
+        "created_at": "2026-05-01T09:14:33Z",
+        "updated_at": "2026-05-01T09:14:33Z"
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/customers`
@@ -74,6 +107,30 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "id": "a8f1…",
+      "name": "Acme AB",
+      "customer_type": "business",
+      "email": "finance@acme.example",
+      "org_number": "556677-8899",
+      "vat_number": "SE556677889901",
+      "default_payment_terms": 30,
+      "archived_at": null,
+      "created_at": "2025-04-12T08:30:00Z"
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12",
+    "next_cursor": null
   }
 }
 ```
@@ -128,6 +185,17 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "name": "Acme AB",
+  "customer_type": "swedish_business",
+  "email": "finance@acme.test",
+  "org_number": "556677-8899",
+  "default_payment_terms": 30
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -162,6 +230,28 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "name": "Acme AB",
+    "customer_type": "swedish_business",
+    "email": "finance@acme.test",
+    "org_number": "556677-8899",
+    "vat_number_validated": false,
+    "default_payment_terms": 30,
+    "archived_at": null,
+    "created_at": "2026-05-12T16:00:00Z",
+    "updated_at": "2026-05-12T16:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -226,6 +316,30 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "a8f1…",
+    "name": "Acme AB",
+    "customer_type": "business",
+    "email": "finance@acme.example",
+    "org_number": "556677-8899",
+    "vat_number": "SE556677889901",
+    "vat_number_validated": true,
+    "country": "Sweden",
+    "default_payment_terms": 30,
+    "archived_at": null,
+    "created_at": "2025-04-12T08:30:00Z",
+    "updated_at": "2026-04-30T11:22:09Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `PATCH /api/v1/companies/{companyId}/customers/{id}`
@@ -275,6 +389,14 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "default_payment_terms": 14,
+  "notes": "New payment terms agreed 2026-05-12."
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -309,6 +431,22 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "name": "Acme AB",
+    "default_payment_terms": 14,
+    "notes": "New payment terms agreed 2026-05-12."
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -367,6 +505,24 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "customers": [
+    {
+      "name": "Acme AB",
+      "customer_type": "swedish_business",
+      "org_number": "556677-8899"
+    },
+    {
+      "name": "Foo OY",
+      "customer_type": "eu_business",
+      "vat_number": "FI12345678"
+    }
+  ]
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -380,6 +536,41 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "results": [
+      {
+        "ok": true,
+        "request_index": 0,
+        "data": {
+          "id": "0e9c…",
+          "name": "Acme AB"
+        }
+      },
+      {
+        "ok": true,
+        "request_index": 1,
+        "data": {
+          "id": "4d2a…",
+          "name": "Foo OY"
+        }
+      }
+    ],
+    "summary": {
+      "total": 2,
+      "succeeded": 2,
+      "failed": 0
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```

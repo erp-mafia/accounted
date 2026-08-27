@@ -35,6 +35,27 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "id": "8fd5b1f4-…",
+      "name": "Acme AB",
+      "org_number": "556677-8899",
+      "entity_type": "aktiebolag",
+      "role": "owner",
+      "created_at": "2025-01-04T08:00:00Z"
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12",
+    "next_cursor": null
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies`
@@ -75,6 +96,19 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "name": "Acme AB",
+  "entity_type": "aktiebolag",
+  "org_number": "5566778899",
+  "vat_registered": true,
+  "moms_period": "quarterly",
+  "accounting_method": "accrual",
+  "f_skatt": true
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -95,6 +129,31 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "8fd5b1f4-…",
+    "name": "Acme AB",
+    "entity_type": "aktiebolag",
+    "org_number": "5566778899",
+    "vat_registered": true,
+    "moms_period": "quarterly",
+    "accounting_method": "accrual",
+    "fiscal_period": {
+      "start_date": "2026-01-01",
+      "end_date": "2026-12-31",
+      "name": "Räkenskapsår 2026"
+    },
+    "team_id": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -143,6 +202,14 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "bankgiro": "991-2346",
+  "contact_person": "Anna Andersson"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -172,6 +239,32 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "company_id": "aaaa1111-2222-4333-8444-555566667777",
+    "bank_name": "Testbanken",
+    "clearing_number": null,
+    "account_number": null,
+    "bankgiro": "991-2346",
+    "plusgiro": null,
+    "swish": null,
+    "iban": null,
+    "bic": null,
+    "contact_person": "Anna Andersson",
+    "email": "faktura@acme.example",
+    "phone": null,
+    "website": null,
+    "invoice_email_texts": null
+  },
+  "meta": {
+    "request_id": "req_...",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/health`
@@ -197,6 +290,22 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "status": "ok",
+    "service": "gnubok",
+    "api_version": "2026-05-12",
+    "timestamp": "2026-05-12T16:25:06Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -243,6 +352,35 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "operation_id": "0e9c-…",
+    "type": "fiscal_periods.year_end",
+    "status": "succeeded",
+    "progress": {
+      "phase": "committed",
+      "current": 142,
+      "total": 142
+    },
+    "result": {
+      "journal_entries_created": 4,
+      "opening_balances_set": 138
+    },
+    "error": null,
+    "started_at": "2026-05-12T10:01:23Z",
+    "completed_at": "2026-05-12T10:01:48Z",
+    "poll_url": "/api/v1/operations/0e9c-…",
+    "webhook_event": "operation.completed"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
