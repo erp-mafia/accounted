@@ -39,6 +39,8 @@ export interface Brand {
   senderDomain: string | null
   senderDomainStatus: 'unverified' | 'pending' | 'verified' | 'failed'
   resendDomainId: string | null
+  /** 'invite_only' arms the signup gate (lib/auth/brand-signup-gate.ts). */
+  signupMode: 'open' | 'invite_only'
 }
 
 interface BrandRow {
@@ -56,6 +58,7 @@ interface BrandRow {
   sender_domain: string | null
   sender_domain_status: string
   resend_domain_id: string | null
+  signup_mode?: string | null
 }
 
 function mapRow(row: BrandRow): Brand {
@@ -74,6 +77,9 @@ function mapRow(row: BrandRow): Brand {
     senderDomain: row.sender_domain,
     senderDomainStatus: row.sender_domain_status as Brand['senderDomainStatus'],
     resendDomainId: row.resend_domain_id,
+    // Anything but the explicit invite_only value reads as 'open' so the
+    // additive guarantee holds even against a stale schema cache.
+    signupMode: row.signup_mode === 'invite_only' ? 'invite_only' : 'open',
   }
 }
 

@@ -1,6 +1,7 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
+import { headers } from 'next/headers'
+import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { setActiveCompany, CompanyContextError } from '@/lib/company/context'
 import { revalidatePath } from 'next/cache'
 import { createCompanyCore } from '@/lib/company/create-company'
@@ -120,6 +121,52 @@ async function createCompanyFromOnboardingImpl(params: {
     }
   }
 
+  // Brand-host signup homing (2026-08-27): when this wizard runs on an
+  // invite-only brand host and the creating user is on the brand's signup
+  // allowlist, the company attaches to the brand's byrå team via the
+  // create_company_for_brand_signup RPC (which re-checks the allowlist).
+  // Without this the company would get the personal team and the home-domain
+  // rule (WL-01) would home it on the canonical domain, invisible on the
+  // very brand domain the user signed up on. Only the personal-team path is
+  // rerouted: an explicit byrå-team creation (the cockpit's new-client flow)
+  // already passed the byrå team and stays under the WL-15 admin gate above.
+  let createCompanyRow: () => PromiseLike<{ data: unknown; error: unknown }> =
+    () =>
+      supabase.rpc('create_company_with_owner', {
+        p_name: companyName,
+        p_entity_type: entityType,
+        p_team_id: params.teamId,
+      })
+
+  if ((teamRow as { kind?: string } | null)?.kind !== 'byra' && user.email) {
+    // Dynamic imports: this file is imported by client components (through
+    // switch-client.ts) for its other actions, and these two modules reach
+    // node:crypto; a static import would drag Node builtins into the client
+    // graph (client-node-builtin guard). Server actions always execute
+    // server-side, so the dynamic import is free here.
+    const [{ resolveBrandByHost }, { isEmailOnBrandAllowlist }] = await Promise.all([
+      import('@/lib/branding/resolve'),
+      import('@/lib/auth/brand-signup-gate'),
+    ])
+    const requestHeaders = await headers()
+    const host =
+      requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host') ?? ''
+    const hostBrand = host ? await resolveBrandByHost(host) : null
+    if (
+      hostBrand?.signupMode === 'invite_only' &&
+      (await isEmailOnBrandAllowlist(hostBrand.id, user.email))
+    ) {
+      const serviceClient = createServiceClient()
+      createCompanyRow = () =>
+        serviceClient.rpc('create_company_for_brand_signup', {
+          p_user_id: user.id,
+          p_name: companyName,
+          p_entity_type: entityType,
+          p_brand_id: hostBrand.id,
+        })
+    }
+  }
+
   // Steps 1-5 (company + owner via RPC, org number, TIC snapshot, chart,
   // settings, fiscal period, tax deadlines, with rollback) are shared with
   // the MCP and v1 creation paths: lib/company/create-company.ts.
@@ -133,12 +180,7 @@ async function createCompanyFromOnboardingImpl(params: {
       fiscalPeriod: params.fiscalPeriod,
       ticLookup: params.ticLookup,
     },
-    () =>
-      supabase.rpc('create_company_with_owner', {
-        p_name: companyName,
-        p_entity_type: entityType,
-        p_team_id: params.teamId,
-      }),
+    createCompanyRow,
   )
   if (created.error !== undefined) {
     return { error: created.error }

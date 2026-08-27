@@ -36,6 +36,10 @@ import {
 } from './lib/bankid-flow-cookie'
 import { lookupCompanyByOrgNumber, registrationDateToMs } from './lib/lookup'
 import { hashPersonalNumber, encryptPersonalNumberForStorage } from '@/lib/auth/bankid'
+import {
+  evaluateBrandSignupGate,
+  readInviteTokenFromCookieHeader,
+} from '@/lib/auth/brand-signup-gate'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createServiceClient } from '@/lib/supabase/server'
 import { createLogger } from '@/lib/logger'
@@ -1108,6 +1112,30 @@ export const ticExtension: Extension = {
               { error: 'already_linked', message: 'This BankID is already linked to an account' },
               { status: 409 }
             ))
+          }
+
+          // Invite-only brand domain gate (founder decision 2026-08-27):
+          // same rule POST /api/auth/signup enforces on the email path. Runs
+          // AFTER the existing-identity check so a returning user's login is
+          // never blocked, and before anything is created or consumed:
+          // deliberately NOT settled, so the visitor keeps the completed
+          // BankID identification if the byrå allowlists them mid-flow.
+          const gateResult = await evaluateBrandSignupGate({
+            host:
+              request.headers.get('x-forwarded-host') ??
+              request.headers.get('host') ??
+              '',
+            email: trimmedEmail!,
+            inviteToken: readInviteTokenFromCookieHeader(request.headers.get('cookie')),
+          })
+          if (!gateResult.allowed) {
+            return NextResponse.json(
+              {
+                error: 'signup_not_allowed',
+                message: 'Registrering på den här domänen kräver inbjudan.',
+              },
+              { status: 403 }
+            )
           }
 
           // Create new Supabase user. Email uniqueness is checked by createUser
