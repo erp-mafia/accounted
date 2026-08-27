@@ -59,7 +59,10 @@ export function FiscalYearsManager() {
   // Newest first: matches the API's ordering and reads most-recent-at-top.
   const sorted = [...periods].sort((a, b) => b.period_start.localeCompare(a.period_start))
 
-  async function runLockAction(period: FiscalPeriod, action: 'lock' | 'unlock') {
+  async function runLockAction(
+    period: FiscalPeriod,
+    action: 'lock' | 'unlock' | 'reopen-external',
+  ) {
     setMutatingId(period.id)
     try {
       const res = await fetch(`/api/bookkeeping/fiscal-periods/${period.id}/${action}`, {
@@ -71,7 +74,14 @@ export function FiscalYearsManager() {
         // saknar bokföring", which tells the user exactly what to fix first.
         throw new Error(body?.error?.message || t('fy_action_error'))
       }
-      toast({ title: action === 'lock' ? t('fy_lock_success') : t('fy_unlock_success') })
+      toast({
+        title:
+          action === 'lock'
+            ? t('fy_lock_success')
+            : action === 'unlock'
+              ? t('fy_unlock_success')
+              : t('fy_reopen_success'),
+      })
       await refreshPeriods()
     } catch (err) {
       toast({
@@ -106,6 +116,21 @@ export function FiscalYearsManager() {
     if (ok) await runLockAction(period, 'unlock')
   }
 
+  // Undo "klarmarkera" (year marked as closed in a previous bookkeeping
+  // system). Only offered while the closed state still comes from that mark:
+  // a year closed by a real year-end run keeps its closing entry and stays
+  // closed here.
+  async function handleReopen(period: FiscalPeriod) {
+    const ok = await confirm({
+      title: t('fy_reopen_confirm_title'),
+      description: t('fy_reopen_confirm_body', { name: period.name }),
+      confirmLabel: t('fy_action_reopen'),
+      cancelLabel: t('fy_confirm_cancel'),
+      variant: 'warning',
+    })
+    if (ok) await runLockAction(period, 'reopen-external')
+  }
+
   return (
     <SettingsGroup label={t('fy_heading')} help={t('fy_help')}>
       {isLoading ? (
@@ -122,6 +147,8 @@ export function FiscalYearsManager() {
         sorted.map((p) => {
           const status = periodStatus(p)
           const isMutating = mutatingId === p.id
+          const closedExternally = status === 'closed' && p.closed_externally === true
+          const canReopen = canManage && closedExternally && !p.closing_entry_id
           return (
             <div key={p.id} className="flex items-center gap-3 border-b border-border px-1 py-3">
               <div className="min-w-0 flex-1">
@@ -134,7 +161,9 @@ export function FiscalYearsManager() {
                 {status === 'open' ? (
                   <span className="text-xs text-muted-foreground">{t('fy_status_open')}</span>
                 ) : (
-                  <Badge variant={STATUS_VARIANT[status]}>{t(`fy_status_${status}`)}</Badge>
+                  <Badge variant={STATUS_VARIANT[status]}>
+                    {closedExternally ? t('fy_status_closed_external') : t(`fy_status_${status}`)}
+                  </Badge>
                 )}
                 {canManage && status === 'open' && (
                   <Button
@@ -180,6 +209,24 @@ export function FiscalYearsManager() {
                       <>
                         <Unlock className="mr-1.5 h-4 w-4" />
                         {t('fy_action_unlock')}
+                      </>
+                    )}
+                  </Button>
+                )}
+                {canReopen && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-muted-foreground hover:text-foreground"
+                    disabled={isMutating}
+                    onClick={() => handleReopen(p)}
+                  >
+                    {isMutating ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <>
+                        <Unlock className="mr-1.5 h-4 w-4" />
+                        {t('fy_action_reopen')}
                       </>
                     )}
                   </Button>

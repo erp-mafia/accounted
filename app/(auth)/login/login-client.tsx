@@ -249,9 +249,13 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
           return
         }
 
-        // Always land on the picker after BankID login so the user sees
-        // fresh CompanyRoles fetched during this session's enrichment.
-        router.push('/select-company')
+        // Byrå staff on their byrå's home domain land in the cockpit
+        // (WL-14). Everyone else keeps the picker: landing on
+        // /select-company after BankID is deliberate, so the user sees
+        // fresh CompanyRoles fetched during this session's enrichment
+        // (and any failure inside the helper degrades to it).
+        const dest = await resolvePostLoginDestination()
+        router.push(dest === '/clients' ? '/clients' : '/select-company')
         router.refresh()
       } catch (error) {
         console.error('[login] BankID complete error', error)

@@ -25,7 +25,39 @@ vi.mock('@/lib/auth/invite-tokens', () => ({
   hashInviteToken: vi.fn(),
 }))
 
+// Default '/' keeps every pre-WL-14 expectation intact: the helper resolving
+// '/' is byte-identical to the old hardcoded dashboard redirect.
+const resolveLandingDestinationMock = vi.fn()
+vi.mock('@/lib/company/landing-server', () => ({
+  resolveLandingDestination: async (...args: unknown[]) =>
+    (await resolveLandingDestinationMock(...args)) ?? '/',
+}))
+
 import { GET } from '../route'
+
+// Shared by the MCP OAuth consent and WL-14 describe blocks: an SSR client
+// whose team_members lookup finds an existing membership.
+function clientWithTeamMembership() {
+  const chain: Record<string, ReturnType<typeof vi.fn>> = {
+    select: vi.fn(() => chain),
+    eq: vi.fn(() => chain),
+    limit: vi.fn(() => chain),
+    maybeSingle: vi.fn().mockResolvedValue({ data: { team_id: 'team-1' }, error: null }),
+  }
+  return {
+    auth: {
+      verifyOtp,
+      exchangeCodeForSession,
+      getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
+      mfa: {
+        getAuthenticatorAssuranceLevel: vi.fn().mockResolvedValue({ data: null }),
+        listFactors: vi.fn().mockResolvedValue({ data: null }),
+      },
+    },
+    from: vi.fn(() => chain),
+    rpc: vi.fn(),
+  }
+}
 
 describe('GET /auth/callback: recovery flow', () => {
   beforeEach(() => {
@@ -160,28 +192,6 @@ describe('GET /auth/callback: resuming an MCP OAuth consent flow (issue #1814)',
   // for a fresh session; anything else still lands on the dashboard.
   const CONSENT = '/api/mcp-oauth/authorize?response_type=code&state=xyz'
 
-  function clientWithTeamMembership() {
-    const chain: Record<string, ReturnType<typeof vi.fn>> = {
-      select: vi.fn(() => chain),
-      eq: vi.fn(() => chain),
-      limit: vi.fn(() => chain),
-      maybeSingle: vi.fn().mockResolvedValue({ data: { team_id: 'team-1' }, error: null }),
-    }
-    return {
-      auth: {
-        verifyOtp,
-        exchangeCodeForSession,
-        getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
-        mfa: {
-          getAuthenticatorAssuranceLevel: vi.fn().mockResolvedValue({ data: null }),
-          listFactors: vi.fn().mockResolvedValue({ data: null }),
-        },
-      },
-      from: vi.fn(() => chain),
-      rpc: vi.fn(),
-    }
-  }
-
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(createServerClient).mockImplementation(() => clientWithTeamMembership() as never)
@@ -237,5 +247,55 @@ describe('GET /auth/callback: resuming an MCP OAuth consent flow (issue #1814)',
     const response = await GET(request)
 
     expect(response.headers.get('location')).toBe('http://localhost:3000/')
+  })
+})
+
+describe('GET /auth/callback: WL-14 cockpit landing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(createServerClient).mockImplementation(() => clientWithTeamMembership() as never)
+  })
+
+  it('lands byrå staff in the cockpit when the helper resolves /clients', async () => {
+    verifyOtp.mockResolvedValue({ error: null })
+    resolveLandingDestinationMock.mockResolvedValue('/clients')
+
+    const request = new NextRequest(
+      'http://localhost:3000/auth/callback?token_hash=abc&type=magiclink',
+      { headers: { 'x-forwarded-host': 'app.amnas.se' } }
+    )
+    const response = await GET(request)
+
+    expect(response.headers.get('location')).toBe('http://localhost:3000/clients')
+    expect(resolveLandingDestinationMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'user-1',
+      'app.amnas.se'
+    )
+  })
+
+  it('degrades to the dashboard when the helper throws', async () => {
+    verifyOtp.mockResolvedValue({ error: null })
+    resolveLandingDestinationMock.mockRejectedValue(new Error('brands unavailable'))
+
+    const request = new NextRequest(
+      'http://localhost:3000/auth/callback?token_hash=abc&type=magiclink'
+    )
+    const response = await GET(request)
+
+    expect(response.headers.get('location')).toBe('http://localhost:3000/')
+  })
+
+  it('never consults the helper when next resumes the MCP OAuth consent flow', async () => {
+    verifyOtp.mockResolvedValue({ error: null })
+    const consent = '/api/mcp-oauth/authorize?response_type=code&state=xyz'
+
+    const request = new NextRequest(
+      `http://localhost:3000/auth/callback?token_hash=abc&type=signup&next=${encodeURIComponent(consent)}`
+    )
+    const response = await GET(request)
+
+    expect(response.headers.get('location')).toBe(`http://localhost:3000${consent}`)
+    expect(resolveLandingDestinationMock).not.toHaveBeenCalled()
   })
 })

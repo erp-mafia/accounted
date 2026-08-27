@@ -340,6 +340,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const { identity: agentIdentity } = useAgentSheet()
   const tNav = useTranslations('nav')
   const tCommon = useTranslations('common')
+  const tSwitcher = useTranslations('company_switcher')
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [isClosing, setIsClosing] = useState(false)
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -374,11 +375,27 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   }
   const cockpitMode =
     !!byraTeam && (onSettings ? lastNonSettingsCockpit || ctxByra : onCockpitPath)
+  // Where "Tillbaka till klienter" points (home-domain rule, WL-01): absolute
+  // URL when the byrå cockpit is homed on another host (resolveCockpitHref in
+  // the layout), relative '/clients' otherwise. The layout's pre-brand
+  // no-company branch leaves cockpitHref unset; there the relative fallback
+  // reproduces the pre-cockpitHref link exactly on the cockpit/settings
+  // surfaces that branch can render. Cross-host hops render a plain <a>
+  // (no client-router prefetch across origins) and carry a "Hanteras via"
+  // hint, since the other host will ask for a login (per-host sessions).
+  const cockpitHref = byraTeam?.cockpitHref ?? '/clients'
+  const cockpitExternal = cockpitHref.startsWith('https://')
+  const cockpitHint = cockpitExternal
+    ? tSwitcher('managed_via', { domain: new URL(cockpitHref).hostname })
+    : null
   // Byrå-scope surfaces, not company surfaces: they must stay reachable even
   // when the active company is unresolved.
   const ALWAYS_ENABLED = new Set(['/settings', '/clients', '/byra', '/byra/automations', '/byra/kpi'])
   const isItemEnabled = (href: string) => {
-    const base = href.split('?')[0]
+    // The back-to-clients link may be absolute (cross-host cockpit); judge
+    // it by its path so it stays as reachable as the relative form.
+    const path = href.startsWith('https://') ? new URL(href).pathname : href
+    const base = path.split('?')[0]
     return hasCompany || ALWAYS_ENABLED.has(base) || base.startsWith('/settings')
   }
   type ExpandableGroup = Exclude<GroupKey, 'top'>
@@ -726,12 +743,22 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   // Collapsed 64px rail: icon-only rows, native title tooltips, count
   // bubbles pinned to the icon corner.
   const renderRailItem = (
-    item: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard; comingSoon?: boolean },
+    item: {
+      href: string
+      labelKey: NavLabelKey
+      icon: typeof LayoutDashboard
+      comingSoon?: boolean
+      /** Cross-origin href: render a plain <a>, no client-router prefetch. */
+      external?: boolean
+      /** Extra tooltip context (e.g. "Hanteras via {domain}"). */
+      hint?: string | null
+    },
   ) => {
     const active = isActive(item.href)
     const enabled = isItemEnabled(item.href) && !item.comingSoon
     const badge = badgeFor(item.href)
     const label = tNav(item.labelKey)
+    const title = item.hint ? `${label} · ${item.hint}` : label
     const inner = (
       <span className="relative">
         {renderNavIcon(
@@ -751,12 +778,19 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
         ? cn('transition-colors duration-150', active ? 'bg-secondary' : 'hover:bg-secondary/60')
         : 'opacity-40 cursor-not-allowed',
     )
+    if (enabled && item.external) {
+      return (
+        <a key={item.href} href={item.href} className={baseClass} title={title} aria-label={title}>
+          {inner}
+        </a>
+      )
+    }
     return enabled ? (
-      <NavLink key={item.href} href={item.href} className={baseClass} title={label} aria-label={label}>
+      <NavLink key={item.href} href={item.href} className={baseClass} title={title} aria-label={title}>
         {inner}
       </NavLink>
     ) : (
-      <div key={item.href} className={baseClass} title={label} aria-disabled="true">
+      <div key={item.href} className={baseClass} title={title} aria-disabled="true">
         {inner}
       </div>
     )
@@ -823,7 +857,13 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 {/* Rail counterpart of the back-to-clients link. */}
                 {byraTeam &&
                   !cockpitMode &&
-                  renderRailItem({ href: '/clients', labelKey: 'back_to_clients', icon: ArrowLeft })}
+                  renderRailItem({
+                    href: cockpitHref,
+                    labelKey: 'back_to_clients',
+                    icon: ArrowLeft,
+                    external: cockpitExternal,
+                    hint: cockpitHint,
+                  })}
                 {railItems.map((item) => renderRailItem(item))}
                 {visibleExtensionNavItems.map((item) => {
                   const Icon = resolveIcon(item.icon)
@@ -867,13 +907,32 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                   cockpit, above everything, separated by a hairline. */}
               {byraTeam && !cockpitMode && (
                 <div className="mb-2">
-                  <NavLink
-                    href="/clients"
-                    className="group flex items-center px-3 py-[7px] text-[13px] rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors duration-150"
-                  >
-                    <ArrowLeft className="mr-2.5 h-[15px] w-[15px] flex-shrink-0 text-muted-foreground group-hover:text-foreground" />
-                    <span className="flex-1">{tNav('back_to_clients')}</span>
-                  </NavLink>
+                  {cockpitExternal ? (
+                    <a
+                      href={cockpitHref}
+                      title={cockpitHint ?? undefined}
+                      className="group flex items-center px-3 py-[7px] text-[13px] rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors duration-150"
+                    >
+                      <ArrowLeft className="mr-2.5 h-[15px] w-[15px] flex-shrink-0 text-muted-foreground group-hover:text-foreground" />
+                      <span className="flex-1 min-w-0">
+                        <span className="block">{tNav('back_to_clients')}</span>
+                        {/* Visible cross-host hint: title alone never surfaces
+                            on touch, and the hop lands on the other host's
+                            login (per-host sessions), so say where it goes. */}
+                        <span className="block truncate text-[11px] text-muted-foreground">
+                          {cockpitHint}
+                        </span>
+                      </span>
+                    </a>
+                  ) : (
+                    <NavLink
+                      href={cockpitHref}
+                      className="group flex items-center px-3 py-[7px] text-[13px] rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors duration-150"
+                    >
+                      <ArrowLeft className="mr-2.5 h-[15px] w-[15px] flex-shrink-0 text-muted-foreground group-hover:text-foreground" />
+                      <span className="flex-1">{tNav('back_to_clients')}</span>
+                    </NavLink>
+                  )}
                   <div className="mx-3 mt-2 border-t border-border/60" />
                 </div>
               )}
@@ -1099,14 +1158,31 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
               {/* Byrå members inside a company: route back to the cockpit. */}
               {byraTeam && !cockpitMode && (
                 <div className="mb-1.5">
-                  <NavLink
-                    href="/clients"
-                    onClick={closeMobileMenu}
-                    className="flex items-center gap-3 px-3 min-h-[44px] rounded-lg text-foreground active:bg-muted/60 transition-colors"
-                  >
-                    <ArrowLeft className="h-[18px] w-[18px] flex-shrink-0 text-muted-foreground" />
-                    <span className="text-sm flex-1">{tNav('back_to_clients')}</span>
-                  </NavLink>
+                  {cockpitExternal ? (
+                    <a
+                      href={cockpitHref}
+                      onClick={closeMobileMenu}
+                      className="flex items-center gap-3 px-3 min-h-[44px] rounded-lg text-foreground active:bg-muted/60 transition-colors"
+                    >
+                      <ArrowLeft className="h-[18px] w-[18px] flex-shrink-0 text-muted-foreground" />
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-sm">{tNav('back_to_clients')}</span>
+                        {/* Visible cross-host hint: touch has no title tooltip. */}
+                        <span className="block truncate text-[11px] text-muted-foreground">
+                          {cockpitHint}
+                        </span>
+                      </span>
+                    </a>
+                  ) : (
+                    <NavLink
+                      href={cockpitHref}
+                      onClick={closeMobileMenu}
+                      className="flex items-center gap-3 px-3 min-h-[44px] rounded-lg text-foreground active:bg-muted/60 transition-colors"
+                    >
+                      <ArrowLeft className="h-[18px] w-[18px] flex-shrink-0 text-muted-foreground" />
+                      <span className="text-sm flex-1">{tNav('back_to_clients')}</span>
+                    </NavLink>
+                  )}
                   <div className="mx-3 mt-1.5 h-px bg-border/30" />
                 </div>
               )}

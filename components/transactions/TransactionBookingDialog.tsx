@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -158,20 +158,9 @@ export default function TransactionBookingDialog({
     return { bankAccount: account, bankAccountName: matched?.name ?? null }
   }, [transaction, cashAccounts, cashAccountsLoading])
 
-  // The dialog is non-modal (see the Dialog below), so Radix does not trap
-  // focus or inert the page. Restore page modality by hand: `inert` on the
-  // dash shell blocks pointer, keyboard, and AT access to the page behind
-  // (including the mobile bottom nav, which sits above the veil), while the
-  // agent sheet (outside the shell) stays live. Same as NewInvoiceDialog.
-  useEffect(() => {
-    if (!open) return
-    const shell = document.getElementById('dash-shell')
-    if (!shell) return
-    shell.inert = true
-    return () => {
-      shell.inert = false
-    }
-  }, [open])
+  // Non-modal dialog (see below): page modality is restored by hand so the
+  // agent sheet stays live. See useDashShellInert in components/ui/dialog.tsx.
+  useDashShellInert(open)
 
   if (!transaction) return null
 
@@ -271,7 +260,11 @@ export default function TransactionBookingDialog({
     }} modal={false}>
       <DialogVeil />
       <DialogContent
-        className="max-w-6xl max-h-[90vh] overflow-y-auto"
+        // Width caps at the space left of a docked agent sheet so the form's
+        // right edge, and the Granska button, never end up unreachable under
+        // the sheet (z-60 over z-50). --agent-sheet-w is docked-only, so with
+        // the sheet closed this is exactly the old max-w-6xl.
+        className="max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto"
         // Non-modal so the agent sheet (fixed z-[60], portaled outside this
         // dialog) stays interactive beside a booking in progress; a click in
         // its text field must not count as outside-dismissal. A half-booked
