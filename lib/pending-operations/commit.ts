@@ -1922,6 +1922,29 @@ async function commitUpdateInvoice(
     return { error: 'Customer not found: they may have been deleted.', status: 404 }
   }
 
+  // Drift/tamper gate for staged article references, same as
+  // commitCreateInvoice: the FK on invoice_items.article_id proves the article
+  // exists, not that it belongs to THIS company, and the top-level arg guard
+  // never sees a nested items[].article_id.
+  if (changes.items) {
+    const stagedArticleIds = Array.from(
+      new Set(changes.items.map((item) => item.article_id).filter((a): a is string => !!a)),
+    )
+    if (stagedArticleIds.length > 0) {
+      const { data: articleRows, error: articleError } = await supabase
+        .from('articles')
+        .select('id')
+        .eq('company_id', companyId)
+        .in('id', stagedArticleIds)
+      if (articleError) return { error: articleError.message, status: 500 }
+      const foundArticleIds = new Set((articleRows ?? []).map((a: { id: string }) => a.id))
+      const missingArticleId = stagedArticleIds.find((a) => !foundArticleIds.has(a))
+      if (missingArticleId) {
+        return { error: `Artikel ${missingArticleId} finns inte i företaget`, status: 400 }
+      }
+    }
+  }
+
   // Effective line set: FULL REPLACE when staged, otherwise the current rows
   // fed back through the builder unchanged.
   let itemsInput: InvoiceWriteItemInput[]
