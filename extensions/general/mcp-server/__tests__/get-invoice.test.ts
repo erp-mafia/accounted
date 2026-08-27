@@ -66,6 +66,9 @@ function invoiceRow(overrides: Record<string, unknown> = {}) {
         deduction_type: null,
         labor_hours: null,
         work_type: null,
+        housing_designation: null,
+        apartment_number: null,
+        brf_org_number: null,
         accrual_period_start: null,
         accrual_period_end: null,
         accrual_balance_account: null,
@@ -87,6 +90,9 @@ function invoiceRow(overrides: Record<string, unknown> = {}) {
         deduction_type: null,
         labor_hours: null,
         work_type: null,
+        housing_designation: null,
+        apartment_number: null,
+        brf_org_number: null,
         accrual_period_start: null,
         accrual_period_end: null,
         accrual_balance_account: null,
@@ -138,7 +144,7 @@ describe('gnubok_get_invoice: registration', () => {
     const itemProps = (
       getInvoice.outputSchema as { properties: { items: { items: { properties: Record<string, unknown> } } } }
     ).properties.items.items.properties
-    for (const key of ['invoice_item_id', 'article_id', 'revenue_account', 'vat_rate', 'line_total', 'dimensions']) {
+    for (const key of ['invoice_item_id', 'article_id', 'revenue_account', 'vat_rate', 'line_total', 'deduction_type', 'housing_designation', 'apartment_number', 'brf_org_number', 'accrual_period_start', 'dimensions']) {
       expect(itemProps[key], key).toBeDefined()
     }
     expect(itemProps.id).toBeUndefined()
@@ -191,6 +197,9 @@ describe('gnubok_get_invoice: execute', () => {
       deduction_type: null,
       labor_hours: null,
       work_type: null,
+      housing_designation: null,
+      apartment_number: null,
+      brf_org_number: null,
       accrual_period_start: null,
       accrual_period_end: null,
       accrual_balance_account: null,
@@ -234,6 +243,45 @@ describe('gnubok_get_invoice: execute', () => {
 
     expect(result.items).toEqual([])
     expect(result.item_count).toBe(0)
+  })
+
+  it('returns the ROT property identifiers per line so a deduction draft can round-trip', async () => {
+    // The housing columns are property identifiers, not personal data; without
+    // them an items update on a ROT draft fails at approval with
+    // 'Fastighetsbeteckning kravs for ROT-avdrag' (rot-rut-rules.ts).
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const base = invoiceRow()
+    const items = (base.items as Array<Record<string, unknown>>).map((row) =>
+      row.id === 'item-1'
+        ? {
+            ...row,
+            deduction_type: 'rot',
+            labor_hours: 10,
+            work_type: 'EL',
+            housing_designation: 'Almgren 1:23',
+            apartment_number: '1101',
+            brf_org_number: '769600-1234',
+          }
+        : row,
+    )
+    enqueue({ data: { ...base, items } })
+
+    const result = (await getInvoice.execute(
+      { invoice_id: INVOICE_ID },
+      COMPANY_ID,
+      USER_ID,
+      supabase as never,
+      { type: 'api_key' } as never,
+    )) as { items: Array<Record<string, unknown>> }
+
+    expect(result.items[0]).toMatchObject({
+      deduction_type: 'rot',
+      labor_hours: 10,
+      work_type: 'EL',
+      housing_designation: 'Almgren 1:23',
+      apartment_number: '1101',
+      brf_org_number: '769600-1234',
+    })
   })
 
   it('never returns the encrypted ROT/RUT personnummer columns even if selected by mistake', async () => {

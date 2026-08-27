@@ -1590,10 +1590,10 @@ async function commitCreateInvoice(
   // (resolveDimensionBags in the MCP tool); coerce is the drift/tamper gate.
   const defaultDimensions = coerceDimensionsBag(params.default_dimensions)
 
-  // Free-text rows carry no amounts and never book. The MCP staging tool does
-  // not accept line_type today, but the totals math must stay identical to
-  // app/api/invoices/route.ts, which excludes text rows from subtotal, VAT,
-  // and the mixed-rate detection.
+  // Free-text rows carry no amounts and never book. The MCP staging tool
+  // accepts line_type 'text' (normalized to zeroed amounts at staging), and
+  // the totals math must stay identical to app/api/invoices/route.ts, which
+  // excludes text rows from subtotal, VAT, and the mixed-rate detection.
   const billableItems = items.filter((item) => item.line_type !== 'text')
 
   const { data: customer, error: customerError } = await supabase

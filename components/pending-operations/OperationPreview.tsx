@@ -207,6 +207,11 @@ interface PreviewInvoiceLine {
   revenue_account?: string | null
   article_id?: string | null
   line_type?: string
+  // ROT/RUT and periodisering markers: a full replace that drops one of
+  // these must be visible to the approver, not only the amounts.
+  deduction_type?: string | null
+  accrual_period_start?: string | null
+  accrual_period_end?: string | null
 }
 
 function isPreviewInvoiceLines(value: unknown): value is PreviewInvoiceLine[] {
@@ -229,6 +234,12 @@ function InvoiceLineRows({ items, currency }: { items: PreviewInvoiceLine[]; cur
             )}
             {item.revenue_account && (
               <span className="text-muted-foreground font-mono"> · {item.revenue_account}</span>
+            )}
+            {item.deduction_type && (
+              <span className="text-muted-foreground"> · {item.deduction_type === 'rot' ? 'ROT-avdrag' : 'RUT-avdrag'}</span>
+            )}
+            {item.accrual_period_start && item.accrual_period_end && (
+              <span className="text-muted-foreground"> · periodiseras {item.accrual_period_start} till {item.accrual_period_end}</span>
             )}
           </span>
           <span className="font-mono tabular-nums whitespace-nowrap">

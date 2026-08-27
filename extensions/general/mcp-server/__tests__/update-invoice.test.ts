@@ -126,6 +126,30 @@ describe('gnubok_update_invoice: registration', () => {
     expect(items.items.required).toEqual(createItems.items.required)
   })
 
+  it('declares the full round-trip line shape (text, ROT/RUT, accrual, account override)', () => {
+    // A schema-conformant agent constructs arguments from the declared
+    // properties: anything undeclared is silently dropped on pass-back, which
+    // is exactly the silent-rebooking class issue #1642 reports.
+    const items = (tool().inputSchema.properties as Record<string, unknown>).items as {
+      items: { properties: Record<string, unknown> }
+    }
+    for (const key of [
+      'line_type',
+      'revenue_account',
+      'deduction_type',
+      'labor_hours',
+      'work_type',
+      'housing_designation',
+      'apartment_number',
+      'brf_org_number',
+      'accrual_period_start',
+      'accrual_period_end',
+      'accrual_balance_account',
+    ]) {
+      expect(items.items.properties[key], key).toBeDefined()
+    }
+  })
+
   it('does not accept structural or server-controlled fields', () => {
     const properties = tool().inputSchema.properties as Record<string, unknown>
     for (const forbidden of ['customer_id', 'currency', 'document_type', 'invoice_number', 'status']) {
@@ -317,6 +341,7 @@ describe('gnubok_update_invoice: validation and staging', () => {
     // The approver sees the per-line booking, not only a row count: a line
     // without an article books by VAT treatment (revenue_account null).
     expect(result.preview.items?.[0]).toEqual({
+      line_type: 'product',
       description: 'Konsultation',
       quantity: 2,
       unit: 'tim',
@@ -325,9 +350,20 @@ describe('gnubok_update_invoice: validation and staging', () => {
       vat_rate: 25,
       revenue_account: null,
       article_id: null,
+      deduction_type: null,
+      accrual_period_start: null,
+      accrual_period_end: null,
     })
-    // ... next to what the replace deletes (the 3041 article line).
-    expect(result.preview.current_items).toEqual(CURRENT_ROWS)
+    // ... next to what the replace deletes (the 3041 article line), with the
+    // ROT/RUT and periodisering markers the approver needs to see a removal.
+    expect(result.preview.current_items).toEqual(
+      CURRENT_ROWS.map((row) => ({
+        ...row,
+        deduction_type: null,
+        accrual_period_start: null,
+        accrual_period_end: null,
+      })),
+    )
     expect(supabase.from).toHaveBeenNthCalledWith(1, 'invoices')
     expect(supabase.from).toHaveBeenNthCalledWith(2, 'customers')
     expect(supabase.from).toHaveBeenNthCalledWith(3, 'invoice_items')
@@ -550,5 +586,272 @@ describe('gnubok_update_invoice: article_id on items (issue #1642)', () => {
         supabase as never,
       ),
     ).rejects.toThrow(/description is required/)
+  })
+})
+
+describe('gnubok_update_invoice: free-text rows (round-trip, issue #1642)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('accepts a text spacer row passed back from gnubok_get_invoice (quantity 0)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueItemsEdit(enqueue, CUSTOMER, null)
+
+    const result = (await tool().execute(
+      {
+        invoice_id: INVOICE_ID,
+        items: [
+          // Exactly the shape gnubok_get_invoice returns for a web-created
+          // spacer row (build-invoice-write stores quantity 0, unit '', price 0).
+          { line_type: 'text', description: 'Avser sprint 12', quantity: 0, unit: '', unit_price: 0, vat_rate: 0 },
+          { description: 'Konsultation', quantity: 2, unit: 'tim', unit_price: 1000, vat_rate: 25 },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedResult
+
+    expect(result.staged).toBe(true)
+    // Totals exclude the text row (commitCreateInvoice billableItems parity).
+    expect(result.preview).toMatchObject({ subtotal: 2000, vat_amount: 500, total: 2500, item_count: 2 })
+    expect(result.preview.items?.[0]).toMatchObject({
+      line_type: 'text',
+      description: 'Avser sprint 12',
+      quantity: 0,
+      line_total: 0,
+      vat_rate: 0,
+    })
+    // The staged params keep the row so the FULL REPLACE does not delete it.
+    expect(result.preview.changes?.items?.[0]).toMatchObject({ line_type: 'text', description: 'Avser sprint 12' })
+  })
+
+  it('does not require description, unit or unit_price on a text row', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueItemsEdit(enqueue, CUSTOMER, null)
+
+    const result = (await tool().execute(
+      {
+        invoice_id: INVOICE_ID,
+        items: [
+          { line_type: 'text', quantity: 0 },
+          { description: 'Konsultation', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25 },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedResult
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.items?.[0]).toMatchObject({ line_type: 'text', description: '', line_total: 0 })
+  })
+
+  it('skips the permitted-VAT gate for text rows (0% is not a real supply)', async () => {
+    // A domestic draft's text row comes back with vat_rate 0: the gate must
+    // not treat it as a zero-rated product line.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueItemsEdit(enqueue, CUSTOMER, null)
+
+    const result = (await tool().execute(
+      {
+        invoice_id: INVOICE_ID,
+        items: [
+          { line_type: 'text', description: 'Mellanrubrik', quantity: 0, unit: '', unit_price: 0, vat_rate: 0 },
+          { description: 'Konsultation', quantity: 1, unit: 'tim', unit_price: 100, vat_rate: 25 },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedResult
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.vat_amount).toBe(25)
+  })
+
+  it('rejects a text row carrying article_id', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice() })
+    enqueue({ data: CUSTOMER })
+
+    await expect(
+      tool().execute(
+        {
+          invoice_id: INVOICE_ID,
+          items: [{ line_type: 'text', article_id: ARTICLE_ID, quantity: 0 }],
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/text row cannot carry article_id/)
+  })
+})
+
+describe('gnubok_update_invoice: ROT/RUT round trip (issue #1642)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  /** A ROT line exactly as gnubok_get_invoice returns it from a web-created draft. */
+  const ROT_LINE = {
+    description: 'Elarbete',
+    quantity: 10,
+    unit: 'tim',
+    unit_price: 800,
+    vat_rate: 25,
+    deduction_type: 'rot',
+    labor_hours: 10,
+    work_type: 'EL',
+    housing_designation: 'Almgren 1:23',
+    apartment_number: null,
+    brf_org_number: null,
+  }
+
+  it('stages a ROT line pass-back with the deduction visible to the approver', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // The draft carries the personnummer as ciphertext: staging only checks
+    // presence and must never stage or return it.
+    enqueue({ data: draftInvoice({ deduction_personnummer_encrypted: 'ROT-CIPHERTEXT' }) })
+    enqueue({ data: CUSTOMER })
+    enqueue({ data: [{ ...CURRENT_ROWS[0], deduction_type: 'rot' }] })
+    enqueue({ data: { id: 'op-invoice-3' } })
+
+    const result = (await tool().execute(
+      { invoice_id: INVOICE_ID, items: [ROT_LINE] },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedResult
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.items?.[0]).toMatchObject({ deduction_type: 'rot' })
+    expect(result.preview.current_items?.[0]).toMatchObject({ deduction_type: 'rot' })
+    // The staged params carry the claim fields the executor derives the
+    // invoice-level property info from (commitUpdateInvoice firstDeduction).
+    expect(result.preview.changes?.items?.[0]).toMatchObject({
+      deduction_type: 'rot',
+      labor_hours: 10,
+      work_type: 'EL',
+      housing_designation: 'Almgren 1:23',
+    })
+    expect(JSON.stringify(result)).not.toContain('ROT-CIPHERTEXT')
+  })
+
+  it('fails at staging, not approval, when a ROT set lacks the property info', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice({ deduction_personnummer_encrypted: 'ROT-CIPHERTEXT' }) })
+    enqueue({ data: CUSTOMER })
+
+    await expect(
+      tool().execute(
+        { invoice_id: INVOICE_ID, items: [{ ...ROT_LINE, housing_designation: null }] },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/housing_designation|fastighetsbeteckning/i)
+    expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
+  })
+
+  it('fails at staging when a deduction line lacks its arbetstyp', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice({ deduction_personnummer_encrypted: 'ROT-CIPHERTEXT' }) })
+    enqueue({ data: CUSTOMER })
+
+    await expect(
+      tool().execute(
+        { invoice_id: INVOICE_ID, items: [{ ...ROT_LINE, work_type: null }] },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/Arbetstyp/)
+    expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
+  })
+
+  it('fails at staging when no personnummer exists on the invoice or the kundkort', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice() }) // no stored ciphertext
+    enqueue({ data: CUSTOMER }) // business customer: no kundkort fallback
+
+    await expect(
+      tool().execute(
+        { invoice_id: INVOICE_ID, items: [ROT_LINE] },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/personnummer/i)
+    expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
+  })
+
+  it('accepts a deduction set when the individual customer card holds a personnummer', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice() }) // no stored ciphertext on the draft
+    enqueue({ data: { customer_type: 'individual', vat_number_validated: false, personal_number: 'enc:v1:abc' } })
+    enqueue({ data: CURRENT_ROWS })
+    enqueue({ data: { id: 'op-invoice-4' } })
+
+    const result = (await tool().execute(
+      { invoice_id: INVOICE_ID, items: [ROT_LINE] },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedResult
+
+    expect(result.staged).toBe(true)
+    expect(JSON.stringify(result)).not.toContain('enc:v1:abc')
+  })
+})
+
+describe('gnubok_update_invoice: accrual and override pass-back (issue #1642)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('keeps periodisering fields on a passed-back line and shows the deferral in the preview', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueItemsEdit(enqueue, CUSTOMER, null)
+
+    const result = (await tool().execute(
+      {
+        invoice_id: INVOICE_ID,
+        items: [
+          {
+            description: 'Licens 12 manader',
+            quantity: 1,
+            unit: 'st',
+            unit_price: 12000,
+            vat_rate: 25,
+            revenue_account: '3051',
+            accrual_period_start: '2026-09-01',
+            accrual_period_end: '2027-08-31',
+            accrual_balance_account: '2990',
+          },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedResult
+
+    expect(result.staged).toBe(true)
+    // Visible to the approver: an update that drops the deferral would show
+    // bare lines here instead.
+    expect(result.preview.items?.[0]).toMatchObject({
+      revenue_account: '3051',
+      accrual_period_start: '2026-09-01',
+      accrual_period_end: '2027-08-31',
+    })
+    // And staged for the executor, so revenue keeps deferring over the period.
+    expect(result.preview.changes?.items?.[0]).toMatchObject({
+      revenue_account: '3051',
+      accrual_period_start: '2026-09-01',
+      accrual_period_end: '2027-08-31',
+      accrual_balance_account: '2990',
+    })
   })
 })

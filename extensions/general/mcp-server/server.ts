@@ -55,6 +55,7 @@ import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
 import { eventBus } from '@/lib/events/bus'
 import { getVatRules, getPermittedVatRates, getArticleVatRateAdoptionSet } from '@/lib/invoices/vat-rules'
+import { validateDeductionLines } from '@/lib/invoices/rot-rut-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { getBranding } from '@/lib/branding/service'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
@@ -288,6 +289,7 @@ import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoic
 // ── Actor context ────────────────────────────────────────────
 
 type StagedInvoiceLineInput = {
+  line_type?: 'product' | 'text'
   description?: string
   quantity: number
   unit?: string
@@ -295,6 +297,19 @@ type StagedInvoiceLineInput = {
   vat_rate?: number
   article_id?: string
   revenue_account?: string | null
+  // ROT/RUT claim fields (CreateInvoiceItemSchema parity). The housing
+  // columns are property identifiers, never the personnummer: the stored
+  // personnummer exists only as ciphertext and never crosses the MCP surface.
+  deduction_type?: 'rot' | 'rut' | null
+  labor_hours?: number | null
+  work_type?: string | null
+  housing_designation?: string | null
+  apartment_number?: string | null
+  brf_org_number?: string | null
+  // Periodisering (förutbetald intäkt): pass-through to the builder.
+  accrual_period_start?: string | null
+  accrual_period_end?: string | null
+  accrual_balance_account?: string | null
   dimensions?: unknown
 }
 
@@ -332,6 +347,23 @@ function resolveInvoiceLineFromArticle(
   index: number,
 ): ResolvedInvoiceLine {
   const lineNo = index + 1
+  // Free-text / spacer rows (web parity, CreateInvoiceItemSchema): no
+  // amounts, never book, exempt from the quantity/description/unit/price
+  // gates. Normalized to the exact zeroed shape build-invoice-write stores so
+  // a gnubok_get_invoice line passes back verbatim.
+  if (item.line_type === 'text') {
+    if (item.article_id) {
+      throw new Error(`Item ${lineNo}: a text row cannot carry article_id (drop line_type or article_id)`)
+    }
+    return {
+      ...item,
+      description: item.description ?? '',
+      quantity: 0,
+      unit: '',
+      unit_price: 0,
+      vat_rate: 0,
+    }
+  }
   if (!item.quantity || item.quantity <= 0) throw new Error(`Item ${lineNo}: quantity must be positive`)
   if (item.article_id && !article) {
     throw new Error(`Item ${lineNo}: article ${item.article_id} not found in this company. Use gnubok_list_articles to find valid IDs.`)
@@ -6255,7 +6287,7 @@ export const tools: McpTool[] = [
         editable_draft: { type: 'boolean', description: 'true when gnubok_update_invoice can edit it' },
         items: {
           type: 'array',
-          description: 'Lines in display order; pass them back to gnubok_update_invoice with article_id kept.',
+          description: 'Lines in display order; pass them back to gnubok_update_invoice verbatim: article, ROT/RUT, accrual and account fields survive only if passed back.',
           items: {
             type: 'object',
             additionalProperties: false,
@@ -6274,6 +6306,9 @@ export const tools: McpTool[] = [
               deduction_type: { type: ['string', 'null'], description: 'rot, rut or null' },
               labor_hours: { type: ['number', 'null'] },
               work_type: { type: ['string', 'null'] },
+              housing_designation: { type: ['string', 'null'], description: 'Fastighetsbeteckning (ROT); property id, not personal data' },
+              apartment_number: { type: ['string', 'null'] },
+              brf_org_number: { type: ['string', 'null'] },
               accrual_period_start: { type: ['string', 'null'] },
               accrual_period_end: { type: ['string', 'null'] },
               accrual_balance_account: { type: ['string', 'null'] },
@@ -6305,7 +6340,7 @@ export const tools: McpTool[] = [
       const { data: invoice, error } = await supabase
         .from('invoices')
         .select(
-          'id, invoice_number, status, document_type, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, labor_hours, work_type, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
+          'id, invoice_number, status, document_type, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
         )
         .eq('id', invoiceId)
         .eq('company_id', companyId)
@@ -6330,6 +6365,9 @@ export const tools: McpTool[] = [
         deduction_type: string | null
         labor_hours: number | null
         work_type: string | null
+        housing_designation: string | null
+        apartment_number: string | null
+        brf_org_number: string | null
         accrual_period_start: string | null
         accrual_period_end: string | null
         accrual_balance_account: string | null
@@ -6355,6 +6393,11 @@ export const tools: McpTool[] = [
         deduction_type: row.deduction_type ?? null,
         labor_hours: row.labor_hours ?? null,
         work_type: row.work_type ?? null,
+        // Property identifiers for the ROT claim, needed for the update round
+        // trip; the encrypted personnummer stays out of this surface.
+        housing_designation: row.housing_designation ?? null,
+        apartment_number: row.apartment_number ?? null,
+        brf_org_number: row.brf_org_number ?? null,
         accrual_period_start: row.accrual_period_start ?? null,
         accrual_period_end: row.accrual_period_end ?? null,
         accrual_balance_account: row.accrual_balance_account ?? null,
@@ -6412,6 +6455,8 @@ export const tools: McpTool[] = [
                 type: 'string',
                 description: 'Optional article UUID from gnubok_list_articles. Prefills description, unit, unit_price, revenue account and, only when compatible with the customer VAT rules, vat_rate. Values set on the line win.',
               },
+              line_type: { type: 'string', enum: ['product', 'text'], description: 'text = free-text row: no amounts, never books.' },
+              revenue_account: { type: ['string', 'null'], description: 'BAS class 1-3 posting-account override.' },
               dimensions: {
                 type: 'object',
                 additionalProperties: { type: 'string' },
@@ -16395,6 +16440,24 @@ export const tools: McpTool[] = [
                 type: 'string',
                 description: 'Optional article UUID from gnubok_list_articles. Prefills description, unit, unit_price, revenue account and, only when compatible with the customer VAT rules, vat_rate. Values set on the line win. Pass it back on every line that should keep its article linkage.',
               },
+              line_type: {
+                type: 'string',
+                enum: ['product', 'text'],
+                description: 'text = free-text/spacer row: no amounts, never books; the quantity/description/unit/price rules are skipped.',
+              },
+              revenue_account: {
+                type: ['string', 'null'],
+                description: 'BAS class 1-3 posting-account override; null books by VAT treatment. Pass back to keep a manual override.',
+              },
+              deduction_type: { type: ['string', 'null'], description: 'rot or rut; pass back or the ROT/RUT-avdrag is removed by the replace.' },
+              labor_hours: { type: ['number', 'null'] },
+              work_type: { type: ['string', 'null'], description: 'Skatteverket arbetstypskod for the deduction line.' },
+              housing_designation: { type: ['string', 'null'], description: 'Fastighetsbeteckning; required on ROT lines.' },
+              apartment_number: { type: ['string', 'null'] },
+              brf_org_number: { type: ['string', 'null'] },
+              accrual_period_start: { type: ['string', 'null'], description: 'YYYY-MM-DD; with accrual_period_end defers the revenue (periodisering). Pass back or the deferral is removed.' },
+              accrual_period_end: { type: ['string', 'null'] },
+              accrual_balance_account: { type: ['string', 'null'], description: '29xx interim account; null = default.' },
               dimensions: {
                 type: 'object',
                 additionalProperties: { type: 'string' },
@@ -16403,7 +16466,7 @@ export const tools: McpTool[] = [
             },
             required: ['quantity'],
           },
-          description: 'FULL REPLACE: every existing line is deleted and this array becomes the new line set. Read the current lines with gnubok_get_invoice first. Omit to keep the current lines.',
+          description: 'FULL REPLACE: every existing line is deleted and this array becomes the new line set. Read the current lines with gnubok_get_invoice first and pass unchanged lines back verbatim (article, ROT/RUT, accrual and account fields survive only if passed back). Omit to keep the current lines.',
         },
         default_dimensions: {
           type: 'object',
@@ -16439,6 +16502,10 @@ export const tools: McpTool[] = [
           )
         }
         for (const [i, item] of rawItems.entries()) {
+          // Text rows are stored with quantity 0 and legitimately come back
+          // that way from gnubok_get_invoice (web parity: the canonical
+          // CreateInvoiceItemSchema exempts them from the quantity rule).
+          if (item.line_type === 'text') continue
           if (!item.quantity || item.quantity <= 0) throw new Error(`Item ${i + 1}: quantity must be positive`)
         }
       }
@@ -16454,9 +16521,12 @@ export const tools: McpTool[] = [
       // The draft first: its customer (VAT rules for the article prefill) and
       // its currency (article price prefill) are structural and come from the
       // stored row, never from the arguments.
+      // deduction_personnummer_encrypted is fetched ONLY as a presence check
+      // for the ROT/RUT staging gate below; the ciphertext is never staged,
+      // previewed, or returned.
       const { data: invoice, error } = await supabase
         .from('invoices')
-        .select('id, invoice_number, status, document_type, journal_entry_id, is_self_billed, credited_invoice_id, total, currency, customer_id, customer:customers(name)')
+        .select('id, invoice_number, status, document_type, journal_entry_id, is_self_billed, credited_invoice_id, total, currency, customer_id, deduction_personnummer_encrypted, customer:customers(name)')
         .eq('id', invoiceId)
         .eq('company_id', companyId)
         .maybeSingle()
@@ -16490,9 +16560,12 @@ export const tools: McpTool[] = [
       let vatAmount = 0
       let currentItems: Array<Record<string, unknown>> | undefined
       if (rawItems !== undefined) {
+        // personal_number is fetched ONLY as a presence check for the ROT/RUT
+        // staging gate below (commit falls back to the kundkort personnummer
+        // for individuals); never decrypted, staged, or returned here.
         const { data: customer, error: custError } = await supabase
           .from('customers')
-          .select('customer_type, vat_number_validated')
+          .select('customer_type, vat_number_validated, personal_number')
           .eq('id', invoice.customer_id)
           .eq('company_id', companyId)
           .single()
@@ -16533,6 +16606,9 @@ export const tools: McpTool[] = [
         const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated)
         const allowedRates = new Set(permittedRates.map((r) => r.rate))
         for (const item of items) {
+          // Text rows carry no amounts and never book: exclude them from the
+          // VAT gate and the totals, like commitCreateInvoice's billableItems.
+          if (item.line_type === 'text') continue
           const itemRate = item.vat_rate ?? vatRules.rate
           if (!allowedRates.has(itemRate)) {
             throw new Error(
@@ -16545,12 +16621,59 @@ export const tools: McpTool[] = [
           vatAmount += roundOre(lineTotal * itemRate / 100)
         }
 
+        // ROT/RUT staging gate: everything buildInvoiceWriteData would refuse
+        // at commit time that this staged set already determines must fail
+        // HERE, where the agent can fix it, not after approval. (The staging
+        // VAT gate above exists for the same reason.)
+        const deductionLines = items.filter((item) => item.line_type !== 'text' && item.deduction_type)
+        if (deductionLines.length > 0) {
+          const claimErrors = validateDeductionLines(
+            deductionLines.map((item) => ({
+              unit_price: item.unit_price,
+              quantity: item.quantity,
+              deduction_type: item.deduction_type ?? null,
+              vat_rate: item.vat_rate ?? vatRules.rate,
+              labor_hours: item.labor_hours ?? null,
+              work_type: item.work_type ?? null,
+            })),
+          )
+          if (claimErrors.length > 0) {
+            throw new Error(`ROT/RUT: ${claimErrors.join(' ')} Read the current lines with gnubok_get_invoice and pass the deduction fields back.`)
+          }
+          // Commit derives the invoice-level property info from the FIRST
+          // deduction line (commitUpdateInvoice), mirrored here.
+          const firstDeduction = deductionLines[0]
+          const housingProvided =
+            Boolean(firstDeduction.housing_designation?.trim()) ||
+            (Boolean(firstDeduction.apartment_number?.trim()) && Boolean(firstDeduction.brf_org_number?.trim()))
+          if (deductionLines.some((item) => item.deduction_type === 'rot') && !housingProvided) {
+            throw new Error(
+              'ROT lines need housing_designation (fastighetsbeteckning), or apartment_number + brf_org_number, on the first deduction line. ' +
+              'gnubok_get_invoice returns them; pass them back or the update will fail at approval.',
+            )
+          }
+          // The stored personnummer exists only as ciphertext and cannot be
+          // supplied through MCP: without one on the invoice or on an
+          // individual's kundkort, approval is guaranteed to fail.
+          const personnummerAvailable =
+            Boolean(invoice.deduction_personnummer_encrypted) ||
+            (customer.customer_type === 'individual' && Boolean(customer.personal_number))
+          if (!personnummerAvailable) {
+            throw new Error(
+              'ROT/RUT lines need a personnummer, which cannot be passed through MCP. ' +
+              'Add it on the invoice in the web UI or on the customer card first, then retry.',
+            )
+          }
+        }
+
         // Snapshot of the lines this replace deletes, for the approval
-        // preview only (the executor re-reads at commit time). No ROT/RUT
-        // identity columns are selected.
+        // preview only (the executor re-reads at commit time). deduction_type
+        // and the accrual period are shown so the approver can see a ROT/RUT
+        // or periodisering removal; no personnummer column exists here and
+        // the property columns are not needed for the preview.
         const { data: currentRows, error: currentError } = await supabase
           .from('invoice_items')
-          .select('line_type, description, quantity, unit, unit_price, line_total, vat_rate, revenue_account, article_id')
+          .select('line_type, description, quantity, unit, unit_price, line_total, vat_rate, revenue_account, article_id, deduction_type, accrual_period_start, accrual_period_end')
           .eq('invoice_id', invoice.id)
           .order('sort_order', { ascending: true })
         if (currentError) throw new Error(`Database error: ${currentError.message}`)
@@ -16564,6 +16687,9 @@ export const tools: McpTool[] = [
           vat_rate: row.vat_rate,
           revenue_account: row.revenue_account ?? null,
           article_id: row.article_id ?? null,
+          deduction_type: row.deduction_type ?? null,
+          accrual_period_start: row.accrual_period_start ?? null,
+          accrual_period_end: row.accrual_period_end ?? null,
         }))
       }
 
@@ -16613,15 +16739,21 @@ export const tools: McpTool[] = [
                 item_count: stagedItems.length,
                 // Effective per-line booking, so the approver sees a revenue
                 // account or VAT rate change instead of only a row count.
+                // deduction_type and the accrual period ride along so a
+                // ROT/RUT or periodisering change is visible too.
                 items: stagedItems.map((item) => ({
+                  line_type: item.line_type ?? 'product',
                   description: item.description,
                   quantity: item.quantity,
                   unit: item.unit,
                   unit_price: item.unit_price,
                   line_total: roundOre(item.quantity * item.unit_price),
-                  vat_rate: item.vat_rate ?? defaultVatRate,
+                  vat_rate: item.line_type === 'text' ? 0 : (item.vat_rate ?? defaultVatRate),
                   revenue_account: item.revenue_account ?? null,
                   article_id: item.article_id ?? null,
+                  deduction_type: item.deduction_type ?? null,
+                  accrual_period_start: item.accrual_period_start ?? null,
+                  accrual_period_end: item.accrual_period_end ?? null,
                 })),
                 current_items: currentItems ?? [],
                 subtotal: roundOre(subtotal),
