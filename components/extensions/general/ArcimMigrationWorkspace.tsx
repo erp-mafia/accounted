@@ -2836,12 +2836,19 @@ export default function ArcimMigrationWorkspace({
       }
 
       // ── Phase 2: API import (customers, suppliers, invoices) ──
+      // The asset toggle is only rendered for Fortnox (the one provider with
+      // an asset register API), but its DEFAULT_OPTIONS value stays true for
+      // everyone. Gate it on the provider here too, so a hidden option can
+      // never be the reason /migrate starts for a user who deselected every
+      // visible API import.
+      const effectiveImportAssets =
+        selectedProvider === 'fortnox' && migrationOptions.importAssets
       const hasApiImport = migrationOptions.importCompanyInfo ||
         migrationOptions.importCustomers ||
         migrationOptions.importSuppliers ||
         migrationOptions.importSalesInvoices ||
         migrationOptions.importSupplierInvoices ||
-        migrationOptions.importAssets
+        effectiveImportAssets
 
       let hadStepErrors = false
       if (hasApiImport) {
@@ -2858,7 +2865,7 @@ export default function ArcimMigrationWorkspace({
             importSuppliers: migrationOptions.importSuppliers,
             importSalesInvoices: migrationOptions.importSalesInvoices,
             importSupplierInvoices: migrationOptions.importSupplierInvoices,
-            importAssets: migrationOptions.importAssets,
+            importAssets: effectiveImportAssets,
           }),
         })
 
