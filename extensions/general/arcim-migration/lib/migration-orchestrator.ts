@@ -10,6 +10,7 @@
  *   3. Suppliers → needed before supplier invoices
  *   4. Sales invoices (all statuses, duplicates skipped)
  *   5. Supplier invoices (all statuses, duplicates skipped)
+ *   6. Asset register (Fortnox only) → asset register rows, no journal entries
  *
  * Performance note: All steps use bulk reads + chunked inserts to
  * avoid N+1 round-trips that would exhaust the Vercel function
@@ -41,6 +42,7 @@ import {
   type ExistingCustomerMetadata,
 } from './customer-metadata'
 import { insertWithPerRowFallback } from './insert-fallback'
+import { importProviderAssets, FortnoxAssetScopesRequiredError } from './import-assets'
 import {
   mapCustomer,
   mapSupplier,
@@ -64,6 +66,8 @@ export interface MigrationOptions {
   importSuppliers?: boolean
   importSalesInvoices?: boolean
   importSupplierInvoices?: boolean
+  /** Import the provider's asset register (Fortnox only). Default true. */
+  importAssets?: boolean
   /** Auto-link imported supplier invoices to GL payment vouchers. Default true. */
   reconcileVouchers?: boolean
   onProgress?: (progress: MigrationProgress) => void
@@ -946,7 +950,28 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
       }
     }
 
-    // ── Step 6: Reconcile supplier invoices to GL payment vouchers ────
+    // ── Step 6: Asset register (Fortnox only) ─────────────────────
+    // Register metadata only: the bookkeeping values (12xx anskaffning and
+    // ackumulerade avskrivningar) already arrived via SIE, so this step never
+    // writes journal entries. A consent without the Fortnox assets scope
+    // reports scopesMissing instead of failing the migration.
+    if (options.importAssets !== false) {
+      emitProgress(options, { status: 'importing', currentStep: 'Importerar anläggningstillgångar...', progress: 92 })
+      try {
+        const assets = await importProviderAssets({ supabase, companyId, userId, consentId })
+        if (assets) results.assets = assets
+      } catch (err) {
+        if (err instanceof FortnoxAssetScopesRequiredError) {
+          log.warn('asset register skipped: consent lacks the Fortnox assets scope')
+          results.assets = { total: 0, imported: 0, skipped: 0, scopesMissing: true }
+        } else {
+          console.error('Failed to import assets:', err)
+          recordStepError(results, 'assets', err)
+        }
+      }
+    }
+
+    // ── Step 7: Reconcile supplier invoices to GL payment vouchers ────
     // The GL (incl. the Dr 2440 / Cr 1930 bank-payment vouchers) is imported
     // separately via SIE. Supplier invoices arrive (via ?filter=unpaid) as open
     // payables with no link to those vouchers, so settled invoices would surface

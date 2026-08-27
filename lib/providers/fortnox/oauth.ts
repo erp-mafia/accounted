@@ -35,6 +35,24 @@ export const FORTNOX_DOCUMENT_SCOPES = ['archive', 'connectfile'];
  */
 export const FORTNOX_DOCUMENT_SCOPES_APPROVED: boolean = true;
 
+/** Anläggningsregistret: what the asset register import reads. */
+export const FORTNOX_ASSET_SCOPES = ['assets'];
+
+/**
+ * Whether the registered Fortnox app has the Assets scope (Anläggningsregister)
+ * enabled in the Fortnox Developer Portal. Ships false until the portal
+ * registration is confirmed to carry it: requesting a scope the app lacks
+ * makes the authorize endpoint reject with invalid_scope BEFORE login, the
+ * same failure mode the document scopes guard against above.
+ *
+ * When true, the ordinary connect requests the scope. Unlike Arkivplats and
+ * Koppla filer, the asset register carries no separate Fortnox customer
+ * licence, so no per-user opt-in is needed. A consent minted without the
+ * scope degrades gracefully: the migration reports assets as skipped instead
+ * of failing (see arcim-migration import-assets).
+ */
+export const FORTNOX_ASSET_SCOPES_APPROVED: boolean = false;
+
 /**
  * The scopes a Fortnox consent is minted with. The document scopes are opt-in
  * per authorize call, because Fortnox derives its customer licence
@@ -48,9 +66,14 @@ export const FORTNOX_DOCUMENT_SCOPES_APPROVED: boolean = true;
 export function fortnoxConsentScopes(options?: { documents?: boolean }): string[] {
   const withDocuments =
     options?.documents === true && FORTNOX_DOCUMENT_SCOPES_APPROVED;
-  return withDocuments
+  const scopes = withDocuments
     ? [...BASE_SCOPES, ...FORTNOX_DOCUMENT_SCOPES]
     : [...BASE_SCOPES];
+  // The asset register rides along on every consent once the portal
+  // registration carries the scope: it needs no extra customer licence, so
+  // there is nothing to opt in to.
+  if (FORTNOX_ASSET_SCOPES_APPROVED) scopes.push(...FORTNOX_ASSET_SCOPES);
+  return scopes;
 }
 
 export function buildFortnoxAuthUrl(

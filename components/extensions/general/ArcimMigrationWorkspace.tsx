@@ -227,7 +227,7 @@ interface SkipReasons {
 }
 
 interface MigrationStepError {
-  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'reconciliation'
+  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'assets' | 'reconciliation'
   code: string | null
   message: string
 }
@@ -238,6 +238,7 @@ interface MigrationResults {
   suppliers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
   salesInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
   supplierInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
+  assets?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons & { unsupported?: number }; errorSample?: string; scopesMissing?: boolean }
   stepErrors?: MigrationStepError[]
 }
 import AccountMappingStep from '@/components/import/AccountMappingStep'
@@ -277,6 +278,7 @@ interface MigrationOptions {
   importSuppliers: boolean
   importSalesInvoices: boolean
   importSupplierInvoices: boolean
+  importAssets: boolean
   voucherSeries: string
 }
 
@@ -287,6 +289,7 @@ const DEFAULT_OPTIONS: MigrationOptions = {
   importSuppliers: true,
   importSalesInvoices: true,
   importSupplierInvoices: true,
+  importAssets: true,
   voucherSeries: 'B',
 }
 
@@ -313,6 +316,10 @@ interface PreviewData {
     accountCount: number
     transactionCount: number
     fiscalYears: number[]
+  } | null
+  assetStats: {
+    total: number
+    importable: number
   } | null
   hasSieData: boolean
 }
@@ -922,6 +929,12 @@ function PreviewStep({
             {preview.sieStats.fiscalYears.length === 1
               ? `räkenskapsåret ${preview.sieStats.fiscalYears[0]}`
               : `${preview.sieStats.fiscalYears.length} räkenskapsår: ${preview.sieStats.fiscalYears.join(', ')}`}
+            {preview.assetStats && preview.assetStats.importable > 0 && (
+              <>
+                {' · '}
+                {preview.assetStats.importable.toLocaleString('sv-SE')} anläggningstillgångar
+              </>
+            )}
           </p>
         )}
 
@@ -1095,6 +1108,7 @@ function OptionsStep({
   if (options.importSuppliers) selectedItems.push('Leverantörer')
   if (options.importSalesInvoices) selectedItems.push('Kundfakturor')
   if (options.importSupplierInvoices) selectedItems.push('Leverantörsfakturor')
+  if (provider === 'fortnox' && options.importAssets) selectedItems.push('Anläggningstillgångar')
 
   return (
     <div className="stagger-enter space-y-8">
@@ -1200,6 +1214,14 @@ function OptionsStep({
           checked={options.importSupplierInvoices}
           onChange={() => toggleOption('importSupplierInvoices')}
         />
+        {provider === 'fortnox' && (
+          <OptionRow
+            label="Anläggningstillgångar"
+            description="Anläggningsregistret med avskrivningsplaner. Bokförda värden kommer via SIE; registret gör att avskrivningarna fortsätter automatiskt."
+            checked={options.importAssets}
+            onChange={() => toggleOption('importAssets')}
+          />
+        )}
       </div>
 
       <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
@@ -1729,7 +1751,8 @@ function ResultStep({
     (results.customers && (results.customers.imported > 0 || (results.customers.updated ?? 0) > 0 || results.customers.skipped > 0)) ||
     (results.suppliers && (results.suppliers.imported > 0 || results.suppliers.skipped > 0)) ||
     (results.salesInvoices && (results.salesInvoices.imported > 0 || results.salesInvoices.skipped > 0)) ||
-    (results.supplierInvoices && (results.supplierInvoices.imported > 0 || results.supplierInvoices.skipped > 0))
+    (results.supplierInvoices && (results.supplierInvoices.imported > 0 || results.supplierInvoices.skipped > 0)) ||
+    (results.assets && (results.assets.imported > 0 || results.assets.skipped > 0 || results.assets.scopesMissing))
   )
 
   // Steps that failed against the provider API. An empty sync with failed
@@ -1812,6 +1835,19 @@ function ResultStep({
           ? formatSkipReasons(results.supplierInvoices.skipReasons, 'invoice', results.supplierInvoices.errorSample) ?? `${results.supplierInvoices.skipped} hoppades över`
           : undefined,
         failed: entityRowStatus(results.supplierInvoices.imported, results.supplierInvoices.skipReasons) === 'error',
+      })
+    }
+    if (results.assets && (results.assets.imported > 0 || results.assets.skipped > 0 || results.assets.scopesMissing)) {
+      entityLines.push({
+        label: 'Anläggningstillgångar',
+        value: results.assets.scopesMissing ? 'Hoppades över' : `${results.assets.imported} importerade`,
+        detail: results.assets.scopesMissing
+          ? 'Fortnox-anslutningen saknar behörighet till anläggningsregistret (assets-scope). Bokförda värden är ändå med via SIE.'
+          : results.assets.skipped > 0
+            ? `${results.assets.skipped} hoppades över${results.assets.skipReasons?.duplicate ? ` (${results.assets.skipReasons.duplicate} fanns redan)` : ''}`
+            : undefined,
+        failed: !results.assets.scopesMissing &&
+          entityRowStatus(results.assets.imported, results.assets.skipReasons) === 'error',
       })
     }
   }
@@ -1953,6 +1989,7 @@ const STEP_ERROR_LABELS: Record<MigrationStepError['step'], string> = {
   suppliers: 'Leverantörer',
   salesInvoices: 'Kundfakturor',
   supplierInvoices: 'Leverantörsfakturor',
+  assets: 'Anläggningstillgångar',
   reconciliation: 'Avstämning av betalningar',
 }
 
@@ -2802,7 +2839,8 @@ export default function ArcimMigrationWorkspace({
         migrationOptions.importCustomers ||
         migrationOptions.importSuppliers ||
         migrationOptions.importSalesInvoices ||
-        migrationOptions.importSupplierInvoices
+        migrationOptions.importSupplierInvoices ||
+        migrationOptions.importAssets
 
       let hadStepErrors = false
       if (hasApiImport) {
@@ -2819,6 +2857,7 @@ export default function ArcimMigrationWorkspace({
             importSuppliers: migrationOptions.importSuppliers,
             importSalesInvoices: migrationOptions.importSalesInvoices,
             importSupplierInvoices: migrationOptions.importSupplierInvoices,
+            importAssets: migrationOptions.importAssets,
           }),
         })
 

@@ -5,6 +5,8 @@ import {
   fortnoxConsentScopes,
   FORTNOX_DOCUMENT_SCOPES,
   FORTNOX_DOCUMENT_SCOPES_APPROVED,
+  FORTNOX_ASSET_SCOPES,
+  FORTNOX_ASSET_SCOPES_APPROVED,
 } from '../oauth';
 
 describe('Fortnox OAuth scopes', () => {
@@ -45,6 +47,21 @@ describe('Fortnox OAuth scopes', () => {
     expect(fortnoxConsentScopes({ documents: true })).toContain('connectfile');
     expect(fortnoxConsentScopes()).not.toContain('archive');
     expect(fortnoxConsentScopes()).not.toContain('connectfile');
+  });
+
+  // The asset register scope is gated on its own portal approval. While the
+  // flag is false, no consent may request it: an unapproved scope in the
+  // authorize request is rejected with invalid_scope BEFORE login (the same
+  // outage mode the document flag above guards against).
+  it('keeps the asset scope out of every consent until the portal approves it', () => {
+    expect(FORTNOX_ASSET_SCOPES).toEqual(['assets']);
+    if (FORTNOX_ASSET_SCOPES_APPROVED) {
+      expect(fortnoxConsentScopes()).toContain('assets');
+      expect(fortnoxConsentScopes({ documents: true })).toContain('assets');
+    } else {
+      expect(fortnoxConsentScopes()).not.toContain('assets');
+      expect(fortnoxConsentScopes({ documents: true })).not.toContain('assets');
+    }
   });
 
   // Even once the portal registration lands, opting in must never cost the

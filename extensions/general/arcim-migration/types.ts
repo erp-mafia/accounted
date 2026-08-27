@@ -76,7 +76,7 @@ export interface SkipReasons {
  * failure classifies, otherwise a generic sentence with the provider's reply).
  */
 export interface MigrationStepError {
-  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'reconciliation'
+  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'assets' | 'reconciliation'
   /** Structured code when the failure classifies (e.g. PROVIDER_API_MODULE_INACTIVE), else null. */
   code: string | null
   message: string
@@ -117,6 +117,20 @@ export interface MigrationResults {
   suppliers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
   salesInvoices?: InvoiceStepResult
   supplierInvoices?: InvoiceStepResult
+  /**
+   * Fortnox anläggningsregister → local asset register. Creates register
+   * rows only, never journal entries (the values arrived via SIE).
+   * `scopesMissing` marks the whole step as skipped because the consent
+   * lacks the Fortnox assets scope (or the licence behind it).
+   */
+  assets?: {
+    total: number
+    imported: number
+    skipped: number
+    skipReasons?: SkipReasons & { unsupported?: number }
+    errorSample?: string
+    scopesMissing?: boolean
+  }
   /**
    * Auto-reconciliation of imported supplier invoices to the GL payment
    * vouchers that the separate SIE import already posted. `autoLinked` invoices

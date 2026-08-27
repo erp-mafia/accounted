@@ -24,6 +24,7 @@ import {
   FortnoxDocumentScopesRequiredError,
   importProviderDocuments,
 } from './lib/import-documents'
+import { fetchFortnoxAssetPreview } from './lib/import-assets'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import type { ArcimProvider } from './types'
 import { ARCIM_PROVIDERS } from './types'
@@ -757,6 +758,18 @@ export const arcimMigrationExtension: Extension = {
             }
           }
 
+          // Asset register stats (Fortnox only). Soft: a consent without the
+          // assets scope (or licence) just omits the line; anything else is
+          // logged and omitted rather than failing an otherwise good preview.
+          let assetStats: { total: number; importable: number } | null = null
+          if (provider === 'fortnox') {
+            try {
+              assetStats = await fetchFortnoxAssetPreview(resolved.accessToken)
+            } catch (err) {
+              log.info('Asset preview failed:', err instanceof Error ? err.message : String(err))
+            }
+          }
+
           // Check if the company already has completed SIE imports (from manual upload)
           const { count: sieImportCount } = await supabase
             .from('sie_imports')
@@ -774,6 +787,7 @@ export const arcimMigrationExtension: Extension = {
             companyInfo: mapped,
             sieAvailable,
             sieStats,
+            assetStats,
             hasSieData: (sieImportCount ?? 0) > 0,
           })
         } catch (error) {
@@ -1146,6 +1160,7 @@ export const arcimMigrationExtension: Extension = {
           importSuppliers = true,
           importSalesInvoices = true,
           importSupplierInvoices = true,
+          importAssets = true,
           reconcileVouchers = true,
         } = await request.json() as {
           consentId: string
@@ -1154,6 +1169,7 @@ export const arcimMigrationExtension: Extension = {
           importSuppliers?: boolean
           importSalesInvoices?: boolean
           importSupplierInvoices?: boolean
+          importAssets?: boolean
           reconcileVouchers?: boolean
         }
 
@@ -1213,6 +1229,7 @@ export const arcimMigrationExtension: Extension = {
             importSuppliers,
             importSalesInvoices,
             importSupplierInvoices,
+            importAssets,
             reconcileVouchers,
           }
 
