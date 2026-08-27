@@ -16542,7 +16542,7 @@ export const tools: McpTool[] = [
           }
           const lineTotal = item.quantity * item.unit_price
           subtotal += lineTotal
-          vatAmount += Math.round(lineTotal * itemRate / 100 * 100) / 100
+          vatAmount += roundOre(lineTotal * itemRate / 100)
         }
 
         // Snapshot of the lines this replace deletes, for the approval
@@ -16618,15 +16618,15 @@ export const tools: McpTool[] = [
                   quantity: item.quantity,
                   unit: item.unit,
                   unit_price: item.unit_price,
-                  line_total: Math.round(item.quantity * item.unit_price * 100) / 100,
+                  line_total: roundOre(item.quantity * item.unit_price),
                   vat_rate: item.vat_rate ?? defaultVatRate,
                   revenue_account: item.revenue_account ?? null,
                   article_id: item.article_id ?? null,
                 })),
                 current_items: currentItems ?? [],
-                subtotal: Math.round(subtotal * 100) / 100,
-                vat_amount: Math.round(vatAmount * 100) / 100,
-                total: Math.round((subtotal + vatAmount) * 100) / 100,
+                subtotal: roundOre(subtotal),
+                vat_amount: roundOre(vatAmount),
+                total: roundOre(subtotal + vatAmount),
               }
             : {}),
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
