@@ -147,6 +147,8 @@ async function loadLink(
   return (data as WhatsAppPhoneLink | null) ?? null
 }
 
+/** Live membership: a pin or default pointing at an ARCHIVED company must not
+ *  receive receipts (same filter shape as lib/supabase/middleware.ts). */
 async function isMember(
   supabase: SupabaseClient,
   userId: string,
@@ -154,9 +156,10 @@ async function isMember(
 ): Promise<boolean> {
   const { data } = await supabase
     .from('company_members')
-    .select('company_id')
+    .select('company_id, companies!inner(archived_at)')
     .eq('user_id', userId)
     .eq('company_id', companyId)
+    .is('companies.archived_at', null)
     .limit(1)
     .maybeSingle()
   return data != null
@@ -279,6 +282,11 @@ interface ResolvedCompany {
  * Conversation pin (live + still a member, sliding 8h) -> default company
  * (still a member) -> sole membership -> null (ask).
  *
+ * Every membership here means a NON-ARCHIVED company: an archived one is not
+ * a place receipts can go, and counting it made a sender with one live
+ * company look multi-company (#1589), so they were asked a question Meta
+ * refused to deliver.
+ *
  * Returns 'transient_error' when the membership query FAILED: a DB blip must
  * not read as "no memberships", which used to park the rows behind an
  * unanswerable company question forever. The caller releases the row so the
@@ -318,8 +326,9 @@ async function resolveCompanyTarget(
 
   const { data: memberships, error: membershipsError } = await supabase
     .from('company_members')
-    .select('company_id')
+    .select('company_id, companies!inner(archived_at)')
     .eq('user_id', link.user_id)
+    .is('companies.archived_at', null)
   if (membershipsError) {
     log.warn('membership query failed during company resolution; will retry', {
       error: membershipsError.message,
@@ -511,6 +520,32 @@ async function processMediaMessage(
       return { kind: 'media_staged', conversationId: conversation.id }
     }
     const companyId = resolved.companyId
+
+    if (resolved.via === 'single' && conversation) {
+      // Receipts parked behind an earlier company question can never be
+      // answered now: the sender's other memberships are archived (or gone),
+      // so that question will not be asked again, and the sole live company
+      // is unambiguous by construction. Re-open them so they file here
+      // instead of expiring at Meta. Same guarded idiom as applyCompanyChoice;
+      // the re-run resolves them as 'single' on its own. default/pin
+      // resolution deliberately does not drain: those choices the user can
+      // still change, so the open question there is not dead.
+      const { data: parked } = await supabase
+        .from('whatsapp_messages')
+        .update({ processing_status: 'received', error_message: null })
+        .eq('conversation_id', conversation.id)
+        .eq('processing_status', 'skipped')
+        .eq('error_message', STAGED_AWAITING_COMPANY)
+        .select('id')
+      const parkedIds = ((parked ?? []) as { id: string }[]).map((r) => r.id)
+      if (parkedIds.length > 0) {
+        log.info('re-opened receipts parked behind an unaskable company question', {
+          conversationId: conversation.id,
+          count: parkedIds.length,
+        })
+        kickInboundProcessing(parkedIds)
+      }
+    }
 
     // ── Per-company intake quota (ack-and-drop, never retryable) ──
     const limit = await checkInboxUploadRateLimit(supabase, companyId)

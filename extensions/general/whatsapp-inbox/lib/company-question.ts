@@ -21,6 +21,7 @@ import {
   MAX_REPLY_BUTTONS,
   MAX_LIST_ROWS,
   type SendMessageBase,
+  type SendTextResult,
 } from './graph-api'
 import { botCopy, TEMPLATE } from './messages'
 import {
@@ -51,10 +52,12 @@ export interface CompanyOption {
 
 type ReplyBase = Omit<SendMessageBase, 'to' | 'template'>
 
-/** All companies the linked user belongs to, alphabetical (stable digits).
- *  Returns null when a query FAILED: a transient DB error must read as
- *  "unknown", never as "no memberships", or the caller parks receipts behind
- *  a question that can never be asked. */
+/** All non-archived companies the linked user belongs to, alphabetical
+ *  (stable digits). An archived company is not a place receipts can go, and
+ *  offering it produced a Meta-rejected payload when it shared its name with
+ *  the live one (#1589). Returns null when a query FAILED: a transient DB
+ *  error must read as "unknown", never as "no memberships", or the caller
+ *  parks receipts behind a question that can never be asked. */
 export async function loadCompanyOptions(
   supabase: SupabaseClient,
   userId: string,
@@ -74,6 +77,7 @@ export async function loadCompanyOptions(
     .from('companies')
     .select('id, name')
     .in('id', companyIds)
+    .is('archived_at', null)
   if (companiesError) {
     log.warn('company options company query failed', { error: companiesError.message })
     return null
@@ -107,6 +111,15 @@ export type AskCompanyQuestionOutcome = 'asked' | 'not_asked' | 'no_options' | '
  * the rollback an expired token or a Graph 5xx left the conversation parked on
  * a question the user never received, with the guard suppressing every later
  * ask and the 48h TTL eventually discarding the staged receipts.
+ *
+ * Send ladder: reply buttons (<=3) or a list (<=10), then the numbered text
+ * variant when Meta rejects the interactive payload synchronously (#1589:
+ * HTTP 400 "Duplicate button title" and similar payload-shape errors are
+ * final for that payload, but plain text still delivers), and only when the
+ * text send ALSO fails is the question rolled back. The fallback reuses the
+ * M6 template id, so the audit/throttle keys are unchanged, and the answer
+ * path is mode-agnostic: a typed digit is accepted whenever company_options
+ * are open and is recorded as via='numbered'.
  */
 export async function askCompanyQuestion(
   supabase: SupabaseClient,
@@ -186,16 +199,21 @@ export async function askCompanyQuestion(
 
   const copy = botCopy('sv')
   const body = copy.m6CompanyQuestion({ count: args.stagedCount })
+  const numberedBody = copy.m6CompanyQuestionNumbered({
+    count: args.stagedCount,
+    options: options.map((o) => o.name),
+  })
   const base = { to: args.to, template: TEMPLATE.m6CompanyQuestion, ...args.replyBase }
 
-  let sent: { ok: boolean }
+  const interactive = options.length <= MAX_LIST_ROWS
+  let sent: SendTextResult
   if (options.length <= MAX_REPLY_BUTTONS) {
     sent = await sendReplyButtons(supabase, {
       ...base,
       body,
       buttons: options.map((o) => ({ id: o.id, title: o.name })),
     })
-  } else if (options.length <= MAX_LIST_ROWS) {
+  } else if (interactive) {
     sent = await sendList(supabase, {
       ...base,
       body,
@@ -203,13 +221,19 @@ export async function askCompanyQuestion(
       rows: options.map((o) => ({ id: o.id, title: o.name })),
     })
   } else {
-    sent = await sendText(supabase, {
-      ...base,
-      body: copy.m6CompanyQuestionNumbered({
-        count: args.stagedCount,
-        options: options.map((o) => o.name),
-      }),
+    sent = await sendText(supabase, { ...base, body: numberedBody })
+  }
+
+  if (!sent.ok && interactive) {
+    // Meta rejected the interactive payload at send time (no wamid was ever
+    // issued, so nothing reached the phone): ask the same question as plain
+    // numbered text instead of going silent. Same template id, same open
+    // question; only the answer mechanism changes (digit instead of tap).
+    log.warn('company question interactive send rejected; falling back to numbered text', {
+      conversationId: args.conversation.id,
+      errorDetail: sent.errorDetail,
     })
+    sent = await sendText(supabase, { ...base, body: numberedBody })
   }
 
   if (!sent.ok) {
@@ -291,14 +315,17 @@ export async function applyCompanyChoice(
   }
   if (!companyId) return { ok: false, reason: 'invalid_option' }
 
-  // Defense in depth: the chosen company must be one the sender belongs to,
-  // whatever the payload claimed. A query ERROR is not a missing membership:
-  // treating a transient failure as "not a member" silently drops the answer.
+  // Defense in depth: the chosen company must be one the sender belongs to
+  // AND still be live, whatever the payload claimed (a stale tap can name a
+  // company archived since the question was asked). A query ERROR is not a
+  // missing membership: treating a transient failure as "not a member"
+  // silently drops the answer.
   const { data: membership, error: membershipError } = await supabase
     .from('company_members')
-    .select('company_id')
+    .select('company_id, companies!inner(archived_at)')
     .eq('user_id', args.link.user_id)
     .eq('company_id', companyId)
+    .is('companies.archived_at', null)
     .limit(1)
     .maybeSingle()
   if (membershipError) {

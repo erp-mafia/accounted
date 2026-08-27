@@ -234,10 +234,14 @@ async function handleUnknownSender(
       processing_status: 'done',
     })
 
+    // Non-archived only: the greeting must describe what the channel will
+    // then do (name the sole live company, or say it will ask), not count a
+    // company receipts can never be filed into (#1589).
     const { data: memberships } = await supabase
       .from('company_members')
-      .select('company_id')
+      .select('company_id, companies!inner(archived_at)')
       .eq('user_id', consumed.userId)
+      .is('companies.archived_at', null)
     const companyIds = [...new Set((memberships ?? []).map((m) => m.company_id as string))]
 
     let companyName: string | null = null

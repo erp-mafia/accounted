@@ -44,6 +44,14 @@ vi.mock('@/lib/core/documents/document-service', () => ({
   computeSHA256: vi.fn().mockResolvedValue('sha-abc'),
 }))
 
+// The drain (#1589) re-kicks re-opened rows through the cookieless service
+// client; route it to a per-test queued mock so the follow-up run is
+// observable instead of hitting a real Supabase URL.
+const kickClient = vi.hoisted(() => ({ current: null as unknown }))
+vi.mock('@/lib/auth/api-keys', () => ({
+  createServiceClientNoCookies: vi.fn(() => kickClient.current),
+}))
+
 import {
   sendText,
   markReadWithTyping,
@@ -177,6 +185,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() }) // load link
     enqueue({ data: makeConversation() }) // load conversation
     enqueue({ data: [{ company_id: 'company-1' }] }) // sole membership
+    enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: null }) // sha256 dup check: none
     enqueue({ data: null }) // item channel_context load
     enqueue({ data: null }) // item channel_context update
@@ -208,12 +217,76 @@ describe('processInboundMessage (media intake)', () => {
       .channel_context
     expect(contextArg.company_selected_via).toBe('single')
 
+    // "Sole membership" means sole LIVE membership (#1589): an archived
+    // same-named company must not turn this sender into a multi-company one.
+    expect(findCalls('company_members', 'select')[0][0]).toContain('companies!inner(archived_at)')
+    expect(findCalls('company_members', 'is')).toContainEqual(['companies.archived_at', null])
+
     const finalUpdate = lastUpdate(findCalls)
     expect(finalUpdate.processing_status).toBe('done')
     expect(finalUpdate.inbox_item_id).toBe('item-1')
 
     // The per-receipt ack is debounced: this worker never sends it.
     expect(sendTextMock).not.toHaveBeenCalled()
+  })
+
+  it('drains receipts parked behind an unaskable company question when the sender resolves as single', async () => {
+    const kick = createQueuedMockSupabase()
+    kickClient.current = kick.supabase
+    kick.enqueue({ data: null }) // follow-up loadRow for the re-opened row (gone: keep it inert)
+
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeRow() }) // load row
+    enqueue({ data: { id: 'msg-1' } }) // claim
+    enqueue({ data: makeLink() }) // load link
+    enqueue({ data: makeConversation() }) // load conversation
+    enqueue({ data: [{ company_id: 'company-1' }] }) // sole live membership
+    enqueue({ data: [{ id: 'stg-1' }, { id: 'stg-2' }] }) // drain: two rows were parked
+    enqueue({ data: null }) // sha256 dup check: none
+    enqueue({ data: null }) // item channel_context load
+    enqueue({ data: null }) // item channel_context update
+    enqueue({ data: null }) // final markStatus done
+
+    const outcome = await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+    expect(outcome).toEqual({ kind: 'media_processed', conversationId: 'conv-1' })
+
+    // The guarded re-open targets exactly the staged marker on this conversation.
+    const reopen = findCalls('whatsapp_messages', 'update').find(
+      (args) =>
+        (args[0] as Record<string, unknown>).processing_status === 'received' &&
+        (args[0] as Record<string, unknown>).error_message === null,
+    )
+    expect(reopen).toBeTruthy()
+    const eqs = findCalls('whatsapp_messages', 'eq')
+    expect(eqs).toContainEqual(['error_message', STAGED_AWAITING_COMPANY])
+    expect(eqs).toContainEqual(['conversation_id', 'conv-1'])
+
+    // The re-opened rows were kicked: the follow-up run loaded the first one.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(kick.findCalls('whatsapp_messages', 'eq')).toContainEqual(['id', 'stg-1'])
+    kickClient.current = null
+  })
+
+  it('does not drain when the company came from a pin or a default (the question is not dead)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeRow() })
+    enqueue({ data: { id: 'msg-1' } })
+    enqueue({ data: makeLink({ default_company_id: 'company-7' }) })
+    enqueue({ data: makeConversation() })
+    enqueue({ data: { company_id: 'company-7' } }) // membership check for default
+    enqueue({ data: null }) // dup check
+    enqueue({ data: null }) // item context load
+    enqueue({ data: null }) // item context update
+    enqueue({ data: null }) // markStatus done
+
+    await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+
+    // The default-membership check is also a LIVE-membership check.
+    expect(findCalls('company_members', 'is')).toContainEqual(['companies.archived_at', null])
+    const reopen = findCalls('whatsapp_messages', 'update').find(
+      (args) => (args[0] as Record<string, unknown>).processing_status === 'received',
+    )
+    expect(reopen).toBeUndefined()
   })
 
   it('does nothing when the claim is lost (already processing)', async () => {
@@ -415,6 +488,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() })
     enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: null }) // M17 notice check: none sent yet
     enqueue({ data: null }) // markStatus skipped
 
@@ -438,6 +512,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() })
     enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: { id: 'earlier-m17' } }) // notice already sent
     enqueue({ data: null }) // markStatus skipped
 
@@ -453,6 +528,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() })
     enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: null }) // no inbox item for this message yet
     enqueue({ data: { id: 'existing-doc' } }) // dup found
     enqueue({ data: null }) // markStatus skipped
@@ -491,6 +567,7 @@ describe('processInboundMessage (media intake)', () => {
       }),
     })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: null }) // dup check
     enqueue({ data: null }) // new item context load
     enqueue({ data: null }) // new item context update
@@ -535,6 +612,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() })
     enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: null }) // no inbox item yet
     enqueue({ data: null }) // markStatus error
     enqueue({ data: null }) // no M18 sent yet
@@ -559,6 +637,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() })
     enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: null }) // no inbox item yet
     enqueue({ data: null }) // markStatus error
     enqueue({ data: null }) // no M18 sent for this message yet
@@ -578,6 +657,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() })
     enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: null }) // no inbox item yet
     enqueue({ data: null }) // markStatus error
     enqueue({ data: { id: 'out-1' } }) // an M18 for this correlation exists
@@ -595,6 +675,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() })
     enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: { id: 'item-winner' } }) // the winner's item
     enqueue({ data: null }) // markStatus done
 
