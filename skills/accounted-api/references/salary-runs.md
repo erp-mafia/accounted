@@ -40,6 +40,32 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "id": "run_a8f1…",
+      "period_year": 2026,
+      "period_month": 5,
+      "payment_date": "2026-05-25",
+      "status": "draft",
+      "voucher_series": "A",
+      "total_gross": 0,
+      "total_tax": 0,
+      "total_net": 0,
+      "total_avgifter": 0,
+      "total_employer_cost": 0
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12",
+    "next_cursor": null
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/salary-runs`
@@ -74,6 +100,16 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "period_year": 2026,
+  "period_month": 5,
+  "payment_date": "2026-05-25",
+  "voucher_series": "L"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -105,6 +141,24 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "run_a8f1…",
+    "period_year": 2026,
+    "period_month": 5,
+    "payment_date": "2026-05-25",
+    "status": "draft",
+    "voucher_series": "L"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -171,6 +225,28 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "run_a8f1…",
+    "period_year": 2026,
+    "period_month": 5,
+    "payment_date": "2026-05-25",
+    "status": "approved",
+    "total_gross": 105000,
+    "total_tax": -28500,
+    "total_net": 76500,
+    "total_avgifter": 32991,
+    "total_employer_cost": 137991
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `PATCH /api/v1/companies/{companyId}/salary-runs/{id}`
@@ -195,6 +271,13 @@ Updates payment_date, voucher_series, or notes on a draft salary run. ONLY allow
 Request body:
 ```ts
 { payment_date?: string, voucher_series?: string, notes?: string }
+```
+
+Example request:
+```json
+{
+  "payment_date": "2026-05-23"
+}
 ```
 
 Response `200`:
@@ -234,6 +317,17 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "run_…",
+    "payment_date": "2026-05-23",
+    "status": "draft"
   }
 }
 ```
@@ -300,6 +394,25 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "run_a8f1…",
+    "status": "approved",
+    "approved_at": "2026-05-14T12:00:00Z",
+    "approved_by": "user_b73c…",
+    "warnings": [
+      "Anna Andersson: E-post saknas, lönebesked kan inte skickas"
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/salary-runs/{id}/book`
@@ -344,6 +457,36 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "run_a8f1…",
+    "status": "booked",
+    "booked_at": "2026-05-26T09:15:00Z",
+    "booked_by": "user_b73c…",
+    "salary_entry_id": "je_salary…",
+    "avgifter_entry_id": "je_avg…",
+    "vacation_entry_id": "je_vac…",
+    "pension_entry_id": null,
+    "entry_ids": [
+      "je_salary…",
+      "je_avg…",
+      "je_vac…"
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12",
+    "audit": {
+      "voucher_number": "L2026-0023",
+      "voucher_url": "/api/v1/companies/.../journal-entries/je_salary…",
+      "immutable_at": "2026-05-26T09:15:00Z"
+    }
   }
 }
 ```
@@ -397,6 +540,30 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "run_a8f1…",
+    "status": "review",
+    "period_year": 2026,
+    "period_month": 5,
+    "total_gross": 105000,
+    "total_tax": 28500,
+    "total_net": 76500,
+    "total_avgifter": 32991,
+    "total_employer_cost": 137991,
+    "warnings": [
+      "Läkarintyg krävs från och med dag 8: Anna Andersson. Kontrollera att läkarintyg finns innan lönekörningen godkänns."
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/salary-runs/{id}/employees`
@@ -433,6 +600,31 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "salary_run_employee_id": "sre_a8f1…",
+      "employee_id": "emp_77b2…",
+      "first_name": "Anna",
+      "last_name": "Andersson",
+      "personnummer_masked": "YYYYMMDDXXXX",
+      "salary_type": "monthly",
+      "gross_salary": 35000,
+      "tax_withheld": -8200,
+      "net_salary": 26800,
+      "avgifter_amount": 10997
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12",
+    "next_cursor": null
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/salary-runs/{id}/employees`
@@ -461,6 +653,13 @@ Request body:
 { employee_id: string, hours_worked?: number }
 ```
 
+Example request:
+```json
+{
+  "employee_id": "emp_77b2…"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -480,6 +679,22 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "salary_run_employee_id": "sre_a8f1…",
+    "employee_id": "emp_77b2…",
+    "salary_type": "monthly",
+    "monthly_salary": 35000
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -564,6 +779,34 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "salary_run_employee_id": "sre_a8f1…",
+    "employee_id": "emp_77b2…",
+    "first_name": "Anna",
+    "last_name": "Andersson",
+    "personnummer_masked": "YYYYMMDDXXXX",
+    "gross_salary": 35000,
+    "tax_withheld": -8200,
+    "net_salary": 26800,
+    "line_items": [
+      {
+        "salary_line_item_id": "sli_31c9…",
+        "item_type": "monthly_salary",
+        "description": "Grundlön",
+        "amount": 35000
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `DELETE /api/v1/companies/{companyId}/salary-runs/{id}/employees/{employeeId}`
@@ -630,6 +873,15 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "item_type": "bonus",
+  "description": "Kvartalsbonus Q2",
+  "amount": 5000
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -655,6 +907,23 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "salary_line_item_id": "sli_31c9…",
+    "item_type": "bonus",
+    "description": "Kvartalsbonus Q2",
+    "amount": 5000,
+    "account_number": "7210"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -706,6 +975,37 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "agi_declaration_id": "agi_a8f1…",
+    "period_year": 2026,
+    "period_month": 5,
+    "employee_count": 3,
+    "is_correction": false,
+    "totals": {
+      "totalTax": 28500,
+      "totalAvgifterBasis": 105000,
+      "totalAvgifterAmount": 32991,
+      "totalSjuklonekostnad": 0,
+      "avgifterByCategory": {
+        "standard": {
+          "basis": 105000,
+          "amount": 32991
+        }
+      }
+    },
+    "xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Skatteverket omrade=\"Arbetsgivardeklaration\">…</Skatteverket>",
+    "xml_filename": "AGI_5566778899_202605.xml"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `PATCH /api/v1/companies/{companyId}/salary-runs/{id}/lines/{lineId}`
@@ -747,6 +1047,13 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "amount": 5500
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -772,6 +1079,20 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "salary_line_item_id": "sli_31c9…",
+    "amount": 5500
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -831,6 +1152,21 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "run_a8f1…",
+    "status": "paid",
+    "paid_at": "2026-05-25T08:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
