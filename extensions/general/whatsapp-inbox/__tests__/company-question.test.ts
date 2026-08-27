@@ -19,6 +19,7 @@ import {
   sendReplyButtons,
   sendList,
   truncateTitle,
+  uniqueTitles,
 } from '@/extensions/general/whatsapp-inbox/lib/graph-api'
 import {
   askCompanyQuestion,
@@ -93,7 +94,7 @@ describe('askCompanyQuestion', () => {
   })
 
   it('uses reply buttons for <=3 companies, ids = company ids', async () => {
-    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCalls, calls } = createQueuedMockSupabase()
     enqueue({ data: memberships(3) })
     enqueue({ data: companies(3) })
     enqueue({ data: [{ id: 'conv-1' }] }) // guarded transition won
@@ -112,6 +113,18 @@ describe('askCompanyQuestion', () => {
     expect(args.buttons).toHaveLength(3)
     expect(args.buttons[0]).toEqual({ id: 'company-1', title: 'Bolag A AB' })
     expect(args.body).toContain('Vilket företag')
+    // The interactive send succeeded: no numbered fallback, no duplicate question.
+    expect(sendTextMock).not.toHaveBeenCalled()
+    // Archived companies are never offered (#1589).
+    expect(
+      calls.some(
+        (c) =>
+          c.table === 'companies' &&
+          c.method === 'is' &&
+          c.args[0] === 'archived_at' &&
+          c.args[1] === null,
+      ),
+    ).toBe(true)
     // State transition stored the options for digit replies too.
     const patch = findCalls('whatsapp_conversations', 'update')[0][0] as {
       state: string
@@ -120,6 +133,101 @@ describe('askCompanyQuestion', () => {
     expect(patch.state).toBe('awaiting_company')
     expect(patch.context.company_options).toHaveLength(3)
     expect(patch.context.pending_question.type).toBe('company')
+  })
+
+  it('falls back to the numbered text question when the reply-button send is rejected', async () => {
+    sendButtonsMock.mockResolvedValueOnce({
+      ok: false,
+      wamid: null,
+      errorDetail:
+        'Send failed (HTTP 400): {"error":{"message":"(#131009) Parameter value is not valid","error_data":{"details":"Duplicate button title"}}}',
+    })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: memberships(3) })
+    enqueue({ data: companies(3) })
+    enqueue({ data: [{ id: 'conv-1' }] })
+
+    const asked = await askCompanyQuestion(supabase as unknown as SupabaseClient, {
+      conversation: makeConversation(),
+      link: makeLink(),
+      to: '46701234567',
+      replyBase,
+      stagedCount: 1,
+    })
+
+    expect(asked).toBe('asked')
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    const fallback = sendTextMock.mock.calls[0][1]
+    expect(fallback.template).toBe(TEMPLATE.m6CompanyQuestion)
+    expect(fallback.to).toBe('46701234567')
+    expect(fallback.body).toContain('1. Bolag A AB')
+    expect(fallback.body).toContain('3. Bolag C AB')
+    expect(fallback.body).toContain('Svara med en siffra')
+    // The question stays armed: exactly one conversation write, no rollback.
+    expect(findCalls('whatsapp_conversations', 'update')).toHaveLength(1)
+  })
+
+  it('falls back to the numbered text question when the list send is rejected', async () => {
+    sendListMock.mockResolvedValueOnce({ ok: false, wamid: null, errorDetail: 'Send failed (HTTP 400)' })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: memberships(5) })
+    enqueue({ data: companies(5) })
+    enqueue({ data: [{ id: 'conv-1' }] })
+
+    const asked = await askCompanyQuestion(supabase as unknown as SupabaseClient, {
+      conversation: makeConversation(),
+      link: makeLink(),
+      to: '46701234567',
+      replyBase,
+      stagedCount: 2,
+    })
+
+    expect(asked).toBe('asked')
+    expect(sendListMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    const body = sendTextMock.mock.calls[0][1].body
+    expect(body).toContain('kvittona')
+    expect(body).toContain('5. Bolag E AB')
+    expect(findCalls('whatsapp_conversations', 'update')).toHaveLength(1)
+  })
+
+  it('rolls back only when the numbered fallback also fails', async () => {
+    sendButtonsMock.mockResolvedValueOnce({ ok: false, wamid: null, errorDetail: 'Send failed (HTTP 400)' })
+    sendTextMock.mockResolvedValueOnce({ ok: false, wamid: null, errorDetail: 'Send failed (HTTP 500)' })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: memberships(3) })
+    enqueue({ data: companies(3) })
+    enqueue({ data: [{ id: 'conv-1' }] }) // guarded transition won
+    enqueue({
+      data: [
+        {
+          ...(makeConversation() as Record<string, unknown>),
+          state: 'awaiting_company',
+          context: { company_options: [{ id: 'company-1', name: 'Bolag A AB' }] },
+        },
+      ],
+    }) // rollback echo
+
+    const asked = await askCompanyQuestion(supabase as unknown as SupabaseClient, {
+      conversation: makeConversation(),
+      link: makeLink(),
+      to: '46701234567',
+      replyBase,
+      stagedCount: 1,
+    })
+
+    expect(asked).toBe('not_asked')
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    const updates = findCalls('whatsapp_conversations', 'update').map(
+      (args) => args[0] as { state?: string; context?: Record<string, unknown> },
+    )
+    expect(updates).toHaveLength(2)
+    expect(updates[0].state).toBe('awaiting_company')
+    expect(updates[1].state).toBe('idle')
+    expect(updates[1].context?.company_options).toBeUndefined()
+    expect(updates[1].context?.pending_question).toBeUndefined()
   })
 
   it('uses a list message for 4-10 companies', async () => {
@@ -299,6 +407,11 @@ describe('applyCompanyChoice', () => {
       stagedMessageIds: ['stg-1', 'stg-2'],
     })
 
+    // The membership check is a LIVE-membership check: a tap or digit for a
+    // company archived since the question was asked is rejected (#1589).
+    expect(findCalls('company_members', 'select')[0][0]).toContain('companies!inner(archived_at)')
+    expect(findCalls('company_members', 'is')).toContainEqual(['companies.archived_at', null])
+
     const patch = findCalls('whatsapp_conversations', 'update')[0][0] as {
       state: string
       company_id: string
@@ -425,5 +538,42 @@ describe('truncateTitle', () => {
     expect(cut.length).toBeLessThanOrEqual(20)
     expect(cut.endsWith('…')).toBe(true)
     expect(cut).not.toMatch(/\s…$/) // no dangling space before the ellipsis
+  })
+})
+
+describe('uniqueTitles', () => {
+  it('passes distinct short names through untouched', () => {
+    expect(uniqueTitles(['Bolag A AB', 'Bolag B AB', 'Bolag C AB'], 20)).toEqual([
+      'Bolag A AB',
+      'Bolag B AB',
+      'Bolag C AB',
+    ])
+  })
+
+  it('disambiguates identical names with their 1-based position (Meta #131009)', () => {
+    const titles = uniqueTitles(['Capelix AB', 'Capelix AB'], 20)
+    expect(new Set(titles).size).toBe(2)
+    expect(titles[0]).toBe('Capelix AB 1')
+    expect(titles[1]).toBe('Capelix AB 2')
+    for (const t of titles) expect(t.length).toBeLessThanOrEqual(20)
+  })
+
+  it('disambiguates names that only collide after truncation, within the limit', () => {
+    const titles = uniqueTitles(
+      ['Wennberg Fastighetsförvaltning AB', 'Wennberg Fastighetsförvaltning Holding AB'],
+      20,
+    )
+    expect(new Set(titles.map((t) => t.toLowerCase())).size).toBe(2)
+    for (const t of titles) {
+      expect(t.length).toBeLessThanOrEqual(20)
+      expect(t.startsWith('Wennberg')).toBe(true)
+    }
+    expect(titles[0].endsWith(' 1')).toBe(true)
+    expect(titles[1].endsWith(' 2')).toBe(true)
+  })
+
+  it('treats a case-only difference as a collision', () => {
+    const titles = uniqueTitles(['Bolag AB', 'bolag ab', 'Annat AB'], 24)
+    expect(titles).toEqual(['Bolag AB 1', 'bolag ab 2', 'Annat AB'])
   })
 })
