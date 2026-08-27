@@ -198,6 +198,30 @@ export function truncateTitle(name: string, max: number): string {
   return `${cut.trimEnd()}…`
 }
 
+/**
+ * Truncate every title to `max` and make the results unique. Meta rejects an
+ * interactive payload whose buttons or rows share a title (HTTP 400, error
+ * #131009 "Duplicate button title"), which happens when a sender belongs to
+ * two same-named companies or when two long names truncate to the same
+ * prefix. Colliding entries (compared case-insensitively) get their 1-based
+ * position appended: the same digit the numbered text variant and the
+ * typed-digit answer path use, so a "Bolag AB 2" button and a "2" reply mean
+ * the same option. The result never exceeds `max`.
+ */
+export function uniqueTitles(titles: string[], max: number): string[] {
+  const truncated = titles.map((t) => truncateTitle(t, max))
+  const occurrences = new Map<string, number>()
+  for (const title of truncated) {
+    const key = title.toLowerCase()
+    occurrences.set(key, (occurrences.get(key) ?? 0) + 1)
+  }
+  return truncated.map((title, i) => {
+    if ((occurrences.get(title.toLowerCase()) ?? 0) < 2) return title
+    const suffix = ` ${i + 1}`
+    return `${truncateTitle(titles[i], max - suffix.length)}${suffix}`
+  })
+}
+
 export interface SendReplyButtonsArgs extends SendMessageBase {
   body: string
   /** At most MAX_REPLY_BUTTONS options; extras are dropped defensively. */
@@ -212,6 +236,10 @@ export async function sendReplyButtons(
   args: SendReplyButtonsArgs,
 ): Promise<SendTextResult> {
   const buttons = args.buttons.slice(0, MAX_REPLY_BUTTONS)
+  const titles = uniqueTitles(
+    buttons.map((b) => b.title),
+    BUTTON_TITLE_MAX,
+  )
   const result = await postToGraph(
     {
       messaging_product: 'whatsapp',
@@ -222,9 +250,9 @@ export async function sendReplyButtons(
         type: 'button',
         body: { text: args.body },
         action: {
-          buttons: buttons.map((b) => ({
+          buttons: buttons.map((b, i) => ({
             type: 'reply',
-            reply: { id: b.id, title: truncateTitle(b.title, BUTTON_TITLE_MAX) },
+            reply: { id: b.id, title: titles[i] },
           })),
         },
       },
@@ -259,6 +287,10 @@ export async function sendList(
   args: SendListArgs,
 ): Promise<SendTextResult> {
   const rows = args.rows.slice(0, MAX_LIST_ROWS)
+  const titles = uniqueTitles(
+    rows.map((r) => r.title),
+    LIST_ROW_TITLE_MAX,
+  )
   const result = await postToGraph(
     {
       messaging_product: 'whatsapp',
@@ -272,9 +304,9 @@ export async function sendList(
           button: truncateTitle(args.buttonLabel, BUTTON_TITLE_MAX),
           sections: [
             {
-              rows: rows.map((r) => ({
+              rows: rows.map((r, i) => ({
                 id: r.id,
-                title: truncateTitle(r.title, LIST_ROW_TITLE_MAX),
+                title: titles[i],
               })),
             },
           ],
