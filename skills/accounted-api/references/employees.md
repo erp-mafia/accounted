@@ -40,6 +40,34 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "id": "a8f1…",
+      "first_name": "Anna",
+      "last_name": "Andersson",
+      "personnummer_masked": "YYYYMMDDXXXX",
+      "employment_type": "employee",
+      "employment_start": "2024-01-15",
+      "employment_end": null,
+      "salary_type": "monthly",
+      "monthly_salary": 35000,
+      "hourly_rate": null,
+      "f_skatt_status": "a_skatt",
+      "is_active": true,
+      "created_at": "2024-01-15T08:00:00Z"
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12",
+    "next_cursor": null
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/employees`
@@ -104,6 +132,22 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "first_name": "Anna",
+  "last_name": "Andersson",
+  "personnummer": "YYYYMMDDNNNN",
+  "employment_type": "employee",
+  "employment_start": "2024-01-15",
+  "salary_type": "monthly",
+  "monthly_salary": 35000,
+  "tax_table_number": 33,
+  "tax_column": 1,
+  "tax_municipality": "Stockholm"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -135,6 +179,38 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "a8f1…",
+    "first_name": "Anna",
+    "last_name": "Andersson",
+    "personnummer_masked": "YYYYMMDDXXXX",
+    "employment_type": "employee",
+    "employment_start": "2024-01-15",
+    "employment_end": null,
+    "employment_degree": 100,
+    "salary_type": "monthly",
+    "monthly_salary": 35000,
+    "hourly_rate": null,
+    "tax_table_number": 33,
+    "tax_column": 1,
+    "tax_municipality": "Stockholm",
+    "is_sidoinkomst": false,
+    "f_skatt_status": "a_skatt",
+    "vacation_rule": "procentregeln",
+    "vacation_days_per_year": 25,
+    "is_active": true,
+    "created_at": "2024-01-15T08:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -213,6 +289,29 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "a8f1…",
+    "first_name": "Anna",
+    "last_name": "Andersson",
+    "personnummer": "YYYYMMDDNNNN",
+    "employment_type": "employee",
+    "employment_start": "2024-01-15",
+    "employment_end": null,
+    "salary_type": "monthly",
+    "monthly_salary": 35000,
+    "f_skatt_status": "a_skatt",
+    "is_active": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `PATCH /api/v1/companies/{companyId}/employees/{id}`
@@ -275,6 +374,14 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "monthly_salary": 38000,
+  "tax_municipality": "Göteborg"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -324,6 +431,16 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "a8f1…",
+    "monthly_salary": 38000
   }
 }
 ```
@@ -388,6 +505,25 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "salary_absence_day_id": "abs_91d2…",
+      "absence_date": "2026-03-03",
+      "absence_type": "sick",
+      "hours": 8,
+      "notes": null
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `PUT /api/v1/companies/{companyId}/employees/{id}/absence`
@@ -423,6 +559,15 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "from": "2026-03-03",
+  "to": "2026-03-07",
+  "absence_type": "sick"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -436,6 +581,26 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "count": 5,
+    "days": [
+      {
+        "absence_date": "2026-03-03",
+        "absence_type": "sick",
+        "hours": 8
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -471,6 +636,19 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "deleted_count": 2
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -525,6 +703,23 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "employee_id": "emp_77b2…",
+    "cutover_date": "2026-07-01",
+    "ytd_gross": 210000,
+    "vacation_paid_days_remaining": 12.5,
+    "locked": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `PUT /api/v1/companies/{companyId}/employees/{id}/opening-balances`
@@ -564,6 +759,23 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "cutover_date": "2026-07-01",
+  "ytd_gross": 210000,
+  "ytd_tax": 48000,
+  "ytd_net": 162000,
+  "vacation_paid_days_remaining": 12.5,
+  "vacation_saved_days_by_year": {
+    "2025": 5
+  },
+  "opening_semester_liability": 42000,
+  "opening_semester_liability_avgifter": 13196.4,
+  "karens_periods_adjustment": 1
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -589,6 +801,21 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "employee_id": "emp_77b2…",
+    "cutover_date": "2026-07-01",
+    "locked": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -641,6 +868,28 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "employee_id": "emp_77b2…",
+    "vacation_year_start": "2026-01-01",
+    "entitled_days": 25,
+    "taken_days": 10,
+    "remaining_days": 15,
+    "saved_days": {
+      "2025": 5
+    },
+    "saved_days_total": 5,
+    "estimated_liability_sek": 31151.4
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `PUT /api/v1/companies/{companyId}/employees/opening-balances`
@@ -669,6 +918,21 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "items": [
+    {
+      "employee_id": "emp_77b2…",
+      "cutover_date": "2026-07-01",
+      "ytd_gross": 210000,
+      "ytd_tax": 48000,
+      "ytd_net": 162000
+    }
+  ]
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -682,6 +946,26 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "count": 1,
+    "rows": [
+      {
+        "employee_id": "emp_77b2…",
+        "cutover_date": "2026-07-01",
+        "locked": false
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -713,6 +997,13 @@ Request body:
 { vacation_year_start?: string, book_adjustment?: boolean }
 ```
 
+Example request:
+```json
+{
+  "book_adjustment": true
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -723,6 +1014,27 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "vacation_year_closure_id": "vyc_a1b2…",
+    "adjustment_entry_id": "je_c3d4…",
+    "report": {
+      "vacation_year_start": "2025-01-01",
+      "rows": [],
+      "sek": {
+        "drift_2920": 8690.84
+      }
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
