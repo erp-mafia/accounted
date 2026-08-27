@@ -175,4 +175,61 @@ describe('POST /api/salary/employees', () => {
     expect(JSON.stringify(body)).not.toContain(NEW_PNR)
     expect(JSON.stringify(body)).not.toContain('9802')
   })
+
+  // #1913: the NewEmployeeDialog sends the jämkning beslut on create; pin that
+  // the insert carries it, and that omitting it inserts nulls (no beslut).
+  const CREATE_BASE = {
+    first_name: 'Test',
+    last_name: 'Testsson',
+    personnummer: NEW_PNR,
+    employment_start: '2026-01-01',
+    monthly_salary: 30000,
+    tax_table_number: 34,
+    tax_municipality: 'Stockholm',
+  }
+
+  function postRequest(body: Record<string, unknown>) {
+    return new Request('https://x.test/api/salary/employees', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  }
+
+  it('inserts the jämkning percentage and validity when provided', async () => {
+    const { supabase, insert } = supabaseWithInsert({ id: 'emp-new', personnummer: encryptPersonnummer(NEW_PNR) })
+    authed(supabase)
+
+    const res = await POST(
+      postRequest({
+        ...CREATE_BASE,
+        jamkning_percentage: 12.5,
+        jamkning_valid_from: '2026-01-01',
+        jamkning_valid_to: '2026-12-31',
+      }),
+      params,
+    )
+
+    expect(res.status).toBe(201)
+    expect(insert).toHaveBeenCalledTimes(1)
+    expect(insert.mock.calls[0][0]).toMatchObject({
+      jamkning_percentage: 12.5,
+      jamkning_valid_from: '2026-01-01',
+      jamkning_valid_to: '2026-12-31',
+    })
+  })
+
+  it('inserts null jämkning fields when the body omits them', async () => {
+    const { supabase, insert } = supabaseWithInsert({ id: 'emp-new', personnummer: encryptPersonnummer(NEW_PNR) })
+    authed(supabase)
+
+    const res = await POST(postRequest(CREATE_BASE), params)
+
+    expect(res.status).toBe(201)
+    expect(insert.mock.calls[0][0]).toMatchObject({
+      jamkning_percentage: null,
+      jamkning_valid_from: null,
+      jamkning_valid_to: null,
+    })
+  })
 })

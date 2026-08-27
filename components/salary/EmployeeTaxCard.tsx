@@ -16,6 +16,13 @@ export interface EmployeeTaxValue {
   tax_table_number: number | null
   tax_column: number
   tax_municipality: string
+  /**
+   * Jämkning (Skatteverket beslut om ändrad beräkning av skatteavdrag). All
+   * three are null when there is no beslut; a null percentage clears it.
+   */
+  jamkning_percentage: number | null
+  jamkning_valid_from: string | null
+  jamkning_valid_to: string | null
 }
 
 interface EmployeeTaxCardProps {
@@ -43,6 +50,9 @@ function RequiredMark() {
  * an opaque skattetabell (29-42) and kolumn (1-6), it derives both from data we
  * already have: the folkbokföringskommun fills the tax table, and the
  * personnummer fills the column. Manual overrides remain for edge cases.
+ * A jämkning beslut (fixed percentage with a validity period) can be entered
+ * alongside the table: the engine uses the percentage while the beslut is
+ * valid and falls back to the table outside that window.
  */
 export default function EmployeeTaxCard({
   personnummer,
@@ -65,8 +75,24 @@ export default function EmployeeTaxCard({
   // Editing an existing employee: respect their saved column. New employee:
   // let the personnummer drive it until the user picks one.
   const [columnTouched, setColumnTouched] = useState(initial?.tax_column != null)
+  // Jämkning is kept as raw input strings so a half-typed value ("12.") does
+  // not snap; the parsed number is derived below. Not rounded: decimals like
+  // 12.5 are legal (the API caps at 0..100).
+  const [jamkningPct, setJamkningPct] = useState(
+    initial?.jamkning_percentage != null ? String(initial.jamkning_percentage) : ''
+  )
+  const [jamkningFrom, setJamkningFrom] = useState(initial?.jamkning_valid_from ?? '')
+  const [jamkningTo, setJamkningTo] = useState(initial?.jamkning_valid_to ?? '')
 
   const requiresTable = fSkatt === 'a_skatt' && !sido
+
+  const jamkningValue = (() => {
+    const n = parseFloat(jamkningPct)
+    return Number.isFinite(n) ? n : null
+  })()
+  // Jämkning only reaches the engine for A-skatt without sidoinkomst, so like
+  // tax_table_number it is reported as null (= clear the beslut) otherwise.
+  const hasJamkning = requiresTable && jamkningValue !== null
 
   const derivedColumn = useMemo(
     () => deriveTaxColumn(personnummer, incomeYear),
@@ -92,8 +118,22 @@ export default function EmployeeTaxCard({
       tax_table_number: requiresTable ? tableNumber : null,
       tax_column: effectiveColumn,
       tax_municipality: municipality.trim(),
+      jamkning_percentage: hasJamkning ? jamkningValue : null,
+      jamkning_valid_from: hasJamkning ? jamkningFrom || null : null,
+      jamkning_valid_to: hasJamkning ? jamkningTo || null : null,
     })
-  }, [fSkatt, sido, tableNumber, effectiveColumn, municipality, requiresTable])
+  }, [
+    fSkatt,
+    sido,
+    tableNumber,
+    effectiveColumn,
+    municipality,
+    requiresTable,
+    hasJamkning,
+    jamkningValue,
+    jamkningFrom,
+    jamkningTo,
+  ])
 
   const body = (
     <>
@@ -247,6 +287,69 @@ export default function EmployeeTaxCard({
                 ) : null}
               </div>
             </div>
+
+            {/* Jämkning: a Skatteverket beslut overrides the table with a fixed
+                percentage for a bounded period. The engine only applies it when
+                BOTH dates are set, so both are required as soon as a percentage
+                is entered (native `required`: both hosts render this inside a
+                <form>). The table fields stay visible above: they apply again
+                once the beslut expires. */}
+            <div className="space-y-2">
+              <Label htmlFor="jamkning_percentage">
+                <InfoTooltip content={t('tax_jamkning_tooltip')}>
+                  {t('tax_jamkning_label')}
+                </InfoTooltip>
+              </Label>
+              <Input
+                id="jamkning_percentage"
+                type="number"
+                min="0"
+                max="100"
+                step="any"
+                inputMode="decimal"
+                value={jamkningPct}
+                onChange={(e) => setJamkningPct(e.target.value)}
+                disabled={disabled}
+              />
+              <p className="text-xs text-muted-foreground">{t('tax_jamkning_hint')}</p>
+            </div>
+
+            {jamkningValue !== null && (
+              <div className="space-y-2">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="jamkning_valid_from">
+                      {t('tax_jamkning_valid_from')}
+                      <RequiredMark />
+                    </Label>
+                    <Input
+                      id="jamkning_valid_from"
+                      type="date"
+                      value={jamkningFrom}
+                      onChange={(e) => setJamkningFrom(e.target.value)}
+                      required
+                      disabled={disabled}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="jamkning_valid_to">
+                      {t('tax_jamkning_valid_to')}
+                      <RequiredMark />
+                    </Label>
+                    <Input
+                      id="jamkning_valid_to"
+                      type="date"
+                      value={jamkningTo}
+                      min={jamkningFrom || undefined}
+                      onChange={(e) => setJamkningTo(e.target.value)}
+                      required
+                      disabled={disabled}
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">{t('tax_jamkning_dates_hint')}</p>
+              </div>
+            )}
           </>
         ) : (
           <p className="rounded-lg border border-dashed border-input px-3 py-3 text-sm text-muted-foreground">

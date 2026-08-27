@@ -126,6 +126,9 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
     tax_table_number: null,
     tax_column: 1,
     tax_municipality: '',
+    jamkning_percentage: null,
+    jamkning_valid_from: null,
+    jamkning_valid_to: null,
   })
 
   function setDimension(dimNo: string, code: string | null) {
@@ -173,6 +176,9 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
       tax_table_number: tax.tax_table_number ?? undefined,
       tax_column: tax.tax_column,
       tax_municipality: tax.tax_municipality || undefined,
+      jamkning_percentage: tax.jamkning_percentage ?? undefined,
+      jamkning_valid_from: tax.jamkning_valid_from ?? undefined,
+      jamkning_valid_to: tax.jamkning_valid_to ?? undefined,
       email: form.get('email') as string || undefined,
       phone: form.get('phone') as string || undefined,
       address_line1: form.get('address_line1') as string || undefined,

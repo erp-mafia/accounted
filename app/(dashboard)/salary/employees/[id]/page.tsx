@@ -175,6 +175,17 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       tax_table_number: tax?.tax_table_number ?? undefined,
       tax_column: tax?.tax_column ?? undefined,
       tax_municipality: tax?.tax_municipality || undefined,
+      // Jämkning is the exception to the sparse-patch rule above: an explicit
+      // null is intentional (null = clear the beslut; the route spreads the
+      // body so null reaches the UPDATE). Guarded on `tax` so a card that has
+      // not reported yet can never wipe a stored beslut.
+      ...(tax
+        ? {
+            jamkning_percentage: tax.jamkning_percentage,
+            jamkning_valid_from: tax.jamkning_valid_from,
+            jamkning_valid_to: tax.jamkning_valid_to,
+          }
+        : {}),
       email: form.get('email') as string || undefined,
       phone: form.get('phone') as string || undefined,
       address_line1: form.get('address_line1') as string || undefined,
@@ -428,6 +439,24 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
         <DefRow label={t('tax_column_label')}>
           <span className="tabular-nums">{employee.tax_column}</span>
         </DefRow>
+        <DefRow label={t('tax_jamkning_label')}>
+          {employee.jamkning_percentage != null ? (
+            <>
+              <span className="tabular-nums">{employee.jamkning_percentage} %</span>
+              {employee.jamkning_valid_from && employee.jamkning_valid_to && (
+                <span className="text-muted-foreground">
+                  {' · '}
+                  {t('tax_jamkning_detail_period', {
+                    from: formatDate(employee.jamkning_valid_from),
+                    to: formatDate(employee.jamkning_valid_to),
+                  })}
+                </span>
+              )}
+            </>
+          ) : (
+            <DefEmpty />
+          )}
+        </DefRow>
       </DetailSection>
 
       <DetailSection kicker={t('form_bank_account')}>
@@ -651,6 +680,9 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                       tax_table_number: employee.tax_table_number ?? null,
                       tax_column: employee.tax_column ?? 1,
                       tax_municipality: employee.tax_municipality || '',
+                      jamkning_percentage: employee.jamkning_percentage ?? null,
+                      jamkning_valid_from: employee.jamkning_valid_from ?? null,
+                      jamkning_valid_to: employee.jamkning_valid_to ?? null,
                     }}
                   />
                   {fSkattVerifiedLabel && (
