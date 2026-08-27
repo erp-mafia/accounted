@@ -1,0 +1,48 @@
+# Postgres + PostgREST for the MCP tool integration tests.
+#
+# The existing pg-real suite talks to Postgres through a raw `pg` Pool, which
+# is the right shape for testing triggers and RLS in SQL. It is the wrong shape
+# for testing the MCP tools, because every one of them queries through
+# supabase-js, and supabase-js speaks PostgREST rather than SQL. The embeds,
+# the `or=(col.is.null,col.not.in.(...))` forms, the `.contains()` filters and
+# the column names in `.select()` strings are all resolved by PostgREST at
+# request time, so a raw-SQL test cannot see any of them.
+#
+# That is the gap this stack exists to close: as of 2026-08-27 all 100 files in
+# extensions/general/mcp-server/__tests__ fake supabase, and query-journal.test.ts
+# says out loud that its query chain is "exercised by the live MCP smoke test",
+# which does not exist in CI.
+services:
+  postgres:
+    # Same image and tag as the pg-real CI job, deliberately: it ships the auth
+    # schema, auth.uid(), the anon/authenticated/service_role roles and the
+    # extensions this repo's migrations need. Plain postgres:15 would not.
+    image: supabase/postgres:15.8.1.060
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '54329:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  postgrest:
+    image: postgrest/postgrest:v12.2.3
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://postgres:postgres@postgres:5432/postgres
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      # Must match TOOL_PG_JWT_SECRET in tests/tool-pg/env.ts. Length matters:
+      # PostgREST refuses a secret shorter than 32 bytes.
+      PGRST_JWT_SECRET: super-secret-jwt-token-with-at-least-32-characters-long
+      # The tools call RPCs and read a lot of rows; the default 1000-row cap
+      # would silently truncate and make a passing test meaningless.
+      PGRST_DB_MAX_ROWS: '100000'
+      PGRST_DB_POOL: '10'
+    ports:
+      - '54330:3000'

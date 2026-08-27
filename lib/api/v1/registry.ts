@@ -383,9 +383,21 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
 
     // Binary responses (e.g. application/pdf) declare a `format: binary`
     // schema rather than deriving from the Zod success type.
+    // The registry's worked `example` travels with the schema as an OpenAPI
+    // media-type `example`. Without this the examples reached only the docs
+    // markdown builder (lib/docs/content/reference.ts): the spec itself carried
+    // none, so neither /api/v1/openapi.json consumers nor the generated
+    // skills/accounted-api ever saw a concrete request or response body.
+    // Attached to JSON media types only: a binary response (application/pdf)
+    // has no meaningful JSON example to show.
     const successContent = def.response.contentType && def.response.contentType !== 'application/json'
       ? { [def.response.contentType]: { schema: { type: 'string', format: 'binary' } } }
-      : { 'application/json': { schema: zodToJsonSchema(def.response.success) } }
+      : {
+          'application/json': {
+            schema: zodToJsonSchema(def.response.success),
+            example: def.example.response,
+          },
+        }
 
     // 204 No Content endpoints (DELETEs returning noContent()) carry no body:
     // emit a bare 204 instead of a 200 { data, meta } so the spec stops
@@ -428,7 +440,16 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
       }
       requestBody = {
         required: true,
-        content: { [contentType]: { schema: bodySchema } },
+        content: {
+          [contentType]: {
+            schema: bodySchema,
+            // Only JSON bodies carry a worked example; a multipart upload's
+            // example would be a file part, which JSON cannot express.
+            ...(def.example.request && contentType === 'application/json'
+              ? { example: def.example.request }
+              : {}),
+          },
+        },
       }
     }
 

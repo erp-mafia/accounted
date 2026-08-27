@@ -1,5 +1,7 @@
 import { redirect } from 'next/navigation'
+import Link from 'next/link'
 import { getTranslations } from 'next-intl/server'
+import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/page-header'
 import { fetchClientOverview } from '@/lib/clients/fetch-client-overview'
 import { getDashboardAuthContext } from '../request-context'
@@ -34,7 +36,14 @@ export default async function ClientsPage() {
     <div className="space-y-8">
       <PageHeader
         title={t('title')}
-        action={canCreate ? <NewClientCompanyButton /> : undefined}
+        action={
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" className="text-muted-foreground" asChild>
+              <Link href="/clients/access">{t('access_link')}</Link>
+            </Button>
+            {canCreate && <NewClientCompanyButton />}
+          </div>
+        }
       />
       <ClientsTable clients={overview.clients} />
     </div>
