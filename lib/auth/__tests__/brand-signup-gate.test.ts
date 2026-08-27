@@ -34,14 +34,14 @@ function makeBrand(overrides: Partial<Brand> = {}): Brand {
   return {
     id: 'brand-1',
     teamId: 'team-1',
-    domain: 'app.siffra.se',
-    appName: 'Siffra',
+    domain: 'app.testbrand.example',
+    appName: 'Testbrand',
     logoUrl: null,
     faviconUrl: null,
     brandColor: '#123456',
     chromeColor: null,
     fontKey: 'default',
-    supportEmail: 'support@siffra.se',
+    supportEmail: 'support@testbrand.example',
     authEmailFrom: null,
     senderDomain: null,
     senderDomainStatus: 'unverified',
@@ -85,7 +85,7 @@ describe('evaluateBrandSignupGate', () => {
   it('allows on an open brand without touching the allowlist', async () => {
     resolveBrandByHostMock.mockResolvedValue(makeBrand({ signupMode: 'open' }))
     const result = await evaluateBrandSignupGate({
-      host: 'app.siffra.se',
+      host: 'app.testbrand.example',
       email: 'anyone@example.com',
     })
     expect(result.allowed).toBe(true)
@@ -98,7 +98,7 @@ describe('evaluateBrandSignupGate', () => {
     mock.enqueue({ data: { id: 'entry-1' } })
 
     const result = await evaluateBrandSignupGate({
-      host: 'app.siffra.se',
+      host: 'app.testbrand.example',
       email: '  Kund@Example.COM ',
     })
 
@@ -117,7 +117,7 @@ describe('evaluateBrandSignupGate', () => {
     mock.enqueue({ data: null })
 
     const result = await evaluateBrandSignupGate({
-      host: 'app.siffra.se',
+      host: 'app.testbrand.example',
       email: 'stranger@example.com',
     })
 
@@ -128,7 +128,7 @@ describe('evaluateBrandSignupGate', () => {
     resolveBrandResultMock.mockResolvedValue({ brand: null, lookupFailed: true })
 
     const result = await evaluateBrandSignupGate({
-      host: 'app.siffra.se',
+      host: 'app.testbrand.example',
       email: 'anyone@example.com',
     })
 
@@ -142,7 +142,7 @@ describe('evaluateBrandSignupGate', () => {
     mock.enqueue({ data: null, error: { message: 'boom' } })
 
     const result = await evaluateBrandSignupGate({
-      host: 'app.siffra.se',
+      host: 'app.testbrand.example',
       email: 'kund@example.com',
     })
 
@@ -164,7 +164,7 @@ describe('evaluateBrandSignupGate', () => {
     ])
 
     const result = await evaluateBrandSignupGate({
-      host: 'app.siffra.se',
+      host: 'app.testbrand.example',
       email: 'invitee@example.com',
       inviteToken: 'gnubok_inv_abc',
     })
@@ -192,7 +192,7 @@ describe('evaluateBrandSignupGate', () => {
     ])
 
     const result = await evaluateBrandSignupGate({
-      host: 'app.siffra.se',
+      host: 'app.testbrand.example',
       email: 'stranger@example.com',
       inviteToken: 'gnubok_inv_abc',
     })
@@ -214,7 +214,7 @@ describe('evaluateBrandSignupGate', () => {
     ])
 
     const result = await evaluateBrandSignupGate({
-      host: 'app.siffra.se',
+      host: 'app.testbrand.example',
       email: 'invitee@example.com',
       inviteToken: 'gnubok_inv_abc',
     })
@@ -232,7 +232,7 @@ describe('isEmailOnBrandAllowlist', () => {
 
 describe('resolveBrandDomainBounce', () => {
   const base = {
-    host: 'app.siffra.se',
+    host: 'app.testbrand.example',
     userEmail: 'user@example.com',
     teamIds: [] as string[],
     companyTeamIds: [] as Array<string | null>,
@@ -283,7 +283,7 @@ describe('resolveBrandDomainBounce', () => {
     expect(
       await resolveBrandDomainBounce({
         ...base,
-        canonicalAppUrl: 'https://app.siffra.se',
+        canonicalAppUrl: 'https://app.testbrand.example',
       }),
     ).toBeNull()
   })

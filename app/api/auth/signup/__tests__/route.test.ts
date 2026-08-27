@@ -51,7 +51,7 @@ describe('POST /api/auth/signup', () => {
     gateMock.mockResolvedValue({ allowed: false, brand: { id: 'brand-1' } })
 
     const res = await POST(
-      makeRequest(validBody, { host: 'app.siffra.se' }),
+      makeRequest(validBody, { host: 'app.testbrand.example' }),
     )
     const { body: json } = await parseJsonResponse<{ error: { code: string } }>(res)
 
@@ -64,7 +64,7 @@ describe('POST /api/auth/signup', () => {
     gateMock.mockResolvedValue({ allowed: false, brand: null, lookupFailed: true })
 
     const res = await POST(
-      makeRequest(validBody, { host: 'app.siffra.se' }),
+      makeRequest(validBody, { host: 'app.testbrand.example' }),
     )
     const { body: json } = await parseJsonResponse<{ error: { code: string } }>(res)
 
@@ -79,14 +79,14 @@ describe('POST /api/auth/signup', () => {
         { ...validBody, email: '  Kund@Example.COM ' },
         {
           host: 'internal',
-          'x-forwarded-host': 'app.siffra.se',
+          'x-forwarded-host': 'app.testbrand.example',
           cookie: 'gnubok-invite-token=gnubok_inv_x',
         },
       ),
     )
 
     expect(gateMock).toHaveBeenCalledWith({
-      host: 'app.siffra.se',
+      host: 'app.testbrand.example',
       email: 'kund@example.com',
       inviteToken: 'gnubok_inv_x',
     })
@@ -95,7 +95,7 @@ describe('POST /api/auth/signup', () => {
   it('signs up with a confirmation callback on the originating host', async () => {
     const res = await POST(
       makeRequest(validBody, {
-        'x-forwarded-host': 'app.siffra.se',
+        'x-forwarded-host': 'app.testbrand.example',
         'x-forwarded-proto': 'https',
       }),
     )
@@ -107,7 +107,7 @@ describe('POST /api/auth/signup', () => {
       email: 'kund@example.com',
       password: 'Str0ng!Pass',
       options: {
-        emailRedirectTo: 'https://app.siffra.se/auth/callback',
+        emailRedirectTo: 'https://app.testbrand.example/auth/callback',
       },
     })
   })

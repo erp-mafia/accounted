@@ -37,7 +37,7 @@ async function insertBrand(teamId: string, signupMode?: string): Promise<string>
   const id = randomUUID()
   await getPool().query(
     `INSERT INTO public.brands (id, team_id, domain, app_name, brand_color, support_email, signup_mode)
-     VALUES ($1, $2, $3, 'Siffra', '#2563eb', 'support@siffra.se', COALESCE($4, 'open'))`,
+     VALUES ($1, $2, $3, 'Testbrand', '#2563eb', 'support@testbrand.example', COALESCE($4, 'open'))`,
     [id, teamId, `${randomUUID().slice(0, 8)}.accounted.se`, signupMode ?? null],
   )
   return id
