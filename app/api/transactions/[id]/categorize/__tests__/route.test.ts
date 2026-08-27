@@ -86,6 +86,13 @@ vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
   reverseOrphanedJournalEntry: (...args: unknown[]) => mockReverseOrphanedJournalEntry(...args),
 }))
 
+// Null-return disambiguation (issue #1947): the route asks checkPeriodLock
+// whether the engine's null was a closed covering period or a missing one.
+const mockCheckPeriodLock = vi.fn()
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: (...args: unknown[]) => mockCheckPeriodLock(...args),
+}))
+
 const mockFindMissingActiveAccounts = vi.fn()
 vi.mock('@/lib/bookkeeping/account-validation', async () => {
   const actual = await vi.importActual<typeof import('@/lib/bookkeeping/account-validation')>(
@@ -126,6 +133,8 @@ describe('POST /api/transactions/[id]/categorize', () => {
     mockDetectDup.mockResolvedValue(null)
     mockAppendProcessingHistory.mockResolvedValue('evt-1')
     mockReverseOrphanedJournalEntry.mockResolvedValue(undefined)
+    // Default: no covering period at all. The closed-period test overrides this.
+    mockCheckPeriodLock.mockResolvedValue({ locked: false, reason: 'no_fiscal_period' })
   })
 
   it('delegates the CAS-race orphan to engine-backed storno compensation', async () => {
@@ -569,7 +578,12 @@ describe('POST /api/transactions/[id]/categorize', () => {
       })
       const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
       return parseJsonResponse<{
-        error: { code: string; message: string; details?: { cause?: string } }
+        error: {
+          code: string
+          message: string
+          message_en?: string
+          details?: { cause?: string; reason?: string; fiscal_period_id?: string }
+        }
       }>(response)
     }
 
@@ -586,6 +600,12 @@ describe('POST /api/transactions/[id]/categorize', () => {
       expect(body.error.message).toBe(
         'Perioden är låst. Verifikationen kan inte skapas i en stängd eller låst period.',
       )
+      // The sv/en pair is derived from the SAME underlying error, per the
+      // errorResponseFromCode contract (provide both or neither): the English
+      // side must not stay on the generic registry text while the Swedish
+      // side names the period lock, and must never carry envelope-field prose.
+      expect(body.error.message_en).toBe('Bookkeeping database operation failed.')
+      expect(body.error.message_en).not.toContain('details.cause')
       expect(body.error.details?.cause).toBe('BOOKKEEPING_DATABASE_ERROR')
       // Nothing persisted: is_business/category stay NULL so the row keeps
       // matching the worklist predicate and stays in "Att bokföra".
@@ -626,12 +646,37 @@ describe('POST /api/transactions/[id]/categorize', () => {
     it('returns NO_OPEN_PERIOD_FOR_DATE when the engine finds no covering period (null entry)', async () => {
       enqueueUpToEngine()
       mockCreateTransactionJournalEntry.mockResolvedValue(null)
+      mockCheckPeriodLock.mockResolvedValue({ locked: false, reason: 'no_fiscal_period' })
 
       const { status, body } = await categorize()
 
       expect(status).toBe(400)
       expect(body.error.code).toBe('NO_OPEN_PERIOD_FOR_DATE')
+      expect(body.error.details?.reason).toBe('no_fiscal_period')
       // Refused before the CAS write: no update, no orphan, so no storno.
+      expect(findCalls('transactions', 'update')).toEqual([])
+      expect(mockSaveUserMappingRule).not.toHaveBeenCalled()
+      expect(mockReverseOrphanedJournalEntry).not.toHaveBeenCalled()
+    })
+
+    it('returns PERIOD_LOCKED (reason period_is_closed) when the covering year is closed', async () => {
+      // findFiscalPeriod filters is_closed = false, so a klarmarkerad year
+      // also surfaces as the engine's null return. The route must not claim
+      // the räkenskapsår does not exist when it exists and is closed.
+      enqueueUpToEngine()
+      mockCreateTransactionJournalEntry.mockResolvedValue(null)
+      mockCheckPeriodLock.mockResolvedValue({
+        locked: true,
+        reason: 'period_is_closed',
+        fiscal_period_id: 'fp-2024',
+      })
+
+      const { status, body } = await categorize()
+
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('PERIOD_LOCKED')
+      expect(body.error.details?.reason).toBe('period_is_closed')
+      expect(body.error.details?.fiscal_period_id).toBe('fp-2024')
       expect(findCalls('transactions', 'update')).toEqual([])
       expect(mockSaveUserMappingRule).not.toHaveBeenCalled()
       expect(mockReverseOrphanedJournalEntry).not.toHaveBeenCalled()

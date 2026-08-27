@@ -7,6 +7,7 @@ import { getTemplateById, buildMappingResultFromTemplate, validateTemplateForEnt
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
+import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
@@ -813,23 +814,43 @@ export const POST = withRouteContext(
       // canonical worklist predicate in lib/worklist/types.ts (is_business IS
       // NULL) while it was still unbooked, so it vanished from "Att bokföra"
       // and the nav badge with no reminder to finish it. Nothing is persisted
-      // when the entry fails: the row stays uncategorized and visible. The
-      // Swedish reason comes from getErrorMessage; the raw message is already
-      // logged above and must never reach the user verbatim (issue #337).
+      // when the entry fails: the row stays uncategorized and visible. Both
+      // message locales come from getErrorMessage (sv/en from the same error,
+      // per the errorResponseFromCode contract: provide both or neither); the
+      // raw message is already logged above and must never reach the user
+      // verbatim (issue #337).
+      const structured = getStructuredError(err)
       return errorResponseFromCode('TX_CATEGORIZE_JOURNAL_ENTRY_FAILED', txLog, {
         requestId,
         messageSv: getErrorMessage(err, { context: 'transaction' }),
-        details: { cause: getStructuredError(err).code },
+        messageEn: getErrorMessage(err, { context: 'transaction', locale: 'en' }),
+        details: { cause: structured.code },
       })
     }
 
-    // createTransactionJournalEntry returns null (no throw) when no fiscal
-    // period covers the date and the pre-FY clamp does not apply. Same
-    // fail-closed rule: refuse rather than mark the row categorized-but-unbooked.
+    // createTransactionJournalEntry returns null (no throw) when
+    // findFiscalPeriod sees no OPEN period covering the date and the pre-FY
+    // clamp does not apply: either no fiscal period exists there at all, or
+    // the covering period exists but is closed (is_closed = true; findFiscalPeriod
+    // filters is_closed = false). Same fail-closed rule either way: refuse
+    // rather than mark the row categorized-but-unbooked. checkPeriodLock tells
+    // the two apart so a closed year answers PERIOD_LOCKED (reason
+    // period_is_closed) instead of claiming the räkenskapsår does not exist.
     if (!journalEntryId) {
+      const periodLock = await checkPeriodLock(supabase, companyId, transaction.date)
+      if (periodLock.locked) {
+        return errorResponseFromCode('PERIOD_LOCKED', txLog, {
+          requestId,
+          details: {
+            transaction_date: transaction.date,
+            reason: periodLock.reason,
+            fiscal_period_id: periodLock.fiscal_period_id,
+          },
+        })
+      }
       return errorResponseFromCode('NO_OPEN_PERIOD_FOR_DATE', txLog, {
         requestId,
-        details: { transaction_date: transaction.date },
+        details: { transaction_date: transaction.date, reason: 'no_fiscal_period' },
       })
     }
 

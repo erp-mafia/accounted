@@ -46,6 +46,8 @@ import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createLogger } from '@/lib/logger'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import type { InboxChannelContext, Transaction, TransactionCategory, EntityType, VatTreatment } from '@/types'
 
 const log = createLogger('transactions/categorize-core')
@@ -54,6 +56,12 @@ const log = createLogger('transactions/categorize-core')
 export interface CategorizeCoreResult {
   data?: Record<string, unknown>
   error?: string
+  /**
+   * Structured-error registry code for `error`, when the core has one.
+   * commit.ts surfaces it as CommitResult.code and persists it in
+   * result_data.error_code so approvers can branch on the failure mode.
+   */
+  errorCode?: string
   status?: number
 }
 
@@ -410,6 +418,34 @@ export async function categorizeMatchedTransaction(
     return { error: err instanceof Error ? err.message : 'Failed to create journal entry', status: 500 }
   }
 
+  // createTransactionJournalEntry returns null WITHOUT throwing when
+  // findFiscalPeriod sees no OPEN period covering the date and the pre-FY
+  // clamp does not apply: either no rakenskapsar exists there at all, or the
+  // covering period is closed (is_closed = true; a locked_at-only lock throws
+  // from the DB trigger and is rethrown above as a bookkeeping error). Fail
+  // closed exactly like the HTTP routes (issue #1947): refuse BEFORE the
+  // transactions update below, so the row never leaves "Att bokfora" as
+  // categorized-but-unbooked (journal_entry_id NULL) and the pending
+  // operation or bulk driver reports the failure instead of success.
+  // checkPeriodLock tells the two null causes apart for an honest message.
+  if (!journalEntryId) {
+    const verdict = await checkPeriodLock(supabase, companyId, transaction.date)
+    const code = verdict.locked ? 'PERIOD_LOCKED' : 'NO_OPEN_PERIOD_FOR_DATE'
+    log.warn('journal entry refused: no open fiscal period for date', {
+      txId,
+      companyId,
+      date: transaction.date,
+      reason: verdict.reason ?? null,
+    })
+    return {
+      error:
+        getErrorEntry(code)?.message_sv ??
+        'Det finns ingen öppen räkenskapsperiod som täcker transaktionsdatumet.',
+      errorCode: code,
+      status: 400,
+    }
+  }
+
   const updateQuery = supabase
     .from('transactions')
     .update({
@@ -614,10 +650,12 @@ export async function bulkBookMatchedInboxItems(
 
     if (result.error) {
       const reason =
-        result.status === 404 ? 'transaction_not_found'
-        : result.status === 409 ? 'already_booked_or_duplicate'
-        : result.status === 400 ? 'no_account_mapping'
-        : 'error'
+        result.errorCode === 'PERIOD_LOCKED' || result.errorCode === 'NO_OPEN_PERIOD_FOR_DATE'
+          ? 'no_open_period'
+          : result.status === 404 ? 'transaction_not_found'
+          : result.status === 409 ? 'already_booked_or_duplicate'
+          : result.status === 400 ? 'no_account_mapping'
+          : 'error'
       skipped.push({ item_id: itemId, reason, detail: result.error })
       continue
     }
