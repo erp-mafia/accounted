@@ -20,10 +20,6 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { FyPicker } from '@/components/common/FyPicker'
 import { mostRecentEndedVatPeriod } from '@/lib/vat/period-defaults'
 import { resolveInitialVatPeriodSelection } from '@/lib/vat/period-selection'
-import {
-  readStoredVatCadence,
-  writeStoredVatCadence,
-} from '@/components/common/vat-period-storage'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { cn, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -1522,36 +1518,26 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   // Company settings drive both the momsregistrerad gate and the default
   // periodicity (moms_period in Inställningar). Applied once per company the
   // first time its settings settle — as a render-phase adjustment, not an
-  // effect. A manual cadence change is persisted per company and restored on
-  // the next visit as long as moms_period is unchanged (only the cadence:
-  // the concrete period always re-seeds to the most recently ended one, the
-  // one that can actually be filed; the current one can never be, so seeding
-  // it forced a step-back click on every filing visit and a year-boundary
-  // trap in January). A company switch re-applies that resolution for the
-  // new company. `useCompanySettings` only refetches when the active company
-  // changes, so this never clobbers a manual selection mid-session.
+  // effect. A later manual change to the picker is preserved for the session,
+  // and a company switch re-applies the new company's setting. The cadence is
+  // deliberately NOT persisted across visits: the redovisningsperiod is fixed
+  // by the company's Skatteverket registration, so this mount-time re-seed is
+  // the control that self-heals an in-session detour to the wrong period
+  // type (see lib/vat/period-selection.ts). `useCompanySettings` only
+  // refetches when the active company changes, so this never clobbers a
+  // manual selection mid-session.
   const { settings, isLoading: settingsLoading, refetch: refetchSettings } = useCompanySettings()
   const [appliedCompany, setAppliedCompany] = useState<string | null>(null)
   const companyKey = settingsLoading ? null : (settings?.company_id ?? 'none')
   if (companyKey !== null && appliedCompany !== companyKey) {
     setAppliedCompany(companyKey)
-    const stored = settings?.company_id ? readStoredVatCadence(settings.company_id) : null
     const initial = resolveInitialVatPeriodSelection({
-      stored,
       momsPeriod: settings?.moms_period ?? null,
       over40m: settings?.vat_taxable_base_over_40m === true,
     })
     setPeriodType(initial.periodType)
     setYear(initial.year)
     setPeriod(initial.period)
-  }
-
-  const persistCadence = (periodTypeValue: VatPeriodType) => {
-    if (!settings?.company_id) return
-    writeStoredVatCadence(settings.company_id, {
-      periodType: periodTypeValue,
-      momsPeriod: settings.moms_period ?? null,
-    })
   }
 
   // Settings row present and the company answered "not VAT-registered" —
@@ -1582,7 +1568,6 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
     } else {
       setPeriod(1)
     }
-    persistCadence(value)
   }
 
   // Annual VAT (helårsmoms) is reported per räkenskapsår, not per calendar year.
