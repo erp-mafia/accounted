@@ -37,16 +37,16 @@ function MfaEnrollContent() {
 
   const returnTo = safeReturnTo(searchParams.get('returnTo'), '/')
 
+  // Always a hard navigation, for two reasons that point the same way.
   // Route-handler destinations (the MCP OAuth consent page sends new
-  // password accounts here with returnTo=/api/mcp-oauth/authorize…) return
-  // raw HTML the client router cannot render: hard-navigate, like /mfa/verify.
+  // password accounts here with returnTo=/api/mcp-oauth/authorize...) return
+  // raw HTML the client router cannot render. And enrolling raises the
+  // session to aal2, which lib/supabase/middleware.ts only re-evaluates on a
+  // fresh document request: `router.push` followed by `router.refresh` raced,
+  // the refresh won, and the user was left on the QR screen with 2FA already
+  // active and no way forward but the address bar (#1948).
   const leave = () => {
-    if (returnTo.startsWith('/api/')) {
-      window.location.assign(returnTo)
-      return
-    }
-    router.push(returnTo)
-    router.refresh()
+    window.location.assign(returnTo)
   }
   // Back must not bounce into the consent page: with no factor enrolled it
   // redirects straight back here. Abort the connect flow to the app instead.
