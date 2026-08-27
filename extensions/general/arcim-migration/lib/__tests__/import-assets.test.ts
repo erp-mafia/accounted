@@ -126,6 +126,8 @@ describe('isImportableStatus', () => {
     expect(isImportableStatus('SCRAPPED')).toBe(false)
     expect(isImportableStatus('DELETED')).toBe(false)
     expect(isImportableStatus('VOIDED')).toBe(false)
+    expect(isImportableStatus('CANCELLED')).toBe(false)
+    expect(isImportableStatus('CANCELED')).toBe(false)
     expect(isImportableStatus('NOT_ACTIVE')).toBe(false)
   })
 })

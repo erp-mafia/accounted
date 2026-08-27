@@ -23,7 +23,7 @@ import { roundOre } from '@/lib/money'
 import { isAccountNumber, isIsoDateShaped } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
 import type { AssetCategory } from '@/types'
-import type { SkipReasons } from '../types'
+import type { AssetSkipReasons } from '../types'
 
 const log = createLogger('extensions/arcim-migration/import-assets')
 
@@ -66,7 +66,7 @@ export interface AssetsStepResult {
   total: number
   imported: number
   skipped: number
-  skipReasons?: SkipReasons & { unsupported?: number }
+  skipReasons?: AssetSkipReasons
   errorSample?: string
   /** True when the Fortnox consent lacks the assets scope (or licence): the
    *  step was skipped as a whole rather than failing the migration. */
@@ -224,7 +224,7 @@ export function mapFortnoxAsset(
  */
 export function isImportableStatus(status: string | null | undefined): boolean {
   if (!status) return true
-  return !/sold|såld|scrap|utrangera|delete|raderad|void|annuller|makuler|not[_ ]?active|ej aktiv/i.test(status)
+  return !/sold|såld|scrap|utrangera|delete|raderad|void|cancel|annuller|makuler|not[_ ]?active|ej aktiv/i.test(status)
 }
 
 const fortnoxClient = new FortnoxClient()

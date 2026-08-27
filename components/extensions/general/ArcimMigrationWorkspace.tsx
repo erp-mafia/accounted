@@ -226,6 +226,7 @@ import type {
   MigrationResults,
   MigrationStepError,
   SkipReasons,
+  AssetSkipReasons,
 } from '@/extensions/general/arcim-migration/types'
 import AccountMappingStep from '@/components/import/AccountMappingStep'
 import ArcimMigrationTheater from '@/components/extensions/general/ArcimMigrationTheater'
@@ -2002,7 +2003,7 @@ function groupStepErrors(errors: MigrationStepError[]): { message: string; steps
 }
 
 function formatSkipReasons(
-  reasons?: SkipReasons & { unsupported?: number },
+  reasons?: AssetSkipReasons,
   entityType?: 'customer' | 'supplier' | 'invoice' | 'asset',
   errorSample?: string,
 ): string | undefined {

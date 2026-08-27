@@ -70,6 +70,15 @@ export interface SkipReasons {
 }
 
 /**
+ * Asset-step skip reasons: `unsupported` counts source assets the mapping
+ * cannot represent (no positive acquisition value, no acquisition date).
+ * One shared contract for the migration producer and the wizard consumer.
+ */
+export interface AssetSkipReasons extends SkipReasons {
+  unsupported?: number
+}
+
+/**
  * A migration step that failed against the provider API, surfaced to the user
  * instead of being swallowed into a "successful" empty sync. `message` is the
  * user-facing Swedish text (mapped from the structured error registry when the
@@ -127,7 +136,7 @@ export interface MigrationResults {
     total: number
     imported: number
     skipped: number
-    skipReasons?: SkipReasons & { unsupported?: number }
+    skipReasons?: AssetSkipReasons
     errorSample?: string
     scopesMissing?: boolean
   }
