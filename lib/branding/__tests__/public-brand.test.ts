@@ -21,6 +21,7 @@ const fullBrand: Brand = {
   senderDomain: 'mail.siffra.se',
   senderDomainStatus: 'verified',
   resendDomainId: 'rd_123',
+  signupMode: 'open',
 }
 
 describe('toPublicBrand', () => {
