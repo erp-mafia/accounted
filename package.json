@@ -24,7 +24,9 @@
     "validate:registry": "npx tsx scripts/validate-registry.ts",
     "check:lint": "node scripts/checks/no-new-lint-errors.mjs",
     "test": "vitest run --project unit",
-    "test:pg": "vitest run --project pg-real"
+    "test:pg": "vitest run --project pg-real",
+    "tools:pg:reset": "bash scripts/tool-pg/reset.sh",
+    "test:tools": "TOOL_PG_REST_URL=${TOOL_PG_REST_URL:-http://127.0.0.1:54330} vitest run --project tool-pg"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "2.0.69",
