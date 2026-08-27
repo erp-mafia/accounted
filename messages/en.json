@@ -1518,7 +1518,10 @@
     "step_receipts_description": "Photo the receipt or forward the email to your inbox address, and the document is read and waiting for you.",
     "step_receipts_action": "Open the inbox",
     "step_receipts_channels": "Email · WhatsApp · upload",
-    "step_receipts_channels_no_wa": "Email · upload"
+    "step_receipts_channels_no_wa": "Email · upload",
+    "step_claude_title": "Connect to Claude",
+    "step_claude_description": "Do your bookkeeping from the chat: drop receipts and SIE files, reconcile the tax account and ask about your numbers. Everything is already connected.",
+    "step_claude_action": "Connect to Claude"
   },
   "tax_assessment_notices": {
     "title": "Final tax notices and remaining tax",
