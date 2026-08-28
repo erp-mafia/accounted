@@ -137,7 +137,14 @@ export const ACCOUNT_RUTA: Record<string, { box: keyof VatDeclarationRutor; side
   '4547': { box: 'ruta50', side: 'debit' },   // Beskattningsunderlag import 6%
 }
 
-const VAT_ACCOUNTS = Object.keys(ACCOUNT_RUTA)
+/**
+ * The fixed BAS accounts that define a momsdeklaration line, and with it the
+ * settlement SHAPE detector passed as `p_ruta_accounts` to both
+ * get_vat_declaration_totals and get_vat_ruta_source_lines. Exported so the
+ * ruta drill-down route detects shape from the same list the figure does; a
+ * second copy is what let the two disagree.
+ */
+export const VAT_ACCOUNTS = Object.keys(ACCOUNT_RUTA)
 
 /**
  * 26xx output VAT accounts feeding rutor 10/11/12, 30/31/32 and 60/61/62.
