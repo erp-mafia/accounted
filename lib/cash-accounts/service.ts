@@ -185,8 +185,19 @@ async function loadCashAccountTopology(
   ]
   const statuses = await getConnectionStatuses(supabase, companyId, connectionIds)
 
-  const isLive = (r: CashAccount): boolean =>
+  const isHeldByActiveConnection = (r: CashAccount): boolean =>
     r.enabled && r.bank_connection_id !== null && statuses.get(r.bank_connection_id) === 'active'
+  // Two enabled rows on ONE active connection sharing (IBAN, currency) are
+  // the bank re-registering the account under a new external_uid: the old
+  // row silently stops syncing while the new one carries on (the dominant
+  // prod twin shape, round 4). Only the most recently synced row is the
+  // live claim; the other is a stale twin (orphaned for counter purposes,
+  // never a re-point destination). balance_updated_at is the sync stamp
+  // available on the row itself; when neither row carries one, or both
+  // carry the same one, nothing tells them apart and both stay live.
+  const staleTwinIds = findStaleSameConnectionTwins(rows, isHeldByActiveConnection)
+  const isLive = (r: CashAccount): boolean =>
+    isHeldByActiveConnection(r) && !staleTwinIds.has(r.id)
   const isReleased = (r: CashAccount): boolean =>
     r.bank_connection_id === null || statuses.get(r.bank_connection_id) === 'revoked'
 
@@ -217,6 +228,44 @@ async function loadCashAccountTopology(
   }
 
   return { rows, statuses, orphaned, isLive, isReleased }
+}
+
+/**
+ * Ids of rows that share (IBAN, currency) AND the bank connection with
+ * another held row but were synced less recently than it (older or missing
+ * balance_updated_at). Groups where no row carries a sync stamp, or where
+ * the newest stamp is shared, yield nothing: the rows cannot be told apart.
+ */
+function findStaleSameConnectionTwins(
+  rows: readonly CashAccount[],
+  isHeld: (row: CashAccount) => boolean,
+): Set<string> {
+  const groups = new Map<string, CashAccount[]>()
+  for (const row of rows) {
+    if (!isHeld(row)) continue
+    const key = physicalAccountKey(row)
+    if (!key) continue
+    const groupKey = `${key}|${row.bank_connection_id}`
+    const group = groups.get(groupKey)
+    if (group) group.push(row)
+    else groups.set(groupKey, [row])
+  }
+  const stale = new Set<string>()
+  for (const group of groups.values()) {
+    if (group.length < 2) continue
+    const stamped = group.filter((row) => row.balance_updated_at)
+    if (stamped.length === 0) continue
+    const newest = stamped.reduce((best, row) =>
+      Date.parse(row.balance_updated_at as string) > Date.parse(best.balance_updated_at as string) ? row : best,
+    )
+    const newestAt = Date.parse(newest.balance_updated_at as string)
+    const ties = stamped.filter((row) => Date.parse(row.balance_updated_at as string) === newestAt)
+    if (ties.length > 1) continue
+    for (const row of group) {
+      if (row.id !== newest.id) stale.add(row.id)
+    }
+  }
+  return stale
 }
 
 /**
@@ -353,7 +402,13 @@ export async function describeCashAccountSiblings(
   if (!topology) return null
   const ownRow = topology.rows.find((row) => row.id === cashAccountId)
   if (!ownRow) return null
+  return describeSiblingsFromTopology(topology, ownRow)
+}
 
+function describeSiblingsFromTopology(
+  topology: CashAccountTopology,
+  ownRow: CashAccount,
+): CashAccountSiblings {
   const toSibling = (row: CashAccount): SiblingCashAccount => ({
     id: row.id,
     ledger_account: row.ledger_account,
@@ -589,39 +644,83 @@ export async function loadCounterLegTopology(
 /**
  * Line-level counterpart of guardCounterLegs for the free-form booking
  * dialog (POST /api/transactions/[id]/book), which submits explicit lines
- * instead of a mapping result. Covers ONLY the two-cash-legs shape: when the
- * lines touch at least two distinct 19xx ledgers, one of them the
- * transaction's own settlement ledger, a 19xx line that is a same-IBAN
- * same-currency twin of the own row or an orphaned ledger is refused, since
- * such a "transfer" books one physical account against itself or onto a junk
- * ledger. A booking with a single 19xx line is NOT inspected (the route does
- * not know the own ledger without a lookup, and paying one on every ordinary
- * booking is not worth it): a hand-typed bank leg on a twin ledger with the
- * counter on a P&L account still posts, with the transaction left on its own
- * row. Returns the refused ledger, or null when clean, not covered, or when
- * the transaction has no cash_accounts row.
+ * instead of a mapping result. Two shapes are covered:
+ *   - Two or more distinct 19xx ledgers, one of them the transaction's own
+ *     settlement ledger: a 19xx line that is a same-IBAN same-currency twin
+ *     of the own row or an orphaned ledger is refused, since such a
+ *     "transfer" books one physical account against itself or onto a junk
+ *     ledger.
+ *   - A single 19xx line that is NOT the own ledger (the user typed the bank
+ *     leg where the money physically is, e.g. the live 1940 for a row
+ *     stranded on the orphaned 1931): when that ledger is a sibling the row
+ *     should move to (shouldRepointToSibling), the caller re-points
+ *     transactions.cash_account_id there in the same locked UPDATE that
+ *     links the voucher, exactly as manualLink does for the identical
+ *     voucher reached through "Matcha mot befintlig verifikation". Otherwise
+ *     the booking posts as typed with the row left where it is (round 4).
+ * An ordinary booking (single 19xx line on the own ledger) pays one PK read
+ * of the own row and nothing more; the topology is only loaded when a twin
+ * or foreign 19xx leg is present. Both fields are null when clean, not
+ * covered, or when the transaction has no cash_accounts row.
  */
+export interface BookedLinesGuardResult {
+  /** The 19xx ledger the booking must not put in the counter position, or null. */
+  refusedLedger: string | null
+  /** cash_accounts row the transaction should be moved to on booking, or null. */
+  repointCashAccountId: string | null
+}
+
+const CLEAN_BOOKED_LINES: BookedLinesGuardResult = { refusedLedger: null, repointCashAccountId: null }
+
 export async function guardBookedCounterLines(
   supabase: SupabaseClient,
   companyId: string,
   accountNumbers: readonly string[],
   settlementCashAccountId: string | null | undefined,
-): Promise<string | null> {
+): Promise<BookedLinesGuardResult> {
   const cashLegs = [...new Set(accountNumbers.filter((a) => /^19\d{2}$/.test(a)))]
-  if (cashLegs.length < 2 || !settlementCashAccountId) return null
+  if (cashLegs.length === 0 || !settlementCashAccountId) return CLEAN_BOOKED_LINES
+
+  if (cashLegs.length === 1) {
+    const { data: ownRow, error } = await supabase
+      .from('cash_accounts')
+      .select('ledger_account')
+      .eq('id', settlementCashAccountId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (error) {
+      log.warn('cash_accounts own-row lookup failed', { companyId, error: error.message })
+      return CLEAN_BOOKED_LINES
+    }
+    const ownLedger = (ownRow as { ledger_account?: string } | null)?.ledger_account ?? null
+    if (!ownLedger || ownLedger === cashLegs[0]) return CLEAN_BOOKED_LINES
+
+    const topology = await loadCashAccountTopology(supabase, companyId)
+    const own = topology?.rows.find((row) => row.id === settlementCashAccountId) ?? null
+    if (!topology || !own) return CLEAN_BOOKED_LINES
+    const described = describeSiblingsFromTopology(topology, own)
+    const sibling = described.siblings.find((row) => row.ledger_account === cashLegs[0]) ?? null
+    if (sibling && shouldRepointToSibling(described, sibling)) {
+      return { refusedLedger: null, repointCashAccountId: sibling.id }
+    }
+    return CLEAN_BOOKED_LINES
+  }
 
   const topology = await loadCashAccountTopology(supabase, companyId)
-  if (!topology) return null
+  if (!topology) return CLEAN_BOOKED_LINES
   const own = topology.rows.find((row) => row.id === settlementCashAccountId) ?? null
-  if (!own) return null
+  if (!own) return CLEAN_BOOKED_LINES
   const settlementAccount = own.ledger_account
-  if (!cashLegs.includes(settlementAccount)) return null
+  if (!cashLegs.includes(settlementAccount)) return CLEAN_BOOKED_LINES
 
   const twins = twinLedgersOf(topology, own, settlementAccount)
   const counterLegs = cashLegs.filter((a) => a !== settlementAccount)
   const twin = counterLegs.find((a) => twins.has(a)) ?? null
-  if (twin) return twin
-  return findOrphanedCounterLedger(counterLegs, settlementAccount, topology.orphaned)
+  if (twin) return { refusedLedger: twin, repointCashAccountId: null }
+  return {
+    refusedLedger: findOrphanedCounterLedger(counterLegs, settlementAccount, topology.orphaned),
+    repointCashAccountId: null,
+  }
 }
 
 /**

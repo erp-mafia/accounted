@@ -1153,25 +1153,39 @@ export async function manualLink(
   // when its own holder is definitively gone (demoted to manual or revoked)
   // and no other sibling is live either. A row whose connection is merely
   // expired/error/pending is still the syncing account (re-auth renews it in
-  // place), so a voucher booked on a dead sibling links without moving it:
-  // the voucher is what is wrong, and moving the row would strand it on the
-  // orphan the moment consent is renewed. The same rule keeps a live row
-  // from being parked on a row no connection can sync again.
+  // place), so a voucher booked ONLY on a dead sibling is REFUSED (round 4):
+  // the voucher is what is wrong, moving the row would strand it on the
+  // orphan the moment consent is renewed, and writing the link anyway would
+  // be the cross-account link the line check above exists to refuse (the
+  // REST and MCP callers reach this directly, without the unmatched-entries
+  // filter that hides such vouchers from the dialog). The same rule keeps a
+  // live row from being parked on a row no connection can sync again.
+  // A voucher touching several sibling ledgers (an old "transfer" between
+  // two rows of one physical account) is judged on the best of them, never
+  // on whichever line the query happened to return first: a live sibling
+  // wins, else the first sibling the row may move to.
   const typedLines = lines as Array<{ account_number: string }>
   let repointCashAccountId: string | null = null
   if (!typedLines.some((line) => line.account_number === accountNumber)) {
-    const siblingLedger = typedLines[0].account_number
-    const sibling = siblingInfo?.siblings.find((row) => row.ledger_account === siblingLedger)
-    if (sibling && siblingInfo && shouldRepointToSibling(siblingInfo, sibling)) {
-      repointCashAccountId = sibling.id
+    const siblingLedgers = [...new Set(typedLines.map((line) => line.account_number))]
+    const candidates = siblingLedgers
+      .map((ledger) => siblingInfo?.siblings.find((row) => row.ledger_account === ledger) ?? null)
+      .filter((row): row is NonNullable<typeof row> => row !== null)
+      .filter((row) => siblingInfo !== null && shouldRepointToSibling(siblingInfo, row))
+    const destination = candidates.find((row) => row.live) ?? candidates[0] ?? null
+    if (destination) {
+      repointCashAccountId = destination.id
     } else {
-      log.warn('manualLink: sibling-ledger link left on the original cash account', {
+      log.warn('manualLink: refused a link to a voucher booked only on a dead sibling ledger', {
         companyId,
         transactionId,
         accountNumber,
-        siblingLedger,
-        reason: sibling ? 'own_row_still_held_sibling_dead' : 'sibling_row_missing',
+        siblingLedgers,
       })
+      return {
+        success: false,
+        error: `Verifikationen är bokförd på ${siblingLedgers.join(' och ')}, som inte är transaktionens konto (${accountNumber}). Rätta verifikationen eller flytta transaktionen först.`,
+      }
     }
   }
 

@@ -272,6 +272,44 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
+  it('re-points a stranded row onto the live sibling when its single bank line is that ledger (#1643 round 4)', async () => {
+    // Nyte-shape: the transaction sits on the demoted 1931, the user books it
+    // with the bank leg on the live 1940 against a P&L account. The voucher
+    // posts on 1940 and the row moves there in the same locked UPDATE, so
+    // neither ledger's reconciliation is left with a half.
+    const iban = 'SE4550000000058398257466'
+    const tx = makeTransaction({ id: 'tx-1', amount: 500, journal_entry_id: null, cash_account_id: 'ca-orphan' })
+    enqueue({ data: tx, error: null }) // fetch transaction
+    enqueue({ data: { ledger_account: '1931' } }) // own row
+    enqueue({
+      data: [
+        { id: 'ca-orphan', ledger_account: '1931', iban, currency: 'SEK', enabled: true, bank_connection_id: null },
+        { id: 'ca-live', ledger_account: '1940', iban, currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
+      ],
+    }) // cash_accounts topology
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }] }) // bank_connections statuses
+    mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // link update
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: {
+        ...validBody,
+        lines: [
+          { account_number: '1940', debit_amount: 500, credit_amount: 0 },
+          { account_number: '8311', debit_amount: 0, credit_amount: 500 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(response.status).toBe(200)
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    expect(findCalls('transactions', 'update')).toContainEqual([
+      expect.objectContaining({ journal_entry_id: 'je-new', cash_account_id: 'ca-live' }),
+    ])
+  })
+
   it('atomically unignores an ignored transaction when booking it', async () => {
     const tx = makeTransaction({
       id: 'tx-1',

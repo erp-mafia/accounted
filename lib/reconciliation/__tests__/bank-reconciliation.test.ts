@@ -1147,12 +1147,14 @@ describe('manualLink', () => {
     expect(updatePayloads()).toEqual([])
   })
 
-  it('links without moving the row when the voucher sits on a sibling that is NOT the live row (#1643)', async () => {
+  it('refuses a voucher that sits only on a sibling that is NOT the live row (#1643 round 4)', async () => {
     const { supabase, enqueue, updatePayloads } = createQueueMockSupabase()
     const iban = 'SE4550000000058398257466'
     // Reverse direction: the transaction synced onto the live 1940 row, the
     // voucher was booked on the now-revoked 1931 before the reconnect. The
-    // voucher is what is wrong; the row must not be parked on the dead row.
+    // voucher is what is wrong; the row must not be parked on the dead row,
+    // and a cross-account link (money on 1940, voucher on 1931) would show
+    // as an imbalance on both ledgers, so the link is refused outright.
     const tx = makeTransaction({
       id: 'tx-1',
       journal_entry_id: null,
@@ -1176,15 +1178,17 @@ describe('manualLink', () => {
       ],
     })
     enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1931' }] })
-    enqueue({ data: [{ id: 'tx-1' }] })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1940')
 
-    expect(result.success).toBe(true)
-    expect(updatePayloads()[0]).not.toHaveProperty('cash_account_id')
+    expect(result.success).toBe(false)
+    expect(result.error).toBe(
+      'Verifikationen är bokförd på 1931, som inte är transaktionens konto (1940). Rätta verifikationen eller flytta transaktionen först.',
+    )
+    expect(updatePayloads()).toEqual([])
   })
 
-  it('links without moving an EXPIRED own row onto a demoted twin (renewable consent, #1643 round 3)', async () => {
+  it('refuses to link an EXPIRED own row to a voucher only on a demoted twin (renewable consent, #1643 rounds 3-4)', async () => {
     const { supabase, enqueue, updatePayloads } = createQueueMockSupabase()
     const iban = 'SE4550000000058398257466'
     // Prod shape: 1930 on an expired connection (still the syncing account,
@@ -1203,13 +1207,53 @@ describe('manualLink', () => {
     })
     enqueue({ data: [{ id: 'conn-expired', status: 'expired' }] })
     enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1931' }] })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('bokförd på 1931')
+    expect(updatePayloads()).toEqual([])
+  })
+
+  it('re-points to the LIVE sibling when the voucher touches a dead twin and the live twin, whatever the line order (#1643 round 4)', async () => {
+    const { supabase, enqueue, updatePayloads } = createQueueMockSupabase()
+    const iban = 'SE4550000000058398257466'
+    // An old cross-ledger "transfer" between two rows of one physical
+    // account: lines on the revoked 1931 and the live 1940, none on the
+    // demoted 1930 the transaction sits on. The query has no ORDER BY, so
+    // the dead line comes first here; the destination must still be 1940.
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null, cash_account_id: 'ca-1930', currency: 'SEK' })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: { ledger_account: '1930' } })
+    enqueue({
+      data: [
+        { id: 'ca-1930', iban, ledger_account: '1930', currency: 'SEK', enabled: true, bank_connection_id: null },
+        { id: 'ca-1931', iban, ledger_account: '1931', currency: 'SEK', enabled: true, bank_connection_id: 'conn-old' },
+        { id: 'ca-1940', iban, ledger_account: '1940', currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
+      ],
+    })
+    enqueue({
+      data: [
+        { id: 'conn-old', status: 'revoked' },
+        { id: 'conn-live', status: 'active' },
+      ],
+    })
+    enqueue({
+      data: [
+        { debit_amount: 0, credit_amount: 1000, account_number: '1931' },
+        { debit_amount: 1000, credit_amount: 0, account_number: '1940' },
+      ],
+    })
     enqueue({ data: [{ id: 'tx-1' }] })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
 
     expect(result.success).toBe(true)
-    expect(updatePayloads()).toEqual([expect.objectContaining({ journal_entry_id: 'je-1' })])
-    expect(updatePayloads()[0]).not.toHaveProperty('cash_account_id')
+    expect(updatePayloads()).toEqual([
+      expect.objectContaining({ journal_entry_id: 'je-1', cash_account_id: 'ca-1940' }),
+    ])
   })
 
   it('re-points to the sibling the voucher was booked on when BOTH rows are live (#1643 round 2)', async () => {

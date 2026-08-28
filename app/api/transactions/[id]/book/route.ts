@@ -149,10 +149,12 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // stale row left by a broken reconnect) or an orphaned ledger books one
     // physical account against itself or onto a junk balance-sheet account.
     // The dialog pre-fills such lines from learned templates (issue #1643
-    // problem 4); this is the same refusal the categorize paths apply, for
-    // the two-cash-legs shape only: a booking whose single 19xx line is not
-    // the own ledger is not inspected (see guardBookedCounterLines).
-    const refusedLedger = await guardBookedCounterLines(
+    // problem 4); this is the same refusal the categorize paths apply. A
+    // booking whose single 19xx line is a sibling ledger the row should move
+    // to (the live twin of a stranded row) instead re-points the transaction
+    // there in the locked UPDATE below, as manualLink does for the same
+    // voucher (see guardBookedCounterLines).
+    const { refusedLedger, repointCashAccountId } = await guardBookedCounterLines(
       supabase,
       companyId,
       lines.map((line) => line.account_number),
@@ -196,6 +198,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         is_business: true,
         is_ignored: false,
         category: 'uncategorized',
+        ...(repointCashAccountId ? { cash_account_id: repointCashAccountId } : {}),
       })
       .eq('id', id)
       .eq('company_id', companyId)
