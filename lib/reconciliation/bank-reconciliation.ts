@@ -957,7 +957,12 @@ export async function getReconciliationStatus(
   // Account-scoped since 20260723160000: a voucher whose links all sit on another
   // cash account (a transfer's other leg) counts as unmatched HERE, keeping this
   // number in agreement with the "Omatchade verifikationer" table the
-  // reconciliation view derives from the same RPC.
+  // reconciliation view derives from the same RPC. Direction-aware since
+  // 20260828220000: on a NON-primary account, an own-account-transfer voucher
+  // whose only link is a NULL-cash_account transaction with a contradicting
+  // sign counts as unmatched here too (that row is the transfer's OTHER leg),
+  // so both legs of a transfer land in this list symmetrically instead of one
+  // leg polluting unexplained_difference.
   // effectiveFrom, NOT the caller's dateFrom: countedLines and countedTx are both
   // clamped to the IB floor above, and this list has to describe the SAME window
   // or the card contradicts itself. With the raw dateFrom, a window that opens
@@ -1518,8 +1523,10 @@ export async function fetchJunctionLinkedTxIds(
 /** A match candidate that carries how many transactions already point at it. */
 export interface GLLineForMatching extends UnlinkedGLLine {
   /** Transactions settling this entry ON THE REQUESTED ACCOUNT (plus legacy
-   *  rows with no cash_account_id, which count everywhere). A transaction on
-   *  another cash account, e.g. the outgoing leg of an own-account transfer,
+   *  rows with no cash_account_id, which count everywhere EXCEPT on a
+   *  non-primary account when the voucher is an own-account transfer and the
+   *  row's sign contradicts this account's leg; 20260828220000). A transaction
+   *  on another cash account, e.g. the outgoing leg of an own-account transfer,
    *  does not mark the voucher as matched here (issue #1026). */
   linked_transaction_count: number
 }

@@ -12,7 +12,9 @@
  * account: a transaction provably on ANOTHER cash account does not mark the
  * voucher as matched for p_account_number. This surfaces the unsettled second
  * leg of an own-account transfer by default (issue #1026) while transactions
- * with no resolvable cash account keep counting for every account.
+ * with no resolvable cash account keep counting for every account, EXCEPT
+ * (20260828220000) on a non-primary account when the voucher is an own-account
+ * transfer and the NULL row's sign contradicts that account's leg.
  * (The companion mark_entry_as_opening_balance guard from the same migration
  * is covered in mark-entry-as-opening-balance.pg.test.ts.)
  */
@@ -234,7 +236,7 @@ describe('get_account_gl_lines_for_matching RPC: account-scoped link count (#102
     expect(withMatched.find((r) => r.journal_entry_id === salaryEntry).linked_transaction_count).toBe(1)
   })
 
-  it('treats transactions without a resolvable cash account as settling every account', async () => {
+  it('treats transactions without a resolvable cash account as settling every account (no primary elsewhere)', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
     const fiscalPeriodId = await insertFiscalPeriod({
@@ -267,5 +269,177 @@ describe('get_account_gl_lines_for_matching RPC: account-scoped link count (#102
       [companyId],
     )
     expect(withMatched.find((r) => r.journal_entry_id === legacyEntry).linked_transaction_count).toBe(1)
+  })
+})
+
+describe('get_account_gl_lines_for_matching RPC: direction-aware NULL links (20260828220000)', () => {
+  /** 1930 primary + 1931 + 1940, the three-account shape from the field report. */
+  async function seedThreeAccounts(withPrimary = true) {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    const fiscalPeriodId = await insertFiscalPeriod({
+      userId, companyId, periodStart: '2026-01-01', periodEnd: '2026-12-31',
+    })
+    await insertCashAccount({ companyId, ledgerAccount: '1930', isPrimary: withPrimary })
+    await insertCashAccount({ companyId, ledgerAccount: '1931' })
+    await insertCashAccount({ companyId, ledgerAccount: '1940' })
+    return { userId, companyId, fiscalPeriodId }
+  }
+
+  /** Transfer voucher moving amount from 1930 into 1931 (debit 1931 / credit 1930). */
+  async function insertTransferInto1931(params: {
+    userId: string
+    companyId: string
+    fiscalPeriodId: string
+    amount: number
+  }): Promise<string> {
+    return insertPostedJournalEntry({
+      userId: params.userId,
+      companyId: params.companyId,
+      fiscalPeriodId: params.fiscalPeriodId,
+      entryDate: '2026-01-27',
+      sourceType: 'import',
+      voucherNumber: 1,
+      lines: [
+        { account: '1931', debit: params.amount, credit: 0 },
+        { account: '1930', debit: 0, credit: params.amount },
+      ],
+    })
+  }
+
+  it('flags the transfer leg a sign-contradicting NULL row cannot settle (non-primary account)', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedThreeAccounts()
+
+    // The field-report shape: money moved 1930 -> 1931; the voucher's only link
+    // is the 1930-side CSV row (cash_account_id NULL, amount negative). That
+    // outflow row cannot be the settlement of the +2593.75 leg on 1931.
+    const transfer = await insertTransferInto1931({ userId, companyId, fiscalPeriodId, amount: 2593.75 })
+    await insertTransaction({
+      companyId, userId, amount: -2593.75, date: '2026-01-27',
+      journalEntryId: transfer, cashAccountId: null,
+    })
+
+    // On 1931 (non-primary) the voucher must surface as unmatched, so the
+    // status card lists BOTH transfer legs and unexplained_difference nets to 0.
+    const { rows: on1931 } = await getPool().query(
+      `SELECT journal_entry_id, linked_transaction_count
+         FROM public.get_account_gl_lines_for_matching(p_company_id => $1, p_account_number => '1931')`,
+      [companyId],
+    )
+    const row1931 = on1931.find((r) => r.journal_entry_id === transfer)
+    expect(row1931).toBeDefined()
+    expect(row1931.linked_transaction_count).toBe(0)
+
+    // On 1930 (the primary card) the NULL row keeps counting: not listed.
+    const { rows: on1930 } = await getPool().query(
+      `SELECT journal_entry_id
+         FROM public.get_account_gl_lines_for_matching(p_company_id => $1, p_account_number => '1930')`,
+      [companyId],
+    )
+    expect(on1930.find((r) => r.journal_entry_id === transfer)).toBeUndefined()
+  })
+
+  it('keeps a sign-compatible NULL row settling the transfer leg', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedThreeAccounts()
+
+    // Same transfer, but the NULL row is an inflow: it plausibly IS the 1931
+    // leg, so the voucher stays settled there (conservative).
+    const transfer = await insertTransferInto1931({ userId, companyId, fiscalPeriodId, amount: 2593.75 })
+    await insertTransaction({
+      companyId, userId, amount: 2593.75, date: '2026-01-27',
+      journalEntryId: transfer, cashAccountId: null,
+    })
+
+    const { rows: on1931 } = await getPool().query(
+      `SELECT journal_entry_id
+         FROM public.get_account_gl_lines_for_matching(p_company_id => $1, p_account_number => '1931')`,
+      [companyId],
+    )
+    expect(on1931.find((r) => r.journal_entry_id === transfer)).toBeUndefined()
+  })
+
+  it('never flags a single-bank-leg voucher over a NULL link, whatever the sign', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedThreeAccounts()
+
+    // Unbackfilled legacy shape: an income voucher on non-primary 1931 whose
+    // NULL row genuinely belongs to 1931 but points the "wrong" way relative
+    // to nothing: only one bank leg exists, so the sign test must not run.
+    // Flagging these was the measured -37 000 kr false-alarm regression.
+    const income = await insertPostedJournalEntry({
+      userId, companyId, fiscalPeriodId,
+      entryDate: '2026-02-10', sourceType: 'import', voucherNumber: 2,
+      lines: [
+        { account: '1931', debit: 0, credit: 1200 },
+        { account: '5810', debit: 1200, credit: 0 },
+      ],
+    })
+    await insertTransaction({
+      companyId, userId, amount: 1200, date: '2026-02-10',
+      journalEntryId: income, cashAccountId: null,
+    })
+
+    const { rows: on1931 } = await getPool().query(
+      `SELECT journal_entry_id
+         FROM public.get_account_gl_lines_for_matching(p_company_id => $1, p_account_number => '1931')`,
+      [companyId],
+    )
+    expect(on1931.find((r) => r.journal_entry_id === income)).toBeUndefined()
+  })
+
+  it('keeps full legacy behavior when the company has no primary cash account', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedThreeAccounts(false)
+
+    const transfer = await insertTransferInto1931({ userId, companyId, fiscalPeriodId, amount: 2593.75 })
+    await insertTransaction({
+      companyId, userId, amount: -2593.75, date: '2026-01-27',
+      journalEntryId: transfer, cashAccountId: null,
+    })
+
+    // No primary anywhere: NULL rows count for every account, exactly as before.
+    const { rows: on1931 } = await getPool().query(
+      `SELECT journal_entry_id
+         FROM public.get_account_gl_lines_for_matching(p_company_id => $1, p_account_number => '1931')`,
+      [companyId],
+    )
+    expect(on1931.find((r) => r.journal_entry_id === transfer)).toBeUndefined()
+  })
+
+  it('applies the same sign test to junction links and to the matched link count', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedThreeAccounts()
+
+    // Junction-anchored variant of the field-report shape: the NULL outflow row
+    // is linked through transaction_voucher_links instead of the pointer.
+    const transfer = await insertTransferInto1931({ userId, companyId, fiscalPeriodId, amount: 2593.75 })
+    const txId = await insertTransaction({
+      companyId, userId, amount: -2593.75, date: '2026-01-27',
+      journalEntryId: null, cashAccountId: null,
+    })
+    await getPool().query(
+      `INSERT INTO public.transaction_voucher_links
+         (id, user_id, company_id, transaction_id, journal_entry_id, allocated_amount, role)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'other')`,
+      [userId, companyId, txId, transfer, 2593.75],
+    )
+
+    const { rows: on1931 } = await getPool().query(
+      `SELECT journal_entry_id, linked_transaction_count
+         FROM public.get_account_gl_lines_for_matching(
+           p_company_id => $1, p_account_number => '1931', p_include_matched => true)`,
+      [companyId],
+    )
+    const row = on1931.find((r) => r.journal_entry_id === transfer)
+    // Listed (include_matched or not) and the sign-contradicting junction link
+    // is excluded from the account's link count.
+    expect(row).toBeDefined()
+    expect(row.linked_transaction_count).toBe(0)
+
+    // On the primary 1930 card the same junction link still counts.
+    const { rows: on1930 } = await getPool().query(
+      `SELECT journal_entry_id, linked_transaction_count
+         FROM public.get_account_gl_lines_for_matching(
+           p_company_id => $1, p_account_number => '1930', p_include_matched => true)`,
+      [companyId],
+    )
+    expect(on1930.find((r) => r.journal_entry_id === transfer).linked_transaction_count).toBe(1)
   })
 })
