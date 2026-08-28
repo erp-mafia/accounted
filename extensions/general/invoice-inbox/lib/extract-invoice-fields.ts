@@ -550,19 +550,30 @@ export async function extractInvoiceFields(
         max_tokens: baseMaxTokens,
         retrying: true,
       })
-      const retry = await service.extractFromDocument({
-        ...request,
-        maxTokens: baseMaxTokens * 2,
-      })
-      if (retry.ok) {
-        result = retry
-        if (retry.truncated) {
-          log.warn('ai_extraction_truncated', {
-            file_name_hash: fileNameHash,
-            max_tokens: baseMaxTokens * 2,
-            retrying: false,
-          })
+      // A retry that THROWS (throttle, network) must not sink the first
+      // response: its text may still parse despite the truncation flag, and
+      // the outer catch would otherwise return the empty skeleton with
+      // rawText null. Swallow locally and continue with the first result.
+      try {
+        const retry = await service.extractFromDocument({
+          ...request,
+          maxTokens: baseMaxTokens * 2,
+        })
+        if (retry.ok) {
+          result = retry
+          if (retry.truncated) {
+            log.warn('ai_extraction_truncated', {
+              file_name_hash: fileNameHash,
+              max_tokens: baseMaxTokens * 2,
+              retrying: false,
+            })
+          }
         }
+      } catch (retryErr) {
+        log.warn('ai_extraction_retry_failed', {
+          file_name_hash: fileNameHash,
+          error: retryErr instanceof Error ? retryErr.message : String(retryErr),
+        })
       }
     }
     rawText = result.text

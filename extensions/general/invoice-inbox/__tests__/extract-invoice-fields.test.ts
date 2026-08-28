@@ -317,6 +317,26 @@ describe('extractInvoiceFields', () => {
     expect(data.confidence).toBe(0)
   })
 
+  it('keeps the first response when the retry call itself throws', async () => {
+    // The truncated first answer happens to be complete valid JSON (the flag
+    // can fire on the last token); a throttled retry must not discard it.
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: JSON.stringify(VALID_RESULT) }],
+        stop_reason: 'max_tokens',
+      })
+      .mockRejectedValueOnce(new Error('throttled'))
+    const { data, rawText } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'many-line-items.pdf',
+    })
+    expect(mockCreate).toHaveBeenCalledTimes(2)
+    expect(rawText).toBe(JSON.stringify(VALID_RESULT))
+    expect(data.totals.total).toBe(6.25)
+    expect(data.confidence).toBe(1)
+  })
+
   it('does not retry when the answer completed under the cap', async () => {
     mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
     await extractInvoiceFields({
