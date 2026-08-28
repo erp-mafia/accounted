@@ -1210,10 +1210,14 @@ export const arcimMigrationExtension: Extension = {
           // Company info (name, org number, VAT number) writes no accounts,
           // balances or subledger rows, so a run that imports only that is
           // not gated.
+          // The asset register counts as entity data for this gate: its rows
+          // carry BAS account triples and depreciation plans that only mean
+          // something against an imported chart of accounts.
           const importsEntities = importCustomers ||
             importSuppliers ||
             importSalesInvoices ||
-            importSupplierInvoices
+            importSupplierInvoices ||
+            importAssets
           const { count: completedSieImports } = importsEntities
             ? await supabase
                 .from('sie_imports')
