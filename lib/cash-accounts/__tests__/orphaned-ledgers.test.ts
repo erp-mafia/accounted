@@ -15,6 +15,8 @@ import {
   findPairableCashAccountByIban,
   guardCounterLegs,
   guardBookedCounterLines,
+  loadCounterLegTopology,
+  shouldRepointToSibling,
 } from '../service'
 
 const IBAN = 'SE4550000000058398257466'
@@ -33,7 +35,7 @@ function row(overrides: Record<string, unknown> = {}) {
 }
 
 describe('getOrphanedCounterLedgers', () => {
-  it('flags rows held by a revoked connection', async () => {
+  it('flags a revoked-held twin of an actively connected row', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: [
@@ -51,6 +53,23 @@ describe('getOrphanedCounterLedgers', () => {
     const orphaned = await getOrphanedCounterLedgers(supabase as never, 'company-1')
     expect(orphaned.has('1931')).toBe(true)
     expect(orphaned.has('1940')).toBe(false)
+  })
+
+  it('does NOT flag a revoked-held row without a live twin (a disconnected but real account, #1643 round 3)', async () => {
+    // Prod shape: the company's only 1930 on a bank-side revoked connection
+    // (never demoted), or two distinct real accounts on one revoked
+    // connection. Both are accounts the user still tracks, not junk.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        row({ id: 'ca-1930', ledger_account: '1930', bank_connection_id: 'conn-old' }),
+        row({ id: 'ca-1940', ledger_account: '1940', bank_connection_id: 'conn-old', iban: 'SE1112223334445556667778' }),
+      ],
+    })
+    enqueue({ data: [{ id: 'conn-old', status: 'revoked' }] })
+
+    const orphaned = await getOrphanedCounterLedgers(supabase as never, 'company-1')
+    expect(orphaned.size).toBe(0)
   })
 
   it('flags a demoted-to-manual twin whose IBAN belongs to an actively connected row', async () => {
@@ -175,7 +194,7 @@ describe('listSiblingCashAccounts', () => {
     enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
 
     const siblings = await listSiblingCashAccounts(supabase as never, 'company-1', 'ca-orphan')
-    expect(siblings).toEqual([{ id: 'ca-live', ledger_account: '1940', currency: 'SEK', live: true }])
+    expect(siblings).toEqual([{ id: 'ca-live', ledger_account: '1940', currency: 'SEK', live: true, released: false }])
   })
 
   it('returns [] on a lookup failure', async () => {
@@ -204,8 +223,64 @@ describe('describeCashAccountSiblings', () => {
     })
 
     const described = await describeCashAccountSiblings(supabase as never, 'company-1', 'ca-orphan')
-    expect(described?.own).toEqual({ id: 'ca-orphan', ledger_account: '1931', currency: 'SEK', live: false })
-    expect(described?.siblings).toEqual([{ id: 'ca-live', ledger_account: '1940', currency: 'SEK', live: true }])
+    expect(described?.own).toEqual({ id: 'ca-orphan', ledger_account: '1931', currency: 'SEK', live: false, released: true })
+    expect(described?.siblings).toEqual([{ id: 'ca-live', ledger_account: '1940', currency: 'SEK', live: true, released: false }])
+  })
+
+  it('reports an expired-connection row as neither live nor released (re-auth renews it in place)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        row({ id: 'ca-expired', ledger_account: '1930', bank_connection_id: 'conn-expired' }),
+        row({ id: 'ca-manual', ledger_account: '1931', bank_connection_id: null }),
+      ],
+    })
+    enqueue({ data: [{ id: 'conn-expired', status: 'expired' }] })
+
+    const described = await describeCashAccountSiblings(supabase as never, 'company-1', 'ca-expired')
+    expect(described?.own).toEqual({ id: 'ca-expired', ledger_account: '1930', currency: 'SEK', live: false, released: false })
+    expect(described?.siblings).toEqual([{ id: 'ca-manual', ledger_account: '1931', currency: 'SEK', live: false, released: true }])
+  })
+})
+
+describe('shouldRepointToSibling', () => {
+  const sib = (overrides: Partial<{ id: string; live: boolean; released: boolean }> = {}) => ({
+    id: 'ca-sib',
+    ledger_account: '1931',
+    currency: 'SEK',
+    live: false,
+    released: true,
+    ...overrides,
+  })
+  const own = (overrides: Partial<{ live: boolean; released: boolean }> = {}) => ({
+    id: 'ca-own',
+    ledger_account: '1930',
+    currency: 'SEK',
+    live: false,
+    released: false,
+    ...overrides,
+  })
+
+  it('always moves onto a live sibling', () => {
+    const sibling = sib({ live: true, released: false })
+    expect(shouldRepointToSibling({ own: own({ live: true }), siblings: [sibling] }, sibling)).toBe(true)
+  })
+
+  it('moves onto a dead sibling only when the own holder is gone and no sibling is live', () => {
+    const dead = sib()
+    expect(shouldRepointToSibling({ own: own({ released: true }), siblings: [dead] }, dead)).toBe(true)
+    const live = sib({ id: 'ca-live', live: true, released: false })
+    expect(shouldRepointToSibling({ own: own({ released: true }), siblings: [dead, live] }, dead)).toBe(false)
+  })
+
+  it('never moves an expired/error/pending own row (not live, not released) onto a dead sibling', () => {
+    const dead = sib()
+    expect(shouldRepointToSibling({ own: own(), siblings: [dead] }, dead)).toBe(false)
+  })
+
+  it('never moves a live own row onto a dead sibling', () => {
+    const dead = sib()
+    expect(shouldRepointToSibling({ own: own({ live: true }), siblings: [dead] }, dead)).toBe(false)
   })
 })
 
@@ -301,6 +376,27 @@ describe('findPairableCashAccountByIban', () => {
 
     const account = await findPairableCashAccountByIban(supabase as never, 'company-1', IBAN)
     expect(account?.id).toBe('ca-expired')
+  })
+
+  it('still pairs with a revoked-held row that has no live twin (bank switch: closing balance moved into the disconnected account, #1643 round 3)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        row({ id: 'ca-new', ledger_account: '1940', bank_connection_id: 'conn-live', iban: 'SE1112223334445556667778' }),
+        row({ id: 'ca-old', ledger_account: '1930', bank_connection_id: 'conn-old', iban: IBAN }),
+      ],
+    })
+    enqueue({
+      data: [
+        { id: 'conn-live', status: 'active' },
+        { id: 'conn-old', status: 'revoked' },
+      ],
+    })
+
+    const found = await findPairableCashAccountByIban(supabase as never, 'company-1', IBAN, {
+      excludeCashAccountId: 'ca-new',
+    })
+    expect(found?.ledger_account).toBe('1930')
   })
 
   it('excludes the requested cash account id (self)', async () => {
@@ -474,17 +570,128 @@ describe('guardCounterLegs', () => {
     expect(result.mappingResult.debit_account).toBe('1937')
   })
 
-  it('refuses an orphaned ledger held by a revoked connection', async () => {
+  it('refuses a revoked-held twin of a live row', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: [
-        row({ id: 'ca-orphan', ledger_account: '1931', bank_connection_id: 'conn-old', iban: 'SE1112223334445556667778' }),
+        row({ id: 'ca-live', ledger_account: '1940', bank_connection_id: 'conn-live' }),
+        row({ id: 'ca-orphan', ledger_account: '1931', bank_connection_id: 'conn-old' }),
+        row({ id: 'ca-savings', ledger_account: '1930', bank_connection_id: 'conn-live', iban: 'SE1112223334445556667778' }),
+      ],
+    })
+    enqueue({
+      data: [
+        { id: 'conn-live', status: 'active' },
+        { id: 'conn-old', status: 'revoked' },
+      ],
+    })
+
+    const result = await guardCounterLegs(supabase as never, 'company-1', mapping('1931', '1930'), '1930', 'ca-savings')
+    expect(result.refusedLedger).toBe('1931')
+  })
+
+  it('accepts a revoked-held row without a live twin as counter (two real accounts on one disconnected bank, #1643 round 3)', async () => {
+    // Company shape from prod: 1930 and 1940 (different IBANs) both on one
+    // revoked connection; a 1940 -> 1930 transfer must still book.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        row({ id: 'ca-1930', ledger_account: '1930', bank_connection_id: 'conn-old' }),
+        row({ id: 'ca-1940', ledger_account: '1940', bank_connection_id: 'conn-old', iban: 'SE1112223334445556667778' }),
       ],
     })
     enqueue({ data: [{ id: 'conn-old', status: 'revoked' }] })
 
-    const result = await guardCounterLegs(supabase as never, 'company-1', mapping('1931', '1930'), '1930', null)
-    expect(result.refusedLedger).toBe('1931')
+    const result = await guardCounterLegs(supabase as never, 'company-1', mapping('1930', '1940'), '1940', 'ca-1940')
+    expect(result.refusedLedger).toBeNull()
+    expect(result.mappingResult.debit_account).toBe('1930')
+  })
+})
+
+describe('loadCounterLegTopology (suggest-categories batch)', () => {
+  const fixture = () => [
+    row({ id: 'ca-live', ledger_account: '1940', bank_connection_id: 'conn-live', currency: 'SEK' }),
+    // Demoted same-IBAN same-currency twin: orphaned, and a twin of ca-live.
+    row({ id: 'ca-twin', ledger_account: '1931', bank_connection_id: null, currency: 'SEK' }),
+    // Same IBAN, other currency: a real pocket, neither orphaned nor a twin.
+    row({ id: 'ca-gbp', ledger_account: '1937', bank_connection_id: null, currency: 'GBP' }),
+    // Revoked-held, no twin: a real disconnected account.
+    row({ id: 'ca-old', ledger_account: '1930', bank_connection_id: 'conn-old', iban: 'SE1112223334445556667778' }),
+  ]
+  const statuses = () => [
+    { id: 'conn-live', status: 'active' },
+    { id: 'conn-old', status: 'revoked' },
+  ]
+  const mapping = (debit: string, credit: string) => ({
+    rule: null,
+    debit_account: debit,
+    credit_account: credit,
+    risk_level: 'LOW' as const,
+    confidence: 0.9,
+    requires_review: false,
+    default_private: false,
+    vat_lines: [],
+    description: 'test',
+  })
+
+  it('derives the settlement ledger and the same-currency twins of a row', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: fixture() })
+    enqueue({ data: statuses() })
+
+    const topology = await loadCounterLegTopology(supabase as never, 'company-1')
+    expect(topology).not.toBeNull()
+    const context = topology!.contextFor('ca-live')
+    expect(context.settlementLedger).toBe('1940')
+    expect([...context.twins]).toEqual(['1931'])
+  })
+
+  it('gives an other-currency pocket no twins, and null/unknown ids no settlement ledger', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: fixture() })
+    enqueue({ data: statuses() })
+
+    const topology = await loadCounterLegTopology(supabase as never, 'company-1')
+    expect(topology!.contextFor('ca-gbp')).toEqual({ settlementLedger: '1937', twins: new Set() })
+    expect(topology!.contextFor(null)).toEqual({ settlementLedger: null, twins: new Set() })
+    expect(topology!.contextFor(undefined)).toEqual({ settlementLedger: null, twins: new Set() })
+    expect(topology!.contextFor('ca-unknown')).toEqual({ settlementLedger: null, twins: new Set() })
+  })
+
+  it('caches the per-row context and never re-queries', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: fixture() })
+    enqueue({ data: statuses() })
+
+    const topology = await loadCounterLegTopology(supabase as never, 'company-1')
+    const first = topology!.contextFor('ca-live')
+    expect(topology!.contextFor('ca-live')).toBe(first)
+    expect(findCalls('cash_accounts', 'select')).toHaveLength(1)
+    expect(findCalls('bank_connections', 'select')).toHaveLength(1)
+  })
+
+  it('exposes the same orphan set the commit guard refuses on the same fixture', async () => {
+    const batch = createQueuedMockSupabase()
+    batch.enqueue({ data: fixture() })
+    batch.enqueue({ data: statuses() })
+    const topology = await loadCounterLegTopology(batch.supabase as never, 'company-1')
+    expect([...topology!.orphaned]).toEqual(['1931'])
+
+    // guardCounterLegs on the same fixture: the twin is refused as counter,
+    // the GBP pocket and the revoked-held 1930 are accepted.
+    for (const [counter, expected] of [['1931', '1931'], ['1937', null], ['1930', null]] as const) {
+      const commit = createQueuedMockSupabase()
+      commit.enqueue({ data: fixture() })
+      commit.enqueue({ data: statuses() })
+      const result = await guardCounterLegs(commit.supabase as never, 'company-1', mapping(counter, '1940'), '1940', 'ca-live')
+      expect(result.refusedLedger).toBe(expected)
+    }
+  })
+
+  it('returns null when the row lookup fails (nothing withheld)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: { message: 'boom' } })
+    expect(await loadCounterLegTopology(supabase as never, 'company-1')).toBeNull()
   })
 })
 
@@ -544,12 +751,12 @@ describe('guardBookedCounterLines (POST /book)', () => {
     expect(refused).toBe('1931')
   })
 
-  it('refuses a 19xx line on a ledger held by a revoked connection', async () => {
+  it('refuses a 19xx line on a revoked-held twin of the transaction\'s own row', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: [
         row({ id: 'ca-live', ledger_account: '1940' }),
-        row({ id: 'ca-orphan', ledger_account: '1931', bank_connection_id: 'conn-old', iban: 'SE1112223334445556667778' }),
+        row({ id: 'ca-orphan', ledger_account: '1931', bank_connection_id: 'conn-old' }),
       ],
     })
     enqueue({
@@ -561,6 +768,24 @@ describe('guardBookedCounterLines (POST /book)', () => {
 
     const refused = await guardBookedCounterLines(supabase as never, 'company-1', ['1931', '1940'], 'ca-live')
     expect(refused).toBe('1931')
+  })
+
+  it('accepts a transfer to a revoked-held account without a live twin (#1643 round 3)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        row({ id: 'ca-live', ledger_account: '1940' }),
+        row({ id: 'ca-old', ledger_account: '1930', bank_connection_id: 'conn-old', iban: 'SE1112223334445556667778' }),
+      ],
+    })
+    enqueue({
+      data: [
+        { id: 'conn-live', status: 'active' },
+        { id: 'conn-old', status: 'revoked' },
+      ],
+    })
+
+    expect(await guardBookedCounterLines(supabase as never, 'company-1', ['1930', '1940'], 'ca-live')).toBeNull()
   })
 
   it('accepts another-currency pocket of the same IBAN and a real transfer to another account', async () => {

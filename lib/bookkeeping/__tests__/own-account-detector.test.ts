@@ -228,19 +228,21 @@ describe('detectOwnAccountTransfer', () => {
       expect(result).toBeNull()
     })
 
-    it('never pairs with a row held by a REVOKED connection', async () => {
+    it('still pairs with a REVOKED-held row that has no live twin (a disconnected but real account, #1643 round 3)', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       enqueue({
-        data: [makeCashRow({ id: 'ca-orphan', bank_connection_id: 'conn-old', ledger_account: '1931', currency: 'SEK' })],
+        data: [makeCashRow({ id: 'ca-old', bank_connection_id: 'conn-old', ledger_account: '1931', currency: 'SEK' })],
       })
       enqueue({ data: [{ id: 'conn-old', status: 'revoked' }] })
+      enqueue({ data: [] }) // pair leg not ingested
 
       const result = await detectOwnAccountTransfer(
         supabase as never,
         'company-1',
         makeTx({ amount: 217.04 }),
       )
-      expect(result).toBeNull()
+      expect(result).not.toBeNull()
+      expect(result!.counterLedgerAccount).toBe('1931')
     })
 
     it('never pairs with a disabled row', async () => {

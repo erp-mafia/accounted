@@ -5,7 +5,7 @@ import {
   ledgerLineAmountIn,
   tryReconcileTransaction,
 } from '@/lib/reconciliation/bank-reconciliation'
-import { describeCashAccountSiblings, normalizeIban } from '@/lib/cash-accounts/service'
+import { describeCashAccountSiblings, normalizeIban, shouldRepointToSibling } from '@/lib/cash-accounts/service'
 import type { Transaction } from '@/types'
 
 export const GET = withRouteContext(
@@ -70,10 +70,11 @@ export const GET = withRouteContext(
       // different accounts). Accounts without an IBAN (manual, CSV) have no
       // siblings and keep the exact single-ledger behavior.
       // A sibling that is NOT live (demoted or held by a revoked/expired
-      // connection) is only offered when the transaction's own row is not
-      // live either: manualLink would re-point the row onto that dead
-      // sibling, and a live row must never be parked on a row no connection
-      // can sync again.
+      // connection) is only offered when manualLink would re-point the row
+      // onto it (shouldRepointToSibling: the own row's holder is gone and no
+      // sibling is live): a live row, or one on a merely expired connection
+      // that re-auth renews, must never be parked on a row no connection can
+      // sync again.
       const ownIban = normalizeIban((cashAccount as { iban?: string | null }).iban ?? null)
       const siblingInfo = ownIban
         ? await describeCashAccountSiblings(supabase, companyId, cashAccount.id as string)
@@ -82,7 +83,7 @@ export const GET = withRouteContext(
         const siblingLedgers = [
           ...new Set(
             siblingInfo.siblings
-              .filter((row) => row.live || !siblingInfo.own.live)
+              .filter((row) => shouldRepointToSibling(siblingInfo, row))
               .map((row) => row.ledger_account),
           ),
         ]

@@ -149,7 +149,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // stale row left by a broken reconnect) or an orphaned ledger books one
     // physical account against itself or onto a junk balance-sheet account.
     // The dialog pre-fills such lines from learned templates (issue #1643
-    // problem 4); this is the same refusal the categorize paths apply.
+    // problem 4); this is the same refusal the categorize paths apply, for
+    // the two-cash-legs shape only: a booking whose single 19xx line is not
+    // the own ledger is not inspected (see guardBookedCounterLines).
     const refusedLedger = await guardBookedCounterLines(
       supabase,
       companyId,

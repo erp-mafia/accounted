@@ -262,6 +262,29 @@ describe('GET /api/reconciliation/bank/unmatched-entries', () => {
     expect(fetchedAccounts).toEqual(['1940'])
   })
 
+  it('does not offer a demoted twin\'s vouchers to a row on an EXPIRED connection (#1643 round 3)', async () => {
+    const iban = 'SE4550000000058398257466'
+    // manualLink would not move a renewable row onto the dead twin either.
+    enqueue({ data: { id: 'cash-expired', currency: 'SEK', iban } })
+    enqueue({
+      data: [
+        { id: 'cash-expired', ledger_account: '1930', iban, currency: 'SEK', enabled: true, bank_connection_id: 'conn-expired' },
+        { id: 'cash-demoted', ledger_account: '1931', iban, currency: 'SEK', enabled: true, bank_connection_id: null },
+      ],
+    })
+    enqueue({ data: [{ id: 'conn-expired', status: 'expired' }] })
+    enqueueTransaction({ currency: 'SEK', amount: 217.04, date: '2026-03-10' })
+    fetchGLLinesForMatchingMock.mockResolvedValue([])
+
+    const response = await GET(
+      request({ account_number: '1930', transaction_id: TX_ID }),
+      emptyParams,
+    )
+    expect(response.status).toBe(200)
+    const fetchedAccounts = fetchGLLinesForMatchingMock.mock.calls.map((c) => c[2])
+    expect(fetchedAccounts).toEqual(['1930'])
+  })
+
   it('does not widen the unranked (reconciliation view) path', async () => {
     const iban = 'SE4550000000058398257466'
     enqueue({ data: { id: 'cash-orphan', currency: 'SEK', iban } })

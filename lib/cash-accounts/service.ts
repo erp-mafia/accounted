@@ -148,6 +148,13 @@ interface CashAccountTopology {
   orphaned: Set<string>
   /** A row on an ACTIVE connection: the live claim on that physical account. */
   isLive: (row: CashAccount) => boolean
+  /**
+   * A row no connection holds a claim on any more: demoted to manual
+   * (bank_connection_id null) or still pointing at a REVOKED connection.
+   * Distinct from "not live": an expired/error/pending connection still
+   * holds the row and can come back through re-auth.
+   */
+  isReleased: (row: CashAccount) => boolean
 }
 
 function currencyKey(currency: string | null | undefined): string {
@@ -180,18 +187,19 @@ async function loadCashAccountTopology(
 
   const isLive = (r: CashAccount): boolean =>
     r.enabled && r.bank_connection_id !== null && statuses.get(r.bank_connection_id) === 'active'
+  const isReleased = (r: CashAccount): boolean =>
+    r.bank_connection_id === null || statuses.get(r.bank_connection_id) === 'revoked'
 
   const orphaned = new Set<string>()
-  // Rows still held by a REVOKED connection.
-  for (const row of rows) {
-    if (row.bank_connection_id !== null && statuses.get(row.bank_connection_id) === 'revoked') {
-      orphaned.add(row.ledger_account)
-    }
-  }
   // Stale IBAN twins of a live row: the live row IS that physical account
-  // now, so a demoted-to-manual, disabled, or expired/error-connection row
-  // carrying the same IBAN in the same currency is a leftover of a broken
-  // reconnect. The key is (IBAN, currency), never the IBAN alone: multi-
+  // now, so a demoted-to-manual, disabled, revoked-held, or expired/error-
+  // connection row carrying the same IBAN in the same currency is a leftover
+  // of a broken reconnect. A row held by a REVOKED connection is NOT orphaned
+  // on its own: the disconnect and supersede paths demote such rows to
+  // manual holders (bank_connection_id null, #916), and a row revoked bank-
+  // side or before that demotion existed is the same thing with the stale
+  // FK kept, i.e. a real account the user still tracks (commonly the
+  // company's only 1930). The key is (IBAN, currency), never the IBAN alone: multi-
   // currency accounts (Revolut, Wise) copy one IBAN onto every currency
   // pocket, and a manual or deselected GBP pocket beside a live SEK pocket is
   // a distinct account the user still tracks, not an orphan.
@@ -208,7 +216,7 @@ async function loadCashAccountTopology(
     if (live && live.ledger_account !== row.ledger_account) orphaned.add(row.ledger_account)
   }
 
-  return { rows, statuses, orphaned, isLive }
+  return { rows, statuses, orphaned, isLive, isReleased }
 }
 
 /**
@@ -304,6 +312,12 @@ export interface SiblingCashAccount {
   currency: string | null
   /** Held by an ACTIVE bank connection and enabled. */
   live: boolean
+  /**
+   * No connection holds the row any more (bank_connection_id null or the
+   * connection is revoked). False for an expired/error/pending connection,
+   * which can still be renewed onto this row.
+   */
+  released: boolean
 }
 
 export interface CashAccountSiblings {
@@ -345,6 +359,7 @@ export async function describeCashAccountSiblings(
     ledger_account: row.ledger_account,
     currency: row.currency ?? null,
     live: topology.isLive(row),
+    released: topology.isReleased(row),
   })
   const own = toSibling(ownRow)
   const wanted = normalizeIban(ownRow.iban)
@@ -365,6 +380,25 @@ export async function describeCashAccountSiblings(
     siblings.push(toSibling(row))
   }
   return { own, siblings }
+}
+
+/**
+ * Whether a link against a voucher booked on `sibling` should MOVE the
+ * transaction's cash_account_id there (manualLink) and, equivalently, whether
+ * that sibling's vouchers should be offered to the row at all
+ * (unmatched-entries). The decision is about the destination: move onto a
+ * live sibling always; onto a dead one only when the own row's holder is
+ * definitively gone (released) and no sibling is live. An own row on an
+ * expired/error/pending connection is still the syncing account, so its
+ * transactions never leave it for a dead twin (issue #1643, round 3).
+ */
+export function shouldRepointToSibling(
+  described: CashAccountSiblings,
+  sibling: SiblingCashAccount,
+): boolean {
+  if (sibling.live) return true
+  if (!described.own.released) return false
+  return !described.siblings.some((row) => row.live)
 }
 
 /**
@@ -395,15 +429,16 @@ export async function listSiblingLedgerAccounts(
 /**
  * Ledger accounts that must never be PROPOSED (or accepted) as the
  * counter-account of a booking, because their cash_accounts row is orphaned
- * (issue #1643):
- *   - a row still held by a REVOKED bank connection, or
- *   - a row that is not live (demoted-to-manual, disabled, or held by an
- *     expired/error connection) whose (IBAN, currency) also belongs to a row
- *     on an ACTIVE connection: the active row IS that physical account now,
- *     so the stale twin is a leftover of a broken reconnect.
- * A manual/CSV account without a live twin is NOT orphaned: transfers to a
- * manually tracked account are legitimate, and so is another currency pocket
- * of a multi-currency account that shares the live pocket's IBAN.
+ * (issue #1643): a row that is not live (demoted-to-manual, disabled, held
+ * by a REVOKED connection, or by an expired/error connection) whose (IBAN,
+ * currency) also belongs to a row on an ACTIVE connection. The active row IS
+ * that physical account now, so the stale twin is a leftover of a broken
+ * reconnect.
+ * A manual/CSV account without a live twin is NOT orphaned, and neither is a
+ * row held by a revoked connection without a live twin (a disconnected but
+ * real account, often the company's only 1930): transfers to such an account
+ * are legitimate, and so is another currency pocket of a multi-currency
+ * account that shares the live pocket's IBAN.
  */
 export async function getOrphanedCounterLedgers(
   supabase: SupabaseClient,
@@ -554,13 +589,17 @@ export async function loadCounterLegTopology(
 /**
  * Line-level counterpart of guardCounterLegs for the free-form booking
  * dialog (POST /api/transactions/[id]/book), which submits explicit lines
- * instead of a mapping result. Runs only when the lines touch at least two
- * distinct 19xx ledgers (a single 19xx line is the bank leg by construction),
- * and refuses a 19xx line that is a same-IBAN same-currency twin of the
- * transaction's own row or an orphaned ledger while the settlement leg is
- * also present: such a "transfer" books one physical account against itself
- * or onto a junk ledger. Returns the refused ledger, or null when clean or
- * when the transaction has no cash_accounts row.
+ * instead of a mapping result. Covers ONLY the two-cash-legs shape: when the
+ * lines touch at least two distinct 19xx ledgers, one of them the
+ * transaction's own settlement ledger, a 19xx line that is a same-IBAN
+ * same-currency twin of the own row or an orphaned ledger is refused, since
+ * such a "transfer" books one physical account against itself or onto a junk
+ * ledger. A booking with a single 19xx line is NOT inspected (the route does
+ * not know the own ledger without a lookup, and paying one on every ordinary
+ * booking is not worth it): a hand-typed bank leg on a twin ledger with the
+ * counter on a P&L account still posts, with the transaction left on its own
+ * row. Returns the refused ledger, or null when clean, not covered, or when
+ * the transaction has no cash_accounts row.
  */
 export async function guardBookedCounterLines(
   supabase: SupabaseClient,

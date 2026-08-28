@@ -395,7 +395,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize CAS race', () => {
 })
 
 describe('POST /api/v1/.../transactions/{id}/categorize orphaned counter-account guard (#1643)', () => {
-  it('returns TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT for an account_override on a ledger held by a revoked connection', async () => {
+  it('returns TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT for an account_override on a revoked-held twin of the live row', async () => {
     const { supabase } = makeFlexibleSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: {
@@ -419,11 +419,12 @@ describe('POST /api/v1/.../transactions/{id}/categorize orphaned counter-account
       cash_accounts: [
         // 1: resolveSettlementAccount reads the row's own ledger (1930).
         { data: { ledger_account: '1930' }, error: null },
-        // 2: the guard's topology scan: 1931 is held by a revoked connection.
+        // 2: the guard's topology scan: 1931 is held by a revoked connection
+        // and shares the live row's (IBAN, currency): a stale twin.
         {
           data: [
             { id: 'ca-live', ledger_account: '1930', bank_connection_id: 'conn-live', iban: 'SE111', enabled: true, currency: 'SEK' },
-            { id: 'ca-orphan', ledger_account: '1931', bank_connection_id: 'conn-old', iban: 'SE455', enabled: true, currency: 'SEK' },
+            { id: 'ca-orphan', ledger_account: '1931', bank_connection_id: 'conn-old', iban: 'SE111', enabled: true, currency: 'SEK' },
           ],
           error: null,
         },

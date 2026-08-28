@@ -1184,6 +1184,34 @@ describe('manualLink', () => {
     expect(updatePayloads()[0]).not.toHaveProperty('cash_account_id')
   })
 
+  it('links without moving an EXPIRED own row onto a demoted twin (renewable consent, #1643 round 3)', async () => {
+    const { supabase, enqueue, updatePayloads } = createQueueMockSupabase()
+    const iban = 'SE4550000000058398257466'
+    // Prod shape: 1930 on an expired connection (still the syncing account,
+    // re-auth renews it in place) beside a demoted manual twin 1931. Moving
+    // the row onto 1931 would strand it on the orphan once consent is renewed.
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null, cash_account_id: 'ca-expired', currency: 'SEK' })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: { ledger_account: '1930' } })
+    enqueue({
+      data: [
+        { id: 'ca-expired', iban, ledger_account: '1930', currency: 'SEK', enabled: true, bank_connection_id: 'conn-expired' },
+        { id: 'ca-demoted', iban, ledger_account: '1931', currency: 'SEK', enabled: true, bank_connection_id: null },
+      ],
+    })
+    enqueue({ data: [{ id: 'conn-expired', status: 'expired' }] })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1931' }] })
+    enqueue({ data: [{ id: 'tx-1' }] })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result.success).toBe(true)
+    expect(updatePayloads()).toEqual([expect.objectContaining({ journal_entry_id: 'je-1' })])
+    expect(updatePayloads()[0]).not.toHaveProperty('cash_account_id')
+  })
+
   it('re-points to the sibling the voucher was booked on when BOTH rows are live (#1643 round 2)', async () => {
     const { supabase, enqueue, updatePayloads } = createQueueMockSupabase()
     const iban = 'SE4550000000058398257466'

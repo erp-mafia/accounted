@@ -10,7 +10,11 @@ import {
   ledgerLineAmountIn,
   type LedgerLineAmount,
 } from '@/lib/bookkeeping/ledger-line-amount'
-import { describeCashAccountSiblings, type CashAccountSiblings } from '@/lib/cash-accounts/service'
+import {
+  describeCashAccountSiblings,
+  shouldRepointToSibling,
+  type CashAccountSiblings,
+} from '@/lib/cash-accounts/service'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('reconciliation.bank')
@@ -1144,17 +1148,21 @@ export async function manualLink(
   // accounts. Same gate as PATCH /api/transactions/[id]/cash-account: the row
   // is unbooked by construction (the locked UPDATE below asserts that). This
   // covers the stranded row linking to the live ledger, two live twins of one
-  // connection, and two demoted rows after a full disconnect. The one
-  // exception is a LIVE transaction whose voucher was booked on a dead
-  // sibling before the reconnect: there the voucher is what is wrong, the
-  // link goes through without moving the row, and the row is never parked on
-  // a row no connection can sync again.
+  // connection, and two demoted rows after a full disconnect. The decision
+  // is about the DESTINATION: the row moves when the sibling is live, or
+  // when its own holder is definitively gone (demoted to manual or revoked)
+  // and no other sibling is live either. A row whose connection is merely
+  // expired/error/pending is still the syncing account (re-auth renews it in
+  // place), so a voucher booked on a dead sibling links without moving it:
+  // the voucher is what is wrong, and moving the row would strand it on the
+  // orphan the moment consent is renewed. The same rule keeps a live row
+  // from being parked on a row no connection can sync again.
   const typedLines = lines as Array<{ account_number: string }>
   let repointCashAccountId: string | null = null
   if (!typedLines.some((line) => line.account_number === accountNumber)) {
     const siblingLedger = typedLines[0].account_number
     const sibling = siblingInfo?.siblings.find((row) => row.ledger_account === siblingLedger)
-    if (sibling && siblingInfo && (sibling.live || !siblingInfo.own.live)) {
+    if (sibling && siblingInfo && shouldRepointToSibling(siblingInfo, sibling)) {
       repointCashAccountId = sibling.id
     } else {
       log.warn('manualLink: sibling-ledger link left on the original cash account', {
@@ -1162,7 +1170,7 @@ export async function manualLink(
         transactionId,
         accountNumber,
         siblingLedger,
-        reason: sibling ? 'own_row_live_sibling_dead' : 'sibling_row_missing',
+        reason: sibling ? 'own_row_still_held_sibling_dead' : 'sibling_row_missing',
       })
     }
   }

@@ -61,7 +61,7 @@ beforeEach(() => {
 })
 
 describe('categorizeMatchedTransaction: orphaned counter-account guard', () => {
-  it('refuses to book when the override counter is a ledger held by a revoked connection', async () => {
+  it('refuses to book when the override counter is a revoked-held twin of a live row', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() }) // transactions select
     enqueue({ data: settingsRow }) // company_settings
@@ -69,13 +69,20 @@ describe('categorizeMatchedTransaction: orphaned counter-account guard', () => {
     // Override chart hit: 1931 exists and is active in the chart (the orphaned
     // ledger was auto-created there by the broken reconnect).
     enqueue({ data: { account_number: '1931', account_class: 1, is_active: true } })
-    // Guard: cash_accounts scan finds 1931 held by a revoked connection.
+    // Guard: cash_accounts scan finds 1931 held by a revoked connection AND
+    // sharing its (IBAN, currency) with the live 1940 row: a stale twin.
     enqueue({
       data: [
-        { id: 'ca-orphan', ledger_account: '1931', bank_connection_id: 'conn-old', iban: 'SE455', enabled: true },
+        { id: 'ca-live', ledger_account: '1940', bank_connection_id: 'conn-live', iban: 'SE455', enabled: true, currency: 'SEK' },
+        { id: 'ca-orphan', ledger_account: '1931', bank_connection_id: 'conn-old', iban: 'SE455', enabled: true, currency: 'SEK' },
       ],
     })
-    enqueue({ data: [{ id: 'conn-old', status: 'revoked' }] })
+    enqueue({
+      data: [
+        { id: 'conn-live', status: 'active' },
+        { id: 'conn-old', status: 'revoked' },
+      ],
+    })
 
     const result = await categorizeMatchedTransaction(
       supabase as never, 'user-1', 'company-1', TX_ID,
