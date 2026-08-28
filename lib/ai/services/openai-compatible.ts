@@ -233,6 +233,7 @@ export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService 
           model,
           usage: usageOf(result),
           ...(built.pagesRasterized ? { pagesRasterized: built.pagesRasterized } : {}),
+          ...(result.finishReason === 'length' ? { truncated: true } : {}),
         }
       }
       const result = await generateText({
@@ -247,6 +248,7 @@ export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService 
         model,
         usage: usageOf(result),
         ...(built.pagesRasterized ? { pagesRasterized: built.pagesRasterized } : {}),
+        ...(result.finishReason === 'length' ? { truncated: true } : {}),
       }
     },
   }

@@ -4361,7 +4361,8 @@ export interface InvoiceExtractionResult {
   confidence: number
   suggestedTemplateId?: string
   // Set by the caller (not the model) when a long PDF was sliced before
-  // extraction: fields were read from the first `analyzed` of `total` pages.
+  // extraction: fields were read from `analyzed` of `total` pages (the first
+  // pages plus the last, where totals usually sit).
   pages?: { total: number; analyzed: number }
 }
 

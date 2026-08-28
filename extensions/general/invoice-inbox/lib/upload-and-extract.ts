@@ -42,12 +42,24 @@ export function sanitiseMime(raw: string | null | undefined): string {
 
 export const MAX_FILE_SIZE = 10 * 1024 * 1024
 
-// AI extraction is tuned for single-page receipts/invoices. Documents above
-// this page count tend to be sales reports, bank statements, or contracts:
-// Bedrock churns for minutes and still extracts nothing useful (issue #553).
-// Above the limit we skip extraction entirely; the document still lands in
-// the inbox and can be attached to a transaction or converted manually.
+// Page budget for auto-extraction. Documents far above it tend to be sales
+// reports, bank statements, or contracts (issue #553); those are sliced (see
+// slicePdfForExtraction) rather than read whole. The budget depends on how
+// the backend reads PDFs:
+//   - native (Claude on hosted): the model reads PDF bytes directly and
+//     handles long documents fine; 8 pages covers real multi-page invoices
+//     whose totals sit on a later page without opening the door to 100-page
+//     statements.
+//   - rasterize (OpenAI-compatible self-host): every page becomes a PNG in
+//     the prompt, so the old conservative budget of 3 stays.
 export const MAX_PAGES_FOR_AUTO_EXTRACT = 3
+export const MAX_PAGES_FOR_AUTO_EXTRACT_NATIVE = 8
+
+export function maxPagesForAutoExtract(): number {
+  return getAiStatus().capabilities.pdfNative
+    ? MAX_PAGES_FOR_AUTO_EXTRACT_NATIVE
+    : MAX_PAGES_FOR_AUTO_EXTRACT
+}
 
 // Returns the page count for a PDF buffer, or null if the buffer isn't a
 // parseable PDF. Errors fall through so callers can treat "unknown" the same
@@ -61,11 +73,13 @@ export async function countPdfPages(buffer: ArrayBuffer): Promise<number | null>
   }
 }
 
-// Long PDFs used to skip extraction entirely (issue #553). Invoice data
-// almost always sits on the first page(s), so instead we extract from a
-// slim copy of the first MAX_PAGES_FOR_AUTO_EXTRACT pages and record the
-// truncation in extracted_data.pages. Returns null when slicing fails
-// (encrypted/malformed PDF) so the caller can fall back to the old skip.
+// Long PDFs used to skip extraction entirely (issue #553). Instead we extract
+// from a slim copy and record the truncation in extracted_data.pages. The
+// slice is the first maxPages-1 pages PLUS the last page: on multi-page
+// invoices the totals, OCR number and "Att betala" routinely sit on the final
+// page, and a first-pages-only slice read everything except the amounts.
+// Returns null when slicing fails (encrypted/malformed PDF) so the caller can
+// fall back to the old skip.
 export async function slicePdfForExtraction(
   buffer: ArrayBuffer,
   maxPages: number
@@ -73,10 +87,12 @@ export async function slicePdfForExtraction(
   try {
     const src = await PDFDocument.load(buffer, { updateMetadata: false })
     const dst = await PDFDocument.create()
-    const pages = await dst.copyPages(
-      src,
-      Array.from({ length: Math.min(maxPages, src.getPageCount()) }, (_, i) => i)
-    )
+    const total = src.getPageCount()
+    const indices =
+      total > maxPages && maxPages >= 2
+        ? [...Array.from({ length: maxPages - 1 }, (_, i) => i), total - 1]
+        : Array.from({ length: Math.min(maxPages, total) }, (_, i) => i)
+    const pages = await dst.copyPages(src, indices)
     for (const page of pages) dst.addPage(page)
     const bytes = await dst.save()
     // Copy into a fresh ArrayBuffer: Uint8Array.buffer is ArrayBufferLike
@@ -335,16 +351,18 @@ export async function uploadAndExtract(
     console.error('[invoice-inbox] Failed to append DocumentIngested:', err)
   }
 
-  // Page-count gate (issue #553): PDFs above MAX_PAGES_FOR_AUTO_EXTRACT
-  // skip extraction. Bedrock would otherwise block the upload response for
-  // minutes on a 6-page sales report and return nothing useful. Images and
-  // non-PDFs are never gated (single-page by definition). countPdfPages
-  // returns null on malformed PDFs: we treat null as "not gated" and fall
-  // through to the existing extraction path so today's behavior is preserved.
+  // Page-count gate (issue #553): PDFs above the auto-extract page budget
+  // are sliced before extraction. Bedrock would otherwise block the upload
+  // response for minutes on a long sales report and return nothing useful.
+  // Images and non-PDFs are never gated (single-page by definition).
+  // countPdfPages returns null on malformed PDFs: we treat null as "not
+  // gated" and fall through to the existing extraction path so today's
+  // behavior is preserved.
+  const maxAutoExtractPages = maxPagesForAutoExtract()
   const pageCount =
     file.type === 'application/pdf' ? await countPdfPages(file.buffer) : null
   const gatedByPageCount =
-    pageCount != null && pageCount > MAX_PAGES_FOR_AUTO_EXTRACT
+    pageCount != null && pageCount > maxAutoExtractPages
   const sandbox = await isSandboxCompany(supabase, companyId)
   // Paid-tier gate: AI document OCR (Bedrock, via extractInvoiceFields) is the
   // `ai` capability. A company without it (free/manual tier) must never trigger
@@ -419,6 +437,7 @@ export async function uploadAndExtract(
       file,
       pageCount,
       gatedByPageCount,
+      maxAutoExtractPages,
     })
 
     return {
@@ -434,12 +453,12 @@ export async function uploadAndExtract(
     }
   }
 
-  // Long PDFs are sliced to their first pages instead of skipped, but only
-  // when extraction would actually run: slicing after an entitlement/sandbox/
-  // opt-out verdict would be wasted CPU.
+  // Long PDFs are sliced (first pages + the last page) instead of skipped,
+  // but only when extraction would actually run: slicing after an
+  // entitlement/sandbox/opt-out verdict would be wasted CPU.
   const slicedBuffer =
     gatedByPageCount && syncSkipReason === null
-      ? await slicePdfForExtraction(file.buffer, MAX_PAGES_FOR_AUTO_EXTRACT)
+      ? await slicePdfForExtraction(file.buffer, maxAutoExtractPages)
       : null
   // Skip-reason priority: no-AI-entitlement > sandbox > client opt-out >
   // page-count. Opt-out outranks the page gate (an opted-out caller never
@@ -464,7 +483,7 @@ export async function uploadAndExtract(
       })
   const { data: extracted, rawText } = extraction
   if (!skipExtraction && slicedBuffer != null && pageCount != null) {
-    extracted.pages = { total: pageCount, analyzed: MAX_PAGES_FOR_AUTO_EXTRACT }
+    extracted.pages = { total: pageCount, analyzed: maxAutoExtractPages }
   }
 
   // Supplier match by org-nr, then VAT number, then case-insensitive name
@@ -563,6 +582,9 @@ interface DeferredExtractionJob {
   file: { name: string; buffer: ArrayBuffer; type: string }
   pageCount: number | null
   gatedByPageCount: boolean
+  /** Snapshot of maxPagesForAutoExtract() from the request, so the gate
+   *  verdict and the slice/stamp below cannot disagree. */
+  maxAutoExtractPages: number
 }
 
 /**
@@ -588,7 +610,7 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
       let skipReason: string | null = null
       try {
         const slicedBuffer = job.gatedByPageCount
-          ? await slicePdfForExtraction(job.file.buffer, MAX_PAGES_FOR_AUTO_EXTRACT)
+          ? await slicePdfForExtraction(job.file.buffer, job.maxAutoExtractPages)
           : null
         if (job.gatedByPageCount && slicedBuffer == null) {
           extractionSkipped = true
@@ -610,7 +632,7 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
             skipReason = result.skipped
           }
           if (slicedBuffer != null && job.pageCount != null) {
-            extracted.pages = { total: job.pageCount, analyzed: MAX_PAGES_FOR_AUTO_EXTRACT }
+            extracted.pages = { total: job.pageCount, analyzed: job.maxAutoExtractPages }
           }
         }
       } catch (err) {
