@@ -140,7 +140,7 @@ async function main() {
     const sel = await selectAccount({
       transaction: {
         merchantName: r.merchant_name,
-        description: r.description,
+        description: r.description ?? r.original_description ?? '',
         amount: r.amount,
         date: r.date,
         currency: r.currency,
