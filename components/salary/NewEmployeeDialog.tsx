@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import {
   Dialog,
@@ -15,7 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Save } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
   validateEmployeeBankAccount,
   isValidClearing,
@@ -100,11 +101,67 @@ export default function NewEmployeeDialog({ open, onOpenChange, onCreated }: Pro
   )
 }
 
+/**
+ * Why a failed save is reported twice (toast AND an inline line): the dialog
+ * is a Radix modal, which aria-hides everything outside DialogContent while
+ * it is open, including the root-layout Toaster. The toast is visible on
+ * screen but absent from the accessibility tree, so a screen reader (and the
+ * E2E driver that filed #1996) hears nothing. The inline role="alert" line
+ * lives inside the dialog and persists until the next attempt, and it is the
+ * one place the support reference (requestId) is shown.
+ */
+interface SubmitError {
+  message: string
+  requestId: string | null
+}
+
+function readRequestId(body: unknown): string | null {
+  if (typeof body !== 'object' || body === null) return null
+  const inner = (body as { error?: unknown }).error
+  if (typeof inner !== 'object' || inner === null) return null
+  const id = (inner as { requestId?: unknown }).requestId
+  return typeof id === 'string' && id.trim() ? id : null
+}
+
+/**
+ * POST the employee and describe the failure, if any, in one sentence.
+ * Returns null on success. Never throws: every arm (non-2xx envelope, a
+ * non-JSON body such as Vercel's plain-text FUNCTION_INVOCATION_FAILED or a
+ * 413 HTML page, a fetch that never completed) ends in a SubmitError so the
+ * caller has exactly one thing to report.
+ */
+async function submitEmployee(body: unknown, locale: ErrorLocale): Promise<SubmitError | null> {
+  try {
+    const res = await fetch('/api/salary/employees', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (res.ok) return null
+
+    // A body that is not JSON leaves null: getErrorMessage then falls back to
+    // the HTTP status map, still in the user's language.
+    const result: unknown = await res.json().catch(() => null)
+    return {
+      message: getErrorMessage(result, { context: 'salary', statusCode: res.status, locale }),
+      requestId: readRequestId(result),
+    }
+  } catch (err) {
+    return {
+      message: getErrorMessage(err, { context: 'salary', locale }),
+      requestId: null,
+    }
+  }
+}
+
 // Inner component so form state resets whenever the dialog reopens (Radix
 // unmounts DialogContent children on close).
 function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCancel: () => void }) {
+  const t = useTranslations('employees')
+  const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [saving, setSaving] = useState(false)
+  const [submitError, setSubmitError] = useState<SubmitError | null>(null)
   const [employmentType, setEmploymentType] = useState('employee')
   const [salaryType, setSalaryType] = useState('monthly')
   const [personnummer, setPersonnummer] = useState('')
@@ -157,6 +214,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
     }
 
     setSaving(true)
+    setSubmitError(null)
 
     const form = new FormData(e.currentTarget)
     const body = {
@@ -193,25 +251,31 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
       default_dimensions: dimensions,
     }
 
-    const res = await fetch('/api/salary/employees', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-
-    if (res.ok) {
-      toast({ title: 'Anställd skapad' })
-      onCreated()
-    } else {
-      const result = await res.json()
-      toast({
-        title: 'Kunde inte skapa anställd',
-        description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
-        variant: 'destructive',
-      })
+    // `saving` is released in finally no matter how the request ends: a
+    // thrown fetch (offline, connection reset) used to escape this handler
+    // before setSaving(false) ran, leaving the dialog silent with Spara stuck
+    // on "Sparar..." forever. #1996
+    let failure: SubmitError | null
+    try {
+      failure = await submitEmployee(body, locale)
+    } finally {
+      setSaving(false)
     }
 
-    setSaving(false)
+    if (!failure) {
+      toast({ title: 'Anställd skapad' })
+      onCreated()
+      return
+    }
+
+    // One toast per attempt (TOAST_LIMIT is 1, a second would evict it) plus
+    // the inline line that the modal's aria-hiding cannot swallow.
+    setSubmitError(failure)
+    toast({
+      title: 'Kunde inte skapa anställd',
+      description: failure.message,
+      variant: 'destructive',
+    })
   }
 
   const bankName = lookupBankByClearing(clearing)
@@ -426,8 +490,21 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
 
       {/* Solid footer outside the scroll area: always visible, never overlaps
           content (the body above scrolls independently). */}
-      <div className="flex justify-end gap-3 border-t border-border bg-background px-6 py-4">
-        <Button type="button" variant="outline" onClick={onCancel}>
+      <div className="flex items-center gap-3 border-t border-border bg-background px-6 py-4">
+        {submitError && (
+          <p role="alert" className="min-w-0 flex-1 text-sm text-destructive">
+            {submitError.message}
+            {submitError.requestId && (
+              <>
+                {' '}
+                <span className="tabular-nums text-muted-foreground">
+                  {t('save_error_request_id', { id: submitError.requestId })}
+                </span>
+              </>
+            )}
+          </p>
+        )}
+        <Button type="button" variant="outline" className="ml-auto" onClick={onCancel}>
           Avbryt
         </Button>
         <Button type="submit" disabled={saving}>

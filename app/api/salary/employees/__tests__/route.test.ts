@@ -12,7 +12,7 @@
  * The route now runs through the withRouteContext wrapper, so we mock its
  * auth/company/write dependencies and inject the Supabase client via requireAuth.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
@@ -230,6 +230,61 @@ describe('POST /api/salary/employees', () => {
       jamkning_percentage: null,
       jamkning_valid_from: null,
       jamkning_valid_to: null,
+    })
+  })
+
+  it('returns 401 when unauthenticated', async () => {
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: null,
+      supabase: null,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    } as never)
+
+    const res = await POST(postRequest(CREATE_BASE), params)
+    expect(res.status).toBe(401)
+  })
+
+  it('returns 400 on a personnummer that fails the checksum, without inserting', async () => {
+    const { supabase, insert } = supabaseWithInsert({ id: 'emp-new' })
+    authed(supabase)
+
+    const res = await POST(postRequest({ ...CREATE_BASE, personnummer: '199001019803' }), params)
+
+    expect(res.status).toBe(400)
+    expect(insert).not.toHaveBeenCalled()
+  })
+
+  // #1996: the deployment that filed the issue had no PERSONNUMMER_ENCRYPTION_KEY.
+  // The encrypt helper used to throw a bare Error, which the wrapper answered
+  // with the generic INTERNAL_ERROR 500 ("try again later") even though no
+  // retry can ever succeed. It now carries a registry code, so the envelope
+  // names the configuration gap, points at support, and keeps the requestId.
+  describe('missing PERSONNUMMER_ENCRYPTION_KEY in production', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs()
+    })
+
+    it('answers 503 PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED with a requestId and no insert', async () => {
+      vi.stubEnv('NODE_ENV', 'production')
+      vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', '')
+      const { supabase, insert } = supabaseWithInsert({ id: 'emp-new' })
+      authed(supabase)
+
+      const res = await POST(postRequest(CREATE_BASE), params)
+
+      expect(res.status).toBe(503)
+      const body = await res.json()
+      expect(body.error.code).toBe('PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED')
+      expect(body.error.message).toContain('PERSONNUMMER_ENCRYPTION_KEY')
+      expect(body.error.message).toMatch(/Kontakta supporten/)
+      expect(body.error.message_en).toContain('PERSONNUMMER_ENCRYPTION_KEY')
+      expect(body.error.requestId).toMatch(/^req_/)
+      expect(res.headers.get('X-Request-Id')).toBe(body.error.requestId)
+      // The failure happens before the database is touched: nothing to clean up.
+      expect(supabase.from).not.toHaveBeenCalled()
+      expect(insert).not.toHaveBeenCalled()
+      // The personnummer itself must never leak into the error envelope.
+      expect(JSON.stringify(body)).not.toContain(NEW_PNR)
     })
   })
 })
