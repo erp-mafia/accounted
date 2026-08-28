@@ -1169,7 +1169,8 @@
     "hourly_suffix": "/hr",
     "employment_employee": "Employee",
     "employment_company_owner": "Company owner",
-    "employment_board_member": "Board member"
+    "employment_board_member": "Board member",
+    "save_error_request_id": "Reference: {id}"
   },
   "register": {
     "subtitle": "Create an account to get started",
@@ -5235,6 +5236,9 @@
     "strike_lines": "Strike lines in the voucher",
     "correct_metadata": "Change text or date",
     "struck_marker": "Struck {date}",
+    "struck_marker_by": "Struck {date} by {actor}",
+    "help_rattelse_tracks_open": "While the period is open and unlocked, a posted voucher is corrected inside the voucher itself: strike lines or change the text and date. The original stays visible with a strikethrough and every correction is logged with who and when.",
+    "help_rattelse_tracks_locked": "Once the period is locked or closed, storno is the only path: the voucher is reversed and, if needed, replaced by a correction voucher. If the month has already been VAT-declared, correcting VAT accounts can affect the filed declaration.",
     "rattelse_history_title": "Correction history",
     "rattelse_kind_metadata": "Text/date corrected",
     "rattelse_kind_lines": "Lines struck and replaced",
@@ -5689,6 +5693,7 @@
     "ext_arcim_documents_error_reference": "Error reference: {requestId}",
     "ext_arcim_documents_provider_message": "Source system response: {message}",
     "ext_arcim_option_series_help": "Vouchers keep their series from the source system (A, D, E ...). The series here is only used for vouchers without one.",
+    "ext_arcim_option_sie_required_hint": "The ledger (chart of accounts, opening balances and verifications) has not been imported yet. Tick Bokföringsdata (SIE) to fetch it in the same run: customers, suppliers and invoices cannot be imported without it.",
     "ext_arcim_documents_result_description": "The document import is complete.",
     "ext_arcim_documents_imported": "Imported",
     "ext_arcim_documents_skipped": "Already present",
