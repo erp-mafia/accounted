@@ -8355,6 +8355,15 @@
     "settings_save_failed_title": "Could not save the setting",
     "settings_open_page": "Open the driving log"
   },
+  "data_analysis": {
+    "group_label": "Data and privacy",
+    "settings_heading": "Data analysis",
+    "settings_toggle_label": "Allow the company's bookkeeping data to be used for analysis",
+    "settings_toggle_help": "Off by default. When on, the company's bookkeeping data is used together with other companies that made the same choice, to evaluate and improve automatic booking. Two things are included. Continuously: booking outcomes, that is which account was proposed, which account was actually booked, the amount and the model's confidence. During Accounted's own evaluation runs: also transaction descriptions, counterparty names and data from matched supporting documents (receipts and invoices), which are then re-run through the same AI model and the same processors as regular booking. Such text can contain personal data, for example names in Swish payments. The data is never used for marketing and never leaves Accounted or the processors listed in the privacy policy. Switching it off stops collection immediately.",
+    "settings_disclosure": "Booking outcomes (proposed and booked account, amount, confidence) and, during evaluation runs, transaction descriptions and matched supporting documents. Only administrators can change this choice. Read more in our",
+    "settings_privacy_link": "privacy policy",
+    "settings_save_failed_title": "Could not save the setting"
+  },
   "reconciliation_underlag": {
     "heading": "Supporting documents",
     "heading_dated": "Supporting documents as of {date}",
