@@ -3019,6 +3019,7 @@
     "edit_title_aria": "Ändra titel",
     "edited_badge": "redigerad",
     "pre_migration_marker": "från perioden före din migrering",
+    "pre_migration_foldout": "Transaktionen är från perioden före din migrering: den motsvarar troligen ett redan importerat verifikat, så matcha den hellre mot en befintlig verifikation än att bokföra på nytt.",
     "original_name_tooltip": "Bankens originalnamn: {name}",
     "edit_title_dialog_title": "Ändra transaktionens titel",
     "edit_title_warning": "Är du säker på att du vill ändra titeln på den här transaktionen?",

@@ -226,6 +226,11 @@ export default function TransactionInboxCard({
   const showOverflowMenu =
     showInvoiceMatchButton || showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem || showMoveAccountItem || showIgnoreItem || showDeleteItem
 
+  // Pre-migration history row (ISO dates compare lexically): most likely
+  // corresponds to an already-imported verifikat, so it carries a quiet
+  // marker steering toward matching rather than re-booking.
+  const isPreMigration = !!preMigrationCutoff && transaction.date <= preMigrationCutoff
+
   // The foldout carries row detail only (actions live on the row: pill + ⋯).
   // Rows with nothing to show don't expand at all; classified imported rows
   // always have at least the payment-method line.
@@ -234,6 +239,7 @@ export default function TransactionInboxCard({
     (transaction.currency !== 'SEK' && transaction.amount_sek != null) ||
     Boolean(transaction.title_edited_at && originalName) ||
     Boolean(skvCounterpartDate) ||
+    isPreMigration ||
     (HAS_AI_EXTRACTION && (extraction.status === 'running' || extraction.status === 'failed'))
   const canExpand = hasFoldoutContent
   // An exiting row's foldout closes with it: the foldout <tr> has no exit
@@ -299,28 +305,35 @@ export default function TransactionInboxCard({
         <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>
           {formatDate(transaction.date)}
         </td>
-        <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+        {/* overflow-hidden: the shrink-0 markers below don't truncate, so on
+            a viewport too narrow for them the cell must clip instead of
+            painting over the Belopp column. */}
+        <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
           <span className="row-collapsible flex min-w-0 items-center gap-2">
             <span className="truncate">{transaction.description}</span>
             <TransactionAttachmentIndicator documentId={attachedDocumentId} />
+            {/* The markers below are desktop-only (hidden md:*): on mobile
+                they overflowed the cell into Belopp; their info stays
+                reachable in the foldout (TransactionHistoryList gates its
+                markers the same way). */}
             {transaction.title_edited_at && (
               <span
-                className="shrink-0 text-xs text-muted-foreground"
+                className="hidden shrink-0 text-xs text-muted-foreground md:inline"
                 title={originalName ? t('original_name_tooltip', { name: originalName }) : undefined}
               >
                 {t('edited_badge')}
               </span>
             )}
             {skvCounterpartDate && (
-              <Badge variant="warning" className="h-4 shrink-0 gap-1 px-1.5 py-0 text-[10px]">
+              <Badge variant="warning" className="hidden h-4 shrink-0 gap-1 px-1.5 py-0 text-[10px] md:inline-flex">
                 <AlertCircle className="h-3 w-3" />
                 Möjlig 1930↔1630
               </Badge>
             )}
             {/* Quiet pre-migration marker (muted text, not a chip: it is
-                context, not an exception state). ISO dates compare lexically. */}
-            {preMigrationCutoff && transaction.date <= preMigrationCutoff && (
-              <span className="shrink-0 text-xs text-muted-foreground">
+                context, not an exception state). */}
+            {isPreMigration && (
+              <span className="hidden shrink-0 text-xs text-muted-foreground md:inline">
                 {t('pre_migration_marker')}
               </span>
             )}
@@ -485,7 +498,8 @@ export default function TransactionInboxCard({
                 {transaction.transaction_method ||
                 (transaction.currency !== 'SEK' && transaction.amount_sek != null) ||
                 transaction.title_edited_at ||
-                skvCounterpartDate ? (
+                skvCounterpartDate ||
+                isPreMigration ? (
                   <div className="space-y-1 py-1 text-xs text-muted-foreground">
                     {transaction.transaction_method && (
                       <p>
@@ -510,6 +524,7 @@ export default function TransactionInboxCard({
                         {t('skv_counterpart_body', { date: skvCounterpartDate })}
                       </p>
                     )}
+                    {isPreMigration && <p>{t('pre_migration_foldout')}</p>}
                   </div>
                 ) : null}
 
