@@ -9,8 +9,15 @@
  * hyphen-minus instead. The sv-SE thousands separator (U+00A0 NBSP) is in
  * WinAnsi and renders fine.
  */
+const NBSP = String.fromCharCode(0x00a0)
+
 export function formatPdfKronor(amount: number): string {
   const rounded = Math.round(amount)
-  const grouped = Math.abs(rounded).toLocaleString('sv-SE')
+  // Pin the group separator to U+00A0: depending on the Node/ICU CLDR
+  // version, sv-SE groups with U+00A0 or U+202F NARROW NO-BREAK SPACE, and
+  // U+202F is missing from WinAnsi too (digits would silently run together).
+  const grouped = Math.abs(rounded)
+    .toLocaleString('sv-SE')
+    .replace(/\s/g, NBSP)
   return rounded < 0 ? `-${grouped}` : grouped
 }

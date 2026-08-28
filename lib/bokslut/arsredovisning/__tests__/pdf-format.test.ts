@@ -18,6 +18,15 @@ describe('formatPdfKronor', () => {
     expect(formatPdfKronor(1234567.89)).toBe(`1${NBSP}234${NBSP}568`)
   })
 
+  it('pins the group separator to U+00A0 regardless of the ICU CLDR choice', () => {
+    // Newer CLDR data groups sv-SE with U+202F NARROW NO-BREAK SPACE, which
+    // is also missing from WinAnsi; the formatter must normalize to U+00A0.
+    const U202F = String.fromCharCode(0x202f)
+    const out = formatPdfKronor(-9876543)
+    expect(out).toBe(`-9${NBSP}876${NBSP}543`)
+    expect(out).not.toContain(U202F)
+  })
+
   it('rounds to whole kronor and never renders "-0"', () => {
     expect(formatPdfKronor(-0.4)).toBe('0')
     expect(formatPdfKronor(-0.6)).toBe('-1')
