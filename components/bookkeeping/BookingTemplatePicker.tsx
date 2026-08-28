@@ -57,7 +57,9 @@ export default function BookingTemplatePicker({ onApply, entityType, defaultAmou
   }, [open, templatesError, toast])
 
   const filtered = useMemo(() => {
-    let result = templates
+    // Templates hidden for this company (opt-in via the settings panel)
+    // never surface in the picker; only settings shows them, for restore.
+    let result = templates.filter((t) => !t.is_hidden)
 
     // Filter by entity type
     if (entityType) {

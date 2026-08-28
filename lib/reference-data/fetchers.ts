@@ -42,8 +42,15 @@ export class ReferenceFetchError extends Error {
   }
 }
 
-/** A booking_templates row as the list route returns it, with its last-used stamp. */
-export type BookingTemplateWithUsage = BookingTemplateLibrary & { last_used_at: string | null }
+/**
+ * A booking_templates row as the list route returns it, with its last-used
+ * stamp and the per-company hidden flag. `is_hidden` templates stay in the
+ * payload so the settings panel can offer restore; pickers filter them out.
+ */
+export type BookingTemplateWithUsage = BookingTemplateLibrary & {
+  last_used_at: string | null
+  is_hidden: boolean
+}
 
 export async function fetchFiscalPeriods(companyId: string): Promise<FiscalPeriod[]> {
   const supabase = createClient()
