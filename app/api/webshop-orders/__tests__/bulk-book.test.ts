@@ -981,6 +981,12 @@ describe('POST /api/webshop-orders/bulk-book', () => {
         customer_country: 'SE',
       })
       expect(body.data.results[0].error?.message).toContain('ruta 35-42')
+      // The check keys on the billing country only; the copy must say so and
+      // must not assert that the account is wrong (a Swedish-billed order
+      // shipped outside the EU is a legitimate ruta 36 export).
+      expect(body.data.results[0].error?.message).toContain('faktureringslandet')
+      expect(body.data.results[0].error?.message).toContain('leveransadressen')
+      expect(body.data.results[0].error?.message).not.toContain('välj rätt konto')
       expect(mockCreateDraftEntry).not.toHaveBeenCalled()
     })
 

@@ -300,6 +300,13 @@ export const POST = withRouteContext(
     // already warns (zero_rate_foreign) and refusing it would regress every
     // untemplated sweep. Checked per order below, because the billing
     // country is per order and the doctrine is partial failure per row.
+    // Known limitation: customer_country is the BILLING country (the
+    // WooCommerce sync never stores the shipping address), while the goods
+    // boxes 35/36/38 follow where the goods are transported. A Swedish-billed
+    // order shipped to Norway is a legitimate ruta 36 export that this guard
+    // refuses; the error copy therefore says the check is billing-based and
+    // sends the user to the single dialog to confirm rather than to change
+    // the account. Storing shipping country is a follow-up.
     const zeroRateAccount = revenueAccountByRate[0]
     const zeroRateChartRow = zeroRateAccount
       ? chartRowByAccount.get(zeroRateAccount)

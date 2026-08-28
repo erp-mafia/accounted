@@ -3952,9 +3952,9 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
   WEBSHOP_ORDER_ZERO_RATE_CONTEXT_MISMATCH: {
     httpStatus: 422,
     message_sv:
-      'Ordern har en momsfri del men kundens land motsäger det valda 0 %-kontot (export- eller EU-konto). Bokför ordern enskilt och välj rätt konto för ruta 35-42.',
+      'Ordern har en momsfri del men faktureringslandet stämmer inte med det valda 0 %-kontot (export- eller EU-konto). Kontrollen bygger på faktureringsadressen, inte leveransadressen: går varorna till ett annat land kan kontot ändå vara rätt. Bokför ordern enskilt och bekräfta kontot för ruta 35-42.',
     message_en:
-      'The order has a 0 % part but the customer country contradicts the chosen 0 % account (export or EU account). Book the order individually and pick the account for the right box (ruta 35-42).',
+      'The order has a 0 % part but the billing country does not match the chosen 0 % account (export or EU account). The check uses the billing address, not the delivery address: if the goods ship to another country the account may still be right. Book the order individually and confirm the account for the right box (ruta 35-42).',
   },
   WEBSHOP_ORDER_REVENUE_ACCOUNT_UNKNOWN: {
     httpStatus: 422,
