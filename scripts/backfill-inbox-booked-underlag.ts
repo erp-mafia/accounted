@@ -14,8 +14,13 @@
  *     constraint allows (on a samlingsverifikat only one of N items can
  *     carry it; the rest stay derived).
  *
- * Idempotent: items already stamped are excluded by the query, and the
- * propagation helper skips documents that are already anchored.
+ * Since #1548 the same pass runs daily from
+ * app/api/extensions/invoice-inbox/underlag-reconcile/cron; this script is
+ * the manual, uncapped entry point to the shared implementation in
+ * lib/transactions/inbox-underlag-reconcile.ts (dry-run, or a full sweep
+ * after an incident). Idempotent: items already stamped are excluded by the
+ * query, and the propagation helper skips documents that are already
+ * anchored.
  *
  * Usage:
  *   npx tsx scripts/backfill-inbox-booked-underlag.ts              # dry-run (default)
@@ -35,12 +40,7 @@
 import { config } from 'dotenv'
 config({ path: '.env.local' })
 import { createClient } from '@supabase/supabase-js'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { appendProcessingHistoryWithClient } from '@/lib/processing-history/append'
-import {
-  propagateUnderlagForBookedTransaction,
-  resolveBookedJournalEntryIds,
-} from '@/lib/transactions/inbox-underlag'
+import { reconcileStrandedInboxUnderlag } from '@/lib/transactions/inbox-underlag-reconcile'
 
 const EXECUTE = process.argv.includes('--execute')
 
@@ -54,93 +54,28 @@ if (!supabaseUrl || !serviceRoleKey) {
 
 const supabase = createClient(supabaseUrl, serviceRoleKey)
 
-interface StrandedItem {
-  id: string
-  company_id: string
-  matched_transaction_id: string
-  document_id: string | null
-}
-
 async function main() {
   console.log(`Target: ${supabaseUrl}`)
   console.log(EXECUTE ? 'MODE: EXECUTE (writing)' : 'MODE: dry-run (no writes)')
 
-  const items = await fetchAllRows<StrandedItem>((range) =>
-    supabase
-      .from('invoice_inbox_items')
-      .select('id, company_id, matched_transaction_id, document_id')
-      .not('matched_transaction_id', 'is', null)
-      .is('created_journal_entry_id', null)
-      .is('created_supplier_invoice_id', null)
-      .order('id', { ascending: true })
-      .range(range.from, range.to),
-  )
-  console.log(`Matched, unconsumed inbox items: ${items.length}`)
+  // Uncapped: the cron is bounded per run, a manual sweep is not.
+  const summary = await reconcileStrandedInboxUnderlag(supabase, {
+    execute: EXECUTE,
+    maxItems: Number.POSITIVE_INFINITY,
+    actorId: 'backfill-inbox-booked-underlag',
+  })
 
-  // Group per company so the resolver runs one batched lookup per tenant.
-  const byCompany = new Map<string, StrandedItem[]>()
-  for (const item of items) {
-    const list = byCompany.get(item.company_id) ?? []
-    list.push(item)
-    byCompany.set(item.company_id, list)
-  }
-
-  let strandedOnBooked = 0
-  let companiesTouched = 0
-  for (const [companyId, companyItems] of byCompany) {
-    const txIds = Array.from(new Set(companyItems.map((i) => i.matched_transaction_id)))
-    const bookedByTx = await resolveBookedJournalEntryIds(supabase, companyId, txIds)
-    const stranded = companyItems.filter((i) => bookedByTx.has(i.matched_transaction_id))
-    if (stranded.length === 0) continue
-    companiesTouched++
-    strandedOnBooked += stranded.length
-    console.log(`company ${companyId}: ${stranded.length} item(s) on booked transactions`)
-
-    if (!EXECUTE) continue
-    const txIdsToComplete = Array.from(new Set(stranded.map((i) => i.matched_transaction_id)))
-    for (const txId of txIdsToComplete) {
-      const journalEntryId = bookedByTx.get(txId)
-      if (!journalEntryId) continue
-      await propagateUnderlagForBookedTransaction(supabase, companyId, txId, journalEntryId)
-
-      // Behandlingshistorik (BFNAR 2013:2 kap 8): a mass repair touching
-      // underlag-to-verifikat linkage must leave a changelog trail
-      // distinguishing it from the original booking action. Written through
-      // the shared appender (row shape + PII validation) on this script's
-      // own service-role client; payload is pseudonymous IDs only.
-      const itemIds = stranded
-        .filter((i) => i.matched_transaction_id === txId)
-        .map((i) => i.id)
-      try {
-        await appendProcessingHistoryWithClient(supabase, {
-          companyId,
-          correlationId: txId,
-          aggregateType: 'BankTransaction',
-          aggregateId: txId,
-          eventType: 'InboxUnderlagBackfilled',
-          payload: {
-            transaction_id: txId,
-            journal_entry_id: journalEntryId,
-            inbox_item_ids: itemIds,
-            script: 'backfill-inbox-booked-underlag',
-          },
-          actor: { type: 'system', id: 'backfill-inbox-booked-underlag' },
-          occurredAt: new Date(),
-        })
-      } catch (historyError) {
-        console.error(
-          `processing_history append failed for tx ${txId}: ${
-            historyError instanceof Error ? historyError.message : String(historyError)
-          }`,
-        )
-      }
-    }
-  }
-
+  console.log(`Matched, unconsumed inbox items: ${summary.scanned}`)
+  console.log(JSON.stringify(summary, null, 2))
   console.log(
-    `${EXECUTE ? 'Repaired' : 'Would repair'} ${strandedOnBooked} item(s) across ${companiesTouched} company/companies.`,
+    EXECUTE
+      ? `Repaired ${summary.repaired} item(s) across ${summary.companiesTouched} company/companies; ` +
+          `${summary.stillUnlinked} still unlinked, ${summary.anchoredElsewhere} anchored elsewhere.`
+      : `Would link ${summary.stillUnlinked} item(s) across ${summary.companiesTouched} company/companies; ` +
+          `${summary.anchoredElsewhere} anchored elsewhere need a human.`,
   )
   if (!EXECUTE) console.log('Re-run with --execute to apply.')
+  if (summary.failures > 0) process.exitCode = 1
 }
 
 main().catch((err) => {

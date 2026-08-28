@@ -63,6 +63,8 @@ import { bulkBookMatchedInboxItems } from '@/lib/transactions/categorize-core'
 import {
   completeInboxItemsForBookedTransaction,
   resolveBookedJournalEntryIds,
+  resolveUnderlagAnchoring,
+  type UnderlagAnchoring,
 } from '@/lib/transactions/inbox-underlag'
 import { hasCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -339,34 +341,56 @@ export const invoiceInboxExtension: Extension = {
         // leave the active inbox (2026-08-12 report: booked items stuck in
         // "Att göra" pointing at a transaction no longer in the work list).
         type ItemRow = {
+          id: string
+          document_id: string | null
           matched_transaction_id: string | null
           created_journal_entry_id: string | null
           created_supplier_invoice_id: string | null
         }
         const rows = (data ?? []) as ItemRow[]
+        const unresolved = rows.filter(
+          (r) =>
+            r.matched_transaction_id &&
+            !r.created_journal_entry_id &&
+            !r.created_supplier_invoice_id,
+        )
         const unresolvedTxIds = Array.from(
-          new Set(
-            rows
-              .filter(
-                (r) =>
-                  r.matched_transaction_id &&
-                  !r.created_journal_entry_id &&
-                  !r.created_supplier_invoice_id,
-              )
-              .map((r) => r.matched_transaction_id as string),
-          ),
+          new Set(unresolved.map((r) => r.matched_transaction_id as string)),
         )
         const bookedByTx = await resolveBookedJournalEntryIds(
           ctx.supabase,
           ctx.companyId,
           unresolvedTxIds,
         )
-        const items = rows.map((r) => ({
-          ...r,
-          matched_transaction_journal_entry_id: r.matched_transaction_id
+        // Per-item honesty (#1548): the transaction being booked says a
+        // verifikat exists, not that THIS item's underlag reached it. A
+        // document whose link failed, or that is anchored to another
+        // verifikat, must keep the item in "Att göra" instead of reading as
+        // booked on the transaction's word alone.
+        const anchoring = await resolveUnderlagAnchoring(
+          ctx.supabase,
+          ctx.companyId,
+          unresolved
+            .filter((r) => bookedByTx.has(r.matched_transaction_id as string))
+            .map((r) => ({
+              id: r.id,
+              document_id: r.document_id,
+              journalEntryId: bookedByTx.get(r.matched_transaction_id as string) as string,
+            })),
+        )
+        const items = rows.map((r) => {
+          const derivedEntryId = r.matched_transaction_id
             ? bookedByTx.get(r.matched_transaction_id) ?? null
-            : null,
-        }))
+            : null
+          const underlagStatus: UnderlagAnchoring | null = derivedEntryId
+            ? anchoring.get(r.id)?.status ?? null
+            : null
+          return {
+            ...r,
+            matched_transaction_journal_entry_id: derivedEntryId,
+            underlag_status: underlagStatus,
+          }
+        })
 
         return NextResponse.json({ data: { items, count: items.length } })
       },
@@ -432,11 +456,14 @@ export const invoiceInboxExtension: Extension = {
         // Same enrichment as the list: the detail rail must not offer to
         // book a matched transaction that is already booked.
         const row = data as {
+          id: string
+          document_id: string | null
           matched_transaction_id: string | null
           created_journal_entry_id: string | null
           created_supplier_invoice_id: string | null
         }
         let matchedTransactionJournalEntryId: string | null = null
+        let underlagStatus: UnderlagAnchoring | null = null
         if (
           row.matched_transaction_id &&
           !row.created_journal_entry_id &&
@@ -446,10 +473,24 @@ export const invoiceInboxExtension: Extension = {
             row.matched_transaction_id,
           ])
           matchedTransactionJournalEntryId = bookedByTx.get(row.matched_transaction_id) ?? null
+          if (matchedTransactionJournalEntryId) {
+            const anchoring = await resolveUnderlagAnchoring(ctx.supabase, ctx.companyId, [
+              {
+                id: row.id,
+                document_id: row.document_id,
+                journalEntryId: matchedTransactionJournalEntryId,
+              },
+            ])
+            underlagStatus = anchoring.get(row.id)?.status ?? null
+          }
         }
 
         return NextResponse.json({
-          data: { ...row, matched_transaction_journal_entry_id: matchedTransactionJournalEntryId },
+          data: {
+            ...row,
+            matched_transaction_journal_entry_id: matchedTransactionJournalEntryId,
+            underlag_status: underlagStatus,
+          },
         })
       },
     },

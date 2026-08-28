@@ -142,6 +142,8 @@ function reportUploadFailure(report: {
 
 // ── Types ────────────────────────────────────────────────────
 
+type UnderlagStatus = 'anchored' | 'unlinked' | 'anchored_elsewhere'
+
 interface InboxItem {
   id: string
   // 'processing' is the staged-upload in-flight state: the row exists (the
@@ -170,6 +172,14 @@ interface InboxItem {
   // samlingsverifikat only one of N items can carry the stamp; this field is
   // what lets the rest read as booked. Absent on client-side placeholders.
   matched_transaction_journal_entry_id?: string | null
+  // Whether THIS item's underlag reached that verifikat (#1548). The
+  // transaction being booked is a fact about the transaction, not about the
+  // item's document: one whose link failed ('unlinked', transient: the daily
+  // reconcile retries it) or that sits on another verifikat
+  // ('anchored_elsewhere', a human decision) keeps the item in "Att göra".
+  // null when nothing was derived (no booked matched transaction, or the
+  // item is stamped). Absent on client-side placeholders.
+  underlag_status?: UnderlagStatus | null
   error_message: string | null
   // True when AI extraction was skipped: either because the upload caller
   // passed skip_extraction=true (MCP/agent path) or because the server's
@@ -298,9 +308,20 @@ function countExtractedFields(data: InvoiceExtractionResult | null): number {
 // else needs a first action.
 type InboxStatus = 'needs_action' | 'processing' | 'linked' | 'booked' | 'error'
 
+// A matched transaction that is booked while this item's own underlag is not
+// on its verifikat: not "booked" for the inbox, and not bookable either (the
+// book routes 409 on an already-booked transaction). The rail explains it
+// instead of offering a bridge that can only fail.
+function isUnderlagDivergent(item: InboxItem): boolean {
+  return (
+    !!item.matched_transaction_journal_entry_id &&
+    (item.underlag_status === 'unlinked' || item.underlag_status === 'anchored_elsewhere')
+  )
+}
+
 function deriveInboxStatus(item: InboxItem): InboxStatus {
   if (item.created_supplier_invoice_id || item.created_journal_entry_id) return 'booked'
-  if (item.matched_transaction_journal_entry_id) return 'booked'
+  if (item.matched_transaction_journal_entry_id && !isUnderlagDivergent(item)) return 'booked'
   // Staged upload mid-extraction. Outranks 'linked': a transaction-anchored
   // upload is matched from birth, but offering the booking bridge before the
   // fields exist would book from empty data. Transient (seconds): stays in
@@ -2701,14 +2722,22 @@ function FieldsRail({
   }, [item.id])
 
   const isProcessed = !!item.created_supplier_invoice_id
+  const underlagDivergent = isUnderlagDivergent(item)
   // The verifikat this item resolved into: its own stamp, or the entry that
-  // anchors its matched (and already booked) transaction. See InboxItem.
+  // anchors its matched (and already booked) transaction, unless this item's
+  // own underlag never reached it. See InboxItem.
   const bookedEntryId =
-    item.created_journal_entry_id ?? item.matched_transaction_journal_entry_id ?? null
+    item.created_journal_entry_id ??
+    (underlagDivergent ? null : item.matched_transaction_journal_entry_id) ??
+    null
   const isBookedDirectly = !isProcessed && !!bookedEntryId
   // "Resolved" now means a journal entry exists: matched_transaction_id alone
   // is not resolved, it's the prerequisite for booking against that tx.
   const isLinkedToTransaction = !isProcessed && !isBookedDirectly && !!item.matched_transaction_id
+  // The booking bridge (proposal, book/ask actions) only while the
+  // transaction is unbooked: a divergent item's transaction already has a
+  // verifikat, so booking would 409. It gets an explanation and a link.
+  const showBookingBridge = isLinkedToTransaction && !underlagDivergent
   const isResolved = isProcessed || isBookedDirectly
   // Staged upload mid-extraction: a real row whose deferred AI extraction has
   // not landed yet. Same disabled treatment as the optimistic placeholder
@@ -2991,7 +3020,7 @@ function FieldsRail({
             scrolling past nine values to reach the one thing to approve.
             Suppressed while extraction is in flight: a proposal computed from
             empty fields would be an invitation to book nothing. */}
-        {isLinkedToTransaction && !inFlight && (
+        {showBookingBridge && !inFlight && (
           <ProposedBooking itemId={item.id} onLoaded={setProposal} />
         )}
 
@@ -3089,10 +3118,29 @@ function FieldsRail({
           </Link>
         ) : isLinkedToTransaction && item.matched_transaction_id ? (
           <>
+            {/* The transaction is booked but this item's underlag is not on
+                its verifikat (#1548): say so, link the verifikat, and keep
+                "Avbryt matchning" as the way out. No booking bridge: the
+                book routes 409 on an already-booked transaction. */}
+            {underlagDivergent && item.matched_transaction_journal_entry_id && (
+              <AttnLine
+                className="pb-1"
+                action={{
+                  label: t('underlag_open_verification'),
+                  href: `/bookkeeping/${item.matched_transaction_journal_entry_id}`,
+                }}
+              >
+                {t(
+                  item.underlag_status === 'anchored_elsewhere'
+                    ? 'underlag_anchored_elsewhere'
+                    : 'underlag_unlinked',
+                )}
+              </AttnLine>
+            )}
             {/* Matched-to-tx state: show the bridge to booking. The user
                 picks one of two actions: book themselves with the
                 deterministic dialog, or hand off to the assistant. */}
-            {onAskAssistant && (
+            {showBookingBridge && onAskAssistant && (
               <Button
                 variant="default"
                 size="sm"
@@ -3107,14 +3155,16 @@ function FieldsRail({
                 there is not, so there is no separate "book manually" path to
                 choose between. Nothing posts from here without the form's own
                 review step (convention 14). */}
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full"
-              onClick={() => setEditOpen(true)}
-            >
-              {proposal?.lines.length ? t('review_and_book') : t('book_manually')}
-            </Button>
+            {showBookingBridge && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full"
+                onClick={() => setEditOpen(true)}
+              >
+                {proposal?.lines.length ? t('review_and_book') : t('book_manually')}
+              </Button>
+            )}
             <button
               type="button"
               onClick={async () => {

@@ -121,6 +121,83 @@ export async function resolveVoucherLinkedEntryIds(
 }
 
 /**
+ * Whether an inbox item's underlag actually references the verifikat that
+ * booked its transaction. Both readers of "this item is booked" need it:
+ *
+ *  - the inbox list enrichment, so an item whose document never reached the
+ *    verifikat (a failed link, or a document anchored to a DIFFERENT
+ *    verifikat) keeps showing in "Att göra" instead of reading as booked on
+ *    the transaction's word alone (#1548)
+ *  - the reconciliation pass, to classify what a re-run repaired and what
+ *    still needs a human
+ *
+ *  'anchored'           : document_attachments.journal_entry_id equals the
+ *                         verifikat, or the item carries no document (there
+ *                         is no underlag to link; the stamp is all that is
+ *                         missing)
+ *  'unlinked'           : the document references no verifikat yet
+ *                         (transient: a re-run of the propagation links it)
+ *  'anchored_elsewhere' : the document references another verifikat
+ *                         (permanent: never stolen, a human decides)
+ *
+ * One batched select for N items. Items whose document row cannot be read
+ * (select error) are absent from the map: callers treat absence as unknown,
+ * never as anchored.
+ */
+export type UnderlagAnchoring = 'anchored' | 'unlinked' | 'anchored_elsewhere'
+
+export interface UnderlagAnchoringResult {
+  status: UnderlagAnchoring
+  /** The verifikat the document currently references, if any. */
+  document_journal_entry_id: string | null
+}
+
+export async function resolveUnderlagAnchoring(
+  supabase: SupabaseClient,
+  companyId: string,
+  items: Array<{ id: string; document_id: string | null; journalEntryId: string }>,
+): Promise<Map<string, UnderlagAnchoringResult>> {
+  const map = new Map<string, UnderlagAnchoringResult>()
+  const withDocument: typeof items = []
+  for (const item of items) {
+    if (item.document_id) withDocument.push(item)
+    else map.set(item.id, { status: 'anchored', document_journal_entry_id: null })
+  }
+  if (withDocument.length === 0) return map
+
+  const docIds = Array.from(new Set(withDocument.map((i) => i.document_id as string)))
+  const { data: docs, error } = await supabase
+    .from('document_attachments')
+    .select('id, journal_entry_id')
+    .in('id', docIds)
+    .eq('company_id', companyId)
+  if (error) {
+    log.error('Failed to resolve document anchoring for inbox items', {
+      company_id: companyId,
+      error: error.message,
+    })
+    return map
+  }
+  const entryByDoc = new Map<string, string | null>()
+  for (const doc of (docs ?? []) as Array<{ id: string; journal_entry_id: string | null }>) {
+    entryByDoc.set(doc.id, doc.journal_entry_id)
+  }
+  for (const item of withDocument) {
+    const docId = item.document_id as string
+    if (!entryByDoc.has(docId)) continue // unreadable row: unknown, not anchored
+    const current = entryByDoc.get(docId) ?? null
+    const status: UnderlagAnchoring =
+      current === null
+        ? 'unlinked'
+        : current === item.journalEntryId
+          ? 'anchored'
+          : 'anchored_elsewhere'
+    map.set(item.id, { status, document_journal_entry_id: current })
+  }
+  return map
+}
+
+/**
  * Anchor one document to the verifikat, with the guard semantics every
  * booking path shares: a document already pointing at THIS verifikat is a
  * no-op (a same-value rewrite would trip the period-lock trigger), a document
