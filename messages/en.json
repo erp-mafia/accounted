@@ -722,6 +722,7 @@
     "type_book_salary_run": "Book payroll run",
     "type_generate_agi": "AGI",
     "type_update_payslip_line": "Payslip line",
+    "type_set_run_salary": "This month's salary",
     "type_register_absence": "Absence",
     "type_delete_absence": "Absence removed",
     "type_create_employee": "New employee",

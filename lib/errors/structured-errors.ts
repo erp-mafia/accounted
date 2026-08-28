@@ -2747,8 +2747,8 @@ const SALARY: Record<string, StructuredErrorEntry> = {
   },
   SALARY_RUN_EMPLOYEES_NOT_DRAFT: {
     httpStatus: 400,
-    message_sv: 'Anställda kan bara läggas till eller tas bort medan lönekörningen är ett utkast.',
-    message_en: 'Employees can only be added or removed while the salary run is a draft.',
+    message_sv: 'Lönekörningen måste vara ett utkast för att ändra anställda eller månadens lön.',
+    message_en: 'The salary run must be a draft to change its employees or this month\'s salary.',
   },
   ABSENCE_RANGE_TOO_LARGE: {
     httpStatus: 400,

@@ -154,6 +154,9 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // numbers feed a verifikation) and re-editable until then, but they change
   // a pay outcome: human review at medium, never silent.
   update_payslip_line: 'medium',
+  // Draft-only edit of one employee's per-run base salary; no booking impact
+  // until the run is calculated and booked (both separately staged).
+  set_run_salary: 'medium',
   // Absence rows drive sjuklön math and the statutory AGI Frånvarouppgift.
   // Reversible via delete, but not audit-free: medium.
   register_absence: 'medium',

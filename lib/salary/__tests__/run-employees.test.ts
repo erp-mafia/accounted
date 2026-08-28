@@ -8,7 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { addEmployeeToRun, removeEmployeeFromRun } from '@/lib/salary/run-employees'
+import { addEmployeeToRun, removeEmployeeFromRun, setRunEmployeeSalary } from '@/lib/salary/run-employees'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const RUN_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -213,6 +213,167 @@ describe('removeEmployeeFromRun', () => {
     })
 
     expect(result.ok).toBe(true)
+    const fromCalls = (mock.supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
+    expect(fromCalls).toEqual(['salary_runs', 'salary_run_employees'])
+  })
+})
+
+describe('setRunEmployeeSalary', () => {
+  const SRE_ROW = {
+    id: SRE_ID,
+    employee_id: EMPLOYEE_ID,
+    salary_type: 'monthly',
+    employment_degree: 80,
+    monthly_salary: 35000,
+  }
+
+  it('rejects a negative salary without touching the DB', async () => {
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      monthlySalary: -1,
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('VALIDATION_ERROR')
+    expect((mock.supabase.from as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0)
+  })
+
+  it('rejects a salary above SALARY_OVERRIDE_MAX without touching the DB', async () => {
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      monthlySalary: 10_000_001,
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('VALIDATION_ERROR')
+    expect((mock.supabase.from as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0)
+  })
+
+  it('rejects an overflow-scale salary (1e307) instead of writing Infinity', async () => {
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      monthlySalary: 1e307,
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('returns SALARY_RUN_NOT_FOUND for a missing run', async () => {
+    mock.enqueue({ data: null })
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      monthlySalary: 45000,
+    })
+    expect(result).toEqual({ ok: false, code: 'SALARY_RUN_NOT_FOUND' })
+  })
+
+  it('gates on draft status', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'review' } })
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      monthlySalary: 45000,
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('SALARY_RUN_EMPLOYEES_NOT_DRAFT')
+  })
+
+  it('returns SALARY_RUN_EMPLOYEE_NOT_FOUND when the employee is not on the run', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: null })
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      monthlySalary: 45000,
+    })
+    expect(result).toEqual({ ok: false, code: 'SALARY_RUN_EMPLOYEE_NOT_FOUND' })
+  })
+
+  it('updates the per-run salary and refreshes the display line (happy path)', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: SRE_ROW })
+    mock.enqueue({ data: null }) // sre update
+    mock.enqueue({ data: null }) // line update
+
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      monthlySalary: 45000.005,
+    })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.previous_monthly_salary).toBe(35000)
+      expect(result.data.monthly_salary).toBe(45000.01) // roundOre applied
+      expect(result.data.salary_run_employee_id).toBe(SRE_ID)
+    }
+    const fromCalls = (mock.supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
+    expect(fromCalls).toEqual([
+      'salary_runs',
+      'salary_run_employees',
+      'salary_run_employees',
+      'salary_line_items',
+    ])
+  })
+
+  it('accepts 0 as an intentional nollkörning', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: SRE_ROW })
+    mock.enqueue({ data: null })
+    mock.enqueue({ data: null })
+
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      monthlySalary: 0,
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.monthly_salary).toBe(0)
+  })
+
+  it('skips the display-line refresh for hourly employees', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { ...SRE_ROW, salary_type: 'hourly' } })
+    mock.enqueue({ data: null }) // sre update only
+
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      monthlySalary: 45000,
+    })
+    expect(result.ok).toBe(true)
+    const fromCalls = (mock.supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
+    expect(fromCalls).toEqual(['salary_runs', 'salary_run_employees', 'salary_run_employees'])
+  })
+
+  it('dry-run resolves old and new salary without writing', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: SRE_ROW })
+
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      monthlySalary: 45000,
+      dryRun: true,
+    })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.previous_monthly_salary).toBe(35000)
+      expect(result.data.monthly_salary).toBe(45000)
+    }
     const fromCalls = (mock.supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
     expect(fromCalls).toEqual(['salary_runs', 'salary_run_employees'])
   })
