@@ -524,19 +524,46 @@ export async function extractInvoiceFields(
   let rawText: string | null = null
   let model: string | null = null
   try {
-    const result = await service.extractFromDocument({
+    const baseMaxTokens = readAiConfig().extractionMaxTokens
+    const request = {
       document: toDocumentInput(input),
       system: SYSTEM_PROMPT,
       instruction: EXTRACTION_INSTRUCTION,
-      maxTokens: readAiConfig().extractionMaxTokens,
       jsonSchema: EXTRACTION_JSON_SCHEMA,
-    })
+    }
+    let result = await service.extractFromDocument({ ...request, maxTokens: baseMaxTokens })
     if (!result.ok) {
       // Not a failure: the deployment cannot read this document at all.
       // `ai_unconfigured` is the self-host "no key yet" case the 30 s
       // upload hang used to hide; the others are honest capability gaps.
       log.warn('AI extraction skipped', { file_name_hash: fileNameHash, reason: result.skipped })
       return { data: emptyResult(), rawText: null, skipped: result.skipped }
+    }
+    if (result.truncated) {
+      // The output hit maxTokens mid-JSON (line-item-heavy documents). Left
+      // alone this parsed to nothing and looked like an unreadable document;
+      // one retry at double the cap recovers it. A second truncation falls
+      // through to the normal parse path, which fails visibly in the log
+      // below instead of silently.
+      log.warn('ai_extraction_truncated', {
+        file_name_hash: fileNameHash,
+        max_tokens: baseMaxTokens,
+        retrying: true,
+      })
+      const retry = await service.extractFromDocument({
+        ...request,
+        maxTokens: baseMaxTokens * 2,
+      })
+      if (retry.ok) {
+        result = retry
+        if (retry.truncated) {
+          log.warn('ai_extraction_truncated', {
+            file_name_hash: fileNameHash,
+            max_tokens: baseMaxTokens * 2,
+            retrying: false,
+          })
+        }
+      }
     }
     rawText = result.text
     model = result.model

@@ -15,7 +15,7 @@ import {
   countPdfPages,
   slicePdfForExtraction,
   MAX_FILE_SIZE,
-  MAX_PAGES_FOR_AUTO_EXTRACT,
+  maxPagesForAutoExtract,
   UPLOAD_ALLOWED_MIME_TYPES,
   EMAIL_ALLOWED_MIME_TYPES,
   ensureHtmlDocument,
@@ -708,10 +708,11 @@ export const invoiceInboxExtension: Extension = {
           // from a slice of their first pages; the skip only remains for
           // unsliceable (encrypted/malformed) PDFs. Sandbox companies skip
           // Bedrock unconditionally.
+          const maxAutoExtractPages = maxPagesForAutoExtract()
           const pageCount =
             file.type === 'application/pdf' ? await countPdfPages(buffer) : null
           const gatedByPageCount =
-            pageCount != null && pageCount > MAX_PAGES_FOR_AUTO_EXTRACT
+            pageCount != null && pageCount > maxAutoExtractPages
           const sandbox = await isSandboxCompany(ctx.supabase, ctx.companyId)
           // Paid-tier gate: no `ai` capability → no Bedrock OCR (seed empty
           // skeleton; the attached document is still stored). Same paywall as
@@ -719,7 +720,7 @@ export const invoiceInboxExtension: Extension = {
           const hasAiEntitlement = await hasCapability(ctx.supabase, ctx.companyId, CAPABILITY.ai)
           const slicedBuffer =
             gatedByPageCount && hasAiEntitlement && !sandbox
-              ? await slicePdfForExtraction(buffer, MAX_PAGES_FOR_AUTO_EXTRACT)
+              ? await slicePdfForExtraction(buffer, maxAutoExtractPages)
               : null
           const skipReason: 'no_ai_entitlement' | 'too_many_pages' | 'sandbox' | null =
             !hasAiEntitlement
@@ -740,7 +741,7 @@ export const invoiceInboxExtension: Extension = {
               })
           const { data: extracted } = extraction
           if (!skipExtraction && slicedBuffer != null && pageCount != null) {
-            extracted.pages = { total: pageCount, analyzed: MAX_PAGES_FOR_AUTO_EXTRACT }
+            extracted.pages = { total: pageCount, analyzed: maxAutoExtractPages }
           }
           await mirrorExtractionToDocument(doc.id, {
             data: extracted,

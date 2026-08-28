@@ -273,6 +273,60 @@ describe('extractInvoiceFields', () => {
     expect(extractJsonObject(oversized)).toBe(oversized)
   })
 
+  // ── max_tokens truncation retry (2026-08) ──────────────────
+  // Line-item-heavy documents can blow the output cap; the truncated JSON
+  // used to parse to nothing and look like an unreadable document.
+
+  it('retries once with a doubled cap when the output was truncated at max_tokens', async () => {
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: JSON.stringify(VALID_RESULT).slice(0, 40) }],
+        stop_reason: 'max_tokens',
+      })
+      .mockReturnValueOnce(aiResponse(VALID_RESULT))
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'many-line-items.pdf',
+    })
+    expect(mockCreate).toHaveBeenCalledTimes(2)
+    const firstMax = mockCreate.mock.calls[0][0].max_tokens
+    expect(mockCreate.mock.calls[1][0].max_tokens).toBe(firstMax * 2)
+    expect(data.totals.total).toBe(6.25)
+    expect(data.confidence).toBe(1)
+  })
+
+  it('falls back to the empty result when the retry is truncated too', async () => {
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: '{"lineItems":[{"desc' }],
+        stop_reason: 'max_tokens',
+      })
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: '{"lineItems":[{"description":"still cut' }],
+        stop_reason: 'max_tokens',
+      })
+    const { data, rawText } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'many-line-items.pdf',
+    })
+    expect(mockCreate).toHaveBeenCalledTimes(2)
+    expect(rawText).toBe('{"lineItems":[{"description":"still cut')
+    expect(data.totals.total).toBeNull()
+    expect(data.confidence).toBe(0)
+  })
+
+  it('does not retry when the answer completed under the cap', async () => {
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+    await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'kvitto.pdf',
+    })
+    expect(mockCreate).toHaveBeenCalledTimes(1)
+  })
+
   it('returns empty result when AI response fails schema validation', async () => {
     mockCreate.mockReturnValueOnce(
       aiResponse({ supplier: { name: 'X' } /* missing required keys */ })
