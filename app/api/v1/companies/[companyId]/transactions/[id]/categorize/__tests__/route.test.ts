@@ -393,3 +393,61 @@ describe('POST /api/v1/.../transactions/{id}/categorize CAS race', () => {
     expect(inserts['voucher_gap_explanations']).toBeUndefined()
   })
 })
+
+describe('POST /api/v1/.../transactions/{id}/categorize orphaned counter-account guard (#1643)', () => {
+  it('returns TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT for an account_override on a revoked-held twin of the live row', async () => {
+    const { supabase } = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: {
+        data: {
+          id: TX_ID,
+          company_id: COMPANY_ID,
+          date: '2026-05-12',
+          amount: 217.04,
+          currency: 'SEK',
+          merchant_name: 'SEB',
+          cash_account_id: 'ca-live',
+          journal_entry_id: null,
+        },
+        error: null,
+      },
+      company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
+      chart_of_accounts: {
+        data: { account_number: '1931', account_class: 1, is_active: true },
+        error: null,
+      },
+      cash_accounts: [
+        // 1: resolveSettlementAccount reads the row's own ledger (1930).
+        { data: { ledger_account: '1930' }, error: null },
+        // 2: the guard's topology scan: 1931 is held by a revoked connection
+        // and shares the live row's (IBAN, currency): a stale twin.
+        {
+          data: [
+            { id: 'ca-live', ledger_account: '1930', bank_connection_id: 'conn-live', iban: 'SE111', enabled: true, currency: 'SEK' },
+            { id: 'ca-orphan', ledger_account: '1931', bank_connection_id: 'conn-old', iban: 'SE111', enabled: true, currency: 'SEK' },
+          ],
+          error: null,
+        },
+      ],
+      bank_connections: {
+        data: [
+          { id: 'conn-live', status: 'active' },
+          { id: 'conn-old', status: 'revoked' },
+        ],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(
+      makeRequest({ is_business: true, category: 'income_services', account_override: '1931' }),
+      routeParams(),
+    )
+
+    const body = await res.json()
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT')
+    expect(body.error.details.accountNumber).toBe('1931')
+    expect(createTxJE).not.toHaveBeenCalled()
+  })
+})

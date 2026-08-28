@@ -30,6 +30,7 @@ import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mappi
 import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { guardCounterLegs } from '@/lib/cash-accounts/service'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
@@ -402,6 +403,29 @@ export async function categorizeMatchedTransaction(
 
   if (!mappingResult.debit_account || !mappingResult.credit_account) {
     return { error: `No account mapping for category "${category}" with entity type "${entityType}".`, status: 400 }
+  }
+
+  // Issue #1643 problem 4: never book the COUNTER leg onto an orphaned
+  // cash-account ledger or a twin ledger of the transaction's own bank
+  // account. An account_override or learned mapping pointing there would
+  // silently drop revenue/expense from the P&L onto a junk balance-sheet
+  // account. A twin that is merely the stale BANK leg is rewritten to the
+  // settlement account instead (see guardCounterLegs).
+  {
+    const guarded = await guardCounterLegs(
+      supabase,
+      companyId,
+      mappingResult,
+      settlementAccount,
+      transaction.cash_account_id,
+    )
+    if (guarded.refusedLedger) {
+      return {
+        error: `Motkontot ${guarded.refusedLedger} är ett bankkonto som hör till transaktionens eget konto eller till en frånkopplad bankanslutning och kan inte användas. Välj ett intäkts- eller kostnadskonto i stället.`,
+        status: 400,
+      }
+    }
+    mappingResult = guarded.mappingResult
   }
 
   await ensureFiscalPeriod(supabase, userId, companyId, transaction.date, fiscalYearStartMonth)
