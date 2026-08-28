@@ -2246,6 +2246,10 @@ export const UpdateSettingsSchema = z.object({
   // Körjournal (mileage log): UI-visibility toggle only, never load-bearing
   // for correctness (trips created via API/MCP work regardless).
   mileage_enabled: z.boolean().optional(),
+  // Data analysis consent (#1346): gates cross-company analysis of this
+  // company's bookkeeping outcomes. Flipped by a human in the settings UI
+  // only; deliberately absent from the v1 REST / MCP settings pick lists.
+  data_analysis_opt_in: z.boolean().optional(),
   // Salary payment file
   preferred_payment_format: z.enum(['bg_lb', 'pain001']).optional(),
   // Salary settings (migration 20260703190000). Day of month salaries are
