@@ -14,8 +14,13 @@
  *   rm .env.local
  *
  * Consent: only companies with company_settings.data_analysis_opt_in = true
- * are read (#1346). Nobody is opted in by default, so an empty run is the
- * expected state until companies flip the toggle in Inställningar > Företag.
+ * are read (#1346). This script goes beyond booking outcomes: it reads each
+ * transaction's description, merchant name and matched underlag (via
+ * gatherUnderlag) and sends them to the model again, so the consent copy in
+ * messages/*.json (data_analysis.settings_toggle_help) explicitly names
+ * "evaluation runs" with exactly those inputs. Do not add inputs here that
+ * the copy does not name. Nobody is opted in by default, so an empty run is
+ * the expected state until an admin flips the toggle in Inställningar > Företag.
  *
  * Leakage caveat: a known vendor's counterparty template may already reflect
  * the very booking under test, inflating the "deterministic nailed it" segment.

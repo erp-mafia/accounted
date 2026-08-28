@@ -7,7 +7,7 @@ import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsRow, SettingsRowNote } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
-import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useCompany } from '@/contexts/CompanyContext'
 import { cn } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
@@ -17,12 +17,17 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
  * The flag is enforced server-side (lib/company/data-analysis.ts) on every
  * path that reads bookkeeping outcomes across companies; this component only
  * mirrors it and states plainly what is analysed. Off by default.
+ *
+ * Owner / admin only: the company_settings RLS update policy is admin-gated,
+ * so a plain member's PUT would fail with a misleading error. Consent is an
+ * admin decision anyway, so the switch renders disabled for everyone else.
  */
 export function DataAnalysisToggle() {
   const t = useTranslations('data_analysis')
   const errorLocale = useLocale() as ErrorLocale
   const { settings, updateSettings } = useSettings()
-  const { canWrite } = useCanWrite()
+  const { role } = useCompany()
+  const canConsent = role === 'owner' || role === 'admin'
   const { toast } = useToast()
   const [isSaving, setIsSaving] = useState(false)
 
@@ -60,7 +65,7 @@ export function DataAnalysisToggle() {
     }
   }
 
-  const locked = isSaving || !canWrite
+  const locked = isSaving || !canConsent
 
   return (
     <SettingsRow label={t('settings_heading')} help={t('settings_toggle_help')}>
