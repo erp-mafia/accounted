@@ -2758,8 +2758,8 @@ const SALARY: Record<string, StructuredErrorEntry> = {
   },
   SALARY_RUN_EMPLOYEES_NOT_DRAFT: {
     httpStatus: 400,
-    message_sv: 'Anställda kan bara läggas till eller tas bort medan lönekörningen är ett utkast.',
-    message_en: 'Employees can only be added or removed while the salary run is a draft.',
+    message_sv: 'Lönekörningen måste vara ett utkast för att ändra anställda eller månadens lön.',
+    message_en: 'The salary run must be a draft to change its employees or this month\'s salary.',
   },
   ABSENCE_RANGE_TOO_LARGE: {
     httpStatus: 400,
@@ -2851,6 +2851,24 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'En anställd med samma personnummer finns redan.',
     message_en: 'An employee with that personnummer already exists.',
+  },
+  // A production deployment without PERSONNUMMER_ENCRYPTION_KEY: every
+  // employee create (and every decrypt-on-read) throws before touching the
+  // database. Deliberately not INTERNAL_ERROR: it is a configuration gap, not
+  // transient, and retrying never helps, so the user should hear "contact
+  // support" rather than "try again later". 503 like
+  // INVOICE_SEND_EMAIL_NOT_CONFIGURED: the service is unavailable until an
+  // operator sets the variable. #1996
+  PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED: {
+    httpStatus: 503,
+    message_sv:
+      'Lönemodulen är inte konfigurerad: krypteringsnyckeln för personnummer (PERSONNUMMER_ENCRYPTION_KEY) saknas i driftmiljön. Kontakta supporten.',
+    message_en:
+      'Payroll is not configured: the personal-number encryption key (PERSONNUMMER_ENCRYPTION_KEY) is missing from the deployment environment. Contact support.',
+    remediation: {
+      description:
+        'Set PERSONNUMMER_ENCRYPTION_KEY in the deployment environment and redeploy. Retrying the request without it will fail identically.',
+    },
   },
   SALARY_RUN_DUPLICATE_PERIOD: {
     httpStatus: 409,
@@ -3959,6 +3977,13 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
       'Ett valt intäktskonto är inte upplagt för momssatsen det ska ta emot, så försäljningen skulle falla ur momsdeklarationens ruta 05. Ange kontots momssats i kontoplanen (eller välj ett konto för rätt sats) och försök igen.',
     message_en:
       'A chosen revenue account is not configured for the VAT rate it would receive, so the sale would drop out of ruta 05 in the VAT declaration. Set the account VAT rate in the chart of accounts (or pick an account for the right rate) and try again.',
+  },
+  WEBSHOP_ORDER_ZERO_RATE_CONTEXT_MISMATCH: {
+    httpStatus: 422,
+    message_sv:
+      'Ordern har en momsfri del men faktureringslandet stämmer inte med det valda 0 %-kontot (export- eller EU-konto). Kontrollen bygger på faktureringsadressen, inte leveransadressen: går varorna till ett annat land kan kontot ändå vara rätt. Bokför ordern enskilt och bekräfta kontot för ruta 35-42.',
+    message_en:
+      'The order has a 0 % part but the billing country does not match the chosen 0 % account (export or EU account). The check uses the billing address, not the delivery address: if the goods ship to another country the account may still be right. Book the order individually and confirm the account for the right box (ruta 35-42).',
   },
   WEBSHOP_ORDER_REVENUE_ACCOUNT_UNKNOWN: {
     httpStatus: 422,

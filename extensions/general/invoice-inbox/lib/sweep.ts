@@ -21,11 +21,16 @@ import { emptyResult } from './extract-invoice-fields'
 const log = createLogger('invoice-inbox/sweep')
 
 /**
- * A deferred extraction is one Bedrock call (the WhatsApp cron budgets
- * 10-60s for the same call). Two minutes of silence means no live worker
- * can still deliver a flip that beats the sweep by enough to matter.
+ * A deferred extraction is now up to TWO Bedrock calls on up to 8 native PDF
+ * pages: the base call can spend its full output budget (~90-150s at 8192
+ * tokens) before the truncation retry doubles the cap and runs again. A live
+ * worker can therefore be legitimately silent for several minutes; a cutoff
+ * shorter than its worst case makes the sweep steal the row and discard the
+ * worker's real result via the status CAS. Ten minutes clears the two-call
+ * worst case with margin while still flipping genuinely crashed rows well
+ * before anyone files a support mail about a stuck item.
  */
-export const PROCESSING_STUCK_MS = 2 * 60 * 1000
+export const PROCESSING_STUCK_MS = 10 * 60 * 1000
 const BATCH = 50
 
 export interface InboxSweepSummary {

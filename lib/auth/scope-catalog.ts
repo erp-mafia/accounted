@@ -318,6 +318,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_payslip:                     'payroll:read',
   gnubok_list_absence:                    'payroll:read',
   gnubok_update_payslip_line:             'payroll:write',
+  gnubok_set_run_salary:                  'payroll:write',
   gnubok_register_absence:                'payroll:write',
   gnubok_delete_absence:                  'payroll:write',
   gnubok_create_employee:                 'payroll:write',

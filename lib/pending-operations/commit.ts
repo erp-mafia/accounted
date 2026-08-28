@@ -5465,6 +5465,51 @@ async function commitUpdatePayslipLine(
   }
 }
 
+async function commitSetRunSalary(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const salaryRunId = params.salary_run_id as string
+  const employeeId = params.employee_id as string
+  const monthlySalary = params.monthly_salary as number
+  if (!salaryRunId || !employeeId || typeof monthlySalary !== 'number') {
+    return { error: 'salary_run_id, employee_id and monthly_salary are required', status: 400 }
+  }
+
+  try {
+    const { setRunEmployeeSalary } = await import('@/lib/salary/run-employees')
+    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId,
+      salaryRunId,
+      employeeId,
+      monthlySalary,
+    })
+    if (!result.ok) {
+      const entry = getErrorEntry(result.code)
+      return {
+        error: entry?.message_sv ?? `Kunde inte sätta månadens lön: ${result.code}`,
+        status: entry?.httpStatus ?? 500,
+      }
+    }
+    return {
+      data: {
+        salary_run_id: salaryRunId,
+        salary_run_employee_id: result.data.salary_run_employee_id,
+        employee_id: result.data.employee_id,
+        previous_monthly_salary: result.data.previous_monthly_salary,
+        monthly_salary: result.data.monthly_salary,
+      },
+    }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Failed to set run salary',
+      status: 500,
+    }
+  }
+}
+
 async function commitCreateEmployee(
   supabase: SupabaseClient,
   userId: string,
@@ -6524,6 +6569,9 @@ async function commitPendingOperationInner(
         break
       case 'update_payslip_line':
         result = await commitUpdatePayslipLine(supabase, companyId, pendingOp.params)
+        break
+      case 'set_run_salary':
+        result = await commitSetRunSalary(supabase, companyId, pendingOp.params)
         break
       case 'register_absence':
         result = await commitRegisterAbsence(supabase, companyId, pendingOp.params)

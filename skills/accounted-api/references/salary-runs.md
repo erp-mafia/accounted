@@ -809,6 +809,81 @@ Example response `200`:
 
 ---
 
+### `PATCH /api/v1/companies/{companyId}/salary-runs/{id}/employees/{employeeId}`
+
+**Set this run's base salary for one employee.**
+`scope:payroll:write · risk:medium · idempotent · dry-run · reversible`
+
+Sets the per-run base salary (salary_run_employees.monthly_salary) that the calculation engine reads for this run. The employee master record is untouched, so each month's gross can differ from the employee's standard pay (variable owner salary). Draft-only; 0 is a valid nollkörning.
+
+**Use when:** The employee's pay this month differs from their configured fixed salary: owners taking salary by need and capacity, one-off adjustments, or a deliberate zero month.
+**Do not use for:** Changing the employee's standard salary going forward: PATCH /employees/{id}. Editing individual payslip lines (tillägg/avdrag): the lines endpoints. Tax/avgifter overrides in review: not exposed on v1 yet.
+
+**Pitfalls:**
+- Draft-only: 400 SALARY_RUN_EMPLOYEES_NOT_DRAFT once the run has advanced.
+- Run POST /calculate afterwards: gross, tax and totals reflect the new salary only after recalculation.
+- Do NOT edit the monthly_salary line item instead: recalculation rebuilds base salary lines from this per-run value.
+- For hourly employees the value is stored but gross derives from hours worked; the salary_type field in the response tells you which applies.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `employeeId` | path | `string` | yes |  |
+
+Request body:
+```ts
+{ monthly_salary: number }
+```
+
+Example request:
+```json
+{
+  "monthly_salary": 45000
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    salary_run_employee_id: string,
+    employee_id: string,
+    salary_type: string,
+    employment_degree: number,
+    previous_monthly_salary: number,
+    monthly_salary: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "salary_run_employee_id": "sre_a8f1…",
+    "employee_id": "emp_77b2…",
+    "salary_type": "monthly",
+    "employment_degree": 100,
+    "previous_monthly_salary": 30000,
+    "monthly_salary": 45000
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `DELETE /api/v1/companies/{companyId}/salary-runs/{id}/employees/{employeeId}`
 
 **Remove an employee from a draft salary run.**

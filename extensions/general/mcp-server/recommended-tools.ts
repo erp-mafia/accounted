@@ -134,6 +134,7 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
     tools: [
       'gnubok_list_employees',
       'gnubok_create_salary_run',
+      'gnubok_set_run_salary',
       'gnubok_calculate_salary_run',
       'gnubok_get_salary_run',
       'gnubok_book_salary_run',

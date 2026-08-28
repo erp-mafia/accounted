@@ -14075,7 +14075,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_update_payslip_line',
     title: 'Update Payslip Line',
-    description: 'Stage an edit to one payslip line (amount, description, quantity, unit price) in a DRAFT salary run. Commit via gnubok_approve_pending_operation, then re-run gnubok_calculate_salary_run: line edits never recompute tax by themselves.',
+    description: 'Stage an edit to one payslip line (amount, description, quantity, unit price) in a DRAFT salary run. Commit via gnubok_approve_pending_operation, then re-run gnubok_calculate_salary_run. NOTE: recalc rebuilds base salary lines: use gnubok_set_run_salary for this month\'s pay.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -14146,6 +14146,91 @@ export const tools: McpTool[] = [
         actor,
         {
           description: 'After approval, recalculate the run so tax and totals reflect the edit.',
+          tool: 'gnubok_calculate_salary_run',
+        },
+        run?.payment_date ? { dateForPeriodCheck: run.payment_date as string } : {},
+      )
+    },
+  },
+  {
+    name: 'gnubok_set_run_salary',
+    title: 'Set This Month\'s Salary',
+    description: 'Stage this run\'s base salary for one employee in a DRAFT salary run (per-run value; the employee\'s fixed salary is untouched). For variable pay, e.g. owner salary; 0 = nollkörning. Commit via gnubok_approve_pending_operation, then gnubok_calculate_salary_run.',
+    // Default catalog: gnubok_call_tool only bridges READ tools, so a
+    // search-only WRITE is uncallable on Claude.ai (the update_customer
+    // lesson, #1876/#1986), and update_payslip_line's description plus the
+    // payroll_month loadout point agents here. Budget accounted for in
+    // payload-size.bench.test.ts's ledger.
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        salary_run_id: { type: 'string', description: 'UUID of the salary run (must be draft)' },
+        employee_id: { type: 'string', description: 'UUID of the employee on the run' },
+        monthly_salary: { type: 'number', description: 'This month\'s gross base salary (SEK, 0 to 10 000 000; 0 books a nollkörning). Monthly employees only: hourly gross derives from hours worked.' },
+      },
+      required: ['salary_run_id', 'employee_id', 'monthly_salary'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const { salary_run_id, employee_id, monthly_salary } = args as {
+        salary_run_id: string; employee_id: string; monthly_salary: number
+      }
+      if (!salary_run_id || !employee_id) {
+        throw new Error('salary_run_id and employee_id are required')
+      }
+      if (typeof monthly_salary !== 'number' || !Number.isFinite(monthly_salary) || monthly_salary < 0) {
+        throw new Error('monthly_salary must be a number >= 0')
+      }
+
+      // Preflight via the shared service in dry-run: verifies draft status and
+      // that the employee is on the run, and yields old/new salary for the
+      // preview. No writes here: the commit path re-runs the service for real.
+      const { setRunEmployeeSalary } = await import('@/lib/salary/run-employees')
+      const preflight = await setRunEmployeeSalary(supabase, {
+        companyId,
+        salaryRunId: salary_run_id,
+        employeeId: employee_id,
+        monthlySalary: monthly_salary,
+        dryRun: true,
+      })
+      if (!preflight.ok) {
+        throw new Error(`Cannot set run salary: ${preflight.code}`)
+      }
+
+      const [{ data: run }, { data: emp }] = await Promise.all([
+        supabase
+          .from('salary_runs')
+          .select('payment_date, period_year, period_month')
+          .eq('id', salary_run_id)
+          .eq('company_id', companyId)
+          .maybeSingle(),
+        supabase
+          .from('employees')
+          .select('first_name, last_name')
+          .eq('id', employee_id)
+          .eq('company_id', companyId)
+          .maybeSingle(),
+      ])
+      const employeeName = emp ? `${emp.first_name} ${emp.last_name}` : employee_id
+
+      return stagePendingOperation(
+        supabase, companyId, userId, 'set_run_salary',
+        `Sätt månadens lön: ${employeeName} ${preflight.data.previous_monthly_salary} kr → ${preflight.data.monthly_salary} kr`,
+        { salary_run_id, employee_id, monthly_salary: preflight.data.monthly_salary },
+        {
+          salary_run_id,
+          salary_run_employee_id: preflight.data.salary_run_employee_id,
+          employee_id,
+          employee_name: employeeName,
+          previous_monthly_salary: preflight.data.previous_monthly_salary,
+          new_monthly_salary: preflight.data.monthly_salary,
+          salary_type: preflight.data.salary_type,
+        },
+        actor,
+        {
+          description: 'After approval, recalculate the run so gross, tax and totals reflect this month\'s salary.',
           tool: 'gnubok_calculate_salary_run',
         },
         run?.payment_date ? { dateForPeriodCheck: run.payment_date as string } : {},

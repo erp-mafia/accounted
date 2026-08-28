@@ -11,6 +11,11 @@
  *
  * Note: .env.local points at production; this only SELECTs, so it is safe, but
  * it is still the prod corpus you are reading.
+ *
+ * Consent: samples are only written for, and only read from, companies with
+ * company_settings.data_analysis_opt_in = true (#1346). The write side is
+ * gated in POST /api/agent/categorize/outcome; the read side filters again
+ * here so a company that opted out after contributing drops out of the fit.
  */
 import { createClient } from '@supabase/supabase-js'
 import {
@@ -21,6 +26,7 @@ import {
   bandFor,
   type Sample,
 } from '@/lib/agent/categorize/calibration'
+import { chunkCompanyIds, listDataAnalysisOptedInCompanyIds } from '@/lib/company/data-analysis'
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -31,18 +37,30 @@ if (!url || !key) {
 const supabase = createClient(url, key)
 
 async function main() {
+  // Consent gate (#1346): only companies that opted in to data analysis.
+  const optedInIds = await listDataAnalysisOptedInCompanyIds(supabase)
+  if (optedInIds.length === 0) {
+    console.log('\nNo company has opted in to data analysis (company_settings.data_analysis_opt_in). Nothing to fit.')
+    return
+  }
+
+  // Query per chunk of company ids: `.in()` goes into the GET query string, so
+  // one request per few hundred opted-in companies would hit URL limits.
   const rows: { confidence: number; was_correct: boolean }[] = []
   const PAGE = 1000
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabase
-      .from('categorize_calibration_samples')
-      .select('confidence, was_correct')
-      .order('created_at', { ascending: false })
-      .range(from, from + PAGE - 1)
-    if (error) throw error
-    if (!data || data.length === 0) break
-    rows.push(...(data as { confidence: number; was_correct: boolean }[]))
-    if (data.length < PAGE) break
+  for (const chunk of chunkCompanyIds(optedInIds)) {
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from('categorize_calibration_samples')
+        .select('confidence, was_correct')
+        .in('company_id', chunk)
+        .order('id', { ascending: true })
+        .range(from, from + PAGE - 1)
+      if (error) throw error
+      if (!data || data.length === 0) break
+      rows.push(...(data as { confidence: number; was_correct: boolean }[]))
+      if (data.length < PAGE) break
+    }
   }
 
   const samples: Sample[] = rows.map((r) => ({ confidence: Number(r.confidence), correct: r.was_correct }))

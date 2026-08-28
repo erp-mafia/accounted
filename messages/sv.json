@@ -722,6 +722,7 @@
     "type_book_salary_run": "Bokför lönekörning",
     "type_generate_agi": "AGI",
     "type_update_payslip_line": "Lönebeskedsrad",
+    "type_set_run_salary": "Månadens lön",
     "type_register_absence": "Frånvaro",
     "type_delete_absence": "Borttagen frånvaro",
     "type_create_employee": "Ny anställd",
@@ -1169,7 +1170,8 @@
     "hourly_suffix": "/tim",
     "employment_employee": "Anställd",
     "employment_company_owner": "Företagsledare",
-    "employment_board_member": "Styrelseledamot"
+    "employment_board_member": "Styrelseledamot",
+    "save_error_request_id": "Ärende-id: {id}"
   },
   "register": {
     "subtitle": "Skapa ett konto för att komma igång",
@@ -3480,6 +3482,11 @@
     "fields_filled": "{count} ifyllda",
     "review_and_book": "Granska och bokför",
     "book_manually": "Bokför manuellt",
+    "underlag_unlinked": "Transaktionen är bokförd men underlaget är inte kopplat till verifikatet ännu. Kopplas automatiskt vid nästa körning.",
+    "underlag_unlinked_locked": "Transaktionen är bokförd men underlaget kan inte kopplas: verifikatet ligger i en stängd eller låst period. Lås upp perioden så kopplas det vid nästa körning.",
+    "underlag_unknown": "Transaktionen är bokförd men det gick inte att läsa om underlaget är kopplat till verifikatet. Ladda om sidan.",
+    "underlag_anchored_elsewhere": "Underlaget är kopplat till ett annat verifikat. Kontrollera vilket verifikat det hör till.",
+    "underlag_open_verification": "Öppna verifikatet",
     "retry": "Försök igen",
     "copy_address": "Kopiera adress",
     "copy_address_failed": "Adressen kopierades inte. Markera den ovan och kopiera manuellt.",
@@ -3500,7 +3507,7 @@
     "payment_cash": "Kontant",
     "payment_invoice": "Faktureras",
     "payment_other": "Annat",
-    "pages_partial_note": "Tolkad från de första {analyzed} av {total} sidorna.",
+    "pages_partial_note": "Tolkad från {analyzed} av {total} sidor.",
     "heic_hint": "HEIC-bilder kan inte AI-tolkas ännu. Ladda upp kvittot som JPEG eller PDF, eller fyll i fälten manuellt.",
     "skipped_hint": "AI-tolkning kördes inte för det här dokumentet. Du kan koppla dokumentet till en transaktion eller skapa leverantörsfaktura manuellt.",
     "retry_overwrite_confirm": "Ny tolkning skriver över fälten, även ändringar du gjort själv. Fortsätta?",
@@ -5235,6 +5242,9 @@
     "strike_lines": "Stryk rader i verifikatet",
     "correct_metadata": "Ändra text eller datum",
     "struck_marker": "Struken {date}",
+    "struck_marker_by": "Struken {date} av {actor}",
+    "help_rattelse_tracks_open": "I en öppen, olåst period rättar du ett bokfört verifikat direkt i verifikatet: stryk rader eller ändra text och datum. Originalet förblir synligt överstruket och varje rättelse loggas med vem och när.",
+    "help_rattelse_tracks_locked": "När perioden är låst eller stängd är storno den enda vägen: verifikatet återförs och ersätts vid behov av ett ändringsverifikat. Om månaden redan är momsdeklarerad kan en rättelse av momskonton påverka den inlämnade deklarationen.",
     "rattelse_history_title": "Rättelsehistorik",
     "rattelse_kind_metadata": "Text/datum rättat",
     "rattelse_kind_lines": "Rader strukna och ersatta",
@@ -5689,6 +5699,7 @@
     "ext_arcim_documents_error_reference": "Felreferens: {requestId}",
     "ext_arcim_documents_provider_message": "Svar från källsystemet: {message}",
     "ext_arcim_option_series_help": "Verifikat behåller sin serie från källsystemet (A, D, E ...). Serien här används bara för verifikat som saknar serie.",
+    "ext_arcim_option_sie_required_hint": "Bokföringen (kontoplan, ingående balanser och verifikationer) har inte importerats än. Kryssa i Bokföringsdata (SIE) för att hämta den i samma körning: kunder, leverantörer och fakturor kan inte importeras utan den.",
     "ext_arcim_documents_result_description": "Underlagsimporten är klar.",
     "ext_arcim_documents_imported": "Importerade",
     "ext_arcim_documents_skipped": "Fanns redan",
@@ -8349,6 +8360,15 @@
     "settings_toggle_help": "Visar körjournalen i menyn. Där loggar du tjänsteresor och bokför milersättning skattefritt enligt schablon.",
     "settings_save_failed_title": "Kunde inte spara inställningen",
     "settings_open_page": "Öppna körjournalen"
+  },
+  "data_analysis": {
+    "group_label": "Data och integritet",
+    "settings_heading": "Dataanalys",
+    "settings_toggle_label": "Tillåt att företagets bokföringsdata används för analys",
+    "settings_toggle_help": "Avstängt från början. När det är på används företagets bokföringsdata tillsammans med andra företag som valt samma sak, för att utvärdera och förbättra den automatiska konteringen. Två saker ingår. Löpande: konteringsutfall, det vill säga vilket konto som föreslogs, vilket konto som faktiskt bokfördes, beloppet och modellens säkerhet. Vid Accounteds egna utvärderingskörningar: även transaktionstexter, motpartsnamn och uppgifter ur matchade underlag (kvitton och fakturor), som då körs på nytt genom samma AI-modell och samma personuppgiftsbiträden som den vanliga konteringen. Sådana texter kan innehålla personuppgifter, till exempel namn i Swish-betalningar. Uppgifterna används aldrig för marknadsföring och lämnar inte Accounted eller de personuppgiftsbiträden som listas i integritetspolicyn. Stänger du av slutar insamlingen direkt.",
+    "settings_disclosure": "Konteringsutfall (föreslaget och bokfört konto, belopp, säkerhet) samt, vid utvärderingskörningar, transaktionstexter och matchade underlag. Endast administratörer kan ändra valet. Läs mer i vår",
+    "settings_privacy_link": "integritetspolicy",
+    "settings_save_failed_title": "Kunde inte spara inställningen"
   },
   "reconciliation_underlag": {
     "heading": "Underlag",

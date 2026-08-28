@@ -722,6 +722,7 @@
     "type_book_salary_run": "Book payroll run",
     "type_generate_agi": "AGI",
     "type_update_payslip_line": "Payslip line",
+    "type_set_run_salary": "This month's salary",
     "type_register_absence": "Absence",
     "type_delete_absence": "Absence removed",
     "type_create_employee": "New employee",
@@ -1169,7 +1170,8 @@
     "hourly_suffix": "/hr",
     "employment_employee": "Employee",
     "employment_company_owner": "Company owner",
-    "employment_board_member": "Board member"
+    "employment_board_member": "Board member",
+    "save_error_request_id": "Reference: {id}"
   },
   "register": {
     "subtitle": "Create an account to get started",
@@ -3480,6 +3482,11 @@
     "fields_filled": "{count} filled",
     "review_and_book": "Review and book",
     "book_manually": "Book manually",
+    "underlag_unlinked": "The transaction is booked but the document is not linked to the voucher yet. It is linked automatically on the next run.",
+    "underlag_unlinked_locked": "The transaction is booked but the document cannot be linked: the voucher sits in a closed or locked period. Unlock the period and it is linked on the next run.",
+    "underlag_unknown": "The transaction is booked but whether the document is linked to the voucher could not be read. Reload the page.",
+    "underlag_anchored_elsewhere": "The document is linked to another voucher. Check which voucher it belongs to.",
+    "underlag_open_verification": "Open the voucher",
     "retry": "Try again",
     "copy_address": "Copy address",
     "copy_address_failed": "The address was not copied. Select it above and copy it manually.",
@@ -3500,7 +3507,7 @@
     "payment_cash": "Cash",
     "payment_invoice": "Invoiced",
     "payment_other": "Other",
-    "pages_partial_note": "Extracted from the first {analyzed} of {total} pages.",
+    "pages_partial_note": "Extracted from {analyzed} of {total} pages.",
     "heic_hint": "HEIC images cannot be AI-extracted yet. Upload the receipt as JPEG or PDF, or fill in the fields manually.",
     "skipped_hint": "AI extraction did not run for this document. You can link the document to a transaction or create a supplier invoice manually.",
     "retry_overwrite_confirm": "Re-running extraction overwrites the fields, including your own edits. Continue?",
@@ -5235,6 +5242,9 @@
     "strike_lines": "Strike lines in the voucher",
     "correct_metadata": "Change text or date",
     "struck_marker": "Struck {date}",
+    "struck_marker_by": "Struck {date} by {actor}",
+    "help_rattelse_tracks_open": "While the period is open and unlocked, a posted voucher is corrected inside the voucher itself: strike lines or change the text and date. The original stays visible with a strikethrough and every correction is logged with who and when.",
+    "help_rattelse_tracks_locked": "Once the period is locked or closed, storno is the only path: the voucher is reversed and, if needed, replaced by a correction voucher. If the month has already been VAT-declared, correcting VAT accounts can affect the filed declaration.",
     "rattelse_history_title": "Correction history",
     "rattelse_kind_metadata": "Text/date corrected",
     "rattelse_kind_lines": "Lines struck and replaced",
@@ -5689,6 +5699,7 @@
     "ext_arcim_documents_error_reference": "Error reference: {requestId}",
     "ext_arcim_documents_provider_message": "Source system response: {message}",
     "ext_arcim_option_series_help": "Vouchers keep their series from the source system (A, D, E ...). The series here is only used for vouchers without one.",
+    "ext_arcim_option_sie_required_hint": "The ledger (chart of accounts, opening balances and verifications) has not been imported yet. Tick Bokföringsdata (SIE) to fetch it in the same run: customers, suppliers and invoices cannot be imported without it.",
     "ext_arcim_documents_result_description": "The document import is complete.",
     "ext_arcim_documents_imported": "Imported",
     "ext_arcim_documents_skipped": "Already present",
@@ -8349,6 +8360,15 @@
     "settings_toggle_help": "Shows the driving log in the menu. There you log business trips and book tax-free mileage allowance at the statutory rate.",
     "settings_save_failed_title": "Could not save the setting",
     "settings_open_page": "Open the driving log"
+  },
+  "data_analysis": {
+    "group_label": "Data and privacy",
+    "settings_heading": "Data analysis",
+    "settings_toggle_label": "Allow the company's bookkeeping data to be used for analysis",
+    "settings_toggle_help": "Off by default. When on, the company's bookkeeping data is used together with other companies that made the same choice, to evaluate and improve automatic booking. Two things are included. Continuously: booking outcomes, that is which account was proposed, which account was actually booked, the amount and the model's confidence. During Accounted's own evaluation runs: also transaction descriptions, counterparty names and data from matched supporting documents (receipts and invoices), which are then re-run through the same AI model and the same processors as regular booking. Such text can contain personal data, for example names in Swish payments. The data is never used for marketing and never leaves Accounted or the processors listed in the privacy policy. Switching it off stops collection immediately.",
+    "settings_disclosure": "Booking outcomes (proposed and booked account, amount, confidence) and, during evaluation runs, transaction descriptions and matched supporting documents. Only administrators can change this choice. Read more in our",
+    "settings_privacy_link": "privacy policy",
+    "settings_save_failed_title": "Could not save the setting"
   },
   "reconciliation_underlag": {
     "heading": "Supporting documents",
