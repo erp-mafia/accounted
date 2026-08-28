@@ -49,6 +49,15 @@ export async function POST(request: Request) {
     )
   }
 
+  // Re-requesting the address that is already awaiting confirmation is a
+  // no-op success rather than another GoTrue round trip (which would re-send
+  // both confirmation mails and eat into the send rate limit). new_email is
+  // absent on the claims-mapped fast path; then GoTrue's own rate limit is
+  // the backstop.
+  if (user.new_email && email === user.new_email.toLowerCase()) {
+    return NextResponse.json({ data: { ok: true, pending_email: email } })
+  }
+
   // Trusted-origin resolution, not request.url: behind a proxy request.url
   // can be an internal origin (dead confirmation links on self-hosted), and
   // auth links may never follow an attacker-chosen host. Registered

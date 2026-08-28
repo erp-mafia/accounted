@@ -104,6 +104,28 @@ describe('POST /api/account/email', () => {
     expect(String(options.emailRedirectTo)).toMatch(/\/auth\/callback$/)
   })
 
+  it('short-circuits a repeat request for the already-pending address', async () => {
+    const { updateUser } = mockUserClient({
+      user: {
+        id: 'user-1',
+        email: 'old@testbrand.example',
+        new_email: 'pending@testbrand.example',
+      } as { id: string; email?: string },
+    })
+
+    const req = createMockRequest('/api/account/email', {
+      method: 'POST',
+      body: { email: 'Pending@Testbrand.example' },
+    })
+    const { status, body } = await parseJsonResponse<{
+      data?: { ok: boolean; pending_email: string }
+    }>(await POST(req))
+
+    expect(status).toBe(200)
+    expect(body.data?.pending_email).toBe('pending@testbrand.example')
+    expect(updateUser).not.toHaveBeenCalled()
+  })
+
   it('returns 409 when the address already belongs to another account', async () => {
     mockUserClient({
       user: { id: 'user-1', email: 'old@testbrand.example' },
