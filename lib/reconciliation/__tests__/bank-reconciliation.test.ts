@@ -872,6 +872,9 @@ describe('manualLink', () => {
 
   function createQueueMockSupabase() {
     const resultQueue: { data: unknown; error: unknown }[] = []
+    // Every chained method call, in order, so a test can assert on the
+    // payload handed to .update(...) (the #1643 re-point cases below).
+    const calls: Array<{ method: string; args: unknown[] }> = []
 
     const enqueue = (...results: { data?: unknown; error?: unknown }[]) => {
       for (const r of results) {
@@ -886,7 +889,10 @@ describe('manualLink', () => {
             const next = resultQueue.shift() ?? { data: null, error: null }
             return (resolve: (v: unknown) => void) => resolve(next)
           }
-          return (..._args: unknown[]) => buildChain()
+          return (...args: unknown[]) => {
+            calls.push({ method: String(prop), args })
+            return buildChain()
+          }
         },
       }
       return new Proxy({}, handler)
@@ -897,7 +903,10 @@ describe('manualLink', () => {
       rpc: vi.fn().mockImplementation(() => buildChain()),
     }
 
-    return { supabase, enqueue }
+    const updatePayloads = () =>
+      calls.filter((c) => c.method === 'update').map((c) => c.args[0] as Record<string, unknown>)
+
+    return { supabase, enqueue, updatePayloads }
   }
 
   it('rejects when transaction not found', async () => {
@@ -1029,6 +1038,9 @@ describe('manualLink', () => {
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     // Cross-check: cash account maps to the account being reconciled
     enqueue({ data: { ledger_account: '1930' } })
+    // Sibling-ledger scan (#1643): a row without an IBAN has no siblings, so
+    // the scan stops after the own-row lookup.
+    enqueue({ data: { id: 'ca-1930', iban: null, ledger_account: '1930' } })
     // Line exists on 1930
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
     // Update succeeds: .select('id') returns the updated row
@@ -1037,6 +1049,129 @@ describe('manualLink', () => {
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
 
     expect(result.success).toBe(true)
+  })
+
+  it('links a transaction stranded on an orphaned row to a voucher on the live sibling ledger and re-points it there (#1643)', async () => {
+    const { supabase, enqueue, updatePayloads } = createQueueMockSupabase()
+    const iban = 'SE4550000000058398257466'
+    // Transaction stamped on the orphaned reconnect row (ledger 1931); the
+    // verifikat it settles is booked on the live ledger 1940 of the SAME
+    // physical account (same IBAN).
+    const tx = makeTransaction({
+      id: 'tx-1',
+      journal_entry_id: null,
+      cash_account_id: 'ca-orphan',
+      currency: 'SEK',
+    })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    // Cross-check: the transaction's own ledger IS the requested account.
+    enqueue({ data: { ledger_account: '1931' } })
+    // Sibling scan: own row carries the IBAN...
+    enqueue({ data: { id: 'ca-orphan', iban, ledger_account: '1931' } })
+    // ...and the live row shares it on 1940.
+    enqueue({
+      data: [
+        { id: 'ca-orphan', iban, ledger_account: '1931', currency: 'SEK' },
+        { id: 'ca-live', iban, ledger_account: '1940', currency: 'SEK' },
+      ],
+    })
+    // The voucher's bank leg sits on the sibling ledger, not on 1931.
+    enqueue({ data: [{ debit_amount: 217.04, credit_amount: 0, account_number: '1940' }] })
+    enqueue({ data: [{ id: 'tx-1' }] })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931')
+
+    expect(result.success).toBe(true)
+    // The same locked UPDATE that stamps the link moves the row to the live
+    // sibling row, so neither account's reconciliation counts a cross-account
+    // link as an imbalance.
+    expect(updatePayloads()).toEqual([
+      expect.objectContaining({ journal_entry_id: 'je-1', cash_account_id: 'ca-live' }),
+    ])
+  })
+
+  it('does not re-point when the voucher line is on the transaction\'s own ledger (#1643)', async () => {
+    const { supabase, enqueue, updatePayloads } = createQueueMockSupabase()
+    const iban = 'SE4550000000058398257466'
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null, cash_account_id: 'ca-orphan' })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: { ledger_account: '1931' } })
+    enqueue({ data: { id: 'ca-orphan', iban, ledger_account: '1931' } })
+    enqueue({
+      data: [
+        { id: 'ca-orphan', iban, ledger_account: '1931', currency: 'SEK' },
+        { id: 'ca-live', iban, ledger_account: '1940', currency: 'SEK' },
+      ],
+    })
+    // Bank leg on 1931 itself: an ordinary same-ledger link.
+    enqueue({ data: [{ debit_amount: 217.04, credit_amount: 0, account_number: '1931' }] })
+    enqueue({ data: [{ id: 'tx-1' }] })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931')
+
+    expect(result.success).toBe(true)
+    expect(updatePayloads()[0]).not.toHaveProperty('cash_account_id')
+  })
+
+  it('links without re-pointing when the sibling row is in another currency (#1643)', async () => {
+    const { supabase, enqueue, updatePayloads } = createQueueMockSupabase()
+    const iban = 'SE4550000000058398257466'
+    const tx = makeTransaction({
+      id: 'tx-1',
+      journal_entry_id: null,
+      cash_account_id: 'ca-orphan',
+      currency: 'SEK',
+    })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: { ledger_account: '1931' } })
+    enqueue({ data: { id: 'ca-orphan', iban, ledger_account: '1931' } })
+    enqueue({
+      data: [
+        { id: 'ca-orphan', iban, ledger_account: '1931', currency: 'SEK' },
+        // Same IBAN, EUR row: a move there would strand the row on both sides.
+        { id: 'ca-live-eur', iban, ledger_account: '1940', currency: 'EUR' },
+      ],
+    })
+    enqueue({ data: [{ debit_amount: 217.04, credit_amount: 0, account_number: '1940' }] })
+    enqueue({ data: [{ id: 'tx-1' }] })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931')
+
+    expect(result.success).toBe(true)
+    expect(updatePayloads()[0]).not.toHaveProperty('cash_account_id')
+  })
+
+  it('still rejects a voucher with no line on the account or any sibling ledger', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const iban = 'SE4550000000058398257466'
+    const tx = makeTransaction({
+      id: 'tx-1',
+      journal_entry_id: null,
+      cash_account_id: 'ca-orphan',
+    })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: { ledger_account: '1931' } })
+    enqueue({ data: { id: 'ca-orphan', iban, ledger_account: '1931' } })
+    enqueue({
+      data: [
+        { id: 'ca-orphan', iban, ledger_account: '1931' },
+        { id: 'ca-live', iban, ledger_account: '1940' },
+      ],
+    })
+    enqueue({ data: [] }) // no line on 1931 OR 1940
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('Verifikationen saknar rad på 1931 eller 1940')
   })
 
   it('allows N:1, does not reject when the verifikat already has a linked transaction', async () => {

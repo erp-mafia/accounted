@@ -76,7 +76,11 @@ vi.mock('@/lib/bookkeeping/mapping-engine', () => ({
         },
 }))
 
-vi.mock('@/lib/bookkeeping/counterparty-templates', () => ({
+// Spread the real module so buildMappingResultFromCounterpartyTemplate (pure)
+// replays a learned template exactly as production does; only the learning
+// write is stubbed.
+vi.mock('@/lib/bookkeeping/counterparty-templates', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/counterparty-templates')>()),
   upsertCounterpartyTemplate: vi.fn().mockResolvedValue(undefined),
 }))
 
@@ -1551,5 +1555,117 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(body.error.code).toBe('TX_CATEGORIZE_INVALID_ACCOUNT')
     expect(body.error.details.accountNumber).toBe('5420')
     expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+  })
+
+  // ----------------------------------------------------------------
+  // Orphaned counter-account guard (issue #1643 problem 4)
+  // ----------------------------------------------------------------
+
+  it('returns 400 TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT when a learned template credits a ledger held by a revoked connection', async () => {
+    // The issue's exact shape: +217,04 interest on the live 1940 account, and
+    // a template learned while the detector paired with the orphan row
+    // proposes 1940 debit / 1931 credit (revenue onto a junk asset account).
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: 217.04,
+      merchant_name: 'SEB',
+      journal_entry_id: null,
+      cash_account_id: 'ca-live',
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
+    // categorization_templates: the learned counterparty template
+    enqueue({
+      data: {
+        id: '11111111-1111-4111-8111-111111111111',
+        company_id: 'company-1',
+        counterparty_name: 'SEB',
+        counterparty_aliases: [],
+        debit_account: '1940',
+        credit_account: '1931',
+        vat_treatment: null,
+        vat_account: null,
+        category: null,
+        line_pattern: null,
+        occurrence_count: 3,
+        confidence: 0.9,
+        source: 'auto_learned',
+        is_active: true,
+      },
+      error: null,
+    })
+    // resolveSettlementAccount: the row's own cash account is the live 1940
+    enqueue({ data: { ledger_account: '1940' }, error: null })
+    // Guard: cash_accounts scan + bank_connections status lookup
+    enqueue({
+      data: [
+        { id: 'ca-live', ledger_account: '1940', bank_connection_id: 'conn-new', iban: 'SE455', enabled: true },
+        { id: 'ca-orphan', ledger_account: '1931', bank_connection_id: 'conn-old', iban: 'SE455', enabled: true },
+      ],
+      error: null,
+    })
+    enqueue({
+      data: [
+        { id: 'conn-new', status: 'active' },
+        { id: 'conn-old', status: 'revoked' },
+      ],
+      error: null,
+    })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, counterparty_template_id: '11111111-1111-4111-8111-111111111111' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { accountNumber?: string } }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT')
+    expect(body.error.details.accountNumber).toBe('1931')
+    expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('still books a transfer whose 19xx counter is a live cash account', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      merchant_name: 'Sparkonto',
+      journal_entry_id: null,
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    // account_override chart lookup: 1940 exists and is active
+    enqueue({ data: { account_number: '1940', account_class: 1 }, error: null })
+    // Guard: 1940 is held by an ACTIVE connection, so it is a genuine transfer target
+    enqueue({
+      data: [{ id: 'ca-live', ledger_account: '1940', bank_connection_id: 'conn-live', iban: 'SE455', enabled: true }],
+      error: null,
+    })
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }], error: null })
+    // ensureFiscalPeriod: existing period
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+
+    // Update transaction (CAS guard)
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_other', account_override: '1940' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean; journal_entry_id: string }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.journal_entry_id).toBe('je-1')
+    expect(mockCreateTransactionJournalEntry).toHaveBeenCalledTimes(1)
   })
 })

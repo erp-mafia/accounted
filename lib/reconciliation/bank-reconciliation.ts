@@ -10,6 +10,7 @@ import {
   ledgerLineAmountIn,
   type LedgerLineAmount,
 } from '@/lib/bookkeeping/ledger-line-amount'
+import { listSiblingCashAccounts, type SiblingCashAccount } from '@/lib/cash-accounts/service'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('reconciliation.bank')
@@ -1089,6 +1090,14 @@ export async function manualLink(
   // reconciled. A transaction bound to 1930 must not be linked against a 1931
   // voucher even if the caller passes accountNumber=1931. Legacy rows with no
   // cash_account_id fall through (the UI list already gates them by currency).
+  //
+  // Sibling ledgers of the SAME physical account (rows sharing the IBAN) are
+  // additionally accepted for the voucher-line check below: a transaction
+  // stranded on an orphaned reconnect row (e.g. 1931) must be linkable to the
+  // verifikat booked on the live ledger of that same account (e.g. 1940),
+  // issue #1643 problem 1. Unrelated accounts stay rejected.
+  let allowedLineAccounts: string[] = [accountNumber]
+  let siblingRows: SiblingCashAccount[] = []
   if (tx.cash_account_id) {
     const { data: txCa } = await supabase
       .from('cash_accounts')
@@ -1102,19 +1111,58 @@ export async function manualLink(
         error: `Transaktionen hör till ${txCa.ledger_account}, inte ${accountNumber}`,
       }
     }
+    siblingRows = await listSiblingCashAccounts(supabase, companyId, tx.cash_account_id)
+    if (siblingRows.length > 0) {
+      allowedLineAccounts = [
+        ...new Set([accountNumber, ...siblingRows.map((row) => row.ledger_account)]),
+      ]
+    }
   }
 
-  // Check for a bank account line on the SELECTED settlement account. The old
+  // Check for a bank account line on the SELECTED settlement account (or a
+  // sibling ledger of the same physical account, see above). The old
   // "any 19xx line" check let a 1930 transaction link to a voucher that only
   // touched 1931: a cross-account link that silently hides a real imbalance.
   const { data: lines } = await supabase
     .from('journal_entry_lines')
     .select('debit_amount, credit_amount, account_number')
     .eq('journal_entry_id', journalEntryId)
-    .eq('account_number', accountNumber)
+    .in('account_number', allowedLineAccounts)
 
   if (!lines || lines.length === 0) {
-    return { success: false, error: `Verifikationen saknar rad på ${accountNumber}` }
+    return { success: false, error: `Verifikationen saknar rad på ${allowedLineAccounts.join(' eller ')}` }
+  }
+
+  // When the voucher's bank leg sits on a SIBLING ledger only, the row moves
+  // to that sibling's cash_accounts row in the same write that links it. A
+  // cross-account link would leave the money on the orphan while the voucher
+  // settles on the live ledger, and the account-keyed reconciliation would
+  // count it as an imbalance on BOTH accounts: exactly the mis-link the old
+  // "any 19xx line" check was tightened to avoid. Same gates as PATCH
+  // /api/transactions/[id]/cash-account: the row is unbooked by construction
+  // (the locked UPDATE below asserts that) and the currencies must agree,
+  // since every reconciliation scope pins the account currency and a
+  // cross-currency move would strand the row on both sides. On a currency
+  // mismatch the link still goes through without the move (the pre-existing
+  // behavior) and the case is logged.
+  const typedLines = lines as Array<{ account_number: string }>
+  let repointCashAccountId: string | null = null
+  if (!typedLines.some((line) => line.account_number === accountNumber)) {
+    const siblingLedger = typedLines[0].account_number
+    const sibling = siblingRows.find((row) => row.ledger_account === siblingLedger)
+    const txCurrency = String((tx as { currency?: string | null }).currency ?? 'SEK').toUpperCase()
+    const siblingCurrency = String(sibling?.currency ?? 'SEK').toUpperCase()
+    if (sibling && siblingCurrency === txCurrency) {
+      repointCashAccountId = sibling.id
+    } else {
+      log.warn('manualLink: sibling-ledger link left on the original cash account', {
+        companyId,
+        transactionId,
+        accountNumber,
+        siblingLedger,
+        reason: sibling ? 'currency_mismatch' : 'sibling_row_missing',
+      })
+    }
   }
 
   // N:1 is intentionally allowed: several bank transactions may settle ONE
@@ -1143,6 +1191,7 @@ export async function manualLink(
       journal_entry_id: journalEntryId,
       reconciliation_method: 'manual' as ReconciliationMethod,
       is_business: true,
+      ...(repointCashAccountId ? { cash_account_id: repointCashAccountId } : {}),
     })
     .eq('id', transactionId)
     .eq('company_id', companyId)

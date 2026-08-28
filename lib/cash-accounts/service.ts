@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CashAccount, CashAccountSource } from '@/types'
 import { createLogger } from '@/lib/logger'
 import { syncMappedAccounts } from '@/lib/import/account-sync'
+import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 
 const log = createLogger('cash-accounts')
 
@@ -133,10 +134,27 @@ export async function getPrimary(
   return null
 }
 
-export async function findByIban(
+/**
+ * Find the cash account an own-account TRANSFER may pair with, by IBAN.
+ *
+ * Replaces the old findByIban for this purpose (issue #1643): a broken reconnect
+ * can leave several rows carrying the same IBAN (the live account plus orphans
+ * held by a revoked connection), and proposing an orphan as the transfer's
+ * counter-account books real money onto a junk balance-sheet ledger. This
+ * finder therefore:
+ *   - tolerates multiple rows on one IBAN (the old single-row lookup errored),
+ *   - excludes the transaction's OWN cash account (a bank stamping the
+ *     account's own IBAN as counterparty, e.g. on interest, is not a transfer),
+ *   - excludes disabled rows and rows held by a REVOKED connection.
+ * Among the remaining candidates, a row on an active connection wins over a
+ * manual row; ties break on is_primary, then lowest ledger number, so the
+ * result is deterministic.
+ */
+export async function findPairableCashAccountByIban(
   supabase: SupabaseClient,
   companyId: string,
   iban: string,
+  opts: { excludeCashAccountId?: string | null } = {},
 ): Promise<CashAccount | null> {
   if (!iban) return null
   const { data, error } = await supabase
@@ -144,12 +162,201 @@ export async function findByIban(
     .select('*')
     .eq('company_id', companyId)
     .eq('iban', iban)
-    .maybeSingle()
   if (error) {
-    log.warn('findByIban failed', { companyId, iban, error: error.message })
+    log.warn('findPairableCashAccountByIban failed', { companyId, iban, error: error.message })
     return null
   }
-  return (data as CashAccount | null) ?? null
+
+  let rows = ((data ?? []) as CashAccount[]).filter(
+    (row) => row.enabled && row.id !== (opts.excludeCashAccountId ?? null),
+  )
+  if (rows.length === 0) return null
+
+  const connectionIds = [
+    ...new Set(rows.map((r) => r.bank_connection_id).filter((id): id is string => id !== null)),
+  ]
+  const revoked = await getRevokedConnectionIds(supabase, companyId, connectionIds)
+  rows = rows.filter(
+    (row) => row.bank_connection_id === null || !revoked.has(row.bank_connection_id),
+  )
+  if (rows.length === 0) return null
+
+  rows.sort((a, b) => {
+    const aConnected = a.bank_connection_id !== null ? 0 : 1
+    const bConnected = b.bank_connection_id !== null ? 0 : 1
+    if (aConnected !== bConnected) return aConnected - bConnected
+    if (a.is_primary !== b.is_primary) return a.is_primary ? -1 : 1
+    return a.ledger_account.localeCompare(b.ledger_account)
+  })
+  return rows[0]
+}
+
+export interface SiblingCashAccount {
+  id: string
+  ledger_account: string
+  currency: string | null
+}
+
+/**
+ * The OTHER cash_accounts rows that carry the same (normalized) IBAN as
+ * `cashAccountId`, i.e. the same physical bank account, on a different ledger.
+ *
+ * A broken reconnect strands transactions on an orphaned row (e.g. 1931) while
+ * the live claim on the same underlying account sits on another row (e.g.
+ * 1940). Matching and linking against "the transaction's own ledger" then
+ * permanently misses vouchers booked on the live ledger; this helper names the
+ * sibling rows such flows may additionally consider, and lets manualLink
+ * re-point a stranded row at the live sibling (issue #1643).
+ *
+ * Returns [] when the row has no IBAN (manual/CSV accounts) or on any lookup
+ * failure: broadening is an enhancement, never a requirement.
+ */
+export async function listSiblingCashAccounts(
+  supabase: SupabaseClient,
+  companyId: string,
+  cashAccountId: string,
+): Promise<SiblingCashAccount[]> {
+  const { data: own, error: ownError } = await supabase
+    .from('cash_accounts')
+    .select('id, iban, ledger_account')
+    .eq('id', cashAccountId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (ownError || !own) {
+    if (ownError) {
+      log.warn('listSiblingCashAccounts own-row lookup failed', {
+        companyId,
+        cashAccountId,
+        error: ownError.message,
+      })
+    }
+    return []
+  }
+  const ownRow = own as { id: string; iban: string | null; ledger_account: string }
+  const wanted = normalizeIban(ownRow.iban)
+  if (!wanted) return []
+
+  const { data: rows, error } = await supabase
+    .from('cash_accounts')
+    .select('id, iban, ledger_account, currency')
+    .eq('company_id', companyId)
+    .not('iban', 'is', null)
+  if (error) {
+    log.warn('listSiblingCashAccounts sibling lookup failed', {
+      companyId,
+      cashAccountId,
+      error: error.message,
+    })
+    return []
+  }
+
+  type Row = { id: string; iban: string | null; ledger_account: string; currency?: string | null }
+  const seenLedgers = new Set<string>()
+  const siblings: SiblingCashAccount[] = []
+  for (const row of (rows ?? []) as Row[]) {
+    if (row.id === ownRow.id) continue
+    if (row.ledger_account === ownRow.ledger_account) continue
+    if (normalizeIban(row.iban) !== wanted) continue
+    // UNIQUE (company_id, ledger_account) makes this a no-op in practice;
+    // kept so a duplicate row can never yield two siblings on one ledger.
+    if (seenLedgers.has(row.ledger_account)) continue
+    seenLedgers.add(row.ledger_account)
+    siblings.push({ id: row.id, ledger_account: row.ledger_account, currency: row.currency ?? null })
+  }
+  return siblings
+}
+
+/**
+ * Ledger accounts of the sibling rows returned by listSiblingCashAccounts.
+ */
+export async function listSiblingLedgerAccounts(
+  supabase: SupabaseClient,
+  companyId: string,
+  cashAccountId: string,
+): Promise<string[]> {
+  const siblings = await listSiblingCashAccounts(supabase, companyId, cashAccountId)
+  return siblings.map((row) => row.ledger_account)
+}
+
+/**
+ * Ledger accounts that must never be PROPOSED (or accepted) as the
+ * counter-account of a booking, because their cash_accounts row is orphaned
+ * (issue #1643):
+ *   - a row still held by a REVOKED bank connection, or
+ *   - a row (demoted-to-manual or disabled) whose IBAN also belongs to a row
+ *     on an ACTIVE connection: the active row IS that physical account now,
+ *     so the stale twin is a leftover of a broken reconnect.
+ * A manual/CSV account without a live IBAN twin is NOT orphaned: transfers to
+ * a manually tracked account are legitimate.
+ */
+export async function getOrphanedCounterLedgers(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from('cash_accounts')
+    .select('id, ledger_account, bank_connection_id, iban, enabled')
+    .eq('company_id', companyId)
+  if (error) {
+    log.warn('getOrphanedCounterLedgers lookup failed', { companyId, error: error.message })
+    return new Set()
+  }
+
+  type Row = {
+    id: string
+    ledger_account: string
+    bank_connection_id: string | null
+    iban: string | null
+    enabled: boolean
+  }
+  const rows = (data ?? []) as Row[]
+  const connectionIds = [
+    ...new Set(rows.map((r) => r.bank_connection_id).filter((id): id is string => id !== null)),
+  ]
+  const revoked = await getRevokedConnectionIds(supabase, companyId, connectionIds)
+
+  const isActive = (r: Row): boolean =>
+    r.enabled && r.bank_connection_id !== null && !revoked.has(r.bank_connection_id)
+
+  const orphaned = new Set<string>()
+  for (const row of rows) {
+    if (row.bank_connection_id !== null && revoked.has(row.bank_connection_id)) {
+      orphaned.add(row.ledger_account)
+    }
+  }
+  // Stale IBAN twins of an actively connected row.
+  const activeByIban = new Map<string, Row>()
+  for (const row of rows) {
+    const key = normalizeIban(row.iban)
+    if (key && isActive(row)) activeByIban.set(key, row)
+  }
+  for (const row of rows) {
+    if (isActive(row)) continue
+    const key = normalizeIban(row.iban)
+    if (!key) continue
+    const live = activeByIban.get(key)
+    if (live && live.ledger_account !== row.ledger_account) orphaned.add(row.ledger_account)
+  }
+  return orphaned
+}
+
+/**
+ * The first account in a mapping result that would book the COUNTER leg onto
+ * an orphaned cash-account ledger, or null when the result is clean. The
+ * settlement account itself is exempt: a transaction stranded on an orphaned
+ * row still books its own bank leg there (the only leg that belongs there).
+ */
+export function findOrphanedCounterLedger(
+  accounts: Array<string | null | undefined>,
+  settlementAccount: string,
+  orphanedLedgers: ReadonlySet<string>,
+): string | null {
+  for (const account of accounts) {
+    if (!account || account === settlementAccount) continue
+    if (!/^19\d{2}$/.test(account)) continue
+    if (orphanedLedgers.has(account)) return account
+  }
+  return null
 }
 
 /**
@@ -311,12 +518,22 @@ export async function allocatePsd2LedgerAccount(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
+  // accountName is accepted for caller compatibility but no longer names the
+  // chart account: see the BAS-style naming note in the function body (#1643).
   input: { currency: string; accountName?: string | null; exclude?: ReadonlySet<string> },
 ): Promise<string | null> {
   const ledger = await findFreeLedgerAccount(supabase, companyId, input.currency, input.exclude ?? new Set())
   if (!ledger) return null
 
-  const name = input.accountName?.trim() || `Bankkonto ${input.currency.toUpperCase()}`
+  // The CHART account always gets a BAS-style name: the BAS reference name
+  // when the slot is a standard account (1930 Företagskonto, 1940 Övriga
+  // bankkonton, ...), otherwise "Bankkonto <CUR>" for a free-use sub-account
+  // (1931, 1935, ...). ASPSPs report the account holder (i.e. the company) as
+  // the account name, and every failed reconnect used to persist another 19xx
+  // chart account named after the company (issue #1643 problem 3). The bank's
+  // display name still lands on cash_accounts.name via upsertFromPsd2, which
+  // is what the pickers show; input.accountName is deliberately ignored here.
+  const name = getBASReference(ledger)?.account_name ?? `Bankkonto ${input.currency.toUpperCase()}`
   const sync = await syncMappedAccounts(
     supabase,
     companyId,

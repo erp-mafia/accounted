@@ -93,7 +93,12 @@ export async function evaluateMappingRules(
   // priority rules (which would mis-categorize the outflow as an expense).
   try {
     const transfer = await detectOwnAccountTransfer(supabase, companyId, transaction)
-    if (transfer) {
+    // A "transfer" whose counter leg is the settlement account itself is not a
+    // transfer (debit == credit on one ledger): it happens when the bank stamps
+    // the account's own IBAN as counterparty (interest, fees) and a sibling
+    // cash_accounts row still carries that IBAN (issue #1643). Fall through to
+    // normal categorization instead of proposing a cash ledger as the counter.
+    if (transfer && transfer.counterLedgerAccount !== bankAccount) {
       const isFx =
         (transaction.currency || '').toUpperCase() !==
         (transfer.counterCurrency || '').toUpperCase()

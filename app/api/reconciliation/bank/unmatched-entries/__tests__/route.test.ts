@@ -179,6 +179,70 @@ describe('GET /api/reconciliation/bank/unmatched-entries', () => {
   })
 
   // ----------------------------------------------------------------
+  // Orphaned reconnect rows (#1643 problem 1): the ranked (dialog) path also
+  // offers vouchers booked on sibling ledgers of the same physical account
+  // ----------------------------------------------------------------
+
+  it('widens ranked candidates to sibling ledgers sharing the account IBAN', async () => {
+    const iban = 'SE4550000000058398257466'
+    // The transaction's own (orphaned) row: ledger 1931, carries the IBAN.
+    enqueue({ data: { id: 'cash-orphan', currency: 'SEK', iban } })
+    // Sibling scan: the live row for the same physical account sits on 1940
+    // (spaced IBAN variant to prove normalization), plus an unrelated account.
+    enqueue({
+      data: [
+        { ledger_account: '1931', iban },
+        { ledger_account: '1940', iban: 'SE45 5000 0000 0583 9825 7466' },
+        { ledger_account: '1935', iban: 'SE1112223334445556667778' },
+      ],
+    })
+    enqueueTransaction({ currency: 'SEK', amount: 217.04, date: '2026-03-10' })
+
+    fetchGLLinesForMatchingMock.mockImplementation((_supabase, _companyId, account) =>
+      account === '1940'
+        ? Promise.resolve([
+            makeGLLine({
+              line_id: 'line-live',
+              journal_entry_id: 'je-live',
+              debit_amount: 217.04,
+              credit_amount: 0,
+              entry_date: '2026-03-10',
+            }),
+          ])
+        : Promise.resolve([]),
+    )
+
+    const response = await GET(
+      request({ account_number: '1931', transaction_id: TX_ID }),
+      emptyParams,
+    )
+    const { status, body } = await parseJsonResponse<Body>(response)
+
+    expect(status).toBe(200)
+    // The voucher booked on the LIVE ledger is offered (and ranks as an exact
+    // hit) even though the row itself is stamped on the orphaned 1931.
+    expect(body.data).toHaveLength(1)
+    expect(body.data[0].journal_entry_id).toBe('je-live')
+    expect(body.data[0].confidence).toBe(0.95)
+
+    const fetchedAccounts = fetchGLLinesForMatchingMock.mock.calls.map((c) => c[2])
+    expect(fetchedAccounts).toEqual(['1931', '1940'])
+  })
+
+  it('does not widen the unranked (reconciliation view) path', async () => {
+    const iban = 'SE4550000000058398257466'
+    enqueue({ data: { id: 'cash-orphan', currency: 'SEK', iban } })
+    fetchGLLinesForMatchingMock.mockResolvedValue([makeGLLine()])
+
+    const response = await GET(request({ account_number: '1931' }), emptyParams)
+    const { status } = await parseJsonResponse<Body>(response)
+
+    expect(status).toBe(200)
+    expect(fetchGLLinesForMatchingMock).toHaveBeenCalledTimes(1)
+    expect(fetchGLLinesForMatchingMock.mock.calls[0][2]).toBe('1931')
+  })
+
+  // ----------------------------------------------------------------
   // Foreign currency: never ranked against an unconverted SEK ledger leg
   // ----------------------------------------------------------------
 

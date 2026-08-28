@@ -30,6 +30,7 @@ import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mappi
 import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { getOrphanedCounterLedgers, findOrphanedCounterLedger } from '@/lib/cash-accounts/service'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
@@ -402,6 +403,30 @@ export async function categorizeMatchedTransaction(
 
   if (!mappingResult.debit_account || !mappingResult.credit_account) {
     return { error: `No account mapping for category "${category}" with entity type "${entityType}".`, status: 400 }
+  }
+
+  // Issue #1643 problem 4: never book the COUNTER leg onto an orphaned
+  // cash-account ledger (a 19xx account held by a revoked bank connection, or
+  // a stale twin of a live account). An account_override or learned mapping
+  // pointing there would silently drop revenue/expense from the P&L onto a
+  // junk balance-sheet account. The settlement leg itself is exempt; the
+  // lookup only runs when a non-settlement 19xx leg is present.
+  {
+    const counterLegs = [
+      mappingResult.debit_account,
+      mappingResult.credit_account,
+      ...mappingResult.vat_lines.map((l) => l.account_number),
+    ].filter((a) => !!a && a !== settlementAccount && /^19\d{2}$/.test(a))
+    if (counterLegs.length > 0) {
+      const orphanedLedgers = await getOrphanedCounterLedgers(supabase, companyId)
+      const orphaned = findOrphanedCounterLedger(counterLegs, settlementAccount, orphanedLedgers)
+      if (orphaned) {
+        return {
+          error: `Motkontot ${orphaned} tillhör ett bankkonto från en frånkopplad bankanslutning och kan inte användas. Välj ett intäkts- eller kostnadskonto i stället.`,
+          status: 400,
+        }
+      }
+    }
   }
 
   await ensureFiscalPeriod(supabase, userId, companyId, transaction.date, fiscalYearStartMonth)

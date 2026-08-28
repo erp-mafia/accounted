@@ -5,6 +5,7 @@ import {
   ledgerLineAmountIn,
   tryReconcileTransaction,
 } from '@/lib/reconciliation/bank-reconciliation'
+import { normalizeIban } from '@/lib/cash-accounts/service'
 import type { Transaction } from '@/types'
 
 export const GET = withRouteContext(
@@ -34,9 +35,11 @@ export const GET = withRouteContext(
     // companies on first connection.
     // `currency` comes along because it, not the transaction's own currency, is
     // the unit this account is reconciled in: see the ranking block below.
+    // `iban` identifies the physical bank account so the ranked (dialog) path
+    // can widen the candidate set to sibling ledgers of the same account.
     const { data: cashAccount } = await supabase
       .from('cash_accounts')
-      .select('id, currency')
+      .select('id, currency, iban')
       .eq('company_id', companyId)
       .eq('ledger_account', accountNumber)
       .maybeSingle()
@@ -53,9 +56,50 @@ export const GET = withRouteContext(
     // into "no currency" and disable ranking for a SEK company.
     const accountCurrency = (cashAccount.currency as string | null) ?? 'SEK'
 
-    const lines = await fetchGLLinesForMatching(supabase, companyId, accountNumber, dateFrom, dateTo, includeMatched)
+    let lines = await fetchGLLinesForMatching(supabase, companyId, accountNumber, dateFrom, dateTo, includeMatched)
 
     if (transactionId) {
+      // The "Matcha mot befintlig verifikation" dialog resolves the account
+      // from the TRANSACTION's own cash_accounts row. When that row is an
+      // orphan of a broken reconnect (issue #1643 problem 1), the verifikat
+      // the row settles is booked on the LIVE ledger of the same physical
+      // account (e.g. row stamped 1931, voucher on 1940) and could never be
+      // offered. Sibling rows share the account's IBAN, so the candidate set
+      // widens to every ledger carrying it. Accounts without an IBAN (manual,
+      // CSV) have no siblings and keep the exact single-ledger behavior.
+      const ownIban = normalizeIban((cashAccount as { iban?: string | null }).iban ?? null)
+      if (ownIban) {
+        const { data: siblingRows } = await supabase
+          .from('cash_accounts')
+          .select('ledger_account, iban')
+          .eq('company_id', companyId)
+          .not('iban', 'is', null)
+        const siblingLedgers = [
+          ...new Set(
+            ((siblingRows ?? []) as Array<{ ledger_account: string; iban: string | null }>)
+              .filter(
+                (row) =>
+                  row.ledger_account !== accountNumber && normalizeIban(row.iban) === ownIban,
+              )
+              .map((row) => row.ledger_account),
+          ),
+        ]
+        if (siblingLedgers.length > 0) {
+          const merged = [...lines]
+          const seen = new Set(lines.map((l) => l.line_id))
+          for (const ledger of siblingLedgers) {
+            const siblingLines = await fetchGLLinesForMatching(
+              supabase, companyId, ledger, dateFrom, dateTo, includeMatched,
+            )
+            for (const line of siblingLines) {
+              if (seen.has(line.line_id)) continue
+              seen.add(line.line_id)
+              merged.push(line)
+            }
+          }
+          lines = merged
+        }
+      }
       // company-scoped fetch (defense-in-depth). A malformed/foreign id yields no
       // row → we fall through to the unranked list rather than erroring.
       const { data: tx } = await supabase

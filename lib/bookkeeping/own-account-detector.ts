@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Transaction } from '@/types'
-import { findByIban } from '@/lib/cash-accounts/service'
+import { findPairableCashAccountByIban } from '@/lib/cash-accounts/service'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('own-account-detector')
@@ -32,6 +32,10 @@ export interface OwnAccountTransfer {
  *   - the transaction has no counterparty IBAN (manual entries, SIE imports,
  *     older PSD2 rows before counterparty_iban capture)
  *   - the counterparty IBAN doesn't match any cash account for this company
+ *   - the only matches are the transaction's OWN cash account, disabled rows,
+ *     or rows held by a revoked connection (issue #1643: a broken reconnect
+ *     leaves orphaned rows sharing the live account's IBAN, and pairing with
+ *     one proposed the orphaned ledger as the counter-account)
  *
  * No amount-only heuristic fallback: silent false positives at FX boundaries
  * would mis-book legitimate external transfers as own-account moves.
@@ -44,7 +48,9 @@ export async function detectOwnAccountTransfer(
   const cpIban = transaction.counterparty_iban?.trim()
   if (!cpIban) return null
 
-  const counterAccount = await findByIban(supabase, companyId, cpIban)
+  const counterAccount = await findPairableCashAccountByIban(supabase, companyId, cpIban, {
+    excludeCashAccountId: transaction.cash_account_id ?? null,
+  })
   if (!counterAccount) return null
 
   // Defense-in-depth: refuse to route to a non-cash BAS account. cash_accounts

@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getSuggestedCategories, getSuggestedTemplates, buildMerchantHistory, merchantHistoryFor, buildCounterpartySuggestion, type SuggestedCategory, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { findCounterpartyTemplatesBatch } from '@/lib/bookkeeping/counterparty-templates'
-import type { Transaction, EntityType } from '@/types'
+import { getOrphanedCounterLedgers } from '@/lib/cash-accounts/service'
+import type { Transaction, EntityType, CategorizationTemplate } from '@/types'
 
 /**
  * POST /api/transactions/suggest-categories
@@ -82,10 +83,29 @@ export const POST = withRouteContext(
       template_suggestions[tx.id] = await getSuggestedTemplates(tx as Transaction, entityType, mappingRules || undefined)
     }
 
-    // Inject counterparty template matches as top suggestions
+    // Inject counterparty template matches as top suggestions. A learned
+    // template can carry the ledger it was learned on; when that ledger is an
+    // orphaned cash account (revoked connection or a stale twin of a live
+    // account, issue #1643 problem 4) the suggestion would pre-fill a junk
+    // balance-sheet account in the booking dialog, so it is withheld here.
+    // Static library templates only reference BAS business accounts plus the
+    // literal 1930 settlement placeholder, so they never need this check.
+    let orphanedLedgers: Set<string> | null = null
+    const referencesOrphanedLedger = async (tmpl: CategorizationTemplate): Promise<boolean> => {
+      const accounts = [
+        tmpl.debit_account,
+        tmpl.credit_account,
+        ...(tmpl.line_pattern ?? []).map((entry) => entry.account),
+      ].filter((a): a is string => !!a && /^19\d{2}$/.test(a))
+      if (accounts.length === 0) return false
+      orphanedLedgers ??= await getOrphanedCounterLedgers(supabase, companyId)
+      return accounts.some((a) => orphanedLedgers!.has(a))
+    }
+
     for (const tx of transactions) {
       const cpMatch = counterpartyMatches.get(tx.id)
       if (!cpMatch) continue
+      if (await referencesOrphanedLedger(cpMatch.template)) continue
 
       const cpSuggestion = buildCounterpartySuggestion(cpMatch.template, cpMatch.confidence)
 
