@@ -919,4 +919,259 @@ describe('POST /api/webshop-orders/bulk-book', () => {
     expect(body.data.results).toHaveLength(1)
     expect(mockCreateDraftEntry).toHaveBeenCalledTimes(1)
   })
+
+  describe('rate-0 slot order context (#1912)', () => {
+    const ZERO_RATE_ORDER = {
+      total: 500,
+      total_sek: 500,
+      total_tax: 0,
+      vat_breakdown: [{ rate: 0, net: 500, tax: 0 }],
+    }
+    const zeroRateOrder = (
+      id: string,
+      customer_country: string | null,
+      extra: Record<string, unknown> = {},
+    ) => makeOrderRow({ id, ...ZERO_RATE_ORDER, customer_country, ...extra })
+
+    const chartRow = (
+      account_number: string,
+      account_name: string,
+      default_vat_treatment: string | null = null,
+    ) => ({
+      account_number,
+      account_name,
+      is_active: true,
+      default_vat_rate: null,
+      default_vat_treatment,
+    })
+    const EXPORT_GOODS = chartRow('3105', 'Försäljning varor till land utanför EU')
+    const EU_GOODS = chartRow('3108', 'Försäljning varor till annat EU-land')
+    const EXPORT_SERVICES = chartRow('3305', 'Försäljning tjänster utanför EU')
+
+    async function runOne(
+      order: Record<string, unknown>,
+      chart: Record<string, unknown>,
+      account: string,
+      claim: boolean,
+    ) {
+      enqueue({ data: [order] })
+      enqueue({ data: [] }) // store settings
+      enqueue({ data: [chart] }) // chart check
+      if (claim) enqueue({ data: [{ id: order.id }] })
+      return parseJsonResponse<BulkResponse>(
+        await postBulk({ order_ids: [order.id], revenue_accounts: { '0': account } }),
+      )
+    }
+
+    it('refuses an export goods account (ruta 36) for a Swedish billing country', async () => {
+      const { status, body } = await runOne(
+        zeroRateOrder(ORDER_1, 'SE'),
+        EXPORT_GOODS,
+        '3105',
+        false,
+      )
+      expect(status).toBe(200)
+      expect(body.data.failed_count).toBe(1)
+      expect(body.data.results[0].error?.code).toBe(
+        'WEBSHOP_ORDER_ZERO_RATE_CONTEXT_MISMATCH',
+      )
+      expect(body.data.results[0].error?.details).toEqual({
+        account: '3105',
+        box: '36',
+        customer_country: 'SE',
+      })
+      expect(body.data.results[0].error?.message).toContain('ruta 35-42')
+      // The check keys on the billing country only; the copy must say so and
+      // must not assert that the account is wrong (a Swedish-billed order
+      // shipped outside the EU is a legitimate ruta 36 export).
+      expect(body.data.results[0].error?.message).toContain('faktureringslandet')
+      expect(body.data.results[0].error?.message).toContain('leveransadressen')
+      expect(body.data.results[0].error?.message).not.toContain('välj rätt konto')
+      expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+    })
+
+    it('refuses an export goods account (ruta 36) for an EU billing country', async () => {
+      // Varuförsäljning to another EU country is ruta 35, never ruta 36.
+      const { body } = await runOne(zeroRateOrder(ORDER_1, 'de'), EXPORT_GOODS, '3105', false)
+      expect(body.data.results[0].error?.code).toBe(
+        'WEBSHOP_ORDER_ZERO_RATE_CONTEXT_MISMATCH',
+      )
+      expect(body.data.results[0].error?.details?.customer_country).toBe('DE')
+      expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+    })
+
+    it('books an export goods account for a non-EU billing country', async () => {
+      const { status, body } = await runOne(
+        zeroRateOrder(ORDER_1, 'US'),
+        EXPORT_GOODS,
+        '3105',
+        true,
+      )
+      expect(status).toBe(200)
+      expect(body.data.booked_count).toBe(1)
+      const lines = (
+        mockCreateDraftEntry.mock.calls[0][3] as {
+          lines: { account_number: string; credit_amount: number }[]
+        }
+      ).lines
+      expect(lines.find((l) => l.account_number === '3105')?.credit_amount).toBe(500)
+    })
+
+    it('refuses an EU goods account (ruta 35) for a non-EU or Swedish billing country', async () => {
+      const us = await runOne(zeroRateOrder(ORDER_1, 'US'), EU_GOODS, '3108', false)
+      expect(us.body.data.results[0].error?.code).toBe(
+        'WEBSHOP_ORDER_ZERO_RATE_CONTEXT_MISMATCH',
+      )
+      expect(us.body.data.results[0].error?.details?.box).toBe('35')
+
+      reset()
+      const se = await runOne(zeroRateOrder(ORDER_1, 'SE'), EU_GOODS, '3108', false)
+      expect(se.body.data.results[0].error?.code).toBe(
+        'WEBSHOP_ORDER_ZERO_RATE_CONTEXT_MISMATCH',
+      )
+      expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+    })
+
+    it('books an EU goods account for another EU billing country', async () => {
+      const { body } = await runOne(zeroRateOrder(ORDER_1, 'DE'), EU_GOODS, '3108', true)
+      expect(body.data.booked_count).toBe(1)
+    })
+
+    it('refuses a services-abroad account (ruta 40) only for Sweden, not for EU', async () => {
+      // Ruta 40 is "omsatta utom landet": outside Sweden, which includes
+      // EU countries for services outside huvudregeln. Only SE contradicts.
+      const se = await runOne(zeroRateOrder(ORDER_1, 'SE'), EXPORT_SERVICES, '3305', false)
+      expect(se.body.data.results[0].error?.code).toBe(
+        'WEBSHOP_ORDER_ZERO_RATE_CONTEXT_MISMATCH',
+      )
+      expect(se.body.data.results[0].error?.details?.box).toBe('40')
+      expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+
+      reset()
+      const de = await runOne(zeroRateOrder(ORDER_1, 'DE'), EXPORT_SERVICES, '3305', true)
+      expect(de.body.data.booked_count).toBe(1)
+    })
+
+    it('resolves the box from a configured treatment on a custom account', async () => {
+      // A company-specific 3060 with treatment export_goods is ruta 36
+      // even though the static BAS map knows nothing about it.
+      const { body } = await runOne(
+        zeroRateOrder(ORDER_1, 'SE'),
+        chartRow('3060', 'Konsultarvode utland', 'export_goods'),
+        '3060',
+        false,
+      )
+      expect(body.data.results[0].error?.code).toBe(
+        'WEBSHOP_ORDER_ZERO_RATE_CONTEXT_MISMATCH',
+      )
+      expect(body.data.results[0].error?.details?.box).toBe('36')
+      expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+    })
+
+    it('lets a configured treatment override the static box', async () => {
+      // 3105 is statically ruta 36, but the company configured it as
+      // exempt (ruta 42): a domestic order is then fine.
+      const { body } = await runOne(
+        zeroRateOrder(ORDER_1, 'SE'),
+        chartRow('3105', 'Momsfri försäljning', 'exempt'),
+        '3105',
+        true,
+      )
+      expect(body.data.booked_count).toBe(1)
+    })
+
+    it('books when the billing country is unknown (Shopify stores null)', async () => {
+      const { body } = await runOne(zeroRateOrder(ORDER_1, null), EXPORT_GOODS, '3105', true)
+      expect(body.data.booked_count).toBe(1)
+    })
+
+    it('ignores the rate-0 template when the order has no 0% bucket', async () => {
+      // 25%-only order: the 3105 slot is never used, so no context to check.
+      const { body } = await runOne(
+        makeOrderRow({ customer_country: 'SE' }),
+        EXPORT_GOODS,
+        '3105',
+        true,
+      )
+      expect(body.data.booked_count).toBe(1)
+    })
+
+    it('ignores a 0% bucket with zero net', async () => {
+      const { body } = await runOne(
+        zeroRateOrder(ORDER_1, 'SE', {
+          total: 500,
+          total_sek: 500,
+          total_tax: 100,
+          vat_breakdown: [
+            { rate: 25, net: 400, tax: 100 },
+            { rate: 0, net: 0, tax: 0 },
+          ],
+        }),
+        EXPORT_GOODS,
+        '3105',
+        true,
+      )
+      expect(body.data.booked_count).toBe(1)
+    })
+
+    it('keeps the domestic direction advisory: exempt account + foreign country books', async () => {
+      // The dialog already warns (zero_rate_foreign); refusing here would
+      // regress every untemplated sweep, so 3004/ruta 42 is never blocked.
+      const { body } = await runOne(
+        zeroRateOrder(ORDER_1, 'DE'),
+        chartRow('3060', 'Momsfri försäljning', 'exempt'),
+        '3060',
+        true,
+      )
+      expect(body.data.booked_count).toBe(1)
+    })
+
+    it('never blocks the default 3004 slot on billing country', async () => {
+      enqueue({ data: [zeroRateOrder(ORDER_1, 'US')] })
+      enqueue({ data: [] }) // store settings
+      // 3004 is in the prefill set: no chart check query.
+      enqueue({ data: [{ id: ORDER_1 }] }) // claim
+      const { body } = await parseJsonResponse<BulkResponse>(
+        await postBulk({ order_ids: [ORDER_1], revenue_accounts: { '0': '3004' } }),
+      )
+      expect(body.data.booked_count).toBe(1)
+    })
+
+    it('leaves an unclassified custom account unchecked (no box)', async () => {
+      // Neither treatment nor the static BAS map classifies 3060; there is
+      // nothing to contradict, so the sweep books (deferred item 1).
+      const { body } = await runOne(
+        zeroRateOrder(ORDER_1, 'SE'),
+        chartRow('3060', 'Konsultarvode utland'),
+        '3060',
+        true,
+      )
+      expect(body.data.booked_count).toBe(1)
+    })
+
+    it('refuses per order inside a mixed batch and books the rest', async () => {
+      enqueue({
+        data: [zeroRateOrder(ORDER_1, 'SE'), zeroRateOrder(ORDER_2, 'US', { order_number: '1002' })],
+      })
+      enqueue({ data: [] }) // store settings
+      enqueue({ data: [EXPORT_GOODS] }) // chart check
+      enqueue({ data: [{ id: ORDER_2 }] }) // claim order 2
+      const { status, body } = await parseJsonResponse<BulkResponse>(
+        await postBulk({
+          order_ids: [ORDER_1, ORDER_2],
+          revenue_accounts: { '0': '3105' },
+        }),
+      )
+      expect(status).toBe(200)
+      expect(body.data.booked_count).toBe(1)
+      expect(body.data.failed_count).toBe(1)
+      expect(body.data.results[0]).toMatchObject({
+        order_id: ORDER_1,
+        success: false,
+        error: { code: 'WEBSHOP_ORDER_ZERO_RATE_CONTEXT_MISMATCH' },
+      })
+      expect(body.data.results[1]).toMatchObject({ order_id: ORDER_2, success: true })
+      expect(mockCreateDraftEntry).toHaveBeenCalledTimes(1)
+    })
+  })
 })
