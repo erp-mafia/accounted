@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { validateBody } from '@/lib/api/validate'
 import { createLogger } from '@/lib/logger'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -29,7 +30,9 @@ const ChangeEmailSchema = z.object({
  *
  * The account itself is keyed by user id everywhere (company_members,
  * user_preferences, ...), so a confirmed change moves nothing but the login
- * identifier and contact address.
+ * identifier and contact address. profiles.email mirrors auth.users.email via
+ * the sync_profile_email trigger (migration 20260828191950), so member lists,
+ * notification recipients, and AGI/KU contact fields follow the change.
  */
 export async function POST(request: Request) {
   const { user, supabase, error: authError } = await requireAuth()
@@ -46,7 +49,11 @@ export async function POST(request: Request) {
     )
   }
 
-  const origin = new URL(request.url).origin
+  // Trusted-origin resolution, not request.url: behind a proxy request.url
+  // can be an internal origin (dead confirmation links on self-hosted), and
+  // auth links may never follow an attacker-chosen host. Registered
+  // white-label hosts pass through so the mail carries the right brand.
+  const origin = resolveRequestAppOrigin(request)
   const { error: updateError } = await supabase.auth.updateUser(
     { email },
     { emailRedirectTo: `${origin}/auth/callback` },

@@ -68,7 +68,7 @@ export function AccountSettingsContent() {
         setCurrentEmail(user.email)
       }
       // A change already awaiting confirmation survives a page reload.
-      if (active && user.new_email) setPendingEmail(user.new_email)
+      if (active && user.new_email) setPendingEmail(user.new_email.toLowerCase())
       const { data } = await supabase
         .from('profiles')
         .select('full_name')
@@ -242,7 +242,8 @@ export function AccountSettingsContent() {
                 !currentEmail ||
                 savingEmail ||
                 !email.trim() ||
-                email.trim().toLowerCase() === currentEmail.toLowerCase()
+                email.trim().toLowerCase() === currentEmail.toLowerCase() ||
+                email.trim().toLowerCase() === pendingEmail
               }
             >
               {savingEmail ? tCommon('saving') : tCommon('save')}
