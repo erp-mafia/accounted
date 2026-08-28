@@ -3525,7 +3525,7 @@ export const UpdateShiftPremiumRuleSchema = z
 // Upper bound on per-employee override values. 10 MSEK is well above any
 // plausible single-period gross/tax/avgifter figure for a salary run and
 // catches typos (e.g. an extra zero) before they reach the ledger or AGI.
-const SALARY_OVERRIDE_MAX = 10_000_000
+export const SALARY_OVERRIDE_MAX = 10_000_000
 
 export const SalaryEmployeeOverrideSchema = z
   .object({

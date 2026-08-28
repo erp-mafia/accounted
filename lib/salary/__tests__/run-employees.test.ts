@@ -239,6 +239,29 @@ describe('setRunEmployeeSalary', () => {
     expect((mock.supabase.from as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0)
   })
 
+  it('rejects a salary above SALARY_OVERRIDE_MAX without touching the DB', async () => {
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      monthlySalary: 10_000_001,
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('VALIDATION_ERROR')
+    expect((mock.supabase.from as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0)
+  })
+
+  it('rejects an overflow-scale salary (1e307) instead of writing Infinity', async () => {
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      monthlySalary: 1e307,
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('VALIDATION_ERROR')
+  })
+
   it('returns SALARY_RUN_NOT_FOUND for a missing run', async () => {
     mock.enqueue({ data: null })
     const result = await setRunEmployeeSalary(supabase, {

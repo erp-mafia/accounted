@@ -14156,17 +14156,18 @@ export const tools: McpTool[] = [
     name: 'gnubok_set_run_salary',
     title: 'Set This Month\'s Salary',
     description: 'Stage this run\'s base salary for one employee in a DRAFT salary run (per-run value; the employee\'s fixed salary is untouched). For variable pay, e.g. owner salary; 0 = nollkörning. Commit via gnubok_approve_pending_operation, then gnubok_calculate_salary_run.',
-    // Search-only: the tools/list payload budget is at zero headroom
-    // (payload-size.bench.test.ts). The payroll_month briefing loadout still
-    // names it, so payroll agents batch-load it up front.
-    catalogVisibility: 'search',
+    // Default catalog: gnubok_call_tool only bridges READ tools, so a
+    // search-only WRITE is uncallable on Claude.ai (the update_customer
+    // lesson, #1876/#1986), and update_payslip_line's description plus the
+    // payroll_month loadout point agents here. Budget accounted for in
+    // payload-size.bench.test.ts's ledger.
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         salary_run_id: { type: 'string', description: 'UUID of the salary run (must be draft)' },
         employee_id: { type: 'string', description: 'UUID of the employee on the run' },
-        monthly_salary: { type: 'number', description: 'This month\'s gross base salary (SEK, >= 0; 0 books a nollkörning)' },
+        monthly_salary: { type: 'number', description: 'This month\'s gross base salary (SEK, 0 to 10 000 000; 0 books a nollkörning). Monthly employees only: hourly gross derives from hours worked.' },
       },
       required: ['salary_run_id', 'employee_id', 'monthly_salary'],
     },

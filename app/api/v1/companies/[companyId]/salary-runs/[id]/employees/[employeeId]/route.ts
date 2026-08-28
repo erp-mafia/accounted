@@ -11,6 +11,7 @@
  */
 
 import { z } from 'zod'
+import { SALARY_OVERRIDE_MAX } from '@/lib/api/schemas'
 import { ok, noContent } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope, NoBodyResponse } from '@/lib/api/v1/registry'
@@ -239,7 +240,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string; 
 
 const SetRunSalaryBody = z.object({
   /** This month's gross base salary in SEK. 0 is a valid nollkörning. */
-  monthly_salary: z.number().finite().nonnegative(),
+  monthly_salary: z.number().finite().nonnegative().max(SALARY_OVERRIDE_MAX),
 })
 
 const SetRunSalaryResponse = z.object({
@@ -283,7 +284,8 @@ registerEndpoint({
     },
   },
   scope: 'payroll:write',
-  risk: 'low',
+  // Matches the staged-operation tier for set_run_salary in risk-tiers.ts.
+  risk: 'medium',
   idempotent: true,
   reversible: true,
   dryRunSupported: true,

@@ -13,6 +13,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getLineItemAccount } from '@/lib/salary/account-mapping'
 import { roundOre } from '@/lib/money'
+import { SALARY_OVERRIDE_MAX } from '@/lib/api/schemas'
 import type { SalaryLineItemType } from '@/types'
 
 export type RunEmployeeResult<T> =
@@ -211,8 +212,19 @@ export async function setRunEmployeeSalary(
     dryRun?: boolean
   },
 ): Promise<RunEmployeeResult<SetRunSalaryData>> {
-  if (!Number.isFinite(args.monthlySalary) || args.monthlySalary < 0) {
-    return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'monthly_salary' } }
+  // Single enforcement point for the salary bound: the cookie route's Zod
+  // schema, the v1 body schema and the MCP tool all funnel through here. The
+  // cap also keeps roundOre far away from Infinity (1e307 * 100 overflows).
+  if (
+    !Number.isFinite(args.monthlySalary) ||
+    args.monthlySalary < 0 ||
+    args.monthlySalary > SALARY_OVERRIDE_MAX
+  ) {
+    return {
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: { field: 'monthly_salary', max: SALARY_OVERRIDE_MAX },
+    }
   }
   const gate = await assertRunDraftForRoster(supabase, args.companyId, args.salaryRunId)
   if (!gate.ok) return gate
@@ -228,7 +240,11 @@ export async function setRunEmployeeSalary(
     .maybeSingle()
 
   if (sreError) {
-    return { ok: false, code: 'INTERNAL_ERROR', details: { message: sreError.message } }
+    return {
+      ok: false,
+      code: 'INTERNAL_ERROR',
+      details: { message: sreError.message, code: sreError.code },
+    }
   }
   if (!sre) {
     return { ok: false, code: 'SALARY_RUN_EMPLOYEE_NOT_FOUND' }
@@ -255,30 +271,39 @@ export async function setRunEmployeeSalary(
     return { ok: true, data }
   }
 
+  // Clearing calculation_breakdown is what makes a stale booking impossible:
+  // both book preflights (MCP gnubok_book_salary_run and the v1/UI path via
+  // advanceAndBookSalaryRun) refuse roster rows without a breakdown, so a
+  // salary change after a calculation forces a recalculation before booking
+  // instead of silently booking gross/tax derived from the old salary.
   const { error: updError } = await supabase
     .from('salary_run_employees')
-    .update({ monthly_salary: monthly })
+    .update({ monthly_salary: monthly, calculation_breakdown: null })
     .eq('id', row.id)
     .eq('company_id', args.companyId)
 
   if (updError) {
-    return { ok: false, code: 'INTERNAL_ERROR', details: { message: updError.message } }
+    return {
+      ok: false,
+      code: 'INTERNAL_ERROR',
+      details: { message: updError.message, code: updError.code },
+    }
   }
 
   // Keep the displayed 'Grundlön' line consistent before the next calculation.
   // Display-only: the engine recomputes baseSalary from monthly_salary at calc
-  // time, but this avoids a stale row until then.
+  // time, and the next calculation rewrites this row anyway, so a failure here
+  // must not fail the request: the salary write above has already committed,
+  // and reporting failure for an applied change is worse than a briefly stale
+  // display row (matches the pre-refactor route behavior).
   if (row.salary_type === 'monthly') {
     const baseAmount = roundOre(monthly * (row.employment_degree / 100))
-    const { error: lineError } = await supabase
+    await supabase
       .from('salary_line_items')
       .update({ amount: baseAmount })
       .eq('salary_run_employee_id', row.id)
       .eq('company_id', args.companyId)
       .eq('item_type', 'monthly_salary')
-    if (lineError) {
-      return { ok: false, code: 'INTERNAL_ERROR', details: { message: lineError.message } }
-    }
   }
 
   return { ok: true, data }
