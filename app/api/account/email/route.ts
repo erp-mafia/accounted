@@ -58,6 +58,18 @@ export async function POST(request: Request) {
       code: updateError.code,
       status: updateError.status,
     })
+    // Addresses are unique per auth user: a change to an already-registered
+    // address is refused by GoTrue, never merged. Accounts are consolidated
+    // via company invitations, not email changes.
+    if (
+      updateError.code === 'email_exists' ||
+      /already.*registered/i.test(updateError.message ?? '')
+    ) {
+      return NextResponse.json(
+        { error: 'E-postadressen används redan av ett annat konto.' },
+        { status: 409 },
+      )
+    }
     return NextResponse.json(
       {
         error:

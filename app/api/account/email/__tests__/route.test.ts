@@ -104,6 +104,28 @@ describe('POST /api/account/email', () => {
     expect(String(options.emailRedirectTo)).toMatch(/\/auth\/callback$/)
   })
 
+  it('returns 409 when the address already belongs to another account', async () => {
+    mockUserClient({
+      user: { id: 'user-1', email: 'old@testbrand.example' },
+      updateUserError: {
+        message: 'A user with this email address has already been registered',
+        status: 422,
+        code: 'email_exists',
+      },
+    })
+
+    const req = createMockRequest('/api/account/email', {
+      method: 'POST',
+      body: { email: 'taken@testbrand.example' },
+    })
+    const { status, body } = await parseJsonResponse<{ error?: string }>(
+      await POST(req),
+    )
+
+    expect(status).toBe(409)
+    expect(body.error).toBe('E-postadressen används redan av ett annat konto.')
+  })
+
   it('returns 400 and surfaces the AAL2 error when Supabase rejects the update', async () => {
     const { updateUser } = mockUserClient({
       user: { id: 'user-1', email: 'old@testbrand.example' },
