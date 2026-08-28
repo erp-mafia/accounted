@@ -183,29 +183,13 @@ async function loadCashAccountTopology(
   const connectionIds = [
     ...new Set(rows.map((r) => r.bank_connection_id).filter((id): id is string => id !== null)),
   ]
-  const connections = await getConnectionStatuses(supabase, companyId, connectionIds)
-  const statuses = new Map([...connections].map(([id, c]) => [id, c.status]))
+  const statuses = await getConnectionStatuses(supabase, companyId, connectionIds)
 
-  const isHeldByActiveConnection = (r: CashAccount): boolean =>
-    r.enabled && r.bank_connection_id !== null && statuses.get(r.bank_connection_id) === 'active'
   // Two enabled rows on ONE active connection sharing (IBAN, currency) are
-  // the bank re-registering the account under a new external_uid: the old
-  // row silently stops syncing while the new one carries on (the dominant
-  // prod twin shape, round 4). Only the row the bank still lists is the
-  // live claim; the other is a stale twin (orphaned for counter purposes,
-  // never a re-point destination). The bank's listing is
-  // bank_connections.accounts_data, rewritten on every sync; when it is
-  // unavailable, or lists both uids or neither, nothing tells the rows
-  // apart and both stay live (round 5: cash_accounts.balance_updated_at is
-  // a connect-time snapshot the sync never refreshes, and ranked the rows
-  // the wrong way round on prod).
-  const staleTwinIds = findStaleSameConnectionTwins(
-    rows,
-    isHeldByActiveConnection,
-    (connectionId) => connections.get(connectionId)?.accountUids ?? null,
-  )
+  // deliberately BOTH live: no liveness signal has held up on prod (see
+  // DECISIONS.md, #1643), so nothing ranks them here.
   const isLive = (r: CashAccount): boolean =>
-    isHeldByActiveConnection(r) && !staleTwinIds.has(r.id)
+    r.enabled && r.bank_connection_id !== null && statuses.get(r.bank_connection_id) === 'active'
   const isReleased = (r: CashAccount): boolean =>
     r.bank_connection_id === null || statuses.get(r.bank_connection_id) === 'revoked'
 
@@ -236,42 +220,6 @@ async function loadCashAccountTopology(
   }
 
   return { rows, statuses, orphaned, isLive, isReleased }
-}
-
-/**
- * Ids of rows that share (IBAN, currency) AND the bank connection with
- * another held row but whose external_uid the bank no longer lists in that
- * connection's accounts_data (the sync rewrites it from the bank's account
- * list). A group yields nothing when the listing is unavailable, or when it
- * names both rows or neither: the rows cannot be told apart.
- */
-function findStaleSameConnectionTwins(
-  rows: readonly CashAccount[],
-  isHeld: (row: CashAccount) => boolean,
-  listedUidsOf: (connectionId: string) => ReadonlySet<string> | null,
-): Set<string> {
-  const groups = new Map<string, CashAccount[]>()
-  for (const row of rows) {
-    if (!isHeld(row)) continue
-    const key = physicalAccountKey(row)
-    if (!key) continue
-    const groupKey = `${key}|${row.bank_connection_id}`
-    const group = groups.get(groupKey)
-    if (group) group.push(row)
-    else groups.set(groupKey, [row])
-  }
-  const stale = new Set<string>()
-  for (const group of groups.values()) {
-    if (group.length < 2) continue
-    const listed = listedUidsOf(group[0].bank_connection_id as string)
-    if (!listed) continue
-    const present = group.filter((row) => row.external_uid !== null && listed.has(row.external_uid))
-    if (present.length !== 1) continue
-    for (const row of group) {
-      if (row.id !== present[0].id) stale.add(row.id)
-    }
-  }
-  return stale
 }
 
 /**
@@ -743,31 +691,20 @@ export async function guardBookedCounterLines(
   }
 }
 
-interface ConnectionSnapshot {
-  status: string
-  /**
-   * external_uids the bank currently lists for the connection
-   * (bank_connections.accounts_data, rewritten on every sync), or null when
-   * the column is absent or unreadable.
-   */
-  accountUids: ReadonlySet<string> | null
-}
-
 /**
- * bank_connections.status plus the currently listed account uids for the
- * given connection ids. Missing ids (and a failed lookup, which returns an
- * empty map) read as "status unknown".
+ * bank_connections.status for the given connection ids. Missing ids (and a
+ * failed lookup, which returns an empty map) read as "status unknown".
  */
 async function getConnectionStatuses(
   supabase: SupabaseClient,
   companyId: string,
   connectionIds: readonly string[],
-): Promise<Map<string, ConnectionSnapshot>> {
+): Promise<Map<string, string>> {
   if (connectionIds.length === 0) return new Map()
 
   const { data, error } = await supabase
     .from('bank_connections')
-    .select('id, status, accounts_data')
+    .select('id, status')
     .eq('company_id', companyId)
     .in('id', [...connectionIds])
 
@@ -777,21 +714,8 @@ async function getConnectionStatuses(
   }
 
   return new Map(
-    ((data ?? []) as Array<{ id: string; status: string; accounts_data?: unknown }>).map((c) => [
-      c.id,
-      { status: c.status, accountUids: listedAccountUids(c.accounts_data) },
-    ]),
+    ((data ?? []) as Array<{ id: string; status: string }>).map((c) => [c.id, c.status]),
   )
-}
-
-function listedAccountUids(accountsData: unknown): ReadonlySet<string> | null {
-  if (!Array.isArray(accountsData)) return null
-  const uids = new Set<string>()
-  for (const entry of accountsData) {
-    const uid = (entry as { uid?: unknown } | null)?.uid
-    if (typeof uid === 'string' && uid) uids.add(uid)
-  }
-  return uids
 }
 
 /**
@@ -809,8 +733,8 @@ export async function getRevokedConnectionIds(
   companyId: string,
   connectionIds: readonly string[],
 ): Promise<Set<string>> {
-  const connections = await getConnectionStatuses(supabase, companyId, connectionIds)
-  return new Set([...connections.entries()].filter(([, c]) => c.status === 'revoked').map(([id]) => id))
+  const statuses = await getConnectionStatuses(supabase, companyId, connectionIds)
+  return new Set([...statuses.entries()].filter(([, status]) => status === 'revoked').map(([id]) => id))
 }
 
 /**
