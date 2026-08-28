@@ -18,7 +18,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { maskPersonnummer } from '@/lib/api/v1/mask-personnummer'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
-import { removeEmployeeFromRun } from '@/lib/salary/run-employees'
+import { removeEmployeeFromRun, setRunEmployeeSalary } from '@/lib/salary/run-employees'
 
 const PayslipLineItem = z.object({
   /** Qualified id of the salary_line_items row. */
@@ -231,6 +231,120 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string; 
       { requestId: ctx.requestId },
     )
   },
+)
+
+// ──────────────────────────────────────────────────────────────────
+// PATCH: set this run's base salary for the employee (draft only)
+// ──────────────────────────────────────────────────────────────────
+
+const SetRunSalaryBody = z.object({
+  /** This month's gross base salary in SEK. 0 is a valid nollkörning. */
+  monthly_salary: z.number().finite().nonnegative(),
+})
+
+const SetRunSalaryResponse = z.object({
+  salary_run_employee_id: z.string().uuid(),
+  employee_id: z.string().uuid(),
+  salary_type: z.string(),
+  employment_degree: z.number(),
+  previous_monthly_salary: z.number(),
+  monthly_salary: z.number(),
+})
+
+registerEndpoint({
+  operation: 'salary-runs.employees.set-salary',
+  method: 'PATCH',
+  path: '/api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId',
+  summary: 'Set this run\'s base salary for one employee.',
+  description:
+    'Sets the per-run base salary (salary_run_employees.monthly_salary) that the calculation engine reads for this run. The employee master record is untouched, so each month\'s gross can differ from the employee\'s standard pay (variable owner salary). Draft-only; 0 is a valid nollkörning.',
+  useWhen:
+    'The employee\'s pay this month differs from their configured fixed salary: owners taking salary by need and capacity, one-off adjustments, or a deliberate zero month.',
+  doNotUseFor:
+    'Changing the employee\'s standard salary going forward: PATCH /employees/{id}. Editing individual payslip lines (tillägg/avdrag): the lines endpoints. Tax/avgifter overrides in review: not exposed on v1 yet.',
+  pitfalls: [
+    'Draft-only: 400 SALARY_RUN_EMPLOYEES_NOT_DRAFT once the run has advanced.',
+    'Run POST /calculate afterwards: gross, tax and totals reflect the new salary only after recalculation.',
+    'Do NOT edit the monthly_salary line item instead: recalculation rebuilds base salary lines from this per-run value.',
+    'For hourly employees the value is stored but gross derives from hours worked; the salary_type field in the response tells you which applies.',
+  ],
+  example: {
+    request: { monthly_salary: 45000 },
+    response: {
+      data: {
+        salary_run_employee_id: 'sre_a8f1…',
+        employee_id: 'emp_77b2…',
+        salary_type: 'monthly',
+        employment_degree: 100,
+        previous_monthly_salary: 30000,
+        monthly_salary: 45000,
+      },
+      meta: { request_id: 'req_…', api_version: '2026-05-12' },
+    },
+  },
+  scope: 'payroll:write',
+  risk: 'low',
+  idempotent: true,
+  reversible: true,
+  dryRunSupported: true,
+  request: { body: SetRunSalaryBody },
+  response: { success: dataEnvelope(SetRunSalaryResponse) },
+})
+
+export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string; employeeId: string }> }>(
+  'salary-runs.employees.set-salary',
+  async (request, ctx, params) => {
+    const { id, employeeId } = await params.params
+    const runParse = z.string().uuid().safeParse(id)
+    const empParse = z.string().uuid().safeParse(employeeId)
+    if (!runParse.success || !empParse.success) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: runParse.success ? 'employeeId' : 'id',
+          message: 'Path ids must be UUIDs.',
+        },
+      })
+    }
+
+    let body: unknown
+    try {
+      body = await request.json()
+    } catch {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { message: 'Request body must be JSON.' },
+      })
+    }
+    const parsed = SetRunSalaryBody.safeParse(body)
+    if (!parsed.success) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { issues: parsed.error.issues },
+      })
+    }
+
+    const result = await setRunEmployeeSalary(ctx.supabase, {
+      companyId: ctx.companyId!,
+      salaryRunId: runParse.data,
+      employeeId: empParse.data,
+      monthlySalary: parsed.data.monthly_salary,
+      dryRun: ctx.dryRun,
+    })
+
+    if (!result.ok) {
+      return v1ErrorResponseFromCode(result.code, ctx.log, {
+        requestId: ctx.requestId,
+        details: result.details,
+      })
+    }
+
+    if (ctx.dryRun) {
+      return dryRunPreview(result.data, { requestId: ctx.requestId, log: ctx.log })
+    }
+    return ok(result.data, { requestId: ctx.requestId })
+  },
+  { requireIdempotencyKey: true },
 )
 
 // ──────────────────────────────────────────────────────────────────

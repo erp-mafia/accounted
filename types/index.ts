@@ -2556,6 +2556,10 @@ export type PendingOperationType =
   // employee master data (1.8; personnummer encrypted at staging), and
   // cutover opening balances for mid-year migrations (2.4).
   | 'update_payslip_line'
+  // Set THIS RUN's base salary for one employee (salary_run_employees.
+  // monthly_salary, draft only). The per-run column is what the engine reads;
+  // the employee master's fixed salary stays untouched (variable owner pay).
+  | 'set_run_salary'
   | 'register_absence'
   | 'create_employee'
   | 'update_employee'
