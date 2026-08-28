@@ -3018,6 +3018,7 @@
     "delete_aria": "Delete transaction",
     "edit_title_aria": "Edit title",
     "edited_badge": "edited",
+    "edited_no_original": "The title has been edited from the bank's original name.",
     "pre_migration_marker": "from the period before your migration",
     "pre_migration_foldout": "This transaction is from the period before your migration: it most likely corresponds to an already imported voucher, so match it to an existing voucher rather than booking it again.",
     "original_name_tooltip": "Original bank name: {name}",

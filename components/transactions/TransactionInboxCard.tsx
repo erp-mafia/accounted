@@ -237,7 +237,10 @@ export default function TransactionInboxCard({
   const hasFoldoutContent =
     Boolean(transaction.transaction_method) ||
     (transaction.currency !== 'SEK' && transaction.amount_sek != null) ||
-    Boolean(transaction.title_edited_at && originalName) ||
+    // No originalName requirement: below md the inline "redigerad" marker is
+    // hidden, so the foldout is the only place the edited state survives; it
+    // must open even when the original bank name is missing.
+    Boolean(transaction.title_edited_at) ||
     Boolean(skvCounterpartDate) ||
     isPreMigration ||
     (HAS_AI_EXTRACTION && (extraction.status === 'running' || extraction.status === 'failed'))
@@ -515,8 +518,12 @@ export default function TransactionInboxCard({
                         {formatCurrency(transaction.amount_sek)}
                       </p>
                     )}
-                    {transaction.title_edited_at && originalName && (
-                      <p>{t('original_name_tooltip', { name: originalName })}</p>
+                    {transaction.title_edited_at && (
+                      <p>
+                        {originalName
+                          ? t('original_name_tooltip', { name: originalName })
+                          : t('edited_no_original')}
+                      </p>
                     )}
                     {skvCounterpartDate && (
                       <p>
