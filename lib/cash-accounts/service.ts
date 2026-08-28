@@ -265,7 +265,7 @@ function findStaleSameConnectionTwins(
     if (group.length < 2) continue
     const listed = listedUidsOf(group[0].bank_connection_id as string)
     if (!listed) continue
-    const present = group.filter((row) => listed.has(row.external_uid))
+    const present = group.filter((row) => row.external_uid !== null && listed.has(row.external_uid))
     if (present.length !== 1) continue
     for (const row of group) {
       if (row.id !== present[0].id) stale.add(row.id)
