@@ -1169,7 +1169,8 @@
     "hourly_suffix": "/tim",
     "employment_employee": "Anställd",
     "employment_company_owner": "Företagsledare",
-    "employment_board_member": "Styrelseledamot"
+    "employment_board_member": "Styrelseledamot",
+    "save_error_request_id": "Ärende-id: {id}"
   },
   "register": {
     "subtitle": "Skapa ett konto för att komma igång",

@@ -2841,6 +2841,24 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'En anställd med samma personnummer finns redan.',
     message_en: 'An employee with that personnummer already exists.',
   },
+  // A production deployment without PERSONNUMMER_ENCRYPTION_KEY: every
+  // employee create (and every decrypt-on-read) throws before touching the
+  // database. Deliberately not INTERNAL_ERROR: it is a configuration gap, not
+  // transient, and retrying never helps, so the user should hear "contact
+  // support" rather than "try again later". 503 like
+  // INVOICE_SEND_EMAIL_NOT_CONFIGURED: the service is unavailable until an
+  // operator sets the variable. #1996
+  PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED: {
+    httpStatus: 503,
+    message_sv:
+      'Lönemodulen är inte konfigurerad: krypteringsnyckeln för personnummer (PERSONNUMMER_ENCRYPTION_KEY) saknas i driftmiljön. Kontakta supporten.',
+    message_en:
+      'Payroll is not configured: the personal-number encryption key (PERSONNUMMER_ENCRYPTION_KEY) is missing from the deployment environment. Contact support.',
+    remediation: {
+      description:
+        'Set PERSONNUMMER_ENCRYPTION_KEY in the deployment environment and redeploy. Retrying the request without it will fail identically.',
+    },
+  },
   SALARY_RUN_DUPLICATE_PERIOD: {
     httpStatus: 409,
     message_sv: 'En lönekörning för perioden finns redan.',

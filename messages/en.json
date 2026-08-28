@@ -1169,7 +1169,8 @@
     "hourly_suffix": "/hr",
     "employment_employee": "Employee",
     "employment_company_owner": "Company owner",
-    "employment_board_member": "Board member"
+    "employment_board_member": "Board member",
+    "save_error_request_id": "Reference: {id}"
   },
   "register": {
     "subtitle": "Create an account to get started",
