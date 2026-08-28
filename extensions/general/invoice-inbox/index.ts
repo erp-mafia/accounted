@@ -705,9 +705,9 @@ export const invoiceInboxExtension: Extension = {
           })
 
           // Same page handling as /upload (issue #553): long PDFs extract
-          // from a slice of their first pages; the skip only remains for
-          // unsliceable (encrypted/malformed) PDFs. Sandbox companies skip
-          // Bedrock unconditionally.
+          // from a slice (first pages + the last page); the skip only remains
+          // for unsliceable (encrypted/malformed) PDFs. Sandbox companies
+          // skip Bedrock unconditionally.
           const maxAutoExtractPages = maxPagesForAutoExtract()
           const pageCount =
             file.type === 'application/pdf' ? await countPdfPages(buffer) : null

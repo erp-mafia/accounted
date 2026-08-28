@@ -3501,7 +3501,7 @@
     "payment_cash": "Kontant",
     "payment_invoice": "Faktureras",
     "payment_other": "Annat",
-    "pages_partial_note": "Tolkad från {analyzed} av {total} sidor (de första sidorna och den sista).",
+    "pages_partial_note": "Tolkad från {analyzed} av {total} sidor.",
     "heic_hint": "HEIC-bilder kan inte AI-tolkas ännu. Ladda upp kvittot som JPEG eller PDF, eller fyll i fälten manuellt.",
     "skipped_hint": "AI-tolkning kördes inte för det här dokumentet. Du kan koppla dokumentet till en transaktion eller skapa leverantörsfaktura manuellt.",
     "retry_overwrite_confirm": "Ny tolkning skriver över fälten, även ändringar du gjort själv. Fortsätta?",

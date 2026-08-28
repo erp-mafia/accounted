@@ -453,9 +453,9 @@ export async function uploadAndExtract(
     }
   }
 
-  // Long PDFs are sliced to their first pages instead of skipped, but only
-  // when extraction would actually run: slicing after an entitlement/sandbox/
-  // opt-out verdict would be wasted CPU.
+  // Long PDFs are sliced (first pages + the last page) instead of skipped,
+  // but only when extraction would actually run: slicing after an
+  // entitlement/sandbox/opt-out verdict would be wasted CPU.
   const slicedBuffer =
     gatedByPageCount && syncSkipReason === null
       ? await slicePdfForExtraction(file.buffer, maxAutoExtractPages)
