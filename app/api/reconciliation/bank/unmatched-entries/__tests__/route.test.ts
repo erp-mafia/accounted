@@ -191,9 +191,11 @@ describe('GET /api/reconciliation/bank/unmatched-entries', () => {
     // (spaced IBAN variant to prove normalization), plus an unrelated account.
     enqueue({
       data: [
-        { ledger_account: '1931', iban },
-        { ledger_account: '1940', iban: 'SE45 5000 0000 0583 9825 7466' },
-        { ledger_account: '1935', iban: 'SE1112223334445556667778' },
+        { ledger_account: '1931', iban, currency: 'SEK' },
+        { ledger_account: '1940', iban: 'SE45 5000 0000 0583 9825 7466', currency: 'SEK' },
+        // Same IBAN, EUR pocket of a multi-currency account: not a sibling.
+        { ledger_account: '1932', iban, currency: 'EUR' },
+        { ledger_account: '1935', iban: 'SE1112223334445556667778', currency: 'SEK' },
       ],
     })
     enqueueTransaction({ currency: 'SEK', amount: 217.04, date: '2026-03-10' })

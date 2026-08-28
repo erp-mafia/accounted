@@ -32,10 +32,12 @@ export interface OwnAccountTransfer {
  *   - the transaction has no counterparty IBAN (manual entries, SIE imports,
  *     older PSD2 rows before counterparty_iban capture)
  *   - the counterparty IBAN doesn't match any cash account for this company
- *   - the only matches are the transaction's OWN cash account, disabled rows,
- *     or rows held by a revoked connection (issue #1643: a broken reconnect
- *     leaves orphaned rows sharing the live account's IBAN, and pairing with
- *     one proposed the orphaned ledger as the counter-account)
+ *   - the counterparty IBAN is the transaction's OWN IBAN (interest, fees:
+ *     every same-currency row on that IBAN is the same physical account,
+ *     whichever of them is live), the only matches are disabled or orphaned
+ *     rows, or several candidates survive and nothing tells them apart
+ *     (issue #1643: a broken reconnect leaves rows sharing the live account's
+ *     IBAN, and pairing with one proposed a junk ledger as the counter)
  *
  * No amount-only heuristic fallback: silent false positives at FX boundaries
  * would mis-book legitimate external transfers as own-account moves.

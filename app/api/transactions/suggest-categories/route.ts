@@ -90,8 +90,31 @@ export const POST = withRouteContext(
     // balance-sheet account in the booking dialog, so it is withheld here.
     // Static library templates only reference BAS business accounts plus the
     // literal 1930 settlement placeholder, so they never need this check.
+    // The transaction's OWN settlement ledger is exempt: a transaction still
+    // stranded on the orphaned row settles there, and a learned template whose
+    // only 19xx leg is that ledger is a valid suggestion for it.
     let orphanedLedgers: Set<string> | null = null
-    const referencesOrphanedLedger = async (tmpl: CategorizationTemplate): Promise<boolean> => {
+    let ledgerByCashAccountId: Map<string, string> | null = null
+    const ownLedgerOf = async (cashAccountId: string | null | undefined): Promise<string | null> => {
+      if (!cashAccountId) return null
+      if (!ledgerByCashAccountId) {
+        const { data: cashRows } = await supabase
+          .from('cash_accounts')
+          .select('id, ledger_account')
+          .eq('company_id', companyId)
+        ledgerByCashAccountId = new Map(
+          ((cashRows ?? []) as Array<{ id: string; ledger_account: string }>).map((r) => [
+            r.id,
+            r.ledger_account,
+          ]),
+        )
+      }
+      return ledgerByCashAccountId.get(cashAccountId) ?? null
+    }
+    const referencesOrphanedLedger = async (
+      tmpl: CategorizationTemplate,
+      tx: Transaction,
+    ): Promise<boolean> => {
       const accounts = [
         tmpl.debit_account,
         tmpl.credit_account,
@@ -99,13 +122,16 @@ export const POST = withRouteContext(
       ].filter((a): a is string => !!a && /^19\d{2}$/.test(a))
       if (accounts.length === 0) return false
       orphanedLedgers ??= await getOrphanedCounterLedgers(supabase, companyId)
-      return accounts.some((a) => orphanedLedgers!.has(a))
+      const hits = accounts.filter((a) => orphanedLedgers!.has(a))
+      if (hits.length === 0) return false
+      const ownLedger = await ownLedgerOf(tx.cash_account_id)
+      return hits.some((a) => a !== ownLedger)
     }
 
     for (const tx of transactions) {
       const cpMatch = counterpartyMatches.get(tx.id)
       if (!cpMatch) continue
-      if (await referencesOrphanedLedger(cpMatch.template)) continue
+      if (await referencesOrphanedLedger(cpMatch.template, tx as Transaction)) continue
 
       const cpSuggestion = buildCounterpartySuggestion(cpMatch.template, cpMatch.confidence)
 

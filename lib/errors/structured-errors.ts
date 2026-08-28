@@ -458,11 +458,11 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
   TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT: {
     httpStatus: 400,
     message_sv:
-      'Motkontot tillhör ett bankkonto från en frånkopplad bankanslutning och kan inte användas. Välj ett intäkts- eller kostnadskonto i stället.',
+      'Motkontot är ett bankkonto som hör till transaktionens eget konto eller till en frånkopplad bankanslutning och kan inte användas. Välj ett intäkts- eller kostnadskonto i stället.',
     message_en:
-      'The counter-account belongs to a bank account from a disconnected bank connection and cannot be used. Pick a revenue or expense account instead.',
+      'The counter-account is a bank ledger of the transaction\'s own account or of a disconnected bank connection and cannot be used. Pick a revenue or expense account instead.',
     remediation: {
-      description: 'Choose a revenue or expense account as the counter-account; the orphaned bank ledger must not receive new postings.',
+      description: 'Choose a revenue or expense account as the counter-account; a twin or orphaned bank ledger must not receive new postings.',
       resource: 'Accounted://chart-of-accounts',
     },
   },

@@ -1038,9 +1038,8 @@ describe('manualLink', () => {
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     // Cross-check: cash account maps to the account being reconciled
     enqueue({ data: { ledger_account: '1930' } })
-    // Sibling-ledger scan (#1643): a row without an IBAN has no siblings, so
-    // the scan stops after the own-row lookup.
-    enqueue({ data: { id: 'ca-1930', iban: null, ledger_account: '1930' } })
+    // Sibling-ledger scan (#1643): a row without an IBAN has no siblings.
+    enqueue({ data: [{ id: 'ca-1930', iban: null, ledger_account: '1930', currency: 'SEK', enabled: true, bank_connection_id: null }] })
     // Line exists on 1930
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
     // Update succeeds: .select('id') returns the updated row
@@ -1068,15 +1067,15 @@ describe('manualLink', () => {
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     // Cross-check: the transaction's own ledger IS the requested account.
     enqueue({ data: { ledger_account: '1931' } })
-    // Sibling scan: own row carries the IBAN...
-    enqueue({ data: { id: 'ca-orphan', iban, ledger_account: '1931' } })
-    // ...and the live row shares it on 1940.
+    // Sibling scan: the own (demoted) row carries the IBAN and the live row
+    // shares it on 1940.
     enqueue({
       data: [
-        { id: 'ca-orphan', iban, ledger_account: '1931', currency: 'SEK' },
-        { id: 'ca-live', iban, ledger_account: '1940', currency: 'SEK' },
+        { id: 'ca-orphan', iban, ledger_account: '1931', currency: 'SEK', enabled: true, bank_connection_id: null },
+        { id: 'ca-live', iban, ledger_account: '1940', currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
       ],
     })
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
     // The voucher's bank leg sits on the sibling ledger, not on 1931.
     enqueue({ data: [{ debit_amount: 217.04, credit_amount: 0, account_number: '1940' }] })
     enqueue({ data: [{ id: 'tx-1' }] })
@@ -1100,13 +1099,13 @@ describe('manualLink', () => {
     enqueue({ data: tx })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     enqueue({ data: { ledger_account: '1931' } })
-    enqueue({ data: { id: 'ca-orphan', iban, ledger_account: '1931' } })
     enqueue({
       data: [
-        { id: 'ca-orphan', iban, ledger_account: '1931', currency: 'SEK' },
-        { id: 'ca-live', iban, ledger_account: '1940', currency: 'SEK' },
+        { id: 'ca-orphan', iban, ledger_account: '1931', currency: 'SEK', enabled: true, bank_connection_id: null },
+        { id: 'ca-live', iban, ledger_account: '1940', currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
       ],
     })
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
     // Bank leg on 1931 itself: an ordinary same-ledger link.
     enqueue({ data: [{ debit_amount: 217.04, credit_amount: 0, account_number: '1931' }] })
     enqueue({ data: [{ id: 'tx-1' }] })
@@ -1117,31 +1116,69 @@ describe('manualLink', () => {
     expect(updatePayloads()[0]).not.toHaveProperty('cash_account_id')
   })
 
-  it('links without re-pointing when the sibling row is in another currency (#1643)', async () => {
+  it('rejects a voucher whose only bank line is on another-currency pocket of the same IBAN (#1643)', async () => {
     const { supabase, enqueue, updatePayloads } = createQueueMockSupabase()
     const iban = 'SE4550000000058398257466'
     const tx = makeTransaction({
       id: 'tx-1',
       journal_entry_id: null,
-      cash_account_id: 'ca-orphan',
+      cash_account_id: 'ca-sek',
       currency: 'SEK',
     })
 
     enqueue({ data: tx })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     enqueue({ data: { ledger_account: '1931' } })
-    enqueue({ data: { id: 'ca-orphan', iban, ledger_account: '1931' } })
+    // Multi-currency account: the EUR pocket shares the IBAN but is another
+    // account, so it is not a sibling and the line check stays on 1931.
     enqueue({
       data: [
-        { id: 'ca-orphan', iban, ledger_account: '1931', currency: 'SEK' },
-        // Same IBAN, EUR row: a move there would strand the row on both sides.
-        { id: 'ca-live-eur', iban, ledger_account: '1940', currency: 'EUR' },
+        { id: 'ca-sek', iban, ledger_account: '1931', currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
+        { id: 'ca-eur', iban, ledger_account: '1932', currency: 'EUR', enabled: true, bank_connection_id: 'conn-live' },
       ],
     })
-    enqueue({ data: [{ debit_amount: 217.04, credit_amount: 0, account_number: '1940' }] })
-    enqueue({ data: [{ id: 'tx-1' }] })
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
+    enqueue({ data: [] }) // no line on 1931 (the voucher only has a 1932 leg)
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('Verifikationen saknar rad på 1931')
+    expect(updatePayloads()).toEqual([])
+  })
+
+  it('links without moving the row when the voucher sits on a sibling that is NOT the live row (#1643)', async () => {
+    const { supabase, enqueue, updatePayloads } = createQueueMockSupabase()
+    const iban = 'SE4550000000058398257466'
+    // Reverse direction: the transaction synced onto the live 1940 row, the
+    // voucher was booked on the now-revoked 1931 before the reconnect. The
+    // voucher is what is wrong; the row must not be parked on the dead row.
+    const tx = makeTransaction({
+      id: 'tx-1',
+      journal_entry_id: null,
+      cash_account_id: 'ca-live',
+      currency: 'SEK',
+    })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: { ledger_account: '1940' } })
+    enqueue({
+      data: [
+        { id: 'ca-live', iban, ledger_account: '1940', currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
+        { id: 'ca-orphan', iban, ledger_account: '1931', currency: 'SEK', enabled: true, bank_connection_id: 'conn-old' },
+      ],
+    })
+    enqueue({
+      data: [
+        { id: 'conn-live', status: 'active' },
+        { id: 'conn-old', status: 'revoked' },
+      ],
+    })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1931' }] })
+    enqueue({ data: [{ id: 'tx-1' }] })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1940')
 
     expect(result.success).toBe(true)
     expect(updatePayloads()[0]).not.toHaveProperty('cash_account_id')
@@ -1159,13 +1196,13 @@ describe('manualLink', () => {
     enqueue({ data: tx })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     enqueue({ data: { ledger_account: '1931' } })
-    enqueue({ data: { id: 'ca-orphan', iban, ledger_account: '1931' } })
     enqueue({
       data: [
-        { id: 'ca-orphan', iban, ledger_account: '1931' },
-        { id: 'ca-live', iban, ledger_account: '1940' },
+        { id: 'ca-orphan', iban, ledger_account: '1931', currency: 'SEK', enabled: true, bank_connection_id: null },
+        { id: 'ca-live', iban, ledger_account: '1940', currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
       ],
     })
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
     enqueue({ data: [] }) // no line on 1931 OR 1940
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931')

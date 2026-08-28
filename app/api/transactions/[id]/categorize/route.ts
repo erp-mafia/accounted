@@ -12,7 +12,7 @@ import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-det
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
-import { getOrphanedCounterLedgers, findOrphanedCounterLedger } from '@/lib/cash-accounts/service'
+import { guardCounterLegs } from '@/lib/cash-accounts/service'
 import { upsertCounterpartyTemplate, buildMappingResultFromCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode, getStructuredError } from '@/lib/errors/get-structured-error'
@@ -417,28 +417,26 @@ export const POST = withRouteContext(
     }
 
     // Issue #1643 problem 4: a learned template or transfer proposal must never
-    // book the COUNTER leg onto an orphaned cash-account ledger (a 19xx account
-    // held by a revoked bank connection, or a stale twin of a live account).
-    // Confirming such a proposal silently drops revenue/expense from the P&L
-    // onto a junk balance-sheet account. The settlement leg itself is exempt:
-    // a transaction stranded on an orphaned row still settles there. Only pay
-    // the lookup when a non-settlement 19xx leg is actually present.
+    // book the COUNTER leg onto an orphaned cash-account ledger, or onto a twin
+    // ledger of the transaction's own bank account. Confirming such a proposal
+    // silently drops revenue/expense from the P&L onto a junk balance-sheet
+    // account. A twin that is merely the stale BANK leg of a learned template
+    // is rewritten to the settlement account instead (see guardCounterLegs).
     {
-      const counterLegs = [
-        mappingResult.debit_account,
-        mappingResult.credit_account,
-        ...mappingResult.vat_lines.map((l) => l.account_number),
-      ].filter((a) => !!a && a !== settlementAccount && /^19\d{2}$/.test(a))
-      if (counterLegs.length > 0) {
-        const orphanedLedgers = await getOrphanedCounterLedgers(supabase, companyId!)
-        const orphaned = findOrphanedCounterLedger(counterLegs, settlementAccount, orphanedLedgers)
-        if (orphaned) {
-          return errorResponseFromCode('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT', txLog, {
-            requestId,
-            details: { accountNumber: orphaned },
-          })
-        }
+      const guarded = await guardCounterLegs(
+        supabase,
+        companyId!,
+        mappingResult,
+        settlementAccount,
+        transaction.cash_account_id,
+      )
+      if (guarded.refusedLedger) {
+        return errorResponseFromCode('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT', txLog, {
+          requestId,
+          details: { accountNumber: guarded.refusedLedger },
+        })
       }
+      mappingResult = guarded.mappingResult
     }
 
     // Pre-validate every account the engine will resolve. Templates,

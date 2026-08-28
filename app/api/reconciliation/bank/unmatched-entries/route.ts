@@ -65,21 +65,26 @@ export const GET = withRouteContext(
       // the row settles is booked on the LIVE ledger of the same physical
       // account (e.g. row stamped 1931, voucher on 1940) and could never be
       // offered. Sibling rows share the account's IBAN, so the candidate set
-      // widens to every ledger carrying it. Accounts without an IBAN (manual,
-      // CSV) have no siblings and keep the exact single-ledger behavior.
+      // widens to every ledger carrying it in the SAME currency (the other
+      // currency pockets of a multi-currency account share the IBAN but are
+      // different accounts). Accounts without an IBAN (manual, CSV) have no
+      // siblings and keep the exact single-ledger behavior.
       const ownIban = normalizeIban((cashAccount as { iban?: string | null }).iban ?? null)
       if (ownIban) {
         const { data: siblingRows } = await supabase
           .from('cash_accounts')
-          .select('ledger_account, iban')
+          .select('ledger_account, iban, currency')
           .eq('company_id', companyId)
           .not('iban', 'is', null)
+        type SiblingRow = { ledger_account: string; iban: string | null; currency?: string | null }
         const siblingLedgers = [
           ...new Set(
-            ((siblingRows ?? []) as Array<{ ledger_account: string; iban: string | null }>)
+            ((siblingRows ?? []) as SiblingRow[])
               .filter(
                 (row) =>
-                  row.ledger_account !== accountNumber && normalizeIban(row.iban) === ownIban,
+                  row.ledger_account !== accountNumber &&
+                  normalizeIban(row.iban) === ownIban &&
+                  String(row.currency ?? 'SEK').toUpperCase() === accountCurrency.toUpperCase(),
               )
               .map((row) => row.ledger_account),
           ),

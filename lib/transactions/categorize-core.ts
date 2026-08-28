@@ -30,7 +30,7 @@ import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mappi
 import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
-import { getOrphanedCounterLedgers, findOrphanedCounterLedger } from '@/lib/cash-accounts/service'
+import { guardCounterLegs } from '@/lib/cash-accounts/service'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
@@ -406,27 +406,26 @@ export async function categorizeMatchedTransaction(
   }
 
   // Issue #1643 problem 4: never book the COUNTER leg onto an orphaned
-  // cash-account ledger (a 19xx account held by a revoked bank connection, or
-  // a stale twin of a live account). An account_override or learned mapping
-  // pointing there would silently drop revenue/expense from the P&L onto a
-  // junk balance-sheet account. The settlement leg itself is exempt; the
-  // lookup only runs when a non-settlement 19xx leg is present.
+  // cash-account ledger or a twin ledger of the transaction's own bank
+  // account. An account_override or learned mapping pointing there would
+  // silently drop revenue/expense from the P&L onto a junk balance-sheet
+  // account. A twin that is merely the stale BANK leg is rewritten to the
+  // settlement account instead (see guardCounterLegs).
   {
-    const counterLegs = [
-      mappingResult.debit_account,
-      mappingResult.credit_account,
-      ...mappingResult.vat_lines.map((l) => l.account_number),
-    ].filter((a) => !!a && a !== settlementAccount && /^19\d{2}$/.test(a))
-    if (counterLegs.length > 0) {
-      const orphanedLedgers = await getOrphanedCounterLedgers(supabase, companyId)
-      const orphaned = findOrphanedCounterLedger(counterLegs, settlementAccount, orphanedLedgers)
-      if (orphaned) {
-        return {
-          error: `Motkontot ${orphaned} tillhör ett bankkonto från en frånkopplad bankanslutning och kan inte användas. Välj ett intäkts- eller kostnadskonto i stället.`,
-          status: 400,
-        }
+    const guarded = await guardCounterLegs(
+      supabase,
+      companyId,
+      mappingResult,
+      settlementAccount,
+      transaction.cash_account_id,
+    )
+    if (guarded.refusedLedger) {
+      return {
+        error: `Motkontot ${guarded.refusedLedger} är ett bankkonto som hör till transaktionens eget konto eller till en frånkopplad bankanslutning och kan inte användas. Välj ett intäkts- eller kostnadskonto i stället.`,
+        status: 400,
       }
     }
+    mappingResult = guarded.mappingResult
   }
 
   await ensureFiscalPeriod(supabase, userId, companyId, transaction.date, fiscalYearStartMonth)

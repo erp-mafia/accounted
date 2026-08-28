@@ -1628,6 +1628,72 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
   })
 
+  it('rewrites a learned template whose stale BANK leg is a twin of the settlement row instead of refusing (#1643)', async () => {
+    // Template learned as 5010 / 1931 while the account sat on 1931; the
+    // transaction now settles on the live 1940 row of the same IBAN. The
+    // counter (5010) is fine, only the bank side is stale.
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -1200,
+      merchant_name: 'Hyresvärden',
+      journal_entry_id: null,
+      cash_account_id: 'ca-live',
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
+    enqueue({
+      data: {
+        id: '11111111-1111-4111-8111-111111111111',
+        company_id: 'company-1',
+        counterparty_name: 'Hyresvärden',
+        counterparty_aliases: [],
+        debit_account: '5010',
+        credit_account: '1931',
+        vat_treatment: null,
+        vat_account: null,
+        category: null,
+        line_pattern: null,
+        occurrence_count: 3,
+        confidence: 0.9,
+        source: 'auto_learned',
+        is_active: true,
+      },
+      error: null,
+    })
+    enqueue({ data: { ledger_account: '1940' }, error: null }) // resolveSettlementAccount
+    enqueue({
+      data: [
+        { id: 'ca-live', ledger_account: '1940', bank_connection_id: 'conn-new', iban: 'SE455', enabled: true, currency: 'SEK' },
+        { id: 'ca-orphan', ledger_account: '1931', bank_connection_id: null, iban: 'SE455', enabled: true, currency: 'SEK' },
+      ],
+      error: null,
+    })
+    enqueue({ data: [{ id: 'conn-new', status: 'active' }], error: null })
+    // ensureFiscalPeriod: existing period
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    // Update transaction (CAS guard)
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, counterparty_template_id: '11111111-1111-4111-8111-111111111111' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<unknown>(response)
+
+    expect(status, JSON.stringify(body)).toBe(200)
+    expect(mockCreateTransactionJournalEntry).toHaveBeenCalledTimes(1)
+    const mapping = mockCreateTransactionJournalEntry.mock.calls[0][4] as {
+      debit_account: string
+      credit_account: string
+    }
+    expect(mapping.debit_account).toBe('5010')
+    expect(mapping.credit_account).toBe('1940')
+  })
+
   it('still books a transfer whose 19xx counter is a live cash account', async () => {
     const tx = makeTransaction({
       id: 'tx-1',

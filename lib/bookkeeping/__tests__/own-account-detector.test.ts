@@ -161,11 +161,69 @@ describe('detectOwnAccountTransfer', () => {
       // The bank stamps the account's own IBAN as counterparty (interest); the
       // only row carrying it is the transaction's own.
       enqueue({ data: [makeCashRow({ id: 'ca-own', ledger_account: '1931', currency: 'SEK' })] })
+      enqueue({ data: [{ id: 'conn-eur', status: 'active' }] })
 
       const result = await detectOwnAccountTransfer(
         supabase as never,
         'company-1',
         makeTx({ amount: 217.04, cash_account_id: 'ca-own' }),
+      )
+      expect(result).toBeNull()
+    })
+
+    it('never pairs an own-IBAN counterparty with the live twin when the transaction sits on the orphan row', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      // The issue's population: +217,04 interest stranded on the demoted 1931
+      // row, the live claim on the same IBAN sits on 1940, and the bank stamps
+      // the account's own IBAN as counterparty. 1940 is the SAME account.
+      enqueue({
+        data: [
+          makeCashRow({ id: 'ca-orphan', bank_connection_id: null, ledger_account: '1931', currency: 'SEK' }),
+          makeCashRow({ id: 'ca-live', bank_connection_id: 'conn-new', ledger_account: '1940', currency: 'SEK' }),
+        ],
+      })
+      enqueue({ data: [{ id: 'conn-new', status: 'active' }] })
+
+      const result = await detectOwnAccountTransfer(
+        supabase as never,
+        'company-1',
+        makeTx({ amount: 217.04, cash_account_id: 'ca-orphan', currency: 'SEK' }),
+      )
+      expect(result).toBeNull()
+    })
+
+    it('never pairs a transaction on the live row with a demoted-manual twin sharing its IBAN', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({
+        data: [
+          makeCashRow({ id: 'ca-live', bank_connection_id: 'conn-new', ledger_account: '1940', currency: 'SEK' }),
+          makeCashRow({ id: 'ca-orphan', bank_connection_id: null, ledger_account: '1931', currency: 'SEK' }),
+        ],
+      })
+      enqueue({ data: [{ id: 'conn-new', status: 'active' }] })
+
+      const result = await detectOwnAccountTransfer(
+        supabase as never,
+        'company-1',
+        makeTx({ amount: 217.04, cash_account_id: 'ca-live', currency: 'SEK' }),
+      )
+      expect(result).toBeNull()
+    })
+
+    it('never pairs an own-IBAN counterparty when two ACTIVE same-currency rows share the IBAN', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({
+        data: [
+          makeCashRow({ id: 'ca-1930', bank_connection_id: 'conn-new', ledger_account: '1930', currency: 'SEK' }),
+          makeCashRow({ id: 'ca-1931', bank_connection_id: 'conn-new', ledger_account: '1931', currency: 'SEK' }),
+        ],
+      })
+      enqueue({ data: [{ id: 'conn-new', status: 'active' }] })
+
+      const result = await detectOwnAccountTransfer(
+        supabase as never,
+        'company-1',
+        makeTx({ amount: 217.04, cash_account_id: 'ca-1930', currency: 'SEK' }),
       )
       expect(result).toBeNull()
     })
@@ -188,6 +246,7 @@ describe('detectOwnAccountTransfer', () => {
     it('never pairs with a disabled row', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       enqueue({ data: [makeCashRow({ id: 'ca-disabled', enabled: false })] })
+      enqueue({ data: [{ id: 'conn-eur', status: 'active' }] })
 
       const result = await detectOwnAccountTransfer(
         supabase as never,

@@ -115,6 +115,27 @@ describe('POST /api/transactions/suggest-categories', () => {
     expect(suggestions.find((s) => s.template_id?.startsWith('cp:'))).toBeUndefined()
   })
 
+  it('keeps a learned suggestion whose only 19xx leg is the transaction\'s OWN (orphaned) settlement ledger', async () => {
+    // A transaction still stranded on the orphaned 1931 row: the template
+    // learned as 5010 / 1931 is valid for it, the 1931 leg is its bank side.
+    enqueue({ data: [{ id: TX_ID, amount: -1200, currency: 'SEK', description: 'Hyra', cash_account_id: 'ca-orphan' }] })
+    enqueue({ data: [] }) // mapping_rules
+    enqueue({ data: [] }) // historical transactions
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
+    findCounterpartyTemplatesBatchMock.mockResolvedValue(
+      new Map([[TX_ID, { template: makeTemplate({ debit_account: '5010', credit_account: '1931' }), confidence: 0.9 }]]),
+    )
+    getOrphanedCounterLedgersMock.mockResolvedValue(new Set(['1931']))
+    enqueue({ data: [{ id: 'ca-orphan', ledger_account: '1931' }] }) // cash_accounts id -> ledger
+
+    const response = await POST(request(), emptyParams)
+    const { status, body } = await parseJsonResponse<Body>(response)
+
+    expect(status).toBe(200)
+    const suggestions = body.template_suggestions[TX_ID] ?? []
+    expect(suggestions.some((s) => s.debit_account === '5010' && s.credit_account === '1931')).toBe(true)
+  })
+
   it('keeps a counterparty suggestion whose accounts are clean', async () => {
     enqueueBaseQueries()
     findCounterpartyTemplatesBatchMock.mockResolvedValue(
