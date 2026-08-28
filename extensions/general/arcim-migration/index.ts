@@ -1160,7 +1160,11 @@ export const arcimMigrationExtension: Extension = {
           importSuppliers = true,
           importSalesInvoices = true,
           importSupplierInvoices = true,
-          importAssets = true,
+          // New option: an omitted field must behave exactly as it did before
+          // this option existed, so it defaults OFF. An older client that omits
+          // it neither imports assets nor trips the SIE guard below; the wizard
+          // always sends it explicitly.
+          importAssets = false,
           reconcileVouchers = true,
         } = await request.json() as {
           consentId: string
