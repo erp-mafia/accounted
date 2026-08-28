@@ -36,6 +36,22 @@ interface CompanyInvitation {
   created_at: string
 }
 
+/**
+ * The shareable accept link from the latest invite response. Raw tokens are
+ * never stored server-side (only their hash), so the link exists exactly
+ * once: here, until the next navigation. Kept visible so a failed or absent
+ * mail send (self-hosted without a mail provider, #1710) never dead-ends the
+ * inviter. There is no re-send for company invites: revoke and re-invite.
+ * provisioned = GoTrue created the account and sent its own invite mail
+ * (AUTH_SIGNUPS_DISABLED path), so email_sent=false is not a failure there.
+ */
+interface ShareableInvite {
+  email: string
+  url: string
+  sent: boolean
+  provisioned: boolean
+}
+
 export function CompanyMembersSection() {
   const t = useTranslations('settings_company')
   const errorLocale = useLocale() as ErrorLocale
@@ -65,6 +81,7 @@ export function CompanyMembersSection() {
   const [removingId, setRemovingId] = useState<string | null>(null)
   const [revokingId, setRevokingId] = useState<string | null>(null)
   const [canInvite, setCanInvite] = useState(false)
+  const [shareInvite, setShareInvite] = useState<ShareableInvite | null>(null)
 
   const fetchMembers = useCallback(async () => {
     setLoadError(null)
@@ -132,14 +149,25 @@ export function CompanyMembersSection() {
         return
       }
 
-      if (data.data.inviteUrl) {
-        console.log('[DEV] Company invite URL:', data.data.inviteUrl)
+      const payload = (
+        data as {
+          data?: { email_sent?: boolean; user_provisioned?: boolean; inviteUrl?: string }
+        } | null
+      )?.data
+      const sent = payload?.email_sent !== false
+      const provisioned = payload?.user_provisioned === true
+      // Persist the shareable link next to the pending list: a failed or
+      // skipped send leaves the invitation valid, and the toast alone is too
+      // easy to miss, so the recovery path stays visible on the page.
+      if (payload?.inviteUrl) {
+        setShareInvite({ email, url: payload.inviteUrl, sent, provisioned })
       }
       toast({
         title: t('members_invite_sent_title'),
-        description: data.data.inviteUrl
-          ? t('members_invite_sent_dev_url')
-          : t('members_invite_sent_description', { email }),
+        description:
+          sent || provisioned
+            ? t('members_invite_sent_description', { email })
+            : t('members_invite_mail_not_sent'),
       })
       setInviteEmail('')
       setInviteRole('viewer')
@@ -148,6 +176,15 @@ export function CompanyMembersSection() {
       toast({ title: t('members_invite_failed'), variant: 'destructive' })
     } finally {
       setIsSending(false)
+    }
+  }
+
+  const handleCopyInviteLink = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url)
+      toast({ title: t('members_invite_link_copied_toast') })
+    } catch {
+      toast({ title: t('members_invite_link_copy_failed'), variant: 'destructive' })
     }
   }
 
@@ -171,10 +208,10 @@ export function CompanyMembersSection() {
     }
   }
 
-  const handleRevokeInvite = async (inviteId: string) => {
-    setRevokingId(inviteId)
+  const handleRevokeInvite = async (invite: CompanyInvitation) => {
+    setRevokingId(invite.id)
     try {
-      const res = await fetch(`/api/company/members/invite/${inviteId}`, { method: 'DELETE' })
+      const res = await fetch(`/api/company/members/invite/${invite.id}`, { method: 'DELETE' })
       const data = await res.json()
 
       if (!res.ok) {
@@ -182,6 +219,8 @@ export function CompanyMembersSection() {
         return
       }
 
+      // A revoked invitation's link is dead: never keep offering it.
+      setShareInvite((current) => (current?.email === invite.email ? null : current))
       toast({ title: t('members_invite_revoked') })
       fetchMembers()
     } catch {
@@ -286,7 +325,7 @@ export function CompanyMembersSection() {
               size="icon"
               className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
               aria-label={t('members_revoke_aria')}
-              onClick={() => handleRevokeInvite(inv.id)}
+              onClick={() => handleRevokeInvite(inv)}
               disabled={revokingId === inv.id}
             >
               {revokingId === inv.id ? (
@@ -298,6 +337,37 @@ export function CompanyMembersSection() {
           )}
         </div>
       ))}
+
+      {/* Shareable accept link from the latest invite: one sentence, not a
+          banner. A send that failed or was skipped (no mail provider) is the
+          page's single attn line; a sent or GoTrue-provisioned invite is a
+          quiet muted line with the same copy action, since the link is a
+          legitimate share path either way. */}
+      {canInvite && shareInvite && (
+        <div className="px-1 pt-3" role="status" aria-live="polite">
+          {shareInvite.sent || shareInvite.provisioned ? (
+            <p className="text-[12.5px] leading-5 text-muted-foreground">
+              {t('members_invite_link_sent', { email: shareInvite.email })}{' '}
+              <button
+                type="button"
+                onClick={() => void handleCopyInviteLink(shareInvite.url)}
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                {t('members_invite_link_copy_action')}
+              </button>
+            </p>
+          ) : (
+            <AttnLine
+              action={{
+                label: t('members_invite_link_copy_action'),
+                onClick: () => void handleCopyInviteLink(shareInvite.url),
+              }}
+            >
+              {t('members_invite_link_not_sent', { email: shareInvite.email })}
+            </AttnLine>
+          )}
+        </div>
+      )}
 
       {/* Inline invite: the list's own last row instead of a separate card. */}
       {canInvite && (

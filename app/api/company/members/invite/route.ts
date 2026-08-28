@@ -43,6 +43,14 @@ function maskEmail(email: string): string {
  * POST /api/company/members/invite
  * Invite a user to the current company (e.g., a client as viewer).
  * Only company owners and admins can invite.
+ *
+ * The accept link (inviteUrl) is ALWAYS returned in the response, whether or
+ * not the invitation email went out, so the inviter can share it directly.
+ * This is the only place the raw link exists: tokens are stored hashed
+ * (lib/auth/invite-tokens.ts), so a self-hosted operator without a mail
+ * provider (#1710) or an inviter whose mail bounced would otherwise hold an
+ * invitation nobody can accept. There is no re-send for company invites:
+ * revoke and invite again to get a fresh link.
  */
 export const POST = withRouteContext(
   'company_members.invite',
@@ -220,11 +228,10 @@ export const POST = withRouteContext(
     // before.
     const sender = await getSenderForCompany(companyId)
     const appUrl = sender.brand ? getBaseUrlForBrand(sender.brand) : appOrigin
+    const inviteUrl = `${appUrl}/invite/${token}`
     const emailService = getEmailService()
     let emailSent = false
     if (emailService.isConfigured()) {
-      const inviteUrl = `${appUrl}/invite/${token}`
-
       const emailData = {
         companyName: company?.name || 'Företag',
         inviterEmail: user.email || '',
@@ -252,17 +259,17 @@ export const POST = withRouteContext(
       log.warn('email service not configured: invite email skipped', { to: email })
     }
 
-    // In development, return the invite URL directly (no email service)
-    const isDev = process.env.NODE_ENV === 'development'
-    const devInviteUrl = isDev ? `${appUrl}/invite/${token}` : undefined
-
     return NextResponse.json({
       data: {
         email,
         status: 'pending',
         email_sent: emailSent,
         user_provisioned: userProvisioned,
-        ...(isDev && { inviteUrl: devInviteUrl }),
+        // The accept link is always returned so the inviter can share it
+        // directly, e.g. when the mail bounced or no mail provider is
+        // configured (self-hosted without Resend). Same contract as
+        // POST /api/team/invite.
+        inviteUrl,
       },
     })
   },
