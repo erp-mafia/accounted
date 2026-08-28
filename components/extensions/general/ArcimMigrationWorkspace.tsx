@@ -1103,8 +1103,9 @@ function OptionsStep({
   // POST /migrate refuses with PROVIDER_SIE_IMPORT_REQUIRED unless a completed
   // SIE import exists. Say so here, before the run, when the user has
   // unchecked SIE for a company that has never imported it (#2000).
-  const hasApiImport = options.importCompanyInfo ||
-    options.importCustomers ||
+  // Company info (name, org number, VAT number) writes no ledger data and is
+  // not gated, matching the route.
+  const hasApiImport = options.importCustomers ||
     options.importSuppliers ||
     options.importSalesInvoices ||
     options.importSupplierInvoices
@@ -2995,7 +2996,7 @@ export default function ArcimMigrationWorkspace({
           options={migrationOptions}
           sieAvailable={preview?.sieAvailable ?? false}
           sieData={sieData}
-          hasSieData={preview?.hasSieData ?? false}
+          hasSieData={(preview?.hasSieData ?? false) || sieImportResults.some(r => r.success)}
           provider={preview?.consent.provider ?? null}
           onChange={setMigrationOptions}
           onStart={handleStartMigration}

@@ -146,6 +146,44 @@ describe('POST /migrate: SIE-import-required guard', () => {
     expect(body.error.message_en).not.toMatch(/upload/i)
   })
 
+  it('allows a company-info-only run with no SIE import (writes no ledger data)', async () => {
+    ;(getConsent as Mock).mockResolvedValue({ id: 'consent-1', status: 1, provider: 'fortnox' })
+
+    const res = await handler(
+      migrateRequest({
+        consentId: 'consent-1',
+        importCompanyInfo: true,
+        importCustomers: false,
+        importSuppliers: false,
+        importSalesInvoices: false,
+        importSupplierInvoices: false,
+      }),
+      buildCtx(0),
+    )
+
+    expect(res.status).toBe(200)
+    expect(executeMigration).toHaveBeenCalledTimes(1)
+  })
+
+  it('still blocks when company info is combined with any entity flag', async () => {
+    ;(getConsent as Mock).mockResolvedValue({ id: 'consent-1', status: 1, provider: 'fortnox' })
+
+    const res = await handler(
+      migrateRequest({
+        consentId: 'consent-1',
+        importCompanyInfo: true,
+        importCustomers: false,
+        importSuppliers: true,
+        importSalesInvoices: false,
+        importSupplierInvoices: false,
+      }),
+      buildCtx(0),
+    )
+
+    expect(res.status).toBe(409)
+    expect(executeMigration).not.toHaveBeenCalled()
+  })
+
   it('allows Fortnox once a completed SIE import exists (entities-only re-run)', async () => {
     ;(getConsent as Mock).mockResolvedValue({ id: 'consent-1', status: 1, provider: 'fortnox' })
 

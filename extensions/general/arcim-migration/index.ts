@@ -1190,13 +1190,23 @@ export const arcimMigrationExtension: Extension = {
           // first, but the wizard lets the user uncheck "Bokföringsdata (SIE)"
           // while keeping entities checked (#2000), and a direct API call or a
           // stale client can skip it regardless.
-          const { count: completedSieImports } = await supabase
-            .from('sie_imports')
-            .select('id', { count: 'exact', head: true })
-            .eq('company_id', companyId)
-            .eq('status', 'completed')
+          //
+          // Company info (name, org number, VAT number) writes no accounts,
+          // balances or subledger rows, so a run that imports only that is
+          // not gated.
+          const importsEntities = importCustomers ||
+            importSuppliers ||
+            importSalesInvoices ||
+            importSupplierInvoices
+          const { count: completedSieImports } = importsEntities
+            ? await supabase
+                .from('sie_imports')
+                .select('id', { count: 'exact', head: true })
+                .eq('company_id', companyId)
+                .eq('status', 'completed')
+            : { count: null }
 
-          if (!completedSieImports || completedSieImports < 1) {
+          if (importsEntities && (!completedSieImports || completedSieImports < 1)) {
             // Providers that serve SIE over the API have no file to upload:
             // point the user at the wizard checkbox instead of the static
             // "ladda upp en SIE-fil" text. Same code and status either way so
