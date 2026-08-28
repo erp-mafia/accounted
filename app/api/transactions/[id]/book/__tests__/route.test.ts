@@ -310,6 +310,47 @@ describe('POST /api/transactions/[id]/book', () => {
     ])
   })
 
+  it('returns 400 TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT when the single bank line sits on a dead twin of the live own row (#1643 round 5)', async () => {
+    // Problem 4: the transaction sits on the live 1940, the dialog pre-fills
+    // [1931, 3011] from a template learned before the reconnect, and 1931 is
+    // the revoked twin. Posting would strand the only bank leg on 1931 while
+    // the transaction stays on 1940, so it is refused before the engine runs.
+    const iban = 'SE4550000000058398257466'
+    const tx = makeTransaction({ id: 'tx-1', amount: 500, journal_entry_id: null, cash_account_id: 'ca-live' })
+    enqueue({ data: tx, error: null }) // fetch transaction
+    enqueue({ data: { ledger_account: '1940' } }) // own row
+    enqueue({
+      data: [
+        { id: 'ca-live', ledger_account: '1940', iban, currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
+        { id: 'ca-orphan', ledger_account: '1931', iban, currency: 'SEK', enabled: true, bank_connection_id: 'conn-old' },
+      ],
+    }) // cash_accounts topology
+    enqueue({
+      data: [
+        { id: 'conn-live', status: 'active' },
+        { id: 'conn-old', status: 'revoked' },
+      ],
+    }) // bank_connections statuses
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: {
+        ...validBody,
+        lines: [
+          { account_number: '1931', debit_amount: 500, credit_amount: 0 },
+          { account_number: '3011', debit_amount: 0, credit_amount: 500 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { accountNumber: string } } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT')
+    expect(body.error.details.accountNumber).toBe('1931')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('atomically unignores an ignored transaction when booking it', async () => {
     const tx = makeTransaction({
       id: 'tx-1',

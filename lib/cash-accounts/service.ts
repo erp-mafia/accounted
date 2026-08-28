@@ -183,19 +183,27 @@ async function loadCashAccountTopology(
   const connectionIds = [
     ...new Set(rows.map((r) => r.bank_connection_id).filter((id): id is string => id !== null)),
   ]
-  const statuses = await getConnectionStatuses(supabase, companyId, connectionIds)
+  const connections = await getConnectionStatuses(supabase, companyId, connectionIds)
+  const statuses = new Map([...connections].map(([id, c]) => [id, c.status]))
 
   const isHeldByActiveConnection = (r: CashAccount): boolean =>
     r.enabled && r.bank_connection_id !== null && statuses.get(r.bank_connection_id) === 'active'
   // Two enabled rows on ONE active connection sharing (IBAN, currency) are
   // the bank re-registering the account under a new external_uid: the old
   // row silently stops syncing while the new one carries on (the dominant
-  // prod twin shape, round 4). Only the most recently synced row is the
+  // prod twin shape, round 4). Only the row the bank still lists is the
   // live claim; the other is a stale twin (orphaned for counter purposes,
-  // never a re-point destination). balance_updated_at is the sync stamp
-  // available on the row itself; when neither row carries one, or both
-  // carry the same one, nothing tells them apart and both stay live.
-  const staleTwinIds = findStaleSameConnectionTwins(rows, isHeldByActiveConnection)
+  // never a re-point destination). The bank's listing is
+  // bank_connections.accounts_data, rewritten on every sync; when it is
+  // unavailable, or lists both uids or neither, nothing tells the rows
+  // apart and both stay live (round 5: cash_accounts.balance_updated_at is
+  // a connect-time snapshot the sync never refreshes, and ranked the rows
+  // the wrong way round on prod).
+  const staleTwinIds = findStaleSameConnectionTwins(
+    rows,
+    isHeldByActiveConnection,
+    (connectionId) => connections.get(connectionId)?.accountUids ?? null,
+  )
   const isLive = (r: CashAccount): boolean =>
     isHeldByActiveConnection(r) && !staleTwinIds.has(r.id)
   const isReleased = (r: CashAccount): boolean =>
@@ -232,13 +240,15 @@ async function loadCashAccountTopology(
 
 /**
  * Ids of rows that share (IBAN, currency) AND the bank connection with
- * another held row but were synced less recently than it (older or missing
- * balance_updated_at). Groups where no row carries a sync stamp, or where
- * the newest stamp is shared, yield nothing: the rows cannot be told apart.
+ * another held row but whose external_uid the bank no longer lists in that
+ * connection's accounts_data (the sync rewrites it from the bank's account
+ * list). A group yields nothing when the listing is unavailable, or when it
+ * names both rows or neither: the rows cannot be told apart.
  */
 function findStaleSameConnectionTwins(
   rows: readonly CashAccount[],
   isHeld: (row: CashAccount) => boolean,
+  listedUidsOf: (connectionId: string) => ReadonlySet<string> | null,
 ): Set<string> {
   const groups = new Map<string, CashAccount[]>()
   for (const row of rows) {
@@ -253,16 +263,12 @@ function findStaleSameConnectionTwins(
   const stale = new Set<string>()
   for (const group of groups.values()) {
     if (group.length < 2) continue
-    const stamped = group.filter((row) => row.balance_updated_at)
-    if (stamped.length === 0) continue
-    const newest = stamped.reduce((best, row) =>
-      Date.parse(row.balance_updated_at as string) > Date.parse(best.balance_updated_at as string) ? row : best,
-    )
-    const newestAt = Date.parse(newest.balance_updated_at as string)
-    const ties = stamped.filter((row) => Date.parse(row.balance_updated_at as string) === newestAt)
-    if (ties.length > 1) continue
+    const listed = listedUidsOf(group[0].bank_connection_id as string)
+    if (!listed) continue
+    const present = group.filter((row) => listed.has(row.external_uid))
+    if (present.length !== 1) continue
     for (const row of group) {
-      if (row.id !== newest.id) stale.add(row.id)
+      if (row.id !== present[0].id) stale.add(row.id)
     }
   }
   return stale
@@ -426,6 +432,10 @@ function describeSiblingsFromTopology(
   for (const row of topology.rows) {
     if (row.id === ownRow.id) continue
     if (row.ledger_account === ownRow.ledger_account) continue
+    // A row the user deselected is never a destination (round 5): an
+    // automatic move must not land on a row the transactions page hides.
+    // A voucher booked only there is then refused as a cross-account link.
+    if (!row.enabled) continue
     if (normalizeIban(row.iban) !== wanted) continue
     if (currencyKey(row.currency) !== ownCurrency) continue
     // UNIQUE (company_id, ledger_account) makes this a no-op in practice;
@@ -656,8 +666,10 @@ export async function loadCounterLegTopology(
  *     should move to (shouldRepointToSibling), the caller re-points
  *     transactions.cash_account_id there in the same locked UPDATE that
  *     links the voucher, exactly as manualLink does for the identical
- *     voucher reached through "Matcha mot befintlig verifikation". Otherwise
- *     the booking posts as typed with the row left where it is (round 4).
+ *     voucher reached through "Matcha mot befintlig verifikation". A twin
+ *     the row may not move to (a dead or disabled twin) is refused, since
+ *     posting would strand the only bank leg on a ledger no connection
+ *     feeds (round 5); a non-twin foreign 19xx line posts as typed.
  * An ordinary booking (single 19xx line on the own ledger) pays one PK read
  * of the own row and nothing more; the topology is only loaded when a twin
  * or foreign 19xx leg is present. Both fields are null when clean, not
@@ -698,12 +710,20 @@ export async function guardBookedCounterLines(
     const topology = await loadCashAccountTopology(supabase, companyId)
     const own = topology?.rows.find((row) => row.id === settlementCashAccountId) ?? null
     if (!topology || !own) return CLEAN_BOOKED_LINES
+    // A foreign 19xx line that is NOT a twin of the own row (a transfer to
+    // another physical account) posts as typed.
+    if (!twinLedgersOf(topology, own, ownLedger).has(cashLegs[0])) return CLEAN_BOOKED_LINES
     const described = describeSiblingsFromTopology(topology, own)
     const sibling = described.siblings.find((row) => row.ledger_account === cashLegs[0]) ?? null
     if (sibling && shouldRepointToSibling(described, sibling)) {
       return { refusedLedger: null, repointCashAccountId: sibling.id }
     }
-    return CLEAN_BOOKED_LINES
+    // A twin the row may not move to (a dead or disabled twin of a live or
+    // still-held row): posting would put the only bank leg on a ledger no
+    // connection feeds while the transaction stays here (issue #1643
+    // problem 4), the shape the categorize paths rewrite and manualLink
+    // refuses. Refuse it (round 5).
+    return { refusedLedger: cashLegs[0], repointCashAccountId: null }
   }
 
   const topology = await loadCashAccountTopology(supabase, companyId)
@@ -723,20 +743,31 @@ export async function guardBookedCounterLines(
   }
 }
 
+interface ConnectionSnapshot {
+  status: string
+  /**
+   * external_uids the bank currently lists for the connection
+   * (bank_connections.accounts_data, rewritten on every sync), or null when
+   * the column is absent or unreadable.
+   */
+  accountUids: ReadonlySet<string> | null
+}
+
 /**
- * bank_connections.status for the given connection ids. Missing ids (and a
- * failed lookup, which returns an empty map) read as "status unknown".
+ * bank_connections.status plus the currently listed account uids for the
+ * given connection ids. Missing ids (and a failed lookup, which returns an
+ * empty map) read as "status unknown".
  */
 async function getConnectionStatuses(
   supabase: SupabaseClient,
   companyId: string,
   connectionIds: readonly string[],
-): Promise<Map<string, string>> {
+): Promise<Map<string, ConnectionSnapshot>> {
   if (connectionIds.length === 0) return new Map()
 
   const { data, error } = await supabase
     .from('bank_connections')
-    .select('id, status')
+    .select('id, status, accounts_data')
     .eq('company_id', companyId)
     .in('id', [...connectionIds])
 
@@ -746,8 +777,21 @@ async function getConnectionStatuses(
   }
 
   return new Map(
-    ((data ?? []) as Array<{ id: string; status: string }>).map((c) => [c.id, c.status]),
+    ((data ?? []) as Array<{ id: string; status: string; accounts_data?: unknown }>).map((c) => [
+      c.id,
+      { status: c.status, accountUids: listedAccountUids(c.accounts_data) },
+    ]),
   )
+}
+
+function listedAccountUids(accountsData: unknown): ReadonlySet<string> | null {
+  if (!Array.isArray(accountsData)) return null
+  const uids = new Set<string>()
+  for (const entry of accountsData) {
+    const uid = (entry as { uid?: unknown } | null)?.uid
+    if (typeof uid === 'string' && uid) uids.add(uid)
+  }
+  return uids
 }
 
 /**
@@ -765,8 +809,8 @@ export async function getRevokedConnectionIds(
   companyId: string,
   connectionIds: readonly string[],
 ): Promise<Set<string>> {
-  const statuses = await getConnectionStatuses(supabase, companyId, connectionIds)
-  return new Set([...statuses.entries()].filter(([, s]) => s === 'revoked').map(([id]) => id))
+  const connections = await getConnectionStatuses(supabase, companyId, connectionIds)
+  return new Set([...connections.entries()].filter(([, c]) => c.status === 'revoked').map(([id]) => id))
 }
 
 /**

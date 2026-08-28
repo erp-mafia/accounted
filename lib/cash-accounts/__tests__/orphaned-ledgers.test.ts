@@ -26,6 +26,7 @@ function row(overrides: Record<string, unknown> = {}) {
     id: 'ca-1',
     ledger_account: '1930',
     bank_connection_id: 'conn-live',
+    external_uid: 'uid-1',
     iban: IBAN,
     enabled: true,
     is_primary: false,
@@ -206,88 +207,79 @@ describe('listSiblingCashAccounts', () => {
   })
 })
 
-describe('same-connection re-registration twins (#1643 round 4)', () => {
+describe('same-connection re-registration twins (#1643 round 4, signal corrected in round 5)', () => {
   // The dominant prod shape: the bank re-registered the account under a new
   // external_uid, so two enabled rows sit on ONE active connection and the
-  // old row silently stopped syncing. Only the most recently synced row is
-  // the live claim.
-  it('treats the row with the older sync stamp as a stale (orphaned) twin', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({
-      data: [
-        row({ id: 'ca-old', ledger_account: '1930', balance_updated_at: '2026-06-01T06:00:00Z' }),
-        row({ id: 'ca-new', ledger_account: '1931', balance_updated_at: '2026-08-28T06:00:00Z' }),
-      ],
-    })
-    enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
-
-    const orphaned = await getOrphanedCounterLedgers(supabase as never, 'company-1')
-    expect(orphaned.has('1930')).toBe(true)
-    expect(orphaned.has('1931')).toBe(false)
+  // old row silently stopped syncing. The old row keeps the
+  // balance_updated_at stamp the picker save copied at connect time (the
+  // sync never refreshes cash_accounts), the new row has none. The bank's
+  // current listing (bank_connections.accounts_data) names the syncing uid
+  // only, and that is the signal that ranks the rows.
+  const prodShape = () => [
+    row({ id: 'ca-old', ledger_account: '1930', external_uid: 'uid-old', balance_updated_at: '2026-05-15T06:00:00Z' }),
+    row({ id: 'ca-new', ledger_account: '1931', external_uid: 'uid-new', balance_updated_at: null }),
+  ]
+  const listing = (...uids: string[]) => ({
+    data: [{ id: 'conn-live', status: 'active', accounts_data: uids.map((uid) => ({ uid, currency: 'SEK' })) }],
   })
 
-  it('treats a row without any sync stamp as stale beside a synced twin', async () => {
+  it('treats the row whose uid the bank no longer lists as the stale (orphaned) twin, whatever the stamps say', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({
-      data: [
-        row({ id: 'ca-old', ledger_account: '1930', balance_updated_at: null }),
-        row({ id: 'ca-new', ledger_account: '1931', balance_updated_at: '2026-08-28T06:00:00Z' }),
-      ],
-    })
-    enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
+    enqueue({ data: prodShape() })
+    enqueue(listing('uid-new'))
 
     const orphaned = await getOrphanedCounterLedgers(supabase as never, 'company-1')
     expect([...orphaned]).toEqual(['1930'])
   })
 
-  it('keeps both rows live when nothing tells them apart (no stamps, or the same stamp)', async () => {
+  it('never ranks on balance_updated_at: a newer stamp on the unlisted row does not make it live', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: [
-        row({ id: 'ca-a', ledger_account: '1930' }),
-        row({ id: 'ca-b', ledger_account: '1931' }),
+        row({ id: 'ca-old', ledger_account: '1930', external_uid: 'uid-old', balance_updated_at: '2026-08-28T06:00:00Z' }),
+        row({ id: 'ca-new', ledger_account: '1931', external_uid: 'uid-new', balance_updated_at: null }),
       ],
     })
-    enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
-    expect((await getOrphanedCounterLedgers(supabase as never, 'company-1')).size).toBe(0)
+    enqueue(listing('uid-new'))
+    expect([...(await getOrphanedCounterLedgers(supabase as never, 'company-1'))]).toEqual(['1930'])
+  })
 
-    const again = createQueuedMockSupabase()
-    again.enqueue({
-      data: [
-        row({ id: 'ca-a', ledger_account: '1930', balance_updated_at: '2026-08-28T06:00:00Z' }),
-        row({ id: 'ca-b', ledger_account: '1931', balance_updated_at: '2026-08-28T06:00:00Z' }),
-      ],
-    })
-    again.enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
-    expect((await getOrphanedCounterLedgers(again.supabase as never, 'company-1')).size).toBe(0)
+  it('keeps both rows live when nothing tells them apart (no listing, both listed, or neither listed)', async () => {
+    for (const statuses of [
+      { data: [{ id: 'conn-live', status: 'active' }] },
+      { data: [{ id: 'conn-live', status: 'active', accounts_data: null }] },
+      listing('uid-old', 'uid-new'),
+      listing('uid-other'),
+    ]) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: prodShape() })
+      enqueue(statuses)
+      expect((await getOrphanedCounterLedgers(supabase as never, 'company-1')).size).toBe(0)
+    }
   })
 
   it('does not compare rows across connections or currencies', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: [
-        row({ id: 'ca-a', ledger_account: '1930', balance_updated_at: '2026-06-01T06:00:00Z' }),
-        row({ id: 'ca-b', ledger_account: '1931', bank_connection_id: 'conn-other', balance_updated_at: '2026-08-28T06:00:00Z' }),
-        row({ id: 'ca-eur', ledger_account: '1932', currency: 'EUR', balance_updated_at: '2026-08-28T06:00:00Z' }),
+        row({ id: 'ca-a', ledger_account: '1930', external_uid: 'uid-a' }),
+        row({ id: 'ca-b', ledger_account: '1931', external_uid: 'uid-b', bank_connection_id: 'conn-other' }),
+        row({ id: 'ca-eur', ledger_account: '1932', external_uid: 'uid-eur', currency: 'EUR' }),
       ],
     })
     enqueue({
       data: [
-        { id: 'conn-live', status: 'active' },
-        { id: 'conn-other', status: 'active' },
+        { id: 'conn-live', status: 'active', accounts_data: [{ uid: 'uid-eur' }] },
+        { id: 'conn-other', status: 'active', accounts_data: [{ uid: 'uid-b' }] },
       ],
     })
     expect((await getOrphanedCounterLedgers(supabase as never, 'company-1')).size).toBe(0)
   })
 
-  it('never re-points a syncing row onto its stale twin, and pairs a transfer with the syncing row only', async () => {
-    const rows = () => [
-      row({ id: 'ca-old', ledger_account: '1930', balance_updated_at: '2026-06-01T06:00:00Z' }),
-      row({ id: 'ca-new', ledger_account: '1931', balance_updated_at: '2026-08-28T06:00:00Z' }),
-    ]
+  it('never re-points the syncing row onto its stale twin, and pairs a transfer with the syncing row only', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: rows() })
-    enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
+    enqueue({ data: prodShape() })
+    enqueue(listing('uid-new'))
     const described = await describeCashAccountSiblings(supabase as never, 'company-1', 'ca-new')
     expect(described?.own.live).toBe(true)
     expect(described?.siblings).toEqual([
@@ -298,16 +290,53 @@ describe('same-connection re-registration twins (#1643 round 4)', () => {
     // A transfer from another account to this IBAN proposes the syncing row
     // instead of giving up on "two live candidates".
     const again = createQueuedMockSupabase()
-    again.enqueue({ data: [...rows(), row({ id: 'ca-savings', ledger_account: '1940', iban: 'SE1112223334445556667778' })] })
-    again.enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
+    again.enqueue({ data: [...prodShape(), row({ id: 'ca-savings', ledger_account: '1940', external_uid: 'uid-savings', iban: 'SE1112223334445556667778' })] })
+    again.enqueue(listing('uid-new', 'uid-savings'))
     const paired = await findPairableCashAccountByIban(again.supabase as never, 'company-1', IBAN, {
       excludeCashAccountId: 'ca-savings',
     })
     expect(paired?.id).toBe('ca-new')
   })
+
+  it('accepts a transfer into the syncing row and moves a stale-row transaction onto it (prod 4c99a0ba shape)', async () => {
+    // The transaction sits on the syncing 1931 (own row), counter is the
+    // savings account: nothing is refused.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [...prodShape(), row({ id: 'ca-savings', ledger_account: '1940', external_uid: 'uid-savings', iban: 'SE1112223334445556667778' })] })
+    enqueue(listing('uid-new', 'uid-savings'))
+    const guarded = await guardCounterLegs(
+      supabase as never,
+      'company-1',
+      { debit_account: '1931', credit_account: '1940', vat_lines: [] } as never,
+      '1940',
+      'ca-savings',
+    )
+    expect(guarded.refusedLedger).toBeNull()
+    expect(guarded.mappingResult.debit_account).toBe('1931')
+
+    // A transaction left on the stale 1930 row may move to the syncing 1931.
+    const again = createQueuedMockSupabase()
+    again.enqueue({ data: prodShape() })
+    again.enqueue(listing('uid-new'))
+    const described = await describeCashAccountSiblings(again.supabase as never, 'company-1', 'ca-old')
+    expect(described?.own.live).toBe(false)
+    expect(shouldRepointToSibling(described!, described!.siblings[0])).toBe(true)
+  })
 })
 
 describe('describeCashAccountSiblings', () => {
+  it('never lists a disabled row as a sibling (not a re-point destination, round 5)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        row({ id: 'ca-released', ledger_account: '1931', bank_connection_id: null }),
+        row({ id: 'ca-disabled', ledger_account: '1930', enabled: false, bank_connection_id: null }),
+      ],
+    })
+    const described = await describeCashAccountSiblings(supabase as never, 'company-1', 'ca-released')
+    expect(described?.siblings).toEqual([])
+  })
+
   it('reports the own row as not live when its connection is revoked', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
@@ -947,9 +976,12 @@ describe('guardBookedCounterLines (POST /book)', () => {
     })
   })
 
-  it('leaves the row where it is when the single bank line is a dead twin or an unrelated ledger', async () => {
-    // Live 1940 row, bank leg typed on the revoked 1931 twin: posts as typed,
-    // no move onto a row no connection can sync (same rule as manualLink).
+  it('refuses a single bank line on a dead twin instead of stranding the bank leg there (#1643 round 5)', async () => {
+    // Live 1940 row, dialog pre-filled the bank leg on the revoked 1931 twin
+    // from a template learned before the reconnect (problem 4): posting it
+    // would put the only bank leg on a ledger no connection feeds while the
+    // transaction stays on 1940. Refused, as manualLink refuses the same
+    // voucher.
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { ledger_account: '1940' } })
     enqueue({
@@ -965,20 +997,37 @@ describe('guardBookedCounterLines (POST /book)', () => {
       ],
     })
     expect(await guardBookedCounterLines(supabase as never, 'company-1', ['1931', '8311'], 'ca-live')).toEqual({
-      refusedLedger: null,
+      refusedLedger: '1931',
       repointCashAccountId: null,
     })
+  })
 
-    const again = createQueuedMockSupabase()
-    again.enqueue({ data: { ledger_account: '1930' } })
-    again.enqueue({
+  it('refuses a single bank line on a disabled twin even when the own row is released (never moves onto a deselected row, round 5)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ledger_account: '1931' } })
+    enqueue({
+      data: [
+        row({ id: 'ca-released', ledger_account: '1931', bank_connection_id: null }),
+        row({ id: 'ca-disabled', ledger_account: '1930', enabled: false, bank_connection_id: null }),
+      ],
+    })
+    expect(await guardBookedCounterLines(supabase as never, 'company-1', ['1930', '8311'], 'ca-released')).toEqual({
+      refusedLedger: '1930',
+      repointCashAccountId: null,
+    })
+  })
+
+  it('posts as typed when the single bank line is an unrelated ledger (a transfer to another account)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ledger_account: '1930' } })
+    enqueue({
       data: [
         row({ id: 'ca-1930', ledger_account: '1930' }),
         row({ id: 'ca-savings', ledger_account: '1940', iban: 'SE1112223334445556667778' }),
       ],
     })
-    again.enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
-    expect(await guardBookedCounterLines(again.supabase as never, 'company-1', ['1940', '8311'], 'ca-1930')).toEqual({
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
+    expect(await guardBookedCounterLines(supabase as never, 'company-1', ['1940', '8311'], 'ca-1930')).toEqual({
       refusedLedger: null,
       repointCashAccountId: null,
     })
