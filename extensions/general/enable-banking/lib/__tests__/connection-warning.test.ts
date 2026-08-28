@@ -8,7 +8,12 @@ import {
 } from '../connection-warning'
 
 function clash(over: Partial<SameBankClash> = {}): SameBankClash {
-  return { companyName: 'Testbrand AB', sessionId: 'sess-other', ...over }
+  return {
+    companyId: 'company-1',
+    companyName: 'Testbrand AB',
+    sessionId: 'sess-other',
+    ...over,
+  }
 }
 
 describe('bank tier matching', () => {
@@ -141,11 +146,35 @@ describe('sameBankWarning', () => {
       bankName: 'SEB',
       clashes: [
         clash({ companyName: 'Testbrand AB' }),
-        clash({ companyName: 'Provbolaget AB', sessionId: 'sess-2' }),
+        clash({ companyId: 'company-2', companyName: 'Provbolaget AB', sessionId: 'sess-2' }),
       ],
       isReconnect: false,
     })
     expect(warning?.description).toContain('andra bolag (Testbrand AB, Provbolaget AB)')
+  })
+
+  it('counts companies by id, not display name', () => {
+    // Two DISTINCT companies sharing a name, or a company whose name failed
+    // to resolve, must still pluralize: names are display-only.
+    const sameName = sameBankWarning({
+      bankName: 'SEB',
+      clashes: [
+        clash({ companyId: 'company-1', companyName: 'Testbrand AB' }),
+        clash({ companyId: 'company-2', companyName: 'Testbrand AB', sessionId: 'sess-2' }),
+      ],
+      isReconnect: false,
+    })
+    expect(sameName?.description).toContain('andra bolag (Testbrand AB)')
+
+    const mixedNamedUnnamed = sameBankWarning({
+      bankName: 'SEB',
+      clashes: [
+        clash({ companyId: 'company-1', companyName: 'Testbrand AB' }),
+        clash({ companyId: 'company-2', companyName: null, sessionId: 'sess-2' }),
+      ],
+      isReconnect: false,
+    })
+    expect(mixedNamedUnnamed?.description).toContain('andra bolag (Testbrand AB)')
   })
 
   it('omits the company list when no names are known', () => {

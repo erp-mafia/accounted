@@ -56,6 +56,8 @@ export function isVerifiedMultiSessionBank(bankName: string | null | undefined):
 
 /** One clashing connection in another of the user's companies. */
 export interface SameBankClash {
+  /** Identity: the company holding the connection. Names are display-only. */
+  companyId: string
   companyName: string | null
   sessionId: string | null
 }
@@ -93,9 +95,11 @@ export function sameBankWarning(input: SameBankWarningInput): SameBankWarning | 
   const bank = (bankName ?? '').trim() || 'Banken'
   const names = [...new Set(atRisk.map(c => c.companyName).filter((n): n is string => !!n))]
   const companyList = names.length > 0 ? ` (${names.join(', ')})` : ''
-  // Phrase by companies when known, else by connection count: one company can
-  // legitimately hold two connections (privat + företag) to the same bank.
-  const companyCount = names.length > 0 ? names.length : atRisk.length
+  // Phrase by DISTINCT COMPANY IDS, not names: two companies can share a name
+  // and a company without a resolvable name still counts. Names are only the
+  // parenthetical display. One company can legitimately hold two connections
+  // (privat + företag) to the same bank and stays "ett annat bolag".
+  const companyCount = new Set(atRisk.map(c => c.companyId)).size
   const inOtherCompanies = companyCount === 1 ? 'ett annat bolag' : 'andra bolag'
   const count = atRisk.length
 

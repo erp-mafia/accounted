@@ -292,6 +292,7 @@ export default function BankingSettingsPanel() {
     const clashes = otherCompanyConnections
       .filter((c) => c.bank_name === bankName)
       .map((c) => ({
+        companyId: c.company_id,
         companyName:
           companies.find((entry) => entry.company.id === c.company_id)?.company.name ?? null,
         sessionId: c.session_id,
