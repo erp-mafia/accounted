@@ -8355,6 +8355,15 @@
     "settings_save_failed_title": "Kunde inte spara inställningen",
     "settings_open_page": "Öppna körjournalen"
   },
+  "data_analysis": {
+    "group_label": "Data och integritet",
+    "settings_heading": "Dataanalys",
+    "settings_toggle_label": "Tillåt att företagets bokföringsdata används för analys",
+    "settings_toggle_help": "Avstängt från början. När det är på används företagets bokföringsdata tillsammans med andra företag som valt samma sak, för att utvärdera och förbättra den automatiska konteringen. Två saker ingår. Löpande: konteringsutfall, det vill säga vilket konto som föreslogs, vilket konto som faktiskt bokfördes, beloppet och modellens säkerhet. Vid Accounteds egna utvärderingskörningar: även transaktionstexter, motpartsnamn och uppgifter ur matchade underlag (kvitton och fakturor), som då körs på nytt genom samma AI-modell och samma personuppgiftsbiträden som den vanliga konteringen. Sådana texter kan innehålla personuppgifter, till exempel namn i Swish-betalningar. Uppgifterna används aldrig för marknadsföring och lämnar inte Accounted eller de personuppgiftsbiträden som listas i integritetspolicyn. Stänger du av slutar insamlingen direkt.",
+    "settings_disclosure": "Konteringsutfall (föreslaget och bokfört konto, belopp, säkerhet) samt, vid utvärderingskörningar, transaktionstexter och matchade underlag. Endast administratörer kan ändra valet. Läs mer i vår",
+    "settings_privacy_link": "integritetspolicy",
+    "settings_save_failed_title": "Kunde inte spara inställningen"
+  },
   "reconciliation_underlag": {
     "heading": "Underlag",
     "heading_dated": "Underlag per {date}",
