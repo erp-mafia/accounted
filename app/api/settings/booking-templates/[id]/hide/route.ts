@@ -39,11 +39,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: 'Only system templates can be hidden' }, { status: 400 })
     }
 
+    // ignoreDuplicates makes the conflict arm DO NOTHING. The table has no
+    // UPDATE policy (insert-or-delete only), so a DO UPDATE arm would be
+    // rejected by RLS and turn a concurrent re-hide into a 500.
     const { error } = await supabase
       .from('booking_template_hidden')
       .upsert(
         { template_id: id, company_id: companyId, hidden_by: user.id },
-        { onConflict: 'template_id,company_id' },
+        { onConflict: 'template_id,company_id', ignoreDuplicates: true },
       )
 
     if (error) {

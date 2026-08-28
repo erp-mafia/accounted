@@ -98,6 +98,12 @@ export function BookingTemplatesPanel() {
       }
       void invalidateReferenceData('ref:booking-templates')
       toast({ title: hide ? t('toast_hidden') : t('toast_unhidden') })
+    } catch {
+      // fetch itself rejected (network); same failure toast as a non-ok status.
+      toast({
+        title: hide ? t('toast_hide_failed') : t('toast_unhide_failed'),
+        variant: 'destructive',
+      })
     } finally {
       setHidingId(null)
     }

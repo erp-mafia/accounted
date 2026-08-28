@@ -149,7 +149,12 @@ describe('POST /api/settings/booking-templates/[id]/hide', () => {
       company_id: 'company-1',
       hidden_by: 'user-1',
     })
-    expect(upsert?.args[1]).toEqual({ onConflict: 'template_id,company_id' })
+    // ignoreDuplicates is load-bearing: the table has no UPDATE policy, so a
+    // DO UPDATE conflict arm would be rejected by RLS on a concurrent re-hide.
+    expect(upsert?.args[1]).toEqual({
+      onConflict: 'template_id,company_id',
+      ignoreDuplicates: true,
+    })
   })
 })
 

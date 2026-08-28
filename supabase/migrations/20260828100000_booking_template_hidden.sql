@@ -33,11 +33,19 @@ CREATE POLICY "bth_select" ON public.booking_template_hidden
   );
 
 -- Hiding/unhiding is a write action on the ACTIVE company only, gated on the
--- non-viewer role like the other settings writes (see 20260702093000).
+-- non-viewer role like the other settings writes (see 20260702093000). Only
+-- active SYSTEM templates can be hidden: company/team templates have a real
+-- delete path, so a hide row for them must not exist even via direct
+-- PostgREST calls (the API route checks the same thing).
 DROP POLICY IF EXISTS "bth_insert" ON public.booking_template_hidden;
 CREATE POLICY "bth_insert" ON public.booking_template_hidden
   FOR INSERT WITH CHECK (
-    company_id = current_active_company_id() AND current_user_can_write()
+    company_id = current_active_company_id()
+    AND current_user_can_write()
+    AND EXISTS (
+      SELECT 1 FROM public.booking_template_library t
+       WHERE t.id = template_id AND t.is_system AND t.is_active
+    )
   );
 
 DROP POLICY IF EXISTS "bth_delete" ON public.booking_template_hidden;

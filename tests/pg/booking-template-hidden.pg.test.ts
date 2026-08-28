@@ -118,6 +118,61 @@ describe('booking_template_hidden RLS', () => {
     )
   })
 
+  it('re-hide via ON CONFLICT DO NOTHING succeeds despite no UPDATE policy', async () => {
+    // The route upserts with ignoreDuplicates (DO NOTHING). A DO UPDATE arm
+    // would be rejected by RLS here (no UPDATE policy on purpose), so this
+    // pins the exact conflict shape the route sends: second hide = no-op 0
+    // rows, not an error.
+    const { userId, companyId } = await seedCompany()
+    await setActiveCompany(userId, companyId)
+    const templateId = await systemTemplateId()
+
+    await withUserContext(userId, async (client) => {
+      const first = await client.query(
+        `INSERT INTO public.booking_template_hidden (template_id, company_id, hidden_by)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (template_id, company_id) DO NOTHING`,
+        [templateId, companyId, userId],
+      )
+      expect(first.rowCount).toBe(1)
+      const second = await client.query(
+        `INSERT INTO public.booking_template_hidden (template_id, company_id, hidden_by)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (template_id, company_id) DO NOTHING`,
+        [templateId, companyId, userId],
+      )
+      expect(second.rowCount).toBe(0)
+    })
+  })
+
+  it('blocks hiding a non-system (company) template even via direct insert', async () => {
+    const { userId, companyId } = await seedCompany()
+    await setActiveCompany(userId, companyId)
+    // A company-scoped template: has a real delete path, must not be hideable.
+    const { rows } = await getPool().query(
+      `INSERT INTO public.booking_template_library
+         (company_id, created_by, name, description, category, entity_type, is_system, lines)
+       VALUES ($1, $2, 'Egen mall', '', 'other', 'all', FALSE, '[]'::jsonb)
+       RETURNING id`,
+      [companyId, userId],
+    )
+    const companyTemplateId = rows[0].id as string
+
+    await withUserContext(userId, async (client) => {
+      await expect(
+        client.query(
+          `INSERT INTO public.booking_template_hidden (template_id, company_id, hidden_by)
+           VALUES ($1, $2, $3)`,
+          [companyTemplateId, companyId, userId],
+        ),
+      ).rejects.toThrow(/row-level security/)
+    })
+
+    await getPool().query(`DELETE FROM public.booking_template_library WHERE id = $1`, [
+      companyTemplateId,
+    ])
+  })
+
   it('enforces one hide row per (template, company)', async () => {
     const { userId, companyId } = await seedCompany()
     await setActiveCompany(userId, companyId)
