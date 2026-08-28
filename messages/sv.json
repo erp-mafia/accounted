@@ -722,6 +722,7 @@
     "type_book_salary_run": "Bokför lönekörning",
     "type_generate_agi": "AGI",
     "type_update_payslip_line": "Lönebeskedsrad",
+    "type_set_run_salary": "Månadens lön",
     "type_register_absence": "Frånvaro",
     "type_delete_absence": "Borttagen frånvaro",
     "type_create_employee": "Ny anställd",

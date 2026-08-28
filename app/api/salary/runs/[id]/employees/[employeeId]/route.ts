@@ -4,7 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { SalaryEmployeeOverrideSchema } from '@/lib/api/schemas'
 import { maskEmployeeForResponse } from '@/lib/salary/personnummer'
-import { removeEmployeeFromRun } from '@/lib/salary/run-employees'
+import { removeEmployeeFromRun, setRunEmployeeSalary } from '@/lib/salary/run-employees'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -91,6 +91,43 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; employeeId
       )
     }
 
+    // ── Draft-stage edit of this month's base salary ──
+    // The shared service owns the run lookup + draft gate for this branch.
+    if (wantsSalaryEdit) {
+      const result = await setRunEmployeeSalary(supabase, {
+        companyId,
+        salaryRunId: id,
+        employeeId,
+        monthlySalary: parsed.data.monthly_salary as number,
+      })
+
+      if (!result.ok) {
+        if (result.code === 'SALARY_RUN_NOT_FOUND') {
+          return NextResponse.json({ error: 'Lönekörning hittades inte' }, { status: 404 })
+        }
+        if (result.code === 'SALARY_RUN_EMPLOYEES_NOT_DRAFT') {
+          return NextResponse.json(
+            { error: 'Månadslönen kan bara redigeras medan lönekörningen är ett utkast.' },
+            { status: 400 },
+          )
+        }
+        if (result.code === 'SALARY_RUN_EMPLOYEE_NOT_FOUND') {
+          return NextResponse.json({ error: 'Anställd hittades inte i lönekörningen' }, { status: 404 })
+        }
+        return NextResponse.json({ error: getUserErrorMessage(result.details) }, { status: 400 })
+      }
+
+      // Same response shape as before the lift into lib/salary/run-employees.
+      return NextResponse.json({
+        data: {
+          id: result.data.salary_run_employee_id,
+          employment_degree: result.data.employment_degree,
+          salary_type: result.data.salary_type,
+          monthly_salary: result.data.monthly_salary,
+        },
+      })
+    }
+
     const { data: run } = await supabase
       .from('salary_runs')
       .select('id, status')
@@ -99,46 +136,6 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; employeeId
       .single()
 
     if (!run) return NextResponse.json({ error: 'Lönekörning hittades inte' }, { status: 404 })
-
-    // ── Draft-stage edit of this month's base salary ──
-    if (wantsSalaryEdit) {
-      if (run.status !== 'draft') {
-        return NextResponse.json(
-          { error: 'Månadslönen kan bara redigeras medan lönekörningen är ett utkast.' },
-          { status: 400 },
-        )
-      }
-      const monthly = Math.round((parsed.data.monthly_salary as number) * 100) / 100
-
-      const { data: sre, error: sreErr } = await supabase
-        .from('salary_run_employees')
-        .update({ monthly_salary: monthly })
-        .eq('salary_run_id', id)
-        .eq('employee_id', employeeId)
-        .eq('company_id', companyId)
-        .select('id, employment_degree, salary_type, monthly_salary')
-        .maybeSingle()
-
-      if (sreErr) return NextResponse.json({ error: getUserErrorMessage(sreErr) }, { status: 400 })
-      if (!sre) {
-        return NextResponse.json({ error: 'Anställd hittades inte i lönekörningen' }, { status: 404 })
-      }
-
-      // Keep the displayed 'Grundlön' line consistent with the new salary. This is
-      // display-only: the engine recomputes baseSalary from monthly_salary at
-      // calc time, but it avoids a stale row before the user clicks Beräkna.
-      if (sre.salary_type === 'monthly') {
-        const baseAmount = Math.round(monthly * (sre.employment_degree / 100) * 100) / 100
-        await supabase
-          .from('salary_line_items')
-          .update({ amount: baseAmount })
-          .eq('salary_run_employee_id', sre.id)
-          .eq('company_id', companyId)
-          .eq('item_type', 'monthly_salary')
-      }
-
-      return NextResponse.json({ data: sre })
-    }
 
     // ── Review-stage override of tax/avgifter ──
     if (run.status !== 'review') {
