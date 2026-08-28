@@ -5237,7 +5237,7 @@
     "struck_marker": "Struck {date}",
     "struck_marker_by": "Struck {date} by {actor}",
     "help_rattelse_tracks_open": "While the period is open and unlocked, a posted voucher is corrected inside the voucher itself: strike lines or change the text and date. The original stays visible with a strikethrough and every correction is logged with who and when.",
-    "help_rattelse_tracks_locked": "Once the period is locked, closed or declared, storno is the only path: the voucher is reversed and, if needed, replaced by a correction voucher.",
+    "help_rattelse_tracks_locked": "Once the period is locked or closed, storno is the only path: the voucher is reversed and, if needed, replaced by a correction voucher. If the month has already been VAT-declared, correcting VAT accounts can affect the filed declaration.",
     "rattelse_history_title": "Correction history",
     "rattelse_kind_metadata": "Text/date corrected",
     "rattelse_kind_lines": "Lines struck and replaced",

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, use } from 'react'
+import { useState, useEffect, useCallback, useRef, use } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
@@ -147,6 +147,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // only applies while the period is open, so the promoted button hides
   // (and the ⋯ item stays) whenever the status is anything else or unknown.
   const [periodStatus, setPeriodStatus] = useState<PeriodStatus | null>(null)
+  // Monotonic id of the latest fetchData run. The period-status fetch is not
+  // awaited, and fetchData re-runs on every id change and after every dialog
+  // success, so an earlier response can resolve last; only the response that
+  // belongs to the most recent run may set periodStatus.
+  const periodStatusRequestRef = useRef(0)
   const [showEdit, setShowEdit] = useState(false)
   const [showRecordate, setShowRecordate] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -216,16 +221,21 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       // failure reads as 'locked'), and a missing answer just keeps the
       // strike button in the ⋯ menu only.
       setPeriodStatus(null)
+      const periodRequest = ++periodStatusRequestRef.current
       void fetch(
         `/api/bookkeeping/fiscal-periods/period-status?date=${encodeURIComponent(data.entry.entry_date)}`,
       )
         .then(async (periodRes) => {
           if (!periodRes.ok) return
           const { data: period } = await periodRes.json()
+          // A newer fetchData has run since; its own response owns the state.
+          if (periodRequest !== periodStatusRequestRef.current) return
           const status = period?.status
           setPeriodStatus(status === 'open' || status === 'locked' || status === 'closed' ? status : null)
         })
-        .catch(() => setPeriodStatus(null))
+        .catch(() => {
+          if (periodRequest === periodStatusRequestRef.current) setPeriodStatus(null)
+        })
       // Underlag references (linked invoices), best-effort; the verifikat still
       // renders if this fails, it just falls back to documents-only.
       if (refsRes.ok) {
