@@ -70,8 +70,10 @@ async function main() {
   console.log(
     EXECUTE
       ? `Repaired ${summary.repaired} item(s) across ${summary.companiesTouched} company/companies; ` +
-          `${summary.stillUnlinked} still unlinked, ${summary.anchoredElsewhere} anchored elsewhere.`
+          `${summary.stillUnlinked} still unlinked, ${summary.unlinkedLocked} in locked periods, ` +
+          `${summary.anchoredElsewhere} anchored elsewhere.`
       : `Would link ${summary.stillUnlinked} item(s) across ${summary.companiesTouched} company/companies; ` +
+          `${summary.unlinkedLocked} in locked periods need an unlock, ` +
           `${summary.anchoredElsewhere} anchored elsewhere need a human.`,
   )
   if (!EXECUTE) console.log('Re-run with --execute to apply.')

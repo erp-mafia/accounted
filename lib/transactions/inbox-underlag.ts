@@ -137,14 +137,20 @@ export async function resolveVoucherLinkedEntryIds(
  *                         missing)
  *  'unlinked'           : the document references no verifikat yet
  *                         (transient: a re-run of the propagation links it)
+ *  'unlinked_locked'    : unlinked, and the verifikat sits in a closed or
+ *                         locked period, so enforce_period_lock_documents
+ *                         rejects the link until someone unlocks the period
+ *                         (not transient: a re-run fails the same way)
  *  'anchored_elsewhere' : the document references another verifikat
  *                         (permanent: never stolen, a human decides)
  *
- * One batched select for N items. Items whose document row cannot be read
- * (select error) are absent from the map: callers treat absence as unknown,
- * never as anchored.
+ * One batched select for N items, plus one lock-state read for the verifikat
+ * of every unlinked item. Items whose document row cannot be read (select
+ * error) are absent from the map: callers treat absence as unknown, never as
+ * anchored. A failed lock-state read leaves the item 'unlinked' (the
+ * propagation is what fails safely, so erring towards "retry" is harmless).
  */
-export type UnderlagAnchoring = 'anchored' | 'unlinked' | 'anchored_elsewhere'
+export type UnderlagAnchoring = 'anchored' | 'unlinked' | 'unlinked_locked' | 'anchored_elsewhere'
 
 export interface UnderlagAnchoringResult {
   status: UnderlagAnchoring
@@ -182,6 +188,7 @@ export async function resolveUnderlagAnchoring(
   for (const doc of (docs ?? []) as Array<{ id: string; journal_entry_id: string | null }>) {
     entryByDoc.set(doc.id, doc.journal_entry_id)
   }
+  const unlinked: typeof items = []
   for (const item of withDocument) {
     const docId = item.document_id as string
     if (!entryByDoc.has(docId)) continue // unreadable row: unknown, not anchored
@@ -192,9 +199,55 @@ export async function resolveUnderlagAnchoring(
         : current === item.journalEntryId
           ? 'anchored'
           : 'anchored_elsewhere'
+    if (status === 'unlinked') unlinked.push(item)
     map.set(item.id, { status, document_journal_entry_id: current })
   }
+  if (unlinked.length === 0) return map
+
+  const lockedEntryIds = await resolveLockedJournalEntryIds(
+    supabase,
+    companyId,
+    Array.from(new Set(unlinked.map((i) => i.journalEntryId))),
+  )
+  for (const item of unlinked) {
+    if (lockedEntryIds.has(item.journalEntryId)) {
+      map.set(item.id, { status: 'unlinked_locked', document_journal_entry_id: null })
+    }
+  }
   return map
+}
+
+/**
+ * Which of the given verifikat sit in a closed or locked fiscal period: the
+ * same (is_closed, locked_at) pair enforce_period_lock_documents checks, so
+ * a document link to them is known to fail before it is attempted. A read
+ * error yields an empty set (nothing is reported as locked on a guess).
+ */
+async function resolveLockedJournalEntryIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  entryIds: string[],
+): Promise<Set<string>> {
+  const locked = new Set<string>()
+  if (entryIds.length === 0) return locked
+  const { data, error } = await supabase
+    .from('journal_entries')
+    .select('id, fiscal_period:fiscal_periods(is_closed, locked_at)')
+    .in('id', entryIds)
+    .eq('company_id', companyId)
+  if (error) {
+    log.error('Failed to resolve period lock state for inbox underlag anchoring', {
+      company_id: companyId,
+      error: error.message,
+    })
+    return locked
+  }
+  type PeriodLock = { is_closed?: boolean | null; locked_at?: string | null }
+  for (const row of (data ?? []) as Array<{ id: string; fiscal_period: PeriodLock | PeriodLock[] | null }>) {
+    const period = Array.isArray(row.fiscal_period) ? row.fiscal_period[0] : row.fiscal_period
+    if (period?.is_closed || period?.locked_at) locked.add(row.id)
+  }
+  return locked
 }
 
 /**

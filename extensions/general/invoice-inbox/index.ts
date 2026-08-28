@@ -66,6 +66,13 @@ import {
   resolveUnderlagAnchoring,
   type UnderlagAnchoring,
 } from '@/lib/transactions/inbox-underlag'
+
+/**
+ * Per-item underlag status on the wire (#1548): the anchoring verdict, or
+ * 'unknown' when the document row could not be read. Absence is never
+ * reported as anchored; the UI keeps 'unknown' out of the booked bucket.
+ */
+type UnderlagStatus = UnderlagAnchoring | 'unknown'
 import { hasCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
@@ -382,9 +389,14 @@ export const invoiceInboxExtension: Extension = {
           const derivedEntryId = r.matched_transaction_id
             ? bookedByTx.get(r.matched_transaction_id) ?? null
             : null
-          const underlagStatus: UnderlagAnchoring | null = derivedEntryId
-            ? anchoring.get(r.id)?.status ?? null
-            : null
+          // Absent from the anchoring map means the document row could not
+          // be read: 'unknown', which the UI treats like a divergent item
+          // (stays in Att göra, no booking bridge). Never booked on a guess.
+          // Only unstamped items were sent to the anchoring read; a stamped
+          // sibling is booked by its own column and gets no verdict here.
+          const unstamped = !r.created_journal_entry_id && !r.created_supplier_invoice_id
+          const underlagStatus: UnderlagStatus | null =
+            derivedEntryId && unstamped ? anchoring.get(r.id)?.status ?? 'unknown' : null
           return {
             ...r,
             matched_transaction_journal_entry_id: derivedEntryId,
@@ -463,7 +475,7 @@ export const invoiceInboxExtension: Extension = {
           created_supplier_invoice_id: string | null
         }
         let matchedTransactionJournalEntryId: string | null = null
-        let underlagStatus: UnderlagAnchoring | null = null
+        let underlagStatus: UnderlagStatus | null = null
         if (
           row.matched_transaction_id &&
           !row.created_journal_entry_id &&
@@ -481,7 +493,7 @@ export const invoiceInboxExtension: Extension = {
                 journalEntryId: matchedTransactionJournalEntryId,
               },
             ])
-            underlagStatus = anchoring.get(row.id)?.status ?? null
+            underlagStatus = anchoring.get(row.id)?.status ?? 'unknown'
           }
         }
 

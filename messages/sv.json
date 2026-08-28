@@ -3481,6 +3481,8 @@
     "review_and_book": "Granska och bokför",
     "book_manually": "Bokför manuellt",
     "underlag_unlinked": "Transaktionen är bokförd men underlaget är inte kopplat till verifikatet ännu. Kopplas automatiskt vid nästa körning.",
+    "underlag_unlinked_locked": "Transaktionen är bokförd men underlaget kan inte kopplas: verifikatet ligger i en stängd eller låst period. Lås upp perioden så kopplas det vid nästa körning.",
+    "underlag_unknown": "Transaktionen är bokförd men det gick inte att läsa om underlaget är kopplat till verifikatet. Ladda om sidan.",
     "underlag_anchored_elsewhere": "Underlaget är kopplat till ett annat verifikat. Kontrollera vilket verifikat det hör till.",
     "underlag_open_verification": "Öppna verifikatet",
     "retry": "Försök igen",

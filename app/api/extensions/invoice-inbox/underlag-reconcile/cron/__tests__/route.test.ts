@@ -47,6 +47,8 @@ const SUMMARY = {
   repaired: 2,
   alreadyAnchored: 0,
   stillUnlinked: 0,
+  unlinkedLocked: 0,
+  deferred: 0,
   anchoredElsewhere: 1,
   companiesTouched: 1,
   historyAppended: 2,

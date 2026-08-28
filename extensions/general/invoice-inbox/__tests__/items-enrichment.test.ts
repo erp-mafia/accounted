@@ -44,7 +44,7 @@ function buildCtx(supabase: unknown): ExtensionContext {
 type EnrichedItem = {
   id: string
   matched_transaction_journal_entry_id: string | null
-  underlag_status: 'anchored' | 'unlinked' | 'anchored_elsewhere' | null
+  underlag_status: 'anchored' | 'unlinked' | 'unlinked_locked' | 'anchored_elsewhere' | 'unknown' | null
 }
 
 const TX1 = 'tx-1'
@@ -125,16 +125,22 @@ describe('GET /items', () => {
     ])
   })
 
-  it('reports null underlag_status when the anchoring read could not classify the item', async () => {
+  it('reports unknown (never booked on a guess) when the anchoring read could not classify the item', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [makeInvoiceInboxItem({ id: 'i1', matched_transaction_id: TX1, document_id: 'doc-a' })] })
     resolveBooked.mockResolvedValue(new Map([[TX1, JE1]]))
+    // The helper's contract: absence means the document row could not be
+    // read. The list must not degrade to the pre-#1548 "booked on the
+    // transaction's word" reading, so it is reported explicitly.
     resolveAnchoring.mockResolvedValue(new Map())
 
     const { body } = await parseJsonResponse<{ data: { items: EnrichedItem[] } }>(
       await route.handler(req(), buildCtx(supabase)),
     )
-    expect(body.data.items[0]).toMatchObject({ matched_transaction_journal_entry_id: JE1, underlag_status: null })
+    expect(body.data.items[0]).toMatchObject({
+      matched_transaction_journal_entry_id: JE1,
+      underlag_status: 'unknown',
+    })
   })
 })
 
@@ -175,6 +181,18 @@ describe('GET /items/:id', () => {
     expect(resolveAnchoring).toHaveBeenCalledWith(expect.anything(), 'company-1', [
       { id: 'i1', document_id: 'doc-a', journalEntryId: JE1 },
     ])
+  })
+
+  it('reports unknown when the anchoring read could not classify the item', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ id: 'i1', matched_transaction_id: TX1, document_id: 'doc-a' }) })
+    resolveBooked.mockResolvedValue(new Map([[TX1, JE1]]))
+    resolveAnchoring.mockResolvedValue(new Map())
+
+    const { body } = await parseJsonResponse<{ data: EnrichedItem }>(
+      await route.handler(req('i1'), buildCtx(supabase)),
+    )
+    expect(body.data).toMatchObject({ matched_transaction_journal_entry_id: JE1, underlag_status: 'unknown' })
   })
 
   it('skips both lookups for a stamped item and reports null', async () => {

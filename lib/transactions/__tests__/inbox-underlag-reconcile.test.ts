@@ -37,7 +37,9 @@ function item(id: string, company: string, tx: string, doc: string | null = `doc
   return { id, company_id: company, matched_transaction_id: tx, document_id: doc }
 }
 
-function anchoring(entries: Record<string, 'anchored' | 'unlinked' | 'anchored_elsewhere'>) {
+function anchoring(
+  entries: Record<string, 'anchored' | 'unlinked' | 'unlinked_locked' | 'anchored_elsewhere'>,
+) {
   return new Map(
     Object.entries(entries).map(([id, status]) => [
       id,
@@ -89,14 +91,14 @@ describe('reconcileStrandedInboxUnderlag', () => {
     expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
   })
 
-  it('execute propagates once per booked transaction and logs history only for repaired ones', async () => {
+  it('execute propagates only transactions with unlinked items and logs history only for repaired ones', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     // Two items on TX1 (a samlingsverifikat) and one on TX2.
     enqueue({ data: [item('i1', C1, TX1), item('i2', C1, TX1), item('i3', C1, TX2)] })
     resolveBooked.mockResolvedValue(new Map([[TX1, JE1], [TX2, JE2]]))
     resolveAnchoring
       .mockResolvedValueOnce(anchoring({ i1: 'unlinked', i2: 'anchored', i3: 'anchored' })) // before
-      .mockResolvedValueOnce(anchoring({ i1: 'anchored', i2: 'anchored', i3: 'anchored' })) // after
+      .mockResolvedValueOnce(anchoring({ i1: 'anchored' })) // after, only the linked item is re-read
 
     const summary = await reconcileStrandedInboxUnderlag(supabase as unknown as SupabaseClient, {
       execute: true,
@@ -104,9 +106,13 @@ describe('reconcileStrandedInboxUnderlag', () => {
       actorId: 'test-actor',
     })
 
-    expect(propagate).toHaveBeenCalledTimes(2)
+    // TX2's item was already anchored: re-propagating it would only no-op,
+    // and letting it claim budget is what starves the real work.
+    expect(propagate).toHaveBeenCalledTimes(1)
     expect(propagate).toHaveBeenCalledWith(expect.anything(), C1, TX1, JE1)
-    expect(propagate).toHaveBeenCalledWith(expect.anything(), C1, TX2, JE2)
+    expect(resolveAnchoring).toHaveBeenNthCalledWith(2, expect.anything(), C1, [
+      { id: 'i1', document_id: 'doc-i1', journalEntryId: JE1 },
+    ])
     expect(summary).toMatchObject({
       strandedOnBooked: 3,
       repaired: 1,
@@ -163,9 +169,8 @@ describe('reconcileStrandedInboxUnderlag', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [item('i1', C1, TX1)] })
     resolveBooked.mockResolvedValue(new Map([[TX1, JE1]]))
-    resolveAnchoring
-      .mockResolvedValueOnce(anchoring({ i1: 'anchored_elsewhere' }))
-      .mockResolvedValueOnce(anchoring({ i1: 'anchored_elsewhere' }))
+    // Settled from the pre-state alone: no propagation, no after-read.
+    resolveAnchoring.mockResolvedValue(anchoring({ i1: 'anchored_elsewhere' }))
 
     const summary = await reconcileStrandedInboxUnderlag(supabase as unknown as SupabaseClient, {
       execute: true,
@@ -173,6 +178,8 @@ describe('reconcileStrandedInboxUnderlag', () => {
     })
 
     expect(summary).toMatchObject({ repaired: 0, anchoredElsewhere: 1, historyAppended: 0 })
+    expect(propagate).not.toHaveBeenCalled()
+    expect(resolveAnchoring).toHaveBeenCalledTimes(1)
     expect(appendHistory).not.toHaveBeenCalled()
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining('another verifikat'),
@@ -215,22 +222,125 @@ describe('reconcileStrandedInboxUnderlag', () => {
     expect(propagate).toHaveBeenCalledTimes(1)
   })
 
-  it('caps the scan at maxItems and reports truncation', async () => {
+  it('reads every candidate and spends maxItems on unlinked items only, deferring the rest', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-    // maxItems + 1 rows come back: the extra one is the truncation signal.
-    enqueue({ data: [item('i1', C1, TX1), item('i2', C1, TX1), item('i3', C1, TX1)] })
-    resolveBooked.mockResolvedValue(new Map())
+    // Six candidates: two already anchored, one anchored elsewhere, three
+    // unlinked. A read cap would have stopped at the first rows; the link
+    // budget (2) must reach past the settled ones and defer only the third
+    // unlinked item.
+    enqueue({
+      data: [
+        item('a1', C1, TX1),
+        item('a2', C1, TX1),
+        item('e1', C1, TX2),
+        item('u1', C1, TX3),
+        item('u2', C2, 'tx-4'),
+        item('u3', C2, 'tx-5'),
+      ],
+    })
+    resolveBooked.mockImplementation(async (_s: unknown, companyId: string) =>
+      companyId === C1
+        ? new Map([[TX1, JE1], [TX2, JE2], [TX3, 'je-3']])
+        : new Map([['tx-4', 'je-4'], ['tx-5', 'je-5']]),
+    )
+    resolveAnchoring.mockImplementation(async (_s: unknown, companyId: string) =>
+      companyId === C1
+        ? anchoring({ a1: 'anchored', a2: 'anchored', e1: 'anchored_elsewhere', u1: 'unlinked' })
+        : anchoring({ u2: 'unlinked', u3: 'unlinked' }),
+    )
 
     const summary = await reconcileStrandedInboxUnderlag(supabase as unknown as SupabaseClient, {
-      execute: false,
+      execute: true,
       maxItems: 2,
       log: log as never,
     })
 
-    expect(summary.scanned).toBe(2)
-    expect(summary.truncated).toBe(true)
-    expect(findCalls('invoice_inbox_items', 'range')).toEqual([[0, 2]])
-    expect(resolveBooked).toHaveBeenCalledWith(expect.anything(), C1, [TX1])
+    expect(findCalls('invoice_inbox_items', 'range')).toEqual([[0, 999]])
+    expect(summary).toMatchObject({
+      scanned: 6,
+      strandedOnBooked: 6,
+      alreadyAnchored: 2,
+      anchoredElsewhere: 1,
+      deferred: 1,
+      truncated: true,
+    })
+    // u1 and u2 got the budget; u3 waits for the next run, without a
+    // misleading "still unlinked after re-run" line.
+    expect(propagate).toHaveBeenCalledTimes(2)
+    expect(propagate).toHaveBeenCalledWith(expect.anything(), C1, TX3, 'je-3')
+    expect(propagate).toHaveBeenCalledWith(expect.anything(), C2, 'tx-4', 'je-4')
+    expect(propagate).not.toHaveBeenCalledWith(expect.anything(), C2, 'tx-5', 'je-5')
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('link budget spent'),
+      expect.objectContaining({ max_items: 2, deferred: 1 }),
+    )
+  })
+
+  it('pages through more than one page of candidates', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const firstPage = Array.from({ length: 1000 }, (_, i) => item(`p${i}`, C1, TX1))
+    enqueue({ data: firstPage })
+    enqueue({ data: [item('tail', C1, TX1)] })
+    resolveBooked.mockResolvedValue(new Map())
+
+    const summary = await reconcileStrandedInboxUnderlag(supabase as unknown as SupabaseClient, {
+      execute: false,
+      log: log as never,
+    })
+
+    expect(summary.scanned).toBe(1001)
+    expect(summary.truncated).toBe(false)
+    expect(findCalls('invoice_inbox_items', 'range')).toEqual([[0, 999], [1000, 1999]])
+  })
+
+  it('counts a locked-period item separately, never propagates it, and appends nothing', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [item('i1', C1, TX1)] })
+    resolveBooked.mockResolvedValue(new Map([[TX1, JE1]]))
+    resolveAnchoring.mockResolvedValue(anchoring({ i1: 'unlinked_locked' }))
+
+    const summary = await reconcileStrandedInboxUnderlag(supabase as unknown as SupabaseClient, {
+      execute: true,
+      log: log as never,
+    })
+
+    expect(summary).toMatchObject({
+      strandedOnBooked: 1,
+      repaired: 0,
+      stillUnlinked: 0,
+      unlinkedLocked: 1,
+      deferred: 0,
+      truncated: false,
+      historyAppended: 0,
+    })
+    // The link is known to fail (enforce_period_lock_documents): no
+    // propagation, no budget spent, no daily "still unlinked" warning.
+    expect(propagate).not.toHaveBeenCalled()
+    expect(appendHistory).not.toHaveBeenCalled()
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('locked period'),
+      expect.objectContaining({ inbox_item_id: 'i1' }),
+    )
+  })
+
+  it('does not count an unreadable pre-state that reads anchored afterwards as repaired', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [item('i1', C1, TX1)] })
+    resolveBooked.mockResolvedValue(new Map([[TX1, JE1]]))
+    resolveAnchoring
+      .mockResolvedValueOnce(new Map()) // before: document row unreadable
+      .mockResolvedValueOnce(anchoring({ i1: 'anchored' })) // after
+
+    const summary = await reconcileStrandedInboxUnderlag(supabase as unknown as SupabaseClient, {
+      execute: true,
+      log: log as never,
+    })
+
+    // Unknown before is a reason to look (propagate), not evidence that this
+    // run changed the linkage: no InboxUnderlagReconciled event.
+    expect(propagate).toHaveBeenCalledTimes(1)
+    expect(summary).toMatchObject({ repaired: 0, alreadyAnchored: 1, historyAppended: 0 })
+    expect(appendHistory).not.toHaveBeenCalled()
   })
 
   it('returns a zero summary with one failure when the scan errors, without throwing', async () => {

@@ -142,7 +142,10 @@ function reportUploadFailure(report: {
 
 // ── Types ────────────────────────────────────────────────────
 
-type UnderlagStatus = 'anchored' | 'unlinked' | 'anchored_elsewhere'
+// Mirrors the extension's UnderlagStatus: the anchoring verdict, or 'unknown'
+// when the server could not read the document row. Anything but 'anchored'
+// keeps the item out of the booked bucket.
+type UnderlagStatus = 'anchored' | 'unlinked' | 'unlinked_locked' | 'anchored_elsewhere' | 'unknown'
 
 interface InboxItem {
   id: string
@@ -175,10 +178,12 @@ interface InboxItem {
   // Whether THIS item's underlag reached that verifikat (#1548). The
   // transaction being booked is a fact about the transaction, not about the
   // item's document: one whose link failed ('unlinked', transient: the daily
-  // reconcile retries it) or that sits on another verifikat
-  // ('anchored_elsewhere', a human decision) keeps the item in "Att göra".
-  // null when nothing was derived (no booked matched transaction, or the
-  // item is stamped). Absent on client-side placeholders.
+  // reconcile retries it), whose verifikat sits in a locked period
+  // ('unlinked_locked', unlock first), that sits on another verifikat
+  // ('anchored_elsewhere', a human decision), or that could not be read
+  // ('unknown') keeps the item in "Att göra". null when nothing was derived
+  // (no booked matched transaction, or the item is stamped). Absent on
+  // client-side placeholders.
   underlag_status?: UnderlagStatus | null
   error_message: string | null
   // True when AI extraction was skipped: either because the upload caller
@@ -315,8 +320,19 @@ type InboxStatus = 'needs_action' | 'processing' | 'linked' | 'booked' | 'error'
 function isUnderlagDivergent(item: InboxItem): boolean {
   return (
     !!item.matched_transaction_journal_entry_id &&
-    (item.underlag_status === 'unlinked' || item.underlag_status === 'anchored_elsewhere')
+    !!item.underlag_status &&
+    item.underlag_status !== 'anchored'
   )
+}
+
+// One explanatory line per non-anchored status (#1548). 'unlinked' is the
+// only one the daily reconcile can heal on its own; the others say what
+// stands in the way instead of promising an automatic link.
+const UNDERLAG_STATUS_MESSAGE_KEY: Record<Exclude<UnderlagStatus, 'anchored'>, string> = {
+  unlinked: 'underlag_unlinked',
+  unlinked_locked: 'underlag_unlinked_locked',
+  anchored_elsewhere: 'underlag_anchored_elsewhere',
+  unknown: 'underlag_unknown',
 }
 
 function deriveInboxStatus(item: InboxItem): InboxStatus {
@@ -3131,9 +3147,9 @@ function FieldsRail({
                 }}
               >
                 {t(
-                  item.underlag_status === 'anchored_elsewhere'
-                    ? 'underlag_anchored_elsewhere'
-                    : 'underlag_unlinked',
+                  UNDERLAG_STATUS_MESSAGE_KEY[
+                    (item.underlag_status ?? 'unknown') as Exclude<UnderlagStatus, 'anchored'>
+                  ],
                 )}
               </AttnLine>
             )}
