@@ -1169,7 +1169,8 @@
     "hourly_suffix": "/tim",
     "employment_employee": "Anställd",
     "employment_company_owner": "Företagsledare",
-    "employment_board_member": "Styrelseledamot"
+    "employment_board_member": "Styrelseledamot",
+    "save_error_request_id": "Ärende-id: {id}"
   },
   "register": {
     "subtitle": "Skapa ett konto för att komma igång",
@@ -5692,6 +5693,7 @@
     "ext_arcim_documents_error_reference": "Felreferens: {requestId}",
     "ext_arcim_documents_provider_message": "Svar från källsystemet: {message}",
     "ext_arcim_option_series_help": "Verifikat behåller sin serie från källsystemet (A, D, E ...). Serien här används bara för verifikat som saknar serie.",
+    "ext_arcim_option_sie_required_hint": "Bokföringen (kontoplan, ingående balanser och verifikationer) har inte importerats än. Kryssa i Bokföringsdata (SIE) för att hämta den i samma körning: kunder, leverantörer och fakturor kan inte importeras utan den.",
     "ext_arcim_documents_result_description": "Underlagsimporten är klar.",
     "ext_arcim_documents_imported": "Importerade",
     "ext_arcim_documents_skipped": "Fanns redan",
