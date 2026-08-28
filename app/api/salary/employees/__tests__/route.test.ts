@@ -254,6 +254,40 @@ describe('POST /api/salary/employees', () => {
     expect(insert).not.toHaveBeenCalled()
   })
 
+  // #1996: the route hand-builds the 409 and generic insert-failure 500 bodies
+  // as flat strings (no error.requestId), so the dialog falls back to the
+  // X-Request-Id header for its "Ärende-id" line. Pin that the header is there.
+  describe('insert failures carry X-Request-Id for support correlation', () => {
+    function supabaseWithInsertError(error: { code: string; message: string }) {
+      const single = vi.fn(() => Promise.resolve({ data: null, error }))
+      const select = vi.fn(() => ({ single }))
+      const insert = vi.fn(() => ({ select }))
+      return { from: vi.fn(() => ({ insert })) }
+    }
+
+    it('409 duplicate personnummer: flat error body plus X-Request-Id header', async () => {
+      authed(supabaseWithInsertError({ code: '23505', message: 'duplicate key value' }))
+
+      const res = await POST(postRequest(CREATE_BASE), params)
+
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body.error).toBe('En anställd med detta personnummer finns redan')
+      expect(res.headers.get('X-Request-Id')).toMatch(/^req_/)
+    })
+
+    it('500 generic insert error: flat error body plus X-Request-Id header', async () => {
+      authed(supabaseWithInsertError({ code: '57014', message: 'canceling statement due to statement timeout' }))
+
+      const res = await POST(postRequest(CREATE_BASE), params)
+
+      expect(res.status).toBe(500)
+      const body = await res.json()
+      expect(typeof body.error).toBe('string')
+      expect(res.headers.get('X-Request-Id')).toMatch(/^req_/)
+    })
+  })
+
   // #1996: the deployment that filed the issue had no PERSONNUMMER_ENCRYPTION_KEY.
   // The encrypt helper used to throw a bare Error, which the wrapper answered
   // with the generic INTERNAL_ERROR 500 ("try again later") even though no

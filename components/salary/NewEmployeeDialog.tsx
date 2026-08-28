@@ -142,9 +142,14 @@ async function submitEmployee(body: unknown, locale: ErrorLocale): Promise<Submi
     // A body that is not JSON leaves null: getErrorMessage then falls back to
     // the HTTP status map, still in the user's language.
     const result: unknown = await res.json().catch(() => null)
+    // The route hand-builds its 409 (duplicate personnummer) and generic
+    // insert-failure 500 bodies as flat strings, so only the typed envelopes
+    // carry error.requestId. withRouteContext sets X-Request-Id on every
+    // response, so fall back to the header: those DB-failure arms are exactly
+    // the ones support needs a correlation id for.
     return {
       message: getErrorMessage(result, { context: 'salary', statusCode: res.status, locale }),
-      requestId: readRequestId(result),
+      requestId: readRequestId(result) ?? res.headers.get('X-Request-Id'),
     }
   } catch (err) {
     return {
