@@ -1184,6 +1184,63 @@ describe('manualLink', () => {
     expect(updatePayloads()[0]).not.toHaveProperty('cash_account_id')
   })
 
+  it('re-points to the sibling the voucher was booked on when BOTH rows are live (#1643 round 2)', async () => {
+    const { supabase, enqueue, updatePayloads } = createQueueMockSupabase()
+    const iban = 'SE4550000000058398257466'
+    // 1930 and 1931 both enabled on one active connection (the common prod
+    // shape): the voucher settled on 1931, the transaction sits on 1930. A
+    // cross-account link would show a difference on both ledgers.
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null, cash_account_id: 'ca-1930', currency: 'SEK' })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: { ledger_account: '1930' } })
+    enqueue({
+      data: [
+        { id: 'ca-1930', iban, ledger_account: '1930', currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
+        { id: 'ca-1931', iban, ledger_account: '1931', currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
+      ],
+    })
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1931' }] })
+    enqueue({ data: [{ id: 'tx-1' }] })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result.success).toBe(true)
+    expect(updatePayloads()).toEqual([
+      expect.objectContaining({ journal_entry_id: 'je-1', cash_account_id: 'ca-1931' }),
+    ])
+  })
+
+  it('re-points to the sibling the voucher was booked on when NEITHER row is live (#1643 round 2)', async () => {
+    const { supabase, enqueue, updatePayloads } = createQueueMockSupabase()
+    const iban = 'SE4550000000058398257466'
+    // Full disconnect: both rows demoted to manual, IBAN kept. The voucher is
+    // the source of truth for where the money was booked.
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null, cash_account_id: 'ca-1931', currency: 'SEK' })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: { ledger_account: '1931' } })
+    enqueue({
+      data: [
+        { id: 'ca-1931', iban, ledger_account: '1931', currency: 'SEK', enabled: true, bank_connection_id: null },
+        { id: 'ca-1940', iban, ledger_account: '1940', currency: 'SEK', enabled: true, bank_connection_id: null },
+      ],
+    })
+    // No bank_connection ids: the status lookup is skipped.
+    enqueue({ data: [{ debit_amount: 217.04, credit_amount: 0, account_number: '1940' }] })
+    enqueue({ data: [{ id: 'tx-1' }] })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931')
+
+    expect(result.success).toBe(true)
+    expect(updatePayloads()).toEqual([
+      expect.objectContaining({ journal_entry_id: 'je-1', cash_account_id: 'ca-1940' }),
+    ])
+  })
+
   it('still rejects a voucher with no line on the account or any sibling ledger', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     const iban = 'SE4550000000058398257466'

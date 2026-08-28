@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getSuggestedCategories, getSuggestedTemplates, buildMerchantHistory, merchantHistoryFor, buildCounterpartySuggestion, type SuggestedCategory, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { findCounterpartyTemplatesBatch } from '@/lib/bookkeeping/counterparty-templates'
-import { getOrphanedCounterLedgers } from '@/lib/cash-accounts/service'
+import { loadCounterLegTopology, type CounterLegTopology } from '@/lib/cash-accounts/service'
 import type { Transaction, EntityType, CategorizationTemplate } from '@/types'
 
 /**
@@ -84,56 +84,75 @@ export const POST = withRouteContext(
     }
 
     // Inject counterparty template matches as top suggestions. A learned
-    // template can carry the ledger it was learned on; when that ledger is an
-    // orphaned cash account (revoked connection or a stale twin of a live
-    // account, issue #1643 problem 4) the suggestion would pre-fill a junk
-    // balance-sheet account in the booking dialog, so it is withheld here.
+    // template can carry the ledger it was learned on. The same rules
+    // guardCounterLegs applies at commit (issue #1643 problem 4) decide what
+    // the transactions page is offered, so a suggestion is never shown that
+    // the commit guard would refuse, and never withheld that it would book:
+    //   - a 19xx leg that is a TWIN of the transaction's own row (same IBAN,
+    //     same currency: the stale bank leg of a template learned before a
+    //     reconnect moved the account, or the other enabled ledger of one
+    //     connection) is rewritten to the settlement ledger; if that leaves
+    //     the settlement ledger against itself the suggestion is withheld,
+    //   - a remaining 19xx leg in the orphaned set (revoked connection, or a
+    //     stale twin of some live account) is a counter-position orphan and
+    //     the suggestion is withheld: it would pre-fill a junk balance-sheet
+    //     account in the booking dialog.
     // Static library templates only reference BAS business accounts plus the
     // literal 1930 settlement placeholder, so they never need this check.
     // The transaction's OWN settlement ledger is exempt: a transaction still
-    // stranded on the orphaned row settles there, and a learned template whose
-    // only 19xx leg is that ledger is a valid suggestion for it.
-    let orphanedLedgers: Set<string> | null = null
-    let ledgerByCashAccountId: Map<string, string> | null = null
-    const ownLedgerOf = async (cashAccountId: string | null | undefined): Promise<string | null> => {
-      if (!cashAccountId) return null
-      if (!ledgerByCashAccountId) {
-        const { data: cashRows } = await supabase
-          .from('cash_accounts')
-          .select('id, ledger_account')
-          .eq('company_id', companyId)
-        ledgerByCashAccountId = new Map(
-          ((cashRows ?? []) as Array<{ id: string; ledger_account: string }>).map((r) => [
-            r.id,
-            r.ledger_account,
-          ]),
-        )
-      }
-      return ledgerByCashAccountId.get(cashAccountId) ?? null
-    }
-    const referencesOrphanedLedger = async (
+    // stranded on the orphaned row settles there.
+    let counterLegTopology: CounterLegTopology | null | undefined
+    const guardLearnedTemplate = async (
       tmpl: CategorizationTemplate,
       tx: Transaction,
-    ): Promise<boolean> => {
+    ): Promise<CategorizationTemplate | null> => {
+      const isCashLedger = (a: string | null | undefined): a is string => !!a && /^19\d{2}$/.test(a)
       const accounts = [
         tmpl.debit_account,
         tmpl.credit_account,
         ...(tmpl.line_pattern ?? []).map((entry) => entry.account),
-      ].filter((a): a is string => !!a && /^19\d{2}$/.test(a))
-      if (accounts.length === 0) return false
-      orphanedLedgers ??= await getOrphanedCounterLedgers(supabase, companyId)
-      const hits = accounts.filter((a) => orphanedLedgers!.has(a))
-      if (hits.length === 0) return false
-      const ownLedger = await ownLedgerOf(tx.cash_account_id)
-      return hits.some((a) => a !== ownLedger)
+      ].filter(isCashLedger)
+      if (accounts.length === 0) return tmpl
+      if (counterLegTopology === undefined) {
+        counterLegTopology = await loadCounterLegTopology(supabase, companyId)
+      }
+      if (!counterLegTopology) return tmpl
+      const { settlementLedger, twins } = counterLegTopology.contextFor(tx.cash_account_id)
+
+      let guarded = tmpl
+      if (settlementLedger && accounts.some((a) => twins.has(a))) {
+        const rewrite = (a: string): string => (twins.has(a) ? settlementLedger : a)
+        guarded = {
+          ...tmpl,
+          debit_account: rewrite(tmpl.debit_account),
+          credit_account: rewrite(tmpl.credit_account),
+          line_pattern: tmpl.line_pattern
+            ? tmpl.line_pattern.map((entry) => ({ ...entry, account: rewrite(entry.account) }))
+            : tmpl.line_pattern,
+        }
+        if (guarded.debit_account === settlementLedger && guarded.credit_account === settlementLedger) {
+          return null
+        }
+      }
+
+      const remaining = [
+        guarded.debit_account,
+        guarded.credit_account,
+        ...(guarded.line_pattern ?? []).map((entry) => entry.account),
+      ].filter(isCashLedger)
+      const orphanHit = remaining.some(
+        (a) => a !== settlementLedger && counterLegTopology!.orphaned.has(a),
+      )
+      return orphanHit ? null : guarded
     }
 
     for (const tx of transactions) {
       const cpMatch = counterpartyMatches.get(tx.id)
       if (!cpMatch) continue
-      if (await referencesOrphanedLedger(cpMatch.template, tx as Transaction)) continue
+      const template = await guardLearnedTemplate(cpMatch.template, tx as Transaction)
+      if (!template) continue
 
-      const cpSuggestion = buildCounterpartySuggestion(cpMatch.template, cpMatch.confidence)
+      const cpSuggestion = buildCounterpartySuggestion(template, cpMatch.confidence)
 
       const existing = template_suggestions[tx.id] || []
       template_suggestions[tx.id] = [cpSuggestion, ...existing]

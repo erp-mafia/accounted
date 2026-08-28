@@ -237,6 +237,41 @@ describe('POST /api/transactions/[id]/book', () => {
     )
   })
 
+  it('returns 400 TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT when a line books the settlement row against its active twin (#1643)', async () => {
+    // The issue's dialog shape: 1930 and 1931 both enabled on one active
+    // connection; "Ändra rader" pre-filled 1930 debit / 1931 credit from a
+    // template learned on 1931. Booking it would move money between two
+    // ledgers of one physical account with nothing reaching the P&L.
+    const iban = 'SE4550000000058398257466'
+    const tx = makeTransaction({ id: 'tx-1', amount: 500, journal_entry_id: null, cash_account_id: 'ca-1930' })
+    enqueue({ data: tx, error: null }) // fetch transaction
+    enqueue({
+      data: [
+        { id: 'ca-1930', ledger_account: '1930', iban, currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
+        { id: 'ca-1931', ledger_account: '1931', iban, currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
+      ],
+    }) // cash_accounts topology
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }] }) // bank_connections statuses
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: {
+        ...validBody,
+        lines: [
+          { account_number: '1930', debit_amount: 500, credit_amount: 0 },
+          { account_number: '1931', debit_amount: 0, credit_amount: 500 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { accountNumber: string } } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT')
+    expect(body.error.details.accountNumber).toBe('1931')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('atomically unignores an ignored transaction when booking it', async () => {
     const tx = makeTransaction({
       id: 'tx-1',

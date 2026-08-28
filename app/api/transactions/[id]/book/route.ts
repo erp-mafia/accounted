@@ -3,6 +3,7 @@ import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { guardBookedCounterLines } from '@/lib/cash-accounts/service'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { validateBody } from '@/lib/api/validate'
@@ -141,6 +142,25 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         })
       }
       dupLog.warn('booking-time duplicate detection failed (continuing)', err as Error)
+    }
+
+    // A 19xx counter line that is a twin of the transaction's own cash account
+    // (same IBAN, same currency: the other ledger of one connection, or a
+    // stale row left by a broken reconnect) or an orphaned ledger books one
+    // physical account against itself or onto a junk balance-sheet account.
+    // The dialog pre-fills such lines from learned templates (issue #1643
+    // problem 4); this is the same refusal the categorize paths apply.
+    const refusedLedger = await guardBookedCounterLines(
+      supabase,
+      companyId,
+      lines.map((line) => line.account_number),
+      transaction.cash_account_id ?? null,
+    )
+    if (refusedLedger) {
+      return errorResponseFromCode('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT', log, {
+        requestId,
+        details: { accountNumber: refusedLedger },
+      })
     }
 
     // Create journal entry via the engine

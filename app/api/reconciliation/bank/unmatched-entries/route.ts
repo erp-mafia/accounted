@@ -5,7 +5,7 @@ import {
   ledgerLineAmountIn,
   tryReconcileTransaction,
 } from '@/lib/reconciliation/bank-reconciliation'
-import { normalizeIban } from '@/lib/cash-accounts/service'
+import { describeCashAccountSiblings, normalizeIban } from '@/lib/cash-accounts/service'
 import type { Transaction } from '@/types'
 
 export const GET = withRouteContext(
@@ -69,23 +69,20 @@ export const GET = withRouteContext(
       // currency pockets of a multi-currency account share the IBAN but are
       // different accounts). Accounts without an IBAN (manual, CSV) have no
       // siblings and keep the exact single-ledger behavior.
+      // A sibling that is NOT live (demoted or held by a revoked/expired
+      // connection) is only offered when the transaction's own row is not
+      // live either: manualLink would re-point the row onto that dead
+      // sibling, and a live row must never be parked on a row no connection
+      // can sync again.
       const ownIban = normalizeIban((cashAccount as { iban?: string | null }).iban ?? null)
-      if (ownIban) {
-        const { data: siblingRows } = await supabase
-          .from('cash_accounts')
-          .select('ledger_account, iban, currency')
-          .eq('company_id', companyId)
-          .not('iban', 'is', null)
-        type SiblingRow = { ledger_account: string; iban: string | null; currency?: string | null }
+      const siblingInfo = ownIban
+        ? await describeCashAccountSiblings(supabase, companyId, cashAccount.id as string)
+        : null
+      if (siblingInfo && siblingInfo.siblings.length > 0) {
         const siblingLedgers = [
           ...new Set(
-            ((siblingRows ?? []) as SiblingRow[])
-              .filter(
-                (row) =>
-                  row.ledger_account !== accountNumber &&
-                  normalizeIban(row.iban) === ownIban &&
-                  String(row.currency ?? 'SEK').toUpperCase() === accountCurrency.toUpperCase(),
-              )
+            siblingInfo.siblings
+              .filter((row) => row.live || !siblingInfo.own.live)
               .map((row) => row.ledger_account),
           ),
         ]

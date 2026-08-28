@@ -187,17 +187,19 @@ describe('GET /api/reconciliation/bank/unmatched-entries', () => {
     const iban = 'SE4550000000058398257466'
     // The transaction's own (orphaned) row: ledger 1931, carries the IBAN.
     enqueue({ data: { id: 'cash-orphan', currency: 'SEK', iban } })
-    // Sibling scan: the live row for the same physical account sits on 1940
-    // (spaced IBAN variant to prove normalization), plus an unrelated account.
+    // Sibling scan (describeCashAccountSiblings): the live row for the same
+    // physical account sits on 1940 (spaced IBAN variant to prove
+    // normalization), plus an unrelated account.
     enqueue({
       data: [
-        { ledger_account: '1931', iban, currency: 'SEK' },
-        { ledger_account: '1940', iban: 'SE45 5000 0000 0583 9825 7466', currency: 'SEK' },
+        { id: 'cash-orphan', ledger_account: '1931', iban, currency: 'SEK', enabled: true, bank_connection_id: null },
+        { id: 'cash-live', ledger_account: '1940', iban: 'SE45 5000 0000 0583 9825 7466', currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
         // Same IBAN, EUR pocket of a multi-currency account: not a sibling.
-        { ledger_account: '1932', iban, currency: 'EUR' },
-        { ledger_account: '1935', iban: 'SE1112223334445556667778', currency: 'SEK' },
+        { id: 'cash-eur', ledger_account: '1932', iban, currency: 'EUR', enabled: true, bank_connection_id: 'conn-live' },
+        { id: 'cash-other', ledger_account: '1935', iban: 'SE1112223334445556667778', currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
       ],
     })
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }] }) // bank_connections statuses
     enqueueTransaction({ currency: 'SEK', amount: 217.04, date: '2026-03-10' })
 
     fetchGLLinesForMatchingMock.mockImplementation((_supabase, _companyId, account) =>
@@ -229,6 +231,35 @@ describe('GET /api/reconciliation/bank/unmatched-entries', () => {
 
     const fetchedAccounts = fetchGLLinesForMatchingMock.mock.calls.map((c) => c[2])
     expect(fetchedAccounts).toEqual(['1931', '1940'])
+  })
+
+  it('does not offer vouchers on a DEAD sibling to a transaction on the live row (#1643 round 2)', async () => {
+    const iban = 'SE4550000000058398257466'
+    // manualLink would not move a live row onto the dead sibling, so the
+    // dead sibling's vouchers are not candidates for it.
+    enqueue({ data: { id: 'cash-live', currency: 'SEK', iban } })
+    enqueue({
+      data: [
+        { id: 'cash-live', ledger_account: '1940', iban, currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
+        { id: 'cash-orphan', ledger_account: '1931', iban, currency: 'SEK', enabled: true, bank_connection_id: 'conn-old' },
+      ],
+    })
+    enqueue({
+      data: [
+        { id: 'conn-live', status: 'active' },
+        { id: 'conn-old', status: 'revoked' },
+      ],
+    })
+    enqueueTransaction({ currency: 'SEK', amount: 217.04, date: '2026-03-10' })
+    fetchGLLinesForMatchingMock.mockResolvedValue([])
+
+    const response = await GET(
+      request({ account_number: '1940', transaction_id: TX_ID }),
+      emptyParams,
+    )
+    expect(response.status).toBe(200)
+    const fetchedAccounts = fetchGLLinesForMatchingMock.mock.calls.map((c) => c[2])
+    expect(fetchedAccounts).toEqual(['1940'])
   })
 
   it('does not widen the unranked (reconciliation view) path', async () => {

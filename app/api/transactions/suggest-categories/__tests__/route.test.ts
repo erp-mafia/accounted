@@ -29,10 +29,26 @@ vi.mock('@/lib/bookkeeping/counterparty-templates', async (importActual) => ({
   findCounterpartyTemplatesBatch: (...args: unknown[]) => findCounterpartyTemplatesBatchMock(...args),
 }))
 
-const getOrphanedCounterLedgersMock = vi.fn()
+const loadCounterLegTopologyMock = vi.fn()
 vi.mock('@/lib/cash-accounts/service', () => ({
-  getOrphanedCounterLedgers: (...args: unknown[]) => getOrphanedCounterLedgersMock(...args),
+  loadCounterLegTopology: (...args: unknown[]) => loadCounterLegTopologyMock(...args),
 }))
+
+/** Topology stub mirroring lib/cash-accounts/service: orphan set + per-row context. */
+function topology(
+  orphaned: string[],
+  contexts: Record<string, { settlementLedger: string | null; twins: string[] }> = {},
+) {
+  return {
+    orphaned: new Set(orphaned),
+    contextFor: (cashAccountId: string | null | undefined) => {
+      const ctx = cashAccountId ? contexts[cashAccountId] : undefined
+      return ctx
+        ? { settlementLedger: ctx.settlementLedger, twins: new Set(ctx.twins) }
+        : { settlementLedger: null, twins: new Set<string>() }
+    },
+  }
+}
 
 import { POST } from '../route'
 
@@ -87,7 +103,7 @@ describe('POST /api/transactions/suggest-categories', () => {
     vi.clearAllMocks()
     reset()
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
-    getOrphanedCounterLedgersMock.mockResolvedValue(new Set())
+    loadCounterLegTopologyMock.mockResolvedValue(topology([]))
   })
 
   it('returns 401 when unauthenticated', async () => {
@@ -105,12 +121,74 @@ describe('POST /api/transactions/suggest-categories', () => {
     findCounterpartyTemplatesBatchMock.mockResolvedValue(
       new Map([[TX_ID, { template: makeTemplate(), confidence: 0.9 }]]),
     )
-    getOrphanedCounterLedgersMock.mockResolvedValue(new Set(['1931']))
+    loadCounterLegTopologyMock.mockResolvedValue(topology(['1931']))
 
     const response = await POST(request(), emptyParams)
     const { status, body } = await parseJsonResponse<Body>(response)
 
     expect(status).toBe(200)
+    const suggestions = body.template_suggestions[TX_ID] ?? []
+    expect(suggestions.find((s) => s.template_id?.startsWith('cp:'))).toBeUndefined()
+  })
+
+  it('keeps a template whose stale BANK leg is a twin of the live row, shown on the settlement ledger (#1643 round 2)', async () => {
+    // Transaction on the live 1940 row; the template was learned as 5010 /
+    // 1931 before the reconnect moved the account. The commit guard rewrites
+    // 1931 to 1940 and books it, so the suggestion must be offered the same way.
+    enqueue({ data: [{ id: TX_ID, amount: -1200, currency: 'SEK', description: 'Hyra', cash_account_id: 'ca-live' }] })
+    enqueue({ data: [] }) // mapping_rules
+    enqueue({ data: [] }) // historical transactions
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
+    findCounterpartyTemplatesBatchMock.mockResolvedValue(
+      new Map([[TX_ID, { template: makeTemplate({ debit_account: '5010', credit_account: '1931' }), confidence: 0.9 }]]),
+    )
+    loadCounterLegTopologyMock.mockResolvedValue(
+      topology(['1931'], { 'ca-live': { settlementLedger: '1940', twins: ['1931'] } }),
+    )
+
+    const response = await POST(request(), emptyParams)
+    const { status, body } = await parseJsonResponse<Body>(response)
+
+    expect(status).toBe(200)
+    const suggestions = body.template_suggestions[TX_ID] ?? []
+    expect(suggestions.some((s) => s.debit_account === '5010' && s.credit_account === '1940')).toBe(true)
+    expect(suggestions.some((s) => s.credit_account === '1931')).toBe(false)
+  })
+
+  it('rewrites a both-active twin leg (two ledgers on one connection) to the settlement ledger (#1643 round 2)', async () => {
+    // Nothing is orphaned: 1930 and 1931 are both enabled on the active
+    // connection. The template learned on 1931 is still the same account.
+    enqueue({ data: [{ id: TX_ID, amount: -1200, currency: 'SEK', description: 'Hyra', cash_account_id: 'ca-1930' }] })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    findCounterpartyTemplatesBatchMock.mockResolvedValue(
+      new Map([[TX_ID, { template: makeTemplate({ debit_account: '5010', credit_account: '1931' }), confidence: 0.9 }]]),
+    )
+    loadCounterLegTopologyMock.mockResolvedValue(
+      topology([], { 'ca-1930': { settlementLedger: '1930', twins: ['1931'] } }),
+    )
+
+    const response = await POST(request(), emptyParams)
+    const { body } = await parseJsonResponse<Body>(response)
+    const suggestions = body.template_suggestions[TX_ID] ?? []
+    expect(suggestions.some((s) => s.debit_account === '5010' && s.credit_account === '1930')).toBe(true)
+  })
+
+  it('withholds a template whose twin leg sits in the COUNTER position (settlement against itself)', async () => {
+    enqueue({ data: [{ id: TX_ID, amount: 217.04, currency: 'SEK', description: 'Ränta', cash_account_id: 'ca-live' }] })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    findCounterpartyTemplatesBatchMock.mockResolvedValue(
+      new Map([[TX_ID, { template: makeTemplate({ debit_account: '1940', credit_account: '1931' }), confidence: 0.9 }]]),
+    )
+    loadCounterLegTopologyMock.mockResolvedValue(
+      topology([], { 'ca-live': { settlementLedger: '1940', twins: ['1931'] } }),
+    )
+
+    const response = await POST(request(), emptyParams)
+    const { body } = await parseJsonResponse<Body>(response)
     const suggestions = body.template_suggestions[TX_ID] ?? []
     expect(suggestions.find((s) => s.template_id?.startsWith('cp:'))).toBeUndefined()
   })
@@ -125,8 +203,9 @@ describe('POST /api/transactions/suggest-categories', () => {
     findCounterpartyTemplatesBatchMock.mockResolvedValue(
       new Map([[TX_ID, { template: makeTemplate({ debit_account: '5010', credit_account: '1931' }), confidence: 0.9 }]]),
     )
-    getOrphanedCounterLedgersMock.mockResolvedValue(new Set(['1931']))
-    enqueue({ data: [{ id: 'ca-orphan', ledger_account: '1931' }] }) // cash_accounts id -> ledger
+    loadCounterLegTopologyMock.mockResolvedValue(
+      topology(['1931'], { 'ca-orphan': { settlementLedger: '1931', twins: ['1940'] } }),
+    )
 
     const response = await POST(request(), emptyParams)
     const { status, body } = await parseJsonResponse<Body>(response)
@@ -141,7 +220,7 @@ describe('POST /api/transactions/suggest-categories', () => {
     findCounterpartyTemplatesBatchMock.mockResolvedValue(
       new Map([[TX_ID, { template: makeTemplate({ debit_account: '1930', credit_account: '8311' }), confidence: 0.9 }]]),
     )
-    getOrphanedCounterLedgersMock.mockResolvedValue(new Set(['1931']))
+    loadCounterLegTopologyMock.mockResolvedValue(topology(['1931']))
 
     const response = await POST(request(), emptyParams)
     const { status, body } = await parseJsonResponse<Body>(response)
@@ -159,6 +238,6 @@ describe('POST /api/transactions/suggest-categories', () => {
 
     const response = await POST(request(), emptyParams)
     expect(response.status).toBe(200)
-    expect(getOrphanedCounterLedgersMock).not.toHaveBeenCalled()
+    expect(loadCounterLegTopologyMock).not.toHaveBeenCalled()
   })
 })

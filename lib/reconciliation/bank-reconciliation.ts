@@ -1135,24 +1135,26 @@ export async function manualLink(
     return { success: false, error: `Verifikationen saknar rad på ${allowedLineAccounts.join(' eller ')}` }
   }
 
-  // When the voucher's bank leg sits on a SIBLING ledger only, and that
-  // sibling is the LIVE row of the account while the transaction's own row is
-  // not, the row moves to the live sibling in the same write that links it. A
-  // cross-account link would leave the money on the orphan while the voucher
-  // settles on the live ledger, and the account-keyed reconciliation would
-  // count it as an imbalance on BOTH accounts. Same gate as PATCH
-  // /api/transactions/[id]/cash-account: the row is unbooked by construction
-  // (the locked UPDATE below asserts that) and the currencies agree (siblings
-  // are keyed on IBAN + currency). In the other direction (a live transaction
-  // and a voucher booked on the dead ledger before the reconnect) the voucher
-  // is what is wrong, so the link goes through without moving the row: the
-  // row must never be parked on a row no connection can sync again.
+  // When the voucher's bank leg sits on a SIBLING ledger only, the row moves
+  // to that sibling in the same write that links it: siblings are the same
+  // physical account in the same currency, and the voucher is the source of
+  // truth for where the money was booked. A cross-account link would leave
+  // the money on one ledger while the voucher settles on the other, and the
+  // account-keyed reconciliation would count it as an imbalance on BOTH
+  // accounts. Same gate as PATCH /api/transactions/[id]/cash-account: the row
+  // is unbooked by construction (the locked UPDATE below asserts that). This
+  // covers the stranded row linking to the live ledger, two live twins of one
+  // connection, and two demoted rows after a full disconnect. The one
+  // exception is a LIVE transaction whose voucher was booked on a dead
+  // sibling before the reconnect: there the voucher is what is wrong, the
+  // link goes through without moving the row, and the row is never parked on
+  // a row no connection can sync again.
   const typedLines = lines as Array<{ account_number: string }>
   let repointCashAccountId: string | null = null
   if (!typedLines.some((line) => line.account_number === accountNumber)) {
     const siblingLedger = typedLines[0].account_number
     const sibling = siblingInfo?.siblings.find((row) => row.ledger_account === siblingLedger)
-    if (sibling && sibling.live && siblingInfo && !siblingInfo.own.live) {
+    if (sibling && siblingInfo && (sibling.live || !siblingInfo.own.live)) {
       repointCashAccountId = sibling.id
     } else {
       log.warn('manualLink: sibling-ledger link left on the original cash account', {
@@ -1160,7 +1162,7 @@ export async function manualLink(
         transactionId,
         accountNumber,
         siblingLedger,
-        reason: sibling ? 'sibling_not_live_or_own_row_live' : 'sibling_row_missing',
+        reason: sibling ? 'own_row_live_sibling_dead' : 'sibling_row_missing',
       })
     }
   }

@@ -14,6 +14,7 @@ import {
   describeCashAccountSiblings,
   findPairableCashAccountByIban,
   guardCounterLegs,
+  guardBookedCounterLines,
 } from '../service'
 
 const IBAN = 'SE4550000000058398257466'
@@ -115,6 +116,23 @@ describe('getOrphanedCounterLedgers', () => {
   it('returns an empty set on lookup failure', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null, error: { message: 'boom' } })
+    const orphaned = await getOrphanedCounterLedgers(supabase as never, 'company-1')
+    expect(orphaned.size).toBe(0)
+  })
+
+  it('does NOT flag another-currency pocket of a live row that shares its IBAN (Wise/Revolut reconnect)', async () => {
+    // Two pockets on one IBAN were demoted by a disconnect; the reconnect
+    // picked only the SEK pocket, so 1935 is live and the GBP pocket 1937 is
+    // still a manual row carrying the same IBAN. It is a distinct account.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        row({ id: 'ca-sek', ledger_account: '1935', currency: 'SEK', bank_connection_id: 'conn-live' }),
+        row({ id: 'ca-gbp', ledger_account: '1937', currency: 'GBP', bank_connection_id: null }),
+      ],
+    })
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
+
     const orphaned = await getOrphanedCounterLedgers(supabase as never, 'company-1')
     expect(orphaned.size).toBe(0)
   })
@@ -467,5 +485,111 @@ describe('guardCounterLegs', () => {
 
     const result = await guardCounterLegs(supabase as never, 'company-1', mapping('1931', '1930'), '1930', null)
     expect(result.refusedLedger).toBe('1931')
+  })
+})
+
+describe('#1643 round 2: same-IBAN other-currency pocket beside a live pocket', () => {
+  const mapping = (debit: string, credit: string) => ({
+    rule: null,
+    debit_account: debit,
+    credit_account: credit,
+    risk_level: 'LOW' as const,
+    confidence: 0.9,
+    requires_review: false,
+    default_private: false,
+    vat_lines: [],
+    description: 'test',
+  })
+  const pockets = () => [
+    row({ id: 'ca-sek', ledger_account: '1935', currency: 'SEK', bank_connection_id: 'conn-live' }),
+    row({ id: 'ca-gbp', ledger_account: '1937', currency: 'GBP', bank_connection_id: null }),
+  ]
+
+  it('guardCounterLegs accepts the manual GBP pocket as counter of a SEK->GBP conversion', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: pockets() })
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
+
+    const result = await guardCounterLegs(supabase as never, 'company-1', mapping('1937', '1935'), '1935', 'ca-sek')
+    expect(result.refusedLedger).toBeNull()
+    expect(result.mappingResult.debit_account).toBe('1937')
+  })
+
+  it('findPairableCashAccountByIban still proposes the manual GBP pocket', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: pockets() })
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
+
+    const found = await findPairableCashAccountByIban(supabase as never, 'company-1', IBAN, {
+      excludeCashAccountId: 'ca-sek',
+    })
+    expect(found?.ledger_account).toBe('1937')
+  })
+})
+
+describe('guardBookedCounterLines (POST /book)', () => {
+  it('refuses a 19xx line that is an active twin of the transaction\'s own row', async () => {
+    // The issue's dialog shape: 1930 and 1931 both enabled on one active
+    // connection, a learned template pre-fills 1930 debit / 1931 credit.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        row({ id: 'ca-1930', ledger_account: '1930' }),
+        row({ id: 'ca-1931', ledger_account: '1931' }),
+      ],
+    })
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
+
+    const refused = await guardBookedCounterLines(supabase as never, 'company-1', ['1930', '1931'], 'ca-1930')
+    expect(refused).toBe('1931')
+  })
+
+  it('refuses a 19xx line on a ledger held by a revoked connection', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        row({ id: 'ca-live', ledger_account: '1940' }),
+        row({ id: 'ca-orphan', ledger_account: '1931', bank_connection_id: 'conn-old', iban: 'SE1112223334445556667778' }),
+      ],
+    })
+    enqueue({
+      data: [
+        { id: 'conn-live', status: 'active' },
+        { id: 'conn-old', status: 'revoked' },
+      ],
+    })
+
+    const refused = await guardBookedCounterLines(supabase as never, 'company-1', ['1931', '1940'], 'ca-live')
+    expect(refused).toBe('1931')
+  })
+
+  it('accepts another-currency pocket of the same IBAN and a real transfer to another account', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        row({ id: 'ca-sek', ledger_account: '1935', currency: 'SEK' }),
+        row({ id: 'ca-gbp', ledger_account: '1937', currency: 'GBP', bank_connection_id: null }),
+        row({ id: 'ca-savings', ledger_account: '1940', iban: 'SE1112223334445556667778' }),
+      ],
+    })
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
+
+    expect(await guardBookedCounterLines(supabase as never, 'company-1', ['1935', '1937'], 'ca-sek')).toBeNull()
+
+    const again = createQueuedMockSupabase()
+    again.enqueue({
+      data: [
+        row({ id: 'ca-sek', ledger_account: '1935', currency: 'SEK' }),
+        row({ id: 'ca-savings', ledger_account: '1940', iban: 'SE1112223334445556667778' }),
+      ],
+    })
+    again.enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
+    expect(await guardBookedCounterLines(again.supabase as never, 'company-1', ['1935', '1940'], 'ca-sek')).toBeNull()
+  })
+
+  it('does not look anything up for an ordinary booking with one bank line', async () => {
+    const { supabase, findCalls } = createQueuedMockSupabase()
+    expect(await guardBookedCounterLines(supabase as never, 'company-1', ['6200', '2640', '1930'], 'ca-1930')).toBeNull()
+    expect(findCalls('cash_accounts')).toHaveLength(0)
   })
 })

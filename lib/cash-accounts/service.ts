@@ -190,21 +190,55 @@ async function loadCashAccountTopology(
   }
   // Stale IBAN twins of a live row: the live row IS that physical account
   // now, so a demoted-to-manual, disabled, or expired/error-connection row
-  // carrying the same IBAN is a leftover of a broken reconnect.
-  const liveByIban = new Map<string, CashAccount>()
+  // carrying the same IBAN in the same currency is a leftover of a broken
+  // reconnect. The key is (IBAN, currency), never the IBAN alone: multi-
+  // currency accounts (Revolut, Wise) copy one IBAN onto every currency
+  // pocket, and a manual or deselected GBP pocket beside a live SEK pocket is
+  // a distinct account the user still tracks, not an orphan.
+  const liveByAccount = new Map<string, CashAccount>()
   for (const row of rows) {
-    const key = normalizeIban(row.iban)
-    if (key && isLive(row)) liveByIban.set(key, row)
+    const key = physicalAccountKey(row)
+    if (key && isLive(row)) liveByAccount.set(key, row)
   }
   for (const row of rows) {
     if (isLive(row)) continue
-    const key = normalizeIban(row.iban)
+    const key = physicalAccountKey(row)
     if (!key) continue
-    const live = liveByIban.get(key)
+    const live = liveByAccount.get(key)
     if (live && live.ledger_account !== row.ledger_account) orphaned.add(row.ledger_account)
   }
 
   return { rows, statuses, orphaned, isLive }
+}
+
+/**
+ * Identity of the physical bank account a row represents: normalized IBAN
+ * plus currency, or null for rows without an IBAN (manual, CSV, kassa).
+ */
+function physicalAccountKey(row: Pick<CashAccount, 'iban' | 'currency'>): string | null {
+  const iban = normalizeIban(row.iban)
+  return iban ? `${iban}|${currencyKey(row.currency)}` : null
+}
+
+/**
+ * Ledger accounts of the OTHER rows that represent the same physical account
+ * as `own` (same normalized IBAN, same currency), whatever their liveness.
+ * The row on `settlementAccount` is never a twin of itself.
+ */
+function twinLedgersOf(
+  topology: CashAccountTopology,
+  own: CashAccount | null,
+  settlementAccount: string,
+): Set<string> {
+  const twins = new Set<string>()
+  const ownKey = own ? physicalAccountKey(own) : null
+  if (!own || !ownKey) return twins
+  for (const row of topology.rows) {
+    if (row.id === own.id || row.ledger_account === settlementAccount) continue
+    if (physicalAccountKey(row) !== ownKey) continue
+    twins.add(row.ledger_account)
+  }
+  return twins
 }
 
 /**
@@ -364,11 +398,12 @@ export async function listSiblingLedgerAccounts(
  * (issue #1643):
  *   - a row still held by a REVOKED bank connection, or
  *   - a row that is not live (demoted-to-manual, disabled, or held by an
- *     expired/error connection) whose IBAN also belongs to a row on an ACTIVE
- *     connection: the active row IS that physical account now, so the stale
- *     twin is a leftover of a broken reconnect.
- * A manual/CSV account without a live IBAN twin is NOT orphaned: transfers to
- * a manually tracked account are legitimate.
+ *     expired/error connection) whose (IBAN, currency) also belongs to a row
+ *     on an ACTIVE connection: the active row IS that physical account now,
+ *     so the stale twin is a leftover of a broken reconnect.
+ * A manual/CSV account without a live twin is NOT orphaned: transfers to a
+ * manually tracked account are legitimate, and so is another currency pocket
+ * of a multi-currency account that shares the live pocket's IBAN.
  */
 export async function getOrphanedCounterLedgers(
   supabase: SupabaseClient,
@@ -443,17 +478,7 @@ export async function guardCounterLegs(
   const own = settlementCashAccountId
     ? (topology.rows.find((row) => row.id === settlementCashAccountId) ?? null)
     : null
-  const ownIban = normalizeIban(own?.iban)
-  const twins = new Set<string>()
-  if (own && ownIban) {
-    const ownCurrency = currencyKey(own.currency)
-    for (const row of topology.rows) {
-      if (row.id === own.id || row.ledger_account === settlementAccount) continue
-      if (normalizeIban(row.iban) !== ownIban) continue
-      if (currencyKey(row.currency) !== ownCurrency) continue
-      twins.add(row.ledger_account)
-    }
-  }
+  const twins = twinLedgersOf(topology, own, settlementAccount)
 
   let result = mappingResult
   const rewrittenTwin = legs.find((leg) => twins.has(leg)) ?? null
@@ -480,6 +505,84 @@ export async function guardCounterLegs(
   ].filter(isCounterCashLeg)
   const orphaned = findOrphanedCounterLedger(remaining, settlementAccount, topology.orphaned)
   return { mappingResult: result, refusedLedger: orphaned }
+}
+
+export interface CounterLegContext {
+  /** Ledger of the transaction's own cash_accounts row, or null when unknown. */
+  settlementLedger: string | null
+  /** Other ledgers of the same physical account (same IBAN, same currency). */
+  twins: ReadonlySet<string>
+}
+
+export interface CounterLegTopology {
+  /** Ledgers that must never be PROPOSED or accepted as a counter leg. */
+  orphaned: ReadonlySet<string>
+  contextFor: (cashAccountId: string | null | undefined) => CounterLegContext
+}
+
+/**
+ * One topology load for a batch of transactions (the suggest-categories
+ * route), exposing the same twin and orphan rules guardCounterLegs applies at
+ * commit: a learned 19xx leg that is a twin of the transaction's own row is
+ * that account's stale BANK leg (rewrite it to the settlement ledger, never
+ * withhold), and only a true counter-position orphan disqualifies a
+ * suggestion. Returns null when the lookup fails (nothing is withheld).
+ */
+export async function loadCounterLegTopology(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<CounterLegTopology | null> {
+  const topology = await loadCashAccountTopology(supabase, companyId)
+  if (!topology) return null
+  const cache = new Map<string, CounterLegContext>()
+  return {
+    orphaned: topology.orphaned,
+    contextFor: (cashAccountId) => {
+      if (!cashAccountId) return { settlementLedger: null, twins: new Set() }
+      const cached = cache.get(cashAccountId)
+      if (cached) return cached
+      const own = topology.rows.find((row) => row.id === cashAccountId) ?? null
+      const context: CounterLegContext = own
+        ? { settlementLedger: own.ledger_account, twins: twinLedgersOf(topology, own, own.ledger_account) }
+        : { settlementLedger: null, twins: new Set() }
+      cache.set(cashAccountId, context)
+      return context
+    },
+  }
+}
+
+/**
+ * Line-level counterpart of guardCounterLegs for the free-form booking
+ * dialog (POST /api/transactions/[id]/book), which submits explicit lines
+ * instead of a mapping result. Runs only when the lines touch at least two
+ * distinct 19xx ledgers (a single 19xx line is the bank leg by construction),
+ * and refuses a 19xx line that is a same-IBAN same-currency twin of the
+ * transaction's own row or an orphaned ledger while the settlement leg is
+ * also present: such a "transfer" books one physical account against itself
+ * or onto a junk ledger. Returns the refused ledger, or null when clean or
+ * when the transaction has no cash_accounts row.
+ */
+export async function guardBookedCounterLines(
+  supabase: SupabaseClient,
+  companyId: string,
+  accountNumbers: readonly string[],
+  settlementCashAccountId: string | null | undefined,
+): Promise<string | null> {
+  const cashLegs = [...new Set(accountNumbers.filter((a) => /^19\d{2}$/.test(a)))]
+  if (cashLegs.length < 2 || !settlementCashAccountId) return null
+
+  const topology = await loadCashAccountTopology(supabase, companyId)
+  if (!topology) return null
+  const own = topology.rows.find((row) => row.id === settlementCashAccountId) ?? null
+  if (!own) return null
+  const settlementAccount = own.ledger_account
+  if (!cashLegs.includes(settlementAccount)) return null
+
+  const twins = twinLedgersOf(topology, own, settlementAccount)
+  const counterLegs = cashLegs.filter((a) => a !== settlementAccount)
+  const twin = counterLegs.find((a) => twins.has(a)) ?? null
+  if (twin) return twin
+  return findOrphanedCounterLedger(counterLegs, settlementAccount, topology.orphaned)
 }
 
 /**
