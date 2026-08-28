@@ -8,6 +8,16 @@ const TAG_LENGTH = 16
 const logger = createLogger('salary/personnummer')
 
 /**
+ * Registry code (lib/errors/structured-errors.ts) for a production deployment
+ * that never set PERSONNUMMER_ENCRYPTION_KEY. Carried on the thrown Error so
+ * withRouteContext -> errorResponse() answers with the typed 503 envelope
+ * ("krypteringsnyckel saknas, kontakta supporten") instead of the generic
+ * INTERNAL_ERROR 500, which reads as a transient failure and invites retries
+ * that can never succeed. #1996
+ */
+export const PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED = 'PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED'
+
+/**
  * Get the encryption key from environment.
  * Falls back to a dev-only key for local development.
  */
@@ -15,7 +25,9 @@ function getEncryptionKey(): Buffer {
   const envKey = process.env.PERSONNUMMER_ENCRYPTION_KEY
   if (!envKey) {
     if (process.env.NODE_ENV === 'production') {
-      throw new Error('PERSONNUMMER_ENCRYPTION_KEY is required in production')
+      throw Object.assign(new Error('PERSONNUMMER_ENCRYPTION_KEY is required in production'), {
+        code: PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED,
+      })
     }
     // Dev-only deterministic key (NOT safe for production)
     return scryptSync('dev-only-key', 'gnubok-dev-salt', 32)

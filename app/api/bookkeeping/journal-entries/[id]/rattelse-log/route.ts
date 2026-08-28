@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { createServiceClient } from '@/lib/supabase/server'
+import { resolveUserLabelsFromProfiles } from '@/lib/reports/behandlingshistorik'
 
 /**
  * GET /api/bookkeeping/journal-entries/[id]/rattelse-log
@@ -7,7 +9,9 @@ import { withRouteContext } from '@/lib/api/with-route-context'
  * The entry's inline rättelse history (BFL 5 kap 5 § / 9 §): the immutable
  * who/when trail behind every metadata edit and line strike, newest first.
  * Struck lines render with strikethrough in the verifikat detail view from
- * the struck_lines snapshots here.
+ * the struck_lines snapshots here. Each row also carries `actor_label`, the
+ * actor's profile label, so the page can say who struck a line without the
+ * reader opening a log panel; the raw `actor` uuid is kept unchanged.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal_entry.rattelse_log',
@@ -41,6 +45,27 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: 'Kunde inte hämta rättelsehistorik' }, { status: 500 })
     }
 
-    return NextResponse.json({ data: data ?? [] })
+    const rows = (data ?? []) as ({ actor: string | null } & Record<string, unknown>)[]
+
+    // Who: `profiles` RLS is self-only, so the label lookup goes through the
+    // service client, scoped to exactly the actor ids that already appear in
+    // this company's own log rows (same precedent as behandlingshistorik).
+    // Best-effort: a failed lookup leaves the label null, never the response.
+    const actorIds = Array.from(new Set(rows.map((r) => r.actor).filter((a): a is string => !!a)))
+    let labels = new Map<string, string>()
+    if (actorIds.length > 0) {
+      try {
+        labels = await resolveUserLabelsFromProfiles(createServiceClient(), actorIds)
+      } catch {
+        labels = new Map()
+      }
+    }
+
+    return NextResponse.json({
+      data: rows.map((row) => ({
+        ...row,
+        actor_label: row.actor ? (labels.get(row.actor) ?? null) : null,
+      })),
+    })
   },
 )
