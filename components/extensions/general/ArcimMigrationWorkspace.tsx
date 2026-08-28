@@ -1068,6 +1068,7 @@ function OptionsStep({
   options,
   sieAvailable,
   sieData,
+  hasSieData,
   provider,
   onChange,
   onStart,
@@ -1076,6 +1077,8 @@ function OptionsStep({
   options: MigrationOptions
   sieAvailable: boolean
   sieData: SIEData | null
+  /** The company already has a completed SIE import (any origin). */
+  hasSieData: boolean
   provider: ArcimProvider | null
   onChange: (options: MigrationOptions) => void
   onStart: () => void
@@ -1105,6 +1108,18 @@ function OptionsStep({
   if (options.importSupplierInvoices) selectedItems.push('Leverantörsfakturor')
   if (provider === 'fortnox' && options.importAssets) selectedItems.push('Anläggningstillgångar')
 
+  // Entities without the SIE-derived ledger leave an incomplete bokföring:
+  // POST /migrate refuses with PROVIDER_SIE_IMPORT_REQUIRED unless a completed
+  // SIE import exists. Say so here, before the run, when the user has
+  // unchecked SIE for a company that has never imported it (#2000).
+  // Company info (name, org number, VAT number) writes no ledger data and is
+  // not gated, matching the route.
+  const hasApiImport = options.importCustomers ||
+    options.importSuppliers ||
+    options.importSalesInvoices ||
+    options.importSupplierInvoices
+  const sieRequiredButUnchecked = sieAvailable && !options.importSIEData && !hasSieData && hasApiImport
+
   return (
     <div className="stagger-enter space-y-8">
       <StepHeading
@@ -1113,8 +1128,10 @@ function OptionsStep({
       />
 
       {/* Years whose provider export failed: must be visible before the user
-          proceeds, otherwise an IB/UB gap slips through. One ochre sentence. */}
-      {sieAvailable && failedYears.length > 0 && (
+          proceeds, otherwise an IB/UB gap slips through. One ochre sentence.
+          Yields to the SIE-required line below: with SIE unchecked no year is
+          imported, and the page carries at most one attn line. */}
+      {sieAvailable && failedYears.length > 0 && !sieRequiredButUnchecked && (
         <AttnLine>
           {failedYears.length === 1
             ? `Räkenskapsår ${failedYears[0].year} kunde inte hämtas från källsystemet: om du fortsätter importeras övriga år, men ingående och utgående balanser kan sakna kontinuitet. Försök igen senare eller ladda upp en SIE-fil för det saknade året manuellt.`
@@ -1219,12 +1236,16 @@ function OptionsStep({
         )}
       </div>
 
+      {sieRequiredButUnchecked && (
+        <AttnLine>{t('ext_arcim_option_sie_required_hint')}</AttnLine>
+      )}
+
       <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
         <Button variant="outline" className="min-h-11" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
-        <Button className="min-h-11" onClick={() => setShowConfirm(true)} disabled={selectedItems.length === 0}>
+        <Button className="min-h-11" onClick={() => setShowConfirm(true)} disabled={selectedItems.length === 0 || sieRequiredButUnchecked}>
           Starta migrering
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
@@ -3023,6 +3044,7 @@ export default function ArcimMigrationWorkspace({
           options={migrationOptions}
           sieAvailable={preview?.sieAvailable ?? false}
           sieData={sieData}
+          hasSieData={(preview?.hasSieData ?? false) || sieImportResults.some(r => r.success)}
           provider={preview?.consent.provider ?? null}
           onChange={setMigrationOptions}
           onStart={handleStartMigration}

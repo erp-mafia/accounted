@@ -1190,31 +1190,57 @@ export const arcimMigrationExtension: Extension = {
           }
 
           // ── Guard: a completed SIE import is required before entity import ──
-          // Most providers expose ONLY entity data (customers, suppliers,
-          // invoices) via API: never the general ledger. Fortnox pulls the GL
-          // itself via SIE-over-API and is exempt. Briox and Björn Lundén also
-          // serve SIE over the API, but the wizard runs /import-sie before
-          // /migrate, so this guard stays satisfied, and keeps protecting
-          // against a skipped SIE step. Importing entities without the
-          // SIE-derived ledger (kontoplan,
-          // ingående balanser, verifikationer) would leave an incomplete
-          // bokföring under BFL: a subledger with no chart of accounts and no
-          // opening balances, so every subsequent posting and balance is wrong.
-          // The wizard surfaces this as an advisory banner, but it must be
-          // enforced here so the rule cannot be bypassed by a direct API call,
-          // a skipped wizard step, or a stale client.
-          if (consent.provider !== 'fortnox') {
-            const { count: completedSieImports } = await supabase
-              .from('sie_imports')
-              .select('id', { count: 'exact', head: true })
-              .eq('company_id', companyId)
-              .eq('status', 'completed')
+          // Provider APIs expose ONLY entity data (customers, suppliers,
+          // invoices): never the general ledger. The GL (kontoplan, ingående
+          // balanser, verifikationer) arrives via SIE, either uploaded by the
+          // user or, for Fortnox, Briox, Björn Lundén and WINT, pulled over the
+          // API by the wizard's /import-sie phase. Importing entities without
+          // that ledger would leave an incomplete bokföring under BFL: a
+          // subledger with no chart of accounts and no opening balances, so
+          // every subsequent posting and balance is wrong.
+          //
+          // The rule is "a completed SIE import must EXIST for the company",
+          // not "must be part of this run": an entities-only re-run after an
+          // earlier full migration passes. No provider is exempt. Fortnox used
+          // to be, on the assumption that the wizard always runs SIE-over-API
+          // first, but the wizard lets the user uncheck "Bokföringsdata (SIE)"
+          // while keeping entities checked (#2000), and a direct API call or a
+          // stale client can skip it regardless.
+          //
+          // Company info (name, org number, VAT number) writes no accounts,
+          // balances or subledger rows, so a run that imports only that is
+          // not gated.
+          const importsEntities = importCustomers ||
+            importSuppliers ||
+            importSalesInvoices ||
+            importSupplierInvoices
+          const { count: completedSieImports } = importsEntities
+            ? await supabase
+                .from('sie_imports')
+                .select('id', { count: 'exact', head: true })
+                .eq('company_id', companyId)
+                .eq('status', 'completed')
+            : { count: null }
 
-            if (!completedSieImports || completedSieImports < 1) {
-              return errorResponseFromCode('PROVIDER_SIE_IMPORT_REQUIRED', moduleLog, {
-                details: { provider: consent.provider },
-              })
-            }
+          if (importsEntities && (!completedSieImports || completedSieImports < 1)) {
+            // Providers that serve SIE over the API have no file to upload:
+            // point the user at the wizard checkbox instead of the static
+            // "ladda upp en SIE-fil" text. Same code and status either way so
+            // the wizard's error path renders it unchanged.
+            const sieViaApi = ARCIM_PROVIDERS.some(
+              (p) => p.id === consent.provider && p.sieViaApi,
+            )
+            return errorResponseFromCode('PROVIDER_SIE_IMPORT_REQUIRED', moduleLog, {
+              details: { provider: consent.provider },
+              ...(sieViaApi
+                ? {
+                    messageSv:
+                      'Bokföringsdata (SIE) måste importeras först. Kryssa i "Bokföringsdata (SIE)" i guiden så att kontoplan, ingående balanser och verifikationer hämtas innan kunder, leverantörer och fakturor importeras.',
+                    messageEn:
+                      'A completed SIE import is required first. Tick "Bokföringsdata (SIE)" in the wizard so the chart of accounts, opening balances and verifications are fetched before customers, suppliers and invoices are imported.',
+                  }
+                : {}),
+            })
           }
 
           log.info(`Starting migration for user ${user.id} from ${consent.provider}`)
