@@ -24,6 +24,12 @@
  * items and samlingsverifikat siblings never leave the candidate set, so a
  * read cap keyed on id would revisit the same window every night.
  *
+ * Transactions whose items already read anchored are still propagated,
+ * outside the budget: the propagation also anchors the transaction's own
+ * pinned document (transactions.document_id) and stamps
+ * created_journal_entry_id on settled items so they leave the scan. That
+ * leg is idempotent and shrinks its own population, so it needs no cap.
+ *
  * This is the one implementation the daily cron
  * (app/api/extensions/invoice-inbox/underlag-reconcile/cron) and the manual
  * script (scripts/backfill-inbox-booked-underlag.ts) share. It never throws:
@@ -51,7 +57,7 @@ export const INBOX_UNDERLAG_RECONCILED_EVENT = 'InboxUnderlagReconciled'
 /** Default actor id in behandlingshistorik when the caller names none. */
 export const DEFAULT_RECONCILE_ACTOR_ID = 'inbox-underlag-reconcile'
 
-/** Link budget per run (unlinked items propagated) so a scheduled pass stays bounded. */
+/** Link budget per run (unlinked items linked) so a scheduled pass stays bounded. */
 export const DEFAULT_RECONCILE_MAX_ITEMS = 1000
 
 const PAGE_SIZE = 1000
@@ -238,11 +244,11 @@ async function reconcileCompany(
   }))
   const before = await resolveUnderlagAnchoring(supabase, companyId, anchoringInput)
 
-  // Only unlinked (or unreadable) items claim budget and get a propagation.
-  // Already-anchored siblings, anchored-elsewhere conflicts and locked
-  // periods are counted straight from the pre-state: re-propagating them
-  // would either no-op or fail identically, and letting them consume the
-  // budget is what would starve the real work.
+  // Only unlinked (or unreadable) items claim budget. Already-anchored
+  // siblings, anchored-elsewhere conflicts and locked periods are counted
+  // straight from the pre-state: re-linking them would either no-op or
+  // fail identically, and letting them consume the budget is what would
+  // starve the real work.
   const toLink = new Set<string>()
   for (const item of stranded) {
     if (!needsLink(before.get(item.id))) continue
@@ -263,9 +269,22 @@ async function reconcileCompany(
     return
   }
 
-  const txIdsToComplete = Array.from(
-    new Set(stranded.filter((i) => toLink.has(i.id)).map((i) => i.matched_transaction_id)),
-  )
+  // Propagate every transaction with link work, plus every transaction
+  // whose items already read anchored (or carry no document). The helper is
+  // idempotent and does two more things than the item link that only it
+  // can do: anchor the transaction's own pinned document
+  // (transactions.document_id, which no inbox item carries) and stamp
+  // created_journal_entry_id on settled items so they leave this scan.
+  // Neither claims budget: the stamp is what shrinks the candidate set, so
+  // this leg is self-limiting. Transactions whose items are all locked or
+  // anchored elsewhere are still skipped: the link would fail identically,
+  // and the conflict is a human decision.
+  const txIdsToComplete = new Set<string>()
+  for (const item of stranded) {
+    if (toLink.has(item.id) || before.get(item.id)?.status === 'anchored') {
+      txIdsToComplete.add(item.matched_transaction_id)
+    }
+  }
   for (const txId of txIdsToComplete) {
     const journalEntryId = bookedByTx.get(txId)
     if (!journalEntryId) continue

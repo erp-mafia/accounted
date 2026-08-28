@@ -91,7 +91,7 @@ describe('reconcileStrandedInboxUnderlag', () => {
     expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
   })
 
-  it('execute propagates only transactions with unlinked items and logs history only for repaired ones', async () => {
+  it('execute propagates unlinked and anchored transactions but logs history only for repaired ones', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     // Two items on TX1 (a samlingsverifikat) and one on TX2.
     enqueue({ data: [item('i1', C1, TX1), item('i2', C1, TX1), item('i3', C1, TX2)] })
@@ -106,10 +106,14 @@ describe('reconcileStrandedInboxUnderlag', () => {
       actorId: 'test-actor',
     })
 
-    // TX2's item was already anchored: re-propagating it would only no-op,
-    // and letting it claim budget is what starves the real work.
-    expect(propagate).toHaveBeenCalledTimes(1)
+    // TX2's item was already anchored, so its link is settled, but the
+    // propagation still runs for the legs only it covers (the transaction's
+    // pinned document, the created_journal_entry_id stamp); only TX1's
+    // unlinked item is re-read afterwards.
+    expect(propagate).toHaveBeenCalledTimes(2)
     expect(propagate).toHaveBeenCalledWith(expect.anything(), C1, TX1, JE1)
+    expect(propagate).toHaveBeenCalledWith(expect.anything(), C1, TX2, JE2)
+    expect(resolveAnchoring).toHaveBeenCalledTimes(2)
     expect(resolveAnchoring).toHaveBeenNthCalledWith(2, expect.anything(), C1, [
       { id: 'i1', document_id: 'doc-i1', journalEntryId: JE1 },
     ])
@@ -265,10 +269,14 @@ describe('reconcileStrandedInboxUnderlag', () => {
       truncated: true,
     })
     // u1 and u2 got the budget; u3 waits for the next run, without a
-    // misleading "still unlinked after re-run" line.
-    expect(propagate).toHaveBeenCalledTimes(2)
+    // misleading "still unlinked after re-run" line. TX1 (anchored items)
+    // is propagated outside the budget for its pin and stamp legs; the
+    // anchored-elsewhere conflict on TX2 is not.
+    expect(propagate).toHaveBeenCalledTimes(3)
+    expect(propagate).toHaveBeenCalledWith(expect.anything(), C1, TX1, JE1)
     expect(propagate).toHaveBeenCalledWith(expect.anything(), C1, TX3, 'je-3')
     expect(propagate).toHaveBeenCalledWith(expect.anything(), C2, 'tx-4', 'je-4')
+    expect(propagate).not.toHaveBeenCalledWith(expect.anything(), C1, TX2, JE2)
     expect(propagate).not.toHaveBeenCalledWith(expect.anything(), C2, 'tx-5', 'je-5')
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining('link budget spent'),
@@ -291,6 +299,40 @@ describe('reconcileStrandedInboxUnderlag', () => {
     expect(summary.scanned).toBe(1001)
     expect(summary.truncated).toBe(false)
     expect(findCalls('invoice_inbox_items', 'range')).toEqual([[0, 999], [1000, 1999]])
+  })
+
+  it('still propagates a transaction whose only item is anchored so an unlinked pin is repaired', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // i1's own document is anchored; i2 carries no document at all. Both
+    // read 'anchored', but the transaction may still have a pinned document
+    // (transactions.document_id) whose link failed earlier, and the items
+    // still lack their stamp: only the propagation repairs those.
+    enqueue({ data: [item('i1', C1, TX1), item('i2', C1, TX2, null)] })
+    resolveBooked.mockResolvedValue(new Map([[TX1, JE1], [TX2, JE2]]))
+    resolveAnchoring.mockResolvedValue(anchoring({ i1: 'anchored', i2: 'anchored' }))
+
+    const summary = await reconcileStrandedInboxUnderlag(supabase as unknown as SupabaseClient, {
+      execute: true,
+      maxItems: 0,
+      log: log as never,
+    })
+
+    // Outside the link budget (maxItems 0 still lets this run), no after-read
+    // (the pre-state is the verdict) and no history: nothing this run can
+    // vouch for changed the item's linkage.
+    expect(propagate).toHaveBeenCalledTimes(2)
+    expect(propagate).toHaveBeenCalledWith(expect.anything(), C1, TX1, JE1)
+    expect(propagate).toHaveBeenCalledWith(expect.anything(), C1, TX2, JE2)
+    expect(resolveAnchoring).toHaveBeenCalledTimes(1)
+    expect(summary).toMatchObject({
+      strandedOnBooked: 2,
+      repaired: 0,
+      alreadyAnchored: 2,
+      deferred: 0,
+      truncated: false,
+      historyAppended: 0,
+    })
+    expect(appendHistory).not.toHaveBeenCalled()
   })
 
   it('counts a locked-period item separately, never propagates it, and appends nothing', async () => {
