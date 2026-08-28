@@ -92,7 +92,7 @@ export default function BankingSettingsPanel() {
   const [reusableSessions, setReusableSessions] = useState<ReusableSessionOffer[]>([])
   const [attachingConnectionId, setAttachingConnectionId] = useState<string | null>(null)
   const [otherCompanyConnections, setOtherCompanyConnections] = useState<
-    { bank_name: string; company_id: string }[]
+    { bank_name: string; company_id: string; session_id: string | null }[]
   >([])
   // Set when the OAuth callback pointed at a connection that belongs to a
   // different company than the active one: without this the picker simply
@@ -229,12 +229,14 @@ export default function BankingSettingsPanel() {
       // competing for the bank's one-session-per-login slot.
       const { data: allConnections } = await supabase
         .from('bank_connections')
-        .select('bank_name, company_id, status')
+        .select('bank_name, company_id, session_id, status')
         .in('status', ['active', 'pending_selection'])
       setOtherCompanyConnections(
-        ((allConnections || []) as { bank_name: string; company_id: string }[]).filter(
-          (c) => c.company_id !== company.id
-        )
+        ((allConnections || []) as {
+          bank_name: string
+          company_id: string
+          session_id: string | null
+        }[]).filter((c) => c.company_id !== company.id)
       )
 
       // Reuse offers. Best-effort: a failure here costs the shortcut, never the
@@ -285,17 +287,21 @@ export default function BankingSettingsPanel() {
   async function confirmSameBankConnections(
     bankName: string,
     isReconnect: boolean,
+    currentSessionId?: string | null,
   ): Promise<boolean> {
-    const clashes = otherCompanyConnections.filter((c) => c.bank_name === bankName)
-    const names = clashes
-      .map((c) => companies.find((entry) => entry.company.id === c.company_id)?.company.name)
-      .filter((name): name is string => !!name)
+    const clashes = otherCompanyConnections
+      .filter((c) => c.bank_name === bankName)
+      .map((c) => ({
+        companyName:
+          companies.find((entry) => entry.company.id === c.company_id)?.company.name ?? null,
+        sessionId: c.session_id,
+      }))
 
     const warning = sameBankWarning({
       bankName,
-      clashCompanyNames: names,
-      clashCount: clashes.length,
+      clashes,
       isReconnect,
+      currentSessionId,
     })
     if (!warning) return true
     return confirm(warning)
@@ -442,7 +448,7 @@ export default function BankingSettingsPanel() {
     if (connectingRef.current) return
     // Lock before the confirm await, same reason as handleConnectBank.
     connectingRef.current = true
-    if (!(await confirmSameBankConnections(connection.bank_name, true))) {
+    if (!(await confirmSameBankConnections(connection.bank_name, true, connection.session_id))) {
       connectingRef.current = false
       return
     }
