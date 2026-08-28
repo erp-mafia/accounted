@@ -3949,6 +3949,13 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en:
       'A chosen revenue account is not configured for the VAT rate it would receive, so the sale would drop out of ruta 05 in the VAT declaration. Set the account VAT rate in the chart of accounts (or pick an account for the right rate) and try again.',
   },
+  WEBSHOP_ORDER_ZERO_RATE_CONTEXT_MISMATCH: {
+    httpStatus: 422,
+    message_sv:
+      'Ordern har en momsfri del men kundens land motsäger det valda 0 %-kontot (export- eller EU-konto). Bokför ordern enskilt och välj rätt konto för ruta 35-42.',
+    message_en:
+      'The order has a 0 % part but the customer country contradicts the chosen 0 % account (export or EU account). Book the order individually and pick the account for the right box (ruta 35-42).',
+  },
   WEBSHOP_ORDER_REVENUE_ACCOUNT_UNKNOWN: {
     httpStatus: 422,
     message_sv:

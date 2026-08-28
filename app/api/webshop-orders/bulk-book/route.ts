@@ -16,11 +16,12 @@ import {
   ROUNDING_ACCOUNT,
   WEBSHOP_PREFILL_ACCOUNTS,
 } from '@/lib/webshop-orders/booking-lines'
-import { inferDomesticSalesRate } from '@/lib/reports/vat-revenue-accounts'
 import {
-  defaultRateForVatTreatment,
-  isAccountVatTreatment,
-} from '@/lib/vat/account-vat-treatment'
+  resolveEffectiveVatRate,
+  resolveRevenueVatBox,
+} from '@/lib/reports/vat-revenue-accounts'
+import { getBoxForAccount, type MomsBox } from '@/lib/vat/moms-box-mapping'
+import { isEuMemberCountry } from '@/lib/vat/eu-countries'
 import {
   assertOrderBookable,
   bookOrderThroughEngine,
@@ -245,17 +246,18 @@ export const POST = withRouteContext(
     // finding): output VAT books on 2611/2621/2631 per rate regardless of
     // the template, and the momsdeklaration counts a custom account toward
     // ruta 05 only when the account resolves to that rate. The effective
-    // rate mirrors fetchDynamicVatAccounts EXACTLY, precedence included: an
-    // explicit momssats always wins, then a rate-mapped treatment, and
-    // number+name inference only when nothing is configured, so an account
-    // explicitly set to 6% can never pass a 25% slot on its name alone
-    // (review finding). A mismatched choice would silently drop the sale's
-    // base out of ruta 05 while its VAT lands in ruta 10-12, so the sweep
-    // refuses it and points at the fix. Rate 0 buckets carry no output VAT
-    // and span legitimate momsfri/export/EU accounts (usually unconfigured),
-    // so they only refuse an account whose resolved rate CONTRADICTS 0%
-    // (review finding). Accounts from our own default set are checked
-    // statically: each is valid only for the rate it is the default for.
+    // rate comes from resolveEffectiveVatRate, the SAME helper the ruta 05
+    // report arithmetic uses (#1912), so the two cannot drift: an explicit
+    // momssats always wins, then a rate-mapped treatment, and number+name
+    // inference only when nothing is configured, so an account explicitly
+    // set to 6% can never pass a 25% slot on its name alone (review
+    // finding). A mismatched choice would silently drop the sale's base out
+    // of ruta 05 while its VAT lands in ruta 10-12, so the sweep refuses it
+    // and points at the fix. Rate 0 buckets carry no output VAT and span
+    // legitimate momsfri/export/EU accounts (usually unconfigured), so they
+    // only refuse an account whose resolved rate CONTRADICTS 0% (review
+    // finding). Accounts from our own default set are checked statically:
+    // each is valid only for the rate it is the default for.
     const mismatchedAccounts: { rate: number; account: string }[] = []
     for (const { rate, account } of revenueTemplatePairs) {
       if (WEBSHOP_PREFILL_ACCOUNTS.includes(account)) {
@@ -267,11 +269,11 @@ export const POST = withRouteContext(
       const row = chartRowByAccount.get(account)
       if (!row) continue // unreachable: the existence guard above returned
       const expected = rate / 100
-      const configured =
-        row.default_vat_rate === null ? null : Number(row.default_vat_rate)
-      const effective = isAccountVatTreatment(row.default_vat_treatment)
-        ? (configured ?? defaultRateForVatTreatment(row.default_vat_treatment, 3))
-        : (configured ?? inferDomesticSalesRate(account, row.account_name))
+      const effective = resolveEffectiveVatRate({
+        account_number: account,
+        account_class: 3,
+        ...row,
+      })
       const mismatch =
         rate === 0
           ? effective !== null && effective !== 0
@@ -284,6 +286,42 @@ export const POST = withRouteContext(
         log,
         { requestId, details: { accounts: mismatchedAccounts } },
       )
+    }
+
+    // Rate-0 order-context guard (#1912): VAT amounts are unaffected by the
+    // 0% slot, but the momsdeklaration is not. Ruta 36 (varuförsäljning
+    // utanför EU) is wrong for a Swedish or EU billing country, ruta 40
+    // (tjänster omsatta utom landet) is wrong for Sweden, and the EU boxes
+    // 35/38/39 are wrong for Sweden or a non-EU country. The box comes from
+    // the chosen account's configured treatment, else the static BAS map;
+    // an account neither classifies (the common unconfigured momsfri case)
+    // gets no context check. The opposite direction, a DOMESTIC 0% account
+    // (3004, ruta 42) receiving a foreign order, stays advisory: the dialog
+    // already warns (zero_rate_foreign) and refusing it would regress every
+    // untemplated sweep. Checked per order below, because the billing
+    // country is per order and the doctrine is partial failure per row.
+    const zeroRateAccount = revenueAccountByRate[0]
+    const zeroRateChartRow = zeroRateAccount
+      ? chartRowByAccount.get(zeroRateAccount)
+      : undefined
+    const zeroRateBox: MomsBox | null = !zeroRateAccount
+      ? null
+      : WEBSHOP_PREFILL_ACCOUNTS.includes(zeroRateAccount)
+        ? (getBoxForAccount(zeroRateAccount) ?? null)
+        : zeroRateChartRow
+          ? resolveRevenueVatBox({
+              account_number: zeroRateAccount,
+              account_class: 3,
+              ...zeroRateChartRow,
+            })
+          : null // unreachable: the existence guard above returned
+    const zeroRateContextContradicted = (country: string): boolean => {
+      if (zeroRateBox === '36') return isEuMemberCountry(country)
+      if (zeroRateBox === '40') return country === 'SE'
+      if (zeroRateBox === '35' || zeroRateBox === '38' || zeroRateBox === '39') {
+        return country === 'SE' || !isEuMemberCountry(country)
+      }
+      return false
     }
 
     // Sequential on purpose: each order is its own draft -> claim -> commit
@@ -347,6 +385,26 @@ export const POST = withRouteContext(
           }),
         })
         continue
+      }
+
+      if (zeroRateAccount && order.customer_country) {
+        const country = order.customer_country.toUpperCase()
+        const hasZeroRateAmount = order.vat_breakdown.some(
+          (b) => b.rate === 0 && b.net !== 0,
+        )
+        if (hasZeroRateAmount && zeroRateContextContradicted(country)) {
+          results.push({
+            order_id: id,
+            order_number: order.order_number,
+            success: false,
+            error: failureFromCode('WEBSHOP_ORDER_ZERO_RATE_CONTEXT_MISMATCH', {
+              account: zeroRateAccount,
+              box: zeroRateBox,
+              customer_country: country,
+            }),
+          })
+          continue
+        }
       }
 
       const settings = settingsFor(order)
