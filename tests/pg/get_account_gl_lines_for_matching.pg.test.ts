@@ -339,6 +339,44 @@ describe('get_account_gl_lines_for_matching RPC: direction-aware NULL links (202
     expect(on1930.find((r) => r.journal_entry_id === transfer)).toBeUndefined()
   })
 
+  it('keeps a sign-contradicting NULL row settling the PRIMARY card (legacy_null_ok)', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedThreeAccounts()
+
+    // Reverse transfer: money moves 1931 -> 1930 (debit 1930 / credit 1931),
+    // linked only to the 1931-side outflow row (NULL, negative). The sign
+    // contradicts 1930's +net, so ONLY the primary-account exemption
+    // (condition 1) keeps the voucher settled on 1930. Without this case the
+    // primary assertion above also passes via sign match, leaving the
+    // exemption untested.
+    const reverse = await insertPostedJournalEntry({
+      userId, companyId, fiscalPeriodId,
+      entryDate: '2026-01-28', sourceType: 'import', voucherNumber: 3,
+      lines: [
+        { account: '1930', debit: 2593.75, credit: 0 },
+        { account: '1931', debit: 0, credit: 2593.75 },
+      ],
+    })
+    await insertTransaction({
+      companyId, userId, amount: -2593.75, date: '2026-01-28',
+      journalEntryId: reverse, cashAccountId: null,
+    })
+
+    const { rows: on1930 } = await getPool().query(
+      `SELECT journal_entry_id
+         FROM public.get_account_gl_lines_for_matching(p_company_id => $1, p_account_number => '1930')`,
+      [companyId],
+    )
+    expect(on1930.find((r) => r.journal_entry_id === reverse)).toBeUndefined()
+
+    // On 1931 (non-primary) the same row's sign MATCHES the -net leg: settled.
+    const { rows: on1931 } = await getPool().query(
+      `SELECT journal_entry_id
+         FROM public.get_account_gl_lines_for_matching(p_company_id => $1, p_account_number => '1931')`,
+      [companyId],
+    )
+    expect(on1931.find((r) => r.journal_entry_id === reverse)).toBeUndefined()
+  })
+
   it('keeps a sign-compatible NULL row settling the transfer leg', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedThreeAccounts()
 
