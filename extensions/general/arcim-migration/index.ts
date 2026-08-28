@@ -1243,9 +1243,9 @@ export const arcimMigrationExtension: Extension = {
               ...(sieViaApi
                 ? {
                     messageSv:
-                      'Bokföringsdata (SIE) måste importeras först. Kryssa i "Bokföringsdata (SIE)" i guiden så att kontoplan, ingående balanser och verifikationer hämtas innan kunder, leverantörer och fakturor importeras.',
+                      'Bokföringsdata (SIE) måste importeras först. Kryssa i "Bokföringsdata (SIE)" i guiden så att kontoplan, ingående balanser och verifikationer hämtas innan kunder, leverantörer, fakturor och anläggningstillgångar importeras.',
                     messageEn:
-                      'A completed SIE import is required first. Tick "Bokföringsdata (SIE)" in the wizard so the chart of accounts, opening balances and verifications are fetched before customers, suppliers and invoices are imported.',
+                      'A completed SIE import is required first. Tick "Bokföringsdata (SIE)" in the wizard so the chart of accounts, opening balances and verifications are fetched before customers, suppliers, invoices and fixed assets are imported.',
                   }
                 : {}),
             })
