@@ -31,7 +31,7 @@ later: much cheaper to ask the customer once at onboarding.
 
 **Special cases:**
 
-- **B2G (Swedish municipality/agency)**: still \`swedish_business\`. If the customer requires Peppol or another e-invoice format, deliver the invoice through an external e-invoice provider, then use \`gnubok_mark_invoice_as_sent\` to record delivery. Accounted currently creates PDF/email invoices and does not generate or send Peppol invoices.
+- **B2G (Swedish municipality/agency)**: still \`swedish_business\`. Public-sector buyers require Peppol e-invoices. Accounted sends Peppol BIS Billing 3 invoices from the invoice page in the dashboard, gated per company (request access under Inställningar > Fakturering; Accounted's operators enable it), aktiebolag senders only, standard invoices only (no credit notes). No MCP tool sends via Peppol yet, so the user sends from the dashboard. If Peppol access is not granted, or the company is an enskild firma, deliver the invoice through an external e-invoice provider, then use \`gnubok_mark_invoice_as_sent\` to record delivery.
 - **Consumer customer in another EU country (B2C distance sale)**: \`eu_business\` does NOT apply. Charge Swedish VAT (25/12/6 %) below the OSS threshold; above the threshold the company must register for OSS. This is rare for sole traders: flag the user if turnover suggests they're approaching the threshold.
 
 ## Workflow

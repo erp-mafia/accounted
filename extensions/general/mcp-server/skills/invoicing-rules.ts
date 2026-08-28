@@ -112,9 +112,9 @@ For consumer-targeted services (RUT: städning, RUT) or construction (ROT):
 
 This data goes on the invoice; Accounted's invoice template renders it automatically when set on the customer.
 
-## External e-invoicing (including B2G)
+## E-invoicing via Peppol (including B2G)
 
-Accounted currently creates PDF invoices and can send them by email. It does not generate e-invoice XML or deliver invoices through Peppol. If the customer requires an e-invoice, deliver it through an external e-invoice provider, then use \`gnubok_mark_invoice_as_sent\` to record the delivery and apply the same booking effect without sending another email.
+Accounted sends Peppol BIS Billing 3 e-invoices from the invoice page in the dashboard. Peppol sending is gated per company: the user requests access under Inställningar > Fakturering and Accounted's operators enable it. Restrictions: the sending company must be an aktiebolag (enskild firma is refused until GLN identifiers are supported), standard invoices only (no credit notes, no self-billed invoices), and the customer must be a Swedish business or organization with an org number. There is no MCP tool and no v1 API action for Peppol sending yet, so an agent cannot trigger it: tell the user to send from the invoice page. Never tell a user that Accounted lacks Peppol sending; say it is gated per company. If the company has no Peppol access, or is an enskild firma, and the customer requires an e-invoice, deliver it through an external e-invoice provider, then use \`gnubok_mark_invoice_as_sent\` to record the delivery and apply the same booking effect without sending another email.
 
 ## Critical rules
 

@@ -2,7 +2,9 @@
  * POST /api/v1/companies/{companyId}/invoices/{id}/mark-sent
  *
  * Transitions a DRAFT invoice to `sent` status. Use this for invoices
- * delivered outside the system (Peppol, postal, custom email). The full
+ * delivered outside the system (external e-invoice provider, postal,
+ * custom email). A dashboard Peppol send (POST /api/invoices/{id}/peppol/send)
+ * issues the invoice itself and never needs this endpoint. The full
  * :send pipeline (PDF + email) will land in PR-B-2b-3.
  *
  * What happens on commit:
@@ -78,9 +80,9 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/mark-sent',
   summary: 'Transition a draft invoice to sent (without emailing).',
   description:
-    'Marks a draft invoice as sent: for invoices delivered outside Accounted (Peppol, postal, manual email). Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). When the company books at issue (faktureringsmetoden without defer_invoice_booking), also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT). Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.',
+    'Marks a draft invoice as sent: for invoices delivered outside Accounted (an external e-invoice provider, postal, manual email). Not needed after a dashboard Peppol send: that flow issues the invoice itself. Peppol sending lives in the dashboard invoice page behind a per-company access grant (requested under Inställningar > Fakturering; aktiebolag senders, standard invoices only); a v1 or MCP Peppol send action is not yet available. Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). When the company books at issue (faktureringsmetoden without defer_invoice_booking), also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT). Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.',
   useWhen:
-    'You delivered the invoice through a channel other than Accounted\'s email (Peppol, postal, your own SMTP) and need to record it as sent so the F-series number is allocated and the journal entry is posted.',
+    'You delivered the invoice through a channel other than Accounted\'s email or its dashboard Peppol send (an external e-invoice provider, postal, your own SMTP) and need to record it as sent so the F-series number is allocated and the journal entry is posted.',
   doNotUseFor:
     'Sending the invoice via Accounted email: use :send (PR-B-2b-3) for that. Marking an already-sent invoice as paid: use :mark-paid (PR-B-2b-2).',
   pitfalls: [

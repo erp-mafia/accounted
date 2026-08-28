@@ -164,9 +164,9 @@ Electronics >100k SEK/invoice?
 
 ---
 
-## Peppol essentials for externally delivered e-invoices
+## Peppol e-invoices in Accounted
 
-Accounted currently creates PDF invoices and can send them by email. It does not generate e-invoice XML or deliver invoices through Peppol. If a customer requires a structured e-invoice, use an external e-invoice provider for delivery, then record the delivery with `gnubok_mark_invoice_as_sent`.
+Accounted sends Peppol BIS Billing 3 e-invoices from the invoice page in the dashboard (`POST /api/invoices/{id}/peppol/send`, Access Point: Qvalia). Sending is gated per company: access is requested under Inställningar > Fakturering and enabled by Accounted's operators. Restrictions: aktiebolag senders only (enskild firma needs a GLN, not yet supported), standard invoices only (no credit notes, no self-billing), Swedish org-number buyers (scheme 0007). No MCP tool or v1 API action sends via Peppol yet. Never describe Peppol sending as absent; it is gated per company. Where access is not granted, or the sender is an enskild firma, use an external e-invoice provider for delivery, then record the delivery with `gnubok_mark_invoice_as_sent`.
 
 Format: UBL 2.1 XML, profile Peppol BIS Billing 3.0.
 TypeCodes: **380** = invoice, **381** = credit note, **389** = self-billing.

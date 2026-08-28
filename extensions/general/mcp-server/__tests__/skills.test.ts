@@ -140,23 +140,47 @@ describe('Skills registry', () => {
     }
   })
 
-  it('does not advertise unsupported built-in e-invoice delivery', () => {
+  it('describes Peppol sending truthfully: gated per company, never absent (#546)', () => {
     const invoiceComplianceAtom = readFileSync(
       join(process.cwd(), '.claude/skills/swedish-invoice-compliance/SKILL.md'),
       'utf8',
     )
     const allBodies = [...skills.map((skill) => skill.body), invoiceComplianceAtom].join('\n')
 
-    expect(allBodies).not.toMatch(/Accounted\s+(?:renders|generates|produces)[^.\n]*EN\s*16931/i)
-    expect(allBodies).not.toMatch(/Accounted\s+(?:handles|sends|delivers)[^.\n]*Peppol/i)
+    // The release-pinned EN 16931 validation stack is still open (docs/PEPPOL_FOUNDATION.md),
+    // so no text may claim Accounted validates against it.
+    expect(allBodies).not.toMatch(/Accounted\s+(?:renders|generates|produces|validates)[^.\n]*EN\s*16931/i)
+    // Peppol send is live behind a per-company access grant (app/api/invoices/[id]/peppol/send).
+    // A text that claims the capability is absent sends users to a competitor; say gated instead.
+    expect(allBodies).not.toMatch(/(?:does not|doesn't|cannot|can't)[^.\n]*(?:send|deliver|generate)[^.\n]*Peppol/i)
+    expect(allBodies).not.toMatch(/Peppol[^.\n]*(?:is not|isn't|not yet)\s+(?:available|supported|possible)/i)
+    // No MCP tool or v1 action sends via Peppol yet: no text may hand an agent a Peppol send verb.
+    expect(allBodies).not.toMatch(/gnubok_send_invoice[^.\n]*Peppol/i)
+    expect(allBodies).not.toMatch(/gnubok_send_peppol|gnubok_peppol_send/i)
 
-    for (const slug of ['invoicing-rules', 'customer-onboarding']) {
-      const skill = skills.find((candidate) => candidate.slug === slug)
-      expect(skill?.body).toMatch(/external e-invoice provider/i)
-      expect(skill?.body).toContain('gnubok_mark_invoice_as_sent')
+    const truthfulTexts = [
+      ...['invoicing-rules', 'customer-onboarding'].map((slug) => {
+        const skill = skills.find((candidate) => candidate.slug === slug)
+        expect(skill, `skill ${slug}`).toBeTruthy()
+        return skill!.body
+      }),
+      invoiceComplianceAtom,
+    ]
+    for (const text of truthfulTexts) {
+      // Where it lives, and that it is gated per company.
+      expect(text).toMatch(/invoice page in the dashboard/i)
+      expect(text).toMatch(/(?:gated|access)[^.\n]*per company|per[- ]company[^.\n]*(?:access|gated)/i)
+      expect(text).toContain('Inställningar > Fakturering')
+      // The restrictions agents must not over-promise past.
+      expect(text).toMatch(/aktiebolag/i)
+      expect(text).toMatch(/enskild firma/i)
+      expect(text).toMatch(/standard invoices only|no credit notes/i)
+      // No agent-callable send verb yet.
+      expect(text).toMatch(/no MCP tool[^.\n]*Peppol|MCP tool[^.\n]*not (?:yet )?available/i)
+      // The fallback path stays documented for companies without access.
+      expect(text).toMatch(/external e-invoice provider/i)
+      expect(text).toContain('gnubok_mark_invoice_as_sent')
     }
-    expect(invoiceComplianceAtom).toMatch(/external e-invoice provider/i)
-    expect(invoiceComplianceAtom).toContain('gnubok_mark_invoice_as_sent')
   })
 
   it('findSkill resolves the workflow skill or null (sync workflow lookup)', async () => {

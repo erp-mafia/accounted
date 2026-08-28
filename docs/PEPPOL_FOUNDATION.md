@@ -13,7 +13,7 @@ The first slice implemented the invoice profile. The second slice added an immut
 
 `POST /api/invoices/{id}/peppol` now stores the exact generated XML as an immutable staged delivery. Staging assigns a stable UUID idempotency key, stores the recipient, profile identifiers, filename, SHA-256, retention date, and an append-only local audit event. It explicitly returns `network_submitted: false`. Repeating the request for the same invoice and XML returns the existing staged record.
 
-`GET /api/invoices/{id}/peppol/deliveries` returns a minimized status timeline projection without exposing XML, raw webhooks, or provider evidence. The invoice page can prepare a delivery, but its network send control remains disabled with a provider-required explanation.
+`GET /api/invoices/{id}/peppol/deliveries` returns a minimized status timeline projection without exposing XML, raw webhooks, or provider evidence. The invoice page can prepare a delivery; since 2026-08-21 its send control performs the network send through `POST /api/invoices/{id}/peppol/send` for companies holding a Peppol access grant (aktiebolag senders, standard invoices only; see "Access point: Qvalia" below).
 
 The provider-neutral `PeppolTransport` boundary separates:
 
@@ -22,7 +22,7 @@ The provider-neutral `PeppolTransport` boundary separates:
 - cryptographically verified webhook normalization;
 - evidence retrieval, including an optional exact transmitted document.
 
-No adapter is registered by core and no environment value can make an absent adapter appear available.
+Core registers an adapter only when provider credentials are present in the environment (`lib/init.ts`); no environment value can make an absent adapter appear available.
 
 The export supports:
 
