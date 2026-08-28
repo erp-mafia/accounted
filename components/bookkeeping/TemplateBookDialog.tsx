@@ -53,7 +53,11 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
   // Session-cached (lib/reference-data): opening the dialog costs no
   // requests once the lists are in the cache. null = still loading.
   const { templates: cachedTemplates, isLoading: templatesLoading } = useBookingTemplates()
-  const templates: BookingTemplateLibrary[] | null = templatesLoading ? null : cachedTemplates
+  // Templates hidden for this company (settings panel opt-in) never show in
+  // the booking flow; the settings panel is the only surface that lists them.
+  const templates: BookingTemplateLibrary[] | null = templatesLoading
+    ? null
+    : cachedTemplates.filter((tt) => !tt.is_hidden)
   const { periods } = useFiscalPeriods()
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<BookingTemplateLibrary | null>(null)

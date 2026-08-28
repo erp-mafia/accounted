@@ -1163,6 +1163,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   bank_connections: 'PSD2 connection state and tokens, not portable',
   bolagsverket_avtal_acceptances: 'service agreement acceptance state',
   bolagsverket_subscriptions: 'integration subscription state',
+  booking_template_hidden: 'per-company UI preference (hidden system templates); no bookkeeping content',
   booking_template_usage: 'usage telemetry',
   calendar_feeds: 'feed tokens (secrets)',
   capability_grants: 'entitlement state',

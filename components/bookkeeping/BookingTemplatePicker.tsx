@@ -57,7 +57,9 @@ export default function BookingTemplatePicker({ onApply, entityType, defaultAmou
   }, [open, templatesError, toast])
 
   const filtered = useMemo(() => {
-    let result = templates
+    // Templates hidden for this company (opt-in via the settings panel)
+    // never surface in the picker; only settings shows them, for restore.
+    let result = templates.filter((t) => !t.is_hidden)
 
     // Filter by entity type
     if (entityType) {
@@ -82,9 +84,11 @@ export default function BookingTemplatePicker({ onApply, entityType, defaultAmou
     return result
   }, [templates, entityType, selectedCategory, search])
 
-  // Unique categories present in templates
+  // Unique categories present in visible templates. Built from the
+  // hidden-filtered list so a category whose templates are all hidden does
+  // not render a chip that can only ever match nothing.
   const availableCategories = useMemo(() => {
-    const cats = new Set(templates.map((t) => t.category))
+    const cats = new Set(templates.filter((t) => !t.is_hidden).map((t) => t.category))
     return Array.from(cats).sort()
   }, [templates])
 
