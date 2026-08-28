@@ -8350,6 +8350,15 @@
     "settings_save_failed_title": "Kunde inte spara inställningen",
     "settings_open_page": "Öppna körjournalen"
   },
+  "data_analysis": {
+    "group_label": "Data och integritet",
+    "settings_heading": "Dataanalys",
+    "settings_toggle_label": "Tillåt att företagets bokföringsdata används för analys",
+    "settings_toggle_help": "Avstängt från början. När det är på analyseras företagets bokföringsutfall tillsammans med andra företag som valt samma sak, för att utvärdera och förbättra den automatiska konteringen: vilket konto som föreslogs, vilket konto som faktiskt bokfördes, beloppet och modellens säkerhet. Ingen fritext, inga verifikationstexter, inga personuppgifter och inga underlag ingår. Uppgifterna används aldrig för marknadsföring och lämnar inte Accounted eller de personuppgiftsbiträden som listas i integritetspolicyn. Stänger du av slutar insamlingen direkt.",
+    "settings_disclosure": "Endast konteringsutfall (föreslaget och bokfört konto, belopp, säkerhet). Ingen fritext, inga personuppgifter. Läs mer i vår",
+    "settings_privacy_link": "integritetspolicy",
+    "settings_save_failed_title": "Kunde inte spara inställningen"
+  },
   "reconciliation_underlag": {
     "heading": "Underlag",
     "heading_dated": "Underlag per {date}",

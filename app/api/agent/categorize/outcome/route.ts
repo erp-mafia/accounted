@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { isDataAnalysisOptedIn } from '@/lib/company/data-analysis'
 import { guardSandbox } from '@/lib/sandbox/guard'
 
 /**
@@ -14,7 +15,10 @@ import { guardSandbox } from '@/lib/sandbox/guard'
  *
  * Telemetry only: it never posts anything and is gated on auth + membership.
  * Sandbox bookings run on seed data, so they are silently skipped (a 204) to
- * keep the corpus clean.
+ * keep the corpus clean. The corpus is read across companies, so it only
+ * collects from companies that opted in to data analysis
+ * (company_settings.data_analysis_opt_in, #1346): everyone else gets the same
+ * silent 204 and no row.
  */
 
 const Schema = z.object({
@@ -57,6 +61,10 @@ export async function POST(request: Request): Promise<Response> {
   // Sandbox bookings are seed data: don't pollute the calibration corpus.
   const blocked = await guardSandbox(supabase, companyId)
   if (blocked) return noContent()
+
+  // Consent gate: the corpus is analysed across companies, so a company that
+  // has not opted in contributes nothing (default false, no grandfathering).
+  if (!(await isDataAnalysisOptedIn(supabase, companyId))) return noContent()
 
   const proposed = parsed.data.proposed_account ?? null
 

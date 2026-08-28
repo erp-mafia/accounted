@@ -11,6 +11,11 @@
  *
  * Note: .env.local points at production; this only SELECTs, so it is safe, but
  * it is still the prod corpus you are reading.
+ *
+ * Consent: samples are only written for, and only read from, companies with
+ * company_settings.data_analysis_opt_in = true (#1346). The write side is
+ * gated in POST /api/agent/categorize/outcome; the read side filters again
+ * here so a company that opted out after contributing drops out of the fit.
  */
 import { createClient } from '@supabase/supabase-js'
 import {
@@ -31,12 +36,25 @@ if (!url || !key) {
 const supabase = createClient(url, key)
 
 async function main() {
+  // Consent gate (#1346): only companies that opted in to data analysis.
+  const { data: optedIn, error: optedInError } = await supabase
+    .from('company_settings')
+    .select('company_id')
+    .eq('data_analysis_opt_in', true)
+  if (optedInError) throw optedInError
+  const optedInIds = (optedIn ?? []).map((r) => r.company_id as string)
+  if (optedInIds.length === 0) {
+    console.log('\nNo company has opted in to data analysis (company_settings.data_analysis_opt_in). Nothing to fit.')
+    return
+  }
+
   const rows: { confidence: number; was_correct: boolean }[] = []
   const PAGE = 1000
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabase
       .from('categorize_calibration_samples')
       .select('confidence, was_correct')
+      .in('company_id', optedInIds)
       .order('created_at', { ascending: false })
       .range(from, from + PAGE - 1)
     if (error) throw error

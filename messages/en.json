@@ -8350,6 +8350,15 @@
     "settings_save_failed_title": "Could not save the setting",
     "settings_open_page": "Open the driving log"
   },
+  "data_analysis": {
+    "group_label": "Data and privacy",
+    "settings_heading": "Data analysis",
+    "settings_toggle_label": "Allow the company's bookkeeping data to be used for analysis",
+    "settings_toggle_help": "Off by default. When on, the company's bookkeeping outcomes are analysed together with other companies that made the same choice, to evaluate and improve automatic booking: which account was proposed, which account was actually booked, the amount and the model's confidence. No free text, no voucher descriptions, no personal data and no supporting documents are included. The data is never used for marketing and never leaves Accounted or the processors listed in the privacy policy. Switching it off stops collection immediately.",
+    "settings_disclosure": "Booking outcomes only (proposed and booked account, amount, confidence). No free text, no personal data. Read more in our",
+    "settings_privacy_link": "privacy policy",
+    "settings_save_failed_title": "Could not save the setting"
+  },
   "reconciliation_underlag": {
     "heading": "Supporting documents",
     "heading_dated": "Supporting documents as of {date}",

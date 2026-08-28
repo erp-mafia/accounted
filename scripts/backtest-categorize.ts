@@ -13,6 +13,10 @@
  *   npx tsx scripts/backtest-categorize.ts [N]
  *   rm .env.local
  *
+ * Consent: only companies with company_settings.data_analysis_opt_in = true
+ * are read (#1346). Nobody is opted in by default, so an empty run is the
+ * expected state until companies flip the toggle in Inställningar > Företag.
+ *
  * Leakage caveat: a known vendor's counterparty template may already reflect
  * the very booking under test, inflating the "deterministic nailed it" segment.
  * The "model had to decide" segment below is the leakage-free measure.
@@ -34,10 +38,23 @@ async function main() {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY!
   const supabase = createClient(url, key)
 
+  // Consent gate (#1346): only companies that opted in to data analysis.
+  const { data: optedIn, error: optedInError } = await supabase
+    .from('company_settings')
+    .select('company_id')
+    .eq('data_analysis_opt_in', true)
+  if (optedInError) throw optedInError
+  const optedInIds = (optedIn ?? []).map((r) => r.company_id as string)
+  if (optedInIds.length === 0) {
+    console.log('\nNo company has opted in to data analysis (company_settings.data_analysis_opt_in). Nothing to backtest.')
+    return
+  }
+
   // Recent booked expense transactions with a counterparty.
   const { data: txs, error } = await supabase
     .from('transactions')
     .select('id, company_id, merchant_name, description, original_description, amount, date, currency, document_id, journal_entry_id')
+    .in('company_id', optedInIds)
     .not('journal_entry_id', 'is', null)
     .lt('amount', 0)
     .eq('is_business', true)
