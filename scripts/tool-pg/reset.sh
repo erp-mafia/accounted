@@ -68,6 +68,11 @@ for f in "$REPO_ROOT"/supabase/migrations/*.sql; do
 done
 echo "==> $count migrations applied"
 
+# NOTE: this blanket grant includes `anon`, which PostgREST needs to answer at
+# all. It also means THIS DATABASE IS NOT VALID FOR THE pg-real SUITE: ~29 of
+# those files assert least privilege ("does not grant EXECUTE to anon"), and
+# they fail here on unmodified main. Point `npm run test:pg` at its own
+# database, not at this one.
 echo "==> granting on everything the migrations created"
 psql_run -c "
   GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, anon, authenticated, service_role;
