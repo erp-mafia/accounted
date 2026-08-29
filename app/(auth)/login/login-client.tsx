@@ -855,6 +855,7 @@ export function LoginClient({
                 )}
                 {providers.map((provider) => (
                   <OAuthButton
+                    compact
                     key={provider.id}
                     provider={provider}
                     next={nextPath}
