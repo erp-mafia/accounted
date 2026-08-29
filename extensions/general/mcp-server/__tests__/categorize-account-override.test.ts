@@ -92,6 +92,7 @@ describe('gnubok_categorize_transaction: account_override', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow() }) // core: transactions
     enqueue({ data: settingsRow }) // core: company_settings
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: null }) // applyAccountOverride: chart_of_accounts miss
 
     await expect(
@@ -108,6 +109,7 @@ describe('gnubok_categorize_transaction: account_override', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow() })
     enqueue({ data: settingsRow })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: { account_number: '4020', account_class: 4, is_active: false } })
 
     await expect(
@@ -124,6 +126,7 @@ describe('gnubok_categorize_transaction: account_override', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow() })
     enqueue({ data: settingsRow })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     await expect(
       categorize.execute(
@@ -139,6 +142,7 @@ describe('gnubok_categorize_transaction: account_override', () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow() }) // core: transactions
     enqueue({ data: settingsRow }) // core: company_settings
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: { account_number: '4020', account_class: 4, is_active: true } }) // override chart hit
     enqueue({ data: guardTxRow() }) // tool: transactions re-fetch
     enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings

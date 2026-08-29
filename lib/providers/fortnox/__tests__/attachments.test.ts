@@ -90,6 +90,47 @@ describe('Fortnox attachments', () => {
     );
   });
 
+  it('falls back to one unfiltered listing when Fortnox rejects the financialyear filter with 400', async () => {
+    const getPaginated = vi
+      .fn()
+      .mockRejectedValueOnce(new FortnoxApiError('Fortnox API error: 400 Bad Request', 400, ''))
+      .mockResolvedValueOnce([
+        { FileId: 'file-1', Name: 'kvitto.pdf', VoucherSeries: 'A', VoucherNumber: 12, VoucherYear: 3 },
+        { FileId: 'file-2', Name: 'faktura.png', VoucherSeries: 'B', VoucherNumber: 7, VoucherYear: 4 },
+        { FileId: 'file-9', Name: 'gammalt.pdf', VoucherSeries: 'A', VoucherNumber: 1, VoucherYear: 1 },
+      ]);
+    const client = clientWith({ getPaginated } as Partial<FortnoxClient>);
+
+    await expect(fetchFortnoxFileConnections(client, 'token', [3, 4])).resolves.toEqual([
+      { fileId: 'file-1', name: 'kvitto.pdf', series: 'A', number: 12, financialYearId: 3 },
+      { fileId: 'file-2', name: 'faktura.png', series: 'B', number: 7, financialYearId: 4 },
+    ]);
+    expect(getPaginated).toHaveBeenCalledTimes(2);
+    expect(getPaginated).toHaveBeenNthCalledWith(
+      2,
+      'token',
+      '/voucherfileconnections',
+      'VoucherFileConnections',
+      { pageSize: 500 },
+    );
+  });
+
+  it('propagates a 400 from the unfiltered fallback and non-400 failures untouched', async () => {
+    const scopeError = new FortnoxApiError('Fortnox API error: 400 Bad Request', 400, 'behörighet');
+    const getPaginated = vi
+      .fn()
+      .mockRejectedValueOnce(new FortnoxApiError('Fortnox API error: 400 Bad Request', 400, ''))
+      .mockRejectedValueOnce(scopeError);
+    const client = clientWith({ getPaginated } as Partial<FortnoxClient>);
+    await expect(fetchFortnoxFileConnections(client, 'token', [3])).rejects.toBe(scopeError);
+
+    const forbidden = new FortnoxApiError('forbidden', 403);
+    const client403 = clientWith({
+      getPaginated: vi.fn().mockRejectedValue(forbidden),
+    } as Partial<FortnoxClient>);
+    await expect(fetchFortnoxFileConnections(client403, 'token', [3])).rejects.toBe(forbidden);
+  });
+
   it('downloads through the archive path without fallback when it succeeds', async () => {
     const response = { bytes: new ArrayBuffer(2), contentType: 'application/pdf' };
     const getBinary = vi.fn().mockResolvedValue(response);

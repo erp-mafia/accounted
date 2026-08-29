@@ -15,6 +15,7 @@ import { discoverAtoms } from '@/scripts/lib/atom-discovery'
 
 const repoRoot = join(__dirname, '..', '..', '..', '..')
 const skillsDir = join(repoRoot, 'claude-plugin', 'skills')
+const commandsDir = join(repoRoot, 'claude-plugin', 'commands')
 
 function readPluginSkills(): { file: string; body: string }[] {
   return readdirSync(skillsDir).map((dir) => {
@@ -23,14 +24,24 @@ function readPluginSkills(): { file: string; body: string }[] {
   })
 }
 
-const pluginSkills = readPluginSkills()
+// Slash commands (commands/*.md) reference the same server surface as the
+// skills and get the same guard; /accounted:setup is the install-time entry
+// (issue #1814) that hands off to the onboarding skill.
+function readPluginCommands(): { file: string; body: string }[] {
+  return readdirSync(commandsDir)
+    .filter((f) => f.endsWith('.md'))
+    .map((f) => ({ file: `commands/${f}`, body: readFileSync(join(commandsDir, f), 'utf8') }))
+}
+
+const pluginSkills = [...readPluginSkills(), ...readPluginCommands()]
 const serverSource = readFileSync(join(__dirname, '..', 'server.ts'), 'utf8')
 
 describe('claude-plugin wrapper references', () => {
-  it('ships the seven v1 skills', () => {
+  it('ships the seven v1 skills and the setup command', () => {
     expect(pluginSkills.map((s) => s.file).sort()).toEqual([
       'bookkeep/SKILL.md',
       'check/SKILL.md',
+      'commands/setup.md',
       'month-close/SKILL.md',
       'payroll/SKILL.md',
       'start/SKILL.md',

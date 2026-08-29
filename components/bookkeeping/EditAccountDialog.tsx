@@ -26,12 +26,14 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { Loader2, Plus, X } from 'lucide-react'
 import DimensionCombobox from '@/components/dimensions/DimensionCombobox'
 import {
-  fetchDimensions,
   type AccountDimensionRuleDto,
   type DimensionDto,
   type DimensionRuleType,
 } from '@/components/dimensions/types'
 import type { BASAccount } from '@/types'
+import { useCompanySettings, useDimensions } from '@/lib/reference-data/hooks'
+import { fetchDimensions } from '@/lib/reference-data/fetchers'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { AccountVatTreatmentSelect } from './AccountVatTreatmentSelect'
 import {
   defaultRateForVatTreatment,
@@ -81,8 +83,11 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
   // dimensions enabled (same /api/settings gate as JournalEntryForm). Rule
   // mutations apply immediately via their own fetches + toasts; they are
   // deliberately independent of the account PUT below.
-  const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
-  const [dims, setDims] = useState<DimensionDto[]>([])
+  // Settings and the dimension registry come from the session cache
+  // (lib/reference-data), so the section and its pickers are ready on open.
+  const { settings: companySettings } = useCompanySettings()
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
+  const { dimensions: dims } = useDimensions()
   const [rules, setRules] = useState<AccountDimensionRuleDto[]>([])
   const [rulesLoading, setRulesLoading] = useState(false)
   const [addRuleOpen, setAddRuleOpen] = useState(false)
@@ -92,32 +97,14 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
   const [isAddingRule, setIsAddingRule] = useState(false)
 
   useEffect(() => {
-    let cancelled = false
-    fetch('/api/settings')
-      .then((r) => r.json())
-      .then(({ data }) => {
-        if (!cancelled && data?.dimensions_enabled === true) setDimensionsEnabled(true)
-      })
-      .catch(() => {
-        /* keep the section hidden */
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  useEffect(() => {
     if (!dimensionsEnabled) return
     let cancelled = false
     setRulesLoading(true)
-    Promise.all([
-      fetchDimensions().catch(() => [] as DimensionDto[]),
-      fetch(`/api/dimensions/rules?account_number=${account.account_number}`)
-        .then(async (r) => ({ ok: r.ok, json: await r.json().catch(() => null) }))
-        .catch(() => ({ ok: false, json: null })),
-    ]).then(([fetchedDims, rulesRes]) => {
+    fetch(`/api/dimensions/rules?account_number=${account.account_number}`)
+      .then(async (r) => ({ ok: r.ok, json: await r.json().catch(() => null) }))
+      .catch(() => ({ ok: false, json: null }))
+      .then((rulesRes) => {
       if (cancelled) return
-      setDims(fetchedDims)
       if (rulesRes.ok) {
         setRules((rulesRes.json?.data?.rules ?? []) as AccountDimensionRuleDto[])
       }
@@ -158,7 +145,8 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
         if (!valueId) {
           const refreshed = await fetchDimensions().catch(() => null)
           if (refreshed) {
-            setDims(refreshed)
+            // Hand the fresh registry to the shared cache as well.
+            void invalidateReferenceData('ref:dimensions')
             valueId = findValueId(refreshed)
           }
         }

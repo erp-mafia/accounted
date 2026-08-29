@@ -251,6 +251,7 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       error: null,
     }) // invoice fetch
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: null, error: null }) // invoice_payments insert
     enqueue({ data: null, error: null }) // transactions update (link)
@@ -296,8 +297,10 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       error: null,
     }) // invoice fetch
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
-    // No cash_accounts enqueue: resolveSettlementAccount short-circuits to
-    // '1930' when cash_account_id is null, with no DB call.
+    // With cash_account_id null, resolveSettlementAccount lists the company's
+    // enabled cash accounts for the currency (issue #1722); no rows here, so
+    // it keeps the 1930 fallback.
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: null, error: null }) // invoice_payments insert
     enqueue({ data: null, error: null }) // transactions update (link)
@@ -402,6 +405,7 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       error: null,
     }) // invoice fetch
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: null, error: null }) // invoice_payments insert
     enqueue({ data: null, error: null }) // transactions update (link)
@@ -468,6 +472,7 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       error: null,
     }) // invoice fetch
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: null, error: null }) // invoice_payments insert
     enqueue({ data: null, error: null }) // transactions update (link)

@@ -116,7 +116,7 @@ Följande delsystem matar journalen:
 | Banktransaktioner | Synkroniserade via PSD2 (Enable Banking) eller importerade bankfiler | Kontering via kategoriseringsregler och konteringsmallar |
 | Kvitto- och underlagshantering | Uppladdade eller inmejlade underlag, maskinellt avlästa | Kontering efter granskning |
 | Kreditnotor | Kreditering av utgående och inkommande fakturor | Omvänd kontering av originalfaktura |
-| Löner | Lönekörningar, arbetsgivardeklaration (AGI) | Debet 7xxx + 7510, kredit 2710/2730/1930 |
+| Löner | Lönekörningar, arbetsgivardeklaration (AGI) | Debet 7xxx + 7510, kredit 2710/2731/1930 |
 | Anläggningstillgångar | Anläggningsregister med årliga avskrivningar | Debet 78xx, kredit 12xx |
 | Periodiseringar | Periodiseringsscheman över flera perioder | Debet/kredit 17xx respektive 29xx |
 
@@ -227,7 +227,7 @@ Momsperiod: [ ] Månad  [ ] Kvartal  [ ] Helår
 
 9.2. Behandlingshistoriken genereras automatiskt av systemet och kan inte ändras av användaren.
 
-9.3. Behandlingshistoriken exporteras under **Importera/Exportera > Exportera > Säkerhetsbackup**. Exporten är en ZIP-fil som innehåller `revision/behandlingshistorik.json` (alla ändringar) och `revision/systemdokumentation.json` (kontoplan, verifikationsserier, arkiveringsprinciper), utöver SIE-filer, rapporter och underlag.
+9.3. Behandlingshistoriken tas fram under **Rapporter > Behandlingshistorik** per räkenskapsår eller datumintervall och kan laddas ner som PDF, CSV eller Excel. Rapporten visar registreringstidpunkt, utförare och detaljer för varje bokföringspost samt ändringar i bokföringssystemet (kontoplan, inställningar, räkenskapsår, importer, åtkomst) och anger programversionen. Behandlingshistoriken ingår även i säkerhetsbackupen under **Importera/Exportera > Exportera > Säkerhetsbackup**: ZIP-filen innehåller `revision/behandlingshistorik.json` (alla ändringar) och `revision/systemdokumentation.json` (kontoplan, verifikationsserier, arkiveringsprinciper, programversion), utöver SIE-filer, rapporter och underlag.
 
 ## 10. Import och export
 
@@ -252,12 +252,14 @@ Momsperiod: [ ] Månad  [ ] Kvartal  [ ] Helår
 |---|---|---|
 | Enable Banking (PSD2) | Bankkontosynkronisering | Bank -> Accounted (läsning av transaktioner och saldon) |
 | Skatteverket | Momsdeklaration, arbetsgivardeklaration (AGI), skattekonto | Accounted -> Skatteverket (inlämning signeras med BankID) |
-| Anthropic (Claude) | Maskinell kategorisering av transaktioner och avläsning av underlag | Accounted -> Anthropic -> Accounted (transaktions- och dokumentdata skickas, förslag returneras) |
+| Amazon Bedrock (AWS) | Maskinell kategorisering av transaktioner och avläsning av underlag. Modellerna som används är Anthropics Claude-modeller, körda inom Bedrock (eu-north-1, Stockholm) | Accounted -> Amazon Bedrock -> Accounted (transaktions- och dokumentdata skickas, förslag returneras; datan lämnar inte EU) |
 | Resend | E-postutskick | Accounted -> Resend -> mottagare (fakturor, påminnelser) |
 | BankID (via identitetsleverantör) | Inloggning och signering | Accounted -> leverantör -> Accounted |
 | PostHog | Användningsstatistik för tjänsten | Accounted -> PostHog |
 
 [ANGE YTTERLIGARE INTEGRATIONER OM TILLÄMPLIGT, t.ex. import från Fortnox, Visma, Bokio, Björn Lundén eller Briox]
+
+[SJÄLVHOSTAD DRIFT: raden för Amazon Bedrock ovan beskriver den hostade tjänstens standardkonfiguration. Om din installation använder en annan AI-leverantör (t.ex. AI_PROVIDER=anthropic med direkt Anthropic-API, eller en egen endpoint via AI_BASE_URL) gäller inte skrivningen "datan lämnar inte EU" automatiskt; uppdatera raden så att den beskriver din faktiska leverantör, region och ditt faktiska dataflöde]
 
 **Notering om maskinell behandling:** förslag från maskinella hjälpmedel bokförs aldrig automatiskt utan att en användare har granskat och godkänt dem. Godkännandet loggas i behandlingshistoriken.
 

@@ -39,6 +39,11 @@ vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
   cancelOrphanedPaymentEntry: (...args: unknown[]) => mockCancelOrphan(...args),
 }))
 
+const mockAnchorDocument = vi.fn()
+vi.mock('@/lib/core/documents/supplier-invoice-underlag', () => ({
+  anchorSupplierInvoiceDocument: (...args: unknown[]) => mockAnchorDocument(...args),
+}))
+
 import { POST } from '../route'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
@@ -152,6 +157,7 @@ describe('POST /api/supplier-invoices/[id]/book', () => {
       'je-1',
       expect.any(String),
     )
+    expect(mockAnchorDocument).not.toHaveBeenCalled()
   })
 
   it('books the registration entry and links it', async () => {
@@ -172,6 +178,9 @@ describe('POST /api/supplier-invoices/[id]/book', () => {
     expect(mockCreateRegistrationEntry).toHaveBeenCalled()
     // No accrual items on the fixture, so no schedule creation.
     expect(mockCreateSchedules).not.toHaveBeenCalled()
+    // The invoice's retained source document is anchored to the fresh
+    // registration verifikat (no-op inside the helper when there is none).
+    expect(mockAnchorDocument).toHaveBeenCalledWith(mockSupabase, 'company-1', 'si-1')
   })
 
   it('creates accrual schedules and surfaces failures as warnings', async () => {

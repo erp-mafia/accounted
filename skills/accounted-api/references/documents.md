@@ -64,6 +64,26 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "file_name": "kvitto-2026-05-12.pdf",
+    "mime_type": "application/pdf",
+    "file_size_bytes": 184320,
+    "sha256_hash": "8a7f…",
+    "version": 1,
+    "is_current_version": true,
+    "journal_entry_id": "a8f1…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/documents/{id}/download`
@@ -108,6 +128,24 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "file_name": "kvitto-2026-05-12.pdf",
+    "mime_type": "application/pdf",
+    "sha256_hash": "8a7f…",
+    "download_url": "https://…supabase.co/storage/v1/object/sign/…",
+    "expires_in_seconds": 900
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/documents/{id}/link`
@@ -136,6 +174,13 @@ Request body:
 { journal_entry_id: string, journal_entry_line_id?: string, inbox_item_id?: string }
 ```
 
+Example request:
+```json
+{
+  "journal_entry_id": "a8f1…"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -146,6 +191,22 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "journal_entry_id": "a8f1…",
+    "journal_entry_line_id": null,
+    "file_name": "kvitto-2026-05-12.pdf"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -177,6 +238,13 @@ Request body:
 { journal_entry_id: string }
 ```
 
+Example request:
+```json
+{
+  "journal_entry_id": "dcccb3c5-b44a-4536-82fa-f0b9bb77f900"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -187,6 +255,20 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "4d2fcdbb-13b3-4ff3-911f-a4cc82f1f6db",
+    "created_journal_entry_id": "dcccb3c5-b44a-4536-82fa-f0b9bb77f900"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```

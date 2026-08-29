@@ -13,10 +13,14 @@ vi.mock('@/lib/salary/salary-entries', () => ({ createSalaryRunEntries: vi.fn() 
 vi.mock('@/lib/salary/vacation-ledger', () => ({
   syncVacationLedgerForEmployees: vi.fn(),
 }))
+vi.mock('@/lib/salary/ytd', () => ({
+  refreshRunYtd: vi.fn().mockResolvedValue({ ok: true, updated: 0 }),
+}))
 
 import { advanceAndBookSalaryRun, bookPaidSalaryRun } from '../book-run'
 import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
+import { refreshRunYtd } from '@/lib/salary/ytd'
 import { eventBus } from '@/lib/events'
 
 const log = {
@@ -194,6 +198,12 @@ describe('bookPaidSalaryRun', () => {
 
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.data.entryIds).toEqual(['je-1', 'je-2'])
+    // Booking is the last chance to correct the payslip's Ackumulerat block
+    // before the run becomes immutable.
+    expect(refreshRunYtd).toHaveBeenCalledWith(expect.anything(), {
+      companyId: 'company-1',
+      salaryRunId: 'run-1',
+    })
     expect(createSalaryRunEntries).toHaveBeenCalledTimes(1)
     expect(createSalaryRunEntries).toHaveBeenCalledWith(
       expect.anything(),

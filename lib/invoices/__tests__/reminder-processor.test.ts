@@ -28,18 +28,41 @@ vi.mock('@supabase/ssr', () => {
   }
 })
 
+const sendEmailSpy = vi.hoisted(() => vi.fn())
+
+vi.mock('@/lib/email/invoice-sender', () => ({
+  resolveInvoiceSender: vi.fn().mockResolvedValue(undefined),
+}))
+
 vi.mock('@/lib/email/service', () => ({
   getEmailService: () => ({
-    sendEmail: vi.fn().mockResolvedValue({ success: true }),
+    sendEmail: sendEmailSpy,
   }),
 }))
+
+const brandSenderMock = vi.hoisted(() => ({
+  getSenderForCompany: vi.fn(),
+  getBaseUrlForBrand: vi.fn(),
+}))
+vi.mock('@/lib/email/brand-sender', () => brandSenderMock)
 
 import {
   processOverdueReminders,
   determineReminderLevel,
   calculateDaysOverdue,
+  sendReminder,
 } from '../reminder-processor'
+import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import { getReminderDaysConfig } from '@/lib/email/reminder-templates'
+
+sendEmailSpy.mockResolvedValue({ success: true })
+brandSenderMock.getSenderForCompany.mockResolvedValue({
+  fromName: null,
+  fromAddress: null,
+  replyTo: null,
+  brand: null,
+})
+brandSenderMock.getBaseUrlForBrand.mockReturnValue('https://app.gnubok.se')
 
 describe('determineReminderLevel', () => {
   it('returns null below the level-1 threshold', () => {
@@ -167,5 +190,122 @@ describe('processOverdueReminders: credit-note filter', () => {
       (c) => c.method === 'in' && c.args[0] === 'status',
     )
     expect(inStatus?.args[1]).toContain('overdue')
+  })
+})
+
+describe('sendReminder: brand mail (WL-13)', () => {
+  const invoice = Object.assign(
+    makeInvoice({
+      company_id: 'company-1',
+      invoice_number: 'F-1001',
+      due_date: '2026-06-01',
+      total: 1250,
+      currency: 'SEK',
+    }),
+    { customer: makeCustomer({ name: 'Erik Andersson', email: 'erik@example.se' }) },
+  )
+  // bankgiro satisfies the payment-account gate; without a usable SEK
+  // account sendReminder refuses before ever reaching the mail path.
+  const company = makeCompanySettings({
+    company_name: 'Kund AB',
+    email: 'faktura@kund.se',
+    bankgiro: '123-4567',
+  })
+  const surcharges = {
+    interestAmount: 0,
+    interestRate: 0,
+    interestFromDate: '2026-06-02',
+    interestDays: 0,
+    reminderFee: 0,
+  }
+
+  beforeEach(() => {
+    sendEmailSpy.mockClear()
+    sendEmailSpy.mockResolvedValue({ success: true })
+    brandSenderMock.getSenderForCompany.mockResolvedValue({
+      fromName: null,
+      fromAddress: null,
+      replyTo: null,
+      brand: null,
+    })
+    brandSenderMock.getBaseUrlForBrand.mockReturnValue('https://app.gnubok.se')
+  })
+
+  it('unbranded: canonical action link and today\'s From fields', async () => {
+    await sendReminder(invoice, company, 1, 'tok-1', surcharges)
+
+    const options = sendEmailSpy.mock.calls[0][0]
+    expect(options.text).toContain('https://app.gnubok.se/invoice-action/tok-1')
+    expect(options.fromName).toBe('Kund AB')
+    expect(options.replyTo).toBe('faktura@kund.se')
+    expect(options.fromAddress).toBeUndefined()
+  })
+
+  it('branded: action link on the brand domain, mail rides the verified brand sender', async () => {
+    const brand = { appName: 'Siffra', domain: 'app.siffra.se' }
+    brandSenderMock.getSenderForCompany.mockResolvedValue({
+      fromName: 'Siffra',
+      fromAddress: 'noreply@post.siffra.se',
+      replyTo: 'support@siffra.se',
+      brand,
+    })
+    brandSenderMock.getBaseUrlForBrand.mockReturnValue('https://app.siffra.se')
+
+    await sendReminder(invoice, company, 1, 'tok-1', surcharges)
+
+    expect(brandSenderMock.getSenderForCompany).toHaveBeenCalledWith('company-1')
+    expect(brandSenderMock.getBaseUrlForBrand).toHaveBeenCalledWith(brand)
+    const options = sendEmailSpy.mock.calls[0][0]
+    expect(options.text).toContain('https://app.siffra.se/invoice-action/tok-1')
+    // The COMPANY stays the displayed sender; only the address is the brand's.
+    expect(options.fromName).toBe('Kund AB')
+    expect(options.fromAddress).toBe('noreply@post.siffra.se')
+    expect(options.replyTo).toBe('faktura@kund.se')
+    expect(options.html).not.toMatch(/accounted/i)
+  })
+
+  it('unverified brand sender domain: brand link but no From address override', async () => {
+    brandSenderMock.getSenderForCompany.mockResolvedValue({
+      fromName: 'Siffra',
+      fromAddress: null,
+      replyTo: 'support@siffra.se',
+      brand: { appName: 'Siffra', domain: 'app.siffra.se' },
+    })
+    brandSenderMock.getBaseUrlForBrand.mockReturnValue('https://app.siffra.se')
+
+    await sendReminder(invoice, company, 1, 'tok-1', surcharges)
+
+    const options = sendEmailSpy.mock.calls[0][0]
+    expect(options.text).toContain('https://app.siffra.se/invoice-action/tok-1')
+    expect(options.fromAddress).toBeUndefined()
+  })
+})
+
+describe('sendReminder payment-account gate', () => {
+  const customer = makeCustomer({ email: 'kund@example.se' })
+  const surcharges = { interestAmount: 0, interestRate: 0.1, interestDays: 0, reminderFee: 60 }
+
+  it('skips a EUR reminder when the company has no EUR payment account (no SEK fallback)', async () => {
+    const sekOnly = makeCompanySettings({ bankgiro: '123-4567', iban: 'SE4550000000058398257466' })
+    const invoice = { ...makeInvoice({ currency: 'EUR', total: 500 }), customer }
+    const result = await sendReminder(invoice, sekOnly, 1, 'tok', surcharges)
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('INVOICE_PAYMENT_ACCOUNT_MISSING:EUR')
+  })
+
+  it('sends a SEK reminder on legacy SEK details', async () => {
+    const sekOnly = makeCompanySettings({ bankgiro: '123-4567' })
+    const invoice = { ...makeInvoice({ currency: 'SEK', total: 500 }), customer }
+    const result = await sendReminder(invoice, sekOnly, 1, 'tok', surcharges)
+    expect(result.success).toBe(true)
+  })
+
+  it('sends a EUR reminder once a EUR account is configured', async () => {
+    const company = makeCompanySettings({
+      invoice_payment_accounts: { EUR: { iban: 'DE89370400440532013000', bic: 'DEUTDEFF' } } as never,
+    })
+    const invoice = { ...makeInvoice({ currency: 'EUR', total: 500 }), customer }
+    const result = await sendReminder(invoice, company, 1, 'tok', surcharges)
+    expect(result.success).toBe(true)
   })
 })

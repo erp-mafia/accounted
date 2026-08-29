@@ -20,6 +20,7 @@ import { useFormat } from '@/lib/hooks/use-format'
 import { BillingActions } from '@/components/settings/BillingActions'
 import { PLAN_PRICES } from '@/components/settings/billing-plans'
 import type { BillingPlan } from '@/lib/stripe/client'
+import { useBranding } from '@/lib/branding/brand-context'
 
 // What the paid tier unlocks: the external connections. One item per PAID
 // capability in lib/entitlements/keys.ts (ai, bank_sync, skatteverket,
@@ -40,6 +41,12 @@ interface BillingView {
   chargeDeferred: boolean
   paidJustNow: boolean
   isDemo: boolean
+  /**
+   * WL-10: present when the company is covered by its byrå team's agreement
+   * (active team-scoped manual grant). Replaces the upgrade pitch with a
+   * read-only "Ingår i <teamName>s avtal" state.
+   */
+  teamAgreement: { teamName: string } | null
 }
 
 function UnlockList({ className }: { className?: string }) {
@@ -70,6 +77,7 @@ export function BillingSettingsContent() {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
   const t = useTranslations('settings_billing')
+  const { appName } = useBranding()
   const errorLocale = useLocale() as ErrorLocale
   const { formatDateLong } = useFormat()
   // null = the billing state is not known: still loading, or the read failed
@@ -111,6 +119,7 @@ export function BillingSettingsContent() {
           configured?: unknown
           trialEndsAt?: unknown
           isDemo?: unknown
+          teamAgreement?: unknown
         }
         if (!active) return
         if (typeof d?.isPaying !== 'boolean' || typeof d?.configured !== 'boolean') {
@@ -126,6 +135,13 @@ export function BillingSettingsContent() {
         // Set by the checkout success redirect. Provisioning happens via the
         // Stripe webhook, so isPaying can lag the redirect by a few seconds.
         const paidJustNow = new URLSearchParams(window.location.search).get('success') === '1'
+        // Only a well-formed teamAgreement (non-empty team name) activates the
+        // read-only agreement state: anything else falls back to the normal view.
+        const rawAgreement = d.teamAgreement as { teamName?: unknown } | null | undefined
+        const teamAgreement =
+          rawAgreement && typeof rawAgreement.teamName === 'string' && rawAgreement.teamName.length > 0
+            ? { teamName: rawAgreement.teamName }
+            : null
         setView({
           isPaying: d.isPaying,
           configured: d.configured,
@@ -134,6 +150,7 @@ export function BillingSettingsContent() {
           chargeDeferred,
           paidJustNow,
           isDemo: d.isDemo === true,
+          teamAgreement,
         })
       } catch {
         if (active) {
@@ -187,7 +204,7 @@ export function BillingSettingsContent() {
         <SettingsGroup label={t('group_yours')}>
           <SettingsRow label={t('row_status')} borderless>
             <span>{t('status_demo')}</span>
-            <SettingsRowNote>{t('status_demo_note')}</SettingsRowNote>
+            <SettingsRowNote>{t('status_demo_note', { appName })}</SettingsRowNote>
           </SettingsRow>
         </SettingsGroup>
         <SettingsGroup label={t('group_included')}>
@@ -235,6 +252,28 @@ export function BillingSettingsContent() {
             </span>
             <SettingsRowNote>{t('paid_just_now_note')}</SettingsRowNote>
           </SettingsRow>
+        </SettingsGroup>
+      </div>
+    )
+  }
+
+  // Covered by the byrå team's agreement (WL-10) → read-only state instead
+  // of the upgrade pitch and Stripe checkout. The page stays visible for
+  // transparency; billing is the byrå's, so there is nothing to manage here.
+  if (view.teamAgreement) {
+    return (
+      <div>
+        {header}
+        <SettingsGroup label={t('group_yours')}>
+          <SettingsRow label={t('row_status')} borderless>
+            <span className="font-medium">
+              {t('team_agreement_status', { teamName: view.teamAgreement.teamName })}
+            </span>
+            <SettingsRowNote>{t('team_agreement_note')}</SettingsRowNote>
+          </SettingsRow>
+        </SettingsGroup>
+        <SettingsGroup label={t('group_included')}>
+          <UnlockList className="pt-3" />
         </SettingsGroup>
       </div>
     )

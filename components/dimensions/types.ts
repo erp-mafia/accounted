@@ -61,36 +61,3 @@ export const PROJECT_DIM_NO = 6
  */
 export const DIMENSION_CODE_PATTERN = /^[A-Za-z0-9ÅÄÖåäö_+\-]{1,20}$/
 
-/**
- * Load the company's dimension registry. The handler lazily seeds system dims
- * 1/6 via ensure_company_dimensions, so the result always contains at least
- * Kostnadsställe + Projekt. Throws the parsed error envelope on failure so
- * callers can hand it straight to getErrorMessage().
- */
-export async function fetchDimensions(): Promise<DimensionDto[]> {
-  const res = await fetch('/api/dimensions')
-  const json = await res.json().catch(() => null)
-  if (!res.ok) {
-    throw json ?? new Error('Failed to load dimensions')
-  }
-  return (json?.dimensions ?? []) as DimensionDto[]
-}
-
-let cachedDimensionsPromise: Promise<DimensionDto[]> | null = null
-
-/**
- * Module-level cached variant of fetchDimensions for high-mount-count
- * consumers (one registry fetch per page load instead of one per line
- * picker). A failed fetch clears the cache so the next mount retries.
- * Registry mutations are rare enough that staleness within a page visit
- * is acceptable — the register UI uses the uncached fetch.
- */
-export function fetchDimensionsCached(): Promise<DimensionDto[]> {
-  if (!cachedDimensionsPromise) {
-    cachedDimensionsPromise = fetchDimensions().catch((err) => {
-      cachedDimensionsPromise = null
-      throw err
-    })
-  }
-  return cachedDimensionsPromise
-}

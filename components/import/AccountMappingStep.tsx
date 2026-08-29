@@ -248,7 +248,10 @@ export default function AccountMappingStep({
                   <TableHead className="w-64 max-w-64">Källnamn</TableHead>
                   <TableHead className="w-12"></TableHead>
                   <TableHead className="w-64">Målkonto</TableHead>
-                  <TableHead className="min-w-72">{t('vat_treatment_column')}</TableHead>
+                  {/* table-fixed sizes columns from the header's width only:
+                      min-w collapsed this column to nothing on laptop widths
+                      and its selects overflowed into Konfidens (2026-08-20). */}
+                  <TableHead className="w-72">{t('vat_treatment_column')}</TableHead>
                   <TableHead className="w-24">Konfidens</TableHead>
                   <TableHead className="sticky right-0 z-20 w-32 min-w-32 border-l border-border bg-background text-right">
                     {t('vat_treatment_confirm')}

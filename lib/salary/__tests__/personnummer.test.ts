@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import {
+  PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED,
   validatePersonnummer,
   extractLast4,
   extractBirthDate,
@@ -304,6 +305,47 @@ describe('encryption roundtrip', () => {
     const a = encryptPersonnummer(pnr)
     const b = encryptPersonnummer(pnr)
     expect(a).not.toBe(b)
+  })
+})
+
+describe('encryption key configuration guard (#1996)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('throws a coded error in production when PERSONNUMMER_ENCRYPTION_KEY is unset', () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', '')
+
+    let thrown: unknown
+    try {
+      encryptPersonnummer('199001019802')
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(Error)
+    // The code is what withRouteContext -> errorResponse() dispatches on, so
+    // the route answers 503 with the registry message instead of a generic 500.
+    expect((thrown as { code?: unknown }).code).toBe(PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED)
+    expect(PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED).toBe('PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED')
+  })
+
+  it('decrypt is guarded the same way (genuine ciphertext, no key, production)', () => {
+    const ciphertext = encryptPersonnummer('199001019802')
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', '')
+
+    expect(() => decryptPersonnummer(ciphertext)).toThrow(
+      expect.objectContaining({ code: PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED }),
+    )
+  })
+
+  it('falls back to the deterministic dev key outside production', () => {
+    vi.stubEnv('NODE_ENV', 'test')
+    vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', '')
+
+    const encrypted = encryptPersonnummer('199001019802')
+    expect(decryptPersonnummer(encrypted)).toBe('199001019802')
   })
 })
 

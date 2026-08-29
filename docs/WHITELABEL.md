@@ -109,6 +109,10 @@ A few things that look brand-related but are configured elsewhere:
 
 Use this checklist when several white-label domains point at one hosted Accounted deployment:
 
+Accounted operates these customer-facing production hosts: `acount.accounted.se`, `arbore.accounted.se`, `elma.accounted.se`, `m360.accounted.se`, `redovisningskompaniet.accounted.se`, `willem.accounted.se`, and `ziffr.accounted.se`. They must never use the staging Supabase project `metjnjrhvujscngnpzdv`. The request proxy emits an alerting structured error, then returns an empty, non-cacheable `503` before session handling when that exact production-host and staging-project pairing is detected. The event records only the approved hostname and the `staging` classification, not the configured backend URL or credentials. This containment guard does not classify other domains, prove cross-tenant isolation, or replace the operational work to place customer environments under production ownership and controls.
+
+`NEXT_PUBLIC_WHITELABEL_DOMAINS` is an auth callback allowlist, not an authoritative customer-production inventory. It can also contain demo, pilot, or self-hosted domains, so the staging-backend guard deliberately does not derive production status from it. When Accounted approves another customer-facing production host, add it to `CUSTOMER_PRODUCTION_WHITE_LABEL_HOSTS` in `lib/domains/production-white-label-backend.ts` as part of the same reviewed rollout.
+
 1. Register the exact custom hostname on the hosting deployment and finish its DNS verification.
 2. Add that hostname to the comma-separated `NEXT_PUBLIC_WHITELABEL_DOMAINS` value. Entries are exact hostnames such as `portal.partner.se`; wildcard entries are ignored.
 3. Add `https://portal.partner.se/auth/callback` and `https://portal.partner.se/invite/*` to the Supabase Auth Redirect URLs allowlist. Keep the canonical `NEXT_PUBLIC_APP_URL` callback there too.

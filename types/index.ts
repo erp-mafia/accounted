@@ -14,10 +14,13 @@ export type CompanyRole = 'owner' | 'admin' | 'member' | 'viewer'
 export type TeamRole = 'owner' | 'admin' | 'member'
 export type MemberSource = 'direct' | 'team'
 
-// Team (consulting firm grouping)
+// Team (consulting firm grouping). 'personal' teams are the implicit
+// one-per-user grouping; 'byra' teams are ops-created accounting-firm
+// tenants (WL-08) with invites, a brand, and cockpit access.
 export interface Team {
   id: string
   name: string
+  kind: 'personal' | 'byra'
   created_by: string
   created_at: string
   updated_at: string
@@ -81,10 +84,6 @@ export type CompanyMigrationResetBlockerCode =
   | 'migration_window_expired'
   | 'sandbox_company'
   | 'locked_or_closed_periods'
-  | 'journal_entries_exist'
-  | 'non_import_committed_entries'
-  | 'voucher_sequence_state_exists'
-  | 'invoice_records_exist'
   | 'authority_submission_detected'
   | 'live_bank_connections'
   | 'imports_in_progress'
@@ -115,6 +114,53 @@ export interface CompanyMigrationResetRpcResult {
   replacement_company_id?: string
   archived_at?: string
   counts?: CompanyMigrationResetEligibility['counts']
+}
+
+// Fiscal-year reset (issue #1883): guarded hard-delete of one OPEN fiscal
+// year's vouchers. Mirrors the migration-reset envelope shapes above.
+export type FiscalYearResetBlockerCode =
+  | 'period_closed'
+  | 'period_locked'
+  | 'company_lock_date'
+  | 'year_end_state'
+  | 'arsredovisning_state'
+  | 'next_year_dependency'
+  | 'vat_declared'
+  | 'agi_declared'
+  | 'rot_rut_state'
+  | 'cross_year_reference'
+
+export interface FiscalYearResetBlocker {
+  code: FiscalYearResetBlockerCode
+  count?: number
+  date?: string
+}
+
+export interface FiscalYearResetEligibility {
+  eligible: boolean
+  blockers: FiscalYearResetBlocker[]
+  period: {
+    id: string
+    name: string
+    period_start: string
+    period_end: string
+  }
+  counts: {
+    vouchers: number
+    documents_to_detach: number
+  }
+}
+
+export interface FiscalYearResetRpcResult {
+  ok: boolean
+  code?: string
+  eligible?: boolean
+  blockers?: FiscalYearResetBlocker[]
+  period?: FiscalYearResetEligibility['period']
+  counts?: FiscalYearResetEligibility['counts']
+  deleted?: number
+  detached_documents?: number
+  period_name?: string
 }
 
 // User preferences (cross-company)
@@ -525,6 +571,12 @@ export interface CompanySettings {
   // for correctness. The nav row also shows when mileage_trips rows exist.
   mileage_enabled: boolean
 
+  // Data analysis consent (migration 20260828120000): when true, the
+  // company's bookkeeping outcomes may be read across companies to evaluate
+  // and improve automatic booking. Default false, enforced server-side
+  // (lib/company/data-analysis.ts); the UI only mirrors it.
+  data_analysis_opt_in: boolean
+
   // Salary payments (migration 20260508120000 + 20260703190000).
   // preferred_payment_format defaults to 'pain001' — Bankgirot Lön is
   // retired by the banks during 2026.
@@ -744,6 +796,12 @@ export interface Transaction {
 
   // Import tracking
   import_source: string | null
+  // The bank_file_imports batch that inserted this row (bank-file CSV/CAMT
+  // import paths only). NULL for PSD2/manual/MCP rows and rows imported
+  // before migration 20260820071500. Scope key for undo_bank_file_import.
+  // Optional like the other late-added columns: older fixtures/readers
+  // predate it.
+  bank_file_import_id?: string | null
   reference: string | null  // OCR number, Bankgiro reference
 
   // Counterparty identification from PSD2 (creditor for outflows, debtor for
@@ -761,7 +819,10 @@ export interface Transaction {
 }
 
 // Bank File Import (tracking table for file-based imports)
-export type BankFileImportStatus = 'pending' | 'processing' | 'completed' | 'failed'
+// 'undone' = the batch's unbooked transactions were bulk-deleted via
+// undo_bank_file_import; a re-import of the same file reuses the row
+// (upsert on company_id + file_hash) and moves it back to 'processing'.
+export type BankFileImportStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'undone'
 
 export interface BankFileImport {
   id: string
@@ -2479,6 +2540,14 @@ export type PendingOperationType =
   | 'bulk_book_inbox_items'
   // PR #614: link a single bank tx to an already-posted verifikat (no new JE)
   | 'link_transaction_journal_entry'
+  // Account-keyed reconciliation (bank accounts + skattekonto): link outside
+  // rows to existing verifikat / clear such a link. No ledger writes.
+  | 'reconciliation_match'
+  | 'reconciliation_unmatch'
+  // Sign-off "avstämt t.o.m. <datum>" on one account (account_reconciliations row).
+  | 'reconciliation_signoff'
+  // Book the remainder of a bank selection as a fee/interest/rounding verifikat and link it.
+  | 'reconciliation_residual'
   // PR5: Skatteverket filing via MCP. Commit = "send for BankID signing"
   // (returns a signing link); the user's signature in the browser files it.
   | 'submit_vat_declaration'
@@ -2493,6 +2562,10 @@ export type PendingOperationType =
   // employee master data (1.8; personnummer encrypted at staging), and
   // cutover opening balances for mid-year migrations (2.4).
   | 'update_payslip_line'
+  // Set THIS RUN's base salary for one employee (salary_run_employees.
+  // monthly_salary, draft only). The per-run column is what the engine reads;
+  // the employee master's fixed salary stays untouched (variable owner pay).
+  | 'set_run_salary'
   | 'register_absence'
   | 'create_employee'
   | 'update_employee'
@@ -2913,7 +2986,7 @@ export interface SIEAccountMapping {
 // receipt ack) but AI extraction has not landed yet; extracted_data is NULL
 // until the deferred worker (or the sweep cron) flips it to 'received'.
 export type InboxItemStatus = 'received' | 'processing' | 'error'
-export type InboxItemSource = 'email' | 'upload' | 'whatsapp'
+export type InboxItemSource = 'email' | 'upload' | 'whatsapp' | 'mail_hunt' | 'peppol'
 
 export type CompanyInboxStatus = 'active' | 'deprecated' | 'blocked'
 
@@ -2949,6 +3022,31 @@ export interface CompanyInboundDomain {
   status: CompanyInboundDomainStatus
   resend_domain_id: string | null
   dns_records: InboundDomainDnsRecord[] | null
+  verified_at: string | null
+  last_checked_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type CompanySendingDomainStatus = 'pending' | 'verified' | 'failed'
+
+// A DNS record the user must publish to verify their custom sending domain
+// (verbatim from the Resend domains API; same shape as the inbound records).
+export type SendingDomainDnsRecord = InboundDomainDnsRecord
+
+// Opt-in per-company sender identity for invoice email. Only a row with
+// status = 'verified' AND enabled = true changes the From header; everything
+// else falls back to the platform sender.
+export interface CompanySendingDomain {
+  id: string
+  company_id: string
+  domain: string
+  status: CompanySendingDomainStatus
+  sender_local_part: string
+  sender_name: string | null
+  enabled: boolean
+  resend_domain_id: string | null
+  dns_records: SendingDomainDnsRecord[] | null
   verified_at: string | null
   last_checked_at: string | null
   created_at: string
@@ -3003,7 +3101,15 @@ export interface InboxChannelContext {
    * everything else on this type belongs to the WhatsApp branch and is absent
    * on them.
    */
-  channel: 'whatsapp' | 'mail_hunt'
+  channel: 'whatsapp' | 'mail_hunt' | 'peppol'
+  /** Set by lib/invoices/peppol-inbox-delivery.ts: provenance of a received e-invoice. */
+  peppol_provider?: string | null
+  /** The provider's id for the received document (Qvalia integrationId). */
+  peppol_document_id?: string | null
+  peppol_document_type?: 'Invoice' | 'CreditNote' | null
+  peppol_sender_endpoint?: string | null
+  /** Archived exact UBL XML, when the inbox document is a rendering (embedded PDF) instead. */
+  peppol_xml_document_id?: string | null
   /** Set by lib/receipt-hunt/ingest.ts: which mailbox the receipt came out of. */
   mail_mailbox?: string | null
   mail_provider?: 'gmail' | 'microsoft' | null
@@ -3608,6 +3714,7 @@ export type AuditAction =
   | 'SECURITY_EVENT'
   | 'INTEGRITY_FAILURE'
   | 'COMMITTED_AT_OVERRIDE'
+  | 'RESET_SNAPSHOT'
 
 export interface AuditLogEntry {
   id: string
@@ -4061,6 +4168,11 @@ export interface IngestOptions {
   /** Only INSERT transactions + dedup. Skip reconciliation, invoice matching,
    * supplier matching, and auto-categorization. For viewer imports. */
   rawInsertOnly?: boolean
+  /** The bank_file_imports batch id to stamp on every inserted row
+   * (transactions.bank_file_import_id). Set by the bank-file import paths
+   * so "undo this import" can scope its bulk delete to exactly this batch.
+   * Omitted by every other caller (PSD2 sync, MCP): those rows stay NULL. */
+  bankFileImportId?: string
 }
 
 /** Result of the transaction ingestion pipeline */
@@ -4163,6 +4275,11 @@ export interface WebshopOrder {
   legacy_transaction_id: string | null
   /** Financial delta arrived from the store after booking froze this row. */
   remote_changed_after_freeze: boolean
+  /** User marked the row as booked/handled outside the integration. */
+  manually_booked_at: string | null
+  manually_booked_by: string | null
+  /** Optional informational reference to the existing verifikat. */
+  manually_booked_journal_entry_id: string | null
   created_at: string
   updated_at: string
 }
@@ -4244,7 +4361,8 @@ export interface InvoiceExtractionResult {
   confidence: number
   suggestedTemplateId?: string
   // Set by the caller (not the model) when a long PDF was sliced before
-  // extraction: fields were read from the first `analyzed` of `total` pages.
+  // extraction: fields were read from `analyzed` of `total` pages (the first
+  // pages plus the last, where totals usually sit).
   pages?: { total: number; analyzed: number }
 }
 

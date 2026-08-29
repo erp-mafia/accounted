@@ -14,9 +14,9 @@ import { useToast } from '@/components/ui/use-toast'
 import { Check, Loader2, Mail, ArrowLeft, ExternalLink, Eye, EyeOff } from 'lucide-react'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { isBankIdEnabled } from '@/lib/auth/bankid'
+import { isBankIdEnabled } from '@/lib/auth/bankid-flags'
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
-import { getBranding } from '@/lib/branding/service'
+import { useBranding } from '@/lib/branding/brand-context'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
 import {
   consumeInviteCookie,
@@ -25,12 +25,19 @@ import {
 import { AuthPageSkeleton } from '@/components/auth/AuthPageSkeleton'
 import { AuthFormError } from '@/components/auth/AuthFormError'
 import { GoogleAuthButton } from '@/components/auth/GoogleAuthButton'
+import {
+  TurnstileChallenge,
+  type TurnstileChallengeHandle,
+} from '@/components/auth/TurnstileChallenge'
 import { isGoogleAuthEnabled } from '@/lib/auth/google-oauth'
 import { classifyAuthError, type AuthErrorKind } from '@/lib/auth/classify-auth-error'
+import {
+  captchaTokenOptions,
+  isTurnstileSubmissionBlocked,
+} from '@/lib/auth/turnstile'
 import { persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
+import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { cn } from '@/lib/utils'
-
-const branding = getBranding()
 
 const BankIdAuth = dynamic(
   () => import('@/components/auth/BankIdAuth').then((module) => module.BankIdAuth),
@@ -46,18 +53,23 @@ export default function RegisterPage() {
 }
 
 function RegisterPageContent() {
-  // `invite` is the only query parameter this page reads. It deliberately does
-  // NOT read `next`: nothing links here with one (bounceToAuth in
-  // lib/supabase/middleware.ts targets /login and the two MFA pages only, and
-  // app/invite/[token]/page.tsx sends `?invite=`), the already-signed-in case
-  // is handled in the middleware behind safeReturnTo, and neither signup path
-  // has a destination to spend it on: the password path leaves through the
-  // confirmation mail and /auth/callback, and the BankID path must land a
-  // brand-new account on '/' or /select-company rather than a deep link it has
-  // no membership for. If a destination is ever wanted here it MUST go through
+  // `invite` and `next` are the only query parameters this page reads.
+  //
+  // `next` is the post-signup destination /login forwards when a visitor with
+  // no account arrives from the MCP OAuth consent page
+  // (/login?next=/api/mcp-oauth/authorize?…, issue #1814). It goes through
   // safeReturnTo (lib/auth/safe-return-to.ts); a hand-rolled check on this
-  // value is an open redirect.
+  // value is an open redirect. Without one ('/'), nothing changes: the
+  // password path leaves through the confirmation mail and /auth/callback,
+  // and the BankID path lands a brand-new account on /select-company. With
+  // one, every path resumes it: BankID hard-navigates (the consent page is a
+  // route handler returning raw HTML), while the confirmation link and Google
+  // OAuth carry it to /auth/callback, which honours only the consent
+  // destination. A new account has no membership to spend a deep link on, so
+  // nothing else may ever be forwarded here.
   const searchParams = useSearchParams()
+  const nextPath = safeReturnTo(searchParams.get('next'), '/')
+  const loginHref = nextPath === '/' ? '/login' : `/login?next=${encodeURIComponent(nextPath)}`
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -65,6 +77,9 @@ function RegisterPageContent() {
   const [isCancelling, setIsCancelling] = useState(false)
   const [isRegistered, setIsRegistered] = useState(false)
   const [duplicateEmail, setDuplicateEmail] = useState<string | null>(null)
+  // Invite-only brand domain (signup gate said no): the form is replaced by
+  // an interstitial pointing at the canonical Accounted signup.
+  const [inviteOnlyBlocked, setInviteOnlyBlocked] = useState(false)
   const [inviteEmail, setInviteEmail] = useState<string | null>(null)
   const [bankIdUser, setBankIdUser] = useState<{ givenName?: string; surname?: string } | null>(null)
   const [bankIdFlowId, setBankIdFlowId] = useState<string | null>(null)
@@ -76,13 +91,18 @@ function RegisterPageContent() {
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [confirmError, setConfirmError] = useState<string | null>(null)
   const [showPassword, setShowPassword] = useState(false)
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const passwordInputRef = useRef<HTMLInputElement>(null)
   const confirmInputRef = useRef<HTMLInputElement>(null)
   const emailInputRef = useRef<HTMLInputElement>(null)
+  const turnstileRef = useRef<TurnstileChallengeHandle>(null)
   const { toast } = useToast()
   const router = useRouter()
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
+  // Per-request brand merged over getBranding() defaults (WL-12): identical
+  // values on default hosts, brand values on branded hosts.
+  const branding = useBranding()
   const googleAuthEnabled = isGoogleAuthEnabled()
   const t = useTranslations('register')
   const tAuth = useTranslations('auth')
@@ -203,6 +223,11 @@ function RegisterPageContent() {
       const json = await res.json()
 
       if (!res.ok) {
+        if (json.error === 'signup_not_allowed') {
+          // Invite-only brand domain: same interstitial as the email path.
+          setInviteOnlyBlocked(true)
+          return
+        }
         if (json.error === 'already_linked') {
           // email_exists kind: the alert renders a sign-in link, which is the
           // recovery path for both "BankID taken" and "email taken".
@@ -244,6 +269,13 @@ function RegisterPageContent() {
 
       if (await acceptPendingInvite()) {
         window.location.href = '/'
+        return
+      }
+
+      if (nextPath !== '/') {
+        // Resume the MCP consent flow: the account exists and the consent
+        // page accepts a user with no company yet.
+        window.location.assign(nextPath)
         return
       }
 
@@ -303,18 +335,59 @@ function RegisterPageContent() {
       return
     }
 
+    if (isTurnstileSubmissionBlocked(captchaToken)) {
+      setFormError({ kind: 'unknown', message: tAuth('turnstile_required') })
+      return
+    }
+
     setIsLoading(true)
 
     try {
-      const { data, error } = await supabase.auth.signUp({
-        email: emailValue,
-        password: passwordValue,
-        options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
-        },
+      // Server-side signup (POST /api/auth/signup): the route performs the
+      // GoTrue signUp and enforces the invite-only brand-domain gate, which
+      // a direct browser call to Supabase would bypass. It builds the
+      // /auth/callback confirmation URL from the request host and carries
+      // `next` along, so the mail flow is unchanged.
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: emailValue,
+          password: passwordValue,
+          captchaToken: captchaTokenOptions(captchaToken).captchaToken ?? null,
+          next: nextPath !== '/' ? nextPath : null,
+        }),
       })
+      const json = await res.json().catch(() => ({}))
 
-      if (error) {
+      if (!res.ok) {
+        const error = {
+          code: json?.error?.code,
+          message: json?.error?.message ?? t('register_failed_default'),
+          status: res.status,
+        }
+        if (error.code === 'signup_not_allowed') {
+          // Invite-only brand domain: swap the form for the interstitial
+          // that sends the visitor to the canonical Accounted signup.
+          setInviteOnlyBlocked(true)
+          return
+        }
+        if (error.code === 'brand_lookup_failed') {
+          // Transient brand-lookup error (the gate failed safe rather than
+          // guess). Ask the user to retry instead of implying they were
+          // turned away. Localized here, not from the raw response envelope.
+          setFormError({ kind: 'unknown', message: t('error_temporary') })
+          return
+        }
+        // The route's validateBody rejection is a flat envelope with no
+        // `code`; the client already gates password strength and presence
+        // before this fetch, so a 400 without a code is an email Zod
+        // rejected (e.g. user@localhost, which passes the browser's
+        // type=email). Surface the specific field message, not the generic.
+        if (!error.code && res.status === 400) {
+          setFormError({ kind: 'email_invalid', message: t('error_email_invalid') })
+          return
+        }
         console.error('[register] signUp error', error.message)
         const kind = classifyAuthError(error)
         if (kind === 'weak_password') {
@@ -341,7 +414,7 @@ function RegisterPageContent() {
       persistLoginMethodHint('email')
 
       // If auto-confirmed (local dev), process invite immediately and redirect
-      if (data.session) {
+      if (json?.data?.status === 'session') {
         const cookieMatch = document.cookie.match(/gnubok-invite-token=([^;]+)/)
         const inviteToken = cookieMatch?.[1]
 
@@ -364,16 +437,17 @@ function RegisterPageContent() {
         }
 
         // Auto-confirmed but no invite or invite failed: go to onboarding
-        // (invite cookie is preserved so the onboarding fallback can retry)
-        window.location.href = '/'
+        // (invite cookie is preserved so the onboarding fallback can retry),
+        // or resume the MCP consent flow when that is where we came from.
+        window.location.href = nextPath
         return
       }
 
       // Supabase obfuscates duplicate signups (to prevent user enumeration):
-      // when the email already belongs to a confirmed account, it returns
-      // data.user with identities: [] and no error, and sends no email.
-      // Detect that case so we don't show a misleading "check your email" screen.
-      if (data.user && (data.user.identities?.length ?? 0) === 0) {
+      // when the email already belongs to a confirmed account, no mail is
+      // sent. The route surfaces that as 'duplicate' so we don't show a
+      // misleading "check your email" screen.
+      if (json?.data?.status === 'duplicate') {
         setDuplicateEmail(emailValue)
         return
       }
@@ -387,8 +461,60 @@ function RegisterPageContent() {
         message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
       })
     } finally {
+      turnstileRef.current?.reset()
       setIsLoading(false)
     }
+  }
+
+  if (inviteOnlyBlocked) {
+    // Deliberately no email in the outbound URL: the canonical register page
+    // never reads one, and an address in a URL lands in browser history,
+    // Referer headers and proxy logs. The visitor retypes it.
+    const canonicalRegisterHref = `${branding.appUrl.replace(/\/+$/, '')}/register`
+
+    return (
+      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
+        <div className="w-full max-w-sm animate-slide-up space-y-8">
+          <div className="flex justify-center">
+            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
+              <Mail className="h-7 w-7 text-primary" />
+            </div>
+          </div>
+
+          <div className="text-center space-y-2">
+            <h1 className="text-2xl tracking-tight">
+              {t('invite_only_title', { appName: branding.appName })}
+            </h1>
+            <p className="text-muted-foreground text-sm leading-relaxed">
+              {t('invite_only_body', { appName: branding.appName })}
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-border bg-background p-4">
+            <p className="text-sm text-muted-foreground text-center leading-relaxed">
+              {t('invite_only_hint')}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Button className="w-full" asChild>
+              <a href={canonicalRegisterHref}>
+                {t('invite_only_cta')}
+                <ExternalLink className="ml-2 h-4 w-4" />
+              </a>
+            </Button>
+            <Button
+              variant="ghost"
+              className="w-full text-muted-foreground"
+              onClick={() => setInviteOnlyBlocked(false)}
+            >
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              {t('back')}
+            </Button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   if (duplicateEmail) {
@@ -424,7 +550,7 @@ function RegisterPageContent() {
               screen above, so nothing is lost by dropping it.
             */}
             <Button className="w-full" asChild>
-              <Link href="/login">
+              <Link href={loginHref}>
                 {t('sign_in')}
               </Link>
             </Button>
@@ -515,7 +641,7 @@ function RegisterPageContent() {
                 action={
                   formError.kind === 'email_exists' ? (
                     <Link
-                      href="/login"
+                      href={loginHref}
                       className="font-medium underline underline-offset-2"
                     >
                       {t('sign_in')}
@@ -737,7 +863,16 @@ function RegisterPageContent() {
                 </p>
               )}
             </div>
-            <Button type="submit" className="w-full h-11" disabled={isLoading}>
+            <TurnstileChallenge
+              ref={turnstileRef}
+              action="accounted_signup"
+              onTokenChange={setCaptchaToken}
+            />
+            <Button
+              type="submit"
+              className="w-full h-11"
+              disabled={isLoading || isTurnstileSubmissionBlocked(captchaToken)}
+            >
               {isLoading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -785,6 +920,7 @@ function RegisterPageContent() {
                 {googleAuthEnabled && (
                   <GoogleAuthButton
                     compact
+                    next={nextPath}
                     onError={(message) => setFormError({ kind: 'oauth', message })}
                   />
                 )}
@@ -807,7 +943,7 @@ function RegisterPageContent() {
         <p className="mt-6 text-center text-[13px] text-muted-foreground">
           {t('already_have_account')}{' '}
           <Link
-            href="/login"
+            href={loginHref}
             className="font-medium text-foreground underline underline-offset-2 hover:opacity-80 transition-opacity"
           >
             {t('sign_in')}
@@ -816,11 +952,23 @@ function RegisterPageContent() {
 
         <p className="mt-3 text-center text-xs text-muted-foreground/80 leading-relaxed">
           {t('terms_prefix')}{' '}
-          <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
+          {/* Same targets as the login page: platform terms on the marketing
+              site, in-app /privacy (host-relative for branded domains). */}
+          <a
+            href="https://accounted.se/terms"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-foreground transition-colors"
+          >
             {t('terms_link')}
           </a>{' '}
           {t('terms_and')}{' '}
-          <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
+          <a
+            href="/privacy"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-foreground transition-colors"
+          >
             {t('privacy_link')}
           </a>
           .

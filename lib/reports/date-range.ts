@@ -22,10 +22,13 @@ export function parseReportDateRange(
   const rawFrom = searchParams.get('from_date')
   const rawTo = searchParams.get('to_date')
 
-  if (rawFrom && !ISO_DATE.test(rawFrom)) {
+  // Null-check, not truthiness: an empty value (`from_date=`, the classic
+  // unfilled template variable) must fail the format check rather than slip
+  // through as a silent full-period request with an empty period echo.
+  if (rawFrom !== null && !ISO_DATE.test(rawFrom)) {
     return { ok: false, error: 'from_date måste vara på formen YYYY-MM-DD.' }
   }
-  if (rawTo && !ISO_DATE.test(rawTo)) {
+  if (rawTo !== null && !ISO_DATE.test(rawTo)) {
     return { ok: false, error: 'to_date måste vara på formen YYYY-MM-DD.' }
   }
 

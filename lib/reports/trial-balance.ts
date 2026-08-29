@@ -96,7 +96,7 @@ export async function generateTrialBalance(
   const [periodResult, yearEndIdRows, accounts] = await Promise.all([
     supabase
       .from('fiscal_periods')
-      .select('period_start, period_end, opening_balance_entry_id, closing_entry_id, is_closed')
+      .select('period_start, period_end, opening_balance_entry_id, closing_entry_id, is_closed, closed_externally')
       .eq('id', fiscalPeriodId)
       .eq('company_id', companyId)
       .single(),
@@ -132,11 +132,15 @@ export async function generateTrialBalance(
   // Statutory annual reports must exclude only the linked final closing entry:
   // tax, depreciation, and appropriations also use source_type year_end. A
   // closed period without the link is ambiguous, so fail instead of silently
-  // understating the statutory report.
+  // understating the statutory report. A period klarmarkerad as closed in a
+  // previous system (closed_externally) is the one unambiguous case: its
+  // closing verifikat never existed in these books, so there is nothing to
+  // strip and the balances as booked are the pre-closing balances.
   if (
     excludeFinalOnly
     && period?.is_closed === true
     && !period.closing_entry_id
+    && period.closed_externally !== true
   ) {
     throw new Error(
       'Closed fiscal period is missing closing_entry_id; statutory pre-closing balances cannot be generated safely',

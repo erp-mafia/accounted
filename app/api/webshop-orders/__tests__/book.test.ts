@@ -50,6 +50,14 @@ vi.mock('@/lib/webshop-orders/ensure-accounts', () => ({
   ensureWebshopPrefillAccounts: (...args: unknown[]) => mockEnsureAccounts(...args),
 }))
 
+// Underlag rendering/archiving behaviour lives in
+// lib/webshop-orders/__tests__/order-underlag.test.ts; here we only assert
+// when the route archives and that a failure never breaks the booking.
+const mockArchiveUnderlag = vi.fn()
+vi.mock('@/lib/webshop-orders/order-underlag', () => ({
+  archiveWebshopOrderUnderlag: (...args: unknown[]) => mockArchiveUnderlag(...args),
+}))
+
 import { POST } from '../[id]/book/route'
 
 const PERIOD_UUID = '550e8400-e29b-41d4-a716-446655440000'
@@ -77,6 +85,7 @@ function makeOrderRow(overrides: Record<string, unknown> = {}) {
     journal_entry_id: null,
     invoice_id: null,
     legacy_transaction_id: null,
+    manually_booked_at: null,
     ...overrides,
   }
 }
@@ -111,6 +120,7 @@ describe('POST /api/webshop-orders/[id]/book', () => {
     requireWriteMock.mockResolvedValue({ ok: true })
     mockCreateDraftEntry.mockResolvedValue(makeJournalEntry({ id: 'draft-1', status: 'draft' }))
     mockCommitEntry.mockResolvedValue(makeJournalEntry({ id: 'je-1' }))
+    mockArchiveUnderlag.mockResolvedValue({ ok: true, documentId: 'doc-1' })
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -166,6 +176,31 @@ describe('POST /api/webshop-orders/[id]/book', () => {
     )
     expect(status).toBe(409)
     expect(body.error.code).toBe('WEBSHOP_ORDER_ALREADY_INVOICED')
+  })
+
+  it('returns 409 when marked as booked outside the integration', async () => {
+    enqueue({ data: makeOrderRow({ manually_booked_at: '2026-08-01T00:00:00Z' }) })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await postBook(),
+    )
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('WEBSHOP_ORDER_MANUALLY_BOOKED')
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+  })
+
+  it('excludes manually marked rows in the atomic claim', async () => {
+    enqueue({ data: makeOrderRow() }) // fetch
+    enqueue({ data: [{ id: 'order-1' }] }) // claim
+    const { status } = await parseJsonResponse(await postBook())
+    expect(status).toBe(200)
+    const isFilters = findCalls('webshop_orders', 'is')
+    expect(isFilters).toEqual(
+      expect.arrayContaining([
+        ['journal_entry_id', null],
+        ['invoice_id', null],
+        ['manually_booked_at', null],
+      ]),
+    )
   })
 
   it('returns 409 for unpaid orders', async () => {
@@ -261,6 +296,56 @@ describe('POST /api/webshop-orders/[id]/book', () => {
       'user-1',
       'draft-1',
     )
+  })
+
+  it('archives the orderunderlag on the committed verifikat (#1881)', async () => {
+    enqueue({ data: makeOrderRow() }) // fetch
+    enqueue({ data: [{ id: 'order-1' }] }) // claim
+    const { status, body } = await parseJsonResponse<{ underlag_archived: boolean }>(
+      await postBook(),
+    )
+    expect(status).toBe(200)
+    expect(body.underlag_archived).toBe(true)
+    expect(mockArchiveUnderlag).toHaveBeenCalledTimes(1)
+    expect(mockArchiveUnderlag).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: 'company-1',
+        userId: 'user-1',
+        journalEntryId: 'je-1',
+        order: expect.objectContaining({ id: 'order-1' }),
+      }),
+    )
+    // Only after the commit: an underlag must never anchor to a draft that
+    // could still be cancelled.
+    expect(mockCommitEntry.mock.invocationCallOrder[0]).toBeLessThan(
+      mockArchiveUnderlag.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('a failed underlag archive never breaks the booking', async () => {
+    mockArchiveUnderlag.mockResolvedValueOnce({ ok: false, documentId: null })
+    enqueue({ data: makeOrderRow() }) // fetch
+    enqueue({ data: [{ id: 'order-1' }] }) // claim
+    const { status, body } = await parseJsonResponse<{
+      journal_entry_id: string
+      underlag_archived: boolean
+      success: boolean
+    }>(await postBook())
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.journal_entry_id).toBe('je-1')
+    expect(body.underlag_archived).toBe(false)
+  })
+
+  it('does not archive an underlag when the commit fails', async () => {
+    mockCommitEntry.mockRejectedValueOnce(new Error('period locked'))
+    enqueue({ data: makeOrderRow() }) // fetch
+    enqueue({ data: [{ id: 'order-1' }] }) // claim
+    enqueue({ data: null }) // unlink
+    enqueue({ data: null }) // cancel draft
+    const { status } = await parseJsonResponse(await postBook())
+    expect(status).toBeGreaterThanOrEqual(400)
+    expect(mockArchiveUnderlag).not.toHaveBeenCalled()
   })
 
   it('returns 409 and cancels the draft when another request wins the claim', async () => {

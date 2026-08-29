@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -43,6 +44,7 @@ import {
   ChevronRight,
   Sparkles,
   Maximize2,
+  Globe,
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn, formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
@@ -58,8 +60,9 @@ import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
 import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
 import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { useBranding } from '@/lib/branding/brand-context'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
-import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
+import type { InboxChannelContext, InvoiceExtractionResult, InboxItemSource } from '@/types'
 import { renderChannelParticipant } from '@/lib/documents/channel-context-notes'
 import { selectInboxFields } from '@/lib/documents/inbox-field-visibility'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
@@ -139,13 +142,18 @@ function reportUploadFailure(report: {
 
 // ── Types ────────────────────────────────────────────────────
 
+// Mirrors the extension's UnderlagStatus: the anchoring verdict, or 'unknown'
+// when the server could not read the document row. Anything but 'anchored'
+// keeps the item out of the booked bucket.
+type UnderlagStatus = 'anchored' | 'unlinked' | 'unlinked_locked' | 'anchored_elsewhere' | 'unknown'
+
 interface InboxItem {
   id: string
   // 'processing' is the staged-upload in-flight state: the row exists (the
   // instant receipt ack) but the deferred AI extraction has not landed;
   // extracted_data is null until the realtime flip to 'received'.
   status: 'received' | 'processing' | 'error'
-  source: 'email' | 'upload' | 'whatsapp'
+  source: InboxItemSource
   created_at: string
   email_from: string | null
   email_subject: string | null
@@ -167,6 +175,16 @@ interface InboxItem {
   // samlingsverifikat only one of N items can carry the stamp; this field is
   // what lets the rest read as booked. Absent on client-side placeholders.
   matched_transaction_journal_entry_id?: string | null
+  // Whether THIS item's underlag reached that verifikat (#1548). The
+  // transaction being booked is a fact about the transaction, not about the
+  // item's document: one whose link failed ('unlinked', transient: the daily
+  // reconcile retries it), whose verifikat sits in a locked period
+  // ('unlinked_locked', unlock first), that sits on another verifikat
+  // ('anchored_elsewhere', a human decision), or that could not be read
+  // ('unknown') keeps the item in "Att göra". null when nothing was derived
+  // (no booked matched transaction, or the item is stamped). Absent on
+  // client-side placeholders.
+  underlag_status?: UnderlagStatus | null
   error_message: string | null
   // True when AI extraction was skipped: either because the upload caller
   // passed skip_extraction=true (MCP/agent path) or because the server's
@@ -295,9 +313,31 @@ function countExtractedFields(data: InvoiceExtractionResult | null): number {
 // else needs a first action.
 type InboxStatus = 'needs_action' | 'processing' | 'linked' | 'booked' | 'error'
 
+// A matched transaction that is booked while this item's own underlag is not
+// on its verifikat: not "booked" for the inbox, and not bookable either (the
+// book routes 409 on an already-booked transaction). The rail explains it
+// instead of offering a bridge that can only fail.
+function isUnderlagDivergent(item: InboxItem): boolean {
+  return (
+    !!item.matched_transaction_journal_entry_id &&
+    !!item.underlag_status &&
+    item.underlag_status !== 'anchored'
+  )
+}
+
+// One explanatory line per non-anchored status (#1548). 'unlinked' is the
+// only one the daily reconcile can heal on its own; the others say what
+// stands in the way instead of promising an automatic link.
+const UNDERLAG_STATUS_MESSAGE_KEY: Record<Exclude<UnderlagStatus, 'anchored'>, string> = {
+  unlinked: 'underlag_unlinked',
+  unlinked_locked: 'underlag_unlinked_locked',
+  anchored_elsewhere: 'underlag_anchored_elsewhere',
+  unknown: 'underlag_unknown',
+}
+
 function deriveInboxStatus(item: InboxItem): InboxStatus {
   if (item.created_supplier_invoice_id || item.created_journal_entry_id) return 'booked'
-  if (item.matched_transaction_journal_entry_id) return 'booked'
+  if (item.matched_transaction_journal_entry_id && !isUnderlagDivergent(item)) return 'booked'
   // Staged upload mid-extraction. Outranks 'linked': a transaction-anchored
   // upload is matched from birth, but offering the booking bridge before the
   // fields exist would book from empty data. Transient (seconds): stays in
@@ -390,7 +430,11 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // Cash method users see "Bokför direkt" as the primary CTA; accrual users
   // see "Skapa leverantörsfaktura". Defaults to 'accrual' until we've read
   // the company settings so we don't flicker the CTA order on first paint.
-  const [accountingMethod, setAccountingMethod] = useState<AccountingMethod>('accrual')
+  // The company's bookkeeping method drives the CTA hierarchy; read from the
+  // session-cached settings row (lib/reference-data), no request of its own.
+  const { settings: companySettings } = useCompanySettings()
+  const accountingMethod: AccountingMethod =
+    companySettings?.accounting_method === 'cash' ? 'cash' : 'accrual'
 
   // ── Data loading ───────────────────────────────────────────
 
@@ -450,16 +494,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   useEffect(() => {
     fetchItems()
     fetchInboxAddress()
-    // Resolve the company's bookkeeping method: drives CTA hierarchy.
-    fetch('/api/settings')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body) => {
-        const method = body?.data?.accounting_method
-        if (method === 'cash' || method === 'accrual') {
-          setAccountingMethod(method)
-        }
-      })
-      .catch(() => { /* keep 'accrual' default */ })
   }, [fetchItems, fetchInboxAddress])
 
   // Realtime: refetch when any invoice_inbox_items row changes for this
@@ -2140,6 +2174,9 @@ function InboxRow({
             <Mail className="h-3 w-3 text-muted-foreground shrink-0" />
           ) : item.source === 'whatsapp' ? (
             <WhatsAppMark className="h-3 w-3 shrink-0" />
+          ) : item.source === 'peppol' ? (
+            // Received as a structured e-invoice over the Peppol network.
+            <Globe className="h-3 w-3 text-muted-foreground shrink-0" aria-label="Peppol" />
           ) : item.channel_context?.mail_provider === 'gmail' ? (
             // The hunt records which mailbox it pulled a receipt from, so the
             // brand is known rather than guessed. Mail that arrived by
@@ -2689,6 +2726,7 @@ function FieldsRail({
 }) {
   const { toast } = useToast()
   const hasAi = useCapability(CAPABILITY.ai)
+  const { appName } = useBranding()
   const data = item.extracted_data
   const [proposal, setProposal] = useState<SuggestedBooking | null>(null)
   const [editOpen, setEditOpen] = useState(false)
@@ -2700,14 +2738,22 @@ function FieldsRail({
   }, [item.id])
 
   const isProcessed = !!item.created_supplier_invoice_id
+  const underlagDivergent = isUnderlagDivergent(item)
   // The verifikat this item resolved into: its own stamp, or the entry that
-  // anchors its matched (and already booked) transaction. See InboxItem.
+  // anchors its matched (and already booked) transaction, unless this item's
+  // own underlag never reached it. See InboxItem.
   const bookedEntryId =
-    item.created_journal_entry_id ?? item.matched_transaction_journal_entry_id ?? null
+    item.created_journal_entry_id ??
+    (underlagDivergent ? null : item.matched_transaction_journal_entry_id) ??
+    null
   const isBookedDirectly = !isProcessed && !!bookedEntryId
   // "Resolved" now means a journal entry exists: matched_transaction_id alone
   // is not resolved, it's the prerequisite for booking against that tx.
   const isLinkedToTransaction = !isProcessed && !isBookedDirectly && !!item.matched_transaction_id
+  // The booking bridge (proposal, book/ask actions) only while the
+  // transaction is unbooked: a divergent item's transaction already has a
+  // verifikat, so booking would 409. It gets an explanation and a link.
+  const showBookingBridge = isLinkedToTransaction && !underlagDivergent
   const isResolved = isProcessed || isBookedDirectly
   // Staged upload mid-extraction: a real row whose deferred AI extraction has
   // not landed yet. Same disabled treatment as the optimistic placeholder
@@ -2990,7 +3036,7 @@ function FieldsRail({
             scrolling past nine values to reach the one thing to approve.
             Suppressed while extraction is in flight: a proposal computed from
             empty fields would be an invitation to book nothing. */}
-        {isLinkedToTransaction && !inFlight && (
+        {showBookingBridge && !inFlight && (
           <ProposedBooking itemId={item.id} onLoaded={setProposal} />
         )}
 
@@ -3048,7 +3094,7 @@ function FieldsRail({
               AI-tolkning ingår i abonnemanget
             </div>
             <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
-              Uppgradera för att låta Accounted läsa av leverantör, belopp och
+              Uppgradera för att låta {appName} läsa av leverantör, belopp och
               moms automatiskt. Du kan fortfarande fylla i fälten manuellt eller
               koppla dokumentet till en transaktion nedan.
             </p>
@@ -3088,10 +3134,29 @@ function FieldsRail({
           </Link>
         ) : isLinkedToTransaction && item.matched_transaction_id ? (
           <>
+            {/* The transaction is booked but this item's underlag is not on
+                its verifikat (#1548): say so, link the verifikat, and keep
+                "Avbryt matchning" as the way out. No booking bridge: the
+                book routes 409 on an already-booked transaction. */}
+            {underlagDivergent && item.matched_transaction_journal_entry_id && (
+              <AttnLine
+                className="pb-1"
+                action={{
+                  label: t('underlag_open_verification'),
+                  href: `/bookkeeping/${item.matched_transaction_journal_entry_id}`,
+                }}
+              >
+                {t(
+                  UNDERLAG_STATUS_MESSAGE_KEY[
+                    (item.underlag_status ?? 'unknown') as Exclude<UnderlagStatus, 'anchored'>
+                  ],
+                )}
+              </AttnLine>
+            )}
             {/* Matched-to-tx state: show the bridge to booking. The user
                 picks one of two actions: book themselves with the
                 deterministic dialog, or hand off to the assistant. */}
-            {onAskAssistant && (
+            {showBookingBridge && onAskAssistant && (
               <Button
                 variant="default"
                 size="sm"
@@ -3106,14 +3171,16 @@ function FieldsRail({
                 there is not, so there is no separate "book manually" path to
                 choose between. Nothing posts from here without the form's own
                 review step (convention 14). */}
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full"
-              onClick={() => setEditOpen(true)}
-            >
-              {proposal?.lines.length ? t('review_and_book') : t('book_manually')}
-            </Button>
+            {showBookingBridge && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full"
+                onClick={() => setEditOpen(true)}
+              >
+                {proposal?.lines.length ? t('review_and_book') : t('book_manually')}
+              </Button>
+            )}
             <button
               type="button"
               onClick={async () => {

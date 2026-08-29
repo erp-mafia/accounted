@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { useBranding } from '@/lib/branding/brand-context'
 import type {
   AnnualReportComplianceIssue,
   AnnualReportProfile,
@@ -48,6 +49,8 @@ interface AnnualReportStudioProps {
   hasUnsavedNarrative: boolean
   narrativeRevision: string | null
   onVersionsChanged?: (versions: AnnualReportVersionSummary[]) => void
+  /** Blocking-issue count once the compliance check has loaded, null while loading. */
+  onBlockingCountChanged?: (count: number | null) => void
 }
 
 type NullableBoolean = boolean | null
@@ -91,8 +94,10 @@ export function AnnualReportStudio({
   hasUnsavedNarrative,
   narrativeRevision,
   onVersionsChanged,
+  onBlockingCountChanged,
 }: AnnualReportStudioProps) {
   const t = useTranslations('annualReportStudio')
+  const { appName } = useBranding()
   const { toast } = useToast()
   const [compliance, setCompliance] = useState<ComplianceResponse | null>(null)
   const [profile, setProfile] = useState<AnnualReportProfile | null>(null)
@@ -143,6 +148,11 @@ export function AnnualReportStudio({
     () => compliance?.validation.issues.filter((issue) => issue.severity === 'error') ?? [],
     [compliance],
   )
+  // The signature section further down explains why "Låst version" is empty
+  // in terms of this count, so it must not read 0 while we are still loading.
+  useEffect(() => {
+    onBlockingCountChanged?.(compliance ? blockingIssues.length : null)
+  }, [compliance, blockingIssues.length, onBlockingCountChanged])
   const digitalOnlyIssues = useMemo(() => {
     const generalCodes = new Set(compliance?.validation.issues.map((issue) => issue.code) ?? [])
     return (
@@ -346,7 +356,7 @@ export function AnnualReportStudio({
           <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('scope_title')}</h3>
           <div className="h-px flex-1 bg-border/60" />
         </div>
-        <p className="px-1 text-sm text-muted-foreground">{t('scope_description')}</p>
+        <p className="px-1 text-sm text-muted-foreground">{t('scope_description', { appName })}</p>
         <div className="space-y-6 px-1 pt-4">
           <div className="grid gap-4 md:grid-cols-2">
             <BooleanQuestion
@@ -496,7 +506,7 @@ export function AnnualReportStudio({
         </div>
       </section>
 
-      <section>
+      <section id="ar-fullstandighetskontroll" className="scroll-mt-24">
         <div className="mb-1 flex items-center gap-2 px-1">
           <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('checks_title')}</h3>
           <div className="h-px flex-1 bg-border/60" />
@@ -561,6 +571,13 @@ export function AnnualReportStudio({
               {t('lock_version')}
             </Button>
           </div>
+          {(blockingIssues.length > 0 || hasUnsavedNarrative) && (
+            <p className="text-right text-xs leading-5 text-muted-foreground">
+              {hasUnsavedNarrative
+                ? t('lock_hint_unsaved')
+                : t('lock_hint_blocked', { count: blockingIssues.length })}
+            </p>
+          )}
         </div>
       </section>
 

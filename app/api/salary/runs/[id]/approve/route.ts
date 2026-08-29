@@ -3,6 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { eventBus } from '@/lib/events'
 import { effectiveNetPayout } from '@/lib/salary/payment/effective-net'
+import { refreshRunYtd } from '@/lib/salary/ytd'
 
 ensureInitialized()
 
@@ -12,7 +13,7 @@ ensureInitialized()
  *  details before generating the payment file (which hard-blocks on its own). */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.run.approve',
-  async (request, { supabase, companyId, user }, { params }) => {
+  async (request, { supabase, companyId, user, log }, { params }) => {
     const { id } = await params
     const force = new URL(request.url).searchParams.get('force') === 'true'
 
@@ -115,6 +116,15 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     if (error || !updatedRun) {
       return NextResponse.json({ error: 'Kunde inte godkänna lönekörningen' }, { status: 500 })
+    }
+
+    // Approval is the first status from which lönebesked can be sent, so it
+    // is where the payslip's "Ackumulerat" snapshot must be brought up to
+    // date: a run calculated before an earlier month was authorized still
+    // carries a YTD missing that month. Non-fatal, YTD is display only.
+    const ytdRefresh = await refreshRunYtd(supabase, { companyId: companyId!, salaryRunId: id })
+    if (!ytdRefresh.ok) {
+      log.warn('YTD refresh failed after approval', { salaryRunId: id, message: ytdRefresh.message })
     }
 
     await eventBus.emit({

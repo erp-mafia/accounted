@@ -331,6 +331,49 @@ describe('POST /api/v1/companies/:companyId/invoices/bulk-create', () => {
     expect(insertedInvoice).toBe(false)
   })
 
+  it('forces every line to 0% when the company is not VAT registered (issue #1719)', async () => {
+    // Momskrysset off (company_settings.vat_registered = false): the invoice
+    // must come out momsfri whether the payload sends an explicit rate or
+    // relies on the customer-default fallback (25% for a Swedish customer).
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: VALID_CUSTOMER, error: null },
+        company_settings: { data: { vat_registered: false }, error: null },
+      }),
+    )
+
+    const res = await bulkCreate(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/bulk-create?dry_run=true`, {
+        invoices: [
+          {
+            customer_id: CUSTOMER_ID,
+            invoice_date: '2026-05-12',
+            due_date: '2026-06-11',
+            currency: 'SEK',
+            items: [
+              { ...SAMPLE_ITEM('Explicit 25'), vat_rate: 25 },
+              SAMPLE_ITEM('Fallback rate'),
+            ],
+          },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.summary.succeeded).toBe(1)
+    const preview = body.data.preview.results[0].data.preview
+    expect(preview.subtotal).toBe(2000)
+    expect(preview.vat_amount).toBe(0)
+    expect(preview.total).toBe(2000)
+    for (const item of preview.items) {
+      expect(item.vat_rate).toBe(0)
+      expect(item.vat_amount).toBe(0)
+    }
+  })
+
   it('rejects all_or_nothing: true with 501 NOT_IMPLEMENTED', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

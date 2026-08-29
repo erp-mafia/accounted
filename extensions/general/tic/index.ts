@@ -34,8 +34,12 @@ import {
   readBankIdFlow,
   setBankIdFlowCookies,
 } from './lib/bankid-flow-cookie'
-import type { CompanyLookupResult } from '@/lib/company-lookup/types'
+import { lookupCompanyByOrgNumber, registrationDateToMs } from './lib/lookup'
 import { hashPersonalNumber, encryptPersonalNumberForStorage } from '@/lib/auth/bankid'
+import {
+  evaluateBrandSignupGate,
+  readInviteTokenFromCookieHeader,
+} from '@/lib/auth/brand-signup-gate'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createServiceClient } from '@/lib/supabase/server'
 import { createLogger } from '@/lib/logger'
@@ -249,38 +253,6 @@ function toFinancialReportSummary(
  * Always logs the cleaned org number so we can correlate failures with input
  * in Vercel logs.
  */
-// Derive `{ startMonthDay, endMonthDay }` (e.g. "01-01" / "12-31") from the
-// search doc's mostRecentFinancialSummary. periodStart/periodEnd are Unix
-// timestamps in seconds. Returns null when the company has no closed period
-// yet: the client's deriveFirstYearDefaults handles newly-registered
-// companies from registrationDate instead.
-function deriveFiscalYearMonthDay(
-  fin: { periodStart?: number; periodEnd?: number } | undefined,
-): { startMonthDay: string | null; endMonthDay: string | null } | null {
-  if (!fin?.periodStart || !fin?.periodEnd) return null
-  const toMonthDay = (unixSeconds: number): string | null => {
-    const d = new Date(unixSeconds * 1000)
-    if (Number.isNaN(d.getTime())) return null
-    const mm = String(d.getUTCMonth() + 1).padStart(2, '0')
-    const dd = String(d.getUTCDate()).padStart(2, '0')
-    return `${mm}-${dd}`
-  }
-  const startMonthDay = toMonthDay(fin.periodStart)
-  const endMonthDay = toMonthDay(fin.periodEnd)
-  if (!startMonthDay && !endMonthDay) return null
-  return { startMonthDay, endMonthDay }
-}
-
-// The search doc's registrationDate is a Unix timestamp in seconds (same
-// unit as periodStart/periodEnd above), but the app-facing contract
-// (CompanyLookupResult / TICCompanyProfile) is a millisecond epoch:
-// consumers feed it straight into `new Date()`. Skipping this conversion
-// is how 2026 registrations rendered as "21 jan 1970" in onboarding.
-function registrationDateToMs(unixSeconds: number | null | undefined): number | null {
-  if (unixSeconds == null || !Number.isFinite(unixSeconds)) return null
-  return unixSeconds * 1000
-}
-
 function handleTicError(
   error: unknown,
   log: { error: (msg: string, meta?: unknown) => void } | Console,
@@ -388,72 +360,13 @@ export const ticExtension: Extension = {
           // newly-registered companies without a financial summary return
           // fiscalYear: null and the client-side first-year derivation
           // takes over (see deriveFirstYearDefaults).
-          const doc = await searchCompanyByOrgNumber(orgNumber)
+          const result = await lookupCompanyByOrgNumber(orgNumber)
 
-          if (!doc) {
+          if (!result) {
             return NextResponse.json(
               { error: 'Company not found' },
               { status: 404 }
             )
-          }
-
-          const nameEntry =
-            doc.names.find((n) => n.companyNamingType === 'name') ?? doc.names[0]
-          const companyName = nameEntry?.nameOrIdentifier ?? ''
-
-          const isCeased = doc.isCeased ?? doc.activityStatus === 'isNoLongerActive'
-
-          const address = doc.mostRecentRegisteredAddress
-            ? {
-                street: doc.mostRecentRegisteredAddress.streetAddress ?? null,
-                postalCode: doc.mostRecentRegisteredAddress.postalCode ?? null,
-                city: doc.mostRecentRegisteredAddress.city ?? null,
-              }
-            : null
-
-          const registration = {
-            fTax: doc.isRegisteredForFTax ?? false,
-            vat: doc.isRegisteredForVAT ?? false,
-          }
-
-          const bankAccounts = (doc.bankAccounts ?? [])
-            .filter((ba) => ba.accountNumber != null && ba.bankAccountType === 'bankgiro')
-            .map((ba) => ({
-              type: 'bankgiro',
-              accountNumber: String(ba.accountNumber),
-              bic: null,
-            }))
-
-          // Search-doc shape is `{ rank, sni_2007Code, sni_2007Name, ... }`;
-          // map to the canonical { code, name } the rest of the app expects.
-          const sniCodes = (doc.sniCodes ?? [])
-            .filter((s) => s.sni_2007Code)
-            .map((s) => ({
-              code: s.sni_2007Code ?? '',
-              name: s.sni_2007Name ?? '',
-            }))
-
-          const email = doc.emailAddresses?.[0]?.emailAddress ?? null
-
-          const phone =
-            doc.phoneNumbers?.[0]?.phoneNumberFormatted
-              ?? doc.phoneNumbers?.[0]?.e164PhoneNumber
-              ?? null
-
-          const fiscalYear = deriveFiscalYearMonthDay(doc.mostRecentFinancialSummary)
-
-          const result: CompanyLookupResult = {
-            companyName,
-            isCeased,
-            address,
-            registration,
-            bankAccounts,
-            email,
-            phone,
-            sniCodes,
-            fiscalYear,
-            legalEntityType: doc.legalEntityType ?? null,
-            registrationDate: registrationDateToMs(doc.registrationDate),
           }
 
           return NextResponse.json({ data: result })
@@ -1199,6 +1112,41 @@ export const ticExtension: Extension = {
               { error: 'already_linked', message: 'This BankID is already linked to an account' },
               { status: 409 }
             ))
+          }
+
+          // Invite-only brand domain gate (founder decision 2026-08-27):
+          // same rule POST /api/auth/signup enforces on the email path. Runs
+          // AFTER the existing-identity check so a returning user's login is
+          // never blocked, and before anything is created or consumed:
+          // deliberately NOT settled, so the visitor keeps the completed
+          // BankID identification if the byrå allowlists them mid-flow.
+          const gateResult = await evaluateBrandSignupGate({
+            host:
+              request.headers.get('x-forwarded-host') ??
+              request.headers.get('host') ??
+              '',
+            email: trimmedEmail!,
+            inviteToken: readInviteTokenFromCookieHeader(request.headers.get('cookie')),
+          })
+          if (!gateResult.allowed && 'lookupFailed' in gateResult) {
+            // Transient brands-table error: fail safe, do not create the
+            // account. Not settled, so the completed BankID flow can retry.
+            return NextResponse.json(
+              {
+                error: 'brand_lookup_failed',
+                message: 'Tillfälligt fel. Försök igen om en stund.',
+              },
+              { status: 503 }
+            )
+          }
+          if (!gateResult.allowed) {
+            return NextResponse.json(
+              {
+                error: 'signup_not_allowed',
+                message: 'Registrering på den här domänen kräver inbjudan.',
+              },
+              { status: 403 }
+            )
           }
 
           // Create new Supabase user. Email uniqueness is checked by createUser

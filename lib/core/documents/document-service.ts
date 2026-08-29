@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { eventBus } from '@/lib/events'
+import type { DocumentExtractionOwner } from '@/lib/events/types'
 import type { DocumentAttachment, DocumentUploadSource } from '@/types'
 
 /**
@@ -289,6 +290,15 @@ function looksLikeXhtml(bytes: Uint8Array): boolean {
   return head.startsWith('<?xml') || head.startsWith('<!doctype html') || head.startsWith('<html')
 }
 
+/** UBL and other XML payloads: an XML declaration or an element root after an optional BOM. */
+function looksLikeXml(bytes: Uint8Array): boolean {
+  const offset = bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF ? 3 : 0
+  const head = Buffer.from(bytes.slice(offset, offset + 256))
+    .toString('utf8')
+    .replace(/^[\s\uFEFF]+/, '')
+  return head.startsWith('<?xml') || /^<[A-Za-z_][\w.:-]*/.test(head)
+}
+
 /**
  * JSON has no binary magic number either. For the declared type
  * application/json (raw PSD2 responses archived as räkenskapsinformation per
@@ -318,6 +328,13 @@ export function validateDocumentMagicBytes(buffer: ArrayBuffer, declaredMimeType
   if (declaredMimeType === 'application/xhtml+xml') {
     if (looksLikeXhtml(new Uint8Array(buffer))) return null
     return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett XHTML/XML-dokument.`
+  }
+  // Received Peppol e-invoices are archived as the exact UBL XML (the
+  // räkenskapsinformation is the XML itself). Same shape check as XHTML: an
+  // XML declaration or an element root, never loosened for binary types.
+  if (declaredMimeType === 'application/xml' || declaredMimeType === 'text/xml') {
+    if (looksLikeXml(new Uint8Array(buffer))) return null
+    return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett XML-dokument.`
   }
   // HTML mail underlag from the invoice-inbox inbound pipeline. Same
   // doctype/root-element check as XHTML: the pipeline wraps fragment-shaped
@@ -503,7 +520,8 @@ export async function completePendingDocumentUpload(
   uploadId: string,
   fileName: string,
   mimeType: string,
-  now: number = Date.now()
+  now: number = Date.now(),
+  options: { extractionOwner?: DocumentExtractionOwner } = {}
 ): Promise<CompletedPendingDocumentUpload> {
   const serviceClient = createServiceClientNoCookies()
   const storage = serviceClient.storage.from(DOCUMENTS_BUCKET)
@@ -594,7 +612,12 @@ export async function completePendingDocumentUpload(
   const document = data as DocumentAttachment
   await eventBus.emit({
     type: 'document.uploaded',
-    payload: { document, userId, companyId },
+    payload: {
+      document,
+      userId,
+      companyId,
+      ...(options.extractionOwner ? { extractionOwner: options.extractionOwner } : {}),
+    },
   })
 
   return { document, buffer }
@@ -646,6 +669,14 @@ export async function uploadDocument(
      * WhatsApp intake precedent: the loser stores a copy, nothing corrupts.
      */
     dedupeByContent?: boolean
+    /**
+     * Who runs AI extraction on this document. The invoice inbox extracts
+     * the documents it ingests itself (and mirrors the result onto the
+     * document row), so it declares ownership here and the
+     * document-extraction extension yields. 'none' opts out entirely (the
+     * caller already knows the booking). Default: the extension extracts.
+     */
+    extractionOwner?: DocumentExtractionOwner
   } = {}
 ): Promise<DocumentAttachment & { deduplicated?: boolean }> {
   await ensureDocumentsBucket()
@@ -775,7 +806,12 @@ export async function uploadDocument(
 
   await eventBus.emit({
     type: 'document.uploaded',
-    payload: { document: result, userId, companyId },
+    payload: {
+      document: result,
+      userId,
+      companyId,
+      ...(metadata.extractionOwner ? { extractionOwner: metadata.extractionOwner } : {}),
+    },
   })
 
   return result

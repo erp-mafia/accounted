@@ -116,6 +116,39 @@ describe('PUT /api/settings', () => {
     expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
   })
 
+  it('accepts the data_analysis_opt_in consent toggle', async () => {
+    enqueueMany([
+      { data: { entity_type: 'enskild_firma', onboarding_complete: true } }, // fetch oldSettings
+      { data: { id: 's1', data_analysis_opt_in: true } },                     // update ... returning
+      { data: null, count: 5 },                                               // deadlines count (has some -> no regen)
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { data_analysis_opt_in: true },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: { data_analysis_opt_in: boolean } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.data_analysis_opt_in).toBe(true)
+    expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-boolean data_analysis_opt_in value', async () => {
+    enqueueMany([
+      { data: { onboarding_complete: true } }, // oldSettings
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { data_analysis_opt_in: 'yes' },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(400)
+  })
+
   it('round-trips share capital fields and clears them with null', async () => {
     const updates = { aktiekapital: 25000, antal_aktier: 500 }
     enqueueMany([

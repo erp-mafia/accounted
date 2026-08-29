@@ -42,12 +42,14 @@ These are configured via `extensions.config.json` and only loaded when explicitl
 
 Sector extensions are tied to a specific market sector. They're only relevant to businesses operating in that sector. A restaurant owner wants "Food Cost %" but an IT consultant does not.
 
-Examples:
+Examples of what a sector extension could be (design intent, none of these exist):
 - **Restaurant:** Food Cost %, Earnings Per Alcohol Liter, POS Z-Report Import, Tip Tracking
 - **Construction:** ROT Calculator, Project Cost Tracking
 - **Hotel:** RevPAR, Occupancy Tracking
 - **IT/Consulting:** Billable Hours Ratio, Project Billing Metrics
-- **E-commerce:** Shopify Order Import, Multi-channel Revenue Analytics
+- **E-commerce:** Multi-channel Revenue Analytics
+
+**Current state (2026-08-26):** no sector extension has been built. Every shipped extension lives under `extensions/general/`, and `SectorSlug` in `lib/extensions/types.ts` is currently just `'general'`. The sector concept, the marketplace routes (`app/(dashboard)/extensions/[sector]/...`) and the `sector/slug` extension-id format are in place for when the first one arrives. Shopify and WooCommerce order import shipped as general extensions, not e-commerce sector ones.
 
 ### The Unified Model
 
@@ -55,38 +57,29 @@ Both general and sector extensions live in the same system:
 
 ```
 extensions/
-  general/                    ← General extensions (any business)
-    document-extraction/
-    invoice-inbox/
-    mcp-server/
-    skatteverket/
-    push-notifications/
-    enable-banking/
-    calendar/
-    email/
-  restaurant/                 ← Restaurant sector extensions
-    food-cost/
-    earnings-per-liter/
-    pos-import/
-    tip-tracking/
-  construction/               ← Construction sector extensions
-    rot-calculator/
-    project-cost/
-  hotel/                      ← Hotel sector extensions
-    revpar/
-    occupancy/
-  tech/                       ← IT/Consulting sector extensions
-    billable-hours/
-    project-billing/
-  ecommerce/                  ← E-commerce sector extensions
-    shopify-import/
-    multichannel-revenue/
-  export/                     ← Export & international trade extensions
-    eu-sales-list/
-    intrastat/
-    vat-monitor/
-    currency-receivables/
+  general/                    ← General extensions (any business); the only sector today
+    arcim-migration/          ← Systemmigration: import from Fortnox, Visma, Bokio, Björn Lundén, Briox
+    bolagsverket/             ← Digital årsredovisning filing to Bolagsverket (iXBRL)
+    calendar/                 ← Kalender: month/week/day views
+    cloud-backup/             ← Molnsynkronisering: sync the säkerhetsbackup to the user's own cloud storage
+    document-extraction/      ← AI-extrahering av underlag: reads receipts and invoices, fills supplier/amount/VAT/date
+    email/                    ← E-post (Resend): invoices and reminders by e-mail
+    enable-banking/           ← Bankintegration (PSD2): automatic bank transaction sync
+    invoice-inbox/            ← Dokumentinkorg: forward supplier invoices to a unique address
+    mail/                     ← Brevlådor: lets Kvittojakten (receipt hunt) search the user's mailboxes
+    mcp-server/               ← MCP-server (API): bookkeeping via Claude, Cursor or any MCP client
+    push-notifications/       ← Push-notiser: event notifications
+    shopify/                  ← Shopify: paid orders and refunds into the Ordersidan
+    skatteverket/             ← Skatteverket: VAT declaration submission via BankID, skattekonto
+    stripe/                   ← Stripe-betalningar: payment links on invoices, automatic avprickning
+    tic/                      ← Bolagsuppgifter: company data from public registers via TIC
+    whatsapp-inbox/           ← WhatsApp-inkorg: receipts as photo or PDF to Accounted's WhatsApp number
+    woocommerce/              ← WooCommerce: paid orders and refunds into the transaction inbox
+    _example-branding/        ← Whitelabel branding starter (disabled by default)
+    example-logger/           ← Minimal example extension (index.ts only, no manifest)
 ```
+
+Which of these are compiled in is decided by `extensions.config.json`; today that is everything except `bolagsverket`, `push-notifications`, `_example-branding` and `example-logger`.
 
 Each extension directory contains a `manifest.json` declaring metadata, entry point, workspace component path, required env vars, and npm dependencies.
 
@@ -283,8 +276,8 @@ type ExtensionCategory = 'accounting' | 'reports' | 'import' | 'operations'
 | Earnings Per Alcohol Liter | Restaurant | A + B (both) | Liters sold per day/week | Alcohol revenue from BAS 3001 | Calculates revenue/liter, trends over time |
 | Food Cost % | Restaurant | A (core) | None | Food purchases (4000-series), food revenue (3000-series) | Calculates food_cost/food_revenue %, trends |
 | Tip Tracking | Restaurant | B (manual) | Tip amounts per shift | Optionally reads staff cost accounts | Total tips, tips/employee, tip % of revenue |
-| POS Z-Report Import | Restaurant | B (manual) | Uploads Z-report CSV/Excel | None | Parses POS data, stores in extension, shows daily sales analytics |
-| Shopify Order Import | E-commerce | B (manual) | Uploads order export | None | Imports orders into extension, shows revenue by product, trends |
+| POS Z-Report Import (not built) | Restaurant | B (manual) | Uploads Z-report CSV/Excel | None | Parses POS data, stores in extension, shows daily sales analytics |
+| Shopify / WooCommerce (shipped, general) | General | B (manual) | Store connection | None | Pulls paid orders and refunds into `webshop_orders` for the order and transaction inboxes |
 | ROT Calculator | Construction | A + B (both) | Labor hours, material costs per job | Invoice data for customer billing | ROT deduction amounts (30% of labor, max 50k/year per customer) |
 | RevPAR | Hotel | A + B (both) | Room count and occupancy | Room revenue accounts | Revenue Per Available Room, occupancy rate |
 | Billable Hours Ratio | IT/Consulting | A + B (both) | Hours worked per project | Invoice data for billed amounts | Billable/total hours, effective hourly rate |
@@ -297,7 +290,7 @@ type ExtensionCategory = 'accounting' | 'reports' | 'import' | 'operations'
 
 ```
 extensions/                           ← Extension source code (opt-in via config)
-  general/                            ← General extensions
+  general/                            ← General extensions (the only sector that exists)
     invoice-inbox/
       manifest.json                   ← Metadata, entry point, env vars, workspace path
       index.ts                        ← Extension definition + logic (exports Extension)
@@ -313,11 +306,14 @@ extensions/                           ← Extension source code (opt-in via conf
     push-notifications/
       manifest.json
       index.ts
-      lib/
+      api-routes.ts
+      notification-scheduler.ts
+      notification-sender.ts
     enable-banking/
       manifest.json
       index.ts
       lib/
+      components/
     email/                            ← Email service extension (registers Resend impl)
       manifest.json
       index.ts
@@ -325,45 +321,22 @@ extensions/                           ← Extension source code (opt-in via conf
     calendar/
       manifest.json
       index.ts
-  restaurant/                         ← Restaurant sector
-    food-cost/
-      manifest.json
-    earnings-per-liter/
-      manifest.json
-    pos-import/
-      manifest.json
-    tip-tracking/
-      manifest.json
-  construction/                       ← Construction sector
-    rot-calculator/
-      manifest.json
-    project-cost/
-      manifest.json
-  hotel/                              ← Hotel sector
-    revpar/
-      manifest.json
-    occupancy/
-      manifest.json
-  tech/                               ← IT/Consulting sector
-    billable-hours/
-      manifest.json
-    project-billing/
-      manifest.json
-  ecommerce/                          ← E-commerce sector
-    shopify-import/
-      manifest.json
-    multichannel-revenue/
-      manifest.json
-  export/                             ← Export & international trade sector
-    eu-sales-list/
+      components/
+    mcp-server/                       ← MCP server: server.ts, tools, prompts, resources, skills, widgets
       manifest.json
       index.ts
-    intrastat/
-      manifest.json
-    vat-monitor/
-      manifest.json
-    currency-receivables/
-      manifest.json
+      server.ts
+    arcim-migration/                  ← Provider migration (Fortnox, Visma, Bokio, BL, Briox)
+    bolagsverket/                     ← Digital årsredovisning (iXBRL)
+    cloud-backup/                     ← Cloud sync of the säkerhetsbackup
+    mail/                             ← Mailbox connections for Kvittojakten
+    shopify/                          ← Shopify order import (api-routes.ts, components/, lib/)
+    woocommerce/                      ← WooCommerce order import (api-routes.ts, components/, lib/)
+    stripe/                           ← Stripe payment links and avprickning
+    tic/                              ← Company data lookup (TIC)
+    whatsapp-inbox/                   ← WhatsApp receipt intake
+    _example-branding/                ← Whitelabel starter, disabled by default
+    example-logger/                   ← Minimal example, index.ts only
 
 extensions.config.json                ← Which extensions are enabled (empty = core-only)
 extensions.schema.json                ← JSON Schema for extensions.config.json
@@ -384,7 +357,7 @@ lib/
   email/
     service.ts                        ← EmailService interface + no-op default + getEmailService()
   reports/
-    sru-export/                       ← SRU file export (core, not an extension)
+    sru-encoding.ts                   ← SRU file encoding (core, not an extension)
     ne-bilaga/                        ← NE tax form attachment (core, not an extension)
 
 scripts/
@@ -403,22 +376,18 @@ components/
       DateRangeFilter.tsx
       EmptyExtensionState.tsx
       ExtensionLoadingSkeleton.tsx
-    general/                          ← General extension workspaces
+    general/                          ← General extension workspaces (the only ones that exist)
       ReceiptOcrWorkspace.tsx
       AiCategorizationWorkspace.tsx
-      AiChatWorkspace.tsx
-    restaurant/                       ← Restaurant extension workspaces
-      EarningsPerLiterWorkspace.tsx
-      FoodCostWorkspace.tsx
-      PosImportWorkspace.tsx
-    construction/
-      RotCalculatorWorkspace.tsx
-    hotel/
-      RevparWorkspace.tsx
-    tech/
-      BillableHoursWorkspace.tsx
-    ecommerce/
-      ShopifyImportWorkspace.tsx
+      InvoiceInboxWorkspace.tsx
+      EnableBankingWorkspace.tsx
+      CalendarWorkspace.tsx
+      CloudBackupWorkspace.tsx
+      ArcimMigrationWorkspace.tsx
+      PushNotificationsWorkspace.tsx
+      TicWorkspace.tsx
+      MailConnectionsPanel.tsx
+      WhatsAppLinkPanel.tsx
 
 app/(dashboard)/
   extensions/                         ← Marketplace

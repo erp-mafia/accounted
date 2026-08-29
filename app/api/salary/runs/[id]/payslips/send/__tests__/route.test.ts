@@ -35,6 +35,11 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
 vi.mock('@/lib/branding/service', () => ({
   getBranding: () => ({ appUrl: 'https://app.example.test' }),
 }))
+const brandSenderMock = vi.hoisted(() => ({
+  getSenderForCompany: vi.fn(),
+  getBaseUrlForBrand: vi.fn(),
+}))
+vi.mock('@/lib/email/brand-sender', () => brandSenderMock)
 vi.mock('@/lib/salary/payslips/links', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/salary/payslips/links')>()
   return {
@@ -80,6 +85,13 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(rotateLinkForEmployee).mockResolvedValue({ token: 'T'.repeat(43) })
+    brandSenderMock.getSenderForCompany.mockResolvedValue({
+      fromName: null,
+      fromAddress: null,
+      replyTo: null,
+      brand: null,
+    })
+    brandSenderMock.getBaseUrlForBrand.mockReturnValue('https://app.example.test')
   })
 
   it('returns 401 when unauthenticated', async () => {
@@ -226,6 +238,44 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
     // Uses the current company name (company_settings.company_name via the
     // resolver), not the frozen onboarding companies.name ('Bolaget AB').
     expect(emailArgs.subject).toContain('Ny Firma AB')
+  })
+
+  it('sends the branded payslip mail: brand link base + brand sender (WL-13)', async () => {
+    brandSenderMock.getSenderForCompany.mockResolvedValue({
+      fromName: 'Siffra',
+      fromAddress: 'noreply@post.siffra.se',
+      replyTo: 'support@siffra.se',
+      brand: { appName: 'Siffra', domain: 'app.siffra.se' },
+    })
+    brandSenderMock.getBaseUrlForBrand.mockReturnValue('https://app.siffra.se')
+
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+    const sendEmail = mockEmail({ success: true, messageId: 'msg-1' })
+
+    enqueueMany([
+      { data: RUN },
+      { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+      {
+        data: [
+          {
+            employee_id: 'emp-1',
+            employee: { first_name: 'Anna', last_name: 'A', email: 'anna@example.test' },
+          },
+        ],
+      },
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    expect(response.status).toBe(200)
+
+    expect(brandSenderMock.getSenderForCompany).toHaveBeenCalledWith('company-1')
+    const emailArgs = sendEmail.mock.calls[0][0]
+    expect(emailArgs.html).toContain(`https://app.siffra.se/payslip/${'T'.repeat(43)}`)
+    expect(emailArgs.fromName).toBe('Siffra')
+    expect(emailArgs.fromAddress).toBe('noreply@post.siffra.se')
+    expect(emailArgs.replyTo).toBe('support@siffra.se')
   })
 
   it('records provider failures without failing the whole batch', async () => {

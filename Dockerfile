@@ -42,6 +42,9 @@ ENV NEXT_PUBLIC_SESSION_IDLE_TIMEOUT_MS=__NEXT_PUBLIC_SESSION_IDLE_TIMEOUT_MS__
 ENV NEXT_PUBLIC_SESSION_ABSOLUTE_TIMEOUT_MS=__NEXT_PUBLIC_SESSION_ABSOLUTE_TIMEOUT_MS__
 ENV NEXT_PUBLIC_SESSION_WARNING_MS=__NEXT_PUBLIC_SESSION_WARNING_MS__
 ENV NEXT_PUBLIC_SESSION_TIMEOUT_FORCE_ALL=__NEXT_PUBLIC_SESSION_TIMEOUT_FORCE_ALL__
+# Optional Supabase Auth bot protection. The site key is public; the matching
+# secret belongs in GoTrue/Supabase Auth and must never be baked into this image.
+ENV NEXT_PUBLIC_TURNSTILE_SITE_KEY=__NEXT_PUBLIC_TURNSTILE_SITE_KEY__
 # Keep the branding placeholder intact through prebuild's inject script so
 # docker-entrypoint.sh can substitute the runtime value into public/sw.js.
 ENV NEXT_PUBLIC_BRANDING_APP_NAME=__NEXT_PUBLIC_BRANDING_APP_NAME__
@@ -64,6 +67,16 @@ WORKDIR /app
 # surface.
 RUN apk upgrade --no-cache && \
     rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
+# poppler-utils (pdftoppm, ~4 MB plus shared libs) renders PDF pages to images
+# for AI backends that cannot read PDF bytes natively: a self-host pointing
+# AI_BASE_URL at an OpenAI-compatible endpoint (e.g. a Swedish inference
+# provider) rasterizes the first pages of a receipt/invoice before extraction
+# (lib/ai/rasterize-pdf.ts, AI_PDF_MODE). Hosted runs Claude on Bedrock, which
+# reads PDFs natively and never calls it. Deliberately the only system
+# package beyond the base image. Temp files go to /tmp, which
+# docker-compose.yml mounts as tmpfs (the root filesystem is read-only).
+RUN apk add --no-cache poppler-utils
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1

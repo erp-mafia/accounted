@@ -31,11 +31,13 @@ import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
 import { mergeParsedSIEFiles } from '@/lib/import/sie-merge'
 import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from '@/lib/import/sie-artifact-scan'
 import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
-import { loadMappings, generateImportPreview, executeSIEImport } from '@/lib/import/sie-import'
+import { loadMappings, generateImportPreview, executeSIEImport, findOverlappingPeriodImports } from '@/lib/import/sie-import'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
 import type { ProviderName } from '@/lib/providers/types'
+import { FORTNOX_DOCUMENT_SCOPES_APPROVED } from '@/lib/providers/fortnox/oauth'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { classifyProviderError } from '@/lib/providers/with-provider-call'
+import { FortnoxApiError, fortnoxErrorMessage } from '@/lib/providers/fortnox/client'
 import { createLogger } from '@/lib/logger'
 
 const moduleLog = createLogger('extensions/arcim-migration')
@@ -118,7 +120,11 @@ function resolveArcimCallbackUrl(provider: ArcimProvider | ProviderName): string
  * consent_id, so re-running OAuth against the same consent overwrites a dead
  * refresh-token pair in place: no disconnect/recreate needed.
  */
-async function buildArcimOAuthUrl(consentId: string, provider: ArcimProvider): Promise<string> {
+async function buildArcimOAuthUrl(
+  consentId: string,
+  provider: ArcimProvider,
+  options?: { documentScopes?: boolean },
+): Promise<string> {
   // Server-side state row: consent id, provider (via the consent), expiry and a
   // consumed marker all live in provider_otc. The `state` handed to the provider
   // is that row's opaque random primary key, nothing more.
@@ -130,7 +136,9 @@ async function buildArcimOAuthUrl(consentId: string, provider: ArcimProvider): P
   // above. It deliberately encodes NOTHING. The previous base64url JSON payload
   // was attacker-authored input the callback trusted, so anyone who learned a
   // consent id could redirect their own provider tokens onto that consent.
-  const { url } = await getAuthUrl(provider, otc.code, callbackUrl)
+  const { url } = await getAuthUrl(provider, otc.code, callbackUrl, {
+    documentScopes: options?.documentScopes,
+  })
   return url
 }
 
@@ -258,11 +266,23 @@ export const arcimMigrationExtension: Extension = {
 
         const companyId = ctx?.companyId ?? user.id
 
-        const { provider, companyName, orgNumber, reconnect } = await request.json() as {
+        const {
+          provider,
+          companyName,
+          orgNumber,
+          reconnect,
+          documentScopes,
+        } = await request.json() as {
           provider: ArcimProvider
           companyName?: string
           orgNumber?: string
           reconnect?: boolean
+          /**
+           * Reconnect specifically to grant the voucher-attachment scopes.
+           * Only the underlag follow-up sets it, so an ordinary connect never
+           * asks the customer for Arkivplats and Koppla filer.
+           */
+          documentScopes?: boolean
         }
 
         if (!provider) {
@@ -299,7 +319,9 @@ export const arcimMigrationExtension: Extension = {
                 await ctx.settings.set('provider', provider)
               }
               if (providerInfo.authType === 'oauth') {
-                const authUrl = await buildArcimOAuthUrl(stale.id, provider)
+                const authUrl = await buildArcimOAuthUrl(stale.id, provider, {
+                  documentScopes: documentScopes === true,
+                })
                 return NextResponse.json({
                   consentId: stale.id,
                   authType: 'oauth',
@@ -920,16 +942,17 @@ export const arcimMigrationExtension: Extension = {
             } | null = null
 
             if (fyStart && fyEnd) {
-              const { data } = await supabase
-                .from('sie_imports')
-                .select('imported_at, fiscal_year_start, fiscal_year_end')
-                .eq('company_id', companyId)
-                .eq('status', 'completed')
-                .lte('fiscal_year_start', fyEnd)
-                .gte('fiscal_year_end', fyStart)
-                .limit(1)
-                .maybeSingle()
-              priorImport = data
+              // Newest first: several completed rows can overlap the same
+              // year (manual upload + provider sync, or residue from
+              // partially deleted data). The unordered .limit(1) this
+              // replaces picked an arbitrary row, so the wizard could show
+              // a stale "ersätter tidigare import från <date>" (issue #1667).
+              // Import-time replace resolves ALL rows regardless of which
+              // one is displayed here.
+              const overlapping = await findOverlappingPeriodImports(
+                supabase, companyId, fyStart, fyEnd
+              )
+              priorImport = overlapping[0] ?? null
             }
 
             fileStatuses.push({
@@ -1151,31 +1174,57 @@ export const arcimMigrationExtension: Extension = {
           }
 
           // ── Guard: a completed SIE import is required before entity import ──
-          // Most providers expose ONLY entity data (customers, suppliers,
-          // invoices) via API: never the general ledger. Fortnox pulls the GL
-          // itself via SIE-over-API and is exempt. Briox and Björn Lundén also
-          // serve SIE over the API, but the wizard runs /import-sie before
-          // /migrate, so this guard stays satisfied, and keeps protecting
-          // against a skipped SIE step. Importing entities without the
-          // SIE-derived ledger (kontoplan,
-          // ingående balanser, verifikationer) would leave an incomplete
-          // bokföring under BFL: a subledger with no chart of accounts and no
-          // opening balances, so every subsequent posting and balance is wrong.
-          // The wizard surfaces this as an advisory banner, but it must be
-          // enforced here so the rule cannot be bypassed by a direct API call,
-          // a skipped wizard step, or a stale client.
-          if (consent.provider !== 'fortnox') {
-            const { count: completedSieImports } = await supabase
-              .from('sie_imports')
-              .select('id', { count: 'exact', head: true })
-              .eq('company_id', companyId)
-              .eq('status', 'completed')
+          // Provider APIs expose ONLY entity data (customers, suppliers,
+          // invoices): never the general ledger. The GL (kontoplan, ingående
+          // balanser, verifikationer) arrives via SIE, either uploaded by the
+          // user or, for Fortnox, Briox, Björn Lundén and WINT, pulled over the
+          // API by the wizard's /import-sie phase. Importing entities without
+          // that ledger would leave an incomplete bokföring under BFL: a
+          // subledger with no chart of accounts and no opening balances, so
+          // every subsequent posting and balance is wrong.
+          //
+          // The rule is "a completed SIE import must EXIST for the company",
+          // not "must be part of this run": an entities-only re-run after an
+          // earlier full migration passes. No provider is exempt. Fortnox used
+          // to be, on the assumption that the wizard always runs SIE-over-API
+          // first, but the wizard lets the user uncheck "Bokföringsdata (SIE)"
+          // while keeping entities checked (#2000), and a direct API call or a
+          // stale client can skip it regardless.
+          //
+          // Company info (name, org number, VAT number) writes no accounts,
+          // balances or subledger rows, so a run that imports only that is
+          // not gated.
+          const importsEntities = importCustomers ||
+            importSuppliers ||
+            importSalesInvoices ||
+            importSupplierInvoices
+          const { count: completedSieImports } = importsEntities
+            ? await supabase
+                .from('sie_imports')
+                .select('id', { count: 'exact', head: true })
+                .eq('company_id', companyId)
+                .eq('status', 'completed')
+            : { count: null }
 
-            if (!completedSieImports || completedSieImports < 1) {
-              return errorResponseFromCode('PROVIDER_SIE_IMPORT_REQUIRED', moduleLog, {
-                details: { provider: consent.provider },
-              })
-            }
+          if (importsEntities && (!completedSieImports || completedSieImports < 1)) {
+            // Providers that serve SIE over the API have no file to upload:
+            // point the user at the wizard checkbox instead of the static
+            // "ladda upp en SIE-fil" text. Same code and status either way so
+            // the wizard's error path renders it unchanged.
+            const sieViaApi = ARCIM_PROVIDERS.some(
+              (p) => p.id === consent.provider && p.sieViaApi,
+            )
+            return errorResponseFromCode('PROVIDER_SIE_IMPORT_REQUIRED', moduleLog, {
+              details: { provider: consent.provider },
+              ...(sieViaApi
+                ? {
+                    messageSv:
+                      'Bokföringsdata (SIE) måste importeras först. Kryssa i "Bokföringsdata (SIE)" i guiden så att kontoplan, ingående balanser och verifikationer hämtas innan kunder, leverantörer och fakturor importeras.',
+                    messageEn:
+                      'A completed SIE import is required first. Tick "Bokföringsdata (SIE)" in the wizard so the chart of accounts, opening balances and verifications are fetched before customers, suppliers and invoices are imported.',
+                  }
+                : {}),
+            })
           }
 
           log.info(`Starting migration for user ${user.id} from ${consent.provider}`)
@@ -1340,10 +1389,23 @@ export const arcimMigrationExtension: Extension = {
 
         let consentId: string | undefined
         let dryRun = false
+        let cursor: string | null = null
         try {
-          const body = (await request.json()) as { consentId?: string; dryRun?: boolean }
+          const body = (await request.json()) as {
+            consentId?: string
+            dryRun?: boolean
+            cursor?: string
+          }
           consentId = body?.consentId
           dryRun = body?.dryRun === true
+          // Resume point from a previous partial call (the last handled
+          // provider attachment id, see import-documents.ts); anything else
+          // restarts from the top, which is always safe: already-archived
+          // receipts are skipped by hash.
+          cursor =
+            typeof body?.cursor === 'string' && body.cursor.length > 0 && body.cursor.length <= 256
+              ? body.cursor
+              : null
         } catch {
           // empty/invalid body: consentId check below rejects it
         }
@@ -1359,28 +1421,53 @@ export const arcimMigrationExtension: Extension = {
             userId: user.id,
             consentId,
             dryRun,
+            cursor,
           })
           log.info('arcim import-documents completed', {
             companyId,
             dryRun,
+            cursor,
+            total: result.total,
             scanned: result.scanned,
             linked: result.linked,
             skipped: result.skipped,
             unmatched: result.unmatched,
             failed: result.failed,
+            partial: result.partial,
+            nextCursor: result.nextCursor,
           })
           return NextResponse.json({ success: true, dryRun, result })
         } catch (error) {
-          log.error('arcim import-documents failed', error as Error)
+          // "400 Bad Request" alone told us nothing when a live Fortnox
+          // discovery failed (2026-08-20): keep status, Fortnox's own
+          // message and a body excerpt in the log, and hand the message
+          // to the UI so the user sees what the source system said.
+          const providerStatus = error instanceof FortnoxApiError ? error.statusCode : undefined
+          const providerMessage = fortnoxErrorMessage(error)
+          log.error('arcim import-documents failed', error as Error, {
+            providerStatus,
+            providerMessage,
+            providerBody:
+              error instanceof FortnoxApiError ? error.body?.slice(0, 500) : undefined,
+          })
           if (error instanceof FortnoxDocumentScopesRequiredError) {
+            // Reconnecting only helps once the connect request actually asks
+            // for Arkiv and Koppla fil. While it does not, say so plainly
+            // instead of sending the user around a loop that cannot succeed.
             return errorResponseFromCode(
-              'PROVIDER_DOCUMENT_SCOPES_REQUIRED',
+              FORTNOX_DOCUMENT_SCOPES_APPROVED
+                ? 'PROVIDER_DOCUMENT_SCOPES_REQUIRED'
+                : 'PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE',
               moduleLog,
               { status: 403 },
             )
           }
           return errorResponseFromCode('PROVIDER_IMPORT_DOCUMENTS_FAILED', moduleLog, {
-            details: { reason: error instanceof Error ? error.message : 'unknown' },
+            details: {
+              reason: error instanceof Error ? error.message : 'unknown',
+              ...(providerStatus ? { providerStatus } : {}),
+              ...(providerMessage ? { providerMessage } : {}),
+            },
           })
         }
       },

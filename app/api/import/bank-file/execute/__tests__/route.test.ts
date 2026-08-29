@@ -152,6 +152,9 @@ describe('POST /api/import/bank-file/execute (SIE overlap)', () => {
     expect(response.status).toBe(200)
     const ingestOptions = ingestMock.mock.calls[0][4] as Record<string, unknown>
     expect(ingestOptions.skipAutoCategorization).toBeUndefined()
+    // Every inserted row is stamped with the batch id so the owner/admin
+    // "undo this import" action can scope its bulk delete exactly.
+    expect(ingestOptions.bankFileImportId).toBe('import-1')
     expect(sweepMock).not.toHaveBeenCalled()
   })
 

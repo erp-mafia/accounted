@@ -24,6 +24,22 @@
  * critical path: provider document APIs are rate-limited and a full sweep can
  * issue hundreds of download calls. Fortnox requires archive and connectfile
  * scopes; existing consents must reconnect before this import can run.
+ *
+ * Resumable: one call works through the provider's attachment list (sorted
+ * by provider id so the order is stable between calls) until `timeBudgetMs`
+ * is spent, then returns `partial: true` with `nextCursor` = the id of the
+ * last attachment it handled. The caller loops, passing the cursor back,
+ * until `partial` is false. The cursor is an id, not an index, so a file the
+ * provider adds or removes mid-sweep shifts nothing: the next slice simply
+ * continues after the last handled id in sorted order. A 113-file Fortnox
+ * import used to run every file inline inside one request and hit the
+ * hosted 300 s function limit after ~17 files (2026-08-21); the UI then
+ * showed a generic failure even though the files it did reach were linked.
+ *
+ * No AI extraction: every file here is linked to a posted verifikat on
+ * arrival, so the booking is already known. The upload opts out
+ * (`extractionOwner: 'none'`); it was the per-file model pass that made the
+ * sweep blow its budget in the first place.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -35,7 +51,11 @@ import {
   downloadBokioUpload,
   type BokioUpload,
 } from '@/lib/providers/bokio/attachments'
-import { FortnoxApiError, FortnoxClient } from '@/lib/providers/fortnox/client'
+import {
+  FortnoxApiError,
+  FortnoxClient,
+  isFortnoxPermissionError,
+} from '@/lib/providers/fortnox/client'
 import {
   downloadFortnoxArchiveFile,
   fetchFortnoxFileConnections,
@@ -74,7 +94,19 @@ export interface ImportDocumentsOptions {
   consentId: string
   /** Resolve + report what would be attached without downloading or writing. */
   dryRun?: boolean
+  /** Resume after this provider attachment id (sorted order); omit to start from the top. */
+  cursor?: string | null
+  /**
+   * Wall-clock budget for this call. Once spent, the sweep stops after the
+   * attachment in flight and reports `nextCursor`. Default leaves headroom
+   * under the hosted 300 s function limit for listing + the final response.
+   */
+  timeBudgetMs?: number
+  /** Clock, injectable for tests. */
+  now?: () => number
 }
+
+export const DEFAULT_IMPORT_DOCUMENTS_TIME_BUDGET_MS = 200_000
 
 export interface ImportDocumentsResult {
   provider: string
@@ -91,6 +123,12 @@ export interface ImportDocumentsResult {
   dryRun: boolean
   /** A few unmatched voucher labels, to aid diagnosis without dumping all. */
   unmatchedSamples: { uploadId: string; voucher: string; date: string }[]
+  /** Provider attachments linked to a voucher in total (all calls). */
+  total: number
+  /** True when the time budget ran out before the end of the list. */
+  partial: boolean
+  /** Last handled attachment id; pass back as `cursor` to continue. Null when complete. */
+  nextCursor: string | null
 }
 
 interface ProviderAttachment {
@@ -213,7 +251,7 @@ function fortnoxSource(
           }
         })
       } catch (error) {
-        if (error instanceof FortnoxApiError && error.statusCode === 403) {
+        if (isFortnoxPermissionError(error)) {
           throw new FortnoxDocumentScopesRequiredError()
         }
         throw error
@@ -228,7 +266,17 @@ function fortnoxSource(
 export async function importProviderDocuments(
   opts: ImportDocumentsOptions,
 ): Promise<ImportDocumentsResult> {
-  const { supabase, companyId, userId, consentId, dryRun = false } = opts
+  const {
+    supabase,
+    companyId,
+    userId,
+    consentId,
+    dryRun = false,
+    cursor = null,
+    timeBudgetMs = DEFAULT_IMPORT_DOCUMENTS_TIME_BUDGET_MS,
+    now = Date.now,
+  } = opts
+  const startedAt = now()
 
   let resolved = await resolveConsent(companyId, consentId)
   const provider = resolved.consent.provider as string
@@ -242,6 +290,9 @@ export async function importProviderDocuments(
     failed: 0,
     dryRun,
     unmatchedSamples: [],
+    total: 0,
+    partial: false,
+    nextCursor: null,
   }
 
   // Unsupported providers are a no-op rather than an error
@@ -259,7 +310,7 @@ export async function importProviderDocuments(
       : fortnoxSource(fortnoxClient as FortnoxClient, resolved.accessToken)
 
   // ── Bulk reads (one round of paged requests each, no per-item N+1) ──
-  const [attachments, periods, vouchers, existingAttachments] = await Promise.all([
+  const [listedAttachments, periods, vouchers, existingAttachments] = await Promise.all([
     source().list(),
     fetchFiscalPeriods(supabase, companyId),
     fetchSourceRefVouchers(supabase, companyId),
@@ -275,6 +326,15 @@ export async function importProviderDocuments(
         .range(from, to),
     ),
   ])
+
+  // Stable order across calls: a provider may page its listing differently
+  // from one call to the next, and the cursor is "continue after this id".
+  const attachments = [...listedAttachments].sort((a, b) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+  )
+  result.total = attachments.length
+  const firstAfterCursor = cursor ? attachments.findIndex((a) => a.id > cursor) : 0
+  const startIndex = firstAfterCursor === -1 ? attachments.length : firstAfterCursor
 
   // Index gnubok verifikat by (period, series, number) for in-memory resolution.
   const voucherIndex = buildVoucherIndex(vouchers)
@@ -298,7 +358,16 @@ export async function importProviderDocuments(
 
   let refreshedAfterUnauthorized = false
 
-  for (const attachment of attachments) {
+  for (let index = startIndex; index < attachments.length; index++) {
+    // Always make progress: at least one attachment per call, then stop at
+    // the budget so the route answers well inside the function limit and the
+    // caller resumes after the last handled id.
+    if (index > startIndex && now() - startedAt >= timeBudgetMs) {
+      result.partial = true
+      result.nextCursor = attachments[index - 1].id
+      break
+    }
+    const attachment = attachments[index]
     result.scanned++
     const ref = attachment.ref
 
@@ -359,6 +428,8 @@ export async function importProviderDocuments(
           upload_source: 'api',
           journal_entry_id: journalEntryId,
           idempotency_key: journalEntryId,
+          // Already booked: the verifikat is the booking. No model pass.
+          extractionOwner: 'none',
         },
       )
 
@@ -386,11 +457,7 @@ export async function importProviderDocuments(
         }
       }
 
-      if (
-        provider === 'fortnox' &&
-        finalError instanceof FortnoxApiError &&
-        finalError.statusCode === 403
-      ) {
+      if (provider === 'fortnox' && isFortnoxPermissionError(finalError)) {
         throw new FortnoxDocumentScopesRequiredError()
       }
 
@@ -405,11 +472,16 @@ export async function importProviderDocuments(
   log.info('document import complete', {
     companyId,
     dryRun,
+    cursor,
+    total: result.total,
     scanned: result.scanned,
     linked: result.linked,
     skipped: result.skipped,
     unmatched: result.unmatched,
     failed: result.failed,
+    partial: result.partial,
+    nextCursor: result.nextCursor,
+    elapsedMs: now() - startedAt,
   })
 
   return result

@@ -177,11 +177,16 @@ describe('importProviderDocuments', () => {
     expect(userId).toBe(USER)
     expect(companyId).toBe(COMPANY)
     expect(file).toMatchObject({ name: 'Kvitto.pdf', type: 'application/pdf' })
+    // extractionOwner 'none': the file arrives linked to its posted
+    // verifikat, so no paid model pass (it was the inline extraction that
+    // blew the hosted function budget on a 113-file import).
     expect(metadata).toEqual({
       upload_source: 'api',
       journal_entry_id: 'je-1',
       idempotency_key: 'je-1',
+      extractionOwner: 'none',
     })
+    expect(result).toMatchObject({ total: 1, partial: false, nextCursor: null })
   })
 
   it('skips a receipt already archived on the same verifikat (sha256 + journal entry idempotency)', async () => {
@@ -268,6 +273,7 @@ describe('importProviderDocuments', () => {
       upload_source: 'api',
       journal_entry_id: 'je-1',
       idempotency_key: 'je-1',
+      extractionOwner: 'none',
     })
   })
 
@@ -479,6 +485,36 @@ describe('importProviderDocuments', () => {
     ).rejects.toThrow('Fortnox consent lacks archive/connectfile scope: reconnect required')
   })
 
+  // Six companies hit exactly this between 2026-08-13 and 08-19 and were told
+  // "kunde inte importera underlag, försök igen", with a retry that could not
+  // work: Fortnox answers an unscoped attachment listing with 400 plus a
+  // behörighet message, not only with 403.
+  it('treats a Fortnox 400 that names the missing permission as the same failure', async () => {
+    const supabase = wireFortnox()
+    mockFetchFortnoxFinancialYears.mockRejectedValue(
+      new FortnoxApiError(
+        'bad request',
+        400,
+        JSON.stringify({
+          ErrorInformation: {
+            error: 1,
+            message: 'Otillräcklig behörighet för att utföra anropet',
+            code: 2000663,
+          },
+        }),
+      ),
+    )
+
+    await expect(
+      importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+      }),
+    ).rejects.toThrow('Fortnox consent lacks archive/connectfile scope: reconnect required')
+  })
+
   it('explains that a Fortnox archive-download 403 requires reconnecting', async () => {
     const supabase = wireFortnox()
     mockDownloadFortnoxArchiveFile.mockRejectedValue(
@@ -617,5 +653,124 @@ describe('importProviderDocuments', () => {
     expect(result).toMatchObject({ scanned: 1, linked: 1, failed: 0 })
     const [, , , file] = mockUpload.mock.calls[0]
     expect(file).toMatchObject({ name: 'Kvitto.jpg', type: 'image/jpeg' })
+  })
+
+  describe('time budget and cursor (resumable sweep)', () => {
+    const THREE_CONNECTIONS: FortnoxFileConnection[] = [
+      { ...FORTNOX_CONNECTION, fileId: 'file-c', name: 'c.pdf' },
+      { ...FORTNOX_CONNECTION, fileId: 'file-a', name: 'a.pdf' },
+      { ...FORTNOX_CONNECTION, fileId: 'file-b', name: 'b.pdf' },
+    ]
+
+    it('stops after the attachment in flight once the budget is spent and hands back a cursor', async () => {
+      const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
+      // Each download "costs" 100 ms of wall clock; the budget allows one.
+      let clock = 0
+      mockDownloadFortnoxArchiveFile.mockImplementation(async () => {
+        clock += 100
+        return { bytes: bytesOf('FORTNOX-PDF-' + clock), contentType: 'application/pdf' }
+      })
+
+      const first = await importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+        timeBudgetMs: 50,
+        now: () => clock,
+      })
+
+      expect(first).toMatchObject({
+        total: 3,
+        scanned: 1,
+        linked: 1,
+        partial: true,
+        nextCursor: 'file-a',
+      })
+      // Sorted by provider id, so the first slice is file-a, not file-c.
+      expect(mockUpload.mock.calls[0][3]).toMatchObject({ name: 'a.pdf' })
+
+      const second = await importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+        cursor: first.nextCursor,
+        timeBudgetMs: 1_000_000,
+        now: () => clock,
+      })
+
+      expect(second).toMatchObject({ total: 3, scanned: 2, linked: 2, partial: false, nextCursor: null })
+      expect(mockUpload.mock.calls.map((call) => (call[3] as { name: string }).name)).toEqual([
+        'a.pdf',
+        'b.pdf',
+        'c.pdf',
+      ])
+    })
+
+    it('always processes at least one attachment per call even when the budget is already spent', async () => {
+      const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
+
+      const result = await importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+        timeBudgetMs: 0,
+        now: () => 0,
+      })
+
+      expect(result).toMatchObject({ scanned: 1, linked: 1, partial: true, nextCursor: 'file-a' })
+    })
+
+    it('treats a cursor past the last id as a complete, empty slice', async () => {
+      const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
+
+      const result = await importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+        cursor: 'file-z',
+      })
+
+      expect(result).toMatchObject({ total: 3, scanned: 0, linked: 0, partial: false, nextCursor: null })
+      expect(mockUpload).not.toHaveBeenCalled()
+    })
+
+    it('resumes after the last handled id even when the provider list changed in between', async () => {
+      // Slice 1 handled file-a. Before slice 2, Fortnox gained a file sorting
+      // BEFORE the resume point (file-0) and lost file-b. An index cursor
+      // would now skip one; an id cursor continues with everything > file-a.
+      const supabase = wireFortnox({
+        connections: [
+          { ...FORTNOX_CONNECTION, fileId: 'file-0', name: '0.pdf' },
+          { ...FORTNOX_CONNECTION, fileId: 'file-a', name: 'a.pdf' },
+          { ...FORTNOX_CONNECTION, fileId: 'file-c', name: 'c.pdf' },
+          { ...FORTNOX_CONNECTION, fileId: 'file-d', name: 'd.pdf' },
+        ],
+      })
+      // Distinct bytes per file: the default mock returns the same bytes for
+      // every download, and identical content on the same verifikat is
+      // (correctly) deduped, which is not what this test is about.
+      mockDownloadFortnoxArchiveFile.mockImplementation(async (_client, _token, id) => ({
+        bytes: bytesOf('PDF-' + id),
+        contentType: 'application/pdf',
+      }))
+
+      const result = await importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+        cursor: 'file-a',
+      })
+
+      expect(result).toMatchObject({ total: 4, scanned: 2, linked: 2, partial: false })
+      expect(mockUpload.mock.calls.map((call) => (call[3] as { name: string }).name)).toEqual([
+        'c.pdf',
+        'd.pdf',
+      ])
+    })
   })
 })

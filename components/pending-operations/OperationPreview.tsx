@@ -9,6 +9,7 @@
 
 import { Fragment, createContext, useContext } from 'react'
 import { cn, formatCurrency } from '@/lib/utils'
+import { AttnLine } from '@/components/ui/attn-line'
 import { VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
 import type { PendingOperation } from '@/types'
 import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
@@ -54,6 +55,14 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
     const txAmount = typeof data.amount === 'number' && Number.isFinite(data.amount) ? data.amount : null
     return (
       <div className="space-y-1 text-sm">
+        {/* Entry date first: with two open fiscal years the approver could
+            not tell which year a categorization belonged to. */}
+        {typeof data.date === 'string' && data.date && (
+          <div className="flex justify-between gap-4 text-xs mb-1">
+            <span className="text-muted-foreground">Datum</span>
+            <span className="font-mono tabular-nums">{data.date}</span>
+          </div>
+        )}
         <p className="text-xs text-muted-foreground mb-1">Verifikat</p>
         {txCurrency !== 'SEK' && txAmount !== null && (
           <div className="flex justify-between gap-4 text-xs text-muted-foreground mb-1">
@@ -174,12 +183,76 @@ function CustomerPreview({ data }: { data: Record<string, unknown> }) {
           <span className="font-mono">{String(data.org_number)}</span>
         </>
       ) : null}
+      {data.personal_number_masked ? (
+        <>
+          <span className="text-muted-foreground">Personnr</span>
+          <span className="font-mono">{String(data.personal_number_masked)}</span>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+// One staged (or replaced) invoice line as the staging tools put it in
+// preview_data: create_invoice and update_invoice both carry the effective
+// vat_rate and any posting-account override, so a rebooking is visible to the
+// approver, not only the amount (issue #1642).
+interface PreviewInvoiceLine {
+  description: string
+  quantity: number
+  unit: string
+  unit_price?: number
+  line_total: number
+  vat_rate?: number
+  revenue_account?: string | null
+  article_id?: string | null
+  line_type?: string
+  // ROT/RUT and periodisering markers: a full replace that drops one of
+  // these must be visible to the approver, not only the amounts.
+  deduction_type?: string | null
+  accrual_period_start?: string | null
+  accrual_period_end?: string | null
+}
+
+function isPreviewInvoiceLines(value: unknown): value is PreviewInvoiceLine[] {
+  return (
+    Array.isArray(value) &&
+    value.every((row) => row != null && typeof row === 'object' && typeof (row as PreviewInvoiceLine).description === 'string')
+  )
+}
+
+function InvoiceLineRows({ items, currency }: { items: PreviewInvoiceLine[]; currency: string }) {
+  return (
+    <div className="space-y-1">
+      {items.map((item, i) => (
+        <div key={i} className="flex justify-between text-xs">
+          <span className="truncate mr-4">
+            {item.description}
+            {item.line_type === 'text' ? null : ` (${item.quantity} ${item.unit})`}
+            {typeof item.vat_rate === 'number' && item.line_type !== 'text' && (
+              <span className="text-muted-foreground"> · {item.vat_rate} % moms</span>
+            )}
+            {item.revenue_account && (
+              <span className="text-muted-foreground font-mono"> · {item.revenue_account}</span>
+            )}
+            {item.deduction_type && (
+              <span className="text-muted-foreground"> · {item.deduction_type === 'rot' ? 'ROT-avdrag' : 'RUT-avdrag'}</span>
+            )}
+            {item.accrual_period_start && item.accrual_period_end && (
+              <span className="text-muted-foreground"> · periodiseras {item.accrual_period_start} till {item.accrual_period_end}</span>
+            )}
+          </span>
+          <span className="font-mono tabular-nums whitespace-nowrap">
+            {item.line_type === 'text' ? '' : money(item.line_total, currency)}
+          </span>
+        </div>
+      ))}
     </div>
   )
 }
 
 function InvoicePreview({ data }: { data: Record<string, unknown> }) {
-  const items = (data.items as Array<{ description: string; quantity: number; unit: string; unit_price: number; line_total: number; vat_rate: number }>) || []
+  const items = isPreviewInvoiceLines(data.items) ? data.items : []
 
   return (
     <div className="space-y-3 text-sm">
@@ -192,15 +265,8 @@ function InvoicePreview({ data }: { data: Record<string, unknown> }) {
         <span>{String(data.due_date ?? '')}</span>
       </div>
       {items.length > 0 && (
-        <div className="border-t pt-2 space-y-1">
-          {items.map((item, i) => (
-            <div key={i} className="flex justify-between text-xs">
-              <span className="truncate mr-4">{item.description} ({item.quantity} {item.unit})</span>
-              <span className="font-mono tabular-nums whitespace-nowrap">
-                {formatCurrency(item.line_total, (data.currency as string) || 'SEK')}
-              </span>
-            </div>
-          ))}
+        <div className="border-t pt-2">
+          <InvoiceLineRows items={items} currency={(data.currency as string) || 'SEK'} />
         </div>
       )}
       <div className="border-t pt-2 grid grid-cols-2 gap-x-4 gap-y-1">
@@ -211,6 +277,82 @@ function InvoicePreview({ data }: { data: Record<string, unknown> }) {
         <span className="font-medium">Totalt</span>
         <span className="tabular-nums font-medium text-right">{money(data.total, (data.currency as string) || 'SEK')}</span>
       </div>
+    </div>
+  )
+}
+
+const UPDATE_INVOICE_FIELD_LABELS: Record<string, string> = {
+  notes: 'Anteckningar',
+  invoice_date: 'Fakturadatum',
+  due_date: 'Förfallodatum',
+  delivery_date: 'Leveransdatum',
+  your_reference: 'Er referens',
+  our_reference: 'Vår referens',
+}
+
+function UpdateInvoicePreview({ data }: { data: Record<string, unknown> }) {
+  const currency = (data.currency as string) || 'SEK'
+  const changes = (data.changes && typeof data.changes === 'object' ? (data.changes as Record<string, unknown>) : {})
+  const headerEntries = Object.entries(changes).filter(
+    ([key, value]) => key !== 'items' && key !== 'default_dimensions' && value !== undefined,
+  )
+  const hasDimensionChange = 'default_dimensions' in changes
+  const dimensionBag = changes.default_dimensions as Record<string, string> | undefined
+  const newItems = isPreviewInvoiceLines(data.items) ? data.items : null
+  const currentItems = isPreviewInvoiceLines(data.current_items) ? data.current_items : null
+
+  return (
+    <div className="space-y-3 text-sm">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+        <span className="text-muted-foreground">Kund</span>
+        <span>{String(data.customer_name ?? '')}</span>
+        <span className="text-muted-foreground">Faktura</span>
+        <span>{data.invoice_number ? String(data.invoice_number) : 'utkast'}</span>
+        {headerEntries.map(([key, value]) => (
+          <Fragment key={key}>
+            <span className="text-muted-foreground">{UPDATE_INVOICE_FIELD_LABELS[key] ?? key.replace(/_/g, ' ')}</span>
+            {/* null is an explicit clear (delivery_date: null), not a missing value */}
+            <span>{value === null ? 'rensas' : renderPrimitive(value)}</span>
+          </Fragment>
+        ))}
+        {hasDimensionChange && (
+          <>
+            <span className="text-muted-foreground">Dimensioner</span>
+            <span className="font-mono text-xs">
+              {dimensionBag && Object.keys(dimensionBag).length > 0
+                ? Object.entries(dimensionBag).map(([dim, code]) => `${dim}: ${code}`).join(', ')
+                : 'rensas'}
+            </span>
+          </>
+        )}
+      </div>
+      {/* Full replace: show what goes away next to what comes in, so a
+          quantity fix that also moves revenue off the article's account
+          (3041 to 3001) or changes the VAT rate is visible before approval. */}
+      {currentItems && (
+        <div className="border-t pt-2 space-y-1">
+          <div className="text-xs text-muted-foreground">
+            {currentItems.length > 0 ? 'Nuvarande rader (ersätts)' : 'Nuvarande rader: inga'}
+          </div>
+          {currentItems.length > 0 && <InvoiceLineRows items={currentItems} currency={currency} />}
+        </div>
+      )}
+      {newItems && (
+        <div className="border-t pt-2 space-y-1">
+          <div className="text-xs text-muted-foreground">Nya rader</div>
+          <InvoiceLineRows items={newItems} currency={currency} />
+        </div>
+      )}
+      {newItems && typeof data.total === 'number' && (
+        <div className="border-t pt-2 grid grid-cols-2 gap-x-4 gap-y-1">
+          <span className="text-muted-foreground">Netto</span>
+          <span className="tabular-nums text-right">{money(data.subtotal, currency)}</span>
+          <span className="text-muted-foreground">Moms</span>
+          <span className="tabular-nums text-right">{money(data.vat_amount, currency)}</span>
+          <span className="font-medium">Totalt</span>
+          <span className="tabular-nums font-medium text-right">{money(data.total, currency)}</span>
+        </div>
+      )}
     </div>
   )
 }
@@ -247,13 +389,22 @@ type VoucherLine = {
 }
 
 function VoucherLinesTable({ lines, currency }: { lines: VoucherLine[]; currency?: string }) {
+  const accountNames = useContext(AccountNamesContext)
   return (
     <div className="border-t pt-2 space-y-1">
-      {lines.map((line, i) => (
+      {lines.map((line, i) => {
+        // The account's own name first (staged account_name, else the chart
+        // name); the line text only when it adds something.
+        const name = line.account_name || accountNames[line.account_number] || ''
+        const text = line.line_description || ''
+        return (
         <div key={i} className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs items-baseline">
           <span className="font-mono text-muted-foreground">{line.account_number}</span>
           <span className="truncate">
-            {line.account_name || line.line_description || '-'}
+            {name || text || '-'}
+            {name && text && text !== name ? (
+              <span className="text-muted-foreground"> · {text}</span>
+            ) : null}
           </span>
           <span className="font-mono tabular-nums text-right w-24">
             {line.debit_amount > 0 ? formatCurrency(line.debit_amount, currency || 'SEK') : ''}
@@ -262,7 +413,8 @@ function VoucherLinesTable({ lines, currency }: { lines: VoucherLine[]; currency
             {line.credit_amount > 0 ? formatCurrency(line.credit_amount, currency || 'SEK') : ''}
           </span>
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -271,9 +423,24 @@ function VoucherPreview({ data }: { data: Record<string, unknown> }) {
   const lines = (data.lines as VoucherLine[]) || []
   const totalDebit = data.total_debit as number | undefined
   const totalCredit = data.total_credit as number | undefined
+  // Advisory, mirrors the MCP staging warning: a verifikat for a received
+  // handling must carry the handling itself (BFL 5 kap 6 §). Gated on the
+  // staged compliance_warning, not on document_attached: the server decides
+  // when the warning applies (IB entries are exempt there), so this stays a
+  // mirror instead of a second, looser policy. Older ops without the field
+  // render unchanged. The wording stays conditional ("om ... avser en
+  // mottagen handling"): internal entries (accruals, FX) legitimately lack
+  // a kvitto, and flagging them as deficient would be wrong.
+  const missingUnderlag = typeof data.compliance_warning === 'string'
 
   return (
     <div className="space-y-3 text-sm">
+      {missingUnderlag && (
+        <AttnLine>
+          Underlag saknas: om verifikatet avser en mottagen handling ska handlingen användas som
+          verifikation (BFL 5 kap 6 §).
+        </AttnLine>
+      )}
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
         <span className="text-muted-foreground">Datum</span>
         <span className="font-mono">{String(data.entry_date ?? '')}</span>
@@ -460,6 +627,7 @@ function isKonteringLines(value: unknown): value is PreviewKonteringLine[] {
 }
 
 function PreviewKonteringTable({ lines }: { lines: PreviewKonteringLine[] }) {
+  const accountNames = useContext(AccountNamesContext)
   const amount = (n: number | undefined) =>
     n && n > 0 ? n.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''
   return (
@@ -478,7 +646,9 @@ function PreviewKonteringTable({ lines }: { lines: PreviewKonteringLine[] }) {
             <td className={cn(VTD_CLASS, 'whitespace-nowrap font-mono tabular-nums')}>
               {line.account ?? line.account_number}
             </td>
-            <td className={cn(VTD_CLASS, 'text-muted-foreground')}>{line.description ?? ''}</td>
+            <td className={cn(VTD_CLASS, 'text-muted-foreground')}>
+              {line.description || accountNames[String(line.account ?? line.account_number ?? '')] || ''}
+            </td>
             <td className={cn(VTD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
               {amount(line.debit ?? line.debit_amount)}
             </td>
@@ -528,6 +698,8 @@ export function OperationPreview({ op }: { op: OperationPreviewInput }) {
         return <CustomerPreview data={op.preview_data} />
       case 'create_invoice':
         return <InvoicePreview data={op.preview_data} />
+      case 'update_invoice':
+        return <UpdateInvoicePreview data={op.preview_data} />
       case 'create_transaction':
         return <CreateTransactionPreview data={op.preview_data} />
       case 'create_voucher':

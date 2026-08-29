@@ -249,16 +249,44 @@ describe('allocatePsd2LedgerAccount', () => {
     const [, companyId, userId, mappings] = mockSyncMappedAccounts.mock.calls[0]
     expect(companyId).toBe('c1')
     expect(userId).toBe('u1')
+    // The chart account gets a BAS-style name, never the bank-reported account
+    // name: ASPSPs report the account HOLDER (the company) as the name, and
+    // every failed reconnect used to persist another 19xx chart account named
+    // after the company (issue #1643 problem 3).
     expect(mappings).toEqual([
       expect.objectContaining({
         sourceAccount: '1931',
         targetAccount: '1931',
-        sourceName: 'Sparkonto',
+        sourceName: 'Bankkonto SEK',
       }),
     ])
   })
 
-  it('uses a currency fallback name when the bank account has none', async () => {
+  it('uses the BAS reference name when the allocated slot is a standard account', async () => {
+    const supabase = makeSupabase([{ ledger_account: '1930', bank_connection_id: 'conn-1' }])
+    // Every free-use slot below 1940 is already assigned earlier in the
+    // caller's loop, so the allocator lands on 1940 Övriga bankkonton.
+    const exclude = new Set(['1931', '1935', '1936', '1937', '1938', '1939'])
+
+    const ledger = await allocatePsd2LedgerAccount(supabase, 'c1', 'u1', {
+      currency: 'SEK',
+      accountName: 'Arcim AB',
+      exclude,
+    })
+
+    expect(ledger).toBe('1940')
+    const [, , , mappings] = mockSyncMappedAccounts.mock.calls[0]
+    expect(mappings).toEqual([
+      expect.objectContaining({
+        sourceAccount: '1940',
+        targetAccount: '1940',
+        sourceName: 'Övriga bankkonton',
+        targetName: 'Övriga bankkonton',
+      }),
+    ])
+  })
+
+  it('names the chart account after the currency regardless of accountName', async () => {
     const supabase = makeSupabase([])
 
     await allocatePsd2LedgerAccount(supabase, 'c1', 'u1', { currency: 'EUR' })
@@ -682,6 +710,34 @@ describe('upsertFromPsd2', () => {
 
     expect(stub.updates).toHaveLength(0)
     expect(stub.upserts).toHaveLength(1)
+  })
+
+  it('promotes a SAME-connection holder under a retired uid when explicitly named via reuse_cash_account_id', async () => {
+    // Issue #1709: in-place reconnect of a no-IBAN account whose ASPSP minted
+    // a new uid. The callback pairs the account with the connection's own old
+    // row and names it explicitly; the promote re-keys that row to the new uid
+    // in place, so its id (and the transactions linked to it) survive. Without
+    // the explicit name the plain upsert would INSERT and trip the
+    // (company_id, ledger_account) UNIQUE constraint; the previous test pins
+    // that an UNNAMED same-connection holder still routes through the plain
+    // upsert (the general active-holder rejection is not loosened).
+    const stub = makeUpsertStub({
+      holder: { id: 'row-self', bank_connection_id: 'conn-new' },
+    })
+    await upsertFromPsd2(makeUpsertSupabase(stub), 'c1', {
+      ...UPSERT_INPUT,
+      external_uid: 'uid-2',
+      reuse_cash_account_id: 'row-self',
+    })
+
+    expect(stub.upserts).toHaveLength(0)
+    expect(stub.updates).toHaveLength(1)
+    expect(stub.updates[0].id).toBe('row-self')
+    expect(stub.updates[0].payload).toMatchObject({
+      bank_connection_id: 'conn-new',
+      external_uid: 'uid-2',
+      ledger_account: '1930',
+    })
   })
 
   it('deletes an empty duplicate row for the same connection+uid before promoting', async () => {

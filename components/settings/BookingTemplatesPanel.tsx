@@ -1,7 +1,7 @@
 'use client'
 
 import { useLocale, useTranslations } from 'next-intl'
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -14,7 +14,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
-import { Loader2, Trash2, Plus, ChevronDown, Download, Upload, Pencil, Copy } from 'lucide-react'
+import { Loader2, Trash2, Plus, ChevronDown, Download, Upload, Pencil, Copy, Eye, EyeOff } from 'lucide-react'
 import { TEMPLATE_CATEGORY_LABELS, convertLibraryToBookingTemplate } from '@/lib/bookkeeping/template-library'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { TemplateForm } from '@/components/settings/TemplateForm'
@@ -22,6 +22,8 @@ import { downloadFile } from '@/lib/browser/download-file'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn } from '@/lib/utils'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
+import { useBookingTemplates } from '@/lib/reference-data/hooks'
 
 export function BookingTemplatesPanel() {
   const t = useTranslations('settings_booking_templates')
@@ -35,9 +37,13 @@ export function BookingTemplatesPanel() {
     aktiebolag: t('entity_aktiebolag'),
   }
 
-  const [templates, setTemplates] = useState<BookingTemplateLibrary[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  // The panel renders the same session-cached list the pickers use
+  // (lib/reference-data); every write below invalidates it so registry and
+  // pickers can never disagree.
+  const { templates, isLoading, error: templatesError } = useBookingTemplates()
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [hidingId, setHidingId] = useState<string | null>(null)
+  const [showHidden, setShowHidden] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
@@ -46,19 +52,13 @@ export function BookingTemplatesPanel() {
   const [activeTemplate, setActiveTemplate] = useState<BookingTemplateLibrary | null>(null)
   const importRef = useRef<HTMLInputElement>(null)
 
-  const fetchTemplates = useCallback(async () => {
-    try {
-      const res = await fetch('/api/settings/booking-templates')
-      const json = await res.json()
-      if (json.data) setTemplates(json.data)
-    } catch {
-      toast({ title: t('toast_fetch_failed'), variant: 'destructive' })
-    } finally {
-      setIsLoading(false)
-    }
-  }, [toast, t])
+  useEffect(() => {
+    if (templatesError) toast({ title: t('toast_fetch_failed'), variant: 'destructive' })
+  }, [templatesError, toast, t])
 
-  useEffect(() => { fetchTemplates() }, [fetchTemplates])
+  const refreshTemplates = () => {
+    void invalidateReferenceData('ref:booking-templates')
+  }
 
   async function handleDelete(id: string) {
     setDeletingId(id)
@@ -72,10 +72,40 @@ export function BookingTemplatesPanel() {
         toast({ title: t('toast_delete_failed'), variant: 'destructive' })
         return
       }
-      setTemplates((prev) => prev.filter((tt) => tt.id !== id))
+      // This list and every picker read the session cache: refresh it.
+      void invalidateReferenceData('ref:booking-templates')
       toast({ title: t('toast_deleted') })
     } finally {
       setDeletingId(null)
+    }
+  }
+
+  // Hide/unhide a system template for the current company only. Opt-in per
+  // company: hidden templates stay listed in the collapsed section below so
+  // nothing ever disappears silently.
+  async function handleToggleHidden(id: string, hide: boolean) {
+    setHidingId(id)
+    try {
+      const res = await fetch(`/api/settings/booking-templates/${id}/hide`, {
+        method: hide ? 'POST' : 'DELETE',
+      })
+      if (!res.ok) {
+        toast({
+          title: hide ? t('toast_hide_failed') : t('toast_unhide_failed'),
+          variant: 'destructive',
+        })
+        return
+      }
+      void invalidateReferenceData('ref:booking-templates')
+      toast({ title: hide ? t('toast_hidden') : t('toast_unhidden') })
+    } catch {
+      // fetch itself rejected (network); same failure toast as a non-ok status.
+      toast({
+        title: hide ? t('toast_hide_failed') : t('toast_unhide_failed'),
+        variant: 'destructive',
+      })
+    } finally {
+      setHidingId(null)
     }
   }
 
@@ -124,7 +154,7 @@ export function BookingTemplatesPanel() {
         return
       }
       toast({ title: t('toast_import_done'), description: t('toast_import_count', { count: json.imported }) })
-      fetchTemplates()
+      refreshTemplates()
     } catch {
       toast({ title: t('toast_import_error'), description: t('toast_invalid_file'), variant: 'destructive' })
     } finally {
@@ -133,8 +163,11 @@ export function BookingTemplatesPanel() {
     }
   }
 
-  // Group templates by scope
-  const systemTemplates = templates.filter((tt) => tt.is_system)
+  // Group templates by scope. Hidden system templates get their own collapsed
+  // section instead of vanishing: the hide feature is per-company and always
+  // reversible from here.
+  const systemTemplates = templates.filter((tt) => tt.is_system && !tt.is_hidden)
+  const hiddenSystemTemplates = templates.filter((tt) => tt.is_system && tt.is_hidden)
   const teamTemplates = templates.filter((tt) => tt.team_id && !tt.is_system)
   const companyTemplates = templates.filter((tt) => tt.company_id && !tt.is_system)
 
@@ -202,7 +235,7 @@ export function BookingTemplatesPanel() {
                   duplicateNamePool={companyTemplateNames}
                   onSaved={() => {
                     setShowCreate(false)
-                    fetchTemplates()
+                    refreshTemplates()
                   }}
                 />
               </DialogContent>
@@ -237,8 +270,65 @@ export function BookingTemplatesPanel() {
             canEdit={false}
             canCustomize={canWrite}
             onCustomize={setActiveTemplate}
+            canHide={canWrite}
+            onHide={(tt) => handleToggleHidden(tt.id, true)}
+            hidingId={hidingId}
             entityLabels={ENTITY_LABELS}
           />
+        )}
+
+        {/* Hidden system templates: collapsed by default, restore per row.
+            Kept visible as a section so hiding is never silent. */}
+        {hiddenSystemTemplates.length > 0 && (
+          <SettingsGroup>
+            <button
+              type="button"
+              onClick={() => setShowHidden((v) => !v)}
+              aria-expanded={showHidden}
+              className="flex items-center gap-2 px-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
+            >
+              <ChevronDown
+                className={cn('h-4 w-4 shrink-0 transition-transform', !showHidden && '-rotate-90')}
+              />
+              <span>{t('section_hidden')}</span>
+              <span className="tabular-nums">{hiddenSystemTemplates.length}</span>
+            </button>
+            {showHidden && (
+              <div>
+                {hiddenSystemTemplates.map((tt) => (
+                  <div
+                    key={tt.id}
+                    className="flex items-center gap-3 border-b border-border px-1 py-3 transition-colors duration-150 hover:bg-secondary/60"
+                  >
+                    <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
+                      <span className="truncate text-sm text-muted-foreground">{tt.name}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {TEMPLATE_CATEGORY_LABELS[tt.category]}
+                        {tt.entity_type !== 'all' && ` · ${ENTITY_LABELS[tt.entity_type]}`}
+                      </span>
+                    </span>
+                    {canWrite && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleToggleHidden(tt.id, false)}
+                        disabled={hidingId === tt.id}
+                        aria-label={t('unhide')}
+                        title={t('unhide')}
+                        className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+                      >
+                        {hidingId === tt.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Eye className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </SettingsGroup>
         )}
 
         {/* Team templates */}
@@ -295,7 +385,7 @@ export function BookingTemplatesPanel() {
             duplicateNamePool={companyTemplateNames}
             onSaved={() => {
               setActiveTemplate(null)
-              fetchTemplates()
+              refreshTemplates()
             }}
           />
         )}
@@ -315,8 +405,11 @@ function TemplateSection({
   canDelete,
   canEdit = false,
   canCustomize = false,
+  canHide = false,
   onEdit,
   onCustomize,
+  onHide,
+  hidingId = null,
   entityLabels,
 }: {
   title: string
@@ -328,8 +421,11 @@ function TemplateSection({
   canDelete: boolean
   canEdit?: boolean
   canCustomize?: boolean
+  canHide?: boolean
   onEdit?: (template: BookingTemplateLibrary) => void
   onCustomize?: (template: BookingTemplateLibrary) => void
+  onHide?: (template: BookingTemplateLibrary) => void
+  hidingId?: string | null
   entityLabels: Record<string, string>
 }) {
   const t = useTranslations('settings_booking_templates')
@@ -383,6 +479,23 @@ function TemplateSection({
                     className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
                   >
                     <Copy className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+                {canHide && onHide && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => onHide(tt)}
+                    disabled={hidingId === tt.id}
+                    aria-label={t('hide')}
+                    title={t('hide')}
+                    className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+                  >
+                    {hidingId === tt.id ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <EyeOff className="h-3.5 w-3.5" />
+                    )}
                   </Button>
                 )}
                 {canEdit && onEdit && (

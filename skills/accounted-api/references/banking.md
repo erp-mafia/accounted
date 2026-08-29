@@ -43,6 +43,23 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "operation_id": "op_a8f1…",
+    "type": "import.bank",
+    "status": "queued",
+    "poll_url": "/api/v1/operations/op_a8f1…",
+    "webhook_event": "operation.completed"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/imports/sie`
@@ -81,6 +98,860 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "operation_id": "op_a8f1…",
+    "type": "import.sie",
+    "status": "queued",
+    "poll_url": "/api/v1/operations/op_a8f1…",
+    "webhook_event": "operation.completed"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/reconciliation/accounts`
+
+**List the accounts that can be reconciled, with status per account.**
+`scope:reconciliation:read · risk:low · idempotent`
+
+Returns one row per reconcilable account (bank:<cash_account_id> for each enabled cash account, skattekonto when configured) with kind, number, currency, source (psd2 / bank_file / skatteverket_api / manual, synced_at, stale), status (reconciled | open | stale | not_configured, unexplained_difference, open_counts) and superseded_by for reconnect duplicates. Optional ?date_from / ?date_to scope the bank bridge (default: the calendar year to date). Pass ?with_status=false for a cheap list without status.
+
+**Use when:** You need the side list of the Avstämning page, a month-end checklist, or to find the account_key to pass to the other reconciliation endpoints.
+**Do not use for:** The bridge and rows for one account: use GET /reconciliation/accounts/{accountKey} and .../items.
+
+**Pitfalls:**
+- account_key is the identifier every other reconciliation endpoint takes: bank:<cash_account_id> or skattekonto. Do not pass the BAS number.
+- status.state = stale means the outside truth is older than 7 days; the numbers are still computed, but judge them accordingly.
+- superseded_by is set on an older cash account that shares IBAN + currency with a newer one (reconnect duplicate); it is kept in the list because it may still hold unlinked rows.
+- Computing status per account runs one reconciliation per account; with_status=false skips that when you only need the list.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    accounts: { account_key: string, kind: "bank" | "skattekonto" | "manual", account_number: string, name: string, currency: string, logo_url: string, source: { type: "psd2" | "bank_file" | "skatteverket_api" | "skatteverket_file" | "manual", synced_at: string, stale: boolean }, status: { state: "reconciled" | "open" | "stale" | "not_configured", as_of: string, unexplained_difference: number, open_counts: { proposed: number, unmatched_external: number, unmatched_ledger: number } }, superseded_by: string, signed_off_through?: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "accounts": [
+      {
+        "account_key": "bank:11111111-1111-4111-8111-111111111111",
+        "kind": "bank",
+        "account_number": "1930",
+        "name": "Swedbank företagskonto",
+        "currency": "SEK",
+        "logo_url": null,
+        "source": {
+          "type": "psd2",
+          "synced_at": "2026-08-20T06:40:00.000Z",
+          "stale": false
+        },
+        "status": {
+          "state": "open",
+          "as_of": "2026-08-20T09:00:00.000Z",
+          "unexplained_difference": 0,
+          "open_counts": {
+            "proposed": 0,
+            "unmatched_external": 1,
+            "unmatched_ledger": 1
+          }
+        },
+        "superseded_by": null
+      },
+      {
+        "account_key": "skattekonto",
+        "kind": "skattekonto",
+        "account_number": "1630",
+        "name": "Skattekonto",
+        "currency": "SEK",
+        "logo_url": "/logos/skatteverket_color.svg",
+        "source": {
+          "type": "skatteverket_api",
+          "synced_at": "2026-08-20T04:00:12.000Z",
+          "stale": false
+        },
+        "status": {
+          "state": "open",
+          "as_of": "2026-08-20T04:00:12.000Z",
+          "unexplained_difference": 0,
+          "open_counts": {
+            "proposed": 2,
+            "unmatched_external": 3,
+            "unmatched_ledger": 1
+          }
+        },
+        "superseded_by": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}`
+
+**The reconciliation bridge for one account.**
+`scope:reconciliation:read · risk:low · idempotent`
+
+Returns external_balance (Skatteverket saldo; null for bank accounts until a statement balance exists), ledger_balance (1630 balance at the snapshot for skattekonto; period movement on the bank account), difference, unexplained_difference, is_reconciled, the bridge lines (label, amount, count, items_bucket) that explain the difference row by row, counts per bucket, and a kind block (skattekonto: saldo, fetched_at, history_start, opening_difference, upcoming; bank: today's bank status fields). Optional ?date_from / ?date_to: for skattekonto they scope the item lists only (the bridge is anchored at the snapshot); for bank they scope the bridge window.
+
+**Use when:** You need to know whether an account reconciles and why not: the bridge is the explanation, the buckets are the work.
+**Do not use for:** Listing the rows themselves (use .../items) or linking (POST .../links).
+
+**Pitfalls:**
+- Judge health on unexplained_difference, never on difference. The difference is expected to be non-zero while rows are unmatched; unexplained_difference is what is left once every bridge line is accounted for, and for skattekonto it is 0,00 whenever the data is consistent (a non-zero value is an integrity finding, not a task).
+- stale = true means the outside truth is older than 7 days (Skatteverket connection needing re-consent is the usual cause). is_reconciled can still be true on stale data; read both.
+- skattekonto.opening_difference is the gap between the derived saldo at history_start and the ledger before it; it belongs to migrated ledgers and is accepted once at sign-off, not worked down.
+- Bank accounts carry the legacy field set in the bank block (bank_transaction_total, gl_1930_period_movement, …) unchanged from /reconciliation/bank/status.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `accountKey` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    account_key: string,
+    kind: "bank" | "skattekonto" | "manual",
+    account_number: string,
+    currency: string,
+    window: { from: string, to: string },
+    as_of: string,
+    stale: boolean,
+    external_balance: number,
+    ledger_balance: number,
+    difference: number,
+    unexplained_difference: number,
+    is_reconciled: boolean,
+    bridge: { key: string, label_sv: string, label_en: string, amount: number, count: number, items_bucket: string }[],
+    counts: { proposed: number, unmatched_external: number, unmatched_ledger: number, matched: number, ignored: number },
+    skattekonto: { saldo_skatteverket: number, fetched_at: string, history_start: string, opening_difference: number, upcoming_count: number, upcoming_total: number, ledger_balance_before_start: number },
+    bank: Record<string, unknown>,
+    manual?: { period_id: string, period_start: string, period_end: string, opening_balance: number, movement: number, closing_balance: number, specification: { provider: "ar" | "ap" | "vacation", label_sv: string, label_en: string, amount: number, unconverted_fx_count: number } },
+    signoff?: { id: string, account_key: string, through_date: string, external_balance: number, ledger_balance: number, unexplained_difference: number, note: string, signed_by: string, signed_at: string, reopened_at: string, reopened_by: string, reopen_reason: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "account_key": "skattekonto",
+    "kind": "skattekonto",
+    "account_number": "1630",
+    "currency": "SEK",
+    "window": {
+      "from": null,
+      "to": null
+    },
+    "as_of": "2026-08-20T04:00:12.000Z",
+    "stale": false,
+    "external_balance": 53395,
+    "ledger_balance": 30342,
+    "difference": 23053,
+    "unexplained_difference": 0,
+    "is_reconciled": false,
+    "bridge": [
+      {
+        "key": "external_balance",
+        "label_sv": "Saldo hos Skatteverket",
+        "label_en": "Balance at Skatteverket",
+        "amount": 53395,
+        "count": null,
+        "items_bucket": null
+      },
+      {
+        "key": "unmatched_external",
+        "label_sv": "Händelser som saknas i bokföringen",
+        "label_en": "Events missing from the ledger",
+        "amount": -35553,
+        "count": 5,
+        "items_bucket": "unmatched_external"
+      },
+      {
+        "key": "unmatched_ledger",
+        "label_sv": "Rader på 1630 utan händelse hos Skatteverket",
+        "label_en": "1630 lines without a Skatteverket event",
+        "amount": 12500,
+        "count": 1,
+        "items_bucket": "unmatched_ledger"
+      },
+      {
+        "key": "ledger_balance",
+        "label_sv": "Bokfört på 1630",
+        "label_en": "Booked on 1630",
+        "amount": 30342,
+        "count": null,
+        "items_bucket": null
+      }
+    ],
+    "counts": {
+      "proposed": 2,
+      "unmatched_external": 3,
+      "unmatched_ledger": 1,
+      "matched": 41,
+      "ignored": 0
+    },
+    "skattekonto": {
+      "saldo_skatteverket": 53395,
+      "fetched_at": "2026-08-20T04:00:12.000Z",
+      "history_start": "2025-01-17",
+      "opening_difference": 0,
+      "upcoming_count": 3,
+      "upcoming_total": -18450,
+      "ledger_balance_before_start": 0
+    },
+    "bank": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/items`
+
+**List the rows behind one account's bridge, bucketed.**
+`scope:reconciliation:read · risk:low · idempotent`
+
+Returns reconciliation items for one account. ?bucket selects one of proposed | unmatched_external | unmatched_ledger | matched | ignored | upcoming (default: all open buckets first, then matched). Each item carries its side (external | ledger), a qualified item_id (skattekonto_transaction / transaction / journal_entry), date, description, signed amount, the proposal when one exists (journal_entry_id, voucher, confidence, reasons[]), link_problem when a link points at a reversed or draft entry, awaiting_external for fresh ledger lines, and the actions the row allows. ?date_from / ?date_to scope the lists; rows outside the window are never hidden from the counts (older_unmatched_count).
+
+**Use when:** You are about to link, book or ignore rows and need to see what is open and what is proposed.
+**Do not use for:** The totals: those are on GET /reconciliation/accounts/{accountKey}.
+
+**Pitfalls:**
+- An item in bucket proposed is NOT linked: it carries a proposal to link. Apply it with POST .../links { use_proposals: true } or explicit pairs.
+- actions lists what the row allows right now; an action not listed returns a structured error rather than silently doing nothing.
+- Ledger items are one per verifikat: several 1630/1930 lines of the same entry are netted, because a link settles the whole entry.
+- Pagination is ?limit (max 200) + ?cursor; next_cursor is null on the last page.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `accountKey` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    items: { item_id: string, item_type: "skattekonto_transaction" | "transaction" | "journal_entry", side: "external" | "ledger", bucket: "proposed" | "unmatched_external" | "unmatched_ledger" | "matched" | "ignored" | "upcoming", date: string, description: string, amount: number, currency: string, voucher_number?: number, voucher_series?: string, entry_status?: "draft" | "posted" | "reversed", linked_journal_entry_id?: string, link_problem?: "entry_reversed" | "entry_draft" | "entry_missing", proposal?: { journal_entry_id: string, voucher_number: number, voucher_series: string, entry_date: string, description: string, entry_status: "draft" | "posted" | "reversed", confidence: number, reasons: string[] }, awaiting_external?: boolean, actions: ("match" | "unmatch" | "book" | "ignore" | "unignore" | "review")[] }[],
+    count: number,
+    total_count: number,
+    has_more: boolean,
+    next_cursor: string,
+    older_unmatched_count: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "items": [
+      {
+        "item_id": "33333333-3333-4333-8333-333333333333",
+        "item_type": "skattekonto_transaction",
+        "side": "external",
+        "bucket": "proposed",
+        "date": "2026-08-12",
+        "description": "Inbetalning bokförd",
+        "amount": 30000,
+        "currency": "SEK",
+        "proposal": {
+          "journal_entry_id": "44444444-4444-4444-8444-444444444444",
+          "voucher_number": 214,
+          "voucher_series": "A",
+          "entry_date": "2026-08-11",
+          "description": "Inbetalning skattekonto",
+          "entry_status": "posted",
+          "confidence": 0.95,
+          "reasons": [
+            "exakt belopp på 1630",
+            "1 dagars avstånd"
+          ]
+        },
+        "actions": [
+          "match",
+          "book",
+          "ignore"
+        ]
+      }
+    ],
+    "count": 1,
+    "total_count": 1,
+    "has_more": false,
+    "next_cursor": null,
+    "older_unmatched_count": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/items/{itemId}/ignore`
+
+**Ignore or restore one outside row.**
+`scope:reconciliation:write · risk:low · idempotent · dry-run · reversible`
+
+Sets the ignore flag on one outside row (bank transaction or skattekonto row). Body { ignored: true | false }, default true. An ignored row never has a link; ignoring a linked row is refused (unlink first). Ignored rows are excluded from the unmatched totals and listed on the bridge's exclusion line so they never disappear silently.
+
+**Use when:** A row will never have a counterpart (a duplicate from a reconnect, an event that predates the books) and should stop counting as work.
+**Do not use for:** Rows that should be booked or linked; ignoring is triage, not settlement.
+
+**Pitfalls:**
+- Ignoring is reversible (ignored: false) and audited through the row itself; nothing is deleted.
+- For the skattekonto, an ignored row still counts toward the derived opening balance (it is a real Skatteverket movement); the bridge shows it on its own line.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `accountKey` | path | `string` | yes |  |
+| `itemId` | path | `string` | yes |  |
+
+Request body:
+```ts
+{ ignored?: boolean }
+```
+
+Example request:
+```json
+{
+  "ignored": true
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { external_id: string, is_ignored: boolean },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "external_id": "33333333-3333-4333-8333-333333333333",
+    "is_ignored": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/links`
+
+**Link outside rows to existing verifikat (pairs or proposals).**
+`scope:reconciliation:write · risk:medium · dry-run · reversible`
+
+Body: { pairs: [{ external_ids: [id], journal_entry_ids: [id] }] } and/or { use_proposals: true, confidence_threshold? }. Each pair is validated as the single-link paths validate (row open and not ignored, entry posted and not reversed, the entry's account lines settle the amount, entry not already linked) and applied independently: the response lists applied[] and skipped[{pair, code, message}] so partial success is explicit. Codes: UNSUPPORTED_PAIR_SHAPE, ALREADY_LINKED, ENTRY_NOT_FOUND, PAIR_NOT_CLOSED, ROW_IGNORED, NOT_FOUND, LINK_RACE. ?dry_run=true returns the pairs that would be attempted without writing.
+
+**Use when:** An agent or integration has decided which rows explain each other, or wants to apply the proposals the sync already computed.
+**Do not use for:** Booking new verifikat for rows that have no counterpart (use the transactions or skattekonto booking endpoints); reconciling across accounts.
+
+**Pitfalls:**
+- A pair is one OR MANY outside rows against exactly one verifikat (bank: independent links per transaction; skattekonto: all-or-nothing, the rows must sum to what the verifikat settles). One row against several verifikat is UNSUPPORTED_PAIR_SHAPE until residual booking lands, never silently reduced.
+- A pair must close to the row's amount on the expected side (a single matching line, or the entry's lines on the account netting to it); a fee or rounding difference is PAIR_NOT_CLOSED here and needs a residual booking first.
+- Links never touch the ledger, so they succeed in locked periods; unlink with DELETE .../links/{linkId} (linkId = the outside row id).
+- Idempotency-Key is required; repeating the same key replays the first response.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `accountKey` | path | `string` | yes |  |
+
+Request body:
+```ts
+{
+  pairs?: { external_ids: string[], journal_entry_ids: string[] }[],
+  use_proposals?: boolean,
+  confidence_threshold?: number
+}
+```
+
+Example request:
+```json
+{
+  "use_proposals": true,
+  "confidence_threshold": 0.9
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    dry_run: boolean,
+    considered: number,
+    applied: { external_id: string, journal_entry_id: string, via?: "line" | "entry_total" }[],
+    skipped: { pair: { external_ids: string[], journal_entry_ids: string[] }, code: string, message: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "dry_run": false,
+    "considered": 2,
+    "applied": [
+      {
+        "external_id": "33333333-3333-4333-8333-333333333333",
+        "journal_entry_id": "44444444-4444-4444-8444-444444444444",
+        "via": "line"
+      }
+    ],
+    "skipped": [
+      {
+        "pair": {
+          "external_ids": [
+            "55555555-5555-4555-8555-555555555555"
+          ],
+          "journal_entry_ids": [
+            "66666666-6666-4666-8666-666666666666"
+          ]
+        },
+        "code": "ALREADY_LINKED",
+        "message": "Verifikatet är redan kopplat till en annan skattekonto-transaktion."
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/links/{linkId}`
+
+**Remove a link between an outside row and a verifikat.**
+`scope:reconciliation:write · risk:low · idempotent · dry-run · reversible`
+
+Clears the link on one outside row (bank transaction or skattekonto row). The verifikat is never edited or deleted (BFL); only the row's pointer is cleared, so the pair returns to the open buckets and proposals are recomputed on the next sync. Allowed in locked periods. ?dry_run=true reports what would be unlinked.
+
+**Use when:** A link was wrong (a bulk proposal apply that paired the wrong verifikat, a manual mistake).
+**Do not use for:** Undoing a booking: a residual or categorization booking is reversed through the journal-entry reverse endpoint, not by unlinking.
+
+**Pitfalls:**
+- linkId is the outside row id, not a separate link entity.
+- Unlinking a row whose verifikat was stornoed is the expected fix for a link_problem = entry_reversed item; the row then shows under unmatched_external again.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `accountKey` | path | `string` | yes |  |
+| `linkId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: { external_id: string, previous_journal_entry_id: string },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "external_id": "33333333-3333-4333-8333-333333333333",
+    "previous_journal_entry_id": "44444444-4444-4444-8444-444444444444"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/residual`
+
+**Book the remainder of a bank selection as a fee/interest/rounding verifikat and link the selection.**
+`scope:transactions:write · risk:medium · dry-run`
+
+Body: { external_ids: [transaction ids], journal_entry_id, kind: "bank_fee" | "interest_expense" | "interest_income" | "rounding", entry_date?, description? }. Computes the difference between the transactions' sum and the verifikat's net on the bank account, books it on 6570 / 8410 / 8310 / 3740 against the bank account (dated on the latest transaction by default), links the transactions to the main verifikat and anchors the residual verifikat through transaction_voucher_links. Bank accounts only (bank:<cash_account_id>). Refused when the difference is 0 (RESIDUAL_ZERO), above 5000 kr (RESIDUAL_TOO_LARGE: that is a missing booking, not a fee), or when the kind points the wrong way (RESIDUAL_DIRECTION). ?dry_run=true returns would_book without writing.
+
+**Use when:** A manual match misses by a small amount that is genuinely a bank fee, interest or rounding, and you want to close it in one step instead of booking a verifikat and then linking.
+**Do not use for:** Skattekonto rows (Skatteverket posts ränta and avgifter as their own rows: link them), or differences that are really a missing booking (book that properly).
+
+**Pitfalls:**
+- The kind must match the direction: money that left the bank unbooked is bank_fee / interest_expense; money that arrived unbooked is interest_income; rounding works either way.
+- Links are made before the booking and undone if the booking is refused (a locked period), so a refusal leaves nothing half done.
+- Idempotency-Key is required; repeating the same key replays the first response.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `accountKey` | path | `string` | yes |  |
+
+Request body:
+```ts
+{
+  external_ids: string[],
+  journal_entry_id: string,
+  kind: "bank_fee" | "rounding" | "interest_income" | "interest_expense",
+  entry_date?: string,
+  description?: string
+}
+```
+
+Example request:
+```json
+{
+  "external_ids": [
+    "22222222-2222-4222-8222-222222222222"
+  ],
+  "journal_entry_id": "44444444-4444-4444-8444-444444444444",
+  "kind": "bank_fee"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    dry_run: boolean,
+    residual_journal_entry_id?: string,
+    residual_amount?: number,
+    applied?: { external_id: string, journal_entry_id: string }[],
+    skipped?: { code: string, message: string }[],
+    would_book?: { kind: string, counter_account: string, ledger_account: string, currency: string, transactions_total: number, entry_net: number, residual_amount: number, entry_date: string, description: string, lines: { account_number: string, debit_amount: number, credit_amount: number }[] }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "dry_run": false,
+    "residual_journal_entry_id": "55555555-5555-4555-8555-555555555555",
+    "residual_amount": -10,
+    "applied": [
+      {
+        "external_id": "22222222-2222-4222-8222-222222222222",
+        "journal_entry_id": "44444444-4444-4444-8444-444444444444"
+      }
+    ],
+    "skipped": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/signoff`
+
+**Sign-off history for one reconcilable account.**
+`scope:reconciliation:read · risk:low · idempotent · reversible`
+
+Every "avstämt t.o.m." sign-off on the account, newest first. Active ones by default; ?include_reopened=true adds the reopened (undone) ones with their reopen stamp. The latest active sign-off also rides along on GET .../accounts/{accountKey} as `signoff`.
+
+**Use when:** You need the attestation trail (who signed what through which date) for an account, e.g. for a close checklist or an audit question.
+**Do not use for:** Deciding whether the account is reconciled today: read unexplained_difference on the account status for that.
+
+**Pitfalls:**
+- A sign-off is an assertion made at a point in time; rows or links added later can make the live bridge differ from the signed numbers. Compare signoff.unexplained_difference with the current status when that matters.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `accountKey` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    signoffs: { id: string, account_key: string, through_date: string, external_balance: number, ledger_balance: number, unexplained_difference: number, note: string, signed_by: string, signed_at: string, reopened_at: string, reopened_by: string, reopen_reason: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signoffs": [
+      {
+        "id": "77777777-7777-4777-8777-777777777777",
+        "account_key": "skattekonto",
+        "through_date": "2026-07-31",
+        "external_balance": 12450,
+        "ledger_balance": 12450,
+        "unexplained_difference": 0,
+        "note": null,
+        "signed_by": "88888888-8888-4888-8888-888888888888",
+        "signed_at": "2026-08-03T09:12:00Z",
+        "reopened_at": null,
+        "reopened_by": null,
+        "reopen_reason": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/signoff`
+
+**Mark an account reconciled through a date (sign-off).**
+`scope:reconciliation:signoff · risk:medium · dry-run · reversible`
+
+Body: { through_date: "YYYY-MM-DD", note?, force?, external_balance? }. Recomputes the bridge through the date and refuses unless unexplained_difference is zero; with force: true and a note it signs anyway and records the difference. Refuses dates in the future, dates past the skattekonto snapshot (NOT_FETCHED_THROUGH), and dates at or before an existing active sign-off (ALREADY_SIGNED_OFF: reopen that one first). For a manual:NNNN account without a system specification (anything but 1510/2440/2920/2940), external_balance is the balance per the signer's underlag in ledger sign (liabilities negative); the difference against the booked balance is recorded, and a non-zero one still needs force + note. On bank, skattekonto and specification accounts external_balance is refused (EXTERNAL_BALANCE_NOT_ALLOWED). ?dry_run=true returns would_sign without writing. Undo with POST .../signoff/{signoffId}/reopen.
+
+**Use when:** The month (or period) is explained and you want the account marked as reconciled through its last day, as a human would in the Avstämning page.
+**Do not use for:** Linking rows or booking anything: a sign-off changes no data in the ledger. Use .../links and the booking endpoints first.
+
+**Pitfalls:**
+- Refusal codes come back as VALIDATION_ERROR with details.code: INVALID_DATE, DATE_IN_FUTURE, NOT_FETCHED_THROUGH, OUTSIDE_UNKNOWN, NOT_RECONCILED, NOTE_REQUIRED, EXTERNAL_BALANCE_NOT_ALLOWED; ALREADY_SIGNED_OFF and SIGNOFF_RACE come back as CONFLICT.
+- force: true without a note is NOTE_REQUIRED: the note is what the next reader sees next to the non-zero difference.
+- Idempotency-Key is required; repeating the same key replays the first response.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `accountKey` | path | `string` | yes |  |
+
+Request body:
+```ts
+{ through_date: string, note?: string, force?: boolean, external_balance?: number }
+```
+
+Example request:
+```json
+{
+  "through_date": "2026-07-31"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    dry_run: boolean,
+    signoff?: { id: string, account_key: string, through_date: string, external_balance: number, ledger_balance: number, unexplained_difference: number, note: string, signed_by: string, signed_at: string, reopened_at: string, reopened_by: string, reopen_reason: string },
+    would_sign?: { account_key: string, through_date: string, external_balance: number, ledger_balance: number, unexplained_difference: number, is_reconciled: boolean, forced: boolean, previous_through_date: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "dry_run": false,
+    "signoff": {
+      "id": "77777777-7777-4777-8777-777777777777",
+      "account_key": "skattekonto",
+      "through_date": "2026-07-31",
+      "external_balance": 12450,
+      "ledger_balance": 12450,
+      "unexplained_difference": 0,
+      "note": null,
+      "signed_by": "88888888-8888-4888-8888-888888888888",
+      "signed_at": "2026-08-03T09:12:00Z",
+      "reopened_at": null,
+      "reopened_by": null,
+      "reopen_reason": null
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/signoff/{signoffId}/reopen`
+
+**Reopen (undo) a reconciliation sign-off.**
+`scope:reconciliation:signoff · risk:low · idempotent · dry-run · reversible`
+
+Body: { reason? }. Stamps the sign-off reopened_at/by/reason; nothing is deleted and the ledger is untouched. After this the account can be signed off again for the same or an earlier date. A sign-off that is already reopened is ALREADY_REOPENED (CONFLICT).
+
+**Use when:** A signed-off period turns out to need more work (a late bank row, a corrected verifikat) and the attestation must be withdrawn before it is redone.
+**Do not use for:** Removing a link or un-booking anything: those are separate operations; reopening only withdraws the attestation.
+
+**Pitfalls:**
+- Reopening is recorded, not erased: the history endpoint (?include_reopened=true) keeps showing the row with its reopen stamp.
+- Idempotency-Key is required; repeating the same key replays the first response.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `accountKey` | path | `string` | yes |  |
+| `signoffId` | path | `string` | yes |  |
+
+Request body:
+```ts
+{ reason?: string }
+```
+
+Example request:
+```json
+{
+  "reason": "Sen bankrad 31 juli kom in 3 augusti."
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    signoff: { id: string, account_key: string, through_date: string, external_balance: number, ledger_balance: number, unexplained_difference: number, note: string, signed_by: string, signed_at: string, reopened_at: string, reopened_by: string, reopen_reason: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signoff": {
+      "id": "77777777-7777-4777-8777-777777777777",
+      "account_key": "skattekonto",
+      "through_date": "2026-07-31",
+      "external_balance": 12450,
+      "ledger_balance": 12450,
+      "unexplained_difference": 0,
+      "note": null,
+      "signed_by": "88888888-8888-4888-8888-888888888888",
+      "signed_at": "2026-08-03T09:12:00Z",
+      "reopened_at": "2026-08-04T07:30:00Z",
+      "reopened_by": "88888888-8888-4888-8888-888888888888",
+      "reopen_reason": "Sen bankrad 31 juli kom in 3 augusti."
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/reconciliation/bank/run`
@@ -109,6 +980,15 @@ Request body:
 { date_from?: string, date_to?: string, account_number?: string, confidence_threshold?: number }
 ```
 
+Example request:
+```json
+{
+  "date_from": "2026-05-01",
+  "date_to": "2026-05-31",
+  "confidence_threshold": 0.9
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -124,6 +1004,22 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "matches": [],
+    "applied": 0,
+    "errors": 0,
+    "skipped_below_threshold": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -181,6 +1077,33 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "bank_transaction_total": 48150,
+    "ignored_transaction_total": 0,
+    "ignored_transaction_count": 0,
+    "gl_1930_balance": 98150,
+    "gl_1930_period_movement": 48150,
+    "gl_1930_opening_balance": 50000,
+    "gl_1930_correction_adjustment": 0,
+    "difference": 0,
+    "is_reconciled": true,
+    "matched_count": 142,
+    "unmatched_transaction_count": 3,
+    "unmatched_transaction_total": 1250,
+    "unmatched_gl_line_count": 2,
+    "unmatched_gl_line_total": 1250,
+    "unexplained_difference": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/transactions`
@@ -205,13 +1128,37 @@ Cursor-paginated transaction list ordered by created_at DESC, id ASC (newest-imp
 Response `200`:
 ```ts
 {
-  data: { id: string, date: string, description: string, amount: number, currency: string, reference: string, merchant_name: string, journal_entry_id: string, invoice_id: string, supplier_invoice_id: string, is_business: boolean, category: string, import_source: string, created_at: string }[],
+  data: { id: string, date: string, description: string, amount: number, currency: string, reference: string, merchant_name: string, journal_entry_id: string, invoice_id: string, supplier_invoice_id: string, is_business: boolean, category: string, import_source: string, cash_account_id: string, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "id": "a8f1…",
+      "date": "2026-05-12",
+      "description": "ICA MAXI",
+      "amount": -349.5,
+      "currency": "SEK",
+      "merchant_name": "ICA MAXI",
+      "journal_entry_id": null,
+      "is_business": null,
+      "category": null
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12",
+    "next_cursor": null
   }
 }
 ```
@@ -261,6 +1208,7 @@ Response `200`:
     external_id: string,
     import_source: string,
     reconciliation_method: string,
+    cash_account_id: string,
     created_at: string,
     updated_at: string
   },
@@ -270,6 +1218,24 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "a8f1…",
+    "date": "2026-05-12",
+    "amount": -349.5,
+    "currency": "SEK",
+    "journal_entry_id": null,
+    "is_business": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -315,6 +1281,14 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "is_business": true,
+  "category": "expense_office"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -333,6 +1307,22 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "success": true,
+    "journal_entry_created": true,
+    "journal_entry_id": "je_…",
+    "category": "expense_office"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -371,6 +1361,13 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "invoice_id": "inv_…"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -389,6 +1386,24 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "success": true,
+    "invoice_status": "paid",
+    "paid_amount": 12500,
+    "remaining_amount": 0,
+    "journal_entry_id": "je_…",
+    "category": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -424,6 +1439,13 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "supplier_invoice_id": "si_…"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -440,6 +1462,23 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "success": true,
+    "invoice_status": "paid",
+    "paid_amount": 5000,
+    "remaining_amount": 0,
+    "journal_entry_id": "je_…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -480,6 +1519,20 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "success": true,
+    "reversed_journal_entry_id": "je_…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/transactions/batch-categorize`
@@ -509,6 +1562,21 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "items": [
+    {
+      "transaction_id": "tx_1",
+      "categorization": {
+        "is_business": true,
+        "category": "expense_office"
+      }
+    }
+  ]
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -522,6 +1590,33 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "results": [
+      {
+        "ok": true,
+        "request_index": 0,
+        "transaction_id": "tx_1",
+        "data": {
+          "journal_entry_id": "je_…"
+        }
+      }
+    ],
+    "summary": {
+      "total": 1,
+      "succeeded": 1,
+      "failed": 0
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -559,6 +1654,22 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "transactions": [
+    {
+      "date": "2026-05-12",
+      "description": "ICA MAXI",
+      "amount": -349.5,
+      "currency": "SEK",
+      "external_id": "csv-line-42",
+      "merchant_name": "ICA MAXI"
+    }
+  ]
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -577,6 +1688,20 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "imported": 1,
+    "skipped_duplicates": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```

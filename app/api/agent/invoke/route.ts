@@ -7,6 +7,7 @@ import { getActiveCompanyId } from '@/lib/company/context'
 import { getIntent } from '@/lib/agent/intents/registry'
 import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
 import { runChatTurn, friendlyModelError } from '@/lib/agent/chat/run-turn'
+import { getAiStatus } from '@/lib/ai'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -15,6 +16,13 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 // Make sure extensions are loaded: the chat loop dispatches against the
 // agent tool registry which is populated by the mcp-server extension at load.
 ensureInitialized()
+
+// Deep turns (thinking at high/xhigh effort, up to 12 tool iterations, a
+// 15-27k-token prompt prefix) can outlive the plan default duration cap; a
+// function killed mid-stream closes the NDJSON stream cleanly, which the chat
+// used to render as silent success. 300 s matches the other long-running model
+// surfaces (app/api/receipt-hunt/run, app/api/agent/ask).
+export const maxDuration = 300
 
 // Hard cap on the per-turn user input. Generous for a chat composer (about
 // 5k words / 20 pages) but bounds Bedrock token cost if the rate limiter is
@@ -116,6 +124,20 @@ export async function POST(request: Request) {
 
   const capBlocked = await requireCapability(supabase, companyId, CAPABILITY.ai)
   if (capBlocked) return capBlocked
+
+  // Distinct from the paywall: the deployment has no AI backend the chat
+  // loop can run on (no credentials, or an OpenAI-compatible endpoint, which
+  // the loop does not speak yet). Answer up front instead of opening a
+  // stream that dies on the first model call.
+  if (!getAiStatus().assistantAvailable) {
+    return NextResponse.json(
+      {
+        error: 'Assistenten är inte konfigurerad på den här installationen.',
+        code: 'ai_unconfigured',
+      },
+      { status: 503 },
+    )
+  }
 
   // Resolve the conversation BEFORE any side effect below (the onboarding
   // intake stamp): a request that is about to be rejected must not write.

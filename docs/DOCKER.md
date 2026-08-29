@@ -216,18 +216,20 @@ No env vars needed: always available.
 
 ## Updating
 
-The default `IMAGE_TAG=latest` follows `main` and updates on every `docker compose pull`. For production, **pin to a specific release** so updates are deliberate:
+The default `IMAGE_TAG=latest` follows `main` and updates on every `docker compose pull`. For production, **pin to a specific build** so updates are deliberate. Every merge to `main` publishes the image under two tags: `latest` and the bare 7-character commit SHA (for example `3e4b5dd`), so a pin looks like:
 
 ```env
 # .env
-IMAGE_TAG=1.2.3
+IMAGE_TAG=3e4b5dd
 ```
 
-Browse available tags at https://github.com/erp-mafia/gnubok/pkgs/container/gnubok. For maximum integrity, pin by digest:
+Browse available tags at https://github.com/erp-mafia/accounted/pkgs/container/gnubok (the image name keeps the historical `gnubok` package name on purpose). For maximum integrity, pin by digest; the digest is printed in the `docker-publish` workflow run and by `docker buildx imagetools inspect ghcr.io/erp-mafia/gnubok:<sha>`:
 
 ```env
-IMAGE_TAG=1.2.3@sha256:abcdef...
+IMAGE_TAG=3e4b5dd@sha256:abcdef...
 ```
+
+Semver tags (`1.2.3`, `1.2`, `1`) are published only when a `v*.*.*` git tag is cut. No such tag exists yet, so until the first tagged release the commit SHA is the only immutable pin.
 
 Apply updates:
 
@@ -246,8 +248,8 @@ If you prefer to build locally instead of pulling the pre-built image:
 
 ```bash
 # Clone the repo
-git clone https://github.com/gnubok/gnubok.git
-cd Accounted
+git clone https://github.com/erp-mafia/accounted.git
+cd accounted
 cp .env.docker.example .env
 # Fill in .env
 

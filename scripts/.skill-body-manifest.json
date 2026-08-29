@@ -40,40 +40,40 @@
     "version": 2
   },
   "horizontal/swedish-e-invoicing": {
-    "hash": "287a9a7d4239de8db25b941345bb9b418e5fcf5b4dd65963c06b68215f54b2ce",
-    "version": 6
+    "hash": "59fb8f4ab9de7c907cf054f37ae6b651504987375f440831e199710b2a938223",
+    "version": 7
   },
   "horizontal/swedish-e-invoicing/consumer-and-b2c": {
     "hash": "ebcb2c7e888497b61a5b25616314ae620f40d220c93c07a48aa4a49d00ac2068",
     "version": 2
   },
   "horizontal/swedish-e-invoicing/european-mandates": {
-    "hash": "62e68fed6dff28d411b1fbe3ed60aeb25034bd7ff74e97c0ec16ac8c456076f7",
-    "version": 2
+    "hash": "cca73256fac8b3cd4ae614a2d512206ae30764676da88df3dc903e29a189a7d4",
+    "version": 3
   },
   "horizontal/swedish-e-invoicing/implementation-guide": {
-    "hash": "dd13aa80a8df4f5f44343133d5f885f1f7f1e914d73ffb5924f0296ead151439",
-    "version": 2
+    "hash": "a52c02278e98d7418b2866cf0dd2211629e4b1381d0c5d28ba3df4df83ee4415",
+    "version": 3
   },
   "horizontal/swedish-e-invoicing/legal-and-regulatory": {
-    "hash": "c1a2f945d60264d2b3e088c2d206be1048aa86688957f67c8047f653c8e48755",
-    "version": 2
+    "hash": "a5efa085631187766375a43b8a740497c4132466c0ec2873d798dcc823db8937",
+    "version": 3
   },
   "horizontal/swedish-e-invoicing/market-provider-pricing": {
-    "hash": "e9527da2e738cefc32990758f6cbfb5f90e12e911938836dea5a1f6a69e3609b",
-    "version": 2
+    "hash": "d99359e2b9b1455c6c2df20b266aca4d79b6585e3591125873751e947b5029f7",
+    "version": 3
   },
   "horizontal/swedish-e-invoicing/peppol-bis-billing": {
-    "hash": "71605dec0d6fe35175a2c40492fccdf04bf6dff9e1aa773e24fad449bdabd460",
-    "version": 1
+    "hash": "2407acacabb60836e1ebfff45f7d443dda92c3c432df83fd447cec6d5375c89f",
+    "version": 2
   },
   "horizontal/swedish-e-invoicing/peppol-network": {
-    "hash": "f751c3eac89dddac792e6f7993c2084300c0d70a3e6133cc309e49e9d818b829",
-    "version": 2
+    "hash": "efb8a84884c84a48bdc68049467d43f40503970bba7659231f7d964f51b5c2a1",
+    "version": 3
   },
   "horizontal/swedish-e-invoicing/swedish-cius-and-specifics": {
-    "hash": "538084e9f20585466adde5aafff03accaa3d7a24c11120014034706c2a01c60d",
-    "version": 2
+    "hash": "d3cadfe9c435013813edefdb435505f6df8f577352b929a24f156aeb0636ab5e",
+    "version": 3
   },
   "horizontal/swedish-financial-reporting": {
     "hash": "4fc9d925de42b6a1c4658b960f269f97cf7035cd2041658d17e1883480d9be4b",
@@ -100,16 +100,16 @@
     "version": 2
   },
   "horizontal/swedish-payroll": {
-    "hash": "8cbedb0245ae1f3a042bc2310d9563424ed58ef9fc6f3e853693844323653faa",
-    "version": 4
+    "hash": "b9d3a10d1c949b01185df001b08f150ebbaeca88bb837913bd9edab6f90e3859",
+    "version": 5
   },
   "horizontal/swedish-payroll/agi-filing": {
     "hash": "91aa490472fafff434088301dd193ed474589b36ae22bdaab640b42bc3b3c255",
     "version": 1
   },
   "horizontal/swedish-payroll/bas-7xxx": {
-    "hash": "6e7167788b3d2f9442163e29b77e79703bfc3394ff90223d2d9d096554638437",
-    "version": 1
+    "hash": "61464f317f81e9bb55d6d65a747a457b85440b076145ed44cd4055b2f0d3c324",
+    "version": 2
   },
   "horizontal/swedish-payroll/benefits": {
     "hash": "bb4ead2f45691bc84c09b7433e3b2c719c93b54f702978cfd362b125ae9c8ca2",

@@ -1,8 +1,17 @@
 'use client'
 
-import { ChevronDown } from 'lucide-react'
+import { Children, isValidElement, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { HelpPopover } from '@/components/ui/help-popover'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 
 /**
  * The Fönster settings language (founder-approved concept 2026-07-25):
@@ -168,30 +177,176 @@ export function SettingsTextarea({ className, ...rest }: React.TextareaHTMLAttri
   )
 }
 
-/** Flat native select with a quiet chevron. */
+/**
+ * Flat select with a styled popup. Keeps the native-select prop surface so
+ * call sites read like a <select> (value/defaultValue, onChange with
+ * e.target.value, <option> children, `name` for the wrapper's FormData read)
+ * but renders through Radix Select: the native listbox popup cannot be
+ * styled and clashes with the panel (same call as TeamPanel's role
+ * dropdowns). The trigger keeps the quiet dashed-underline look.
+ */
+const SETTINGS_SELECT_TRIGGER_CLASS =
+  'h-auto w-auto max-w-full shrink-0 cursor-pointer gap-1.5 rounded-none border-0 border-b border-dashed border-transparent bg-transparent px-0 py-1 text-sm text-foreground ' +
+  'hover:border-border focus:border-solid focus:border-foreground/50 focus:ring-0 disabled:cursor-not-allowed disabled:opacity-60'
+
+// Radix Select refuses empty-string item values; settings selects use '' for
+// placeholder-shaped options ("Ingen", "Lägg till valuta"), so '' maps onto a
+// sentinel at the Radix boundary and back at the native-shaped one.
+const SETTINGS_SELECT_EMPTY = '__settings-select-empty__'
+const toRadixValue = (value: string) => (value === '' ? SETTINGS_SELECT_EMPTY : value)
+const fromRadixValue = (value: string) => (value === SETTINGS_SELECT_EMPTY ? '' : value)
+
+interface SettingsSelectOption {
+  value: string
+  label: React.ReactNode
+  disabled: boolean
+}
+
+type SettingsSelectEntry =
+  | { kind: 'option'; option: SettingsSelectOption }
+  | { kind: 'group'; label: React.ReactNode; options: SettingsSelectOption[] }
+
+function collectSelectOptions(children: React.ReactNode): SettingsSelectOption[] {
+  return collectSelectEntries(children).flatMap((entry) =>
+    entry.kind === 'group' ? entry.options : [entry.option],
+  )
+}
+
+/**
+ * Walks native-shaped select children. <option>s become option entries;
+ * <optgroup>s become group entries that keep their label (rendered as a
+ * non-interactive header row in the popup, e.g. the ROT/RUT work-type
+ * groups in ArticleForm); fragments/arrays are flattened transparently.
+ */
+function collectSelectEntries(children: React.ReactNode): SettingsSelectEntry[] {
+  const entries: SettingsSelectEntry[] = []
+  Children.forEach(children, (child) => {
+    if (!isValidElement(child)) return
+    if (child.type === 'option') {
+      const props = child.props as React.OptionHTMLAttributes<HTMLOptionElement>
+      entries.push({
+        kind: 'option',
+        option: {
+          value: String(props.value ?? ''),
+          label: props.children,
+          disabled: !!props.disabled,
+        },
+      })
+      return
+    }
+    if (child.type === 'optgroup') {
+      const props = child.props as React.OptgroupHTMLAttributes<HTMLOptGroupElement>
+      entries.push({
+        kind: 'group',
+        label: props.label,
+        options: collectSelectOptions(props.children),
+      })
+      return
+    }
+    // Fragments / arrays of options: flatten.
+    entries.push(
+      ...collectSelectEntries((child.props as { children?: React.ReactNode }).children),
+    )
+  })
+  return entries
+}
+
 export function SettingsSelect({
   className,
   wrapperClassName,
   children,
-  ...rest
+  id,
+  name,
+  value,
+  defaultValue,
+  disabled,
+  onChange,
+  onInput,
+  'aria-label': ariaLabel,
 }: React.SelectHTMLAttributes<HTMLSelectElement> & { wrapperClassName?: string }) {
+  const entries = collectSelectEntries(children)
+  const options = entries.flatMap((entry) =>
+    entry.kind === 'group' ? entry.options : [entry.option],
+  )
+  const isControlled = value !== undefined
+  // Uncontrolled fallback mirrors the native select: defaultValue if given,
+  // else the first option.
+  const [internalValue, setInternalValue] = useState<string>(() =>
+    defaultValue !== undefined ? String(defaultValue) : (options[0]?.value ?? ''),
+  )
+  const hiddenInputRef = useRef<HTMLInputElement>(null)
+  const currentValue = isControlled ? String(value) : internalValue
+
+  const handleValueChange = (encoded: string) => {
+    const next = fromRadixValue(encoded)
+    if (!isControlled) setInternalValue(next)
+    // SettingsFormWrapper tracks dirtiness via bubbling input events; the
+    // Radix trigger is a button and fires none, so raise the event from the
+    // hidden input. Call sites that opt out of dirty tracking pass an
+    // onInput stopPropagation handler, which attaches there and still
+    // intercepts.
+    hiddenInputRef.current?.dispatchEvent(new Event('input', { bubbles: true }))
+    onChange?.({ target: { value: next } } as unknown as React.ChangeEvent<HTMLSelectElement>)
+  }
+
   return (
     <span className={cn('relative inline-flex max-w-full items-center', wrapperClassName)}>
-      <select
-        {...rest}
-        className={cn(
-          'max-w-full cursor-pointer appearance-none truncate rounded-none border-0 border-b border-dashed border-transparent bg-transparent py-1 pl-0 pr-6 text-sm text-foreground',
-          'hover:border-border focus:outline-none focus-visible:border-solid focus-visible:border-foreground/50',
-          'disabled:cursor-not-allowed disabled:opacity-60',
-          className,
-        )}
-      >
-        {children}
-      </select>
-      <ChevronDown
-        aria-hidden="true"
-        className="pointer-events-none absolute right-1 h-3.5 w-3.5 text-muted-foreground"
+      {/* Carries `name` into the wrapper's FormData and hosts the dirty-
+          tracking input event; type="hidden" keeps it out of the tab order. */}
+      <input
+        ref={hiddenInputRef}
+        type="hidden"
+        name={name}
+        value={currentValue}
+        onInput={onInput as unknown as React.FormEventHandler<HTMLInputElement>}
+        readOnly
       />
+      <Select
+        value={toRadixValue(currentValue)}
+        onValueChange={handleValueChange}
+        disabled={disabled}
+      >
+        <SelectTrigger
+          id={id}
+          aria-label={ariaLabel}
+          className={cn(SETTINGS_SELECT_TRIGGER_CLASS, className)}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent align="start">
+          {entries.map((entry, index) =>
+            entry.kind === 'group' ? (
+              /* Radix Label rows are not Items: arrow-key navigation and
+                 typeahead skip them; they render as muted eyebrow headers. */
+              <SelectGroup key={`group-${index}`}>
+                <SelectLabel
+                  data-ph-unmask=""
+                  className="text-[11px] uppercase tracking-wider"
+                >
+                  {entry.label}
+                </SelectLabel>
+                {entry.options.map((option) => (
+                  <SelectItem
+                    key={option.value}
+                    value={toRadixValue(option.value)}
+                    disabled={option.disabled}
+                  >
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            ) : (
+              <SelectItem
+                key={entry.option.value}
+                value={toRadixValue(entry.option.value)}
+                disabled={entry.option.disabled}
+              >
+                {entry.option.label}
+              </SelectItem>
+            ),
+          )}
+        </SelectContent>
+      </Select>
     </span>
   )
 }

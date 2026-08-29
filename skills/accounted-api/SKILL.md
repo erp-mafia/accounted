@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 124 endpoints.
+  pagination, scopes), and all 139 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -128,9 +128,11 @@ imports) return `202` with an operation id; poll `GET /api/v1/operations/{id}`
 until `status` is `succeeded`/`failed`. The response shape is identical
 whether the work ran inline or queued.
 
-**Versioning.** Dated versions (current: see `meta.api_version`). Pin with the
-`Gnubok-Version` request header; responses echo it. Additive changes ship
-without a version bump; see https://app.gnubok.se/docs/api/versioning.
+**Versioning.** Dated versions (current: see `meta.api_version`). Responses
+carry the `Gnubok-Version` header; request pinning via a `Gnubok-Version`
+request header is reserved for a future breaking change and is not read
+today. Additive changes ship without a version bump; see
+https://app.gnubok.se/docs/api/versioning.
 
 **Index badges.** Every operation line below carries machine-readable
 annotations from the spec: `scope:` (required key scope), `risk:` (low/medium/
@@ -140,15 +142,16 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 124 operations. Paths are shown without
+API version `2026-05-12`, 139 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
-### Core (4)
+### Core (5)
 
 Full detail: [references/core.md](references/core.md)
 
 ```text
 GET /companies : List companies the API key can access [scope:companies:read risk:low idempotent]
+POST /companies : Create a company and set it up for bookkeeping [scope:companies:write risk:medium dry-run]
 PATCH /companies/{companyId}/settings : Partially update company settings [scope:companies:write risk:medium idempotent dry-run reversible]
 GET /health : Health check [risk:low idempotent]
 GET /operations/{id} : Poll a long-running operation by id [scope:operations:read risk:low idempotent]
@@ -169,7 +172,7 @@ POST /companies/{companyId}/journal-entries/batch-create : Create up to 50 draft
 POST /companies/{companyId}/voucher-gap-explanations : Document a gap in the verifikationsserie (BFL 5 kap 6-7 §§) [scope:bookkeeping:write risk:low idempotent dry-run]
 ```
 
-### Periods and registers (12)
+### Periods and registers (13)
 
 Full detail: [references/periods.md](references/periods.md)
 
@@ -186,6 +189,7 @@ POST /companies/{companyId}/fiscal-periods/{id}/currency-revaluation : Run FX re
 POST /companies/{companyId}/fiscal-periods/{id}/lock : Lock a fiscal period (no new entries can be posted into it) [scope:bookkeeping:write risk:high idempotent reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/opening-balances : Generate opening-balance verifikation for the next fiscal period [scope:bookkeeping:write risk:high idempotent reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/year-end : Execute year-end closing (currency revaluation + closing entry) [scope:bookkeeping:write risk:high idempotent]
+GET /companies/{companyId}/skatteverket/vat-declarations : Read a filed momsdeklaration (submitted and/or decided) from Skatteverket [scope:compliance:read risk:low idempotent]
 ```
 
 ### Invoices (AR) (10)
@@ -250,13 +254,23 @@ POST /companies/{companyId}/documents/{id}/link : Link a document to a journal e
 POST /companies/{companyId}/inbox-items/{id}/stamp : Mark an inbox item as consumed by a journal entry [scope:documents:write risk:low idempotent]
 ```
 
-### Banking (12)
+### Banking (22)
 
 Full detail: [references/banking.md](references/banking.md)
 
 ```text
 POST /companies/{companyId}/imports/bank : Import a bank-file (CSV / XML / CAMT053) [scope:transactions:write risk:medium idempotent]
 POST /companies/{companyId}/imports/sie : Import a SIE4 file [scope:bookkeeping:write risk:high idempotent]
+GET /companies/{companyId}/reconciliation/accounts : List the accounts that can be reconciled, with status per account [scope:reconciliation:read risk:low idempotent]
+GET /companies/{companyId}/reconciliation/accounts/{accountKey} : The reconciliation bridge for one account [scope:reconciliation:read risk:low idempotent]
+GET /companies/{companyId}/reconciliation/accounts/{accountKey}/items : List the rows behind one account's bridge, bucketed [scope:reconciliation:read risk:low idempotent]
+POST /companies/{companyId}/reconciliation/accounts/{accountKey}/items/{itemId}/ignore : Ignore or restore one outside row [scope:reconciliation:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/reconciliation/accounts/{accountKey}/links : Link outside rows to existing verifikat (pairs or proposals) [scope:reconciliation:write risk:medium dry-run reversible]
+DELETE /companies/{companyId}/reconciliation/accounts/{accountKey}/links/{linkId} : Remove a link between an outside row and a verifikat [scope:reconciliation:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/reconciliation/accounts/{accountKey}/residual : Book the remainder of a bank selection as a fee/interest/rounding verifikat and link the selection [scope:transactions:write risk:medium dry-run]
+GET /companies/{companyId}/reconciliation/accounts/{accountKey}/signoff : Sign-off history for one reconcilable account [scope:reconciliation:read risk:low idempotent reversible]
+POST /companies/{companyId}/reconciliation/accounts/{accountKey}/signoff : Mark an account reconciled through a date (sign-off) [scope:reconciliation:signoff risk:medium dry-run reversible]
+POST /companies/{companyId}/reconciliation/accounts/{accountKey}/signoff/{signoffId}/reopen : Reopen (undo) a reconciliation sign-off [scope:reconciliation:signoff risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/reconciliation/bank/run : Run the bank-reconciliation matcher [scope:transactions:write risk:medium idempotent dry-run]
 GET /companies/{companyId}/reconciliation/bank/status : Bank-reconciliation health snapshot [scope:transactions:read risk:low idempotent]
 GET /companies/{companyId}/transactions : List transactions for a company [scope:transactions:read risk:low idempotent]
@@ -289,7 +303,7 @@ PUT /companies/{companyId}/employees/opening-balances : Bulk-set payroll cutover
 POST /companies/{companyId}/salary/vacation-year-close : Close a vacation year (semesterberedning + arsavslut) [scope:payroll:write risk:high idempotent dry-run]
 ```
 
-### Salary runs (18)
+### Salary runs (19)
 
 Full detail: [references/salary-runs.md](references/salary-runs.md)
 
@@ -305,6 +319,7 @@ POST /companies/{companyId}/salary-runs/{id}/calculate : Calculate a draft salar
 GET /companies/{companyId}/salary-runs/{id}/employees : List per-employee results of a salary run [scope:payroll:read risk:low idempotent]
 POST /companies/{companyId}/salary-runs/{id}/employees : Add an employee to a draft salary run [scope:payroll:write risk:low idempotent dry-run reversible]
 GET /companies/{companyId}/salary-runs/{id}/employees/{employeeId} : Get one employee's payslip in a salary run [scope:payroll:read risk:low idempotent]
+PATCH /companies/{companyId}/salary-runs/{id}/employees/{employeeId} : Set this run's base salary for one employee [scope:payroll:write risk:medium idempotent dry-run reversible]
 DELETE /companies/{companyId}/salary-runs/{id}/employees/{employeeId} : Remove an employee from a draft salary run [scope:payroll:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/salary-runs/{id}/employees/{employeeId}/lines : Add a payslip line to an employee in a draft salary run [scope:payroll:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/salary-runs/{id}/generate-agi : Generate the Skatteverket AGI XML for a salary run [scope:payroll:write risk:medium idempotent]
@@ -314,17 +329,19 @@ POST /companies/{companyId}/salary-runs/{id}/mark-paid : Mark an approved salary
 GET /companies/{companyId}/salary-runs/{id}/payslips/{employeeId}/pdf : Download one employee's payslip as PDF [scope:payroll:read risk:low idempotent]
 ```
 
-### Reports (14)
+### Reports (16)
 
 Full detail: [references/reports.md](references/reports.md)
 
 ```text
 GET /companies/{companyId}/reports/ar-ledger : AR ledger: unpaid customer invoices with aging [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/avgifter-basis : Annual arbetsgivaravgifter basis per employee [scope:payroll:read risk:low idempotent]
-GET /companies/{companyId}/reports/balance-sheet : Balance sheet (balansräkning) for a fiscal period [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/reports/balance-sheet : Balance sheet (balansräkning) for a fiscal period or as of a custom date [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/reports/balance-sheet/pdf : Balance sheet (balansräkning) as a PDF [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/continuity-check : IB/UB continuity check: opening balances match prior closing [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/general-ledger : General ledger (huvudbok) for a fiscal period [scope:reports:read risk:low idempotent]
-GET /companies/{companyId}/reports/income-statement : Income statement (resultatrapport) for a fiscal period [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/reports/income-statement : Income statement (resultatrapport) for a fiscal period or a custom date range [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/reports/income-statement/pdf : Income statement (resultaträkning) as a PDF [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/journal-register : Journal register (verifikationsregister) for a fiscal period [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/monthly-breakdown : Income statement broken down by month for a fiscal period [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/salary-journal : Salary journal (lönejournal) for a year and optional month range [scope:payroll:read risk:low idempotent]

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { FinancialStatementPDF } from '@/lib/reports/financial-statement-pdf-template'
+import { buildBalanceSheetPdfModel, balanceSheetImbalanceKronor } from '@/lib/reports/financial-statement-pdf'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import type { CompanySettings } from '@/types'
@@ -53,17 +54,7 @@ export const GET = withRouteContext('report.balance_sheet.pdf', async (request, 
     const report = await generateBalanceSheet(supabase, companyId, periodId, range)
     report.period = { start: effectiveStart, end: effectiveEnd }
 
-    const totalAssets = report.total_assets
-    const totalEquityLiab = report.total_equity_liabilities
-
-    // ÅRL 3 kap / K2 / K3 require balansräkningen to balance. Compare rounded
-    // to whole kronor: matches SFL 22:1's truncation convention for statutory
-    // reports and is immune to floating-point accumulation across hundreds of
-    // ledger lines (öresavrundning noise under half a krona is never a real
-    // accounting error). The on-screen view still surfaces a "Balanserar ej"
-    // warning at öre precision so users can diagnose smaller discrepancies.
-    const diffInKronor = Math.abs(Math.round(totalAssets) - Math.round(totalEquityLiab))
-    if (diffInKronor >= 1) {
+    if (balanceSheetImbalanceKronor(report) >= 1) {
       return NextResponse.json(
         {
           error:
@@ -76,20 +67,7 @@ export const GET = withRouteContext('report.balance_sheet.pdf', async (request, 
     const pdfBuffer = await renderToBuffer(
       FinancialStatementPDF({
         title: 'Balansräkning',
-        groups: [
-          {
-            heading: 'Tillgångar',
-            sections: report.asset_sections,
-            totalLabel: 'Summa tillgångar',
-            total: totalAssets,
-          },
-          {
-            heading: 'Eget kapital och skulder',
-            sections: report.equity_liability_sections,
-            totalLabel: 'Summa eget kapital och skulder',
-            total: totalEquityLiab,
-          },
-        ],
+        groups: buildBalanceSheetPdfModel(report).groups,
         period: report.period,
         company: companyRow as CompanySettings,
         generatedAt: new Date().toISOString(),

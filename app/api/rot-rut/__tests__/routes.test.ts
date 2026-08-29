@@ -124,7 +124,8 @@ describe('GET /api/rot-rut/eligible', () => {
       invoice_number: 'F-BAD',
       items: [makeRotItem({ labor_hours: null })],
     })
-    enqueue({ data: [good, missingHours] })
+    enqueue({ data: [good, missingHours] }) // by header total
+    enqueue({ data: [] }) // by deduction lines
     enqueue({ data: [] }) // no active request items
 
     const response = await eligibleGET(
@@ -142,9 +143,26 @@ describe('GET /api/rot-rut/eligible', () => {
     expect(body.data.blocked[0].code).toBe('MISSING_HOURS')
   })
 
-  it('hides invoices already in an active request', async () => {
+  it('surfaces invoices held by an in-flight request as ALREADY_REQUESTED', async () => {
     enqueue({ data: [makePaidRotInvoice()] })
-    enqueue({ data: [{ invoice_id: INVOICE_ID, request: { id: 'r', status: 'submitted', company_id: 'company-1' } }] })
+    enqueue({ data: [] })
+    enqueue({ data: [{ invoice_id: INVOICE_ID, request: { id: 'r', name: 'ROT juli', status: 'submitted', company_id: 'company-1' } }] })
+
+    const response = await eligibleGET(createMockRequest('/api/rot-rut/eligible'))
+    const { body } = await parseJsonResponse<{
+      data: { eligible: unknown[]; blocked: Array<{ code: string; message: string }> }
+    }>(response)
+
+    expect(body.data.eligible).toHaveLength(0)
+    expect(body.data.blocked).toHaveLength(1)
+    expect(body.data.blocked[0].code).toBe('ALREADY_REQUESTED')
+    expect(body.data.blocked[0].message).toContain('ROT juli')
+  })
+
+  it('hides invoices whose request is already decided', async () => {
+    enqueue({ data: [makePaidRotInvoice()] })
+    enqueue({ data: [] })
+    enqueue({ data: [{ invoice_id: INVOICE_ID, request: { id: 'r', name: 'ROT juli', status: 'paid', company_id: 'company-1' } }] })
 
     const response = await eligibleGET(createMockRequest('/api/rot-rut/eligible'))
     const { body } = await parseJsonResponse<{

@@ -39,6 +39,37 @@ describe('structured-errors registry', () => {
     }
   })
 
+  it('has an entry for every code the link-transaction service can emit', () => {
+    for (const code of [
+      'LINK_TX_JE_NOT_FOUND',
+      'LINK_TX_JE_NOT_POSTED',
+      'LINK_TX_TX_ALREADY_LINKED',
+      'LINK_TX_INVOICE_NOT_FOUND',
+      'LINK_TX_INVOICE_NOT_OPEN',
+      'LINK_TX_INVOICE_CREDIT_NOTE',
+      'LINK_TX_INVOICE_RACE',
+      'LINK_TX_INVOICE_CURRENCY_MISMATCH',
+      'LINK_TX_DB_ERROR',
+    ]) {
+      const entry = getErrorEntry(code)
+      expect(entry, `missing entry for ${code}`).toBeDefined()
+      expect(entry?.message_sv).toBeTruthy()
+      expect(entry?.message_en).toBeTruthy()
+    }
+  })
+
+  it('registers PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED as a 503 configuration gap (#1996)', () => {
+    const entry = getErrorEntry('PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED')
+    expect(entry).toBeDefined()
+    expect(entry?.httpStatus).toBe(503)
+    expect(entry?.message_sv).toContain('PERSONNUMMER_ENCRYPTION_KEY')
+    expect(entry?.message_sv).toMatch(/Kontakta supporten/)
+    expect(entry?.message_en).toContain('PERSONNUMMER_ENCRYPTION_KEY')
+    expect(entry?.remediation?.description).toContain('PERSONNUMMER_ENCRYPTION_KEY')
+    // Retrying without the variable fails identically: never mark it transient.
+    expect(entry?.retryable).toBeFalsy()
+  })
+
   it('listErrorCodes returns at least the bookkeeping + generic + provider codes', () => {
     const codes = listErrorCodes()
     expect(codes.length).toBeGreaterThan(20)
@@ -54,6 +85,23 @@ describe('structured-errors registry', () => {
 })
 
 describe('errorResponse', () => {
+  it('maps a plain Error carrying a registry code to that code, status and requestId', async () => {
+    // The shape lib/salary/personnummer.ts throws when the key is unset in
+    // production: an Error with a `code` own-property, no class hierarchy.
+    const err = Object.assign(new Error('PERSONNUMMER_ENCRYPTION_KEY is required in production'), {
+      code: 'PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED',
+    })
+    const res = errorResponse(err, noopLogger, { requestId: 'req_1996' })
+    expect(res.status).toBe(503)
+    expect(res.headers.get('X-Request-Id')).toBe('req_1996')
+    const body = await readEnvelope(res)
+    expect(body.error.code).toBe('PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED')
+    expect(body.error.message).toMatch(/PERSONNUMMER_ENCRYPTION_KEY/)
+    expect(body.error.requestId).toBe('req_1996')
+    // The raw English Error.message must not replace the registry message.
+    expect(body.error.message).not.toBe(err.message)
+  })
+
   it('maps BookkeepingError to its code + structured details + Swedish message', async () => {
     const err = new JournalEntryNotBalancedError(100, 90)
     const res = errorResponse(err, noopLogger, { requestId: 'req_1' })

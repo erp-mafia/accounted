@@ -40,13 +40,23 @@ export const DEFAULT_PAYMENT_ACCOUNT = '1686'
 /** BAS 2026 name for DEFAULT_PAYMENT_ACCOUNT; used when adding it to a chart. */
 export const DEFAULT_PAYMENT_ACCOUNT_NAME = 'Fordringar för kontokort och kuponger'
 
-/** Revenue account per Swedish VAT rate (BAS 2026). */
-const REVENUE_ACCOUNT_BY_RATE: Record<number, string> = {
+/**
+ * Default revenue account per Swedish VAT rate: the standard BAS 2026
+ * "Försäljning inom Sverige" accounts. Exported so the bulk dialog can
+ * prefill its per-rate revenue pickers with the effective defaults. BAS 2026
+ * has no standard goods/services subdivision of 30xx (such a split, e.g. an
+ * own 3040-series, is company-specific), which is why the revenue template
+ * is a per-rate account choice against the company's own chart rather than
+ * a hardcoded varor/tjänster preset.
+ */
+export const DEFAULT_REVENUE_ACCOUNT_BY_RATE: Readonly<Record<number, string>> = {
   25: '3001',
   12: '3002',
   6: '3003',
   0: '3004',
 }
+
+const REVENUE_ACCOUNT_BY_RATE = DEFAULT_REVENUE_ACCOUNT_BY_RATE
 
 /** Output VAT account per rate. */
 const VAT_ACCOUNT_BY_RATE: Record<number, string> = {
@@ -55,8 +65,10 @@ const VAT_ACCOUNT_BY_RATE: Record<number, string> = {
   6: '2631',
 }
 
-/** Öresavrundning. */
-const ROUNDING_ACCOUNT = '3740'
+/** Öresavrundning. Exported so the bulk route can find and bound the
+ * residual line it emits (a residual above öre scale means the order's
+ * totals do not match its VAT breakdown and needs per-order review). */
+export const ROUNDING_ACCOUNT = '3740'
 
 /**
  * Every account this prefill can emit, as a closed set.
@@ -118,6 +130,21 @@ export function fallbackVatBreakdown(
   return [{ rate: 25, net, tax }]
 }
 
+/**
+ * VAT-bucket rates the account maps above can express (Swedish rates). A
+ * bucket with any other rate (e.g. a German 19% OSS bucket stored raw by the
+ * sync) would fall back to the 25% accounts: acceptable only as the single
+ * dialog's editable prefill, never in an unreviewed sweep. Returns the
+ * distinct offending rates, empty when every bucket is representable.
+ */
+export function unsupportedVatRates(breakdown: WebshopVatBreakdownLine[]): number[] {
+  const bad = new Set<number>()
+  for (const bucket of breakdown) {
+    if (REVENUE_ACCOUNT_BY_RATE[bucket.rate] === undefined) bad.add(bucket.rate)
+  }
+  return Array.from(bad).sort((a, b) => a - b)
+}
+
 export type BookingWarning = 'zero_rate_foreign' | 'foreign_vat'
 
 /**
@@ -153,6 +180,26 @@ export function resolveBookingWarnings(
   return warnings
 }
 
+/**
+ * The default verifikat/line description for an order or refund row. Kept as
+ * a single helper so the dialog prefill, the single-order route and the bulk
+ * route all label the booking identically.
+ */
+export function orderBookingDescription(
+  order: Pick<
+    WebshopOrder,
+    'row_type' | 'order_number' | 'payment_method' | 'payment_method_title'
+  >,
+): string {
+  if (order.row_type === 'refund') {
+    return `Återbetalning order ${order.order_number}`
+  }
+  const methodLabel = order.payment_method_title || order.payment_method || ''
+  return methodLabel
+    ? `Order ${order.order_number} (${methodLabel})`
+    : `Order ${order.order_number}`
+}
+
 export interface OrderBookingLinesInput {
   order: Pick<
     WebshopOrder,
@@ -170,6 +217,12 @@ export interface OrderBookingLinesInput {
   settings?: WebshopStoreSettings | null
   /** Explicit override of the payment counter-account (dialog edit). */
   paymentAccount?: string
+  /**
+   * Revenue template: revenue account per Swedish VAT rate. A rate not in
+   * the map falls back to DEFAULT_REVENUE_ACCOUNT_BY_RATE. Only the revenue
+   * side is templated; output VAT accounts are always derived from the rate.
+   */
+  revenueAccounts?: Partial<Record<number, string>>
 }
 
 /**
@@ -180,6 +233,7 @@ export function buildOrderBookingLines({
   order,
   settings,
   paymentAccount,
+  revenueAccounts,
 }: OrderBookingLinesInput): CreateJournalEntryLineInput[] {
   const isSek = order.currency.toUpperCase() === 'SEK'
   const rate = isSek ? 1 : order.exchange_rate
@@ -201,13 +255,7 @@ export function buildOrderBookingLines({
 
   const toSek = (amount: number) => round(Math.abs(amount) * rate)
 
-  const methodLabel = order.payment_method_title || order.payment_method || ''
-  const baseDescription = methodLabel
-    ? `Order ${order.order_number} (${methodLabel})`
-    : `Order ${order.order_number}`
-  const description = isRefund
-    ? `Återbetalning order ${order.order_number}`
-    : baseDescription
+  const description = orderBookingDescription(order)
 
   const currencyMeta = (amountAbs: number): Partial<CreateJournalEntryLineInput> =>
     isSek
@@ -256,7 +304,9 @@ export function buildOrderBookingLines({
   }
   for (const bucket of breakdown) {
     const revenueAccount =
-      REVENUE_ACCOUNT_BY_RATE[bucket.rate] ?? REVENUE_ACCOUNT_BY_RATE[25]
+      revenueAccounts?.[bucket.rate] ??
+      REVENUE_ACCOUNT_BY_RATE[bucket.rate] ??
+      REVENUE_ACCOUNT_BY_RATE[25]
     const vatAccount = VAT_ACCOUNT_BY_RATE[bucket.rate] ?? VAT_ACCOUNT_BY_RATE[25]
     pushSigned(revenueAccount, round(bucket.net))
     pushSigned(vatAccount, round(bucket.tax))

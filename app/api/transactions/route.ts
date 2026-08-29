@@ -1,6 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
 import { scopeTransactionsToAccount } from '@/lib/reconciliation/bank-reconciliation'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
@@ -9,16 +7,9 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 
 const MAX_ROWS = 500
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+// withRouteContext enforces auth (MFA on hosted) and resolves companyId; the
+// previous hand-rolled session lookup in this handler skipped the MFA gate.
+export const GET = withRouteContext('transaction.list', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
   const unmatched = searchParams.get('unmatched') === 'true'
   const reconciled = searchParams.get('reconciled') === 'true'
@@ -107,7 +98,7 @@ export async function GET(request: Request) {
   const truncated = hasMore ? rows.slice(0, MAX_ROWS) : rows
 
   return NextResponse.json({ data: truncated, has_more: hasMore, limit: MAX_ROWS })
-}
+})
 
 // Manual bank-transaction creation. This is the server-side boundary the form
 // now goes through (it used to insert straight into Supabase from the browser).
