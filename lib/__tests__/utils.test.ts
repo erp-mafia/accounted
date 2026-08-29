@@ -52,7 +52,7 @@ describe('withTimeout', () => {
 
   it('rejects when the promise exceeds the deadline', async () => {
     const slow = new Promise<string>((resolve) => setTimeout(() => resolve('late'), 200))
-    await expect(withTimeout(slow, 50)).rejects.toThrow('Timed out after 50ms')
+    await expect(withTimeout(slow, 50)).rejects.toThrow('Timeout after 50ms')
   })
 
   it('rejects when the promise itself rejects', async () => {

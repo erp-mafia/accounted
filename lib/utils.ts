@@ -203,7 +203,7 @@ export function isValidExchangeRate(rate: number | null | undefined): rate is nu
 // completion on the server when the budget elapses: we just stop waiting for
 // it. For Anthropic calls that's fine: a slow Opus turn finishing later still
 // warms its own cache.
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`Timeout after ${ms}ms`)), ms)
     promise.then(
