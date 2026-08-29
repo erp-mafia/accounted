@@ -22,6 +22,7 @@ export default async function LoginPage() {
       <LoginClient
         initialMethod={isLoginMethod(stored) ? stored : null}
         authSettings={authSettings}
+        canUseSaml={!!(process.env.NEXT_PUBLIC_SSO_DOMAIN || process.env.NEXT_PUBLIC_SSO_PROVIDER_ID)}
       />
     </Suspense>
   )

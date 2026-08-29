@@ -72,9 +72,11 @@ const BankIdAuth = dynamic(
 export function LoginClient({
   initialMethod,
   authSettings,
+  canUseSaml
 }: {
   initialMethod: LoginMethod | null
   authSettings: GoTrueAuthSettings
+  canUseSaml?: boolean
 }) {
   const { providers, passwordLoginEnabled, registrationEnabled, samlEnabled } = authSettings
   const [email, setEmail] = useState('')
@@ -587,7 +589,8 @@ export function LoginClient({
 
   const showBankIdChip = method === 'email' && bankIdEnabled
   const showEmailChip = method === 'bankid' && passwordLoginEnabled
-  const chipCount = (showBankIdChip ? 1 : 0) + (showEmailChip ? 1 : 0) + providers.length + (samlEnabled ? 1 : 0)
+  const samlAvailable = samlEnabled && canUseSaml
+  const chipCount = (showBankIdChip ? 1 : 0) + (showEmailChip ? 1 : 0) + providers.length + (samlAvailable ? 1 : 0)
 
   const hasPrimaryMethod =
     (method === 'bankid' && bankIdEnabled) ||
@@ -783,7 +786,7 @@ export function LoginClient({
                       onError={(message) => setFormError({ kind: 'oauth', message })}
                     />
                   ))}
-                  {samlEnabled && !hasPrimaryMethod && (
+                  {samlAvailable && !hasPrimaryMethod && (
                     <Button
                       type="button"
                       variant="outline"
@@ -800,7 +803,7 @@ export function LoginClient({
                     </Button>
                   )}
                 </div>
-              ) : samlEnabled ? (
+              ) : samlAvailable ? (
                 <Button
                   type="button"
                   variant="outline"
@@ -873,7 +876,7 @@ export function LoginClient({
                     {tAuth('method_email_chip')}
                   </Button>
                 )}
-                {samlEnabled && (
+                {samlAvailable && (
                   <Button
                     type="button"
                     variant="outline"
