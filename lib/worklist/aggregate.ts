@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SuggestedMatch } from './types'
 import type { WorklistCounts } from './types'
 import {
   countDeadlinesNeedingAction,
@@ -22,9 +23,20 @@ import {
  * fast path over transactions already counted in book_transaction, so it is
  * excluded to avoid double-counting (see lib/worklist/types.ts).
  */
+export interface GetWorklistCountsOptions {
+  /**
+   * Suggested matches the caller is already fetching (Hem renders them in
+   * the Att göra pane): the count is taken from this list instead of a
+   * second scan of the same rows. A promise is accepted so it can run in
+   * parallel with the other counts.
+   */
+  suggestedMatches?: SuggestedMatch[] | Promise<SuggestedMatch[]>
+}
+
 export async function getWorklistCounts(
   supabase: SupabaseClient,
   companyId: string,
+  options: GetWorklistCountsOptions = {},
 ): Promise<WorklistCounts> {
   const [
     bookTransaction,
@@ -39,7 +51,9 @@ export async function getWorklistCounts(
   ] = await Promise.all([
     countUnbookedTransactions(supabase, companyId),
     countInboxDocuments(supabase, companyId),
-    countSuggestedMatches(supabase, companyId),
+    options.suggestedMatches
+      ? Promise.resolve(options.suggestedMatches).then((m) => m.length)
+      : countSuggestedMatches(supabase, companyId),
     countSupplierInvoicesAwaitingApproval(supabase, companyId),
     countVerifikatMissingDocument(supabase, companyId),
     countOverdueInvoices(supabase, companyId),

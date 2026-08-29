@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { computeProposalLines, proposalLinesToFormLines, resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
+import { buildMappingResultFromCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
+import { makeCategorizationTemplate, makeTransaction } from '@/tests/helpers'
 import { roundOre } from '@/lib/money'
 import type { LinePatternEntry } from '@/types'
 
@@ -385,6 +387,75 @@ describe('computeProposalLines', () => {
       // 3 x 33.30 = 99.90, diff 0.10 lands on 3740 on the business side
       expect(lines).toContainEqual({ side: 'debet', account: '3740', amount: 0.1 })
       expect(sumSide(lines, 'debet')).toBe(sumSide(lines, 'kredit'))
+    })
+
+    it('books an over-allocating diff on 3740 opposite the business side (#1898)', () => {
+      const over: LinePatternEntry[] = [
+        { account: '6110', type: 'business', side: 'debit', ratio: 0.3334 },
+        { account: '6212', type: 'business', side: 'debit', ratio: 0.3334 },
+        { account: '6991', type: 'business', side: 'debit', ratio: 0.3334 },
+      ]
+      const lines = computeProposalLines({ amount: -100, linePattern: over })
+      // 3 x 33.34 = 100.02 over-allocates by 0.02: 3740 offsets on the credit side
+      expect(lines).toContainEqual({ side: 'kredit', account: '3740', amount: 0.02 })
+      expect(sumSide(lines, 'debet')).toBe(100.02)
+      expect(sumSide(lines, 'kredit')).toBe(100.02)
+    })
+
+    it('balances a normalized 50/50 pattern on an odd-ore amount (#1898)', () => {
+      const half: LinePatternEntry[] = [
+        { account: '6110', type: 'business', side: 'debit', ratio: 0.5 },
+        { account: '6212', type: 'business', side: 'debit', ratio: 0.5 },
+      ]
+      const lines = computeProposalLines({ amount: -100.03, linePattern: half })
+      // 50.015 rounds to 50.02 twice: ratios that sum to exactly 1 still over-allocate
+      expect(lines).toContainEqual({ side: 'debet', account: '6110', amount: 50.02 })
+      expect(lines).toContainEqual({ side: 'kredit', account: '3740', amount: 0.01 })
+      expect(sumSide(lines, 'debet')).toBe(sumSide(lines, 'kredit'))
+    })
+
+    it('mirrors the over-allocation rounding leg on a refund (#1898)', () => {
+      const over: LinePatternEntry[] = [
+        { account: '6110', type: 'business', side: 'debit', ratio: 0.3334 },
+        { account: '6212', type: 'business', side: 'debit', ratio: 0.3334 },
+        { account: '6991', type: 'business', side: 'debit', ratio: 0.3334 },
+      ]
+      const lines = computeProposalLines({ amount: 100, linePattern: over })
+      // Mirrored business side is kredit, so the over-allocation offset lands on debet
+      expect(lines).toContainEqual({ side: 'kredit', account: '6110', amount: 33.34 })
+      expect(lines).toContainEqual({ side: 'debet', account: '3740', amount: 0.02 })
+      expect(sumSide(lines, 'debet')).toBe(sumSide(lines, 'kredit'))
+    })
+
+    it('keeps the 3740 leg in byte parity with the engine across 0.01..50.00 kr (#1898)', () => {
+      const half: LinePatternEntry[] = [
+        { account: '6110', type: 'business', side: 'debit', ratio: 0.5 },
+        { account: '6212', type: 'business', side: 'debit', ratio: 0.5 },
+      ]
+      const template = makeCategorizationTemplate({
+        debit_account: '6110',
+        credit_account: '1930',
+        line_pattern: half,
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.9 }
+      for (let ore = 1; ore <= 5000; ore++) {
+        const amount = -(ore / 100)
+        const tx = makeTransaction({ amount })
+        const engine = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+        const proposal = computeProposalLines({ amount, linePattern: half })
+        const engineRounding = engine.vat_lines.find(l => l.account_number === '3740')
+        const proposalRounding = proposal.find(l => l.account === '3740')
+        if (engineRounding) {
+          expect(proposalRounding, `amount ${amount}`).toEqual({
+            side: engineRounding.debit_amount > 0 ? 'debet' : 'kredit',
+            account: '3740',
+            amount: engineRounding.debit_amount || engineRounding.credit_amount,
+          })
+        } else {
+          expect(proposalRounding, `amount ${amount}`).toBeUndefined()
+        }
+        expect(sumSide(proposal, 'debet'), `amount ${amount}`).toBe(sumSide(proposal, 'kredit'))
+      }
     })
 
     it('handles income patterns with the settlement on the debit side', () => {

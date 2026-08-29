@@ -27,11 +27,40 @@ type WritePermissionResult =
   | { ok: true }
   | { ok: false; response: NextResponse }
 
+/**
+ * Facts the caller has already established for this request. Passing
+ * `companyId` skips the `resolve_active_company` round trip that
+ * `getActiveCompanyId` would otherwise repeat (withRouteContext resolves it
+ * two awaits earlier for every route); passing `role` skips the membership
+ * select as well. Only ever pass values that came from `getActiveCompanyId`
+ * / `company_members` for the same user in the same request: this is a
+ * dedupe, not a trust boundary.
+ */
+export interface KnownRouteContext {
+  companyId: string
+  role?: CompanyRole
+}
+
+async function selectRole(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+): Promise<CompanyRole | null> {
+  const { data: membership } = await supabase
+    .from('company_members')
+    .select('role')
+    .eq('company_id', companyId)
+    .eq('user_id', userId)
+    .maybeSingle()
+  return membership ? (membership.role as CompanyRole) : null
+}
+
 export async function requireWritePermission(
   supabase: SupabaseClient,
   userId: string,
+  known?: KnownRouteContext,
 ): Promise<WritePermissionResult> {
-  const companyId = await getActiveCompanyId(supabase, userId)
+  const companyId = known?.companyId ?? (await getActiveCompanyId(supabase, userId))
 
   if (!companyId) {
     return {
@@ -43,14 +72,9 @@ export async function requireWritePermission(
     }
   }
 
-  const { data: membership } = await supabase
-    .from('company_members')
-    .select('role')
-    .eq('company_id', companyId)
-    .eq('user_id', userId)
-    .maybeSingle()
+  const role = known?.role ?? (await selectRole(supabase, companyId, userId))
 
-  if (!membership || membership.role === 'viewer') {
+  if (!role || role === 'viewer') {
     return {
       ok: false,
       response: NextResponse.json(
@@ -81,8 +105,9 @@ export type CompanyRoleResult =
 export async function getCompanyRole(
   supabase: SupabaseClient,
   userId: string,
+  known?: Pick<KnownRouteContext, 'companyId'>,
 ): Promise<CompanyRoleResult> {
-  const companyId = await getActiveCompanyId(supabase, userId)
+  const companyId = known?.companyId ?? (await getActiveCompanyId(supabase, userId))
 
   if (!companyId) {
     return {
@@ -94,14 +119,9 @@ export async function getCompanyRole(
     }
   }
 
-  const { data: membership } = await supabase
-    .from('company_members')
-    .select('role')
-    .eq('company_id', companyId)
-    .eq('user_id', userId)
-    .maybeSingle()
+  const role = await selectRole(supabase, companyId, userId)
 
-  if (!membership) {
+  if (!role) {
     return {
       ok: false,
       response: NextResponse.json(
@@ -111,5 +131,5 @@ export async function getCompanyRole(
     }
   }
 
-  return { ok: true, role: membership.role as CompanyRole, companyId }
+  return { ok: true, role, companyId }
 }

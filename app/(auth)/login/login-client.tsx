@@ -24,10 +24,12 @@ import {
 } from 'lucide-react'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { isBankIdEnabled } from '@/lib/auth/bankid'
-import { getBranding } from '@/lib/branding/service'
+import { isBankIdEnabled } from '@/lib/auth/bankid-flags'
+import { useBranding } from '@/lib/branding/brand-context'
+import { SourceCodeFooter } from '@/components/branding/SourceCodeFooter'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import { resolvePostLoginDestination } from '@/lib/company/post-login-landing'
 import {
   consumeInviteCookie,
   INVITE_PROBLEM_MESSAGE_KEYS,
@@ -53,7 +55,6 @@ import {
   type SessionTimeoutReason,
 } from '@/lib/auth/session-timeout-shared'
 
-const branding = getBranding()
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
 
 const BankIdAuth = dynamic(
@@ -111,6 +112,9 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   const registerHref = nextPath === '/' ? '/register' : `/register?next=${encodeURIComponent(nextPath)}`
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
+  // Per-request brand merged over getBranding() defaults (WL-12): identical
+  // values on default hosts, brand values on branded hosts.
+  const branding = useBranding()
   const googleAuthEnabled = isGoogleAuthEnabled()
   const tAuth = useTranslations('auth')
   const tCommon = useTranslations('common')
@@ -245,9 +249,13 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
           return
         }
 
-        // Always land on the picker after BankID login so the user sees
-        // fresh CompanyRoles fetched during this session's enrichment.
-        router.push('/select-company')
+        // Byrå staff on their byrå's home domain land in the cockpit
+        // (WL-14). Everyone else keeps the picker: landing on
+        // /select-company after BankID is deliberate, so the user sees
+        // fresh CompanyRoles fetched during this session's enrichment
+        // (and any failure inside the helper degrades to it).
+        const dest = await resolvePostLoginDestination()
+        router.push(dest === '/clients' ? '/clients' : '/select-company')
         router.refresh()
       } catch (error) {
         console.error('[login] BankID complete error', error)
@@ -330,7 +338,10 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
         return
       }
 
-      router.push('/')
+      // Byrå staff land in the cockpit on their byrå's home domain (WL-14);
+      // everyone else resolves to '/' and keeps today's flow byte-identically
+      // (any failure inside the helper also degrades to '/').
+      router.push(await resolvePostLoginDestination())
       router.refresh()
     } catch (error) {
       setFormError({
@@ -784,15 +795,32 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
 
         <p className="mt-3 text-center text-xs text-muted-foreground/80 leading-relaxed">
           {tAuth('terms_prefix')}{' '}
-          <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
+          {/* The platform's terms live on the marketing site; the privacy
+              policy is the in-app /privacy page (host-relative, so it works
+              on branded byrå domains too). New tab: don't lose login state. */}
+          <a
+            href="https://accounted.se/terms"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-foreground transition-colors"
+          >
             {tAuth('terms_link')}
           </a>{' '}
           {tAuth('terms_and')}{' '}
-          <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
+          <a
+            href="/privacy"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-foreground transition-colors"
+          >
             {tAuth('privacy_link')}
           </a>
           .
         </p>
+
+        {/* AGPL section 13 source offer (WL-06): renders on both default and
+            branded hosts; never gate this on a brand. */}
+        <SourceCodeFooter className="mt-4" />
       </div>
     </div>
   )

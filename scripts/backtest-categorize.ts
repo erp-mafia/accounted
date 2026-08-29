@@ -13,6 +13,15 @@
  *   npx tsx scripts/backtest-categorize.ts [N]
  *   rm .env.local
  *
+ * Consent: only companies with company_settings.data_analysis_opt_in = true
+ * are read (#1346). This script goes beyond booking outcomes: it reads each
+ * transaction's description, merchant name and matched underlag (via
+ * gatherUnderlag) and sends them to the model again, so the consent copy in
+ * messages/*.json (data_analysis.settings_toggle_help) explicitly names
+ * "evaluation runs" with exactly those inputs. Do not add inputs here that
+ * the copy does not name. Nobody is opted in by default, so an empty run is
+ * the expected state until an admin flips the toggle in Inställningar > Företag.
+ *
  * Leakage caveat: a known vendor's counterparty template may already reflect
  * the very booking under test, inflating the "deterministic nailed it" segment.
  * The "model had to decide" segment below is the leakage-free measure.
@@ -29,23 +38,53 @@ async function main() {
   const { gatherCandidates } = await import('../lib/agent/categorize/candidates')
   const { gatherUnderlag } = await import('../lib/agent/categorize/underlag')
   const { selectAccount } = await import('../lib/agent/categorize/select-account')
+  const { chunkCompanyIds, listDataAnalysisOptedInCompanyIds } = await import('../lib/company/data-analysis')
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY!
   const supabase = createClient(url, key)
 
-  // Recent booked expense transactions with a counterparty.
-  const { data: txs, error } = await supabase
-    .from('transactions')
-    .select('id, company_id, merchant_name, description, original_description, amount, date, currency, document_id, journal_entry_id')
-    .not('journal_entry_id', 'is', null)
-    .lt('amount', 0)
-    .eq('is_business', true)
-    .not('merchant_name', 'is', null)
-    .order('created_at', { ascending: false })
-    .limit(N)
-  if (error) throw error
-  const rows = txs ?? []
+  // Consent gate (#1346): only companies that opted in to data analysis.
+  const optedInIds = await listDataAnalysisOptedInCompanyIds(supabase)
+  if (optedInIds.length === 0) {
+    console.log('\nNo company has opted in to data analysis (company_settings.data_analysis_opt_in). Nothing to backtest.')
+    return
+  }
+
+  // Recent booked expense transactions with a counterparty. Queried per chunk
+  // of company ids (`.in()` lives in the GET query string), then merged and
+  // re-cut to the N most recent overall.
+  type Tx = {
+    id: string
+    company_id: string
+    merchant_name: string | null
+    description: string | null
+    original_description: string | null
+    amount: number
+    date: string
+    currency: string | null
+    document_id: string | null
+    journal_entry_id: string | null
+    created_at: string
+  }
+  const candidatesByChunk: Tx[] = []
+  for (const chunk of chunkCompanyIds(optedInIds)) {
+    const { data: txs, error } = await supabase
+      .from('transactions')
+      .select('id, company_id, merchant_name, description, original_description, amount, date, currency, document_id, journal_entry_id, created_at')
+      .in('company_id', chunk)
+      .not('journal_entry_id', 'is', null)
+      .lt('amount', 0)
+      .eq('is_business', true)
+      .not('merchant_name', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(N)
+    if (error) throw error
+    candidatesByChunk.push(...((txs ?? []) as Tx[]))
+  }
+  const rows = candidatesByChunk
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0))
+    .slice(0, N)
   console.log(`\nBacktesting ${rows.length} booked transactions on ${process.env.BEDROCK_MODEL_ID ?? process.env.AI_MODEL ?? 'the configured model'}…\n`)
 
   // Ground-truth debit account per journal entry (expense line, not cash/VAT).
@@ -101,7 +140,7 @@ async function main() {
     const sel = await selectAccount({
       transaction: {
         merchantName: r.merchant_name,
-        description: r.description,
+        description: r.description ?? r.original_description ?? '',
         amount: r.amount,
         date: r.date,
         currency: r.currency,

@@ -3,6 +3,7 @@
 import { Eye } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
+import { useBranding } from '@/lib/branding/brand-context'
 
 interface DocumentViewButtonProps {
   documentId: string
@@ -26,6 +27,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  */
 export function DocumentViewButton({ documentId, label = 'Visa dokument', className }: DocumentViewButtonProps) {
   const { toast } = useToast()
+  const { appName } = useBranding()
 
   const handleClick = () => {
     // documentId originates from staged preview_data (Record<string, unknown>);
@@ -50,7 +52,7 @@ export function DocumentViewButton({ documentId, label = 'Visa dokument', classN
     } else {
       toast({
         title: 'Kunde inte öppna dokumentet',
-        description: 'Tillåt popupfönster för Accounted i webbläsaren och försök igen.',
+        description: `Tillåt popupfönster för ${appName} i webbläsaren och försök igen.`,
         variant: 'destructive',
       })
     }

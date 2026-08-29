@@ -4,7 +4,19 @@ This plugin bundles exactly one connector: the Accounted MCP server, the same se
 
 | Connector | Server | Auth | What it reaches |
 |-----------|--------|------|-----------------|
-| Accounted | `https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted` | OAuth 2.1 (PKCE). Read-only scopes by default; write scopes are ticked explicitly on the consent screen. | The user's own companies in Accounted: ledger, transactions, invoices, VAT, payroll, reconciliation, year-end. |
+| Accounted | `https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted` | OAuth 2.1 (PKCE). One-click consent: all scopes pre-selected (adjustable in a fold); every write still stages for explicit approval before it touches the ledger. | The user's own companies in Accounted: ledger, transactions, invoices, VAT, payroll, reconciliation, year-end. |
+
+## Share link and starter prompt
+
+One-click add on claude.ai (opens the Add custom connector dialog prefilled; the params are `connectorName`/`connectorUrl`):
+
+```
+https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=Accounted&connectorUrl=https%3A%2F%2Fapp.accounted.se%2Fapi%2Fextensions%2Fext%2Fmcp-server%2Fmcp%3Ftool_namespace%3Daccounted
+```
+
+Pair the link with a starter prompt the user pastes as their first message. It stays copy-paste ready for everyone because it points the agent at what it already knows (Claude memory, earlier chats) instead of containing the user's own data; the server-side onboarding skill carries the rest of the flow:
+
+> Sätt upp mitt företag i Accounted och följ kopplingens onboarding-guide. Utgå från det du redan vet om mig och mitt bolag och fråga bara efter det som saknas. Håll det kort.
 
 ## How the connection works
 

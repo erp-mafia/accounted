@@ -13,6 +13,7 @@ import {
   API_KEY_SCOPES,
   DEFAULT_OAUTH_SCOPES,
   SCOPE_GROUPS,
+  scopeKind,
   validateScopes,
   type ApiKeyScope,
 } from '@/lib/auth/api-keys'
@@ -39,7 +40,8 @@ type ScopeParseResult =
  *
  * Returns:
  *   - { ok, scopes: undefined } when no scope param was supplied: the consent
- *     UI pre-checks DEFAULT_OAUTH_SCOPES (read-only, GDPR Art. 25(2)).
+ *     UI pre-checks ALL_SCOPES (one-click consent; every write is staged for
+ *     approval, and the empty-selection POST fallback stays read-only).
  *   - { ok, scopes: [...] } when at least one valid scope was requested.
  *   - { invalid_scope } when a scope param was supplied but every value was
  *     unknown: refusing the request is safer than silently dropping it back
@@ -274,23 +276,18 @@ export async function GET(request: Request) {
   //   - Client requested specific scopes → ceiling = that set, pre-checked =
   //     that set (RFC 6749 §3.3 strict least-privilege).
   //   - Client passed no scope (or only the legacy `mcp` marker, Claude's
-  //     connector today) → ceiling = ALL_SCOPES so every read/write row
-  //     renders; pre-checked = DEFAULT_OAUTH_SCOPES so only the read rows
-  //     start ticked. The user has to actively tick :write to widen the
-  //     grant. This preserves GDPR Art. 25(2) (defaults are minimal /
-  //     read-only) while still letting the resource owner authorise write
-  //     scopes per RFC 6749 §3.3 ("based on … the resource owner's
-  //     instructions"), which is the whole point of the consent step.
+  //     connector today) → ceiling = ALL_SCOPES and pre-checked = ALL_SCOPES:
+  //     one-click consent (founder decision 2026-08-26; the read-only default
+  //     killed the agent flow with an insufficient-scope dead-end mid-chat).
+  //     The mitigations that make full-by-default defensible: every write is
+  //     STAGED for explicit approval before anything touches the ledger, the
+  //     full scope list stays on the page (collapsed but expandable) with
+  //     every row untickable, the warn line states the staging rule above the
+  //     button, and the grant is revocable under Inställningar › API-nycklar.
+  //     RFC 6749 §3.3 lets the resource owner authorise the set presented;
+  //     the consent is the click on a page that shows exactly that set.
   const grantCeiling = new Set<ApiKeyScope>(parsed.scopes ?? ALL_SCOPES)
-  const preChecked = new Set<ApiKeyScope>(parsed.scopes ?? DEFAULT_OAUTH_SCOPES)
-  // An account with no company is connecting in order to create one
-  // (issue #1814): pre-tick the one write scope that gnubok_create_company
-  // needs, so the agent-driven setup does not dead-end on insufficient scope
-  // right after signup. Still a checkbox the user can untick, and still
-  // bounded by the client's ceiling.
-  if (!companyId && grantCeiling.has('companies:write')) {
-    preChecked.add('companies:write')
-  }
+  const preChecked = new Set<ApiKeyScope>(parsed.scopes ?? ALL_SCOPES)
   const scopeCheckboxesHtml = renderScopeCheckboxes(preChecked, grantCeiling)
 
   // Render consent page
@@ -422,11 +419,48 @@ export async function GET(request: Request) {
       line-height: 1.55;
       margin: -1rem 0 1.75rem;
     }
+    .scopes-details {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0 0.875rem;
+      background: var(--surface);
+    }
+    .scopes-details summary {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 0;
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+    }
+    .scopes-details summary::-webkit-details-marker { display: none; }
+    .scopes-details summary:focus-visible {
+      outline: 2px solid var(--ring);
+      outline-offset: 2px;
+      border-radius: 6px;
+    }
+    .scopes-summary-hint {
+      flex: 1;
+      text-align: right;
+      font-size: 0.75rem;
+      color: var(--fg-faint);
+    }
+    .scopes-chevron {
+      width: 14px;
+      height: 14px;
+      color: var(--fg-faint);
+      transition: transform 150ms;
+      flex-shrink: 0;
+    }
+    .scopes-details[open] .scopes-chevron { transform: rotate(90deg); }
+    .scopes-details[open] summary { border-bottom: 1px solid var(--border); }
+    .scopes-details .scope-groups { padding-bottom: 0.5rem; }
     .scopes-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding-bottom: 0.625rem;
+      padding: 0.625rem 0;
       margin-bottom: 0.25rem;
       border-bottom: 1px solid var(--border);
     }
@@ -602,7 +636,7 @@ export async function GET(request: Request) {
   <main class="card" role="main">
     <div class="eyebrow">${appNameLower} · mcp</div>
     <h1>Anslut MCP-klient</h1>
-    <p class="lede">En extern applikation begär åtkomst till ditt ${appNameLower}-konto. Välj vilka behörigheter du vill bevilja.</p>
+    <p class="lede">En extern applikation begär åtkomst till ditt ${appNameLower}-konto. Alla behörigheter är förvalda; varje skrivning kräver ändå ditt godkännande innan den bokförs.</p>
 
     <div class="account">
       ${accountRowHtml}
@@ -613,16 +647,22 @@ export async function GET(request: Request) {
       <input type="hidden" name="scope_binding" value="${escapeHtml(scopeBindingValue)}">
       <input type="hidden" name="scope_binding_sig" value="${escapeHtml(scopeBindingSignature)}">
 
-      <div class="scopes-header">
-        <span class="scopes-title">Behörigheter</span>
-        <div class="scopes-controls">
-          <button type="button" id="select-read">Endast läs</button>
-          <button type="button" id="select-all">Alla</button>
-          <button type="button" id="select-none">Inga</button>
+      <details class="scopes-details">
+        <summary>
+          <span class="scopes-title">Behörigheter</span>
+          <span class="scopes-summary-hint">Alla förvalda &middot; visa och justera</span>
+          <svg class="scopes-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </summary>
+        <div class="scopes-header">
+          <span class="scopes-title">Justera</span>
+          <div class="scopes-controls">
+            <button type="button" id="select-read">Endast läs</button>
+            <button type="button" id="select-all">Alla</button>
+            <button type="button" id="select-none">Inga</button>
+          </div>
         </div>
-      </div>
-
-      <div class="scope-groups">${scopeCheckboxesHtml}</div>
+        <div class="scope-groups">${scopeCheckboxesHtml}</div>
+      </details>
 
       <div class="warn">
         <svg class="warn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
@@ -838,13 +878,10 @@ function renderScopeCheckboxes(
 
   for (const group of SCOPE_GROUPS) {
     const rows: string[] = []
-    if (group.read && ceiling.has(group.read)) {
-      rows.push(scopeRow(group.read, preChecked.has(group.read), 'read'))
-      renderedInGroups.add(group.read)
-    }
-    if (group.write && ceiling.has(group.write)) {
-      rows.push(scopeRow(group.write, preChecked.has(group.write), 'write'))
-      renderedInGroups.add(group.write)
+    for (const scope of group.scopes) {
+      if (!ceiling.has(scope)) continue
+      rows.push(scopeRow(scope, preChecked.has(scope), scopeKind(scope)))
+      renderedInGroups.add(scope)
     }
     if (rows.length > 0) {
       groups.push(
@@ -853,11 +890,11 @@ function renderScopeCheckboxes(
     }
   }
 
+  // Defense in depth: the catalogue test guarantees full group coverage, so
+  // this bucket is empty unless a scope ships without a group.
   const remaining = ALL_SCOPES.filter(s => ceiling.has(s) && !renderedInGroups.has(s))
   if (remaining.length > 0) {
-    const rows = remaining.map((s) =>
-      scopeRow(s, preChecked.has(s), s.endsWith(':write') || s.endsWith(':manage') || s.endsWith(':approve') ? 'write' : 'read')
-    )
+    const rows = remaining.map((s) => scopeRow(s, preChecked.has(s), scopeKind(s)))
     groups.push(
       `<div class="scope-group"><div class="scope-group-title">Övriga</div>${rows.join('')}</div>`
     )

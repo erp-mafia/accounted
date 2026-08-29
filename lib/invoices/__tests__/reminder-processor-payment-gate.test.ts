@@ -70,6 +70,10 @@ vi.mock('@/lib/email/service', () => ({
 vi.mock('@/lib/bookkeeping/reminder-fee-entries', () => ({
   createReminderFeeEntry: mockCreateReminderFeeEntry,
 }))
+vi.mock('@/lib/email/brand-sender', () => ({
+  getSenderForCompany: vi.fn().mockResolvedValue({ brand: null }),
+  getBaseUrlForBrand: vi.fn().mockReturnValue('https://app.accounted.test'),
+}))
 
 import { processOverdueReminders } from '../reminder-processor'
 

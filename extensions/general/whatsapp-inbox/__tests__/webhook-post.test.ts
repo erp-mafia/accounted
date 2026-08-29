@@ -445,6 +445,189 @@ describe('POST /webhook', () => {
       await route.handler(signedRequest(envelope({ messages: [textMessage('hej')] })))
       expect(findCalls('whatsapp_messages', 'insert')).toHaveLength(0)
     })
+
+    // #1599: an UNAVAILABLE limiter (RPC error or throw) fails open into the
+    // throttled greeting path. Over-quota (ok: false) above stays silent.
+    describe('quota RPC unavailable (fail open, #1599)', () => {
+      const rpcError = { data: null, error: { message: 'PGRST202 could not find function' } }
+
+      it('media still earns the throttled M1, no content persisted', async () => {
+        const { enqueue, findCalls } = mockSupabase()
+        enqueue({ data: null }) // no active link
+        enqueue(rpcError) // sender quota RPC unavailable
+        enqueue({ data: [] }) // greeting throttle: nothing sent before
+        enqueue({ data: null, error: null }) // trace row insert ('done': no cap query)
+
+        const response = await route.handler(
+          signedRequest(envelope({ messages: [imageMessage()] })),
+        )
+        expect(response.status).toBe(200)
+        expect(sendTextMock).toHaveBeenCalledTimes(1)
+        expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m1Unlinked)
+        // The hard rules hold in degraded mode: no media touch, no checkmark.
+        expect(vi.mocked(downloadMedia)).not.toHaveBeenCalled()
+        expect(sendReactionMock).not.toHaveBeenCalled()
+        // Exactly one trace row (no fail-closed 'skipped' insert ahead of it:
+        // a second insert would 23505 on the wamid and read as a redelivery).
+        const inserts = findCalls('whatsapp_messages', 'insert')
+        expect(inserts).toHaveLength(1)
+        const [row] = inserts[0] as [Record<string, unknown>]
+        expect(row.processing_status).toBe('done')
+        expect(row.error_message).toContain('greeted')
+        expect(row.error_message).toContain('quota limiter unavailable')
+        expect(row.phone_link_id).toBeNull()
+        expect(row.body_text).toBeUndefined()
+        expect(row.media_id).toBeUndefined()
+        expect(row.raw_payload).toBeUndefined()
+        expect(kickMock).toHaveBeenCalledWith([])
+      })
+
+      it('inside the greeting window stays silent (the throttle is the remaining cap)', async () => {
+        const { enqueue, findCalls } = mockSupabase()
+        enqueue({ data: null })
+        enqueue(rpcError)
+        enqueue({ data: [{ created_at: new Date().toISOString() }] }) // greeted within the hour
+        enqueue({ count: 0 }) // decline-trace day cap
+        enqueue({ data: null, error: null }) // declined trace insert
+
+        await route.handler(signedRequest(envelope({ messages: [textMessage('hej')] })))
+        expect(sendTextMock).not.toHaveBeenCalled()
+        const inserts = findCalls('whatsapp_messages', 'insert')
+        expect(inserts).toHaveLength(1)
+        const [row] = inserts[0] as [Record<string, unknown>]
+        expect(row.processing_status).toBe('skipped')
+        expect(row.error_message).toContain('greeting throttled')
+        expect(row.error_message).toContain('quota limiter unavailable')
+      })
+
+      it('still binds a valid link code and replies M3', async () => {
+        const { enqueue, findCall } = mockSupabase()
+        enqueue({ data: null }) // no active link
+        enqueue(rpcError) // quota unavailable
+        enqueue({
+          data: {
+            id: 'code-1',
+            user_id: 'user-1',
+            expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+            used_at: null,
+          },
+        }) // code lookup
+        enqueue({ data: { id: 'code-1' } }) // code claim
+        enqueue({ data: null }) // revoke by phone hash
+        enqueue({ data: null }) // revoke by user
+        enqueue({ data: { id: 'link-9', user_id: 'user-1' } }) // link insert
+        enqueue({ data: { id: 'conv-9' } }) // conversation insert
+        enqueue({ data: null }) // content-free code-message row
+        enqueue({ data: [{ company_id: 'company-1' }] }) // memberships
+        enqueue({ data: { name: 'Bolaget AB' } }) // company name
+
+        const response = await route.handler(
+          signedRequest(
+            envelope({
+              contacts: [{ wa_id: '46701234567', profile: { name: 'Jakob' } }],
+              messages: [textMessage('ac-7kp4qf')],
+            }),
+          ),
+        )
+        expect(response.status).toBe(200)
+        const [linkRow] = findCall('whatsapp_phone_links', 'insert') as [Record<string, unknown>]
+        expect(linkRow.user_id).toBe('user-1')
+        expect(sendTextMock).toHaveBeenCalledTimes(1)
+        expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m3Linked)
+      })
+
+      it('a bad code still gets M2 under its own throttle, even inside the M1 hour', async () => {
+        // The greeting throttle is never consulted on this path: only the
+        // M2 window read gates the reply, so a sender greeted with M1 five
+        // minutes ago is still told their code was rejected.
+        const { enqueue, findCalls } = mockSupabase()
+        enqueue({ data: null }) // no active link
+        enqueue(rpcError) // quota unavailable
+        enqueue({ data: null }) // code lookup: nothing
+        enqueue({ data: [] }) // M2 throttle window: no M2 sent before
+        enqueue({ data: null, error: null }) // trace row insert ('done')
+
+        await route.handler(signedRequest(envelope({ messages: [textMessage('ac-zzzz99')] })))
+        expect(sendTextMock).toHaveBeenCalledTimes(1)
+        expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m2BadCode)
+        const inserts = findCalls('whatsapp_messages', 'insert')
+        expect(inserts).toHaveLength(1)
+        const [row] = inserts[0] as [Record<string, unknown>]
+        expect(row.error_message).toContain('invalid link code')
+        expect(row.error_message).toContain('quota limiter unavailable')
+        expect(row.body_text).toBeUndefined()
+      })
+
+      it('a repeated bad code inside the M2 window falls through and stays silent', async () => {
+        const { enqueue, findCalls } = mockSupabase()
+        enqueue({ data: null })
+        enqueue(rpcError)
+        enqueue({ data: null }) // code lookup: nothing
+        enqueue({
+          data: [{ created_at: new Date(Date.now() - 2 * 60 * 1000).toISOString() }],
+        }) // M2 sent 2 min ago: inside the 10 min window
+        enqueue({ data: [{ created_at: new Date().toISOString() }] }) // M1 within the hour
+        enqueue({ count: 0 }) // decline-trace day cap
+        enqueue({ data: null, error: null }) // declined trace insert
+
+        await route.handler(signedRequest(envelope({ messages: [textMessage('ac-zzzz99')] })))
+        expect(sendTextMock).not.toHaveBeenCalled()
+        const inserts = findCalls('whatsapp_messages', 'insert')
+        expect(inserts).toHaveLength(1)
+        const [row] = inserts[0] as [Record<string, unknown>]
+        expect(row.processing_status).toBe('skipped')
+        expect(row.error_message).toContain('greeting throttled')
+      })
+
+      it('the fourth M2 of the day is withheld (daily cap)', async () => {
+        const { enqueue } = mockSupabase()
+        enqueue({ data: null })
+        enqueue(rpcError)
+        enqueue({ data: null }) // code lookup: nothing
+        enqueue({
+          data: [
+            { created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() },
+            { created_at: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString() },
+            { created_at: new Date(Date.now() - 9 * 60 * 60 * 1000).toISOString() },
+          ],
+        }) // BAD_CODE_DAY_MAX already sent today, all outside the 10 min window
+        enqueue({ data: [] }) // greeting throttle: nothing sent before
+        enqueue({ data: null, error: null }) // trace row insert ('done')
+
+        await route.handler(signedRequest(envelope({ messages: [textMessage('ac-zzzz99')] })))
+        expect(sendTextMock).toHaveBeenCalledTimes(1)
+        expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m1Unlinked)
+      })
+
+      it('an unreadable M2 window fails closed to the M1 path', async () => {
+        const { enqueue } = mockSupabase()
+        enqueue({ data: null })
+        enqueue(rpcError)
+        enqueue({ data: null }) // code lookup: nothing
+        enqueue({ data: null, error: { message: 'read failed' } }) // M2 window unreadable
+        enqueue({ data: [] }) // greeting throttle: nothing sent before
+        enqueue({ data: null, error: null }) // trace row insert ('done')
+
+        await route.handler(signedRequest(envelope({ messages: [textMessage('ac-zzzz99')] })))
+        expect(sendTextMock).toHaveBeenCalledTimes(1)
+        expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m1Unlinked)
+      })
+
+      it('a throwing RPC (network) is treated like an RPC error', async () => {
+        const mock = mockSupabase()
+        mock.enqueue({ data: null }) // no active link
+        mock.supabase.rpc.mockRejectedValueOnce(new Error('fetch failed'))
+        mock.enqueue({ data: [] }) // greeting throttle: nothing sent before
+        mock.enqueue({ data: null, error: null }) // trace row insert ('done')
+
+        const response = await route.handler(
+          signedRequest(envelope({ messages: [imageMessage()] })),
+        )
+        expect(response.status).toBe(200)
+        expect(sendTextMock).toHaveBeenCalledTimes(1)
+        expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m1Unlinked)
+      })
+    })
   })
 
   describe('link codes', () => {

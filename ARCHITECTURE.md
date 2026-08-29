@@ -30,9 +30,17 @@ The journal entry lifecycle is draft, then commit:
 Two invariants hold for every entry:
 
 - Debits equal credits, and both sides are greater than zero.
-- Once committed, an entry is never edited or deleted. Mistakes are corrected
-  with reversal entries (storno): `reverseEntry()` cancels a voucher and
-  `correctEntry()` replaces it (`lib/core/bookkeeping/storno-service.ts`).
+- Once committed, an entry is never silently edited or deleted. BFL 5 kap.
+  5 § allows two correction paths, and the code has exactly those two:
+  - Storno: `reverseEntry()` cancels a voucher with a reversal entry and
+    `correctEntry()` replaces it (`lib/core/bookkeeping/storno-service.ts`).
+    Always allowed.
+  - Inline rättelse (founder-approved 2026-07-23): the
+    `correct_entry_metadata` and `correct_entry_lines_inline` RPCs
+    strike-and-replace inside the same voucher, keeping the original
+    readable and writing an immutable who/when record to
+    `journal_entry_rattelse_log`. Only while the period is open and
+    unlocked; past a lock, close, or declared state, storno is the only path.
 
 If a gap still occurs in a voucher series (for example around imported
 history), it must be documented, and the explanation is stored
@@ -42,9 +50,10 @@ history), it must be documented, and the explanation is stored
 
 The rules above are not conventions; they are enforced by PostgreSQL triggers:
 
-- Committed journal entries cannot be edited or deleted. The only change the
-  triggers permit is the controlled status transition used by the storno flow
-  (marking an entry as reversed).
+- Committed journal entries cannot be edited or deleted. The only changes the
+  triggers permit are the controlled status transition used by the storno flow
+  (marking an entry as reversed) and the audited inline-rättelse RPCs above,
+  which are refused once the period is locked or closed.
 - Writes to closed or locked accounting periods are rejected, as are writes
   behind a company-wide lock date.
 - Documents linked to posted entries cannot be deleted; Swedish law requires
@@ -98,12 +107,18 @@ documented Extension API to be licensed under any terms. See
 ## Agent surface (MCP)
 
 The bookkeeping engine is exposed as an MCP (Model Context Protocol) server
-with over 100 tools, so AI agents can operate the ledger: list and categorize
+with 150+ tools, so AI agents can operate the ledger: list and categorize
 transactions, draft vouchers, reconcile periods, generate reports and
 declarations.
 
 - Authentication uses scoped API keys (stored as SHA-256 hashes, rate limited
-  per key).
+  per key). Claude and ChatGPT connectors instead authenticate with OAuth 2.1
+  (PKCE; `app/api/mcp-oauth/{authorize,register,token}` plus the
+  `.well-known` discovery documents), which mints a scoped API key behind the
+  scenes. Authentication is lazy: a client can connect, list tools, and call a
+  small set of public discovery tools before an account exists; the first
+  tenant-touching call answers 401 and triggers the client's connect prompt
+  (`extensions/general/mcp-server/public-tools.ts`).
 - Posting operations are staged: an agent proposes an operation, and a human
   approves it before anything is committed to the journal.
 
@@ -125,7 +140,9 @@ to core activity without core knowing about them.
 | `components/` | React components (shadcn/ui based) |
 | `extensions/` | Opt-in extension plugins |
 | `supabase/migrations/` | Database schema, RLS policies, enforcement triggers |
-| `packages/gnubok-mcp` | Published MCP bridge package |
+| `packages/accounted-mcp` | Published stdio MCP bridge for new installs (`accounted_*` tool namespace) |
+| `packages/gnubok-mcp` | Compatibility MCP bridge for existing installs (kept on purpose) |
+| `claude-plugin/` | Claude Code plugin: OAuth connector plus approval-gated workflow skills |
 | `messages/` | Swedish and English UI strings |
 | `tests/` | Shared test helpers and fixtures |
 | `docs/` | Self-hosting, Docker, extensions, white-label guides |

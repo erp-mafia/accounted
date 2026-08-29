@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useCallback, useEffect, useReducer, useRef } from 'react'
+import { useAccounts } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
@@ -1058,6 +1060,7 @@ function OptionsStep({
   options,
   sieAvailable,
   sieData,
+  hasSieData,
   provider,
   onChange,
   onStart,
@@ -1066,6 +1069,8 @@ function OptionsStep({
   options: MigrationOptions
   sieAvailable: boolean
   sieData: SIEData | null
+  /** The company already has a completed SIE import (any origin). */
+  hasSieData: boolean
   provider: ArcimProvider | null
   onChange: (options: MigrationOptions) => void
   onStart: () => void
@@ -1094,6 +1099,18 @@ function OptionsStep({
   if (options.importSalesInvoices) selectedItems.push('Kundfakturor')
   if (options.importSupplierInvoices) selectedItems.push('Leverantörsfakturor')
 
+  // Entities without the SIE-derived ledger leave an incomplete bokföring:
+  // POST /migrate refuses with PROVIDER_SIE_IMPORT_REQUIRED unless a completed
+  // SIE import exists. Say so here, before the run, when the user has
+  // unchecked SIE for a company that has never imported it (#2000).
+  // Company info (name, org number, VAT number) writes no ledger data and is
+  // not gated, matching the route.
+  const hasApiImport = options.importCustomers ||
+    options.importSuppliers ||
+    options.importSalesInvoices ||
+    options.importSupplierInvoices
+  const sieRequiredButUnchecked = sieAvailable && !options.importSIEData && !hasSieData && hasApiImport
+
   return (
     <div className="stagger-enter space-y-8">
       <StepHeading
@@ -1102,8 +1119,10 @@ function OptionsStep({
       />
 
       {/* Years whose provider export failed: must be visible before the user
-          proceeds, otherwise an IB/UB gap slips through. One ochre sentence. */}
-      {sieAvailable && failedYears.length > 0 && (
+          proceeds, otherwise an IB/UB gap slips through. One ochre sentence.
+          Yields to the SIE-required line below: with SIE unchecked no year is
+          imported, and the page carries at most one attn line. */}
+      {sieAvailable && failedYears.length > 0 && !sieRequiredButUnchecked && (
         <AttnLine>
           {failedYears.length === 1
             ? `Räkenskapsår ${failedYears[0].year} kunde inte hämtas från källsystemet: om du fortsätter importeras övriga år, men ingående och utgående balanser kan sakna kontinuitet. Försök igen senare eller ladda upp en SIE-fil för det saknade året manuellt.`
@@ -1200,12 +1219,16 @@ function OptionsStep({
         />
       </div>
 
+      {sieRequiredButUnchecked && (
+        <AttnLine>{t('ext_arcim_option_sie_required_hint')}</AttnLine>
+      )}
+
       <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
         <Button variant="outline" className="min-h-11" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
-        <Button className="min-h-11" onClick={() => setShowConfirm(true)} disabled={selectedItems.length === 0}>
+        <Button className="min-h-11" onClick={() => setShowConfirm(true)} disabled={selectedItems.length === 0 || sieRequiredButUnchecked}>
           Starta migrering
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
@@ -2039,6 +2062,10 @@ export default function ArcimMigrationWorkspace({
   // SIE data state (held between mapping and execution steps)
   const [sieData, setSieData] = useState<SIEData | null>(null)
   const companyAccountsForVatRef = useRef<BASAccount[]>([])
+  // Chart of accounts incl. inactive, from the session cache
+  // (lib/reference-data). Re-read when the mapping step opens because the
+  // preview may have created accounts; the SIE import invalidates it too.
+  const { refresh: refreshCompanyAccounts } = useAccounts(false)
 
   // Options state
   const [migrationOptions, setMigrationOptions] = useState<MigrationOptions>(DEFAULT_OPTIONS)
@@ -2619,16 +2646,10 @@ export default function ArcimMigrationWorkspace({
       }
 
       const data = await res.json() as SIEData
-      const accountsRes = await fetch('/api/bookkeeping/accounts?active=false')
-      const accountsBody = await accountsRes.json().catch(() => ({})) as {
-        data?: BASAccount[]
-        error?: unknown
-      }
-      if (!accountsRes.ok) {
-        throw apiError(accountsBody, `HTTP ${accountsRes.status}`)
-      }
-      companyAccountsForVatRef.current = accountsBody.data ?? []
-      const enrichedMappings = enrichAccountMappingsWithVat(data.mappings, accountsBody.data ?? [])
+      // Bound SWR mutate resolves with the revalidated list.
+      const companyAccounts = ((await refreshCompanyAccounts()) ?? []) as BASAccount[]
+      companyAccountsForVatRef.current = companyAccounts
+      const enrichedMappings = enrichAccountMappingsWithVat(data.mappings, companyAccounts)
       setSieData({ ...data, mappings: enrichedMappings })
 
       // If all SIE files are already imported, disable SIE import by default
@@ -2648,7 +2669,7 @@ export default function ArcimMigrationWorkspace({
     } finally {
       setIsLoading(false)
     }
-  }, [consentId])
+  }, [consentId, refreshCompanyAccounts])
 
   const handlePreviewContinue = useCallback(() => {
     if (preview?.sieAvailable) {
@@ -2781,6 +2802,9 @@ export default function ArcimMigrationWorkspace({
 
           const result = await res.json() as ImportResult
           setSieImportResults(prev => [...prev, result])
+          // The import creates accounts and a räkenskapsår: every cached
+          // picker must see them.
+          void invalidateReferenceData(['ref:accounts', 'ref:fiscal-periods'])
 
           // The endpoint returns HTTP 200 with success:false when the import
           // itself failed (e.g. räkenskapsår mismatch). Stop here: continuing
@@ -2972,6 +2996,7 @@ export default function ArcimMigrationWorkspace({
           options={migrationOptions}
           sieAvailable={preview?.sieAvailable ?? false}
           sieData={sieData}
+          hasSieData={(preview?.hasSieData ?? false) || sieImportResults.some(r => r.success)}
           provider={preview?.consent.provider ?? null}
           onChange={setMigrationOptions}
           onStart={handleStartMigration}

@@ -160,7 +160,7 @@ const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
   [
     // GoTrue could not send its own mail (admin invite, confirmation,
     // recovery): almost always missing SMTP configuration on self-hosted.
-    /error sending (invite|confirmation|recovery|magic link) email/i,
+    /error sending (invite|confirmation|recovery|magic link|email change) email/i,
     'E-postmeddelandet kunde inte skickas av autentiseringstjänsten. Kontrollera installationens SMTP-inställningar och försök igen.',
   ],
 ]

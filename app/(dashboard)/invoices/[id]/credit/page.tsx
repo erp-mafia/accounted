@@ -24,6 +24,7 @@ import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
 import { creditConfirmNumber } from '@/lib/invoices/display'
 import type { Invoice, InvoiceItem, Customer } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { InvoiceEditorSkeleton } from '@/components/common/DetailPageSkeleton'
 
 interface InvoiceWithRelations extends Invoice {
   customer: Customer
@@ -160,11 +161,7 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
   }
 
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    )
+    return <InvoiceEditorSkeleton />
   }
 
   if (!invoice) {

@@ -39,6 +39,21 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "as_of_date": "2026-05-31",
+    "customers": [],
+    "totals": {}
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/reports/avgifter-basis`
@@ -69,6 +84,21 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "year": 2026,
+    "employees": [],
+    "totals": {}
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -104,6 +134,24 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "period": {
+      "start": "2026-01-01",
+      "end": "2026-12-31"
+    },
+    "sections": [],
+    "totals": {}
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -166,6 +214,20 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "is_continuous": true,
+    "discrepancies": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/reports/general-ledger`
@@ -201,6 +263,20 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "period": {},
+    "accounts": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/reports/income-statement`
@@ -232,6 +308,25 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "period": {
+      "start": "…",
+      "end": "…"
+    },
+    "sections": [],
+    "grossMargin": 0,
+    "netResult": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -294,6 +389,20 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "period": {},
+    "entries": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/reports/monthly-breakdown`
@@ -323,6 +432,20 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "period": {},
+    "months": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -359,6 +482,21 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "year": 2026,
+    "employees": [],
+    "totals": {}
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -421,6 +559,21 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "as_of_date": "2026-05-31",
+    "suppliers": [],
+    "totals": {}
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/reports/trial-balance`
@@ -461,6 +614,31 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "rows": [
+      {
+        "account": "1930",
+        "account_name": "Företagskonto",
+        "opening_balance": 100000,
+        "period_debit": 25000,
+        "period_credit": 18000,
+        "closing_balance": 107000
+      }
+    ],
+    "totalDebit": 25000,
+    "totalCredit": 25000,
+    "isBalanced": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/reports/vacation-liability`
@@ -491,6 +669,21 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "year": 2026,
+    "employees": [],
+    "total_liability": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -527,6 +720,43 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "period_type": "monthly",
+    "year": 2026,
+    "period": 4,
+    "rutor": {
+      "ruta05": 0,
+      "ruta10": 0,
+      "ruta11": 0,
+      "ruta12": 0,
+      "ruta20": 0,
+      "ruta21": 0,
+      "ruta22": 0,
+      "ruta23": 0,
+      "ruta24": 0,
+      "ruta30": 0,
+      "ruta31": 0,
+      "ruta32": 0,
+      "ruta39": 0,
+      "ruta40": 0,
+      "ruta48": 0,
+      "ruta50": 0,
+      "ruta60": 0,
+      "ruta61": 0,
+      "ruta62": 0,
+      "ruta49": 0
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```

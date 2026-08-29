@@ -1,6 +1,7 @@
 'use client'
 
 import { use, useCallback, useEffect, useMemo, useState } from 'react'
+import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -24,7 +25,7 @@ import { assessJamkning, assessJamkningEligibility } from '@/lib/bokslut/assets/
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import type { Asset, AssetDisposalType, FiscalPeriod, VatTreatment } from '@/types'
+import type { Asset, AssetDisposalType, VatTreatment } from '@/types'
 
 interface PeriodOption {
   id: string
@@ -61,7 +62,21 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
   const { canWrite } = useCanWrite()
 
   const [asset, setAsset] = useState<Asset | null>(null)
-  const [periods, setPeriods] = useState<PeriodOption[]>([])
+  // Periods from the session cache (lib/reference-data), narrowed to the
+  // fields the picker needs.
+  const { periods: fiscalPeriods } = useFiscalPeriods()
+  const periods = useMemo<PeriodOption[]>(
+    () =>
+      fiscalPeriods.map((period) => ({
+        id: period.id,
+        name: period.name,
+        period_start: period.period_start,
+        period_end: period.period_end,
+        is_closed: period.is_closed,
+        locked_at: period.locked_at,
+      })),
+    [fiscalPeriods],
+  )
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [disposalType, setDisposalType] = useState<AssetDisposalType>('sale')
@@ -79,23 +94,11 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([
-      fetch(`/api/assets/${id}`).then((response) => response.json()),
-      fetch('/api/bookkeeping/fiscal-periods').then((response) => response.json()),
-    ])
-      .then(([assetResponse, periodsResponse]) => {
+    fetch(`/api/assets/${id}`)
+      .then((response) => response.json())
+      .then((assetResponse) => {
         if (cancelled) return
         setAsset(assetResponse.data ?? null)
-        setPeriods(
-          (periodsResponse.data ?? []).map((period: FiscalPeriod) => ({
-            id: period.id,
-            name: period.name,
-            period_start: period.period_start,
-            period_end: period.period_end,
-            is_closed: period.is_closed,
-            locked_at: period.locked_at,
-          })),
-        )
       })
       .catch(() => {
         if (!cancelled) {

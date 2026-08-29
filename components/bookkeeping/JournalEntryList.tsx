@@ -46,9 +46,11 @@ import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight, ChevronLeft, ChevronsLef
 import { cn, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
+import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { Input } from '@/components/ui/input'
 import { AccountNumber } from '@/components/ui/account-number'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
+import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
 import NoDocRequiredToggle from '@/components/bookkeeping/NoDocRequiredToggle'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
@@ -61,7 +63,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/types'
-import type { FiscalPeriod, JournalEntry, JournalEntryLine } from '@/types'
+import type { JournalEntry, JournalEntryLine } from '@/types'
 
 // Shared source of truth (lib/worklist/types.ts) so the per-row chip and
 // waiver UI can never drift from the worklist count and the SQL predicate
@@ -218,6 +220,9 @@ export default function JournalEntryList({
   const { canWrite } = useCanWrite()
   const company = useCompanyOptional()?.company ?? null
   const t = useTranslations('journal_list')
+  // Loads the BAS chart chunk after mount and re-renders once names and
+  // descriptions for non-hardcoded accounts are available.
+  useBasReference()
   const [entries, setEntries] = useState<JournalEntry[]>([])
   const [committingId, setCommittingId] = useState<string | null>(null)
   // Confirm-before-posting (convention 10): the draft the user is about to
@@ -444,7 +449,7 @@ export default function JournalEntryList({
     setPageSizeHydrated(true)
   }, [company?.id])
 
-  // Fetch fiscal periods AND resolve the initial fiscal-year scope in one pass.
+  // Resolve the initial fiscal-year scope from the session-cached period list.
   // The list is period-oriented (BFL): verifikationsnummer run as an unbroken
   // series *per räkenskapsår*, so the same number (e.g. A42) recurs once per
   // year. Showing every year at once makes those look like duplicates and makes
@@ -454,12 +459,22 @@ export default function JournalEntryList({
   // Resolving the scope here, not in the dialog's FiscalYearSelector, which
   // only mounts when opened, keeps the first fetch correct. periodHydrated
   // gates that first fetch so the list loads already scoped to the resolved year.
+  //
+  // The periods come from useFiscalPeriods (seeded by the dashboard layout),
+  // so on a normal visit this resolves in the first effect tick with no
+  // round trip; the saved-scope shortcut below still unblocks the entries
+  // fetch first when the list is not cached yet. Resolution runs once per
+  // company: a background revalidation of the list must not snap the scope
+  // back (the deep-link "all years" visit in particular).
+  const { periods: fiscalPeriods, isLoading: fiscalPeriodsLoading } = useFiscalPeriods()
+  const periodScopeResolvedForRef = useRef<string | null>(null)
   useEffect(() => {
     if (!company?.id) {
       setPeriodId(null)
       setPeriodHydrated(true)
       return
     }
+    if (periodScopeResolvedForRef.current === company.id) return
 
     // Deep-link arrival with the missing-underlag filter: scope this visit to
     // all fiscal years (in memory only) so the list can show the same set the
@@ -467,6 +482,7 @@ export default function JournalEntryList({
     // FyPicker afterwards works and persists as usual.
     if (deepLinkAllYearsRef.current) {
       deepLinkAllYearsRef.current = false
+      periodScopeResolvedForRef.current = company.id
       setPeriodId(null)
       setPeriodHydrated(true)
       return
@@ -477,43 +493,29 @@ export default function JournalEntryList({
         ? window.localStorage.getItem(FISCAL_YEAR_STORAGE_KEY_PREFIX + company.id)
         : null
     // Optimistic hydration: a saved scope unblocks the first entries fetch
-    // immediately instead of serializing it behind the fiscal-periods
-    // round-trip (the common returning-user case). The fetch below still
-    // validates a saved period id and re-scopes to the current räkenskapsår
-    // if it went stale (e.g. the period was deleted), the entries effect
-    // then refires with the corrected scope.
+    // immediately instead of waiting for the period list (the common
+    // returning-user case without a seed). The validation below still
+    // re-scopes to the current räkenskapsår if the saved id went stale (e.g.
+    // the period was deleted); the entries effect then refires with the
+    // corrected scope.
     if (stored) {
       // FISCAL_YEAR_ALL_VALUE = user explicitly chose "all years", respect it.
       setPeriodId(stored === FISCAL_YEAR_ALL_VALUE ? null : stored)
       setPeriodHydrated(true)
     }
 
-    let cancelled = false
-    ;(async () => {
-      let fetched: FiscalPeriod[] = []
-      try {
-        const res = await fetch('/api/bookkeeping/fiscal-periods')
-        if (res.ok) {
-          const { data } = await res.json()
-          fetched = (data || []) as FiscalPeriod[]
-        }
-      } catch {
-        // Non-critical: fall through with an empty list (scope stays "all years").
-      }
-      if (cancelled) return
+    // Not cached yet and no seed: wait for the list, this effect re-runs.
+    if (fiscalPeriodsLoading) return
+    periodScopeResolvedForRef.current = company.id
 
-      if (stored === FISCAL_YEAR_ALL_VALUE) return
-      if (stored && fetched.some((p) => p.id === stored)) return
+    if (stored === FISCAL_YEAR_ALL_VALUE) return
+    if (stored && fiscalPeriods.some((p) => p.id === stored)) return
 
-      // No (valid) saved scope → default to the current räkenskapsår.
-      const today = new Date().toISOString().split('T')[0]
-      setPeriodId(resolveCurrentPeriodId(fetched, today))
-      setPeriodHydrated(true)
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [company?.id])
+    // No (valid) saved scope → default to the current räkenskapsår.
+    const today = new Date().toISOString().split('T')[0]
+    setPeriodId(resolveCurrentPeriodId(fiscalPeriods, today))
+    setPeriodHydrated(true)
+  }, [company?.id, fiscalPeriods, fiscalPeriodsLoading])
 
   // Debounce the free-text search before it reaches the API. Require ≥2 chars:
   // a single character matches almost every verifikationstext and isn't a useful

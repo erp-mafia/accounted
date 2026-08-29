@@ -25,6 +25,7 @@ import { TemplateForm } from '@/components/settings/TemplateForm'
 import { deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useAccounts, useCashAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import {
   useSubmitWithAccountActivation,
   throwOnStructuredError,
@@ -36,7 +37,7 @@ import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { AttnLine } from '@/components/ui/attn-line'
-import type { BASAccount, BookingTemplateLibrary, CashAccount, FiscalPeriod, InboxChannelContext, InvoiceExtractionResult } from '@/types'
+import type { BookingTemplateLibrary, CashAccount, InboxChannelContext, InvoiceExtractionResult } from '@/types'
 
 interface InboxItem {
   id: string
@@ -185,11 +186,15 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   // pending, or unsupported.
   const [fxRate, setFxRate] = useState<number | null>(null)
 
-  // null = fetch pending; array = loaded (may be empty on error: falls back to '1930')
-  const [cashAccounts, setCashAccounts] = useState<CashAccount[] | null>(null)
-
-  const [periods, setPeriods] = useState<FiscalPeriod[]>([])
-  const [accounts, setAccounts] = useState<BASAccount[]>([])
+  // Session-cached reference data (lib/reference-data), seeded by the
+  // dashboard layout: the settlement account, the period and the account
+  // picker are known on the first paint instead of after three round trips
+  // per open. cashAccounts stays null only while the list is still loading
+  // (no seed): the prefill effect below reads that as "not resolved yet".
+  const { cashAccounts: cachedCashAccounts, isLoading: cashAccountsLoading } = useCashAccounts()
+  const cashAccounts: CashAccount[] | null = cashAccountsLoading ? null : cachedCashAccounts
+  const { periods } = useFiscalPeriods()
+  const { accounts } = useAccounts()
   // Full BAS catalogue (static reference data, fetched once per session). Lets
   // the account picker surface standard accounts the company hasn't activated
   // yet; picking one activates it at commit via the existing
@@ -316,29 +321,6 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, targetCurrency, item.id])
 
-  // Fetch cash accounts once when the dialog opens so the settlement line can
-  // be routed to the correct ledger account instead of the hardcoded '1930'.
-  useEffect(() => {
-    if (!open) return
-    setCashAccounts(null)
-    let cancelled = false
-    fetch('/api/cash-accounts')
-      .then((r) => {
-        if (!r.ok) throw new Error(`cash-accounts fetch failed: ${r.status}`)
-        return r.json()
-      })
-      .then((json) => {
-        if (cancelled) return
-        setCashAccounts((json.data ?? []) as CashAccount[])
-      })
-      .catch(() => {
-        // Fall back to empty list: resolveAccount will return '1930'
-        if (!cancelled) setCashAccounts([])
-      })
-    return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, item.id])
-
   // SEK-equivalent of the underlag total: the anchor for ranking candidates.
   const targetSek = useMemo(() => {
     if (targetAmount == null) return null
@@ -403,25 +385,11 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     })
   }, [open, item, selectedTransactionAmount, bankAccount])
 
-  // Fetch fiscal periods and accounts on first open
+  // Load the static BAS catalogue on first open (periods and accounts come
+  // from the session cache above).
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    ;(async () => {
-      try {
-        const [periodsRes, accountsRes] = await Promise.all([
-          fetch('/api/bookkeeping/fiscal-periods'),
-          fetch('/api/bookkeeping/accounts'),
-        ])
-        const periodsJson = await periodsRes.json()
-        const accountsJson = await accountsRes.json()
-        if (cancelled) return
-        setPeriods(periodsJson.data || [])
-        setAccounts(accountsJson.data || [])
-      } catch (err) {
-        console.error('[book-direct] fetch reference data failed:', err)
-      }
-    })()
     loadBasCatalog().then((data) => {
       if (!cancelled) setCatalog(data)
     }).catch(() => {/* search degrades to the active chart */})

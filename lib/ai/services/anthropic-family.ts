@@ -272,7 +272,13 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
         messages: [{ role: 'user', content: buildAnthropicDocumentContent(req.document, req.instruction) }],
       }
       const resp = await getClient().messages.create(params)
-      return { ok: true, text: textOf(resp), model, usage: usageOf(resp) }
+      return {
+        ok: true,
+        text: textOf(resp),
+        model,
+        usage: usageOf(resp),
+        ...(resp.stop_reason === 'max_tokens' ? { truncated: true } : {}),
+      }
     },
   }
 }

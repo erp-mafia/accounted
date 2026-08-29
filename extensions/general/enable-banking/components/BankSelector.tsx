@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ChevronRight, Landmark, Loader2, Search } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import { matchBankByName } from '../lib/bank-match'
 
 export interface Bank {
   name: string
@@ -128,6 +129,41 @@ export function BankSelector({
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
+  const autoStartHandled = useRef(false)
+
+  // Deep-link preselect (?bank=<name>, set by the MCP connect card when the
+  // user already named their bank in chat): auto-start that bank's consent
+  // the way clicking its row would, so the flow feels like Skatteverket's
+  // one-click authorize. The param is stripped immediately so an abort at
+  // the bank followed by back-navigation does not silently re-launch; an
+  // unknown or ambiguous name just prefills the search instead of guessing.
+  // Guards further down (duplicate pending, renew-instead-409) stay fully
+  // interactive because this runs through the same onConnect handler.
+  useEffect(() => {
+    if (autoStartHandled.current || isLoading || banks.length === 0 || isConnecting) return
+    const params = new URLSearchParams(window.location.search)
+    const requested = params.get('bank')
+    if (!requested) {
+      autoStartHandled.current = true
+      return
+    }
+    autoStartHandled.current = true
+    params.delete('bank')
+    const query = params.toString()
+    window.history.replaceState(
+      null,
+      '',
+      `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`
+    )
+    const match = matchBankByName(banks, requested)
+    if (match) {
+      onConnect(match)
+    } else {
+      setSearchQuery(requested)
+      searchRef.current?.focus()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot after the bank list arrives
+  }, [isLoading, banks, isConnecting])
 
   useEffect(() => {
     async function fetchBanks() {

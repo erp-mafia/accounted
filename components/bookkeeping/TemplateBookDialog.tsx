@@ -23,7 +23,8 @@ import {
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { roundOre } from '@/lib/money'
 import { ArrowLeft, Check, ChevronRight, Loader2, Search } from 'lucide-react'
-import type { BookingTemplateLibrary, FiscalPeriod } from '@/types'
+import type { BookingTemplateLibrary } from '@/types'
+import { useBookingTemplates, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 
 interface Props {
@@ -49,39 +50,20 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
   const t = useTranslations('bookkeeping')
   const { toast } = useToast()
 
-  const [templates, setTemplates] = useState<BookingTemplateLibrary[] | null>(null)
-  const [periods, setPeriods] = useState<FiscalPeriod[]>([])
+  // Session-cached (lib/reference-data): opening the dialog costs no
+  // requests once the lists are in the cache. null = still loading.
+  const { templates: cachedTemplates, isLoading: templatesLoading } = useBookingTemplates()
+  // Templates hidden for this company (settings panel opt-in) never show in
+  // the booking flow; the settings panel is the only surface that lists them.
+  const templates: BookingTemplateLibrary[] | null = templatesLoading
+    ? null
+    : cachedTemplates.filter((tt) => !tt.is_hidden)
+  const { periods } = useFiscalPeriods()
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<BookingTemplateLibrary | null>(null)
   const [entryDate, setEntryDate] = useState(() => new Date().toISOString().split('T')[0])
   const [amountInput, setAmountInput] = useState('')
   const [submitting, setSubmitting] = useState(false)
-
-  // Load templates + fiscal periods when the dialog opens.
-  useEffect(() => {
-    if (!open) return
-    let cancelled = false
-    ;(async () => {
-      const [tplRes, periodRes] = await Promise.all([
-        fetch('/api/settings/booking-templates'),
-        fetch('/api/bookkeeping/fiscal-periods'),
-      ])
-      if (cancelled) return
-      if (tplRes.ok) {
-        const { data } = await tplRes.json()
-        if (!cancelled) setTemplates(data ?? [])
-      } else {
-        setTemplates([])
-      }
-      if (periodRes.ok) {
-        const { data } = await periodRes.json()
-        if (!cancelled) setPeriods(data ?? [])
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [open])
 
   // Reset per open so yesterday's half-typed amount never leaks into today.
   useEffect(() => {

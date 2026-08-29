@@ -179,6 +179,126 @@ describe('GET /api/reconciliation/bank/unmatched-entries', () => {
   })
 
   // ----------------------------------------------------------------
+  // Orphaned reconnect rows (#1643 problem 1): the ranked (dialog) path also
+  // offers vouchers booked on sibling ledgers of the same physical account
+  // ----------------------------------------------------------------
+
+  it('widens ranked candidates to sibling ledgers sharing the account IBAN', async () => {
+    const iban = 'SE4550000000058398257466'
+    // The transaction's own (orphaned) row: ledger 1931, carries the IBAN.
+    enqueue({ data: { id: 'cash-orphan', currency: 'SEK', iban } })
+    // Sibling scan (describeCashAccountSiblings): the live row for the same
+    // physical account sits on 1940 (spaced IBAN variant to prove
+    // normalization), plus an unrelated account.
+    enqueue({
+      data: [
+        { id: 'cash-orphan', ledger_account: '1931', iban, currency: 'SEK', enabled: true, bank_connection_id: null },
+        { id: 'cash-live', ledger_account: '1940', iban: 'SE45 5000 0000 0583 9825 7466', currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
+        // Same IBAN, EUR pocket of a multi-currency account: not a sibling.
+        { id: 'cash-eur', ledger_account: '1932', iban, currency: 'EUR', enabled: true, bank_connection_id: 'conn-live' },
+        { id: 'cash-other', ledger_account: '1935', iban: 'SE1112223334445556667778', currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
+      ],
+    })
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }] }) // bank_connections statuses
+    enqueueTransaction({ currency: 'SEK', amount: 217.04, date: '2026-03-10' })
+
+    fetchGLLinesForMatchingMock.mockImplementation((_supabase, _companyId, account) =>
+      account === '1940'
+        ? Promise.resolve([
+            makeGLLine({
+              line_id: 'line-live',
+              journal_entry_id: 'je-live',
+              debit_amount: 217.04,
+              credit_amount: 0,
+              entry_date: '2026-03-10',
+            }),
+          ])
+        : Promise.resolve([]),
+    )
+
+    const response = await GET(
+      request({ account_number: '1931', transaction_id: TX_ID }),
+      emptyParams,
+    )
+    const { status, body } = await parseJsonResponse<Body>(response)
+
+    expect(status).toBe(200)
+    // The voucher booked on the LIVE ledger is offered (and ranks as an exact
+    // hit) even though the row itself is stamped on the orphaned 1931.
+    expect(body.data).toHaveLength(1)
+    expect(body.data[0].journal_entry_id).toBe('je-live')
+    expect(body.data[0].confidence).toBe(0.95)
+
+    const fetchedAccounts = fetchGLLinesForMatchingMock.mock.calls.map((c) => c[2])
+    expect(fetchedAccounts).toEqual(['1931', '1940'])
+  })
+
+  it('does not offer vouchers on a DEAD sibling to a transaction on the live row (#1643 round 2)', async () => {
+    const iban = 'SE4550000000058398257466'
+    // manualLink would not move a live row onto the dead sibling, so the
+    // dead sibling's vouchers are not candidates for it.
+    enqueue({ data: { id: 'cash-live', currency: 'SEK', iban } })
+    enqueue({
+      data: [
+        { id: 'cash-live', ledger_account: '1940', iban, currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
+        { id: 'cash-orphan', ledger_account: '1931', iban, currency: 'SEK', enabled: true, bank_connection_id: 'conn-old' },
+      ],
+    })
+    enqueue({
+      data: [
+        { id: 'conn-live', status: 'active' },
+        { id: 'conn-old', status: 'revoked' },
+      ],
+    })
+    enqueueTransaction({ currency: 'SEK', amount: 217.04, date: '2026-03-10' })
+    fetchGLLinesForMatchingMock.mockResolvedValue([])
+
+    const response = await GET(
+      request({ account_number: '1940', transaction_id: TX_ID }),
+      emptyParams,
+    )
+    expect(response.status).toBe(200)
+    const fetchedAccounts = fetchGLLinesForMatchingMock.mock.calls.map((c) => c[2])
+    expect(fetchedAccounts).toEqual(['1940'])
+  })
+
+  it('does not offer a demoted twin\'s vouchers to a row on an EXPIRED connection (#1643 round 3)', async () => {
+    const iban = 'SE4550000000058398257466'
+    // manualLink would not move a renewable row onto the dead twin either.
+    enqueue({ data: { id: 'cash-expired', currency: 'SEK', iban } })
+    enqueue({
+      data: [
+        { id: 'cash-expired', ledger_account: '1930', iban, currency: 'SEK', enabled: true, bank_connection_id: 'conn-expired' },
+        { id: 'cash-demoted', ledger_account: '1931', iban, currency: 'SEK', enabled: true, bank_connection_id: null },
+      ],
+    })
+    enqueue({ data: [{ id: 'conn-expired', status: 'expired' }] })
+    enqueueTransaction({ currency: 'SEK', amount: 217.04, date: '2026-03-10' })
+    fetchGLLinesForMatchingMock.mockResolvedValue([])
+
+    const response = await GET(
+      request({ account_number: '1930', transaction_id: TX_ID }),
+      emptyParams,
+    )
+    expect(response.status).toBe(200)
+    const fetchedAccounts = fetchGLLinesForMatchingMock.mock.calls.map((c) => c[2])
+    expect(fetchedAccounts).toEqual(['1930'])
+  })
+
+  it('does not widen the unranked (reconciliation view) path', async () => {
+    const iban = 'SE4550000000058398257466'
+    enqueue({ data: { id: 'cash-orphan', currency: 'SEK', iban } })
+    fetchGLLinesForMatchingMock.mockResolvedValue([makeGLLine()])
+
+    const response = await GET(request({ account_number: '1931' }), emptyParams)
+    const { status } = await parseJsonResponse<Body>(response)
+
+    expect(status).toBe(200)
+    expect(fetchGLLinesForMatchingMock).toHaveBeenCalledTimes(1)
+    expect(fetchGLLinesForMatchingMock.mock.calls[0][2]).toBe('1931')
+  })
+
+  // ----------------------------------------------------------------
   // Foreign currency: never ranked against an unconverted SEK ledger leg
   // ----------------------------------------------------------------
 

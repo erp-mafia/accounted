@@ -10,7 +10,15 @@
  * Endpoints not listed here are public (no auth): only the discovery routes
  * (`/llms.txt`, `/.well-known/skills`, `/api/v1/health`, `/api/v1/openapi.json`)
  * fall into that bucket. Everything else under `/api/v1/` MUST be in this map
- * or the wrapper will refuse the request with INSUFFICIENT_SCOPE.
+ * or the wrapper answers NOT_FOUND before it even looks at the bearer token
+ * (`resolveRequiredScope` returns null for an unknown path).
+ *
+ * This map and the endpoint registry (`lib/api/v1/registry.ts`, populated by
+ * `load-routes.ts`) are kept in lock-step by
+ * `lib/api/v1/__tests__/scope-registry-parity.test.ts`: every registered
+ * endpoint needs an entry with the same scope, and every entry needs a
+ * registered endpoint. The inbox-items stamp route shipped without an entry
+ * and answered 404 to valid keys until that test existed.
  */
 
 import type { ApiKeyScope } from './api-keys'
@@ -22,7 +30,6 @@ import type { ApiKeyScope } from './api-keys'
 export const V1_PUBLIC_ENDPOINTS: ReadonlyArray<string> = [
   'GET /api/v1/health',
   'GET /api/v1/openapi.json',
-  'GET /api/v1/openapi.yaml',
 ]
 
 /**
@@ -40,16 +47,12 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'GET /api/v1/companies': 'companies:read',
   // Issue #1814: programmatic company creation (partner provisioning, agents).
   'POST /api/v1/companies': 'companies:write',
-  'GET /api/v1/companies/:companyId': 'companies:read',
   // Issue #1348: company-settings write (same field set as the MCP tool
   // gnubok_update_company_settings; direct write, no staging).
   'PATCH /api/v1/companies/:companyId/settings': 'companies:write',
 
   // Operations (async long-running tasks)
   'GET /api/v1/operations/:id': 'operations:read',
-
-  // Events (webhook fallback / event log polling)
-  'GET /api/v1/companies/:companyId/events': 'events:read',
 
   // Customers (Phase 2 PR-A: reads; Phase 2 PR-B-1: writes)
   'GET /api/v1/companies/:companyId/customers': 'customers:read',
@@ -117,6 +120,9 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'POST /api/v1/companies/:companyId/documents': 'documents:write',
   'GET /api/v1/companies/:companyId/documents/:id/download': 'documents:read',
   'POST /api/v1/companies/:companyId/documents/:id/link': 'documents:write',
+  // Inbox item stamp: closes an invoice_inbox_items row against the JE it
+  // was booked to. Rides documents:write like the link verb it complements.
+  'POST /api/v1/companies/:companyId/inbox-items/:id/stamp': 'documents:write',
 
   // Phase 3: transactions + reconciliation vertical.
   // Reads
@@ -210,6 +216,9 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // detail endpoint is the identity drill-in.
   'GET /api/v1/companies/:companyId/salary-runs/:id/employees': 'payroll:read',
   'GET /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId': 'payroll:read',
+  // Per-run base salary edit (variable owner pay): draft-only write of
+  // salary_run_employees.monthly_salary; the employee master is untouched.
+  'PATCH /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId': 'payroll:write',
   'GET /api/v1/companies/:companyId/salary-runs/:id/payslips/:employeeId/pdf': 'payroll:read',
   // Payroll gap-closure 1.2: payslip line writes (draft runs only).
   'POST /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId/lines': 'payroll:write',

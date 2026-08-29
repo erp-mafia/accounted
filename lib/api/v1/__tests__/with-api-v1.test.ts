@@ -47,7 +47,11 @@ vi.mock('@/lib/api/idempotency', async () => {
   }
 })
 
-import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import {
+  validateApiKey,
+  createServiceClientNoCookies,
+  RATE_LIMIT_RETRY_AFTER_SECONDS,
+} from '@/lib/auth/api-keys'
 import {
   checkIdempotencyKey,
   storeIdempotencyResponse,
@@ -145,6 +149,27 @@ describe('withApiV1: auth', () => {
     expect(res.status).toBe(429)
     const body = await res.json()
     expect(body.error.code).toBe('RATE_LIMITED')
+    // The published skill instructs agents to honor Retry-After on a 429.
+    // Before this header existed that instruction pointed at nothing, so an
+    // unattended client had to back off blindly.
+    expect(res.headers.get('Retry-After')).toBe(String(RATE_LIMIT_RETRY_AFTER_SECONDS))
+  })
+
+  it('does not advertise Retry-After on a non-throttle error', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+
+    const handler = withApiV1('companies.list', async (_req, ctx) =>
+      ok({ ok: true }, { requestId: ctx.requestId }),
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies', {
+        headers: { Authorization: 'Bearer gnubok_sk_invalid' },
+      }),
+      emptyParams(),
+    )
+    expect(res.status).toBe(401)
+    expect(res.headers.get('Retry-After')).toBeNull()
   })
 })
 

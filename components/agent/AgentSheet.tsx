@@ -563,6 +563,9 @@ export default function AgentSheet({
       ref={sheetRef}
       role="dialog"
       aria-label={displayTitle}
+      // Interactions here must never dismiss an open (non-modal) dialog:
+      // DialogContent treats data-agent-ui as inside the dialog.
+      data-agent-ui=""
       // z-[60] sits above the mobile bottom nav (z-50) so on phones the sheet
       // covers the full screen including where the nav would otherwise show.
       // `hidden` (display:none) when collapsed keeps the component mounted (the

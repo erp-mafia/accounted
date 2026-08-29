@@ -28,6 +28,7 @@ function supabaseWithTeam(teamId: string | null) {
   return {
     from: vi.fn(() => chain),
     rpc: vi.fn().mockResolvedValue({ data: COMPANY_ID, error: null }),
+    chain,
   }
 }
 
@@ -53,6 +54,25 @@ describe('gnubok_create_company', () => {
     expect(isCompanyDependentTool('gnubok_create_company')).toBe(false)
     expect(tool.annotations.readOnlyHint).toBe(false)
     expect(tool.annotations.destructiveHint).toBe(false)
+  })
+
+  it('defaults an omitted accounting_method by form and flags it in the preview', async () => {
+    const supabase = supabaseWithTeam(TEAM_ID)
+    const { accounting_method: _dropped, ...withoutMethod } = setup
+    const result = (await tool.execute(withoutMethod, '', 'user-1', supabase as never)) as Record<string, unknown>
+
+    expect(result.created).toBe(false)
+    const preview = result.preview as Record<string, unknown>
+    expect(preview.accounting_method).toBe('accrual')
+    expect(preview.accounting_method_defaulted).toBe(true)
+  })
+
+  it('does not flag an explicitly chosen accounting_method as defaulted', async () => {
+    const supabase = supabaseWithTeam(TEAM_ID)
+    const result = (await tool.execute(setup, '', 'user-1', supabase as never)) as Record<string, unknown>
+    const preview = result.preview as Record<string, unknown>
+    expect(preview.accounting_method).toBe('accrual')
+    expect('accounting_method_defaulted' in preview).toBe(false)
   })
 
   it('previews without creating when confirm is not true', async () => {
@@ -99,6 +119,35 @@ describe('gnubok_create_company', () => {
     expect((result.next as Record<string, unknown>).tool).toBe('gnubok_load_skill')
   })
 
+  it('orders history import before the bank when the fiscal period started over 90 days ago', async () => {
+    // The default calendar-year setup starts 1 January: from February on the
+    // period has >90 days of history the bank cannot deliver, so the created
+    // result must point at SIE-first ordering. Frozen mid-year so the test
+    // does not flip in January.
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(`${new Date().getFullYear()}-08-15T12:00:00Z`))
+    try {
+      const supabase = supabaseWithTeam(TEAM_ID)
+      mocks.createCompanyCore.mockImplementation(
+        async (_client: unknown, _input: unknown, createRow: () => Promise<{ data: unknown; error: unknown }>) => {
+          const { data } = await createRow()
+          return { companyId: data as string }
+        }
+      )
+      const result = (await tool.execute(
+        { ...setup, confirm: true },
+        '',
+        'user-1',
+        supabase as never
+      )) as Record<string, unknown>
+
+      expect(result.history_note).toContain('gnubok_create_sie_upload')
+      expect(result.message).toContain('IN ORDER')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('refuses a VAT-registered company without a moms period before touching the database', async () => {
     const supabase = supabaseWithTeam(TEAM_ID)
     await expect(
@@ -106,6 +155,25 @@ describe('gnubok_create_company', () => {
     ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringContaining('moms_period') })
     expect(supabase.rpc).not.toHaveBeenCalled()
     expect(mocks.createCompanyCore).not.toHaveBeenCalled()
+  })
+
+  it('defaults the team to the user PERSONAL team only (WL-08)', async () => {
+    const supabase = supabaseWithTeam(TEAM_ID)
+    const result = (await tool.execute(setup, '', 'user-1', supabase as never)) as Record<string, unknown>
+
+    expect((result.preview as Record<string, unknown>).team_id).toBe(TEAM_ID)
+    // The default-team lookup must be restricted to kind='personal': picking
+    // the first membership regardless of kind attached a consultant's private
+    // company to their byrå team.
+    expect(supabase.from).toHaveBeenCalledWith('team_members')
+    expect(supabase.chain.select).toHaveBeenCalledWith('team_id, teams!inner(kind, created_at)')
+    expect(supabase.chain.eq).toHaveBeenCalledWith('teams.kind', 'personal')
+  })
+
+  it('leaves team_id null when the user has no personal team', async () => {
+    const supabase = supabaseWithTeam(null)
+    const result = (await tool.execute(setup, '', 'user-1', supabase as never)) as Record<string, unknown>
+    expect((result.preview as Record<string, unknown>).team_id).toBeNull()
   })
 
   it('uses an explicit team_id over the default team', async () => {

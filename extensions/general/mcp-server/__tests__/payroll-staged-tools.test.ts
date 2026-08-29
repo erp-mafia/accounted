@@ -19,6 +19,7 @@ import { tools } from '../server'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 
 const updatePayslipLine = tools.find((t) => t.name === 'gnubok_update_payslip_line')!
+const setRunSalary = tools.find((t) => t.name === 'gnubok_set_run_salary')!
 const registerAbsence = tools.find((t) => t.name === 'gnubok_register_absence')!
 const bookSalaryRun = tools.find((t) => t.name === 'gnubok_book_salary_run')!
 const deleteAbsence = tools.find((t) => t.name === 'gnubok_delete_absence')!
@@ -133,6 +134,66 @@ describe('gnubok_update_payslip_line', () => {
         'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
       ),
     ).rejects.toThrow(/At least one/)
+  })
+})
+
+describe('gnubok_set_run_salary', () => {
+  const SRE_ROW = {
+    id: 'sre-1',
+    employee_id: 'emp-1',
+    salary_type: 'monthly',
+    employment_degree: 100,
+    monthly_salary: 30000,
+  }
+
+  it('stages with old/new salary preview and a recalculate next-hint', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'run-1', status: 'draft' } }) // service draft gate (dry-run preflight)
+    enqueue({ data: SRE_ROW }) // service sre lookup
+    enqueue({ data: { payment_date: '2026-03-25', period_year: 2026, period_month: 3 } }) // run for period check
+    enqueue({ data: { first_name: 'Anna', last_name: 'Andersson' } }) // name for preview
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
+
+    const result = (await setRunSalary.execute(
+      { salary_run_id: 'run-1', employee_id: 'emp-1', monthly_salary: 45000 },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as {
+      staged: boolean
+      risk_level: string
+      preview: Record<string, unknown>
+      next?: { tool: string }
+    }
+
+    expect(result.staged).toBe(true)
+    expect(result.risk_level).toBe('medium')
+    expect(result.preview.previous_monthly_salary).toBe(30000)
+    expect(result.preview.new_monthly_salary).toBe(45000)
+    expect(result.preview.employee_name).toBe('Anna Andersson')
+    expect(result.next?.tool).toBe('gnubok_calculate_salary_run')
+  })
+
+  it('throws when the run has advanced past draft (preflight)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'run-1', status: 'review' } })
+
+    await expect(
+      setRunSalary.execute(
+        { salary_run_id: 'run-1', employee_id: 'emp-1', monthly_salary: 45000 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/SALARY_RUN_EMPLOYEES_NOT_DRAFT/)
+  })
+
+  it('rejects a negative salary', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      setRunSalary.execute(
+        { salary_run_id: 'run-1', employee_id: 'emp-1', monthly_salary: -100 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/monthly_salary/)
   })
 })
 

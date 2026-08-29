@@ -42,6 +42,36 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "id": "0e9c…",
+      "invoice_number": "2026-0042",
+      "customer_id": "a8f1…",
+      "customer_name": "Acme AB",
+      "invoice_date": "2026-05-01",
+      "due_date": "2026-05-31",
+      "status": "sent",
+      "document_type": "invoice",
+      "currency": "SEK",
+      "subtotal": 10000,
+      "vat_amount": 2500,
+      "total": 12500,
+      "remaining_amount": 12500,
+      "paid_at": null,
+      "created_at": "2026-05-01T09:14:33Z"
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12",
+    "next_cursor": null
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/invoices`
@@ -98,6 +128,24 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "customer_id": "a8f1…",
+  "invoice_date": "2026-05-12",
+  "due_date": "2026-06-11",
+  "currency": "SEK",
+  "items": [
+    {
+      "description": "Konsultation",
+      "quantity": 8,
+      "unit": "tim",
+      "unit_price": 1250
+    }
+  ]
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -122,6 +170,29 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "invoice_number": null,
+    "customer_id": "a8f1…",
+    "invoice_date": "2026-05-12",
+    "due_date": "2026-06-11",
+    "status": "draft",
+    "currency": "SEK",
+    "subtotal": 10000,
+    "vat_amount": 2500,
+    "total": 12500,
+    "remaining_amount": 12500
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -174,6 +245,32 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "invoice_number": "2026-0042",
+    "customer_id": "a8f1…",
+    "customer": {
+      "id": "a8f1…",
+      "name": "Acme AB"
+    },
+    "invoice_date": "2026-05-01",
+    "due_date": "2026-05-31",
+    "status": "sent",
+    "total": 12500,
+    "remaining_amount": 12500,
+    "paid_at": null,
+    "created_at": "2026-05-01T09:14:33Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `PATCH /api/v1/companies/{companyId}/invoices/{id}`
@@ -212,6 +309,14 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "due_date": "2026-07-15",
+  "notes": "Förlängd förfallotid"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -235,6 +340,22 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "status": "draft",
+    "due_date": "2026-07-15",
+    "notes": "Förlängd förfallotid"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -267,6 +388,13 @@ Request body:
 { reason?: string }
 ```
 
+Example request:
+```json
+{
+  "reason": "Felaktig kund"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -285,6 +413,24 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "ccccccc-c…",
+    "invoice_number": "KR-2026-0042",
+    "credited_invoice_id": "0e9c…",
+    "status": "sent",
+    "total": -12500,
+    "journal_entry_id": "8b4b…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -325,6 +471,13 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "payment_date": "2026-05-12"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -349,6 +502,26 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "invoice_number": "2026-0042",
+    "status": "paid",
+    "total": 12500,
+    "paid_amount": 12500,
+    "remaining_amount": 0,
+    "paid_at": "2026-05-12",
+    "journal_entry_id": "7b3a…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/invoices/{id}/mark-sent`
@@ -356,7 +529,7 @@ Response `200`:
 **Transition a draft invoice to sent (without emailing).**
 `scope:invoices:write · risk:medium · idempotent · dry-run`
 
-Marks a draft invoice as sent: for invoices delivered outside Accounted (Peppol, postal, manual email). Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). On accounting_method=accrual, also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT). Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.
+Marks a draft invoice as sent: for invoices delivered outside Accounted (Peppol, postal, manual email). Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). When the company books at issue (faktureringsmetoden without defer_invoice_booking), also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT). Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.
 
 **Use when:** You delivered the invoice through a channel other than Accounted's email (Peppol, postal, your own SMTP) and need to record it as sent so the F-series number is allocated and the journal entry is posted.
 **Do not use for:** Sending the invoice via Accounted email: use :send (PR-B-2b-3) for that. Marking an already-sent invoice as paid: use :mark-paid (PR-B-2b-2).
@@ -393,6 +566,23 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "invoice_number": "2026-0042",
+    "status": "sent",
+    "total": 12500,
+    "journal_entry_id": "7b3a…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/invoices/{id}/pdf`
@@ -424,7 +614,7 @@ Response `200` (`application/pdf`).
 **Send a draft invoice to the customer by email.**
 `scope:invoices:write · risk:high · idempotent · dry-run`
 
-The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → email via Resend (PDF attachment, copy to company) → flip status to sent → post journal entry (accrual + real invoice) → archive PDF as underlag → emit invoice.sent. Email failure is a hard 502 before state changes; post-email failures surface as warnings but the invoice IS marked sent.
+The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → email via Resend (PDF attachment, copy to company) → flip status to sent → post journal entry (real invoice, unless kontantmetoden or defer_invoice_booking) → archive PDF as underlag → emit invoice.sent. Email failure is a hard 502 before state changes; post-email failures surface as warnings but the invoice IS marked sent.
 
 **Use when:** You want Accounted to deliver the invoice to the customer via email. For invoices delivered through another channel (Peppol, postal, own SMTP) use :mark-sent instead.
 **Do not use for:** Re-sending an already-sent invoice (returns 409 INVOICE_UPDATE_NOT_DRAFT). Sending a delivery note (no F-series lifecycle). Sending a credit note (use the :credit endpoint to issue the kreditfaktura; subsequent re-send of the credit note via :mark-sent is the supported path).
@@ -450,6 +640,18 @@ Request body:
 { additional_cc?: string[], additional_bcc?: string[] }
 ```
 
+Example request:
+```json
+{
+  "additional_cc": [
+    "case-owner@company.test"
+  ],
+  "additional_bcc": [
+    "invoice-archive@company.test"
+  ]
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -471,6 +673,29 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "invoice_number": "2026-0042",
+    "status": "sent",
+    "total": 12500,
+    "message_id": "re_abc123",
+    "sent_to": "finance@acme.test",
+    "cc": "billing@gnubok-user.test",
+    "cc_addresses": [
+      "billing@gnubok-user.test"
+    ],
+    "journal_entry_id": "7b3a…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -505,6 +730,28 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "invoices": [
+    {
+      "customer_id": "a8f1…",
+      "invoice_date": "2026-05-12",
+      "due_date": "2026-06-11",
+      "currency": "SEK",
+      "items": [
+        {
+          "description": "A",
+          "quantity": 1,
+          "unit": "st",
+          "unit_price": 1000
+        }
+      ]
+    }
+  ]
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -518,6 +765,35 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "results": [
+      {
+        "ok": true,
+        "request_index": 0,
+        "data": {
+          "id": "0e9c…",
+          "invoice_number": null,
+          "status": "draft",
+          "total": 1250
+        }
+      }
+    ],
+    "summary": {
+      "total": 1,
+      "succeeded": 1,
+      "failed": 0
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```

@@ -20,8 +20,8 @@
  *      never cached, so a simulation can never be replayed in place of the
  *      real write that follows it.
  *   7. Invokes the handler with a typed RouteContext.
- *   8. Stamps `X-Request-Id`, `Gnubok-Version`, `X-RateLimit-Limit` on the
- *      response.
+ *   8. Stamps `X-Request-Id` and `Gnubok-Version` on the response, plus
+ *      `Retry-After` on a 429.
  *   9. Catches any thrown value and converts it to the v1 error envelope via
  *      `v1ErrorResponse`.
  *
@@ -45,6 +45,7 @@ import {
   createServiceClientNoCookies,
   extractBearerToken,
   hasScope,
+  RATE_LIMIT_RETRY_AFTER_SECONDS,
   validateApiKey,
 } from '@/lib/auth/api-keys'
 
@@ -333,8 +334,13 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       const auth = await validateApiKey(token)
       if ('error' in auth) {
         log.warn('api key validation failed', { status: auth.status, reason: auth.error, ...forensic })
-        const code = auth.status === 429 ? 'RATE_LIMITED' : 'UNAUTHORIZED'
-        return await v1ErrorResponseFromCode(code, log, { requestId, reason: auth.error })
+        const rateLimited = auth.status === 429
+        const code = rateLimited ? 'RATE_LIMITED' : 'UNAUTHORIZED'
+        return await v1ErrorResponseFromCode(code, log, {
+          requestId,
+          reason: auth.error,
+          ...(rateLimited ? { retryAfterSeconds: RATE_LIMIT_RETRY_AFTER_SECONDS } : {}),
+        })
       }
 
       const userLog = log.child({

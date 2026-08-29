@@ -17,7 +17,7 @@ Open-source Swedish accounting software for sole traders (enskild firma) and lim
 
 **Compliant by construction.** Accounted implements double-entry bookkeeping under Swedish accounting law (Bokföringslagen). Voucher immutability, sequential voucher numbering, period locks, and 7-year document retention are enforced by database triggers, not by convention. Corrections are made the legal way, with reversal entries (storno), never by editing history. See [ARCHITECTURE.md](ARCHITECTURE.md) for how.
 
-**Agent-native.** The full bookkeeping engine is exposed as 100+ MCP (Model Context Protocol) tools with scoped API keys, so an AI agent can do the books in Accounted: categorize transactions, draft vouchers, reconcile periods, and prepare declarations. Posting is staged for human approval, so the agent proposes and you decide.
+**Agent-native.** The full bookkeeping engine is exposed as 150+ MCP (Model Context Protocol) tools with scoped API keys or OAuth, so an AI agent can do the books in Accounted: categorize transactions, draft vouchers, reconcile periods, and prepare declarations. Posting is staged for human approval, so the agent proposes and you decide.
 
 **Yours to run.** AGPL-3.0 licensed and fully self-hostable with Docker and Supabase. Use the hosted version at [app.gnubok.se](https://app.gnubok.se) or run your own.
 
@@ -30,9 +30,13 @@ Open-source Swedish accounting software for sole traders (enskild firma) and lim
 - **Tax reports** -- NE-bilaga, INK2, SRU export for Skatteverket
 - **Payroll** -- Salary runs, payslips, and AGI (arbetsgivardeklaration) employer declarations
 - **Supplier invoices** -- Registration, payment tracking, input VAT deduction
+- **Supplier payment files (betalfil)** -- Batch supplier payments into ISO 20022 pain.001 files for upload to the bank, rendered byte-identical on every download
+- **E-invoicing (Peppol)** -- Send and receive Peppol BIS Billing 3 e-invoices through Qvalia, a certified Swedish Access Point; received documents land in the supplier invoice inbox
+- **Skattekonto** -- Tax account transactions synced from Skatteverket or imported from statement files, linked to the booked 1630 movements for reconciliation
 - **Document archive** -- SHA-256 integrity, 7-year retention enforcement, full archive ZIP export
 - **SIE import/export** -- Standard Swedish accounting interchange format
-- **Agent access (MCP)** -- 100+ bookkeeping tools over the Model Context Protocol, with scoped API keys and staged approvals
+- **Agent access (MCP)** -- 150+ bookkeeping tools over the Model Context Protocol, with scoped API keys and staged approvals
+- **Claude connector and plugin** -- Connect Claude.ai or Claude Code over OAuth 2.1 and install approval-gated workflow skills (`/accounted:bookkeep`, `/accounted:vat`, `/accounted:year-end`, ...) from [claude-plugin/](claude-plugin/README.md)
 - **Extension system** -- Opt-in plugins for AI categorization, receipt OCR, email, calendar, and more
 
 ## Self-Hosting
@@ -48,7 +52,7 @@ You need a Supabase project and must apply the database migrations before first 
 
 ## Development Setup
 
-Prerequisites: Node.js 20+, a Supabase project.
+Prerequisites: Node.js 20 or newer (CI runs Node 20; the Docker image ships Node 22), a Supabase project.
 
 ```bash
 npm install
@@ -65,7 +69,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development workflow.
 - **Framework**: Next.js 16 (App Router), React 19, TypeScript (strict)
 - **Database**: Supabase (PostgreSQL + Row Level Security + email/password auth + TOTP MFA)
 - **Styling**: Tailwind CSS 4 + shadcn/ui
-- **Integrations**: Enable Banking (PSD2), Anthropic SDK, LangChain, OpenAI, Resend, JSZip
+- **Integrations**: Enable Banking (PSD2), Qvalia (Peppol), Skatteverket, Anthropic SDK on Amazon Bedrock (eu-north-1; direct Anthropic or any OpenAI-compatible endpoint for self-hosted via the Vercel AI SDK), Resend, JSZip
 
 ## Documentation
 

@@ -2246,6 +2246,10 @@ export const UpdateSettingsSchema = z.object({
   // Körjournal (mileage log): UI-visibility toggle only, never load-bearing
   // for correctness (trips created via API/MCP work regardless).
   mileage_enabled: z.boolean().optional(),
+  // Data analysis consent (#1346): gates cross-company analysis of this
+  // company's bookkeeping outcomes. Flipped by a human in the settings UI
+  // only; deliberately absent from the v1 REST / MCP settings pick lists.
+  data_analysis_opt_in: z.boolean().optional(),
   // Salary payment file
   preferred_payment_format: z.enum(['bg_lb', 'pain001']).optional(),
   // Salary settings (migration 20260703190000). Day of month salaries are
@@ -2873,9 +2877,10 @@ export const CreateEmployeeSchema = EmployeeSchemaBase.superRefine((data, ctx) =
     })
   }
 
-  // Jämkning: a percentage without a start date is meaningless (the engine
-  // gates on jamkning_valid_from <= payment_date). End date is optional
-  // (beslut often run until year-end implicitly).
+  // Jämkning: a percentage without a start date is meaningless. Note that the
+  // engine (isJamkningValid in lib/salary/calculation-engine.ts) applies the
+  // beslut only when BOTH dates are set; the API keeps valid_to optional for
+  // compatibility and the UI requires it.
   if (
     data.jamkning_percentage !== null &&
     data.jamkning_percentage !== undefined &&
@@ -3524,7 +3529,7 @@ export const UpdateShiftPremiumRuleSchema = z
 // Upper bound on per-employee override values. 10 MSEK is well above any
 // plausible single-period gross/tax/avgifter figure for a salary run and
 // catches typos (e.g. an extra zero) before they reach the ledger or AGI.
-const SALARY_OVERRIDE_MAX = 10_000_000
+export const SALARY_OVERRIDE_MAX = 10_000_000
 
 export const SalaryEmployeeOverrideSchema = z
   .object({
@@ -3610,6 +3615,16 @@ export const DimensionTaggingApplySchema = z.object({
   line_ids: z.array(uuid).min(1).max(500),
   dimensions: DimensionsBagSchema,
   reason: z.string().trim().min(3).max(500),
+})
+
+/**
+ * Body for PATCH /api/byra/brand. The app name is byra-editable (WL-17):
+ * shown beside the sidebar logo and across branded chrome. Trimmed and
+ * capped so it stays a name, not a paragraph; domain and colors are NOT
+ * accepted here (ops-managed).
+ */
+export const ByraBrandUpdateSchema = z.object({
+  appName: z.string().trim().min(1).max(60),
 })
 
 // ============================================================
@@ -3828,4 +3843,22 @@ export const FiscalYearResetSchema = z.object({
  */
 export const NoticeDismissSchema = z.object({
   notice_id: z.string().min(1).max(200),
+})
+
+/**
+ * Brand signup access (invite-only white-label domains, 2026-08-27).
+ * Emails are lowercased here so they match the CHECK-enforced lowercase
+ * storage in brand_signup_allowlist.
+ */
+export const BrandSignupModeSchema = z.object({
+  signup_mode: z.enum(['open', 'invite_only']),
+})
+
+export const BrandAllowlistAddSchema = z.object({
+  email: z.string().trim().toLowerCase().max(320).pipe(z.string().email()),
+  note: z.string().trim().max(200).optional(),
+})
+
+export const BrandAllowlistRemoveSchema = z.object({
+  id: z.string().uuid(),
 })

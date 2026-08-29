@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
+import { fetchAccounts } from '@/lib/reference-data/fetchers'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
@@ -807,12 +809,9 @@ function SIEImportWizard() {
       setIssues(data.parsed.issues)
       setSieAccounts(data.parsed.accounts)
 
-      const accountsRes = await fetch('/api/bookkeeping/accounts?active=false')
-      if (!accountsRes.ok) {
+      const accounts = await fetchAccounts(false).catch(() => {
         throw new Error('Kunde inte hämta kontoplanen för momsgranskning.')
-      }
-      const accountsData = await accountsRes.json()
-      const accounts = accountsData.data || []
+      })
       setBasAccounts(accounts)
       setMappings(enrichAccountMappingsWithVat(data.mappings, accounts))
 
@@ -986,12 +985,12 @@ function SIEImportWizard() {
       toast({ title: 'Konton skapade', description: `${data.created} nya konton har lagts till i din kontoplan` })
 
       const createdSet = new Set(missingAccounts.map(a => a.number))
-      const accountsRes = await fetch('/api/bookkeeping/accounts?active=false')
-      if (!accountsRes.ok) {
+      // New accounts exist now: refresh every cached chart (pickers app-wide)
+      // and re-read the full chart for the VAT review below.
+      await invalidateReferenceData('ref:accounts')
+      const accounts = await fetchAccounts(false).catch(() => {
         throw new Error('Kunde inte hämta kontoplanen för momsgranskning.')
-      }
-      const accountsData = await accountsRes.json()
-      const accounts = accountsData.data || []
+      })
       setBasAccounts(accounts)
       setMappings(prev => {
         let updated = prev.map(m =>
@@ -1077,6 +1076,9 @@ function SIEImportWizard() {
       }
 
       setStep('result')
+      // An import creates periods and accounts: refresh the session caches so
+      // every picker in the app sees them without a reload.
+      void invalidateReferenceData(['ref:accounts', 'ref:fiscal-periods'])
 
       if (data.result?.success) {
         const created = data.result.journalEntriesCreated

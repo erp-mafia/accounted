@@ -85,6 +85,7 @@ export default function DeadlinesPage() {
             .from('customers')
             .select('id, name')
             .eq('company_id', companyId)
+            .is('archived_at', null)
             .order('name', { ascending: true })
             .order('id', { ascending: true })
             .range(from, to),

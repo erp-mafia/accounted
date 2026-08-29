@@ -1,26 +1,47 @@
 import { describe, it, expect } from 'vitest'
 import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
 import { projectToolInputSchema } from '../company-routing'
+import { projectToolReferences } from '../tool-namespace'
+
+// Mirror the real tools/list serializer, including the derived staging _meta
+// (requires_approval / approve_tool / preflight) merged over any literal
+// _meta: otherwise the guard under-measures the wire payload.
+const canonicalToolNames = new Set(tools.map((t) => t.name))
+
+function serializeCatalog(namespace: 'gnubok' | 'accounted'): string {
+  const projection = tools.filter(isDefaultCatalogTool).map((t) => {
+    const meta = { ...(deriveToolMeta(t) ?? {}), ...(t._meta ?? {}) }
+    const projected = {
+      name: t.name,
+      ...(t.title ? { title: t.title } : {}),
+      description: t.description,
+      inputSchema: projectToolInputSchema(t),
+      ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
+      annotations: t.annotations,
+      ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
+    }
+    return namespace === 'accounted'
+      ? projectToolReferences(projected, namespace, canonicalToolNames)
+      : projected
+  })
+  return JSON.stringify({ tools: projection })
+}
+
+const tokensFor = (namespace: 'gnubok' | 'accounted') =>
+  Math.round(serializeCatalog(namespace).length / 4)
 
 describe('tools/list payload size guard', () => {
   it('keeps the projected tools/list payload under the context-budget ceiling', () => {
-    // Mirror the real tools/list serializer, including the derived staging
-    // _meta (requires_approval / approve_tool / preflight) merged over any
-    // literal _meta: otherwise the guard under-measures the wire payload.
-    const projection = tools.filter(isDefaultCatalogTool).map((t) => {
-      const meta = { ...(deriveToolMeta(t) ?? {}), ...(t._meta ?? {}) }
-      return {
-        name: t.name,
-        ...(t.title ? { title: t.title } : {}),
-        description: t.description,
-        inputSchema: projectToolInputSchema(t),
-        ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
-        annotations: t.annotations,
-        ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
-      }
-    })
-    const payload = JSON.stringify({ tools: projection })
-    const approxTokens = Math.round(payload.length / 4)
+    // Measure BOTH namespaces and guard the larger.
+    //
+    // `?tool_namespace=accounted` rewrites every gnubok_* reference to
+    // accounted_* (+3 chars each), so the accounted projection is inherently
+    // ~200 tokens larger than the gnubok one. CLAUDE.md points new MCP
+    // installs at the accounted-mcp package and the accounted_* aliases, so
+    // that larger payload is what a NEW user's client actually receives,
+    // while this guard measured only the legacy namespace and let the real
+    // worst case drift untested.
+    const approxTokens = Math.max(tokensFor('gnubok'), tokensFor('accounted'))
     // Ceiling progression: 20K to 25K to 30K to 31K to 31.5K to 32K to 36K.
     //   * 20K → 25K when item 8 of the agent-native API plan landed
     //     (additionalProperties: false on all inputSchemas + period_status in the
@@ -216,9 +237,78 @@ describe('tools/list payload size guard', () => {
     //     trimmed to bare property names first (the two connect-link tools
     //     are search-only); headroom before the change was ~0 after the skatteverket_connection bump, so even the
     //     bare contract crossed by ~420.
-    // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
-    // fires again, prefer trimming descriptions or making a tool opt-in via search
-    // before bumping further.
-    expect(approxTokens).toBeLessThan(60_700)
+    //   * 60.7K to 61.2K with the two connect-link tools moved into the default
+    //     catalog (issue #1814): Claude.ai can only CALL tools present in
+    //     tools/list, so catalogVisibility 'search' means discover-only there;
+    //     the onboarding flow dead-ended on client-side tool-not-found when
+    //     the skill pointed at them (SilverPark session, 2026-08-26).
+    //   * 61.2K to 61.5K with gnubok_lookup_company (org-number-first
+    //     onboarding): default-catalog for the same reason as the connect
+    //     tools; the onboarding skill's first instruction is to call it, and
+    //     a search-only tool is uncallable on Claude.ai. Descriptions were
+    //     trimmed first; the tool costs ~265 tokens against ~0 headroom.
+    //   * 61.5K to 62K with gnubok_sie_preflight (migration-first onboarding):
+    //     the scan-before-import step the skill instructs for shared SIE
+    //     files, so default-catalog for the same Claude.ai reason; ~390
+    //     tokens (schema carries the mappings-passthrough contract).
+    //   * 62K to 62.4K with gnubok_create_sie_upload + upload_id/sha256 on the
+    //     two SIE tools: the byte-exact upload path after a real 104 KB file
+    //     dead-ended in chat (a model cannot reproduce 30k tokens verbatim
+    //     without silent-truncation risk); skill-instructed, so default catalog.
+    //   * 62.4K to 63K with gnubok_connect_migration (the previous-system
+    //     connect card, same one-click feel as bank/Skatteverket): the skill
+    //     instructs calling it when the user names Fortnox/BL/Briox/Wint, so
+    //     default catalog for the standing Claude.ai reason.
+    //   * 63K to 63.4K with gnubok_reconcile_match promoted to the default
+    //     catalog: the onboarding efterkontroll instructs matching bank rows
+    //     against SIE verifikat, and a search-only tool is uncallable on
+    //     Claude.ai (E2E #12 punted to the web app over it).
+    //   * 63.4K to 63.6K with NO new tool: the guard started measuring the
+    //     accounted_* namespace as well as gnubok_* and asserting on the
+    //     larger. The accounted projection was already ~90 tokens over the
+    //     63.4K line (the namespace rewrite costs ~209 tokens on its own) and
+    //     nothing tested it, so this bump buys no new catalog surface. It
+    //     re-points an existing ceiling at the payload new installs actually
+    //     receive; the gnubok projection still sits ~320 tokens under it.
+    //   * 63.6K DOWN to 63.1K, the first tightening in this ledger. Two
+    //     changes, net -549 tokens on the guarded (accounted) projection:
+    //     gnubok_get_agent_briefing's outputSchema went 7,743 to 4,565 chars
+    //     by condensing four sub-schemas whose interiors were documentation
+    //     rather than contract (ledger_context, dimensions,
+    //     skatteverket_connection, recommended_tools: agent-briefing.test.ts
+    //     pins their RUNTIME shape, so nothing was left unguarded), against
+    //     +~245 for the new gnubok_call_tool.
+    //   * 63.1K to 63.8K with gnubok_update_customer promoted to the default
+    //     catalog (#1706, #1876). gnubok_call_tool (above) only bridges READ
+    //     tools and refuses writes, so a search-only WRITE tool is still
+    //     uncallable on Claude.ai; the reporter read the tool as missing twice.
+    //     The +761 tokens are the 19-property partial-update wire contract plus
+    //     the staging envelope; the description is already 152 chars.
+    //     Measured 63 761 on the accounted projection after merging #1993
+    //     (line_type and revenue_account declared on the create item schema).
+    //   * 63.8K to 64.4K with gnubok_set_run_salary in the default catalog
+    //     (variable owner pay, the payroll_month flagship flow). Same reason
+    //     as update_customer: a search-only WRITE is uncallable on Claude.ai,
+    //     and both update_payslip_line's description and the payroll_month
+    //     loadout point agents at this tool. Measured 64 315 on the accounted
+    //     projection. This bump skips the "demote a read first" rule below
+    //     deliberately: picking which read to demote needs prod usage data
+    //     (MCP usage profile), not a guess inside a payroll PR: do that
+    //     demotion as its own change and ratchet this ceiling back down.
+    // Long-term answer to growth is no longer a ceiling bump. gnubok_call_tool
+    // makes `catalogVisibility: 'search'` usable for READ tools on hosts that
+    // can only invoke what tools/list showed them, which is the constraint that
+    // forced gnubok_reconcile_match back into the default catalog on
+    // 2026-08-26. Demote a read to search-only before proposing a bump.
+    expect(approxTokens).toBeLessThan(64_400)
+  })
+
+  it('keeps the accounted_* namespace as the measured worst case', () => {
+    // Pins the DIRECTION of the delta, not its size. If a future change ever
+    // made gnubok_* the larger projection, the Math.max above would silently
+    // keep passing while this guard stopped describing reality.
+    expect(serializeCatalog('accounted').length).toBeGreaterThan(
+      serializeCatalog('gnubok').length,
+    )
   })
 })

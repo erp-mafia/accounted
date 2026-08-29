@@ -114,6 +114,24 @@ describe('extractFromDocument request shape (hosted regression net)', () => {
       model: 'eu.anthropic.claude-sonnet-5',
       usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 7 },
     })
+    expect(result.ok && result.truncated).toBeFalsy()
+  })
+
+  it('flags a max_tokens stop as truncated so the caller can retry with a higher cap', async () => {
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: 'text', text: '{"lineItems":[{"description":"cut of' }],
+      stop_reason: 'max_tokens',
+      usage: { input_tokens: 10, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    })
+    const svc = createAnthropicFamilyService(readAiConfig())
+    const result = await svc.extractFromDocument({
+      document: { kind: 'text', text: 'x' },
+      system: SYSTEM,
+      instruction: INSTRUCTION,
+      maxTokens: 100,
+    })
+    expect(result.ok).toBe(true)
+    expect(result.ok && result.truncated).toBe(true)
   })
 
   it('honours the extraction tier override (legacy BEDROCK_MODEL_ID)', async () => {

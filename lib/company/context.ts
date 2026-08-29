@@ -12,6 +12,16 @@ export { CompanyContextError, getActiveCompanyId }
 const COMPANY_COOKIE = 'gnubok-company-id'
 
 /**
+ * Session marker for an EXPLICIT company choice (WL byrå landing). Set only
+ * by setActiveCompany, which every deliberate switch funnels through
+ * (company switcher, cockpit client entry, onboarding). The middleware's
+ * first-membership fallback write-back upserts user_preferences directly and
+ * never sets this, so "/" can tell a picked company from an auto-resolved
+ * one. Session-scoped on purpose: a new browser session starts unpicked.
+ */
+export const COMPANY_PICKED_COOKIE = 'gnubok-company-picked'
+
+/**
  * Resolve a company's effective entity type.
  *
  * `company_settings.entity_type` is the read-primary source (what the user
@@ -174,6 +184,14 @@ export async function setActiveCompany(
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       maxAge: 60 * 60 * 24 * 365, // 1 year
+    })
+    // Explicit-choice marker (see COMPANY_PICKED_COOKIE). No maxAge: a session
+    // cookie, gone when the browser closes.
+    cookieStore.set(COMPANY_PICKED_COOKIE, '1', {
+      path: '/',
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
     })
   } catch {
     // Sealed cookie store (render phase): the DB write is what matters.
