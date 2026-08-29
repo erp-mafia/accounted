@@ -2,6 +2,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse, type NextRequest } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { hashInviteToken } from '@/lib/auth/invite-tokens'
+import { acceptPendingTeamInviteByToken } from '@/lib/company/pending-invites'
 
 interface TeamInviteRow {
   id: string
@@ -135,96 +136,28 @@ export async function POST(request: NextRequest) {
     return acceptCompanyInvite(serviceClient, user, companyInvite)
   }
 
-  // No company invitation for this token: try byrå-team invitations.
-  const { data: teamInviteRaw } = await serviceClient
-    .from('team_invitations')
-    .select('id, team_id, email, role, status, expires_at, teams:team_id(name, kind)')
-    .eq('token_hash', tokenHash)
-    .single()
-
-  const teamInvite = teamInviteRaw as unknown as TeamInviteRow | null
-
-  // Kind gate mirrors GET: byrå teams only; anything else is an invalid token.
-  if (!teamInvite || teamInvite.teams?.kind !== 'byra' || teamInvite.status !== 'pending') {
-    return NextResponse.json({ error: 'Inbjudan är ogiltig.' }, { status: 400 })
-  }
-
-  if (new Date(teamInvite.expires_at) < new Date()) {
-    await serviceClient
-      .from('team_invitations')
-      .update({ status: 'expired' })
-      .eq('id', teamInvite.id)
-    return NextResponse.json({ error: 'Inbjudan har gått ut.' }, { status: 410 })
-  }
-
-  if (user.email?.toLowerCase() !== teamInvite.email.toLowerCase()) {
-    return NextResponse.json({ error: 'E-postadressen matchar inte inbjudan.' }, { status: 403 })
-  }
-
-  // Invitations never mint team owners (the invite route's schema already
-  // forbids it; re-checked here against hand-edited rows).
-  const memberRole = teamInvite.role === 'admin' ? 'admin' : 'member'
-
-  const { error: memberError } = await serviceClient
-    .from('team_members')
-    .insert({
-      team_id: teamInvite.team_id,
-      user_id: user.id,
-      role: memberRole,
-    })
-
-  if (memberError) {
-    if (memberError.code === '23505') {
+  // No company invitation for this token: try byrå-team invitations. The
+  // acceptance itself lives in the shared helper (lib/company/pending-invites)
+  // so the callback and onboarding recovery accept team invites the same way;
+  // this route only maps the outcome onto its long-standing HTTP contract.
+  const outcome = await acceptPendingTeamInviteByToken(user, token)
+  switch (outcome.status) {
+    case 'accepted':
+      return NextResponse.json({
+        data: { type: 'team', teamId: outcome.teamId, teamName: outcome.teamName },
+      })
+    case 'already_member':
       return NextResponse.json({ error: 'Du är redan medlem.' }, { status: 409 })
-    }
-    return NextResponse.json({ error: 'Kunde inte lägga till medlem.' }, { status: 500 })
+    case 'expired':
+      return NextResponse.json({ error: 'Inbjudan har gått ut.' }, { status: 410 })
+    case 'wrong_email':
+      return NextResponse.json({ error: 'E-postadressen matchar inte inbjudan.' }, { status: 403 })
+    case 'error':
+      return NextResponse.json({ error: 'Kunde inte lägga till medlem.' }, { status: 500 })
+    case 'invalid':
+    default:
+      return NextResponse.json({ error: 'Inbjudan är ogiltig.' }, { status: 400 })
   }
-
-  // Point a company-less user at one of the team's companies so their first
-  // dashboard load resolves. A consultant with their own firma keeps their
-  // active company untouched: joining a byrå must never hijack the context.
-  const { data: prefs } = await serviceClient
-    .from('user_preferences')
-    .select('active_company_id')
-    .eq('user_id', user.id)
-    .maybeSingle()
-
-  if (!(prefs as { active_company_id: string | null } | null)?.active_company_id) {
-    const { data: firstCompany } = await serviceClient
-      .from('companies')
-      .select('id')
-      .eq('team_id', teamInvite.team_id)
-      .is('archived_at', null)
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle()
-
-    if (firstCompany) {
-      const { error: prefError } = await serviceClient
-        .from('user_preferences')
-        .upsert({
-          user_id: user.id,
-          active_company_id: (firstCompany as { id: string }).id,
-        }, { onConflict: 'user_id' })
-      if (prefError) {
-        console.error('[team/accept] failed to set active company', prefError)
-      }
-    }
-  }
-
-  // Mark invite as accepted
-  await serviceClient
-    .from('team_invitations')
-    .update({ status: 'accepted' })
-    .eq('id', teamInvite.id)
-
-  return NextResponse.json({
-    data: {
-      type: 'team',
-      teamId: teamInvite.team_id,
-      teamName: teamInvite.teams?.name ?? null,
-    },
-  })
 }
 
 /** The pre-existing company-invite acceptance flow, unchanged. */

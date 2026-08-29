@@ -1241,13 +1241,87 @@ export async function reverseEntry(
   // as bokförd forever, and has no re-booking affordance: the agent paths
   // (lib/pending-operations/commit.ts) already did this manually after every
   // reverseEntry call; the dashboard reverse route did not.
+  //
+  // The worklist's "unbooked" predicate is is_business IS NULL (see
+  // lib/worklist/types.ts), not journal_entry_id IS NULL, so clearing only the
+  // link left the stornoed row invisible in Att bokföra and in the nav badge
+  // (#1950) while the storno dialog (reverse_warning) promised the return.
+  // The engine therefore resets the same triple the uncategorize paths write
+  // (is_business, category, journal_entry_id), plus reconciliation_method:
+  // it describes how the link was made, and the link is gone (the koppla-bort
+  // path in lib/reconciliation/bank-reconciliation.ts resets it the same way).
   const { error: unlinkError } = await supabase
     .from('transactions')
-    .update({ journal_entry_id: null })
+    .update({
+      journal_entry_id: null,
+      is_business: null,
+      category: null,
+      reconciliation_method: null,
+    })
     .eq('company_id', companyId)
     .eq('journal_entry_id', entryId)
   if (unlinkError) {
     log.error('failed to unlink transactions from reversed entry', unlinkError, { entryId })
+  }
+
+  // Same promise, second anchor. Bulk-booked rows (bulk_book_transactions RPC)
+  // and residual verifikat (lib/reconciliation/residual.ts) anchor bank lines
+  // through transaction_voucher_links; for a samlingsverifikat with N>1 rows
+  // that junction is the ONLY anchor (journal_entry_id stays NULL), so the
+  // UPDATE above matches nothing and all N rows keep is_business = true
+  // against a status='reversed' entry. The link rows go the way koppla-bort
+  // removes them, and a row returns to Att bokföra only when no anchor is
+  // left: a residual booking keeps the main verifikat in journal_entry_id
+  // while its junction row points at the small residual verifikat, and
+  // stornoing the residual must not put a still-booked row back in the list.
+  const { data: junctionRows, error: junctionReadError } = await supabase
+    .from('transaction_voucher_links')
+    .select('transaction_id')
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', entryId)
+  if (junctionReadError) {
+    log.error('failed to read voucher links of reversed entry', junctionReadError, { entryId })
+  } else if (junctionRows && junctionRows.length > 0) {
+    const junctionTxIds = [
+      ...new Set((junctionRows as Array<{ transaction_id: string }>).map((r) => r.transaction_id)),
+    ]
+    const { error: junctionDeleteError } = await supabase
+      .from('transaction_voucher_links')
+      .delete()
+      .eq('company_id', companyId)
+      .eq('journal_entry_id', entryId)
+    if (junctionDeleteError) {
+      log.error('failed to delete voucher links of reversed entry', junctionDeleteError, { entryId })
+    } else {
+      const { data: remainingRows, error: remainingError } = await supabase
+        .from('transaction_voucher_links')
+        .select('transaction_id')
+        .eq('company_id', companyId)
+        .in('transaction_id', junctionTxIds)
+      if (remainingError) {
+        log.error('failed to read remaining voucher links after storno', remainingError, {
+          entryId,
+        })
+      } else {
+        const stillAnchored = new Set(
+          ((remainingRows ?? []) as Array<{ transaction_id: string }>).map((r) => r.transaction_id),
+        )
+        const releaseIds = junctionTxIds.filter((id) => !stillAnchored.has(id))
+        if (releaseIds.length > 0) {
+          const { error: releaseError } = await supabase
+            .from('transactions')
+            .update({ is_business: null, category: null, reconciliation_method: null })
+            .eq('company_id', companyId)
+            .in('id', releaseIds)
+            .is('journal_entry_id', null)
+          if (releaseError) {
+            log.error('failed to release junction-linked transactions of reversed entry', releaseError, {
+              entryId,
+            })
+          }
+        }
+      }
+    }
   }
 
   // Same hazard one table over: a period whose opening_balance_entry_id still

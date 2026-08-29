@@ -1590,10 +1590,10 @@ async function commitCreateInvoice(
   // (resolveDimensionBags in the MCP tool); coerce is the drift/tamper gate.
   const defaultDimensions = coerceDimensionsBag(params.default_dimensions)
 
-  // Free-text rows carry no amounts and never book. The MCP staging tool does
-  // not accept line_type today, but the totals math must stay identical to
-  // app/api/invoices/route.ts, which excludes text rows from subtotal, VAT,
-  // and the mixed-rate detection.
+  // Free-text rows carry no amounts and never book. The MCP staging tool
+  // accepts line_type 'text' (normalized to zeroed amounts at staging), and
+  // the totals math must stay identical to app/api/invoices/route.ts, which
+  // excludes text rows from subtotal, VAT, and the mixed-rate detection.
   const billableItems = items.filter((item) => item.line_type !== 'text')
 
   const { data: customer, error: customerError } = await supabase
@@ -1920,6 +1920,29 @@ async function commitUpdateInvoice(
 
   if (customerError || !customer) {
     return { error: 'Customer not found: they may have been deleted.', status: 404 }
+  }
+
+  // Drift/tamper gate for staged article references, same as
+  // commitCreateInvoice: the FK on invoice_items.article_id proves the article
+  // exists, not that it belongs to THIS company, and the top-level arg guard
+  // never sees a nested items[].article_id.
+  if (changes.items) {
+    const stagedArticleIds = Array.from(
+      new Set(changes.items.map((item) => item.article_id).filter((a): a is string => !!a)),
+    )
+    if (stagedArticleIds.length > 0) {
+      const { data: articleRows, error: articleError } = await supabase
+        .from('articles')
+        .select('id')
+        .eq('company_id', companyId)
+        .in('id', stagedArticleIds)
+      if (articleError) return { error: articleError.message, status: 500 }
+      const foundArticleIds = new Set((articleRows ?? []).map((a: { id: string }) => a.id))
+      const missingArticleId = stagedArticleIds.find((a) => !foundArticleIds.has(a))
+      if (missingArticleId) {
+        return { error: `Artikel ${missingArticleId} finns inte i företaget`, status: 400 }
+      }
+    }
   }
 
   // Effective line set: FULL REPLACE when staged, otherwise the current rows
@@ -5442,6 +5465,51 @@ async function commitUpdatePayslipLine(
   }
 }
 
+async function commitSetRunSalary(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const salaryRunId = params.salary_run_id as string
+  const employeeId = params.employee_id as string
+  const monthlySalary = params.monthly_salary as number
+  if (!salaryRunId || !employeeId || typeof monthlySalary !== 'number') {
+    return { error: 'salary_run_id, employee_id and monthly_salary are required', status: 400 }
+  }
+
+  try {
+    const { setRunEmployeeSalary } = await import('@/lib/salary/run-employees')
+    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId,
+      salaryRunId,
+      employeeId,
+      monthlySalary,
+    })
+    if (!result.ok) {
+      const entry = getErrorEntry(result.code)
+      return {
+        error: entry?.message_sv ?? `Kunde inte sätta månadens lön: ${result.code}`,
+        status: entry?.httpStatus ?? 500,
+      }
+    }
+    return {
+      data: {
+        salary_run_id: salaryRunId,
+        salary_run_employee_id: result.data.salary_run_employee_id,
+        employee_id: result.data.employee_id,
+        previous_monthly_salary: result.data.previous_monthly_salary,
+        monthly_salary: result.data.monthly_salary,
+      },
+    }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Failed to set run salary',
+      status: 500,
+    }
+  }
+}
+
 async function commitCreateEmployee(
   supabase: SupabaseClient,
   userId: string,
@@ -6501,6 +6569,9 @@ async function commitPendingOperationInner(
         break
       case 'update_payslip_line':
         result = await commitUpdatePayslipLine(supabase, companyId, pendingOp.params)
+        break
+      case 'set_run_salary':
+        result = await commitSetRunSalary(supabase, companyId, pendingOp.params)
         break
       case 'register_absence':
         result = await commitRegisterAbsence(supabase, companyId, pendingOp.params)

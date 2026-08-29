@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { CashAccount, CashAccountSource } from '@/types'
+import type { CashAccount, CashAccountSource, MappingResult } from '@/types'
 import { createLogger } from '@/lib/logger'
 import { syncMappedAccounts } from '@/lib/import/account-sync'
+import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 
 const log = createLogger('cash-accounts')
 
@@ -133,23 +134,588 @@ export async function getPrimary(
   return null
 }
 
-export async function findByIban(
+/**
+ * One in-memory picture of the company's cash_accounts rows and the status of
+ * the bank connections holding them. Every #1643 helper below derives from it,
+ * so "orphaned", "live" and "same physical account" mean the same thing in the
+ * transfer detector, the match/link flows and the commit guards.
+ */
+interface CashAccountTopology {
+  rows: CashAccount[]
+  /** bank_connection_id -> bank_connections.status */
+  statuses: Map<string, string>
+  /** Ledger accounts that must never be PROPOSED or accepted as a counter leg. */
+  orphaned: Set<string>
+  /** A row on an ACTIVE connection: the live claim on that physical account. */
+  isLive: (row: CashAccount) => boolean
+  /**
+   * A row no connection holds a claim on any more: demoted to manual
+   * (bank_connection_id null) or still pointing at a REVOKED connection.
+   * Distinct from "not live": an expired/error/pending connection still
+   * holds the row and can come back through re-auth.
+   */
+  isReleased: (row: CashAccount) => boolean
+}
+
+function currencyKey(currency: string | null | undefined): string {
+  return String(currency ?? '').toUpperCase()
+}
+
+/**
+ * Load the topology, or null when the row lookup fails. A failed connection
+ * lookup degrades to "no connection is known to be active": nothing is
+ * flagged orphaned (the conservative pre-fix behavior) and no row ranks as
+ * live.
+ */
+async function loadCashAccountTopology(
   supabase: SupabaseClient,
   companyId: string,
-  iban: string,
-): Promise<CashAccount | null> {
-  if (!iban) return null
+): Promise<CashAccountTopology | null> {
   const { data, error } = await supabase
     .from('cash_accounts')
     .select('*')
     .eq('company_id', companyId)
-    .eq('iban', iban)
-    .maybeSingle()
   if (error) {
-    log.warn('findByIban failed', { companyId, iban, error: error.message })
+    log.warn('cash_accounts topology lookup failed', { companyId, error: error.message })
     return null
   }
-  return (data as CashAccount | null) ?? null
+  const rows = (data ?? []) as CashAccount[]
+  const connectionIds = [
+    ...new Set(rows.map((r) => r.bank_connection_id).filter((id): id is string => id !== null)),
+  ]
+  const statuses = await getConnectionStatuses(supabase, companyId, connectionIds)
+
+  // Two enabled rows on ONE active connection sharing (IBAN, currency) are
+  // deliberately BOTH live: no liveness signal has held up on prod (see
+  // DECISIONS.md, #1643), so nothing ranks them here.
+  const isLive = (r: CashAccount): boolean =>
+    r.enabled && r.bank_connection_id !== null && statuses.get(r.bank_connection_id) === 'active'
+  const isReleased = (r: CashAccount): boolean =>
+    r.bank_connection_id === null || statuses.get(r.bank_connection_id) === 'revoked'
+
+  const orphaned = new Set<string>()
+  // Stale IBAN twins of a live row: the live row IS that physical account
+  // now, so a demoted-to-manual, disabled, revoked-held, or expired/error-
+  // connection row carrying the same IBAN in the same currency is a leftover
+  // of a broken reconnect. A row held by a REVOKED connection is NOT orphaned
+  // on its own: the disconnect and supersede paths demote such rows to
+  // manual holders (bank_connection_id null, #916), and a row revoked bank-
+  // side or before that demotion existed is the same thing with the stale
+  // FK kept, i.e. a real account the user still tracks (commonly the
+  // company's only 1930). The key is (IBAN, currency), never the IBAN alone: multi-
+  // currency accounts (Revolut, Wise) copy one IBAN onto every currency
+  // pocket, and a manual or deselected GBP pocket beside a live SEK pocket is
+  // a distinct account the user still tracks, not an orphan.
+  const liveByAccount = new Map<string, CashAccount>()
+  for (const row of rows) {
+    const key = physicalAccountKey(row)
+    if (key && isLive(row)) liveByAccount.set(key, row)
+  }
+  for (const row of rows) {
+    if (isLive(row)) continue
+    const key = physicalAccountKey(row)
+    if (!key) continue
+    const live = liveByAccount.get(key)
+    if (live && live.ledger_account !== row.ledger_account) orphaned.add(row.ledger_account)
+  }
+
+  return { rows, statuses, orphaned, isLive, isReleased }
+}
+
+/**
+ * Identity of the physical bank account a row represents: normalized IBAN
+ * plus currency, or null for rows without an IBAN (manual, CSV, kassa).
+ */
+function physicalAccountKey(row: Pick<CashAccount, 'iban' | 'currency'>): string | null {
+  const iban = normalizeIban(row.iban)
+  return iban ? `${iban}|${currencyKey(row.currency)}` : null
+}
+
+/**
+ * Ledger accounts of the OTHER rows that represent the same physical account
+ * as `own` (same normalized IBAN, same currency), whatever their liveness.
+ * The row on `settlementAccount` is never a twin of itself.
+ */
+function twinLedgersOf(
+  topology: CashAccountTopology,
+  own: CashAccount | null,
+  settlementAccount: string,
+): Set<string> {
+  const twins = new Set<string>()
+  const ownKey = own ? physicalAccountKey(own) : null
+  if (!own || !ownKey) return twins
+  for (const row of topology.rows) {
+    if (row.id === own.id || row.ledger_account === settlementAccount) continue
+    if (physicalAccountKey(row) !== ownKey) continue
+    twins.add(row.ledger_account)
+  }
+  return twins
+}
+
+/**
+ * Find the cash account an own-account TRANSFER may pair with, by IBAN.
+ *
+ * Replaces the old findByIban for this purpose (issue #1643): a broken reconnect
+ * can leave several rows carrying the same IBAN (the live account plus orphans
+ * held by a revoked connection, or demoted to manual), and proposing an orphan
+ * as the transfer's counter-account books real money onto a junk balance-sheet
+ * ledger. This finder therefore:
+ *   - tolerates multiple rows on one IBAN (the old single-row lookup errored),
+ *   - drops disabled rows and every row in the orphaned set (the same
+ *     definition the commit guards use, so a proposal is never rejected later),
+ *   - treats the transaction's OWN IBAN as "not a transfer": when the bank
+ *     stamps the account's own IBAN as counterparty (interest, fees) every
+ *     row on that IBAN in the same currency is the same physical account,
+ *     whichever of them happens to be live. Only a pocket in ANOTHER currency
+ *     on that IBAN (a multi-currency account exchanging between pockets) can
+ *     still pair.
+ * When more than one candidate survives (two active twins of one account, or
+ * several currency pockets with nothing to pick between them) the finder
+ * returns null rather than guessing by ledger number: no proposal beats a
+ * wrong one, and that is also what the single-row lookup did before.
+ */
+export async function findPairableCashAccountByIban(
+  supabase: SupabaseClient,
+  companyId: string,
+  iban: string,
+  opts: { excludeCashAccountId?: string | null } = {},
+): Promise<CashAccount | null> {
+  const wanted = normalizeIban(iban)
+  if (!wanted) return null
+  const topology = await loadCashAccountTopology(supabase, companyId)
+  if (!topology) return null
+
+  const onIban = topology.rows.filter((row) => normalizeIban(row.iban) === wanted)
+  if (onIban.length === 0) return null
+
+  const ownId = opts.excludeCashAccountId ?? null
+  const own = ownId ? (onIban.find((row) => row.id === ownId) ?? null) : null
+
+  let rows = onIban.filter(
+    (row) => row.enabled && row.id !== ownId && !topology.orphaned.has(row.ledger_account),
+  )
+  if (own) {
+    const ownCurrency = currencyKey(own.currency)
+    rows = rows.filter((row) => currencyKey(row.currency) !== ownCurrency)
+  }
+  if (rows.length === 0) return null
+  if (rows.length > 1) {
+    log.warn('several pairable cash accounts share the counterparty IBAN: not pairing', {
+      companyId,
+      ledgers: rows.map((row) => row.ledger_account),
+    })
+    return null
+  }
+  return rows[0]
+}
+
+export interface SiblingCashAccount {
+  id: string
+  ledger_account: string
+  currency: string | null
+  /** Held by an ACTIVE bank connection and enabled. */
+  live: boolean
+  /**
+   * No connection holds the row any more (bank_connection_id null or the
+   * connection is revoked). False for an expired/error/pending connection,
+   * which can still be renewed onto this row.
+   */
+  released: boolean
+}
+
+export interface CashAccountSiblings {
+  own: SiblingCashAccount
+  siblings: SiblingCashAccount[]
+}
+
+/**
+ * The transaction's own cash_accounts row plus the OTHER rows that carry the
+ * same (normalized) IBAN in the same currency, i.e. the same physical bank
+ * account on a different ledger. Multi-currency accounts (Revolut, Wise) copy
+ * one IBAN onto every currency pocket, so an IBAN match alone would present a
+ * EUR pocket as a sibling of the SEK pocket; the currency key keeps those
+ * apart.
+ *
+ * A broken reconnect strands transactions on an orphaned row (e.g. 1931) while
+ * the live claim on the same underlying account sits on another row (e.g.
+ * 1940). Matching and linking against "the transaction's own ledger" then
+ * permanently misses vouchers booked on the live ledger; this helper names the
+ * sibling rows such flows may additionally consider, and lets manualLink
+ * re-point a stranded row at the live sibling (issue #1643).
+ *
+ * Returns null when the row cannot be found or on any lookup failure, and an
+ * empty sibling list when the row has no IBAN (manual/CSV accounts):
+ * broadening is an enhancement, never a requirement.
+ */
+export async function describeCashAccountSiblings(
+  supabase: SupabaseClient,
+  companyId: string,
+  cashAccountId: string,
+): Promise<CashAccountSiblings | null> {
+  const topology = await loadCashAccountTopology(supabase, companyId)
+  if (!topology) return null
+  const ownRow = topology.rows.find((row) => row.id === cashAccountId)
+  if (!ownRow) return null
+  return describeSiblingsFromTopology(topology, ownRow)
+}
+
+function describeSiblingsFromTopology(
+  topology: CashAccountTopology,
+  ownRow: CashAccount,
+): CashAccountSiblings {
+  const toSibling = (row: CashAccount): SiblingCashAccount => ({
+    id: row.id,
+    ledger_account: row.ledger_account,
+    currency: row.currency ?? null,
+    live: topology.isLive(row),
+    released: topology.isReleased(row),
+  })
+  const own = toSibling(ownRow)
+  const wanted = normalizeIban(ownRow.iban)
+  if (!wanted) return { own, siblings: [] }
+
+  const ownCurrency = currencyKey(ownRow.currency)
+  const seenLedgers = new Set<string>()
+  const siblings: SiblingCashAccount[] = []
+  for (const row of topology.rows) {
+    if (row.id === ownRow.id) continue
+    if (row.ledger_account === ownRow.ledger_account) continue
+    // A row the user deselected is never a destination (round 5): an
+    // automatic move must not land on a row the transactions page hides.
+    // A voucher booked only there is then refused as a cross-account link.
+    if (!row.enabled) continue
+    if (normalizeIban(row.iban) !== wanted) continue
+    if (currencyKey(row.currency) !== ownCurrency) continue
+    // UNIQUE (company_id, ledger_account) makes this a no-op in practice;
+    // kept so a duplicate row can never yield two siblings on one ledger.
+    if (seenLedgers.has(row.ledger_account)) continue
+    seenLedgers.add(row.ledger_account)
+    siblings.push(toSibling(row))
+  }
+  return { own, siblings }
+}
+
+/**
+ * Whether a link against a voucher booked on `sibling` should MOVE the
+ * transaction's cash_account_id there (manualLink) and, equivalently, whether
+ * that sibling's vouchers should be offered to the row at all
+ * (unmatched-entries). The decision is about the destination: move onto a
+ * live sibling always; onto a dead one only when the own row's holder is
+ * definitively gone (released) and no sibling is live. An own row on an
+ * expired/error/pending connection is still the syncing account, so its
+ * transactions never leave it for a dead twin (issue #1643, round 3).
+ */
+export function shouldRepointToSibling(
+  described: CashAccountSiblings,
+  sibling: SiblingCashAccount,
+): boolean {
+  if (sibling.live) return true
+  if (!described.own.released) return false
+  return !described.siblings.some((row) => row.live)
+}
+
+/**
+ * The sibling rows of `cashAccountId` (see describeCashAccountSiblings), or []
+ * when the row has no IBAN or the lookup fails.
+ */
+export async function listSiblingCashAccounts(
+  supabase: SupabaseClient,
+  companyId: string,
+  cashAccountId: string,
+): Promise<SiblingCashAccount[]> {
+  const described = await describeCashAccountSiblings(supabase, companyId, cashAccountId)
+  return described?.siblings ?? []
+}
+
+/**
+ * Ledger accounts of the sibling rows returned by listSiblingCashAccounts.
+ */
+export async function listSiblingLedgerAccounts(
+  supabase: SupabaseClient,
+  companyId: string,
+  cashAccountId: string,
+): Promise<string[]> {
+  const siblings = await listSiblingCashAccounts(supabase, companyId, cashAccountId)
+  return siblings.map((row) => row.ledger_account)
+}
+
+/**
+ * Ledger accounts that must never be PROPOSED (or accepted) as the
+ * counter-account of a booking, because their cash_accounts row is orphaned
+ * (issue #1643): a row that is not live (demoted-to-manual, disabled, held
+ * by a REVOKED connection, or by an expired/error connection) whose (IBAN,
+ * currency) also belongs to a row on an ACTIVE connection. The active row IS
+ * that physical account now, so the stale twin is a leftover of a broken
+ * reconnect.
+ * A manual/CSV account without a live twin is NOT orphaned, and neither is a
+ * row held by a revoked connection without a live twin (a disconnected but
+ * real account, often the company's only 1930): transfers to such an account
+ * are legitimate, and so is another currency pocket of a multi-currency
+ * account that shares the live pocket's IBAN.
+ */
+export async function getOrphanedCounterLedgers(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<Set<string>> {
+  const topology = await loadCashAccountTopology(supabase, companyId)
+  return topology?.orphaned ?? new Set()
+}
+
+/**
+ * The first account in a mapping result that would book the COUNTER leg onto
+ * an orphaned cash-account ledger, or null when the result is clean. The
+ * settlement account itself is exempt: a transaction stranded on an orphaned
+ * row still books its own bank leg there (the only leg that belongs there).
+ */
+export function findOrphanedCounterLedger(
+  accounts: Array<string | null | undefined>,
+  settlementAccount: string,
+  orphanedLedgers: ReadonlySet<string>,
+): string | null {
+  for (const account of accounts) {
+    if (!account || account === settlementAccount) continue
+    if (!/^19\d{2}$/.test(account)) continue
+    if (orphanedLedgers.has(account)) return account
+  }
+  return null
+}
+
+export interface CounterLegGuardResult {
+  mappingResult: MappingResult
+  /** The 19xx ledger the result must not book its counter leg on, or null. */
+  refusedLedger: string | null
+}
+
+/**
+ * Commit-time guard shared by every categorize path (issue #1643 problem 4).
+ * Runs after applySettlementAccount, on the legs that are NOT the settlement
+ * account:
+ *   1. A 19xx leg that is a twin of the settlement row (same IBAN, same
+ *      currency) is that same physical account's bank leg learned on another
+ *      ledger (a counterparty template learned while the account sat on 1931,
+ *      replayed after the reconnect moved it to 1940). It is rewritten to the
+ *      settlement account rather than refused: the business account is fine,
+ *      only the bank side is stale.
+ *   2. If that leaves the result booking the settlement account against
+ *      itself (a "transfer" between two ledgers of one physical account, e.g.
+ *      interest whose counterparty IBAN is the account's own), the twin is
+ *      refused: no revenue or expense would reach the P&L.
+ *   3. Any remaining 19xx counter leg in the orphaned set is refused.
+ * The cash_accounts lookup only runs when a non-settlement 19xx leg is
+ * present, so ordinary bookings pay nothing.
+ */
+export async function guardCounterLegs(
+  supabase: SupabaseClient,
+  companyId: string,
+  mappingResult: MappingResult,
+  settlementAccount: string,
+  settlementCashAccountId: string | null | undefined,
+): Promise<CounterLegGuardResult> {
+  const isCounterCashLeg = (a: string | null | undefined): a is string =>
+    !!a && a !== settlementAccount && /^19\d{2}$/.test(a)
+  const legs = [
+    mappingResult.debit_account,
+    mappingResult.credit_account,
+    ...mappingResult.vat_lines.map((l) => l.account_number),
+  ].filter(isCounterCashLeg)
+  if (legs.length === 0) return { mappingResult, refusedLedger: null }
+
+  const topology = await loadCashAccountTopology(supabase, companyId)
+  if (!topology) return { mappingResult, refusedLedger: null }
+
+  const own = settlementCashAccountId
+    ? (topology.rows.find((row) => row.id === settlementCashAccountId) ?? null)
+    : null
+  const twins = twinLedgersOf(topology, own, settlementAccount)
+
+  let result = mappingResult
+  const rewrittenTwin = legs.find((leg) => twins.has(leg)) ?? null
+  if (rewrittenTwin) {
+    const rewrite = (a: string): string => (twins.has(a) ? settlementAccount : a)
+    result = {
+      ...mappingResult,
+      debit_account: rewrite(mappingResult.debit_account),
+      credit_account: rewrite(mappingResult.credit_account),
+      vat_lines: mappingResult.vat_lines.map((l) => ({
+        ...l,
+        account_number: rewrite(l.account_number),
+      })),
+    }
+    if (result.debit_account === settlementAccount && result.credit_account === settlementAccount) {
+      return { mappingResult, refusedLedger: rewrittenTwin }
+    }
+  }
+
+  const remaining = [
+    result.debit_account,
+    result.credit_account,
+    ...result.vat_lines.map((l) => l.account_number),
+  ].filter(isCounterCashLeg)
+  const orphaned = findOrphanedCounterLedger(remaining, settlementAccount, topology.orphaned)
+  return { mappingResult: result, refusedLedger: orphaned }
+}
+
+export interface CounterLegContext {
+  /** Ledger of the transaction's own cash_accounts row, or null when unknown. */
+  settlementLedger: string | null
+  /** Other ledgers of the same physical account (same IBAN, same currency). */
+  twins: ReadonlySet<string>
+}
+
+export interface CounterLegTopology {
+  /** Ledgers that must never be PROPOSED or accepted as a counter leg. */
+  orphaned: ReadonlySet<string>
+  contextFor: (cashAccountId: string | null | undefined) => CounterLegContext
+}
+
+/**
+ * One topology load for a batch of transactions (the suggest-categories
+ * route), exposing the same twin and orphan rules guardCounterLegs applies at
+ * commit: a learned 19xx leg that is a twin of the transaction's own row is
+ * that account's stale BANK leg (rewrite it to the settlement ledger, never
+ * withhold), and only a true counter-position orphan disqualifies a
+ * suggestion. Returns null when the lookup fails (nothing is withheld).
+ */
+export async function loadCounterLegTopology(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<CounterLegTopology | null> {
+  const topology = await loadCashAccountTopology(supabase, companyId)
+  if (!topology) return null
+  const cache = new Map<string, CounterLegContext>()
+  return {
+    orphaned: topology.orphaned,
+    contextFor: (cashAccountId) => {
+      if (!cashAccountId) return { settlementLedger: null, twins: new Set() }
+      const cached = cache.get(cashAccountId)
+      if (cached) return cached
+      const own = topology.rows.find((row) => row.id === cashAccountId) ?? null
+      const context: CounterLegContext = own
+        ? { settlementLedger: own.ledger_account, twins: twinLedgersOf(topology, own, own.ledger_account) }
+        : { settlementLedger: null, twins: new Set() }
+      cache.set(cashAccountId, context)
+      return context
+    },
+  }
+}
+
+/**
+ * Line-level counterpart of guardCounterLegs for the free-form booking
+ * dialog (POST /api/transactions/[id]/book), which submits explicit lines
+ * instead of a mapping result. Two shapes are covered:
+ *   - Two or more distinct 19xx ledgers, one of them the transaction's own
+ *     settlement ledger: a 19xx line that is a same-IBAN same-currency twin
+ *     of the own row or an orphaned ledger is refused, since such a
+ *     "transfer" books one physical account against itself or onto a junk
+ *     ledger.
+ *   - A single 19xx line that is NOT the own ledger (the user typed the bank
+ *     leg where the money physically is, e.g. the live 1940 for a row
+ *     stranded on the orphaned 1931): when that ledger is a sibling the row
+ *     should move to (shouldRepointToSibling), the caller re-points
+ *     transactions.cash_account_id there in the same locked UPDATE that
+ *     links the voucher, exactly as manualLink does for the identical
+ *     voucher reached through "Matcha mot befintlig verifikation". A twin
+ *     the row may not move to (a dead or disabled twin) is refused, since
+ *     posting would strand the only bank leg on a ledger no connection
+ *     feeds (round 5); a non-twin foreign 19xx line posts as typed.
+ * An ordinary booking (single 19xx line on the own ledger) pays one PK read
+ * of the own row and nothing more; the topology is only loaded when a twin
+ * or foreign 19xx leg is present. Both fields are null when clean, not
+ * covered, or when the transaction has no cash_accounts row.
+ */
+export interface BookedLinesGuardResult {
+  /** The 19xx ledger the booking must not put in the counter position, or null. */
+  refusedLedger: string | null
+  /** cash_accounts row the transaction should be moved to on booking, or null. */
+  repointCashAccountId: string | null
+}
+
+const CLEAN_BOOKED_LINES: BookedLinesGuardResult = { refusedLedger: null, repointCashAccountId: null }
+
+export async function guardBookedCounterLines(
+  supabase: SupabaseClient,
+  companyId: string,
+  accountNumbers: readonly string[],
+  settlementCashAccountId: string | null | undefined,
+): Promise<BookedLinesGuardResult> {
+  const cashLegs = [...new Set(accountNumbers.filter((a) => /^19\d{2}$/.test(a)))]
+  if (cashLegs.length === 0 || !settlementCashAccountId) return CLEAN_BOOKED_LINES
+
+  if (cashLegs.length === 1) {
+    const { data: ownRow, error } = await supabase
+      .from('cash_accounts')
+      .select('ledger_account')
+      .eq('id', settlementCashAccountId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (error) {
+      log.warn('cash_accounts own-row lookup failed', { companyId, error: error.message })
+      return CLEAN_BOOKED_LINES
+    }
+    const ownLedger = (ownRow as { ledger_account?: string } | null)?.ledger_account ?? null
+    if (!ownLedger || ownLedger === cashLegs[0]) return CLEAN_BOOKED_LINES
+
+    const topology = await loadCashAccountTopology(supabase, companyId)
+    const own = topology?.rows.find((row) => row.id === settlementCashAccountId) ?? null
+    if (!topology || !own) return CLEAN_BOOKED_LINES
+    // A foreign 19xx line that is NOT a twin of the own row (a transfer to
+    // another physical account) posts as typed.
+    if (!twinLedgersOf(topology, own, ownLedger).has(cashLegs[0])) return CLEAN_BOOKED_LINES
+    const described = describeSiblingsFromTopology(topology, own)
+    const sibling = described.siblings.find((row) => row.ledger_account === cashLegs[0]) ?? null
+    if (sibling && shouldRepointToSibling(described, sibling)) {
+      return { refusedLedger: null, repointCashAccountId: sibling.id }
+    }
+    // A twin the row may not move to (a dead or disabled twin of a live or
+    // still-held row): posting would put the only bank leg on a ledger no
+    // connection feeds while the transaction stays here (issue #1643
+    // problem 4), the shape the categorize paths rewrite and manualLink
+    // refuses. Refuse it (round 5).
+    return { refusedLedger: cashLegs[0], repointCashAccountId: null }
+  }
+
+  const topology = await loadCashAccountTopology(supabase, companyId)
+  if (!topology) return CLEAN_BOOKED_LINES
+  const own = topology.rows.find((row) => row.id === settlementCashAccountId) ?? null
+  if (!own) return CLEAN_BOOKED_LINES
+  const settlementAccount = own.ledger_account
+  if (!cashLegs.includes(settlementAccount)) return CLEAN_BOOKED_LINES
+
+  const twins = twinLedgersOf(topology, own, settlementAccount)
+  const counterLegs = cashLegs.filter((a) => a !== settlementAccount)
+  const twin = counterLegs.find((a) => twins.has(a)) ?? null
+  if (twin) return { refusedLedger: twin, repointCashAccountId: null }
+  return {
+    refusedLedger: findOrphanedCounterLedger(counterLegs, settlementAccount, topology.orphaned),
+    repointCashAccountId: null,
+  }
+}
+
+/**
+ * bank_connections.status for the given connection ids. Missing ids (and a
+ * failed lookup, which returns an empty map) read as "status unknown".
+ */
+async function getConnectionStatuses(
+  supabase: SupabaseClient,
+  companyId: string,
+  connectionIds: readonly string[],
+): Promise<Map<string, string>> {
+  if (connectionIds.length === 0) return new Map()
+
+  const { data, error } = await supabase
+    .from('bank_connections')
+    .select('id, status')
+    .eq('company_id', companyId)
+    .in('id', [...connectionIds])
+
+  if (error) {
+    log.warn('bank_connections status lookup failed', { companyId, error: error.message })
+    return new Map()
+  }
+
+  return new Map(
+    ((data ?? []) as Array<{ id: string; status: string }>).map((c) => [c.id, c.status]),
+  )
 }
 
 /**
@@ -167,24 +733,8 @@ export async function getRevokedConnectionIds(
   companyId: string,
   connectionIds: readonly string[],
 ): Promise<Set<string>> {
-  if (connectionIds.length === 0) return new Set()
-
-  const { data, error } = await supabase
-    .from('bank_connections')
-    .select('id, status')
-    .eq('company_id', companyId)
-    .in('id', [...connectionIds])
-
-  if (error) {
-    log.warn('getRevokedConnectionIds lookup failed', { companyId, error: error.message })
-    return new Set()
-  }
-
-  return new Set(
-    ((data ?? []) as Array<{ id: string; status: string }>)
-      .filter(c => c.status === 'revoked')
-      .map(c => c.id),
-  )
+  const statuses = await getConnectionStatuses(supabase, companyId, connectionIds)
+  return new Set([...statuses.entries()].filter(([, status]) => status === 'revoked').map(([id]) => id))
 }
 
 /**
@@ -311,12 +861,22 @@ export async function allocatePsd2LedgerAccount(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
+  // accountName is accepted for caller compatibility but no longer names the
+  // chart account: see the BAS-style naming note in the function body (#1643).
   input: { currency: string; accountName?: string | null; exclude?: ReadonlySet<string> },
 ): Promise<string | null> {
   const ledger = await findFreeLedgerAccount(supabase, companyId, input.currency, input.exclude ?? new Set())
   if (!ledger) return null
 
-  const name = input.accountName?.trim() || `Bankkonto ${input.currency.toUpperCase()}`
+  // The CHART account always gets a BAS-style name: the BAS reference name
+  // when the slot is a standard account (1930 Företagskonto, 1940 Övriga
+  // bankkonton, ...), otherwise "Bankkonto <CUR>" for a free-use sub-account
+  // (1931, 1935, ...). ASPSPs report the account holder (i.e. the company) as
+  // the account name, and every failed reconnect used to persist another 19xx
+  // chart account named after the company (issue #1643 problem 3). The bank's
+  // display name still lands on cash_accounts.name via upsertFromPsd2, which
+  // is what the pickers show; input.accountName is deliberately ignored here.
+  const name = getBASReference(ledger)?.account_name ?? `Bankkonto ${input.currency.toUpperCase()}`
   const sync = await syncMappedAccounts(
     supabase,
     companyId,

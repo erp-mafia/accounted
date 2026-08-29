@@ -2,6 +2,7 @@ import type {
   EgenKapitalRow,
   NoteEntry,
 } from './types'
+import { formatPdfKronor } from './pdf-format'
 
 /**
  * K3 noter builder (BFNAR 2012:1).
@@ -161,8 +162,8 @@ export function buildUppskjutenSkattNot(params: {
   const { noteNumber, latentTaxOpening, latentTaxChange, latentTaxClosing } =
     params
   // sv-SE thousand separator, no decimals: typical for ÅR notes.
-  const fmt = (n: number) =>
-    Math.round(n).toLocaleString('sv-SE')
+  // ASCII hyphen for negatives: PDF Helvetica/WinAnsi has no U+2212 glyph.
+  const fmt = (n: number) => formatPdfKronor(n)
   const lines: string[] = [
     'Posten avser uppskjuten skatteskuld redovisad på konto 2240.',
     '',
@@ -367,7 +368,7 @@ export function buildMateriellaAnlaggningsNot(params: {
   }
 
   // If any asset has components, render a per-component breakdown per asset.
-  const fmt = (n: number) => Math.round(n).toLocaleString('sv-SE')
+  const fmt = (n: number) => formatPdfKronor(n)
   const withComponents = active.filter((a) => isComponentArray(a.k3_components))
   if (withComponents.length > 0) {
     linesOut.push('', 'Komponentuppdelning per tillgång:')

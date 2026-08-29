@@ -36,7 +36,7 @@ vi.mock('@supabase/supabase-js', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as listRunEmployees, POST as attachEmployee } from '../route'
-import { GET as getPayslip, DELETE as removeEmployee } from '../[employeeId]/route'
+import { GET as getPayslip, DELETE as removeEmployee, PATCH as setRunSalary } from '../[employeeId]/route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -492,6 +492,167 @@ describe('POST /api/v1/companies/:companyId/salary-runs/:id/employees', () => {
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error.code).toBe('SALARY_RUN_EMPLOYEES_NOT_DRAFT')
+  })
+})
+
+describe('PATCH /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId', () => {
+  const patchRequest = (url: string, body: unknown, extraHeaders: Record<string, string> = {}): Request =>
+    new Request(url, {
+      method: 'PATCH',
+      headers: {
+        Authorization: 'Bearer test-fixture-not-a-real-key',
+        'Idempotency-Key': 'b3aaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        ...extraHeaders,
+      },
+      body: JSON.stringify(body),
+    })
+
+  const SRE_SALARY_ROW = {
+    id: SRE_ID,
+    employee_id: EMPLOYEE_ID,
+    salary_type: 'monthly',
+    employment_degree: 100,
+    monthly_salary: 30000,
+  }
+
+  it('sets this run\'s salary on a draft (happy path)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: { data: { id: RUN_ID, status: 'draft' }, error: null },
+        salary_run_employees: [
+          { data: SRE_SALARY_ROW, error: null }, // select
+          { data: null, error: null }, // update
+        ],
+        salary_line_items: { data: null, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await setRunSalary(
+      patchRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/employees/${EMPLOYEE_ID}`,
+        { monthly_salary: 45000 },
+      ),
+      detailParams(COMPANY_ID, RUN_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.salary_run_employee_id).toBe(SRE_ID)
+    expect(body.data.previous_monthly_salary).toBe(30000)
+    expect(body.data.monthly_salary).toBe(45000)
+  })
+
+  it('returns 400 SALARY_RUN_EMPLOYEES_NOT_DRAFT once the run advanced', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: { data: { id: RUN_ID, status: 'review' }, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await setRunSalary(
+      patchRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/employees/${EMPLOYEE_ID}`,
+        { monthly_salary: 45000 },
+      ),
+      detailParams(COMPANY_ID, RUN_ID, EMPLOYEE_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_RUN_EMPLOYEES_NOT_DRAFT')
+  })
+
+  it('returns 404 SALARY_RUN_EMPLOYEE_NOT_FOUND when the employee is not on the run', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: { data: { id: RUN_ID, status: 'draft' }, error: null },
+        salary_run_employees: { data: null, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await setRunSalary(
+      patchRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/employees/${EMPLOYEE_ID}`,
+        { monthly_salary: 45000 },
+      ),
+      detailParams(COMPANY_ID, RUN_ID, EMPLOYEE_ID),
+    )
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_RUN_EMPLOYEE_NOT_FOUND')
+  })
+
+  it('rejects a negative salary with 400 VALIDATION_ERROR', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await setRunSalary(
+      patchRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/employees/${EMPLOYEE_ID}`,
+        { monthly_salary: -1 },
+      ),
+      detailParams(COMPANY_ID, RUN_ID, EMPLOYEE_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('rejects keys without payroll:write scope', async () => {
+    mockValidate.mockResolvedValue({
+      userId: USER_ID,
+      companyId: COMPANY_ID,
+      apiKeyId: 'ak_1',
+      apiKeyName: 'read only',
+      scopes: ['payroll:read'],
+      mode: 'live',
+    })
+    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+
+    const res = await setRunSalary(
+      patchRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/employees/${EMPLOYEE_ID}`,
+        { monthly_salary: 45000 },
+      ),
+      detailParams(COMPANY_ID, RUN_ID, EMPLOYEE_ID),
+    )
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.code).toBe('INSUFFICIENT_SCOPE')
+  })
+
+  it('dry-run previews without writing', async () => {
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      salary_runs: { data: { id: RUN_ID, status: 'draft' }, error: null },
+      salary_run_employees: { data: SRE_SALARY_ROW, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await setRunSalary(
+      patchRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/employees/${EMPLOYEE_ID}?dry_run=true`,
+        { monthly_salary: 45000 },
+      ),
+      detailParams(COMPANY_ID, RUN_ID, EMPLOYEE_ID),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.dry_run).toBe(true)
+    expect(body.data.preview.monthly_salary).toBe(45000)
+    // No write tables touched.
+    const tables = (supabaseMock.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
+    expect(tables).not.toContain('salary_line_items')
   })
 })
 

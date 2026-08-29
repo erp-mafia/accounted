@@ -10,6 +10,11 @@ import {
   ledgerLineAmountIn,
   type LedgerLineAmount,
 } from '@/lib/bookkeeping/ledger-line-amount'
+import {
+  describeCashAccountSiblings,
+  shouldRepointToSibling,
+  type CashAccountSiblings,
+} from '@/lib/cash-accounts/service'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('reconciliation.bank')
@@ -957,7 +962,12 @@ export async function getReconciliationStatus(
   // Account-scoped since 20260723160000: a voucher whose links all sit on another
   // cash account (a transfer's other leg) counts as unmatched HERE, keeping this
   // number in agreement with the "Omatchade verifikationer" table the
-  // reconciliation view derives from the same RPC.
+  // reconciliation view derives from the same RPC. Direction-aware since
+  // 20260828220000: on a NON-primary account, an own-account-transfer voucher
+  // whose only link is a NULL-cash_account transaction with a contradicting
+  // sign counts as unmatched here too (that row is the transfer's OTHER leg),
+  // so both legs of a transfer land in this list symmetrically instead of one
+  // leg polluting unexplained_difference.
   // effectiveFrom, NOT the caller's dateFrom: countedLines and countedTx are both
   // clamped to the IB floor above, and this list has to describe the SAME window
   // or the card contradicts itself. With the raw dateFrom, a window that opens
@@ -1089,6 +1099,16 @@ export async function manualLink(
   // reconciled. A transaction bound to 1930 must not be linked against a 1931
   // voucher even if the caller passes accountNumber=1931. Legacy rows with no
   // cash_account_id fall through (the UI list already gates them by currency).
+  //
+  // Sibling ledgers of the SAME physical account (rows sharing the IBAN, in
+  // the same currency) are additionally accepted for the voucher-line check
+  // below: a transaction stranded on an orphaned reconnect row (e.g. 1931)
+  // must be linkable to the verifikat booked on the live ledger of that same
+  // account (e.g. 1940), issue #1643 problem 1. Unrelated accounts, and the
+  // other currency pockets of a multi-currency account (same IBAN, other
+  // currency), stay rejected.
+  let allowedLineAccounts: string[] = [accountNumber]
+  let siblingInfo: CashAccountSiblings | null = null
   if (tx.cash_account_id) {
     const { data: txCa } = await supabase
       .from('cash_accounts')
@@ -1102,19 +1122,76 @@ export async function manualLink(
         error: `Transaktionen hör till ${txCa.ledger_account}, inte ${accountNumber}`,
       }
     }
+    siblingInfo = await describeCashAccountSiblings(supabase, companyId, tx.cash_account_id)
+    if (siblingInfo && siblingInfo.siblings.length > 0) {
+      allowedLineAccounts = [
+        ...new Set([accountNumber, ...siblingInfo.siblings.map((row) => row.ledger_account)]),
+      ]
+    }
   }
 
-  // Check for a bank account line on the SELECTED settlement account. The old
+  // Check for a bank account line on the SELECTED settlement account (or a
+  // sibling ledger of the same physical account, see above). The old
   // "any 19xx line" check let a 1930 transaction link to a voucher that only
   // touched 1931: a cross-account link that silently hides a real imbalance.
   const { data: lines } = await supabase
     .from('journal_entry_lines')
     .select('debit_amount, credit_amount, account_number')
     .eq('journal_entry_id', journalEntryId)
-    .eq('account_number', accountNumber)
+    .in('account_number', allowedLineAccounts)
 
   if (!lines || lines.length === 0) {
-    return { success: false, error: `Verifikationen saknar rad på ${accountNumber}` }
+    return { success: false, error: `Verifikationen saknar rad på ${allowedLineAccounts.join(' eller ')}` }
+  }
+
+  // When the voucher's bank leg sits on a SIBLING ledger only, the row moves
+  // to that sibling in the same write that links it: siblings are the same
+  // physical account in the same currency, and the voucher is the source of
+  // truth for where the money was booked. A cross-account link would leave
+  // the money on one ledger while the voucher settles on the other, and the
+  // account-keyed reconciliation would count it as an imbalance on BOTH
+  // accounts. Same gate as PATCH /api/transactions/[id]/cash-account: the row
+  // is unbooked by construction (the locked UPDATE below asserts that). This
+  // covers the stranded row linking to the live ledger, two live twins of one
+  // connection, and two demoted rows after a full disconnect. The decision
+  // is about the DESTINATION: the row moves when the sibling is live, or
+  // when its own holder is definitively gone (demoted to manual or revoked)
+  // and no other sibling is live either. A row whose connection is merely
+  // expired/error/pending is still the syncing account (re-auth renews it in
+  // place), so a voucher booked ONLY on a dead sibling is REFUSED (round 4):
+  // the voucher is what is wrong, moving the row would strand it on the
+  // orphan the moment consent is renewed, and writing the link anyway would
+  // be the cross-account link the line check above exists to refuse (the
+  // REST and MCP callers reach this directly, without the unmatched-entries
+  // filter that hides such vouchers from the dialog). The same rule keeps a
+  // live row from being parked on a row no connection can sync again.
+  // A voucher touching several sibling ledgers (an old "transfer" between
+  // two rows of one physical account) is judged on the best of them, never
+  // on whichever line the query happened to return first: a live sibling
+  // wins, else the first sibling the row may move to.
+  const typedLines = lines as Array<{ account_number: string }>
+  let repointCashAccountId: string | null = null
+  if (!typedLines.some((line) => line.account_number === accountNumber)) {
+    const siblingLedgers = [...new Set(typedLines.map((line) => line.account_number))]
+    const candidates = siblingLedgers
+      .map((ledger) => siblingInfo?.siblings.find((row) => row.ledger_account === ledger) ?? null)
+      .filter((row): row is NonNullable<typeof row> => row !== null)
+      .filter((row) => siblingInfo !== null && shouldRepointToSibling(siblingInfo, row))
+    const destination = candidates.find((row) => row.live) ?? candidates[0] ?? null
+    if (destination) {
+      repointCashAccountId = destination.id
+    } else {
+      log.warn('manualLink: refused a link to a voucher booked only on a dead sibling ledger', {
+        companyId,
+        transactionId,
+        accountNumber,
+        siblingLedgers,
+      })
+      return {
+        success: false,
+        error: `Verifikationen är bokförd på ${siblingLedgers.join(' och ')}, som inte är transaktionens konto (${accountNumber}). Rätta verifikationen eller flytta transaktionen först.`,
+      }
+    }
   }
 
   // N:1 is intentionally allowed: several bank transactions may settle ONE
@@ -1143,6 +1220,7 @@ export async function manualLink(
       journal_entry_id: journalEntryId,
       reconciliation_method: 'manual' as ReconciliationMethod,
       is_business: true,
+      ...(repointCashAccountId ? { cash_account_id: repointCashAccountId } : {}),
     })
     .eq('id', transactionId)
     .eq('company_id', companyId)
@@ -1518,8 +1596,10 @@ export async function fetchJunctionLinkedTxIds(
 /** A match candidate that carries how many transactions already point at it. */
 export interface GLLineForMatching extends UnlinkedGLLine {
   /** Transactions settling this entry ON THE REQUESTED ACCOUNT (plus legacy
-   *  rows with no cash_account_id, which count everywhere). A transaction on
-   *  another cash account, e.g. the outgoing leg of an own-account transfer,
+   *  rows with no cash_account_id, which count everywhere EXCEPT on a
+   *  non-primary account when the voucher is an own-account transfer and the
+   *  row's sign contradicts this account's leg; 20260828220000). A transaction
+   *  on another cash account, e.g. the outgoing leg of an own-account transfer,
    *  does not mark the voucher as matched here (issue #1026). */
   linked_transaction_count: number
 }

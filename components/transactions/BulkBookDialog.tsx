@@ -153,21 +153,34 @@ export default function BulkBookDialog({
   )
 
   // Load templates when the dialog opens. RLS scopes to user's companies +
-  // system templates; no company_id filter needed.
+  // system templates; no company_id filter needed. Templates the company hid
+  // (booking_template_hidden, per-company opt-in) are excluded like in the
+  // other pickers; if that lookup fails we show everything (safe direction).
   useEffect(() => {
     if (!open || !company) return
+    const companyId = company.id
     let cancelled = false
     async function load() {
       setLoadingTemplates(true)
       try {
-        const { data } = await supabase
-          .from('booking_template_library')
-          .select('*')
-          .eq('is_active', true)
-          .order('is_system', { ascending: false })
-          .order('name', { ascending: true })
+        const [templatesRes, hiddenRes] = await Promise.all([
+          supabase
+            .from('booking_template_library')
+            .select('*')
+            .eq('is_active', true)
+            .order('is_system', { ascending: false })
+            .order('name', { ascending: true }),
+          supabase
+            .from('booking_template_hidden')
+            .select('template_id')
+            .eq('company_id', companyId),
+        ])
         if (cancelled) return
-        setTemplates((data ?? []) as BookingTemplateLibrary[])
+        const hiddenIds = new Set(
+          (hiddenRes.error ? [] : hiddenRes.data ?? []).map((r) => r.template_id as string),
+        )
+        const rows = (templatesRes.data ?? []) as BookingTemplateLibrary[]
+        setTemplates(rows.filter((tpl) => !hiddenIds.has(tpl.id)))
       } finally {
         if (!cancelled) setLoadingTemplates(false)
       }

@@ -3,6 +3,8 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { TimeoutError } from '@/lib/http/fetch-with-timeout'
 import {
   sendText,
+  sendReplyButtons,
+  sendList,
   sendReaction,
   RECEIVED_REACTION_EMOJI,
   downloadMedia,
@@ -95,6 +97,69 @@ describe('graph-api', () => {
         template: TEMPLATE.m18Error,
       })
       expect(result.ok).toBe(false)
+    })
+  })
+
+  describe('interactive titles are unique (#1589, Meta #131009 "Duplicate button title")', () => {
+    it('sendReplyButtons sends distinct titles when two options share a name, ids untouched', async () => {
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify({ messages: [{ id: 'wamid.BTN' }] }), { status: 200 }),
+      )
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: null, error: null })
+
+      await sendReplyButtons(supabase as unknown as SupabaseClient, {
+        to: '46701234567',
+        body: 'Vilket företag gäller kvittot?',
+        template: TEMPLATE.m6CompanyQuestion,
+        buttons: [
+          { id: 'company-live', title: 'Capelix AB' },
+          { id: 'company-archived', title: 'Capelix AB' },
+        ],
+      })
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      const payload = JSON.parse(init.body as string) as {
+        interactive: { action: { buttons: { reply: { id: string; title: string } }[] } }
+      }
+      const [first, second] = payload.interactive.action.buttons
+      expect(first.reply.title).not.toBe(second.reply.title)
+      expect(first.reply.title.length).toBeLessThanOrEqual(20)
+      expect(second.reply.title.length).toBeLessThanOrEqual(20)
+      expect(first.reply.id).toBe('company-live')
+      expect(second.reply.id).toBe('company-archived')
+    })
+
+    it('sendList sends distinct row titles when two options share a name, ids untouched', async () => {
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify({ messages: [{ id: 'wamid.LIST' }] }), { status: 200 }),
+      )
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: null, error: null })
+
+      await sendList(supabase as unknown as SupabaseClient, {
+        to: '46701234567',
+        body: 'Vilket företag gäller kvittot?',
+        template: TEMPLATE.m6CompanyQuestion,
+        buttonLabel: 'Välj företag',
+        rows: [
+          { id: 'c-1', title: 'Bolag A AB' },
+          { id: 'c-2', title: 'Wennberg Fastighetsförvaltning AB' },
+          { id: 'c-3', title: 'Wennberg Fastighetsförvaltning Holding AB' },
+          { id: 'c-4', title: 'Bolag D AB' },
+        ],
+      })
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      const payload = JSON.parse(init.body as string) as {
+        interactive: { action: { sections: { rows: { id: string; title: string }[] }[] } }
+      }
+      const rows = payload.interactive.action.sections[0].rows
+      expect(new Set(rows.map((r) => r.title.toLowerCase())).size).toBe(4)
+      for (const row of rows) expect(row.title.length).toBeLessThanOrEqual(24)
+      expect(rows.map((r) => r.id)).toEqual(['c-1', 'c-2', 'c-3', 'c-4'])
+      expect(rows[0].title).toBe('Bolag A AB')
+      expect(rows[3].title).toBe('Bolag D AB')
     })
   })
 

@@ -1,6 +1,6 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
-import { pdfNumberText } from '@/lib/pdf/number-text'
 import type { ArsredovisningData, StatementRow } from './types'
+import { formatPdfKronor } from './pdf-format'
 
 /**
  * K3 årsredovisning PDF template (BFNAR 2012:1).
@@ -161,9 +161,8 @@ const styles = StyleSheet.create({
 })
 
 function fmt(amount: number): string {
-  // pdfNumberText: the locale's U+2212 has no glyph in the bundled Helvetica and
-  // a loss would print unsigned (issue #1982).
-  return pdfNumberText(Math.round(amount).toLocaleString('sv-SE'))
+  // ASCII hyphen for negatives: Helvetica/WinAnsi has no U+2212 glyph.
+  return formatPdfKronor(amount)
 }
 
 /**

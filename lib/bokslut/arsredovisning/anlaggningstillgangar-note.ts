@@ -24,6 +24,7 @@
 
 import type { NoteEntry } from './types'
 import type { AssetDepreciationFigures } from './asset-note-figures'
+import { formatPdfKronor } from './pdf-format'
 
 export interface AnlaggningAsset {
   category: string
@@ -161,7 +162,9 @@ export function computeRollforwardTotals(
   }
 }
 
-const fmt = (n: number) => Math.round(n).toLocaleString('sv-SE')
+// ASCII hyphen for negatives: the note body renders in the ÅR PDF with
+// Helvetica/WinAnsi, which has no U+2212 glyph.
+const fmt = (n: number) => formatPdfKronor(n)
 
 /**
  * Build the anläggningstillgångar roll-forward note. Returns null when no

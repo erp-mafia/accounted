@@ -49,3 +49,14 @@ export const EU_COUNTRIES: EUCountry[] = [
   { code: 'ES', name: 'Spanien', nameEn: 'Spain', vatPrefix: 'ES', currency: 'EUR' },
   { code: 'SE', name: 'Sverige', nameEn: 'Sweden', vatPrefix: 'SE', currency: 'SEK' },
 ]
+
+const EU_COUNTRY_CODES = new Set(EU_COUNTRIES.map((c) => c.code))
+
+/**
+ * True when the ISO 3166-1 alpha-2 code is an EU member state. Case
+ * insensitive. Sweden (SE) counts as a member: callers that need "another
+ * EU country" must test SE separately first.
+ */
+export function isEuMemberCountry(code: string): boolean {
+  return EU_COUNTRY_CODES.has(code.toUpperCase())
+}
