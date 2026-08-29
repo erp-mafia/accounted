@@ -10,6 +10,7 @@
  */
 
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { withTimeout } from '@/lib/utils'
 
 export type ExternalProvider =
   | 'apple'
@@ -101,10 +102,39 @@ export interface GoTrueAuthSettings {
 }
 
 /**
- * Providers that are handled by dedicated UI components and should not
- * appear in the generic OAuth provider list.
+ * Allowlist of auth-js Provider identifiers that may appear as OAuth/OIDC
+ * buttons.  GoTrue's /auth/v1/settings `external` map can include entries
+ * that are not login providers (e.g. `anonymous_users` in the sandbox
+ * project).  Only entries in this set are forwarded to the UI.
+ *
+ * Custom OIDC providers (prefixed `custom:`) are merged separately via
+ * the admin endpoint and do not go through this filter.
  */
-const EXCLUDED_PROVIDERS = new Set(['phone'])
+const ALLOWED_EXTERNAL_PROVIDERS = new Set<ExternalProvider>([
+  'apple',
+  'azure',
+  'bitbucket',
+  'discord',
+  'facebook',
+  'figma',
+  'fly',
+  'github',
+  'gitlab',
+  'google',
+  'kakao',
+  'keycloak',
+  'linkedin',
+  'linkedin_oidc',
+  'notion',
+  'slack',
+  'slack_oidc',
+  'snapchat',
+  'spotify',
+  'twitch',
+  'twitter',
+  'workos',
+  'zoom',
+])
 
 /**
  * Fetch auth settings from GoTrue.
@@ -136,17 +166,20 @@ export async function fetchAuthSettings(): Promise<GoTrueAuthSettings> {
     const data: GoTrueSettingsResponse = await res.json()
 
     const providers = Object.entries(data.external)
-      .filter(([name, enabled]) => enabled && !EXCLUDED_PROVIDERS.has(name) && name !== 'email')
+      .filter(([name, enabled]) => enabled && ALLOWED_EXTERNAL_PROVIDERS.has(name as ExternalProvider))
       .map(([name]) => ({
         id: name,
         label: PROVIDER_META[name]?.label ?? name,
-        isCustom: !(name in PROVIDER_META),
+        isCustom: false,
       }))
 
     if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
       try {
         const serviceClient = createServiceClientNoCookies()
-        const { data: customData } = await serviceClient.auth.admin.customProviders.listProviders()
+        const { data: customData } = await withTimeout(
+          serviceClient.auth.admin.customProviders.listProviders(),
+          3000,
+        )
         for (const cp of customData?.providers ?? []) {
           if (cp.enabled && cp.identifier) {
             providers.push({
@@ -157,7 +190,7 @@ export async function fetchAuthSettings(): Promise<GoTrueAuthSettings> {
           }
         }
       } catch {
-        // Custom providers are best-effort; don't break login if the admin endpoint is unreachable.
+        // Custom providers are best-effort; don't break login if the admin endpoint is unreachable or slow.
       }
     }
 

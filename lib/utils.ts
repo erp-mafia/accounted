@@ -198,3 +198,17 @@ export function generateInvoiceNumber(): string {
 export function isValidExchangeRate(rate: number | null | undefined): rate is number {
   return rate != null && rate > 0 && rate < 100000
 }
+
+/**
+ * Race `promise` against a deadline.  Rejects with a `TimeoutError` if the
+ * promise has not settled within `ms` milliseconds.  Useful for bounding
+ * network calls that would otherwise hang the render path.
+ */
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms),
+    ),
+  ])
+}

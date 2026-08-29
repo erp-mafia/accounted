@@ -149,14 +149,12 @@ describe('fetchAuthSettings', () => {
     ])
   })
 
-  it('marks unknown providers as custom with their name as label', async () => {
+  it('excludes unknown external providers not in the allowlist', async () => {
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co'
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'anon-key-123'
     mockFetch(fakeSettings({ external: { 'my-oidc': true } }))
     const result = await fetchAuthSettings()
-    expect(result.providers).toEqual([
-      { id: 'my-oidc', label: 'my-oidc', isCustom: true },
-    ])
+    expect(result.providers).toEqual([])
   })
 
   it('excludes disabled providers', async () => {
@@ -182,6 +180,15 @@ describe('fetchAuthSettings', () => {
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co'
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'anon-key-123'
     mockFetch(fakeSettings({ external: { phone: true, google: true } }))
+    const result = await fetchAuthSettings()
+    expect(result.providers).toHaveLength(1)
+    expect(result.providers[0].id).toBe('google')
+  })
+
+  it('excludes non-provider entries like anonymous_users', async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co'
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'anon-key-123'
+    mockFetch(fakeSettings({ external: { anonymous_users: true, google: true, email: true } }))
     const result = await fetchAuthSettings()
     expect(result.providers).toHaveLength(1)
     expect(result.providers[0].id).toBe('google')
