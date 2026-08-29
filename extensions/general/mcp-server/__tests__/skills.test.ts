@@ -152,31 +152,62 @@ describe('Skills registry', () => {
     expect(allBodies).not.toMatch(/Accounted\s+(?:renders|generates|produces|validates)[^.\n]*EN\s*16931/i)
     // Peppol send is live behind a per-company access grant (app/api/invoices/[id]/peppol/send).
     // A text that claims the capability is absent sends users to a competitor; say gated instead.
-    expect(allBodies).not.toMatch(/(?:does not|doesn't|cannot|can't)[^.\n]*(?:send|deliver|generate)[^.\n]*Peppol/i)
-    expect(allBodies).not.toMatch(/Peppol[^.\n]*(?:is not|isn't|not yet)\s+(?:available|supported|possible)/i)
+    // The patterns take the capability as subject (active, passive and adjective forms) so that
+    // the true statement "a v1 or MCP Peppol send action is not yet available" stays legal.
+    const capabilityAbsentPatterns = [
+      /(?:does not|doesn't|cannot|can't)[^.\n]*(?:send|deliver|generate)[^.\n]*Peppol/i,
+      /Peppol\s+(?:invoices?|e-invoices?|documents?|send(?:ing)?|delivery)\s+(?:is|are|has|have)\s+(?:not|never)\b[^.\n]*\b(?:sent|delivered|generated|built|implemented|available|supported|possible)\b/i,
+    ]
+    for (const pattern of capabilityAbsentPatterns) {
+      expect(allBodies).not.toMatch(pattern)
+      // Forbidden: the pre-#546 wording in its active, passive and adjective forms.
+      expect(
+        [
+          'It does not generate e-invoice XML or deliver invoices through Peppol.',
+          'Peppol invoices are not generated or sent by Accounted.',
+          'Peppol sending has not been built.',
+          'Peppol sending is not yet available.',
+        ].some((claim) => pattern.test(claim)),
+      ).toBe(true)
+      // Legal: the v1 :send/:mark-sent descriptions say the agent verb is missing, not the capability.
+      expect('a v1 or MCP Peppol send action is not yet available').not.toMatch(pattern)
+    }
     // No MCP tool or v1 action sends via Peppol yet: no text may hand an agent a Peppol send verb.
     expect(allBodies).not.toMatch(/gnubok_send_invoice[^.\n]*Peppol/i)
     expect(allBodies).not.toMatch(/gnubok_send_peppol|gnubok_peppol_send/i)
 
-    const truthfulTexts = [
-      ...['invoicing-rules', 'customer-onboarding'].map((slug) => {
-        const skill = skills.find((candidate) => candidate.slug === slug)
-        expect(skill, `skill ${slug}`).toBeTruthy()
-        return skill!.body
-      }),
-      invoiceComplianceAtom,
-    ]
+    const truthfulSkills = ['invoicing-rules', 'customer-onboarding'].map((slug) => {
+      const skill = skills.find((candidate) => candidate.slug === slug)
+      expect(skill, `skill ${slug}`).toBeTruthy()
+      return skill!
+    })
+    // The discovery surface (gnubok_list_skills) must not frame e-invoicing as external either.
+    for (const skill of truthfulSkills) {
+      expect(skill.summary).not.toMatch(/external e-invoic/i)
+    }
+    expect(truthfulSkills[0].summary).toMatch(/Peppol/)
+
+    const truthfulTexts = [...truthfulSkills.map((skill) => skill.body), invoiceComplianceAtom]
     for (const text of truthfulTexts) {
-      // Where it lives, and that it is gated per company.
+      // Where it lives, and that it is gated per company (with the English label for en-locale users).
       expect(text).toMatch(/invoice page in the dashboard/i)
       expect(text).toMatch(/(?:gated|access)[^.\n]*per company|per[- ]company[^.\n]*(?:access|gated)/i)
-      expect(text).toContain('Inställningar > Fakturering')
-      // The restrictions agents must not over-promise past.
+      expect(text).toContain('Inställningar > Fakturering (Settings > Invoicing)')
+      expect(text).toMatch(/send cap/i)
+      // The restrictions agents must not over-promise past (lib/invoices/peppol-bis-billing.ts).
       expect(text).toMatch(/aktiebolag/i)
       expect(text).toMatch(/enskild firma/i)
       expect(text).toMatch(/standard invoices only|no credit notes/i)
+      expect(text).toMatch(/SEK/)
+      expect(text).toMatch(/6, 12 or 25 %/)
+      expect(text).toMatch(/no reverse charge/i)
+      expect(text).toMatch(/no ROT\/RUT deductions/i)
+      expect(text).toMatch(/Er referens/)
       // No agent-callable send verb yet.
       expect(text).toMatch(/no MCP tool[^.\n]*Peppol|MCP tool[^.\n]*not (?:yet )?available/i)
+      // A successful dashboard send issues the invoice; mark-sent is only the issuance-failure recovery.
+      expect(text).toMatch(/successful dashboard Peppol send issues the invoice itself/i)
+      expect(text).toMatch(/could not be marked as sent/i)
       // The fallback path stays documented for companies without access.
       expect(text).toMatch(/external e-invoice provider/i)
       expect(text).toContain('gnubok_mark_invoice_as_sent')

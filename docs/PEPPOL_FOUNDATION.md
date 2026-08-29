@@ -43,6 +43,8 @@ The local preflight is not a replacement for the official validation stack. Befo
 
 ## Remaining architecture
 
+The subsections below are the requirements written before the Qvalia decision. Access-point delivery and the UI send flow shipped on 2026-08-21 and are described under "Access point: Qvalia"; the text is kept as the acceptance criteria that work met. Standards validation (the release-pinned validator run before transport) is still open.
+
 ### Standards validation
 
 Pin and execute the official release artifacts from OpenPeppol and the EN 16931 validation artifact registry. The November 2025 release is the active production release at implementation time. The May 2026 release becomes mandatory on 17 August 2026, so provider onboarding and conformance testing must target the May 2026 validator before launch.
@@ -78,7 +80,7 @@ Inbound invoices are a separate acceptance slice. It requires provider webhook a
 
 ### UI and API
 
-The UI downloads a locally checked XML file and can prepare an immutable delivery snapshot. Both actions state that they did not send the invoice. Once an adapter exists, sending must be a distinct confirmation flow that performs recipient lookup, shows the discovered participant and capabilities, and records the resulting timeline. The download remains available for diagnosis and interoperability testing.
+The UI downloads a locally checked XML file and can prepare an immutable delivery snapshot. Both actions state that they did not send the invoice. Once an adapter exists, sending must be a distinct confirmation flow that performs recipient lookup, shows the discovered participant and capabilities, and records the resulting timeline. The download remains available for diagnosis and interoperability testing. Shipped 2026-08-21: the confirmation dialog on the invoice page and `POST /api/invoices/{id}/peppol/send` (see "Access point: Qvalia").
 
 ### Access point: Qvalia (decided 2026-08-21)
 

@@ -114,7 +114,7 @@ This data goes on the invoice; Accounted's invoice template renders it automatic
 
 ## E-invoicing via Peppol (including B2G)
 
-Accounted sends Peppol BIS Billing 3 e-invoices from the invoice page in the dashboard. Peppol sending is gated per company: the user requests access under Inställningar > Fakturering and Accounted's operators enable it. Restrictions: the sending company must be an aktiebolag (enskild firma is refused until GLN identifiers are supported), standard invoices only (no credit notes, no self-billed invoices), and the customer must be a Swedish business or organization with an org number. There is no MCP tool and no v1 API action for Peppol sending yet, so an agent cannot trigger it: tell the user to send from the invoice page. Never tell a user that Accounted lacks Peppol sending; say it is gated per company. If the company has no Peppol access, or is an enskild firma, and the customer requires an e-invoice, deliver it through an external e-invoice provider, then use \`gnubok_mark_invoice_as_sent\` to record the delivery and apply the same booking effect without sending another email.
+Accounted sends Peppol BIS Billing 3 e-invoices from the invoice page in the dashboard. Peppol sending is gated per company: the user requests access under Inställningar > Fakturering (Settings > Invoicing) and Accounted's operators enable it; a grant may carry a send cap, and when it is used up the dashboard says so and support raises it. Restrictions: the sending company must be an aktiebolag (enskild firma is refused until GLN identifiers are supported), standard invoices only (no credit notes, no self-billed invoices), the customer must be a Swedish business or organization with an org number, and the invoice must be in SEK with taxable Swedish VAT at 6, 12 or 25 % (no reverse charge, no VAT-exempt sales, no ROT/RUT deductions) and carry Er referens. There is no MCP tool and no v1 API action for Peppol sending yet, so an agent cannot trigger it: tell the user to send from the invoice page. Never tell a user that Accounted lacks Peppol sending; say it is gated per company. A successful dashboard Peppol send issues the invoice itself (number, status, verifikat), so do not mark it as sent afterwards. If the dashboard reports that the invoice was sent via Peppol but could not be marked as sent, call \`gnubok_mark_invoice_as_sent\` on the still-draft invoice to complete the issuance; a number already allocated is reused, never consumed twice. If the company has no Peppol access, or is an enskild firma, and the customer requires an e-invoice, deliver it through an external e-invoice provider, then use \`gnubok_mark_invoice_as_sent\` to record the delivery and apply the same booking effect without sending another email.
 
 ## Critical rules
 
@@ -146,7 +146,7 @@ Accounted sends Peppol BIS Billing 3 e-invoices from the invoice page in the das
 export const invoicingRulesSkill: Skill = {
   slug: 'invoicing-rules',
   name: 'Invoicing Rules',
-  summary: 'Mandatory invoice fields (ML 17 kap. 24 §), VAT treatment, ROT/RUT, external e-invoicing, kreditfaktura.',
+  summary: 'Mandatory invoice fields (ML 17 kap. 24 §), VAT treatment, ROT/RUT, Peppol e-invoicing (gated per company), kreditfaktura.',
   tags: ['invoicing', 'vat', 'compliance', 'eu', 'rot-rut'],
   body,
   tier: 'workflow',
