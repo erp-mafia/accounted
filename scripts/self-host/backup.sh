@@ -118,10 +118,14 @@ if [ -n "${BACKUP_QUIESCE_CMD:-}" ]; then
 fi
 
 # 1. Database: custom-format dump (compressed, selective restore possible).
-#    --no-owner/--no-privileges so it restores into a fresh Supabase stack
-#    whose roles were created by that stack, not by us.
+#    --no-owner so it restores into a fresh Supabase stack whose roles were
+#    created by that stack, not by us. ACLs (GRANT/REVOKE) are kept on purpose:
+#    the Supabase roles (anon, authenticated, service_role, postgres) exist
+#    under the same names in every stack, and the migrations' REVOKE/GRANT
+#    hardening of SECURITY DEFINER RPCs must survive a restore; --no-privileges
+#    would re-expose service_role-only functions to anon/authenticated.
 DB_FILE="${WORK}/${NAME}.db.dump"
-pg_dump --format=custom --no-owner --no-privileges --file "$DB_FILE" "$BACKUP_DATABASE_URL"
+pg_dump --format=custom --no-owner --file "$DB_FILE" "$BACKUP_DATABASE_URL"
 echo "backup: database dump $(du -h "$DB_FILE" | cut -f1)"
 
 # 2. Documents (the BFL underlag) when storage-api uses the file backend.

@@ -102,8 +102,12 @@ fi
 # Log only what follows the last "@" (host, port, database): never the
 # credentials part of the URL.
 echo "restore: restoring database into ${RESTORE_DATABASE_URL##*@} (objects are dropped and recreated)"
-# --clean --if-exists: drop objects before recreating them. --no-owner /
-# --no-privileges: the fresh stack owns its roles. pg_restore exits 1 when
+# --clean --if-exists: drop objects before recreating them. --no-owner: the
+# fresh stack owns its roles. ACLs are restored (no --no-privileges): the
+# Supabase roles (anon, authenticated, service_role, postgres) exist under the
+# same names in every stack, and the migrations' REVOKE/GRANT hardening of
+# SECURITY DEFINER RPCs must survive a restore or a restored self-host would
+# re-expose service_role-only functions over PostgREST. pg_restore exits 1 when
 # any restore operation failed; that can be a routine "already exists" on a
 # Supabase target or a genuinely missing table, and the script cannot tell
 # which. Default: stop here, show the log, restore nothing further. The
@@ -111,7 +115,7 @@ echo "restore: restoring database into ${RESTORE_DATABASE_URL##*@} (objects are 
 # errors are the expected kind.
 PG_LOG="${WORK}/pg_restore.log"
 set +e
-pg_restore --clean --if-exists --no-owner --no-privileges --dbname "$RESTORE_DATABASE_URL" \
+pg_restore --clean --if-exists --no-owner --dbname "$RESTORE_DATABASE_URL" \
   "${WORK}/${NAME}.db.dump" 2> "$PG_LOG"
 rc=$?
 set -e

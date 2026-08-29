@@ -32,7 +32,7 @@ Three things carry the sovereign claim, in order of how much they matter:
 
 1. **Storage and database**: the self-hosted Supabase stack (Postgres + Auth + Storage) on a Swedish provider, with backups on Swedish S3 under retention locks. This is where the räkenskapsinformation lives.
 2. **The agent surface needs no AI provider at all.** Most automation against Accounted runs through the MCP server (100+ tools, scoped API keys, staged approvals) driven by *your* agent: Claude Code, Codex, an OpenClaw setup, or a local model. The MCP server makes zero model calls itself. A deployment with no AI credentials configured is fully usable that way.
-3. **In-app AI** (reading receipts and invoices, the assistant) is optional and bring-your-own: point `AI_BASE_URL` at a Swedish OpenAI-compatible endpoint. Document extraction runs there today; the in-app chat assistant does not yet (it answers `503 ai_unconfigured` on such a backend until its port lands) and the MCP path is unaffected.
+3. **In-app AI** (reading receipts and invoices, the assistant) is optional and bring-your-own: point `AI_BASE_URL` at a Swedish OpenAI-compatible endpoint. Document extraction, the assistant's question-and-answer (`/chat` and the docked assistant sheet, via `/api/agent/ask`) and one-tap transaction categorization run on any OpenAI-compatible backend; only the specialized Anthropic-only conversational flows (VAT review, KPI explanation, settings help, the bokslut step-through, the operation-staging inbox flows) answer `503` there, see [SELF-HOSTING.md, What runs on any model](SELF-HOSTING.md#what-runs-on-any-model). The MCP path needs no model at all.
 
 ## 2. What is and is not covered
 
@@ -42,10 +42,10 @@ Three things carry the sovereign claim, in order of how much they matter:
 | VAT and AGI file generation for manual filing at Skatteverket | Skatteverket API submission and skattekonto sync (Accounted's API client registration) |
 | Document archive with SHA-256 integrity and WORM bucket | Company lookup (TIC), migration from Fortnox/Visma/Bokio/Björn Lundén via the Arcim gateway |
 | MCP server, API keys, staged approvals | Receipt hunt in a connected mailbox (Accounted's Google OAuth app), WhatsApp intake (Accounted's Meta credentials), Stripe billing |
-| AI document extraction on a BYO endpoint; HTML mail invoices | In-app chat assistant on a BYO OpenAI-compatible endpoint (port pending) |
-| Push notifications (your VAPID keys), invoice email via your own SMTP relay or Resend (section 6) | |
+| AI document extraction, assistant Q&A and one-tap categorization on a BYO endpoint; HTML mail invoices | Specialized conversational flows (VAT review, KPI explanation, settings help, bokslut helpers): Anthropic-family backend only (Bedrock or the direct API), not a BYO OpenAI-compatible endpoint ([#1800](https://github.com/erp-mafia/accounted/issues/1800)) |
+| Push notifications (your VAPID keys), invoice email via Resend (section 6; an SMTP relay option is proposed in #1746) | |
 
-The hosted-only column is what the connector subscription unlocks for self-hosted instances (priced at parity with hosted, per active company). Keys are issued manually by Accounted for now (self-serve later); the instance side is `GNUBOK_CONNECTOR_KEY` plus an hourly sync that writes the capability grants, described in [SELF-HOSTING.md, Connector subscription](SELF-HOSTING.md#connector-subscription-self-hosted-instances). The proxied services themselves ship in a following release; until then a key is validated and the grants are written, nothing more, and the extensions' settings screens will tell you they are unconfigured.
+The hosted-only column is what a connector subscription for self-hosted instances would unlock (priced at parity with hosted, per active company). That connector-key registry is proposed (PRs #1747, #1748, #1751, #1757 and #1758, none merged) and **not yet available**: today there is no instance-side variable to set and nothing to subscribe to, and the extensions' settings screens will tell you those services are unconfigured.
 
 ## 3. Choosing Swedish infrastructure
 
@@ -70,7 +70,7 @@ Facts below were checked on the providers' own pages in August 2026; verify befo
 
 ### Swedish AI inference (for in-app extraction)
 
-- **Berget AI** (default in this guide): OpenAI-compatible API at `https://api.berget.ai/v1`; public model list at `/v1/models`. Vision-capable models suitable for receipts as of August 2026 include `google/gemma-4-31B-it` and `mistralai/Mistral-Medium-3.5-128B`; text-only models such as `zai-org/GLM-5.2` work for the assistant tier later but cannot read images. Markets Swedish data centers; the DPA wording is "within the EEA", so ask for the specific site in writing if your policy needs "Sweden". **The SLA excludes serverless inference**: raise that in procurement. https://docs.berget.ai/models/overview, https://berget.ai/en/dpa, https://berget.ai/en/sla
+- **Berget AI** (default in this guide): OpenAI-compatible API at `https://api.berget.ai/v1`; public model list at `/v1/models`. Vision-capable models suitable for receipts as of August 2026 include `google/gemma-4-31B-it` and `mistralai/Mistral-Medium-3.5-128B`; text-only models such as `zai-org/GLM-5.2` work for the assistant's question-and-answer but cannot read images. Markets Swedish data centers; the DPA wording is "within the EEA", so ask for the specific site in writing if your policy needs "Sweden". **The SLA excludes serverless inference**: raise that in procurement. https://docs.berget.ai/models/overview, https://berget.ai/en/dpa, https://berget.ai/en/sla
 - **evroc**: OpenAI-compatible "Think Models" API at `https://models.think.evroc.com/v1` with vision models (Gemma 4, Qwen3-VL, Kimi); EU residency, flagship Stockholm data center expected in H2 2026, so confirm where inference runs today. DPA with no sub-processors. https://docs.evroc.com/products/think/think.html, https://evroc.com/legal/data-processing-addendum/
 
 Configure either through the standard variables (details in [SELF-HOSTING.md, AI Features, Option 3](SELF-HOSTING.md#ai-features)):
@@ -110,7 +110,7 @@ Swedish bookkeeping law requires the ledger and its underlag to be kept for seve
 - `scripts/self-host/backup.sh`: logical `pg_dump` (custom format) of the Supabase database, a tar of the storage volume (the documents), optionally the `db-config` Docker volume (the pgsodium root key; without it Vault-encrypted columns are unreadable after a restore), SHA-256 manifest, uploaded to an S3-compatible bucket with optional **COMPLIANCE-mode Object Lock**.
 - `scripts/self-host/restore.sh <name> --yes`: downloads a set, verifies checksums, restores the database (`pg_restore --clean`; any reported error stops it before storage is touched, re-run with `RESTORE_TOLERATE_ERRORS=1` once you have read the log and the errors are the expected "already exists" kind on a Supabase target), unpacks storage and db-config.
 
-Requirements on the host running them: `pg_dump`/`pg_restore` matching the server major, `tar`, `gzip`, AWS CLI v2 (talks to any S3-compatible endpoint via `--endpoint-url`), and `docker` only if you back up the db-config volume.
+Requirements on the host running them: `pg_dump`/`pg_restore` matching the server major, `tar`, `gzip`, AWS CLI v2 (talks to any S3-compatible endpoint via `--endpoint-url`), and `docker` only if you back up the db-config volume. Uploads go through `aws s3api put-object`, which caps a single object at 5 GB and has no multipart fallback in the script: a dump or storage tar past that size needs splitting or another uploader before the run succeeds.
 
 ### Nightly plus yearly
 
@@ -148,7 +148,7 @@ A sovereign deployment still has these touchpoints. None carries accounting data
 
 - **Image distribution**: the app image is pulled from GitHub Container Registry (`ghcr.io/erp-mafia/gnubok`), and the cron sidecar downloads `supercronic` from GitHub Releases at build time. Mirror both into your own registry for an air-gapped setup (build from source: `docker compose -f docker-compose.yml -f docker-compose.build.yml up --build`).
 - **Fonts**: `next/font/google` downloads Geist and Hedvig Letters Serif **at build time** and self-hosts them; browsers never call Google. The GitHub-built image therefore has no runtime font dependency; a source build fetches them once during `next build`.
-- **Invoice email**: the email extension sends through Resend (US) by default. Set `EMAIL_PROVIDER=smtp` with your own relay (a Swedish mail provider, an M365/Workspace relay, Postfix on the host; variables in [SELF-HOSTING.md, Email](SELF-HOSTING.md#email-invoice-sending-and-reminders)) to keep outbound mail Swedish too, or leave invoice email unconfigured (invoices download as PDF). Resend carries invoice PDFs to your customers but no ledger data.
+- **Invoice email**: the email extension sends through Resend (US) only today; an SMTP mailer behind the same seam is proposed in #1746 and, once merged, `EMAIL_PROVIDER=smtp` selects it (your own relay: a Swedish mail provider, an M365/Workspace relay, Postfix on the host). Until then, either accept Resend as the one non-Swedish touchpoint or leave invoice email unconfigured (invoices download as PDF). Resend carries invoice PDFs to your customers but no ledger data.
 - **Telemetry**: none. Analytics (PostHog), Vercel Speed Insights and error tracking are hosted-only and switched off by `NEXT_PUBLIC_SELF_HOSTED=true`; there is no call-home licence check, by design.
 - **Upstream services you opt into**: Enable Banking, Skatteverket, TIC, the migration gateway, Google OAuth for receipt hunt, Meta for WhatsApp are hosted-only today (section 2) and simply stay unconfigured.
 
@@ -160,5 +160,5 @@ A sovereign deployment still has these touchpoints. None carries accounting data
 - [ ] `NEXT_PUBLIC_SELF_HOSTED=true`, `CRON_SECRET` set, cron sidecar healthy (`docker compose ps`), `/api/health` green.
 - [ ] Backup bucket created **with Object Lock**, `backup.sh` scheduled nightly + yearly, one restore drill completed and timed.
 - [ ] AI: either none (MCP-only deployment) or `AI_BASE_URL`/`AI_API_KEY`/`AI_MODEL` set and `npx tsx scripts/smoke-ai-provider.ts receipt.pdf` green.
-- [ ] Decide on invoice email (your SMTP relay, Resend, or none) and record it in your register.
+- [ ] Decide on invoice email (Resend, or none until the SMTP relay in #1746 lands) and record it in your register.
 - [ ] Read the national cloud policy yourself before quoting it to a buyer: it is principles, not mandates. https://www.regeringen.se/informationsmaterial/2026/05/en-molnpolicy-for-sverige--for-okad-sakerhet-effektivitet-och-innovation-i-den-offentliga-forvaltningen/
