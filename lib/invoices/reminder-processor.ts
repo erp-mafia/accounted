@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { getEmailService } from '@/lib/email/service'
+import { getSenderForCompany, getBaseUrlForBrand } from '@/lib/email/brand-sender'
 import { resolveInvoiceSender, type InvoiceSenderIdentity } from '@/lib/email/invoice-sender'
 import {
   generateReminderEmailHtml,
@@ -139,8 +140,12 @@ export async function sendReminder(
 
   const daysOverdue = calculateDaysOverdue(invoice.due_date)
 
-  // Build action URL (public page for customer response)
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://app.erp-base.se'
+  // Brand mail (WL-13): the action link points at the company's home domain
+  // and the mail rides the brand's verified sender domain, while the COMPANY
+  // stays the displayed sender exactly as today. No brand = canonical URL
+  // and today's From header.
+  const brandSender = await getSenderForCompany(invoice.company_id)
+  const baseUrl = getBaseUrlForBrand(brandSender.brand)
   const actionUrl = `${baseUrl}/invoice-action/${actionToken}`
 
   const emailData = {
@@ -160,6 +165,9 @@ export async function sendReminder(
     text: generateReminderEmailText(emailData),
     replyTo: company.email || undefined,
     fromName: company.company_name || undefined,
+    ...(brandSender.fromAddress ? { fromAddress: brandSender.fromAddress } : {}),
+    // The company's own verified sender wins over the brand address
+    // (buildFromHeader gives `from` precedence).
     from: sender,
   })
 

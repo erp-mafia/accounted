@@ -866,3 +866,59 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(res.status).toBe(403)
   })
 })
+
+describe('POST /api/v1/companies/:companyId/invoices/:id/send honours defer_invoice_booking (#967)', () => {
+  it('sends the invoice WITHOUT posting a journal entry when the company defers booking', async () => {
+    const { createInvoiceJournalEntry } = await import('@/lib/bookkeeping/invoice-entries')
+    vi.mocked(createInvoiceJournalEntry).mockClear()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: DRAFT_INVOICE, error: null },
+          { data: { invoice_number: '2026-0042' }, error: null },
+        ],
+        company_settings: {
+          data: { ...COMPANY_SETTINGS, defer_invoice_booking: true },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`, {}),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.journal_entry_id ?? null).toBeNull()
+    expect(createInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('dry-run preview reports would_create_journal_entry=false when booking is deferred', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: DRAFT_INVOICE, error: null },
+        company_settings: {
+          data: { ...COMPANY_SETTINGS, defer_invoice_booking: true },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await sendInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send?dry_run=true`,
+        {},
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.would_create_journal_entry).toBe(false)
+    expect(body.data.preview.accounting_method).toBe('accrual')
+  })
+})

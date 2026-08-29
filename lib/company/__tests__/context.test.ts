@@ -112,7 +112,7 @@ describe('setActiveCompany', () => {
     expect(mockCookieSet).not.toHaveBeenCalled()
   })
 
-  it('sets the cookie only after the write is verified', async () => {
+  it('sets the cookies only after the write is verified', async () => {
     const { supabase, calls } = buildSupabase({
       company_members: { single: { data: { company_id: 'company-2' } } },
       user_preferences: { single: { data: { active_company_id: 'company-2' } } },
@@ -122,12 +122,21 @@ describe('setActiveCompany', () => {
 
     const upsert = calls.find((c) => c.table === 'user_preferences' && c.method === 'upsert')
     expect(upsert?.args[0]).toEqual({ user_id: 'user-1', active_company_id: 'company-2' })
-    expect(mockCookieSet).toHaveBeenCalledTimes(1)
+    expect(mockCookieSet).toHaveBeenCalledTimes(2)
     expect(mockCookieSet).toHaveBeenCalledWith(
       'gnubok-company-id',
       'company-2',
       expect.objectContaining({ httpOnly: true, path: '/' }),
     )
+    // The explicit-choice marker (byrå landing): must be a SESSION cookie
+    // (no maxAge), so a new browser session starts unpicked and byrå
+    // owners/admins land in the cockpit again.
+    const picked = mockCookieSet.mock.calls.find((c) => c[0] === 'gnubok-company-picked')
+    expect(picked?.[1]).toBe('1')
+    expect(picked?.[2]).toEqual(
+      expect.objectContaining({ httpOnly: true, path: '/', sameSite: 'lax' }),
+    )
+    expect(picked?.[2]).not.toHaveProperty('maxAge')
   })
 })
 

@@ -15,7 +15,7 @@
  *   }
  * }
  *
- * Get your API key at: https://app.gnubok.se/settings?tab=api
+ * Get your API key at: https://app.gnubok.se/settings/api
  */
 
 const API_KEY = process.env.GNUBOK_API_KEY
@@ -33,7 +33,7 @@ if (rawClient && !CLIENT) {
 if (!API_KEY) {
   process.stderr.write(
     'Error: GNUBOK_API_KEY is required.\n' +
-    'Get your API key at: https://app.gnubok.se/settings?tab=api\n' +
+    'Get your API key at: https://app.gnubok.se/settings/api\n' +
     '\n' +
     'Add it to your Claude Desktop config:\n' +
     '{\n' +

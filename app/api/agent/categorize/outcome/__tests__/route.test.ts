@@ -11,13 +11,18 @@ vi.mock('@/lib/sandbox/guard', () => ({ guardSandbox: () => guardSandbox() }))
 import { POST } from '../route'
 
 const inserts: Record<string, unknown>[] = []
-function makeSupabase(membership: unknown = { user_id: 'user-1' }) {
+// company_settings.maybeSingle() feeds the consent gate; company_members
+// feeds the membership check. Default: a member of an opted-in company.
+function makeSupabase(membership: unknown = { user_id: 'user-1' }, optedIn = true) {
   return {
     from(table: string) {
       const chain = {
         select: () => chain,
         eq: () => chain,
-        maybeSingle: async () => ({ data: membership }),
+        maybeSingle: async () =>
+          table === 'company_settings'
+            ? { data: { data_analysis_opt_in: optedIn }, error: null }
+            : { data: membership, error: null },
         insert: async (payload: Record<string, unknown>) => {
           if (table === 'categorize_calibration_samples') inserts.push(payload)
           return { error: null }
@@ -61,7 +66,16 @@ describe('POST /api/agent/categorize/outcome', () => {
     expect(inserts).toHaveLength(0)
   })
 
-  it('logs was_correct=true when the proposed account was booked', async () => {
+  it('skips companies that have not opted in to data analysis (204, no sample)', async () => {
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: makeSupabase({ user_id: 'user-1' }, false), error: null })
+    const res = await POST(
+      createMockRequest('/x', { method: 'POST', body: body({ proposed_account: '5410', booked_account: '5410' }) }),
+    )
+    expect(res.status).toBe(204)
+    expect(inserts).toHaveLength(0)
+  })
+
+  it('logs was_correct=true when the proposed account was booked (opted-in company)', async () => {
     const res = await POST(
       createMockRequest('/x', {
         method: 'POST',

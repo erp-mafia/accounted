@@ -499,3 +499,68 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
     expect(body.error.code).toBe('VALIDATION_ERROR')
   })
 })
+
+describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent honours defer_invoice_booking (#967)', () => {
+  it('marks sent WITHOUT a journal entry when the company defers booking', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: DRAFT_INVOICE, error: null },
+          { data: SENT_INVOICE, error: null },
+        ],
+        company_settings: {
+          data: {
+            accounting_method: 'accrual',
+            defer_invoice_booking: true,
+            entity_type: 'enskild_firma',
+            bankgiro: '123-4567',
+          },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await markSent(
+      makeMarkSentRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.journal_entry_id ?? null).toBeNull()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('dry-run preview reports would_create_journal_entry=false when booking is deferred', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: DRAFT_INVOICE, error: null },
+        company_settings: {
+          data: {
+            accounting_method: 'accrual',
+            defer_invoice_booking: true,
+            entity_type: 'enskild_firma',
+            bankgiro: '123-4567',
+          },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await markSent(
+      makeMarkSentRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent?dry_run=true`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.would_create_journal_entry).toBe(false)
+    expect(body.data.preview.accounting_method).toBe('accrual')
+  })
+})

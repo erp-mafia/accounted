@@ -1,11 +1,12 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -31,7 +32,7 @@ import VatTreatmentSelect from './VatTreatmentSelect'
 import AiCategorizeProposal, { type AiProposalMeta } from './AiCategorizeProposal'
 import { VAT_TREATMENT_OPTIONS } from './transaction-types'
 import type { TransactionWithInvoice } from './transaction-types'
-import type { TransactionCategory, VatTreatment, BASAccount, EntityType, LinePatternEntry } from '@/types'
+import type { TransactionCategory, VatTreatment, EntityType, LinePatternEntry } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface QuickReviewDialogProps {
@@ -101,7 +102,10 @@ export default function QuickReviewDialog({
   // never throws.
   const [accountOverride, setAccountOverride] = useState(defaultAccount ?? '')
   const [vatTreatment, setVatTreatment] = useState<VatTreatment | 'none'>(defaultVat)
-  const [accounts, setAccounts] = useState<BASAccount[]>([])
+  // Session-cached (lib/reference-data): the kontoväljare is populated on
+  // the first open of every row instead of after a request per open.
+  const { accounts } = useAccounts()
+  const { settings: companySettings } = useCompanySettings()
   // The AI proposal shown this session, kept so we can log a calibration sample
   // (proposed vs actually booked) once the user confirms.
   const [aiProposal, setAiProposal] = useState<AiProposalMeta | null>(null)
@@ -126,7 +130,7 @@ export default function QuickReviewDialog({
   // company_settings.dimensions_enabled, same gate as BulkBookDialog. Seeded
   // from the counterparty template's learned bag so the user sees what the
   // booking will carry and can change it.
-  const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
   const [dims, setDims] = useState<Record<string, string>>(
     () => ({ ...(counterpartyDefaultDimensions ?? {}) }),
   )
@@ -139,22 +143,6 @@ export default function QuickReviewDialog({
     if (account?.startsWith('2')) {
       setVatTreatment('none')
     }
-  }, [])
-
-  // Fetch accounts on mount
-  useEffect(() => {
-    async function fetchAccounts() {
-      try {
-        const res = await fetch('/api/bookkeeping/accounts')
-        const { data } = await res.json()
-        if (data) {
-          setAccounts(data)
-        }
-      } catch {
-        // Non-critical
-      }
-    }
-    fetchAccounts()
   }, [])
 
   // Reset local mirror whenever the underlying transaction changes (the parent
@@ -170,22 +158,6 @@ export default function QuickReviewDialog({
     // flight edits; the bag only changes together with the transaction.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transaction])
-
-  // Company settings gate the dimension affordance (dimensions_enabled).
-  // Fetched once per open; on failure the picker simply stays hidden.
-  useEffect(() => {
-    if (!open) return
-    let cancelled = false
-    fetch('/api/settings')
-      .then((r) => r.json())
-      .then(({ data }) => {
-        if (!cancelled) setDimensionsEnabled(data?.dimensions_enabled === true)
-      })
-      .catch(() => {
-        if (!cancelled) setDimensionsEnabled(false)
-      })
-    return () => { cancelled = true }
-  }, [open])
 
   // Backfill the SEK conversion on demand. resolveSekAmount silently falls
   // back to the raw foreign amount when amount_sek/exchange_rate are null,
@@ -230,6 +202,10 @@ export default function QuickReviewDialog({
       cancelled = true
     }
   }, [open, transaction, t])
+
+  // Non-modal dialog (see the Dialog below): hand-restore page modality so
+  // the agent sheet stays live. See useDashShellInert in ui/dialog.tsx.
+  useDashShellInert(open)
 
   if (!transaction || !category) return null
 
@@ -460,7 +436,11 @@ export default function QuickReviewDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={isProcessing ? undefined : (o) => {
+    // Non-modal so the agent sheet and its trigger stay usable during review
+    // (useDashShellInert above hand-restores page modality). Existing
+    // dismissal semantics kept: Esc/veil-click close unless processing, and
+    // assistant clicks never dismiss (data-agent-ui counts as inside).
+    <Dialog modal={false} open={open} onOpenChange={isProcessing ? undefined : (o) => {
       if (!o) {
         setUploadedFiles([])
         setPickedInboxDocs([])
@@ -468,7 +448,11 @@ export default function QuickReviewDialog({
       }
       onOpenChange(o)
     }}>
-      <DialogContent className={preAttachedDocumentId ? 'max-w-6xl max-h-[90vh] overflow-y-auto' : 'max-w-md sm:max-w-lg max-h-[85vh] overflow-y-auto'}>
+      <DialogVeil />
+      {/* Both variants cap at the space left of a docked agent sheet so the
+          right edge never lands unreachable under it (sheet is z-60).
+          --agent-sheet-w is docked-only: sheet closed = the old widths. */}
+      <DialogContent className={preAttachedDocumentId ? 'max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto' : 'max-w-[min(28rem,calc(100vw-var(--agent-sheet-w,0px)))] sm:max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[85vh] overflow-y-auto'}>
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>

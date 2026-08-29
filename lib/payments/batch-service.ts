@@ -7,6 +7,12 @@
  * row that changed since the preview (settled meanwhile, supplier edited) is
  * rejected rather than paid on stale terms.
  *
+ * The write itself is one transactional RPC (create_supplier_payment_batch):
+ * it locks the selected invoices, re-checks active batches inside the
+ * transaction, and inserts header + items atomically, so two concurrent
+ * creates can never both land an active batch for the same invoice and a
+ * header can never outlive its items (#1503).
+ *
  * The file is rendered deterministically from the stored batch + item rows
  * alone: msg_id and created_at are fixed at creation, so every download of a
  * batch is byte-identical and bank-side duplicate detection (keyed on MsgId)
@@ -240,6 +246,11 @@ export type CreateBatchResult =
   | { ok: false; code: 'already_batched'; details: Array<{ id: string; batch_id: string }> }
   | { ok: false; code: 'create_failed' }
 
+/** Shape returned by the create_supplier_payment_batch RPC. */
+type CreateBatchRpcResult =
+  | { ok: true; batch: SupplierPaymentBatch }
+  | { ok: false; code: string; details?: unknown }
+
 export async function createSupplierPaymentBatch(
   supabase: SupabaseClient,
   companyId: string,
@@ -331,48 +342,57 @@ export async function createSupplierPaymentBatch(
   if (itemRows.length === 0) return { ok: false, code: 'create_failed' }
 
   // The id is minted here (not by the DB default) because msg_id derives from
-  // it and both must land in the same INSERT.
+  // it and both must land in the same transaction.
   const batchId = crypto.randomUUID()
   const orgDigits = debtor.org_number.replace(/\D/g, '')
   const msgId = `${getBranding().appName.toUpperCase()}-${orgDigits}-B${batchId.replace(/-/g, '').slice(0, 8).toUpperCase()}`.slice(0, 35)
-  const totalAmount = sumOre(itemRows.map((row) => row.amount))
 
-  const { data: batch, error: batchError } = await supabase
-    .from('supplier_payment_batches')
-    .insert({
-      id: batchId,
-      company_id: companyId,
-      user_id: userId,
-      format: input.format,
-      status: 'created',
-      currency: 'SEK',
-      total_amount: totalAmount,
-      item_count: itemRows.length,
-      msg_id: msgId,
-      debtor_snapshot: debtor,
-    })
-    .select()
-    .single()
+  // The RPC is the authority: it locks the invoices, re-runs the active-batch
+  // check inside the transaction (the loadActiveBatchMap pass above is the
+  // friendly fast path, not the guarantee), and writes header + items
+  // atomically. company_id rides in p_company_id, so it is stripped from the
+  // item rows. Domain refusals come back as { ok: false, code }; constraint
+  // violations and the tenant guard surface as an error.
+  const { data, error } = await supabase.rpc('create_supplier_payment_batch', {
+    p_company_id: companyId,
+    p_batch_id: batchId,
+    p_format: input.format,
+    p_msg_id: msgId,
+    p_debtor_snapshot: debtor,
+    p_items: itemRows.map(({ company_id: _companyId, ...row }) => row),
+    p_confirm_already_batched: input.confirm_already_batched ?? false,
+    p_user_id: userId,
+  })
+  if (error) return { ok: false, code: 'create_failed' }
 
-  if (batchError || !batch) return { ok: false, code: 'create_failed' }
-
-  const { error: itemsError } = await supabase
-    .from('supplier_payment_batch_items')
-    .insert(itemRows.map((row) => ({ ...row, batch_id: batchId })))
-
-  if (itemsError) {
-    // Best-effort rollback: without its items the batch must not exist. There
-    // is no DELETE policy, so flag it cancelled instead of leaving an empty
-    // "created" batch behind.
-    await supabase
-      .from('supplier_payment_batches')
-      .update({ status: 'cancelled', cancelled_at: new Date().toISOString(), cancelled_by: userId })
-      .eq('id', batchId)
-      .eq('company_id', companyId)
-    return { ok: false, code: 'create_failed' }
+  const result = data as CreateBatchRpcResult | null
+  if (!result) return { ok: false, code: 'create_failed' }
+  if (!result.ok) {
+    switch (result.code) {
+      case 'already_batched':
+        return {
+          ok: false,
+          code: 'already_batched',
+          details: result.details as Array<{ id: string; batch_id: string }>,
+        }
+      case 'amount_exceeds_remaining':
+        return {
+          ok: false,
+          code: 'amount_exceeds_remaining',
+          details: result.details as Array<{ id: string }>,
+        }
+      case 'ineligible':
+        return {
+          ok: false,
+          code: 'ineligible',
+          details: result.details as Array<{ id: string; reason: string }>,
+        }
+      default:
+        return { ok: false, code: 'create_failed' }
+    }
   }
 
-  return { ok: true, batch: batch as SupplierPaymentBatch }
+  return { ok: true, batch: result.batch }
 }
 
 export interface RenderedBatchFile {

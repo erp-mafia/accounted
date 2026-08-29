@@ -35,6 +35,7 @@ import {
   selectPageAttention,
   sortConnectionsByPrecedence,
 } from '../lib/connection-state'
+import { sameBankWarning } from '../lib/connection-warning'
 import type { BankConnection } from '@/types'
 import type { StoredAccount } from '../types'
 
@@ -91,7 +92,7 @@ export default function BankingSettingsPanel() {
   const [reusableSessions, setReusableSessions] = useState<ReusableSessionOffer[]>([])
   const [attachingConnectionId, setAttachingConnectionId] = useState<string | null>(null)
   const [otherCompanyConnections, setOtherCompanyConnections] = useState<
-    { bank_name: string; company_id: string }[]
+    { bank_name: string; company_id: string; session_id: string | null }[]
   >([])
   // Set when the OAuth callback pointed at a connection that belongs to a
   // different company than the active one: without this the picker simply
@@ -228,12 +229,14 @@ export default function BankingSettingsPanel() {
       // competing for the bank's one-session-per-login slot.
       const { data: allConnections } = await supabase
         .from('bank_connections')
-        .select('bank_name, company_id, status')
+        .select('bank_name, company_id, session_id, status')
         .in('status', ['active', 'pending_selection'])
       setOtherCompanyConnections(
-        ((allConnections || []) as { bank_name: string; company_id: string }[]).filter(
-          (c) => c.company_id !== company.id
-        )
+        ((allConnections || []) as {
+          bank_name: string
+          company_id: string
+          session_id: string | null
+        }[]).filter((c) => c.company_id !== company.id)
       )
 
       // Reuse offers. Best-effort: a failure here costs the shortcut, never the
@@ -274,31 +277,35 @@ export default function BankingSettingsPanel() {
 
   /**
    * Warn before authorizing a bank where the same user already holds live
-   * connections in other companies. Several ASPSPs bind one active AIS session
-   * per PSU, so the new authorization silently invalidates the existing ones,
-   * and nothing in the product tells the user until a sync fails days later.
-   * Advisory only: legitimate multi-company setups must still be able to
-   * proceed, so the dialog always offers a working "Fortsätt".
+   * connections in other companies. The decision table lives in
+   * lib/connection-warning.ts: banks with observed one-session-per-PSU
+   * behavior get the hard warning, everything else gets a calm confirmation
+   * on fresh connects and no dialog at all on renewals. Advisory only:
+   * legitimate multi-company setups must still be able to proceed, so the
+   * dialog always offers a working confirm.
    */
-  async function confirmSameBankConnections(bankName: string): Promise<boolean> {
-    const clashes = otherCompanyConnections.filter((c) => c.bank_name === bankName)
-    if (clashes.length === 0) return true
+  async function confirmSameBankConnections(
+    bankName: string,
+    isReconnect: boolean,
+    currentSessionId?: string | null,
+  ): Promise<boolean> {
+    const clashes = otherCompanyConnections
+      .filter((c) => c.bank_name === bankName)
+      .map((c) => ({
+        companyId: c.company_id,
+        companyName:
+          companies.find((entry) => entry.company.id === c.company_id)?.company.name ?? null,
+        sessionId: c.session_id,
+      }))
 
-    const names = clashes
-      .map((c) => companies.find((entry) => entry.company.id === c.company_id)?.company.name)
-      .filter((name): name is string => !!name)
-    const companyList = names.length > 0 ? ` (${names.join(', ')})` : ''
-    const count = clashes.length
-
-    return confirm({
-      title: `Du har redan ${count} ${count === 1 ? 'anslutning' : 'anslutningar'} till ${bankName}`,
-      description:
-        `${bankName} är sedan tidigare ansluten i ${count === 1 ? 'ett annat bolag' : 'andra bolag'}${companyList}. ` +
-        'Vissa banker tillåter bara en aktiv anslutning per inloggning: när du slutför den här kan de andra sluta synka ' +
-        'och behöva förnyas. Fortsätt om du vet att din bank tillåter flera.',
-      confirmLabel: 'Fortsätt',
-      variant: 'warning',
+    const warning = sameBankWarning({
+      bankName,
+      clashes,
+      isReconnect,
+      currentSessionId,
     })
+    if (!warning) return true
+    return confirm(warning)
   }
 
   /**
@@ -370,7 +377,7 @@ export default function BankingSettingsPanel() {
     // indefinitely, and a second click in that window would otherwise sail
     // past the guard above and start a concurrent connect flow.
     connectingRef.current = true
-    if (!(await confirmSameBankConnections(bank.name))) {
+    if (!(await confirmSameBankConnections(bank.name, false))) {
       connectingRef.current = false
       return
     }
@@ -442,7 +449,7 @@ export default function BankingSettingsPanel() {
     if (connectingRef.current) return
     // Lock before the confirm await, same reason as handleConnectBank.
     connectingRef.current = true
-    if (!(await confirmSameBankConnections(connection.bank_name))) {
+    if (!(await confirmSameBankConnections(connection.bank_name, true, connection.session_id))) {
       connectingRef.current = false
       return
     }

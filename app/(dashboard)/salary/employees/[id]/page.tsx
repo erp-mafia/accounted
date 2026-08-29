@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, use } from 'react'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
@@ -33,6 +34,7 @@ import type { EmployeeMasked } from '@/types'
 import { EmployeeBenefitsPanel } from '@/components/salary/EmployeeBenefitsPanel'
 import { OpeningBalancesPanel } from '@/components/salary/OpeningBalancesPanel'
 import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/EmployeeTaxCard'
+import { jamkningPatch } from '@/lib/salary/jamkning-patch'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 
 const EMPLOYMENT_LABEL_KEYS: Record<string, string> = {
@@ -87,7 +89,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   // Default dimensions bag ({sie_dim_no: object_code}) proposed on the
   // employee's salary-cost lines at booking. The fields render only when
   // company_settings.dimensions_enabled: same UI gate as the voucher form.
-  const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
+  const { settings: companySettings } = useCompanySettings()
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
   const [dimensions, setDimensions] = useState<Record<string, string>>({})
 
   // The controlled form fields mirror the saved row. Called on load and again
@@ -115,13 +118,6 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     }
     load()
   }, [id])
-
-  useEffect(() => {
-    fetch('/api/settings')
-      .then((r) => r.json())
-      .then(({ data }) => setDimensionsEnabled(data?.dimensions_enabled === true))
-      .catch(() => {/* keep the dimension fields hidden */})
-  }, [])
 
   function setDimension(dimNo: string, code: string | null) {
     setDimensions((prev) => {
@@ -180,6 +176,14 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       tax_table_number: tax?.tax_table_number ?? undefined,
       tax_column: tax?.tax_column ?? undefined,
       tax_municipality: tax?.tax_municipality || undefined,
+      // Jämkning: the three keys are sent with explicit values (null = clear
+      // the beslut; the route spreads the body so null reaches the UPDATE)
+      // only when the inputs were visible (A-skatt, not sidoinkomst) and the
+      // user edited them. Hidden or untouched, the keys are omitted like any
+      // other sparse field, so toggling sidoinkomst / FA-skatt or fixing a
+      // phone number never wipes a stored beslut. Guarded on `tax` so a card
+      // that has not reported yet sends nothing.
+      ...(tax ? jamkningPatch(tax) : {}),
       email: form.get('email') as string || undefined,
       phone: form.get('phone') as string || undefined,
       address_line1: form.get('address_line1') as string || undefined,
@@ -433,6 +437,24 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
         <DefRow label={t('tax_column_label')}>
           <span className="tabular-nums">{employee.tax_column}</span>
         </DefRow>
+        <DefRow label={t('tax_jamkning_label')}>
+          {employee.jamkning_percentage != null ? (
+            <>
+              <span className="tabular-nums">{employee.jamkning_percentage} %</span>
+              {employee.jamkning_valid_from && employee.jamkning_valid_to && (
+                <span className="text-muted-foreground">
+                  {' · '}
+                  {t('tax_jamkning_detail_period', {
+                    from: formatDate(employee.jamkning_valid_from),
+                    to: formatDate(employee.jamkning_valid_to),
+                  })}
+                </span>
+              )}
+            </>
+          ) : (
+            <DefEmpty />
+          )}
+        </DefRow>
       </DetailSection>
 
       <DetailSection kicker={t('form_bank_account')}>
@@ -656,6 +678,9 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                       tax_table_number: employee.tax_table_number ?? null,
                       tax_column: employee.tax_column ?? 1,
                       tax_municipality: employee.tax_municipality || '',
+                      jamkning_percentage: employee.jamkning_percentage ?? null,
+                      jamkning_valid_from: employee.jamkning_valid_from ?? null,
+                      jamkning_valid_to: employee.jamkning_valid_to ?? null,
                     }}
                   />
                   {fSkattVerifiedLabel && (

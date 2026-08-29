@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   authError: null as unknown,
   aal: null as null | { currentLevel: string; nextLevel: string },
   factors: null as null | { totp: Array<{ id: string; status: string }> },
+  listFactors: vi.fn(async () => ({ data: state.factors })),
   company: {
     data: [{ company_id: 'company-1', locale: 'sv', used_fallback: false }],
     error: null as unknown,
@@ -26,6 +27,20 @@ const state = vi.hoisted(() => ({
     }>
     error: unknown
   },
+  // Rows the team_members query resolves to (the byrå exception in the
+  // no-company branch and the home-domain guard both await eq-terminated
+  // chains, so the from() mock makes exactly that table thenable).
+  byraMemberships: [] as Array<{
+    role?: string
+    teams: { kind: string; brands?: { domain: string } | Array<{ domain: string }> | null }
+  }>,
+  // Rows any awaited company_members filter chain resolves to: the Rule 2
+  // home-domain client lookup AND the Rule 1 canonical personal-company
+  // exemption both land here (each scenario exercises only one of them).
+  clientMemberships: [] as Array<Record<string, unknown>>,
+  clientMembershipsError: null as unknown,
+  // What the mocked resolveBrandByHost returns for the request host.
+  hostBrand: null as null | { teamId: string },
   signOut: vi.fn(async () => ({ error: null })),
   // Row returned for user_preferences reads (the auto_logout mint lookup).
   userPreferences: null as null | { auto_logout: boolean },
@@ -45,7 +60,7 @@ vi.mock('@supabase/ssr', () => ({
       signOut: state.signOut,
       mfa: {
         getAuthenticatorAssuranceLevel: vi.fn(async () => ({ data: state.aal })),
-        listFactors: vi.fn(async () => ({ data: state.factors })),
+        listFactors: (...args: unknown[]) => state.listFactors(...args),
       },
     },
     rpc: vi.fn(async () => state.company),
@@ -53,7 +68,23 @@ vi.mock('@supabase/ssr', () => ({
       const chain: Record<string, unknown> = {}
       const self = new Proxy(chain, {
         get: (_t, prop) => {
-          if (prop === 'then') return undefined
+          if (prop === 'then') {
+            // The byrå-membership lookup and the home-domain client lookup
+            // await their filter chains directly (no .maybeSingle terminal),
+            // so those tables must be thenable.
+            if (table === 'team_members') {
+              return (resolve: (v: unknown) => void) =>
+                resolve({ data: state.byraMemberships, error: null })
+            }
+            if (table === 'company_members') {
+              return (resolve: (v: unknown) => void) =>
+                resolve({
+                  data: state.clientMembershipsError ? null : state.clientMemberships,
+                  error: state.clientMembershipsError,
+                })
+            }
+            return undefined
+          }
           if (prop === 'maybeSingle' || prop === 'single') {
             return async () => ({
               data:
@@ -70,6 +101,26 @@ vi.mock('@supabase/ssr', () => ({
       return self
     }),
   })),
+}))
+
+const logState = vi.hoisted(() => ({ info: vi.fn() }))
+
+vi.mock('@/lib/logger', () => {
+  const logger = {
+    info: (...args: unknown[]) => logState.info(...args),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    child: () => logger,
+  }
+  return { createLogger: () => logger }
+})
+
+vi.mock('@/lib/branding/resolve', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/branding/resolve')>()),
+  resolveBrandByHost: vi.fn(async () =>
+    state.hostBrand ? { teamId: state.hostBrand.teamId } : null,
+  ),
 }))
 
 import { updateSession } from '../middleware'
@@ -91,6 +142,10 @@ function run(path: string, init?: RequestInit) {
   return updateSession(new NextRequest(`${ORIGIN}${path}`, init))
 }
 
+function runAt(origin: string, path: string, headers?: Record<string, string>) {
+  return updateSession(new NextRequest(`${origin}${path}`, { headers }))
+}
+
 describe('updateSession redirect destinations', () => {
   const envBackup = {
     require: process.env.NEXT_PUBLIC_REQUIRE_MFA,
@@ -103,6 +158,8 @@ describe('updateSession redirect destinations', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    logState.info.mockClear()
+    state.listFactors.mockClear()
     state.user = null
     state.sessionId = 'session-1'
     state.authError = null
@@ -112,6 +169,10 @@ describe('updateSession redirect destinations', () => {
       data: [{ company_id: 'company-1', locale: 'sv', used_fallback: false }],
       error: null,
     }
+    state.byraMemberships = []
+    state.clientMemberships = []
+    state.clientMembershipsError = null
+    state.hostBrand = null
     state.userPreferences = null
     state.userPreferencesError = null
     delete process.env.NEXT_PUBLIC_REQUIRE_MFA
@@ -531,9 +592,327 @@ describe('updateSession redirect destinations', () => {
 
       expect(response.status).toBe(200)
     })
+
+    it('still asks for the factor list at aal1/aal1 before bouncing', async () => {
+      const response = await run('/invoices/new')
+
+      expect(new URL(locationOf(response)!).pathname).toBe('/mfa/enroll')
+      expect(state.listFactors).toHaveBeenCalledTimes(1)
+    })
+
+    it('never calls listFactors once the session is at aal2 (a verified factor is implied)', async () => {
+      state.aal = { currentLevel: 'aal2', nextLevel: 'aal2' }
+      // Even a factor list that would read as "none" must not matter here:
+      // the call is skipped, not just its result ignored.
+      state.factors = { totp: [] }
+
+      const response = await run('/invoices/new')
+
+      expect(response.status).toBe(200)
+      expect(state.listFactors).not.toHaveBeenCalled()
+    })
+
+    it('does not spend an MFA lookup on RSC and prefetch requests at aal2 either', async () => {
+      state.aal = { currentLevel: 'aal2', nextLevel: 'aal2' }
+
+      await run('/invoices', { headers: { rsc: '1' } })
+      await run('/invoices', { headers: { 'next-router-prefetch': '1', rsc: '1' } })
+
+      expect(state.listFactors).not.toHaveBeenCalled()
+    })
+  })
+
+  // ── No-company branch: the byrå cockpit exception ─────────────────────
+
+  describe('byrå team members with zero companies', () => {
+    beforeEach(() => {
+      state.user = SIGNED_IN
+      // No resolvable company at all (fresh byrå, no client memberships).
+      state.company = {
+        data: [{ company_id: null, locale: 'sv', used_fallback: true }],
+        error: null,
+      }
+    })
+
+    it('steers a byrå owner from the dashboard root to the empty cockpit, not onboarding', async () => {
+      state.byraMemberships = [{ role: 'owner', teams: { kind: 'byra' } }]
+
+      const response = await run('/')
+
+      expect(new URL(locationOf(response)!).pathname).toBe('/byra')
+    })
+
+    it('lets a byrå admin through to cockpit routes', async () => {
+      state.byraMemberships = [{ role: 'admin', teams: { kind: 'byra' } }]
+
+      for (const path of ['/byra', '/clients', '/companies/new-client', '/settings/brand']) {
+        const response = await run(path)
+        expect(response.status).toBe(200)
+      }
+    })
+
+    it('steers a plain byrå member to the cockpit too (any role counts)', async () => {
+      state.byraMemberships = [{ role: 'member', teams: { kind: 'byra' } }]
+
+      const response = await run('/')
+
+      expect(new URL(locationOf(response)!).pathname).toBe('/byra')
+    })
+
+    it('keeps the onboarding redirect for non-byrå users', async () => {
+      state.byraMemberships = []
+
+      const response = await run('/')
+
+      expect(new URL(locationOf(response)!).pathname).toBe('/onboarding')
+    })
+  })
+
+  // ── Home-domain affinity (WL): the domain corrects itself ─────────────
+
+  describe('home-domain affinity', () => {
+    const ARBORE = 'https://arbore.accounted.se'
+    const ACOUNT = 'https://acount.accounted.se'
+
+    beforeEach(() => {
+      state.user = SIGNED_IN
+    })
+
+    it('redirects a byrå member on a foreign byrå domain to their own domain', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'acount.accounted.se' } } },
+      ]
+
+      const response = await runAt(ARBORE, '/')
+
+      expect(locationOf(response)).toBe(`${ACOUNT}/`)
+    })
+
+    it('redirects a byrå member on the platform domain to their byrå domain', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+      ]
+
+      const response = await runAt('https://app.gnubok.se', '/')
+
+      expect(locationOf(response)).toBe(`${ARBORE}/`)
+    })
+
+    it('preserves path and query across the affinity redirect', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+      ]
+
+      const response = await runAt('https://app.gnubok.se', '/invoices/abc?tab=payments')
+
+      expect(locationOf(response)).toBe(`${ARBORE}/invoices/abc?tab=payments`)
+    })
+
+    it('lets a byrå member through on their own domain and caches the verdict', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+      ]
+
+      const response = await runAt(ARBORE, '/byra')
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('set-cookie')).toContain(
+        'gnubok-home-ok=arbore.accounted.se',
+      )
+    })
+
+    it('keeps a byrå member with a brandless personal company on the canonical host', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+      ]
+      // A personal company with no team at all: homed on canonical.
+      state.clientMemberships = [{ companies: { team_id: null, teams: null } }]
+
+      const response = await runAt('https://app.gnubok.se', '/')
+
+      expect(response.status).toBe(200)
+      expect(locationOf(response)).toBeNull()
+      expect(response.headers.get('set-cookie')).toContain(
+        'gnubok-home-ok=app.gnubok.se',
+      )
+    })
+
+    it('counts a company whose team has no brand as canonical-homed too', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+      ]
+      state.clientMemberships = [
+        { companies: { team_id: 'team-personal', teams: { brands: null } } },
+      ]
+
+      const response = await runAt('https://app.gnubok.se', '/')
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('set-cookie')).toContain(
+        'gnubok-home-ok=app.gnubok.se',
+      )
+    })
+
+    it('still redirects a byrå member whose companies are all brand-homed', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+      ]
+      state.clientMemberships = [
+        { companies: { team_id: 'team-arbore', teams: { brands: { id: 'brand-1' } } } },
+      ]
+
+      const response = await runAt('https://app.gnubok.se', '/')
+
+      expect(locationOf(response)).toBe(`${ARBORE}/`)
+    })
+
+    it('still redirects off a FOREIGN byrå domain even with a canonical personal company', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'acount.accounted.se' } } },
+      ]
+      state.clientMemberships = [{ companies: { team_id: null, teams: null } }]
+
+      const response = await runAt(ARBORE, '/')
+
+      expect(locationOf(response)).toBe(`${ACOUNT}/`)
+    })
+
+    it('stays put without caching when the canonical-company lookup fails', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+      ]
+      state.clientMembershipsError = { message: 'connection reset' }
+
+      const response = await runAt('https://app.gnubok.se', '/')
+
+      // Fail open: no redirect, and no home-ok cookie so the next request
+      // re-runs the check instead of freezing the error verdict for the TTL.
+      expect(response.status).toBe(200)
+      expect(response.headers.get('set-cookie') ?? '').not.toContain('gnubok-home-ok')
+      expect(errorSpy).toHaveBeenCalled()
+      errorSpy.mockRestore()
+    })
+
+    it('tolerates the array shape for the embedded brand', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: [{ domain: 'acount.accounted.se' }] } },
+      ]
+
+      const response = await runAt(ARBORE, '/')
+
+      expect(locationOf(response)).toBe(`${ACOUNT}/`)
+    })
+
+    it('redirects a user with no byrå ties off a brand domain to the platform', async () => {
+      state.hostBrand = { teamId: 'team-arbore' }
+
+      const response = await runAt(ARBORE, '/')
+
+      expect(locationOf(response)).toBe('https://app.gnubok.se/')
+    })
+
+    it('keeps a byrå client user on the byrå domain their company lives under', async () => {
+      state.hostBrand = { teamId: 'team-arbore' }
+      state.clientMemberships = [{ company_id: 'company-1' }]
+
+      const response = await runAt(ARBORE, '/')
+
+      expect(response.status).toBe(200)
+    })
+
+    it('does nothing on the platform domain for regular users', async () => {
+      const response = await runAt('https://app.gnubok.se', '/')
+
+      expect(response.status).toBe(200)
+    })
+
+    it('does nothing on localhost and direct Vercel hosts', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+      ]
+
+      for (const origin of [ORIGIN, 'https://erp-base-abc123.vercel.app']) {
+        const response = await runAt(origin, '/byra')
+        expect(response.status).toBe(200)
+      }
+    })
+
+    it('skips the check while the host-scoped OK cookie is fresh', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'acount.accounted.se' } } },
+      ]
+
+      const response = await runAt(ARBORE, '/', {
+        cookie: 'gnubok-home-ok=arbore.accounted.se',
+      })
+
+      expect(response.status).toBe(200)
+    })
   })
 
   // ── MFA semantics that must not change ────────────────────────────────
+
+  describe('per-request timing header and log line', () => {
+    const TIMING_RE =
+      /^mw-auth;dur=\d+, mw-session;dur=\d+, mw-company;dur=\d+, mw-mfa;dur=\d+, mw-total;dur=\d+$/
+
+    function lastLog() {
+      expect(logState.info).toHaveBeenCalledTimes(1)
+      const [msg, ctx] = logState.info.mock.calls[0] as [string, Record<string, unknown>]
+      expect(msg).toBe('proxy completed')
+      return ctx
+    }
+
+    it('page responses carry Server-Timing and log kind=page with the route', async () => {
+      state.user = SIGNED_IN
+      const res = await run('/invoices')
+      expect(res.status).toBe(200)
+      expect(res.headers.get('server-timing')).toMatch(TIMING_RE)
+      expect(res.headers.get('x-proxy-timing')).toBeNull()
+      const ctx = lastLog()
+      expect(ctx.kind).toBe('page')
+      expect(ctx.route).toBe('/invoices')
+      expect(ctx.status).toBe(200)
+      expect(typeof ctx.totalMs).toBe('number')
+      expect(typeof ctx.authMs).toBe('number')
+      expect(typeof ctx.companyMs).toBe('number')
+    })
+
+    it('classifies prefetch and RSC requests from the app-router headers', async () => {
+      state.user = SIGNED_IN
+      await run('/invoices', { headers: { 'next-router-prefetch': '1', rsc: '1' } })
+      expect(lastLog().kind).toBe('prefetch')
+      logState.info.mockClear()
+      await run('/invoices', { headers: { rsc: '1' } })
+      expect(lastLog().kind).toBe('rsc')
+    })
+
+    it('/api responses use X-Proxy-Timing and leave Server-Timing to the route wrapper', async () => {
+      state.user = SIGNED_IN
+      const res = await run('/api/settings')
+      expect(res.headers.get('x-proxy-timing')).toMatch(TIMING_RE)
+      expect(res.headers.get('server-timing')).toBeNull()
+      expect(lastLog().kind).toBe('api')
+    })
+
+    it('redirect responses also carry the header and log their status', async () => {
+      const res = await run('/invoices')
+      expect(res.status).toBe(307)
+      expect(res.headers.get('server-timing')).toMatch(TIMING_RE)
+      expect(lastLog().status).toBe(307)
+    })
+
+    it('never logs a token-carrying path or a raw entity id', async () => {
+      const res = await run('/invite/9f8e7d6c5b4a3928171605f4e3d2c1b0')
+      expect(res.status).toBe(200)
+      expect(lastLog().route).toBe('/invite/*')
+      logState.info.mockClear()
+      state.user = SIGNED_IN
+      await run('/invoices/6f1c2a3e-1234-4bcd-9abc-0123456789ab')
+      expect(lastLog().route).toBe('/invoices/:id')
+    })
+  })
 
   describe('MFA-disabled and self-hosted paths are unchanged', () => {
     it('does not redirect when NEXT_PUBLIC_REQUIRE_MFA is unset', async () => {

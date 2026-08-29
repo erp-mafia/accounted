@@ -73,7 +73,7 @@ export const GET = withRouteContext(
       ...(teamId && UUID_RE.test(teamId) ? [`team_id.eq.${teamId}`] : []),
     ].join(',')
 
-    const [templatesRes, usageRes] = await Promise.all([
+    const [templatesRes, usageRes, hiddenRes] = await Promise.all([
       supabase
         .from('booking_template_library')
         .select('*')
@@ -84,6 +84,10 @@ export const GET = withRouteContext(
       supabase
         .from('booking_template_usage')
         .select('template_id, last_used_at')
+        .eq('company_id', companyId),
+      supabase
+        .from('booking_template_hidden')
+        .select('template_id')
         .eq('company_id', companyId),
     ])
 
@@ -98,10 +102,20 @@ export const GET = withRouteContext(
       }
     }
 
+    // hidden lookup failing is also non-fatal: falling back to "nothing
+    // hidden" shows extra templates, which is the safe direction.
+    const hiddenIds = new Set<string>()
+    if (!hiddenRes.error && hiddenRes.data) {
+      for (const row of hiddenRes.data) {
+        hiddenIds.add(row.template_id)
+      }
+    }
+
     const templates = templatesRes.data ?? []
     const decorated = templates.map((t) => ({
       ...t,
       last_used_at: usageByTemplate.get(t.id) ?? null,
+      is_hidden: hiddenIds.has(t.id),
     }))
 
     // Stable-sort: templates with last_used_at come first (most-recent first).

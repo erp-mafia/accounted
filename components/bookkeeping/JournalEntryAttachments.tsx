@@ -32,6 +32,7 @@ import {
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
+import { useBranding } from '@/lib/branding/brand-context'
 
 interface DocumentRecord {
   id: string
@@ -84,6 +85,7 @@ export default function JournalEntryAttachments({
   const embedded = variant === 'section'
   const t = useTranslations('journal_attachments')
   const tCommon = useTranslations('common')
+  const { appName } = useBranding()
   const { toast } = useToast()
   const [documents, setDocuments] = useState<DocumentRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -179,7 +181,7 @@ export default function JournalEntryAttachments({
         tab.close()
         toast({
           title: t('download_failed'),
-          description: tab.blocked ? tCommon('popup_blocked_description') : undefined,
+          description: tab.blocked ? tCommon('popup_blocked_description', { appName }) : undefined,
           variant: 'destructive',
         })
       }

@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -18,9 +18,10 @@ import { resolveSekAmount, buildCurrencyMetadata } from '@/lib/bookkeeping/curre
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
 import { proposalLinesToFormLines } from '@/lib/bookkeeping/proposal-lines'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
-import type { BookingTemplateLibrary, CashAccount } from '@/types'
+import type { BookingTemplateLibrary } from '@/types'
 import type { TransactionWithInvoice } from './transaction-types'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
+import { useCashAccounts } from '@/lib/reference-data/hooks'
 
 interface TransactionBookingDialogProps {
   open: boolean
@@ -136,39 +137,30 @@ export default function TransactionBookingDialog({
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [pickedInboxDocs, setPickedInboxDocs] = useState<AvailableInboxDoc[]>([])
   const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
-  const [bankAccount, setBankAccount] = useState<string | null>(null)
-  const [bankAccountName, setBankAccountName] = useState<string | null>(null)
+  // Settlement account for the bank line: resolved from the session-cached
+  // cash accounts (seeded by the dashboard layout), so the form below mounts
+  // on the first paint instead of after a /api/cash-accounts round trip on
+  // every open. null only while the list is genuinely still loading.
+  const { cashAccounts, isLoading: cashAccountsLoading } = useCashAccounts()
+  const { bankAccount, bankAccountName } = useMemo(() => {
+    if (!transaction || cashAccountsLoading) {
+      return { bankAccount: null as string | null, bankAccountName: null as string | null }
+    }
+    const { account } = resolveAccount(
+      cashAccounts,
+      transaction.cash_account_id ?? null,
+      transaction.currency ?? 'SEK',
+    )
+    // Use the matched account's own name instead of a generic label.
+    const matched =
+      cashAccounts.find((a) => a.id === transaction.cash_account_id) ??
+      cashAccounts.find((a) => a.ledger_account === account)
+    return { bankAccount: account, bankAccountName: matched?.name ?? null }
+  }, [transaction, cashAccounts, cashAccountsLoading])
 
-  useEffect(() => {
-    if (!open || !transaction) return
-    setBankAccount(null)
-    setBankAccountName(null)
-    let cancelled = false
-    fetch('/api/cash-accounts')
-      .then((r) => {
-        if (!r.ok) throw new Error(`cash-accounts fetch failed: ${r.status}`)
-        return r.json()
-      })
-      .then((json) => {
-        if (cancelled) return
-        const accounts = (json.data ?? []) as CashAccount[]
-        const { account } = resolveAccount(
-          accounts,
-          transaction.cash_account_id ?? null,
-          transaction.currency ?? 'SEK',
-        )
-        // Use the matched account's own name instead of a generic label.
-        const matched =
-          accounts.find((a) => a.id === transaction.cash_account_id) ??
-          accounts.find((a) => a.ledger_account === account)
-        setBankAccount(account)
-        setBankAccountName(matched?.name ?? null)
-      })
-      .catch(() => {
-        if (!cancelled) setBankAccount('1930')
-      })
-    return () => { cancelled = true }
-  }, [open, transaction?.id])
+  // Non-modal dialog (see below): page modality is restored by hand so the
+  // agent sheet stays live. See useDashShellInert in components/ui/dialog.tsx.
+  useDashShellInert(open)
 
   if (!transaction) return null
 
@@ -265,8 +257,25 @@ export default function TransactionBookingDialog({
         setInboxPickerOpen(false)
       }
       onOpenChange(o)
-    }}>
-      <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+    }} modal={false}>
+      <DialogVeil />
+      <DialogContent
+        // Width caps at the space left of a docked agent sheet so the form's
+        // right edge, and the Granska button, never end up unreachable under
+        // the sheet (z-60 over z-50). --agent-sheet-w is docked-only, so with
+        // the sheet closed this is exactly the old max-w-6xl.
+        className="max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto"
+        // Non-modal so the agent sheet (fixed z-[60], portaled outside this
+        // dialog) stays interactive beside a booking in progress; a click in
+        // its text field must not count as outside-dismissal. A half-booked
+        // transaction must also survive a stray Escape or backdrop click.
+        // Closing is explicit: the header X. Same convention as
+        // NewInvoiceDialog (which pairs non-modality with the inert effect
+        // above).
+        onEscapeKeyDown={(e) => e.preventDefault()}
+        onPointerDownOutside={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription className="sr-only">

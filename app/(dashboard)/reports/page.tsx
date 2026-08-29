@@ -3,7 +3,6 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Skeleton } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -25,7 +24,10 @@ import { getReport } from '@/lib/reports/catalog'
 export default function ReportsPage() {
   const router = useRouter()
   const [selectedPeriod, setSelectedPeriod] = useState('')
-  const [isLoadingInit, setIsLoadingInit] = useState(true)
+  // The catalog itself is static; only the "no fiscal year" empty state has
+  // to wait for the picker to finish restoring its scope (one effect tick
+  // when the periods are seeded, see FyPicker).
+  const [fyReady, setFyReady] = useState(false)
   const { company } = useCompany()
   const { settings } = useCompanySettings()
   const t = useTranslations('reports')
@@ -62,18 +64,12 @@ export default function ReportsPage() {
             onChange={(id) => setSelectedPeriod(id || '')}
             includeAllOption={false}
             hideFuturePeriods
-            onReady={() => setIsLoadingInit(false)}
+            onReady={() => setFyReady(true)}
           />
         }
       />
 
-      {isLoadingInit ? (
-        <div className="space-y-3">
-          {[1, 2, 3, 4, 5, 6].map((i) => (
-            <Skeleton key={i} className="h-9 w-full" />
-          ))}
-        </div>
-      ) : !selectedPeriod ? (
+      {fyReady && !selectedPeriod ? (
         <EmptyState
           title="Inget räkenskapsår valt"
           description="Skapa ett räkenskapsår för att kunna se rapporter."

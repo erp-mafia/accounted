@@ -137,9 +137,12 @@ function buildCtx(supabase: unknown): ExtensionContext {
   } as ExtensionContext
 }
 
+// The last page gets a distinct size so tests can assert the slice kept it:
+// slicePdfForExtraction takes the first pages PLUS the last (totals page).
 async function makePdfBuffer(pageCount: number): Promise<Uint8Array> {
   const pdf = await PDFDocument.create()
-  for (let i = 0; i < pageCount; i++) pdf.addPage([612, 792])
+  for (let i = 0; i < pageCount - 1; i++) pdf.addPage([612, 792])
+  pdf.addPage([400, 600])
   return pdf.save()
 }
 
@@ -165,7 +168,7 @@ beforeEach(() => {
 })
 
 describe('POST /upload: staged extraction + page-count gate (issue #553)', () => {
-  it('defers long PDFs: responds processing, then slices to 3 pages and flips to received', async () => {
+  it('defers long PDFs: responds processing, then slices to 8 pages (incl. the last) and flips to received', async () => {
     const captured: { row?: Record<string, unknown> } = {}
     const flip: FlipCapture = { filters: [] }
     const supabase = makeSupabase(captured, flip)
@@ -175,7 +178,7 @@ describe('POST /upload: staged extraction + page-count gate (issue #553)', () =>
       rawText: 'ok',
     })
 
-    const req = await makeUploadRequest(6)
+    const req = await makeUploadRequest(10)
     const res = await uploadRoute.handler(req, buildCtx(supabase))
     const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
 
@@ -186,16 +189,20 @@ describe('POST /upload: staged extraction + page-count gate (issue #553)', () =>
     expect(body.data.extracted_data).toBeNull()
     expect(body.data.extraction_skipped).toBe(false)
     expect(body.data.skip_reason).toBeNull()
-    expect(body.data.page_count).toBe(6)
+    expect(body.data.page_count).toBe(10)
     expect(captured.row?.status).toBe('processing')
     expect(captured.row?.extracted_data).toBeNull()
     expect(captured.row?.extraction_skipped).toBe(false)
 
-    // The deferred worker extracts from the sliced copy, not the original.
+    // The deferred worker extracts from the sliced copy, not the original:
+    // the first 7 pages plus the LAST page (the distinct 400x600 one), where
+    // invoice totals usually sit.
     await vi.waitFor(() => expect(extractInvoiceFields).toHaveBeenCalledOnce())
     const sentBuffer = vi.mocked(extractInvoiceFields).mock.calls[0][0].buffer
     const sentPdf = await PDFDocument.load(sentBuffer)
-    expect(sentPdf.getPageCount()).toBe(3)
+    expect(sentPdf.getPageCount()).toBe(8)
+    const lastPage = sentPdf.getPage(7).getSize()
+    expect(lastPage).toEqual({ width: 400, height: 600 })
 
     // ...and CAS-flips the processing row to received, with the truncation
     // recorded in extracted_data.pages rather than as a skip.
@@ -203,8 +210,8 @@ describe('POST /upload: staged extraction + page-count gate (issue #553)', () =>
     expect(flip.payload?.status).toBe('received')
     expect(flip.payload?.extraction_skipped).toBe(false)
     expect((flip.payload?.extracted_data as { pages?: unknown })?.pages).toEqual({
-      total: 6,
-      analyzed: 3,
+      total: 10,
+      analyzed: 8,
     })
     expect(flip.filters).toEqual([
       ['id', 'inbox-1'],
@@ -212,7 +219,7 @@ describe('POST /upload: staged extraction + page-count gate (issue #553)', () =>
     ])
   })
 
-  it('defers PDFs at or below the page-count limit and extracts the full buffer', async () => {
+  it('defers PDFs at or below the native page budget (6 pages) and extracts the full buffer', async () => {
     const captured: { row?: Record<string, unknown> } = {}
     const flip: FlipCapture = { filters: [] }
     const supabase = makeSupabase(captured, flip)
@@ -222,7 +229,9 @@ describe('POST /upload: staged extraction + page-count gate (issue #553)', () =>
       rawText: 'ok',
     })
 
-    const req = await makeUploadRequest(2)
+    // 6 pages gated on the old budget of 3; on the native budget of 8 the
+    // whole document is read (this is the regression the raise fixes).
+    const req = await makeUploadRequest(6)
     const res = await uploadRoute.handler(req, buildCtx(supabase))
     const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
 
@@ -230,12 +239,12 @@ describe('POST /upload: staged extraction + page-count gate (issue #553)', () =>
     expect(body.data.status).toBe('processing')
     expect(body.data.extraction_skipped).toBe(false)
     expect(body.data.skip_reason).toBeNull()
-    expect(body.data.page_count).toBe(2)
+    expect(body.data.page_count).toBe(6)
 
     await vi.waitFor(() => expect(extractInvoiceFields).toHaveBeenCalledOnce())
     const sentBuffer = vi.mocked(extractInvoiceFields).mock.calls[0][0].buffer
     const sentPdf = await PDFDocument.load(sentBuffer)
-    expect(sentPdf.getPageCount()).toBe(2)
+    expect(sentPdf.getPageCount()).toBe(6)
 
     await vi.waitFor(() => expect(flip.payload).toBeDefined())
     expect(flip.payload?.status).toBe('received')

@@ -34,6 +34,41 @@ describe('CompanySetupSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('defaults an omitted accounting_method by form and flags it in the plan', () => {
+    // Minimal-input decision 2026-08-26: orgnr + moms period is the whole ask.
+    const ab = CompanySetupSchema.safeParse({ ...base, accounting_method: undefined })
+    expect(ab.success).toBe(true)
+    if (ab.success) {
+      const plan = planCompanySetup(ab.data)
+      expect(plan.ok).toBe(true)
+      if (plan.ok) {
+        expect(plan.resolved).toEqual({ accountingMethod: 'accrual', accountingMethodDefaulted: true })
+        expect(plan.input.settings.accounting_method).toBe('accrual')
+      }
+    }
+
+    const ef = CompanySetupSchema.safeParse({
+      ...base,
+      entity_type: 'enskild_firma',
+      accounting_method: undefined,
+    })
+    expect(ef.success).toBe(true)
+    if (ef.success) {
+      const plan = planCompanySetup(ef.data)
+      expect(plan.ok && plan.resolved.accountingMethod).toBe('cash')
+    }
+  })
+
+  it('an explicit accounting_method always wins over the form default', () => {
+    const parsed = CompanySetupSchema.safeParse({ ...base, accounting_method: 'cash' })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      const plan = planCompanySetup(parsed.data)
+      expect(plan.ok && plan.resolved.accountingMethod).toBe('cash')
+      expect(plan.ok && plan.resolved.accountingMethodDefaulted).toBe(false)
+    }
+  })
+
   it('refuses a VAT-registered company without an org number (invoice momsregistreringsnummer)', () => {
     const result = CompanySetupSchema.safeParse({ ...base, org_number: undefined })
     expect(result.success).toBe(false)

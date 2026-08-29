@@ -10,6 +10,7 @@ import {
   completeInboxItemsForBookedTransaction,
   propagateUnderlagForBookedTransaction,
   resolveBookedJournalEntryIds,
+  resolveUnderlagAnchoring,
 } from '../inbox-underlag'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 
@@ -354,5 +355,108 @@ describe('completeInboxItemsForBookedTransaction', () => {
     expect(result).toBe(JE2)
     expect(linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, 'doc-pin', JE2)
     expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
+  })
+})
+
+describe('resolveUnderlagAnchoring', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('reads an item without a document as anchored, without querying', async () => {
+    // No underlag to carry onto the verifikat: only the stamp is missing.
+    const { supabase, calls } = createQueuedMockSupabase()
+    const map = await resolveUnderlagAnchoring(supabase as unknown as SupabaseClient, COMPANY, [
+      { id: 'i1', document_id: null, journalEntryId: JE1 },
+    ])
+    expect(map.get('i1')).toEqual({ status: 'anchored', document_journal_entry_id: null })
+    expect(calls.length).toBe(0)
+  })
+
+  it('classifies anchored, unlinked and anchored_elsewhere from one batched select', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: 'doc-a', journal_entry_id: JE1 },
+        { id: 'doc-b', journal_entry_id: null },
+        { id: 'doc-c', journal_entry_id: JE2 },
+      ],
+    })
+
+    const map = await resolveUnderlagAnchoring(supabase as unknown as SupabaseClient, COMPANY, [
+      { id: 'i-a', document_id: 'doc-a', journalEntryId: JE1 },
+      { id: 'i-b', document_id: 'doc-b', journalEntryId: JE1 },
+      { id: 'i-c', document_id: 'doc-c', journalEntryId: JE1 },
+      { id: 'i-none', document_id: null, journalEntryId: JE1 },
+    ])
+
+    expect(map.get('i-a')?.status).toBe('anchored')
+    expect(map.get('i-b')?.status).toBe('unlinked')
+    expect(map.get('i-c')).toEqual({ status: 'anchored_elsewhere', document_journal_entry_id: JE2 })
+    expect(map.get('i-none')?.status).toBe('anchored')
+    const selects = findCalls('document_attachments', 'select')
+    expect(selects.length).toBe(1)
+    expect(findCalls('document_attachments', 'in')).toEqual([['id', ['doc-a', 'doc-b', 'doc-c']]])
+  })
+
+  it('reads an unlinked item whose verifikat sits in a locked or closed period as unlinked_locked', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: 'doc-a', journal_entry_id: null },
+        { id: 'doc-b', journal_entry_id: null },
+        { id: 'doc-c', journal_entry_id: null },
+        { id: 'doc-d', journal_entry_id: JE1 },
+      ],
+    })
+    enqueue({
+      data: [
+        { id: JE1, fiscal_period: { is_closed: false, locked_at: '2026-08-01T00:00:00Z' } },
+        { id: JE2, fiscal_period: { is_closed: true, locked_at: null } },
+        { id: 'je-open', fiscal_period: { is_closed: false, locked_at: null } },
+      ],
+    })
+
+    const map = await resolveUnderlagAnchoring(supabase as unknown as SupabaseClient, COMPANY, [
+      { id: 'i-a', document_id: 'doc-a', journalEntryId: JE1 },
+      { id: 'i-b', document_id: 'doc-b', journalEntryId: JE2 },
+      { id: 'i-c', document_id: 'doc-c', journalEntryId: 'je-open' },
+      { id: 'i-d', document_id: 'doc-d', journalEntryId: JE1 },
+    ])
+
+    expect(map.get('i-a')).toEqual({ status: 'unlinked_locked', document_journal_entry_id: null })
+    expect(map.get('i-b')).toEqual({ status: 'unlinked_locked', document_journal_entry_id: null })
+    expect(map.get('i-c')?.status).toBe('unlinked')
+    // Already anchored: the lock does not matter and it is not looked up.
+    expect(map.get('i-d')?.status).toBe('anchored')
+    expect(findCalls('journal_entries', 'in')).toEqual([['id', [JE1, JE2, 'je-open']]])
+  })
+
+  it('keeps an unlinked item unlinked (retryable) when the lock-state read fails', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'doc-a', journal_entry_id: null }] })
+    enqueue({ data: null, error: { message: 'boom' } })
+    const map = await resolveUnderlagAnchoring(supabase as unknown as SupabaseClient, COMPANY, [
+      { id: 'i-a', document_id: 'doc-a', journalEntryId: JE1 },
+    ])
+    expect(map.get('i-a')?.status).toBe('unlinked')
+  })
+
+  it('leaves items absent (unknown, not anchored) when the document read fails', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: { message: 'boom' } })
+    const map = await resolveUnderlagAnchoring(supabase as unknown as SupabaseClient, COMPANY, [
+      { id: 'i-a', document_id: 'doc-a', journalEntryId: JE1 },
+      { id: 'i-none', document_id: null, journalEntryId: JE1 },
+    ])
+    expect(map.has('i-a')).toBe(false)
+    expect(map.get('i-none')?.status).toBe('anchored')
+  })
+
+  it('leaves an item absent when its document row is not returned', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    const map = await resolveUnderlagAnchoring(supabase as unknown as SupabaseClient, COMPANY, [
+      { id: 'i-a', document_id: 'doc-a', journalEntryId: JE1 },
+    ])
+    expect(map.has('i-a')).toBe(false)
   })
 })

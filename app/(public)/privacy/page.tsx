@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { SourceCodeFooter } from '@/components/branding/SourceCodeFooter'
 import { getBranding } from '@/lib/branding/service'
 
 export function generateMetadata(): Metadata {
@@ -310,6 +311,10 @@ export default function PrivacyPolicyPage() {
             </p>
           </CardContent>
         </Card>
+
+        {/* AGPL section 13 source offer (WL-06): renders on both default and
+            branded hosts; never gate this on a brand. */}
+        <SourceCodeFooter className="pt-2" />
       </div>
     </div>
   )

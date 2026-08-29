@@ -87,6 +87,10 @@
       "schedule": "*/2 * * * *"
     },
     {
+      "path": "/api/extensions/invoice-inbox/underlag-reconcile/cron",
+      "schedule": "45 5 * * *"
+    },
+    {
       "path": "/api/bookkeeping/accruals/post-due/cron",
       "schedule": "15 5 * * *"
     },

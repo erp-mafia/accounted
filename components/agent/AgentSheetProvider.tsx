@@ -274,15 +274,23 @@ export function AgentSheetProvider({
   // beside the answer. Written as a CSS variable rather than a class on <main>
   // because the frame layout is a server component; globals.css seeds the
   // default so the first paint is not a jump.
+  // --agent-sheet-w is the docked-only sibling: unlike --agent-dock-w it has
+  // NO stylesheet default (globals.css seeds dock-w at the 10px frame gutter),
+  // so consumers that must be a no-op when the sheet is closed (dialog
+  // centering and width caps in ui/dialog.tsx and the wide booking/review
+  // dialogs) read this one and get their 0px fallback.
   useEffect(() => {
     const root = document.documentElement
     if (dockWidth === null) {
       root.style.removeProperty('--agent-dock-w')
+      root.style.removeProperty('--agent-sheet-w')
       return
     }
     root.style.setProperty('--agent-dock-w', `${dockWidth}px`)
+    root.style.setProperty('--agent-sheet-w', `${dockWidth}px`)
     return () => {
       root.style.removeProperty('--agent-dock-w')
+      root.style.removeProperty('--agent-sheet-w')
     }
   }, [dockWidth])
 

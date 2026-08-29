@@ -1,8 +1,15 @@
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { createLogger } from '@/lib/logger'
+import { currentAppVersion } from '@/lib/reports/app-version'
 
 const log = createLogger('health')
+
+// Build identifier (commit SHA prefix on Vercel) so operators can tell which
+// deploy answered. Falls back to '1.0.0' for self-hosted builds with no SHA
+// inlined, so Docker healthchecks keep a stable value. Same identifier the
+// MCP serverInfo and the behandlingshistorik report stamp.
+const APP_VERSION = currentAppVersion() ?? '1.0.0'
 
 const CACHE_TTL_MS = 5_000
 
@@ -73,7 +80,7 @@ async function runHealthCheck(): Promise<CheckResult> {
   if (!supabaseUrl || !supabaseServiceKey) {
     log.error('Missing Supabase configuration for health check')
     return {
-      body: { status: 'unhealthy', timestamp: new Date().toISOString(), version: '1.0.0' },
+      body: { status: 'unhealthy', timestamp: new Date().toISOString(), version: APP_VERSION },
       status: 503,
     }
   }
@@ -94,13 +101,13 @@ async function runHealthCheck(): Promise<CheckResult> {
         errMessage: error.message ?? null,
       })
       return {
-        body: { status: 'unhealthy', timestamp: new Date().toISOString(), version: '1.0.0' },
+        body: { status: 'unhealthy', timestamp: new Date().toISOString(), version: APP_VERSION },
         status: 503,
       }
     }
 
     return {
-      body: { status: 'healthy', timestamp: new Date().toISOString(), version: '1.0.0' },
+      body: { status: 'healthy', timestamp: new Date().toISOString(), version: APP_VERSION },
       status: 200,
     }
   } catch (err) {
@@ -114,7 +121,7 @@ async function runHealthCheck(): Promise<CheckResult> {
       errCode: typeof e?.code === 'string' ? e.code : null,
     })
     return {
-      body: { status: 'unhealthy', timestamp: new Date().toISOString(), version: '1.0.0' },
+      body: { status: 'unhealthy', timestamp: new Date().toISOString(), version: APP_VERSION },
       status: 503,
     }
   }

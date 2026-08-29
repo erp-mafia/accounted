@@ -141,6 +141,25 @@ describe('stale-dismissal reaping (contract in lib/notices/types.ts)', () => {
     expect(queued.findCall('notice_dismissals', 'in')).toEqual(['notice_id', [BACKUP_ID]])
   })
 
+  it('hands the reap to deferReap instead of awaiting it on the read path (Hem streams)', async () => {
+    queued.enqueue({ data: [{ notice_id: BACKUP_ID }] }) // dismissal read
+    queued.enqueue({ data: null }) // delete result, consumed only when the task runs
+    const deferred: Array<() => Promise<void>> = []
+
+    const notices = await getCompanyNotices(qSupabase, 'company-1', {
+      userId: 'user-1',
+      deferReap: (task) => deferred.push(task),
+    })
+
+    expect(notices).toEqual([])
+    expect(deferred).toHaveLength(1)
+    expect(queued.findCalls('notice_dismissals', 'delete')).toEqual([])
+
+    await deferred[0]()
+    expect(queued.findCalls('notice_dismissals', 'delete').length).toBe(1)
+    expect(queued.findCall('notice_dismissals', 'in')).toEqual(['notice_id', [BACKUP_ID]])
+  })
+
   it('resurfaces a NEW failure after the healthy spell reaped the dismissal', async () => {
     // error -> dismiss: hidden while the incident persists.
     detectMocks.backup.mockResolvedValue(backupNotice)

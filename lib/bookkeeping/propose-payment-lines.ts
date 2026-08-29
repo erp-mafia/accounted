@@ -10,7 +10,7 @@ import {
   getRevenueAccount,
   getOutputVatAccount,
   InvoiceFxRateMissingError,
-} from './invoice-entries'
+} from './invoice-accounts'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'

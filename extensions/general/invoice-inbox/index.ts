@@ -15,7 +15,7 @@ import {
   countPdfPages,
   slicePdfForExtraction,
   MAX_FILE_SIZE,
-  MAX_PAGES_FOR_AUTO_EXTRACT,
+  maxPagesForAutoExtract,
   UPLOAD_ALLOWED_MIME_TYPES,
   EMAIL_ALLOWED_MIME_TYPES,
   ensureHtmlDocument,
@@ -44,6 +44,7 @@ import {
   applyDomainStatusFromWebhook,
 } from './lib/custom-domains'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
@@ -62,7 +63,16 @@ import { bulkBookMatchedInboxItems } from '@/lib/transactions/categorize-core'
 import {
   completeInboxItemsForBookedTransaction,
   resolveBookedJournalEntryIds,
+  resolveUnderlagAnchoring,
+  type UnderlagAnchoring,
 } from '@/lib/transactions/inbox-underlag'
+
+/**
+ * Per-item underlag status on the wire (#1548): the anchoring verdict, or
+ * 'unknown' when the document row could not be read. Absence is never
+ * reported as anchored; the UI keeps 'unknown' out of the booked bucket.
+ */
+type UnderlagStatus = UnderlagAnchoring | 'unknown'
 import { hasCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
@@ -338,34 +348,61 @@ export const invoiceInboxExtension: Extension = {
         // leave the active inbox (2026-08-12 report: booked items stuck in
         // "Att göra" pointing at a transaction no longer in the work list).
         type ItemRow = {
+          id: string
+          document_id: string | null
           matched_transaction_id: string | null
           created_journal_entry_id: string | null
           created_supplier_invoice_id: string | null
         }
         const rows = (data ?? []) as ItemRow[]
+        const unresolved = rows.filter(
+          (r) =>
+            r.matched_transaction_id &&
+            !r.created_journal_entry_id &&
+            !r.created_supplier_invoice_id,
+        )
         const unresolvedTxIds = Array.from(
-          new Set(
-            rows
-              .filter(
-                (r) =>
-                  r.matched_transaction_id &&
-                  !r.created_journal_entry_id &&
-                  !r.created_supplier_invoice_id,
-              )
-              .map((r) => r.matched_transaction_id as string),
-          ),
+          new Set(unresolved.map((r) => r.matched_transaction_id as string)),
         )
         const bookedByTx = await resolveBookedJournalEntryIds(
           ctx.supabase,
           ctx.companyId,
           unresolvedTxIds,
         )
-        const items = rows.map((r) => ({
-          ...r,
-          matched_transaction_journal_entry_id: r.matched_transaction_id
+        // Per-item honesty (#1548): the transaction being booked says a
+        // verifikat exists, not that THIS item's underlag reached it. A
+        // document whose link failed, or that is anchored to another
+        // verifikat, must keep the item in "Att göra" instead of reading as
+        // booked on the transaction's word alone.
+        const anchoring = await resolveUnderlagAnchoring(
+          ctx.supabase,
+          ctx.companyId,
+          unresolved
+            .filter((r) => bookedByTx.has(r.matched_transaction_id as string))
+            .map((r) => ({
+              id: r.id,
+              document_id: r.document_id,
+              journalEntryId: bookedByTx.get(r.matched_transaction_id as string) as string,
+            })),
+        )
+        const items = rows.map((r) => {
+          const derivedEntryId = r.matched_transaction_id
             ? bookedByTx.get(r.matched_transaction_id) ?? null
-            : null,
-        }))
+            : null
+          // Absent from the anchoring map means the document row could not
+          // be read: 'unknown', which the UI treats like a divergent item
+          // (stays in Att göra, no booking bridge). Never booked on a guess.
+          // Only unstamped items were sent to the anchoring read; a stamped
+          // sibling is booked by its own column and gets no verdict here.
+          const unstamped = !r.created_journal_entry_id && !r.created_supplier_invoice_id
+          const underlagStatus: UnderlagStatus | null =
+            derivedEntryId && unstamped ? anchoring.get(r.id)?.status ?? 'unknown' : null
+          return {
+            ...r,
+            matched_transaction_journal_entry_id: derivedEntryId,
+            underlag_status: underlagStatus,
+          }
+        })
 
         return NextResponse.json({ data: { items, count: items.length } })
       },
@@ -431,11 +468,14 @@ export const invoiceInboxExtension: Extension = {
         // Same enrichment as the list: the detail rail must not offer to
         // book a matched transaction that is already booked.
         const row = data as {
+          id: string
+          document_id: string | null
           matched_transaction_id: string | null
           created_journal_entry_id: string | null
           created_supplier_invoice_id: string | null
         }
         let matchedTransactionJournalEntryId: string | null = null
+        let underlagStatus: UnderlagStatus | null = null
         if (
           row.matched_transaction_id &&
           !row.created_journal_entry_id &&
@@ -445,10 +485,24 @@ export const invoiceInboxExtension: Extension = {
             row.matched_transaction_id,
           ])
           matchedTransactionJournalEntryId = bookedByTx.get(row.matched_transaction_id) ?? null
+          if (matchedTransactionJournalEntryId) {
+            const anchoring = await resolveUnderlagAnchoring(ctx.supabase, ctx.companyId, [
+              {
+                id: row.id,
+                document_id: row.document_id,
+                journalEntryId: matchedTransactionJournalEntryId,
+              },
+            ])
+            underlagStatus = anchoring.get(row.id)?.status ?? 'unknown'
+          }
         }
 
         return NextResponse.json({
-          data: { ...row, matched_transaction_journal_entry_id: matchedTransactionJournalEntryId },
+          data: {
+            ...row,
+            matched_transaction_journal_entry_id: matchedTransactionJournalEntryId,
+            underlag_status: underlagStatus,
+          },
         })
       },
     },
@@ -704,13 +758,14 @@ export const invoiceInboxExtension: Extension = {
           })
 
           // Same page handling as /upload (issue #553): long PDFs extract
-          // from a slice of their first pages; the skip only remains for
-          // unsliceable (encrypted/malformed) PDFs. Sandbox companies skip
-          // Bedrock unconditionally.
+          // from a slice (first pages + the last page); the skip only remains
+          // for unsliceable (encrypted/malformed) PDFs. Sandbox companies
+          // skip Bedrock unconditionally.
+          const maxAutoExtractPages = maxPagesForAutoExtract()
           const pageCount =
             file.type === 'application/pdf' ? await countPdfPages(buffer) : null
           const gatedByPageCount =
-            pageCount != null && pageCount > MAX_PAGES_FOR_AUTO_EXTRACT
+            pageCount != null && pageCount > maxAutoExtractPages
           const sandbox = await isSandboxCompany(ctx.supabase, ctx.companyId)
           // Paid-tier gate: no `ai` capability → no Bedrock OCR (seed empty
           // skeleton; the attached document is still stored). Same paywall as
@@ -718,7 +773,7 @@ export const invoiceInboxExtension: Extension = {
           const hasAiEntitlement = await hasCapability(ctx.supabase, ctx.companyId, CAPABILITY.ai)
           const slicedBuffer =
             gatedByPageCount && hasAiEntitlement && !sandbox
-              ? await slicePdfForExtraction(buffer, MAX_PAGES_FOR_AUTO_EXTRACT)
+              ? await slicePdfForExtraction(buffer, maxAutoExtractPages)
               : null
           const skipReason: 'no_ai_entitlement' | 'too_many_pages' | 'sandbox' | null =
             !hasAiEntitlement
@@ -739,7 +794,7 @@ export const invoiceInboxExtension: Extension = {
               })
           const { data: extracted } = extraction
           if (!skipExtraction && slicedBuffer != null && pageCount != null) {
-            extracted.pages = { total: pageCount, analyzed: MAX_PAGES_FOR_AUTO_EXTRACT }
+            extracted.pages = { total: pageCount, analyzed: maxAutoExtractPages }
           }
           await mirrorExtractionToDocument(doc.id, {
             data: extracted,
@@ -2151,14 +2206,15 @@ export const invoiceInboxExtension: Extension = {
 
         const { data: settings } = await ctx.supabase
           .from('company_settings')
-          .select('accounting_method')
+          .select('accounting_method, defer_invoice_booking')
           .eq('company_id', ctx.companyId)
           .single()
 
-        const accountingMethod = settings?.accounting_method || 'accrual'
         let registrationJournalEntryId: string | null = null
 
-        if (accountingMethod === 'accrual') {
+        // #967: deferred companies register WITHOUT booking (same gate as
+        // POST /api/supplier-invoices); ekonomi books later via Bokför.
+        if (booksInvoicesOnIssue(settings)) {
           try {
             const journalEntry = await createSupplierInvoiceRegistrationEntry(
               ctx.supabase,

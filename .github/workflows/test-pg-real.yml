@@ -200,3 +200,100 @@ jobs:
           done
 
       - run: npm run test:pg
+
+  tool-pg:
+    # MCP tools driven through a REAL supabase-js client against a REAL
+    # PostgREST. This is NOT a duplicate of the pg-real job: that one holds a
+    # `pg` Pool and writes SQL, which cannot see the half of a tool that
+    # PostgREST resolves (the .select() column strings, the resource embeds,
+    # the or=(...) grammar). Before this job, all 100 files in
+    # extensions/general/mcp-server/__tests__ faked supabase and nothing in CI
+    # exercised that surface.
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: supabase/postgres:15.8.1.060
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      TOOL_PG_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      TOOL_PG_REST_URL: http://127.0.0.1:3000
+      PGPASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Bootstrap storage schema
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
+
+      - name: Default privileges for the supabase roles
+        # Without these PostgREST answers every request with 42501, because the
+        # grants have to exist before the migrations create ~400 tables.
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c "
+            GRANT USAGE ON SCHEMA public TO postgres, anon, authenticated, service_role;
+            ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO postgres, anon, authenticated, service_role;
+            ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO postgres, anon, authenticated, service_role;
+            ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO postgres, anon, authenticated, service_role;
+          "
+
+      - name: Apply migrations
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(supabase/migrations/*.sql)
+          if [ ${#files[@]} -eq 0 ]; then echo "No migration files found"; exit 1; fi
+          for f in "${files[@]}"; do
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+
+      - name: Grant on everything the migrations created
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c "
+            GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+            GRANT ALL ON ALL ROUTINES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+            GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+          "
+
+      - name: Start PostgREST
+        # Deliberately `docker run --network host` rather than a service
+        # container. Service containers on a non-containerized job are reachable
+        # from the runner on localhost, but NOT from each other by name, and
+        # PostgREST has to reach Postgres. Host networking sidesteps that.
+        run: |
+          docker run -d --name postgrest --network host \
+            -e PGRST_DB_URI="postgres://postgres:postgres@127.0.0.1:5432/postgres" \
+            -e PGRST_DB_SCHEMAS=public \
+            -e PGRST_DB_ANON_ROLE=anon \
+            -e PGRST_JWT_SECRET="super-secret-jwt-token-with-at-least-32-characters-long" \
+            -e PGRST_DB_MAX_ROWS=100000 \
+            -e PGRST_SERVER_PORT=3000 \
+            postgrest/postgrest:v12.2.3
+          for _ in $(seq 1 60); do
+            if curl -sf -o /dev/null "http://127.0.0.1:3000/" ; then break; fi
+            sleep 1
+          done
+          curl -sf -o /dev/null "http://127.0.0.1:3000/" || (docker logs postgrest && exit 1)
+
+      - run: npm run test:tools

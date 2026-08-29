@@ -9,6 +9,7 @@ import {
   sectorNameKey,
 } from '@/lib/extensions/i18n'
 import type { SectorSlug } from '@/lib/extensions/types'
+import { getRequestAppName } from '@/lib/branding/request-brand'
 import CategoryBadge from '@/components/extensions/CategoryBadge'
 import { WORKSPACES } from '@/lib/extensions/_generated/workspace-map'
 import { Button } from '@/components/ui/button'
@@ -27,13 +28,16 @@ export default async function ExtensionDetailPage({
   const sector = getSector(sectorSlug as SectorSlug)
 
   const t = await getTranslations('extensions')
+  // Some long descriptions carry the {appName} ICU parameter (WL-12 appName
+  // sweep); passing it unconditionally is harmless for messages without it.
+  const appName = await getRequestAppName()
 
   const nameKey = extensionNameKey(definition.slug)
   const descriptionKey = extensionDescriptionKey(definition.slug)
   const longDescriptionKey = extensionLongDescriptionKey(definition.slug)
   const extensionName = nameKey ? t(nameKey) : definition.name
-  const extensionDescription = descriptionKey ? t(descriptionKey) : definition.description
-  const extensionLongDescription = longDescriptionKey ? t(longDescriptionKey) : definition.longDescription
+  const extensionDescription = descriptionKey ? t(descriptionKey, { appName }) : definition.description
+  const extensionLongDescription = longDescriptionKey ? t(longDescriptionKey, { appName }) : definition.longDescription
 
   const sectorLabel = (() => {
     if (!sector) return sectorSlug

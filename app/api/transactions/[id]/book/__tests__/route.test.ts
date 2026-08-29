@@ -237,6 +237,120 @@ describe('POST /api/transactions/[id]/book', () => {
     )
   })
 
+  it('returns 400 TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT when a line books the settlement row against its active twin (#1643)', async () => {
+    // The issue's dialog shape: 1930 and 1931 both enabled on one active
+    // connection; "Ändra rader" pre-filled 1930 debit / 1931 credit from a
+    // template learned on 1931. Booking it would move money between two
+    // ledgers of one physical account with nothing reaching the P&L.
+    const iban = 'SE4550000000058398257466'
+    const tx = makeTransaction({ id: 'tx-1', amount: 500, journal_entry_id: null, cash_account_id: 'ca-1930' })
+    enqueue({ data: tx, error: null }) // fetch transaction
+    enqueue({
+      data: [
+        { id: 'ca-1930', ledger_account: '1930', iban, currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
+        { id: 'ca-1931', ledger_account: '1931', iban, currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
+      ],
+    }) // cash_accounts topology
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }] }) // bank_connections statuses
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: {
+        ...validBody,
+        lines: [
+          { account_number: '1930', debit_amount: 500, credit_amount: 0 },
+          { account_number: '1931', debit_amount: 0, credit_amount: 500 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { accountNumber: string } } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT')
+    expect(body.error.details.accountNumber).toBe('1931')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('re-points a stranded row onto the live sibling when its single bank line is that ledger (#1643 round 4)', async () => {
+    // Nyte-shape: the transaction sits on the demoted 1931, the user books it
+    // with the bank leg on the live 1940 against a P&L account. The voucher
+    // posts on 1940 and the row moves there in the same locked UPDATE, so
+    // neither ledger's reconciliation is left with a half.
+    const iban = 'SE4550000000058398257466'
+    const tx = makeTransaction({ id: 'tx-1', amount: 500, journal_entry_id: null, cash_account_id: 'ca-orphan' })
+    enqueue({ data: tx, error: null }) // fetch transaction
+    enqueue({ data: { ledger_account: '1931' } }) // own row
+    enqueue({
+      data: [
+        { id: 'ca-orphan', ledger_account: '1931', iban, currency: 'SEK', enabled: true, bank_connection_id: null },
+        { id: 'ca-live', ledger_account: '1940', iban, currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
+      ],
+    }) // cash_accounts topology
+    enqueue({ data: [{ id: 'conn-live', status: 'active' }] }) // bank_connections statuses
+    mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // link update
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: {
+        ...validBody,
+        lines: [
+          { account_number: '1940', debit_amount: 500, credit_amount: 0 },
+          { account_number: '8311', debit_amount: 0, credit_amount: 500 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(response.status).toBe(200)
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    expect(findCalls('transactions', 'update')).toContainEqual([
+      expect.objectContaining({ journal_entry_id: 'je-new', cash_account_id: 'ca-live' }),
+    ])
+  })
+
+  it('returns 400 TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT when the single bank line sits on a dead twin of the live own row (#1643 round 5)', async () => {
+    // Problem 4: the transaction sits on the live 1940, the dialog pre-fills
+    // [1931, 3011] from a template learned before the reconnect, and 1931 is
+    // the revoked twin. Posting would strand the only bank leg on 1931 while
+    // the transaction stays on 1940, so it is refused before the engine runs.
+    const iban = 'SE4550000000058398257466'
+    const tx = makeTransaction({ id: 'tx-1', amount: 500, journal_entry_id: null, cash_account_id: 'ca-live' })
+    enqueue({ data: tx, error: null }) // fetch transaction
+    enqueue({ data: { ledger_account: '1940' } }) // own row
+    enqueue({
+      data: [
+        { id: 'ca-live', ledger_account: '1940', iban, currency: 'SEK', enabled: true, bank_connection_id: 'conn-live' },
+        { id: 'ca-orphan', ledger_account: '1931', iban, currency: 'SEK', enabled: true, bank_connection_id: 'conn-old' },
+      ],
+    }) // cash_accounts topology
+    enqueue({
+      data: [
+        { id: 'conn-live', status: 'active' },
+        { id: 'conn-old', status: 'revoked' },
+      ],
+    }) // bank_connections statuses
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: {
+        ...validBody,
+        lines: [
+          { account_number: '1931', debit_amount: 500, credit_amount: 0 },
+          { account_number: '3011', debit_amount: 0, credit_amount: 500 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { accountNumber: string } } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT')
+    expect(body.error.details.accountNumber).toBe('1931')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('atomically unignores an ignored transaction when booking it', async () => {
     const tx = makeTransaction({
       id: 'tx-1',

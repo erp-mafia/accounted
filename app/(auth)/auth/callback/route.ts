@@ -3,6 +3,8 @@ import { type NextRequest, NextResponse } from 'next/server'
 import { hashInviteToken } from '@/lib/auth/invite-tokens'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import { resolveLandingDestination } from '@/lib/company/landing-server'
+import { acceptPendingTeamInviteByToken } from '@/lib/company/pending-invites'
 
 /**
  * The one `next` destination this callback honours for a fresh session: the
@@ -70,6 +72,9 @@ export async function GET(request: NextRequest) {
 
   if (authenticated) {
     let redirectPath = next
+    // Set once a byrå-team invite is accepted below, so the final response
+    // clears the invite cookie instead of leaving it for a redundant retry.
+    let inviteConsumed = false
 
     // Password recovery flow: the user just exchanged a recovery token, so they
     // have a fresh session whose only purpose is to call updateUser({ password })
@@ -202,6 +207,29 @@ export async function GET(request: NextRequest) {
         }
       }
 
+      // Byrå-TEAM invite: the company-invite block above only knows
+      // company_invitations, so a byrå staffer's invite was accepted by no
+      // server path before landing resolved, and they were funneled to
+      // /onboarding as a first-timer. Accept it here, BEFORE the silent-team
+      // check (so no stray "Personal" team is minted) and BEFORE landing
+      // resolves, so resolveLandingDestination sees the byrå membership and
+      // sends an owner/admin to /clients. Company-invite and non-invite flows
+      // are untouched. On success the cookie is cleared on the final response;
+      // otherwise it survives for the /onboarding + /select-company retry.
+      if (inviteToken && !inviteConsumed) {
+        try {
+          const outcome = await acceptPendingTeamInviteByToken(
+            { id: user.id, email: user.email },
+            inviteToken,
+          )
+          if (outcome.status === 'accepted' || outcome.status === 'already_member') {
+            inviteConsumed = true
+          }
+        } catch (err) {
+          console.error('[auth/callback] team invite acceptance failed:', err)
+        }
+      }
+
       // Ensure user has a silent team (for new signups and existing users without one)
       const { data: teamMembership } = await supabase
         .from('team_members')
@@ -240,8 +268,24 @@ export async function GET(request: NextRequest) {
 
       // Redirect to the dashboard (it handles zero-company and incomplete
       // states), unless the session was created to resume an MCP OAuth
-      // consent flow: that page handles the zero-company state too.
-      redirectPath = resumeOAuth ?? '/'
+      // consent flow: that page handles the zero-company state too. With no
+      // explicit destination, byrå staff on their byrå's home domain land in
+      // the cockpit instead (WL-14): this callback is the OAuth/magic-link
+      // twin of the login page's resolvePostLoginDestination call, covering
+      // only AAL1 sessions (MFA-enrolled users exited to /mfa/verify above,
+      // which applies the same rule). Any failure degrades to '/'.
+      if (resumeOAuth) {
+        redirectPath = resumeOAuth
+      } else {
+        try {
+          const host =
+            request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? ''
+          redirectPath = await resolveLandingDestination(supabase, user.id, host)
+        } catch (err) {
+          console.error('[auth/callback] landing resolution failed:', err)
+          redirectPath = '/'
+        }
+      }
     }
 
     // Create redirect and explicitly set auth cookies on the response
@@ -250,8 +294,13 @@ export async function GET(request: NextRequest) {
       response.cookies.set({ name, value, ...options })
     }
     // Keep the invite cookie alive so the /onboarding and /select-company
-    // pages can retry acceptance via acceptPendingInviteByToken (only clear
-    // it when successfully processed above).
+    // pages can retry acceptance via acceptPendingInviteByToken, UNLESS a team
+    // invite was just accepted above (then the membership exists and a retry
+    // would only 409). The company-invite success path returns earlier and
+    // clears the cookie itself.
+    if (inviteConsumed) {
+      response.cookies.delete('gnubok-invite-token')
+    }
     return response
   }
 

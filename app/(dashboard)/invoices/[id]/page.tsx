@@ -1,10 +1,12 @@
 'use client'
 
 import { useState, useEffect, useRef, use } from 'react'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
+import { guardBrowserWrite } from '@/lib/company/tab-guard'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
@@ -79,6 +81,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import type { Invoice, InvoiceItem, Customer, InvoiceStatus, InvoiceReminder, InvoiceDocumentType } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { useBranding } from '@/lib/branding/brand-context'
+import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
 /** Minimized Peppol delivery projection from GET /api/invoices/[id]/peppol/deliveries. */
 interface PeppolDeliveryView {
@@ -96,7 +101,6 @@ const PEPPOL_STATUS_KEYS = new Set([
   'no_route', 'failed',
 ])
 const PEPPOL_SENDABLE_STATUSES = new Set<InvoiceStatus>(['draft', 'sent', 'overdue'])
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // Why the downloaded file is not the invoice the customer received. One key
 // per reason: "no archived copy exists" and "the archive could not be reached"
@@ -150,6 +154,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const { toast } = useToast()
   const supabase = createClient()
   const t = useTranslations('invoice_detail')
+  const { appName } = useBranding()
   // Begäran status labels are shared with the payout dialog on the list page.
   const tInvoices = useTranslations('invoices')
   const tCommon = useTranslations('common')
@@ -246,6 +251,25 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
   // #967: register/send without booking; ekonomi books in a separate step.
   const [deferInvoiceBooking, setDeferInvoiceBooking] = useState(false)
+  // Company settings from the session cache (lib/reference-data): applied
+  // whenever the cached row (re)loads, no request per invoice visit.
+  const { settings: companySettings } = useCompanySettings()
+  useEffect(() => {
+    const settings = companySettings
+    if (!settings) return
+    setOreRounding(settings.ore_rounding ?? true)
+    if (typeof settings.vat_registered === 'boolean') {
+      setVatRegistered(settings.vat_registered)
+    }
+    setAccountingMethod(settings.accounting_method === 'cash' ? 'cash' : 'accrual')
+    setDeferInvoiceBooking(!!settings.defer_invoice_booking)
+    setReminderDays([
+      settings.reminder_days_level_1 ?? 15,
+      settings.reminder_days_level_2 ?? 30,
+      settings.reminder_days_level_3 ?? 45,
+    ])
+    setAutoRemindersEnabled(settings.send_invoice_reminders ?? true)
+  }, [companySettings])
   const [showBookConfirm, setShowBookConfirm] = useState(false)
   const [bookVoucherPreview, setBookVoucherPreview] = useState<string | null>(null)
   const [reminderDays, setReminderDays] = useState<[number, number, number]>([15, 30, 45])
@@ -330,16 +354,6 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       // A different invoice: never let the previous one's mask show on it.
       setDeductionPersonnummerMasked(undefined)
     }
-
-    // Settings depend only on the active company, so start them with the main
-    // invoice batch instead of waiting for the invoice row first.
-    const settingsPromise = company?.id
-      ? supabase
-          .from('company_settings')
-          .select('ore_rounding, vat_registered, accounting_method, defer_invoice_booking, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3, send_invoice_reminders')
-          .eq('company_id', company.id)
-          .maybeSingle()
-      : Promise.resolve(null)
 
     const deliveriesPromise = loadDeliveries()
 
@@ -460,25 +474,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       }),
     )
 
-    const settingsRes = await settingsPromise
     if (seq !== fetchSeqRef.current) return
-    if (settingsRes) {
-      const settings = settingsRes.data
-      setOreRounding(settings?.ore_rounding ?? true)
-      if (typeof settings?.vat_registered === 'boolean') {
-        setVatRegistered(settings.vat_registered)
-      }
-      setAccountingMethod(settings?.accounting_method === 'cash' ? 'cash' : 'accrual')
-      setDeferInvoiceBooking(!!settings?.defer_invoice_booking)
-      setReminderDays([
-        settings?.reminder_days_level_1 ?? 15,
-        settings?.reminder_days_level_2 ?? 30,
-        settings?.reminder_days_level_3 ?? 45,
-      ])
-      if (settings) {
-        setAutoRemindersEnabled(settings.send_invoice_reminders ?? true)
-      }
-    }
 
     // Related documents need the invoice row but do not gate the main detail
     // view. Resolve them together after first paint and fill their links in.
@@ -580,6 +576,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
   async function updateStatus(status: InvoiceStatus) {
     if (!invoice) return
+    // Cross-tab guard (WL-09): the direct Supabase branches below bypass the
+    // patched window.fetch, so consult the tab guard explicitly. On a
+    // mismatch the blocking dialog raised by guardBrowserWrite is the user
+    // feedback; nothing is written.
+    if (!guardBrowserWrite()) return
 
     setIsUpdating(true)
 
@@ -720,7 +721,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       if (caveat) {
         toast({
           title: t('pdf_rerender_downloaded_title'),
-          description: t(RERENDER_CAVEAT_KEYS[caveat]),
+          description: t(RERENDER_CAVEAT_KEYS[caveat], { appName }),
         })
       } else {
         toast({
@@ -999,7 +1000,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     if (!window.open(url, '_blank', 'noopener,noreferrer')) {
       toast({
         title: t('pdf_preview_blocked_title'),
-        description: t('pdf_preview_blocked_description'),
+        description: t('pdf_preview_blocked_description', { appName }),
         variant: 'destructive',
       })
       return
@@ -1009,7 +1010,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     if (caveat) {
       toast({
         title: t('pdf_rerender_preview_title'),
-        description: t(RERENDER_CAVEAT_KEYS[caveat]),
+        description: t(RERENDER_CAVEAT_KEYS[caveat], { appName }),
       })
     }
   }
@@ -1179,11 +1180,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   }
 
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    )
+    return <DetailPageSkeleton cards={3} />
   }
 
   if (!invoice) {
@@ -2326,7 +2323,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <DialogDescription>
               {pdfArchiveIssue === 'document'
                 ? t('pdf_archive_issue_document_desc')
-                : t('pdf_archive_issue_history_desc')}
+                : t('pdf_archive_issue_history_desc', { appName })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

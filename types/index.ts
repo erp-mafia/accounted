@@ -14,10 +14,13 @@ export type CompanyRole = 'owner' | 'admin' | 'member' | 'viewer'
 export type TeamRole = 'owner' | 'admin' | 'member'
 export type MemberSource = 'direct' | 'team'
 
-// Team (consulting firm grouping)
+// Team (consulting firm grouping). 'personal' teams are the implicit
+// one-per-user grouping; 'byra' teams are ops-created accounting-firm
+// tenants (WL-08) with invites, a brand, and cockpit access.
 export interface Team {
   id: string
   name: string
+  kind: 'personal' | 'byra'
   created_by: string
   created_at: string
   updated_at: string
@@ -81,10 +84,6 @@ export type CompanyMigrationResetBlockerCode =
   | 'migration_window_expired'
   | 'sandbox_company'
   | 'locked_or_closed_periods'
-  | 'journal_entries_exist'
-  | 'non_import_committed_entries'
-  | 'voucher_sequence_state_exists'
-  | 'invoice_records_exist'
   | 'authority_submission_detected'
   | 'live_bank_connections'
   | 'imports_in_progress'
@@ -571,6 +570,12 @@ export interface CompanySettings {
   // Körjournal (mileage log): UI-visibility toggle only, never load-bearing
   // for correctness. The nav row also shows when mileage_trips rows exist.
   mileage_enabled: boolean
+
+  // Data analysis consent (migration 20260828120000): when true, the
+  // company's bookkeeping outcomes may be read across companies to evaluate
+  // and improve automatic booking. Default false, enforced server-side
+  // (lib/company/data-analysis.ts); the UI only mirrors it.
+  data_analysis_opt_in: boolean
 
   // Salary payments (migration 20260508120000 + 20260703190000).
   // preferred_payment_format defaults to 'pain001' — Bankgirot Lön is
@@ -2557,6 +2562,10 @@ export type PendingOperationType =
   // employee master data (1.8; personnummer encrypted at staging), and
   // cutover opening balances for mid-year migrations (2.4).
   | 'update_payslip_line'
+  // Set THIS RUN's base salary for one employee (salary_run_employees.
+  // monthly_salary, draft only). The per-run column is what the engine reads;
+  // the employee master's fixed salary stays untouched (variable owner pay).
+  | 'set_run_salary'
   | 'register_absence'
   | 'create_employee'
   | 'update_employee'
@@ -4352,7 +4361,8 @@ export interface InvoiceExtractionResult {
   confidence: number
   suggestedTemplateId?: string
   // Set by the caller (not the model) when a long PDF was sliced before
-  // extraction: fields were read from the first `analyzed` of `total` pages.
+  // extraction: fields were read from `analyzed` of `total` pages (the first
+  // pages plus the last, where totals usually sit).
   pages?: { total: number; analyzed: number }
 }
 

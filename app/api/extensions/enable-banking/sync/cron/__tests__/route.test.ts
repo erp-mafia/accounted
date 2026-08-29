@@ -288,15 +288,95 @@ describe('GET /api/extensions/enable-banking/sync/cron: session health probe', (
     await expect(response.json()).resolves.toMatchObject({ processed: 1 })
   })
 
-  it('applies the fifty-connection cap after entitlement filtering', async () => {
-    state.active = Array.from({ length: 51 }, (_, index) => connection({
+  it('applies the connection cap after entitlement filtering', async () => {
+    state.active = Array.from({ length: 301 }, (_, index) => connection({
       id: `paid-${index}`,
       company_id: `11111111-1111-4111-8111-${String(index).padStart(12, '0')}`,
     }))
 
     await GET(cronRequest())
 
-    expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(50)
+    expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(300)
+  })
+
+  it('syncs connections in concurrent waves of four', async () => {
+    const started: string[] = []
+    const resolvers: (() => void)[] = []
+    mocks.syncAccountTransactions.mockImplementation((...args: unknown[]) => {
+      started.push(args[3] as string)
+      return new Promise(resolve => {
+        resolvers.push(() => resolve({ imported: 0, duplicates: 0, errors: 0 }))
+      })
+    })
+    state.active = Array.from({ length: 6 }, (_, index) => connection({
+      id: `conn-${index}`,
+      company_id: `11111111-1111-4111-8111-${String(index).padStart(12, '0')}`,
+    }))
+
+    const responsePromise = GET(cronRequest())
+
+    // The first wave fans out to exactly SYNC_CONCURRENCY connections; the
+    // second wave must not start until every sync in the first has settled.
+    await vi.waitFor(() => expect(started).toHaveLength(4))
+    resolvers.splice(0).forEach(resolve => resolve())
+    await vi.waitFor(() => expect(started).toHaveLength(6))
+    resolvers.splice(0).forEach(resolve => resolve())
+
+    const response = await responsePromise
+    await expect(response.json()).resolves.toMatchObject({ processed: 6 })
+  })
+
+  it('never syncs two connections of the same company concurrently', async () => {
+    // The post-sync unattended sweep is company-scoped: two concurrent sweeps
+    // for one company can both read a journal entry as unlinked and claim it
+    // for different bank transactions. Same-company connections must serialize.
+    const started: string[] = []
+    const resolvers: (() => void)[] = []
+    mocks.syncAccountTransactions.mockImplementation((...args: unknown[]) => {
+      started.push(args[3] as string)
+      return new Promise(resolve => {
+        resolvers.push(() => resolve({ imported: 0, duplicates: 0, errors: 0 }))
+      })
+    })
+    state.active = [
+      connection({ id: 'same-a', company_id: 'company-shared' }),
+      connection({ id: 'same-b', company_id: 'company-shared' }),
+      connection({ id: 'other', company_id: 'company-other' }),
+    ]
+
+    const responsePromise = GET(cronRequest())
+
+    // First wave: one slot per company, so same-b must wait for same-a.
+    await vi.waitFor(() => expect(started).toContain('other'))
+    expect(started).toEqual(expect.arrayContaining(['same-a', 'other']))
+    expect(started).not.toContain('same-b')
+    resolvers.splice(0).forEach(resolve => resolve())
+    await vi.waitFor(() => expect(started).toContain('same-b'))
+    resolvers.splice(0).forEach(resolve => resolve())
+
+    const response = await responsePromise
+    await expect(response.json()).resolves.toMatchObject({ processed: 3 })
+  })
+
+  it('isolates one failing connection inside a wave', async () => {
+    mocks.syncAccountTransactions.mockImplementation((...args: unknown[]) => {
+      if (args[3] === 'conn-1') return Promise.reject(new Error('ASPSP 500'))
+      return Promise.resolve({ imported: 0, duplicates: 0, errors: 0 })
+    })
+    state.active = Array.from({ length: 4 }, (_, index) => connection({
+      id: `conn-${index}`,
+      company_id: `11111111-1111-4111-8111-${String(index).padStart(12, '0')}`,
+    }))
+
+    const response = await GET(cronRequest())
+
+    const body = await response.json()
+    expect(body.processed).toBe(4)
+    expect(body.totalFailed).toBe(1)
+    const failed = body.results.find(
+      (r: { connectionId: string }) => r.connectionId === 'conn-1',
+    )
+    expect(failed).toMatchObject({ status: 'error', errors: 1 })
   })
 
   it('probes a connection whose accounts are all deselected', async () => {
