@@ -1014,6 +1014,11 @@ function chunkIds(ids: readonly string[], size: number): string[][] {
  * filter, so they are consulted in a pre-check; the column gate is re-asserted
  * on the UPDATE itself against a concurrent book or auto-match.
  *
+ * Runs before the target row is promoted and none of rebind / demote-or-delete
+ * / promote is transactional (PostgREST calls). Safe because the two rows share
+ * (bank_connection_id, external_uid), so their transactions already carry the
+ * currency the promote is about to write onto the target.
+ *
  * @returns the number of rows rebound
  */
 async function rebindMovableTransactions(
@@ -1045,10 +1050,15 @@ async function rebindMovableTransactions(
         .select('transaction_id')
         .eq('company_id', companyId)
         .in('transaction_id', chunk),
-      supabase.from('invoice_payments').select('transaction_id').in('transaction_id', chunk),
+      supabase
+        .from('invoice_payments')
+        .select('transaction_id')
+        .eq('company_id', companyId)
+        .in('transaction_id', chunk),
       supabase
         .from('supplier_invoice_payments')
         .select('transaction_id')
+        .eq('company_id', companyId)
         .in('transaction_id', chunk),
     ])
     for (const { data, error } of anchorRows) {
@@ -1306,6 +1316,9 @@ export async function upsertFromPsd2(
       return
     }
     // Holder row vanished between SELECT and UPDATE: fall through to upsert.
+    // Any rows the rebind above already moved onto it were SET NULL by the
+    // transactions.cash_account_id FK when it went; the next sync re-ingests
+    // them under the fresh row (the same self-heal as a deleted twin).
   }
 
   const { error } = await supabase

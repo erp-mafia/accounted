@@ -495,13 +495,18 @@ interface UpsertStub {
   ownRow?: { id: string; is_primary: boolean } | null
   /**
    * Transactions bound to the duplicate ownRow. `booked` rows carry a
-   * journal_entry_id (or a confirmed invoice match); `anchored` rows have a
-   * transaction_voucher_links row WITHOUT journal_entry_id (bulk-book N>1).
+   * journal_entry_id (or a confirmed invoice match); `anchor` rows are bound
+   * to a verifikat WITHOUT journal_entry_id through the named table (bulk-book
+   * N>1 via transaction_voucher_links, multi-allocation via a payment row).
    * The mock mutates this list as rebinds land, so the demote-or-delete probe
    * sees the post-rebind state like the real table would.
    */
   ownTransactions: OwnTx[]
   upsertError?: { message: string } | null
+  /** Fail the pre-check SELECT on this anchor table. */
+  anchorError?: { table: AnchorTable; message: string } | null
+  /** Fail the rebind UPDATE on transactions. */
+  rebindError?: { message: string } | null
   // Captured writes:
   updates: Array<{ payload: Record<string, unknown>; id: unknown }>
   deletes: unknown[]
@@ -511,11 +516,12 @@ interface UpsertStub {
   transactionFilters: Array<{ col: string; value: unknown }>
   /** Rebind UPDATEs from the overflow duplicate onto the promoted row, with their filters. */
   txRebinds: Array<{ payload: Record<string, unknown>; filters: TxFilter[] }>
-  /** Anchor tables consulted before the rebind and the ids they were probed with. */
-  anchorProbes: Array<{ table: string; ids: string[] }>
+  /** Anchor tables consulted before the rebind, the ids they were probed with and their eq filters. */
+  anchorProbes: Array<{ table: string; ids: string[]; filters: Array<{ col: string; value: unknown }> }>
 }
 
-type OwnTx = { id: string; booked?: boolean; anchored?: boolean }
+type AnchorTable = 'transaction_voucher_links' | 'invoice_payments' | 'supplier_invoice_payments'
+type OwnTx = { id: string; booked?: boolean; anchor?: AnchorTable }
 type TxFilter = { op: 'eq' | 'is' | 'in'; col: string; value: unknown }
 
 function makeUpsertStub(partial: Partial<UpsertStub> = {}): UpsertStub {
@@ -601,6 +607,9 @@ function makeUpsertSupabase(stub: UpsertStub) {
                 return chain
               }),
               select: vi.fn(() => {
+                if (stub.rebindError) {
+                  return Promise.resolve({ data: null, error: stub.rebindError })
+                }
                 const moved = stub.ownTransactions.filter((t) => ids.includes(t.id) && !t.booked)
                 stub.ownTransactions = stub.ownTransactions.filter((t) => !moved.includes(t))
                 return Promise.resolve({ data: moved.map((t) => ({ id: t.id })), error: null })
@@ -615,17 +624,21 @@ function makeUpsertSupabase(stub: UpsertStub) {
         table === 'invoice_payments' ||
         table === 'supplier_invoice_payments'
       ) {
+        const filters: Array<{ col: string; value: unknown }> = []
         const chain = {
           select: vi.fn(() => chain),
-          eq: vi.fn(() => chain),
+          eq: vi.fn((col: string, value: unknown) => {
+            filters.push({ col, value })
+            return chain
+          }),
           in: vi.fn((_col: string, ids: string[]) => {
-            stub.anchorProbes.push({ table, ids })
-            const rows =
-              table === 'transaction_voucher_links'
-                ? stub.ownTransactions
-                    .filter((t) => t.anchored && ids.includes(t.id))
-                    .map((t) => ({ transaction_id: t.id }))
-                : []
+            stub.anchorProbes.push({ table, ids, filters })
+            if (stub.anchorError && stub.anchorError.table === table) {
+              return Promise.resolve({ data: null, error: { message: stub.anchorError.message } })
+            }
+            const rows = stub.ownTransactions
+              .filter((t) => t.anchor === table && ids.includes(t.id))
+              .map((t) => ({ transaction_id: t.id }))
             return Promise.resolve({ data: rows, error: null })
           }),
         }
@@ -864,12 +877,17 @@ describe('upsertFromPsd2', () => {
         { op: 'is', col: 'supplier_invoice_id', value: null },
       ]),
     )
-    // Junction/payment anchors (no journal_entry_id on the tx) were checked.
+    // Junction/payment anchors (no journal_entry_id on the tx) were checked,
+    // each scoped by company (the callback path runs with a service-role
+    // client, where RLS does not apply).
     expect(stub.anchorProbes.map((p) => p.table).sort()).toEqual([
       'invoice_payments',
       'supplier_invoice_payments',
       'transaction_voucher_links',
     ])
+    for (const probe of stub.anchorProbes) {
+      expect(probe.filters).toEqual([{ col: 'company_id', value: 'c1' }])
+    }
     expect(stub.deletes).toEqual(['row-dup'])
     expect(stub.updates).toHaveLength(1)
     expect(stub.updates[0].id).toBe('row-old')
@@ -887,7 +905,7 @@ describe('upsertFromPsd2', () => {
       ownTransactions: [
         { id: 'tx-movable' },
         { id: 'tx-booked', booked: true },
-        { id: 'tx-anchored', anchored: true },
+        { id: 'tx-anchored', anchor: 'transaction_voucher_links' },
       ],
     })
     await upsertFromPsd2(makeUpsertSupabase(stub), 'c1', UPSERT_INPUT)
@@ -924,6 +942,103 @@ describe('upsertFromPsd2', () => {
       id: 'row-dup',
       payload: { bank_connection_id: null, external_uid: null },
     })
+  })
+
+  it.each<AnchorTable>(['invoice_payments', 'supplier_invoice_payments'])(
+    'keeps a row anchored through %s on the duplicate and demotes it',
+    async (table) => {
+      // Multi-allocation (match_batch_allocate) anchors through a payment row
+      // with journal_entry_id NULL on the transaction, so the column gate alone
+      // would move it. The pre-check must exclude it.
+      const stub = makeUpsertStub({
+        holder: { id: 'row-old', bank_connection_id: 'conn-old' },
+        connections: [{ id: 'conn-old', status: 'revoked' }],
+        ownRow: { id: 'row-dup', is_primary: false },
+        ownTransactions: [{ id: 'tx-movable' }, { id: 'tx-paid', anchor: table }],
+      })
+      await upsertFromPsd2(makeUpsertSupabase(stub), 'c1', UPSERT_INPUT)
+
+      expect(stub.txRebinds).toHaveLength(1)
+      expect(stub.txRebinds[0].filters).toContainEqual({
+        op: 'in',
+        col: 'id',
+        value: ['tx-movable'],
+      })
+      expect(stub.ownTransactions.map((t) => t.id)).toEqual(['tx-paid'])
+      expect(stub.deletes).toHaveLength(0)
+      expect(stub.updates[0]).toEqual({
+        id: 'row-dup',
+        payload: { bank_connection_id: null, external_uid: null },
+      })
+      expect(stub.updates[1].id).toBe('row-old')
+    },
+  )
+
+  it('aborts before any cash_accounts write when an anchor pre-check fails', async () => {
+    const stub = makeUpsertStub({
+      holder: { id: 'row-old', bank_connection_id: 'conn-old' },
+      connections: [{ id: 'conn-old', status: 'revoked' }],
+      ownRow: { id: 'row-dup', is_primary: true },
+      ownTransactions: [{ id: 'tx-1' }],
+      anchorError: { table: 'supplier_invoice_payments', message: 'probe boom' },
+    })
+    await expect(
+      upsertFromPsd2(makeUpsertSupabase(stub), 'c1', UPSERT_INPUT),
+    ).rejects.toThrow(/cash_accounts upsert failed: probe boom/)
+
+    expect(stub.txRebinds).toHaveLength(0)
+    expect(stub.updates).toHaveLength(0)
+    expect(stub.deletes).toHaveLength(0)
+    expect(stub.upserts).toHaveLength(0)
+    expect(stub.rpcCalls).toHaveLength(0)
+  })
+
+  it('aborts before any cash_accounts write when the rebind UPDATE fails', async () => {
+    const stub = makeUpsertStub({
+      holder: { id: 'row-old', bank_connection_id: 'conn-old' },
+      connections: [{ id: 'conn-old', status: 'revoked' }],
+      ownRow: { id: 'row-dup', is_primary: true },
+      ownTransactions: [{ id: 'tx-1' }],
+      rebindError: { message: 'rebind boom' },
+    })
+    await expect(
+      upsertFromPsd2(makeUpsertSupabase(stub), 'c1', UPSERT_INPUT),
+    ).rejects.toThrow(/cash_accounts upsert failed: rebind boom/)
+
+    expect(stub.txRebinds).toHaveLength(1)
+    expect(stub.ownTransactions.map((t) => t.id)).toEqual(['tx-1'])
+    expect(stub.updates).toHaveLength(0)
+    expect(stub.deletes).toHaveLength(0)
+    expect(stub.upserts).toHaveLength(0)
+    expect(stub.rpcCalls).toHaveLength(0)
+  })
+
+  it('chunks the anchor probes and the rebind UPDATE at 100 ids', async () => {
+    const ids = Array.from({ length: 150 }, (_, i) => `tx-${String(i).padStart(3, '0')}`)
+    const stub = makeUpsertStub({
+      holder: { id: 'row-old', bank_connection_id: 'conn-old' },
+      connections: [{ id: 'conn-old', status: 'revoked' }],
+      ownRow: { id: 'row-dup', is_primary: false },
+      ownTransactions: ids.map((id) => ({ id })),
+    })
+    await upsertFromPsd2(makeUpsertSupabase(stub), 'c1', UPSERT_INPUT)
+
+    // 3 anchor tables x 2 chunks, each chunk probed against every table.
+    expect(stub.anchorProbes).toHaveLength(6)
+    for (const table of [
+      'transaction_voucher_links',
+      'invoice_payments',
+      'supplier_invoice_payments',
+    ]) {
+      const probes = stub.anchorProbes.filter((p) => p.table === table)
+      expect(probes.map((p) => p.ids)).toEqual([ids.slice(0, 100), ids.slice(100)])
+    }
+    const inLists = stub.txRebinds.map(
+      (r) => r.filters.find((f) => f.op === 'in' && f.col === 'id')?.value,
+    )
+    expect(inLists).toEqual([ids.slice(0, 100), ids.slice(100)])
+    expect(stub.ownTransactions).toHaveLength(0)
+    expect(stub.deletes).toEqual(['row-dup'])
   })
 
   it('scopes the duplicate linked-transactions probe by company (service-role defense in depth)', async () => {
