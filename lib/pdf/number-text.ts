@@ -29,3 +29,12 @@ export function pdfNumberText(text: string): string {
   const ascii = text.replaceAll(UNICODE_MINUS, '-')
   return NEGATIVE_ZERO.test(ascii) ? ascii.slice(1) : ascii
 }
+
+/**
+ * Free text (a formula, a label) made safe for a standard PDF font: U+2212
+ * becomes the ASCII hyphen-minus. Unlike pdfNumberText it never touches a
+ * leading "-0", because the text is not a single number.
+ */
+export function pdfText(text: string): string {
+  return text.replaceAll(UNICODE_MINUS, '-')
+}

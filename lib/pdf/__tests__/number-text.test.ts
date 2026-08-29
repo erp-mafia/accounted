@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { pdfNumberText, UNICODE_MINUS } from '../number-text'
+import { pdfNumberText, pdfText, UNICODE_MINUS } from '../number-text'
 
 describe('pdfNumberText', () => {
   it('maps every U+2212 to the ASCII hyphen-minus', () => {
@@ -22,5 +22,23 @@ describe('pdfNumberText', () => {
   it('leaves text without a minus sign untouched', () => {
     expect(pdfNumberText('20 316')).toBe('20 316')
     expect(pdfNumberText('')).toBe('')
+  })
+})
+
+describe('pdfText', () => {
+  it('maps every U+2212 in free text to the ASCII hyphen-minus', () => {
+    expect(pdfText(`bruttolön ${UNICODE_MINUS} skatt ${UNICODE_MINUS} nettoavdrag`)).toBe(
+      'bruttolön - skatt - nettoavdrag'
+    )
+    expect(pdfText(`${UNICODE_MINUS}(full lön ${UNICODE_MINUS} sjuklön + karensavdrag)`)).toBe(
+      '-(full lön - sjuklön + karensavdrag)'
+    )
+  })
+
+  it('does not treat the text as a number', () => {
+    // A formula that happens to start with "-0" keeps its sign.
+    expect(pdfText(`${UNICODE_MINUS}0,5 × lön`)).toBe('-0,5 × lön')
+    expect(pdfText('grundlön + tillägg')).toBe('grundlön + tillägg')
+    expect(pdfText('')).toBe('')
   })
 })
