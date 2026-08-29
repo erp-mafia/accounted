@@ -464,8 +464,30 @@ export async function createPendingDocumentUpload(
 }
 
 export interface CompletedPendingDocumentUpload {
-  document: DocumentAttachment
+  /** `deduplicated` is set only when the caller opted into content dedupe
+   *  and the company had already archived these exact bytes. */
+  document: DocumentAttachment & { deduplicated?: boolean }
   buffer: ArrayBuffer
+}
+
+export interface CompletePendingDocumentUploadOptions {
+  extractionOwner?: DocumentExtractionOwner
+  /**
+   * Provenance stamped on the document row. Default 'api': the signed-URL
+   * primitives were built for MCP agents. The browser direct-to-storage path
+   * (files too large for a hosted function body) passes 'file_upload' so the
+   * archive tells the same story as the multipart route it replaces.
+   */
+  uploadSource?: Extract<DocumentUploadSource, 'api' | 'file_upload'>
+  /**
+   * Content dedupe, same contract as uploadDocument({ dedupeByContent }):
+   * after hashing, a current-version document in the same company with the
+   * same SHA-256 wins, the pending object is removed and the existing row is
+   * returned with `deduplicated: true`. Opt-in (default false) because the
+   * MCP tools key their idempotency on document id === upload id: a dedupe
+   * hit would return a different id and trip their collision guard.
+   */
+  dedupeByContent?: boolean
 }
 
 async function findReservedDocument(
@@ -495,16 +517,32 @@ function validateReservedDocumentMetadata(
   }
 }
 
+/**
+ * Each verdict carries a registry code (structured-errors.ts) so a REST
+ * caller can answer with the right status and copy instead of a generic
+ * failure. The magic-byte sentence is authored Swedish user copy naming the
+ * expected and detected types: it rides along as `messageSv` so the route
+ * can show it without forwarding a raw error message.
+ */
 async function validatePendingDocumentBytes(
   buffer: ArrayBuffer,
   mimeType: string
 ): Promise<string> {
-  if (buffer.byteLength === 0) throw new Error('Uploaded file is empty')
+  if (buffer.byteLength === 0) {
+    throw Object.assign(new Error('Uploaded file is empty'), { code: 'DOC_UPLOAD_EMPTY' })
+  }
   if (buffer.byteLength > MAX_DOCUMENT_SIZE) {
-    throw new Error(`File too large (max ${MAX_DOCUMENT_SIZE / 1024 / 1024} MB)`)
+    throw Object.assign(new Error(`File too large (max ${MAX_DOCUMENT_SIZE / 1024 / 1024} MB)`), {
+      code: 'DOC_UPLOAD_TOO_LARGE',
+    })
   }
   const magicError = validateDocumentMagicBytes(buffer, mimeType)
-  if (magicError) throw new Error(magicError)
+  if (magicError) {
+    throw Object.assign(new Error(magicError), {
+      code: 'DOC_UPLOAD_INVALID_CONTENT',
+      messageSv: magicError,
+    })
+  }
   return computeSHA256(buffer)
 }
 
@@ -521,7 +559,7 @@ export async function completePendingDocumentUpload(
   fileName: string,
   mimeType: string,
   now: number = Date.now(),
-  options: { extractionOwner?: DocumentExtractionOwner } = {}
+  options: CompletePendingDocumentUploadOptions = {}
 ): Promise<CompletedPendingDocumentUpload> {
   const serviceClient = createServiceClientNoCookies()
   const storage = serviceClient.storage.from(DOCUMENTS_BUCKET)
@@ -552,7 +590,12 @@ export async function completePendingDocumentUpload(
     sourcePath = permanentPath
   }
   if (downloadError || !blob) {
-    throw new Error('Document upload was not found or has expired. Create a new upload URL and try again.')
+    // Coded so REST callers can answer 404 with the registry copy: the
+    // browser PUT never landed, or the reservation outlived its TTL.
+    throw Object.assign(
+      new Error('Document upload was not found or has expired. Create a new upload URL and try again.'),
+      { code: 'DOCUMENT_UPLOAD_NOT_FOUND' },
+    )
   }
 
   const buffer = await blob.arrayBuffer()
@@ -562,6 +605,27 @@ export async function completePendingDocumentUpload(
   } catch (error) {
     await storage.remove([sourcePath])
     throw error
+  }
+
+  if (options.dedupeByContent) {
+    // Same lookup as uploadDocument: oldest current-version match wins, and
+    // a broken lookup fails closed rather than archiving the duplicate.
+    const { data: existingByContent, error: dedupeError } = await supabase
+      .from('document_attachments')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('sha256_hash', sha256Hash)
+      .eq('is_current_version', true)
+      .order('created_at', { ascending: true })
+      .limit(1)
+    if (dedupeError) {
+      throw new Error(`Content dedupe lookup failed: ${dedupeError.message}`)
+    }
+    const hit = (existingByContent as DocumentAttachment[] | null)?.[0]
+    if (hit) {
+      await storage.remove([sourcePath])
+      return { document: { ...hit, deduplicated: true }, buffer }
+    }
   }
 
   if (sourcePath === pendingPath) {
@@ -588,7 +652,7 @@ export async function completePendingDocumentUpload(
       version: 1,
       is_current_version: true,
       uploaded_by: userId,
-      upload_source: 'api',
+      upload_source: options.uploadSource ?? 'api',
       digitization_date: new Date(now).toISOString(),
       journal_entry_id: null,
       journal_entry_line_id: null,
@@ -606,7 +670,13 @@ export async function completePendingDocumentUpload(
       return { document: concurrent, buffer }
     }
     await storage.remove([permanentPath])
-    throw new Error(`Failed to create document record: ${error.message}`)
+    // Keep the SQLSTATE on the thrown error: a viewer-role member passes the
+    // storage policy (membership only) but not the document_attachments
+    // insert policy (writers only), and 42501 is what lets the caller answer
+    // "no permission" in Swedish instead of a generic failure.
+    throw Object.assign(new Error(`Failed to create document record: ${error.message}`), {
+      code: error.code,
+    })
   }
 
   const document = data as DocumentAttachment
