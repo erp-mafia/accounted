@@ -36,12 +36,11 @@ import {
 } from '@/lib/auth/consume-invite-cookie'
 import { buildPasswordResetRedirectTo } from '@/lib/domains/trusted-app-origin'
 import { AuthFormError } from '@/components/auth/AuthFormError'
-import { GoogleAuthButton } from '@/components/auth/GoogleAuthButton'
+import { OAuthButton } from '@/components/auth/OAuthButton'
 import {
   TurnstileChallenge,
   type TurnstileChallengeHandle,
 } from '@/components/auth/TurnstileChallenge'
-import { isGoogleAuthEnabled } from '@/lib/auth/google-oauth'
 import {
   captchaTokenOptions,
   isTurnstileSubmissionBlocked,
@@ -54,6 +53,7 @@ import {
   setSessionAuthMethodHint,
   type SessionTimeoutReason,
 } from '@/lib/auth/session-timeout-shared'
+import type { GoTrueAuthSettings } from '@/lib/auth/gotrue-providers'
 
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
 
@@ -69,7 +69,14 @@ const BankIdAuth = dynamic(
  * `initialMethod` comes from the server page reading the method-hint cookie,
  * so a returning password user lands straight on the form with no flash.
  */
-export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | null }) {
+export function LoginClient({
+  initialMethod,
+  authSettings,
+}: {
+  initialMethod: LoginMethod | null
+  authSettings: GoTrueAuthSettings
+}) {
+  const { providers, passwordLoginEnabled, registrationEnabled } = authSettings
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -115,7 +122,6 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   // Per-request brand merged over getBranding() defaults (WL-12): identical
   // values on default hosts, brand values on branded hosts.
   const branding = useBranding()
-  const googleAuthEnabled = isGoogleAuthEnabled()
   const tAuth = useTranslations('auth')
   const tCommon = useTranslations('common')
   const tInvite = useTranslations('invite')
@@ -548,8 +554,8 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   }
 
   const showBankIdChip = method === 'email' && bankIdEnabled
-  const showEmailChip = method === 'bankid'
-  const chipCount = (showBankIdChip ? 1 : 0) + (showEmailChip ? 1 : 0) + (googleAuthEnabled ? 1 : 0)
+  const showEmailChip = method === 'bankid' && passwordLoginEnabled
+  const chipCount = (showBankIdChip ? 1 : 0) + (showEmailChip ? 1 : 0) + providers.length
 
   return (
     <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
@@ -604,14 +610,16 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                 {tAuth('bankid_no_account_greeting', { name: bankIdNoAccount.givenName ?? '' })}
               </p>
               <p className="mt-1 text-muted-foreground">{tAuth('bankid_no_account_body')}</p>
-              <p className="mt-1">
-                <Link
-                  href={registerHref}
-                  className="text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors"
-                >
-                  {tAuth('bankid_no_account_create')}
-                </Link>
-              </p>
+        {passwordLoginEnabled && registrationEnabled && (
+                <p className="mt-1">
+                  <Link
+                    href={registerHref}
+                    className="text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors"
+                  >
+                    {tAuth('bankid_no_account_create')}
+                  </Link>
+                </p>
+              )}
             </div>
           )}
           {bankIdUnavailable && (
@@ -624,7 +632,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
           <div key={method} className="animate-fade-in">
             {method === 'bankid' ? (
               <BankIdAuth mode="login" hero onComplete={handleBankIdComplete} />
-            ) : (
+            ) : !passwordLoginEnabled ? null : (
               <form onSubmit={handlePasswordLogin} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="email">{tAuth('email_label')}</Label>
@@ -760,13 +768,15 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                     BankID
                   </Button>
                 )}
-                {googleAuthEnabled && (
-                  <GoogleAuthButton
+                {providers.map((provider) => (
+                  <OAuthButton
+                    key={provider.id}
+                    provider={provider}
                     compact
                     next={nextPath}
                     onError={(message) => setFormError({ kind: 'oauth', message })}
                   />
-                )}
+                ))}
                 {showEmailChip && (
                   <Button
                     type="button"
@@ -783,15 +793,17 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
           )}
         </div>
 
-        <p className="mt-6 text-center text-[13px] text-muted-foreground">
-          {tAuth('login_new_here')}{' '}
-          <Link
-            href={registerHref}
-            className="font-medium text-foreground underline underline-offset-2 hover:opacity-80 transition-opacity"
-          >
-            {tAuth('no_account')}
-          </Link>
-        </p>
+        {passwordLoginEnabled && (
+          <p className="mt-6 text-center text-[13px] text-muted-foreground">
+            {tAuth('login_new_here')}{' '}
+            <Link
+              href={registerHref}
+              className="font-medium text-foreground underline underline-offset-2 hover:opacity-80 transition-opacity"
+            >
+              {tAuth('no_account')}
+            </Link>
+          </p>
+        )}
 
         <p className="mt-3 text-center text-xs text-muted-foreground/80 leading-relaxed">
           {tAuth('terms_prefix')}{' '}
