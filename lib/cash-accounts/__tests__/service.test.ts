@@ -493,19 +493,30 @@ interface UpsertStub {
   connections?: ConnRow[]
   /** Existing row for (company_id, bank_connection_id, external_uid) on another ledger. */
   ownRow?: { id: string; is_primary: boolean } | null
-  /** Whether the duplicate ownRow has linked transactions. */
-  ownHasTransactions?: boolean
+  /**
+   * Transactions bound to the duplicate ownRow. `booked` rows carry a
+   * journal_entry_id (or a confirmed invoice match); `anchored` rows have a
+   * transaction_voucher_links row WITHOUT journal_entry_id (bulk-book N>1).
+   * The mock mutates this list as rebinds land, so the demote-or-delete probe
+   * sees the post-rebind state like the real table would.
+   */
+  ownTransactions: OwnTx[]
   upsertError?: { message: string } | null
   // Captured writes:
   updates: Array<{ payload: Record<string, unknown>; id: unknown }>
   deletes: unknown[]
   upserts: Array<Record<string, unknown>>
   rpcCalls: Array<{ fn: string; args: Record<string, unknown> }>
-  /** .eq() filters applied to the linked-transactions probe. */
+  /** Filters applied to the transactions SELECTs (candidate scan + probe). */
   transactionFilters: Array<{ col: string; value: unknown }>
-  /** Rebind writes from the overflow duplicate onto the promoted row. */
-  txRebinds: Array<Record<string, unknown>>
+  /** Rebind UPDATEs from the overflow duplicate onto the promoted row, with their filters. */
+  txRebinds: Array<{ payload: Record<string, unknown>; filters: TxFilter[] }>
+  /** Anchor tables consulted before the rebind and the ids they were probed with. */
+  anchorProbes: Array<{ table: string; ids: string[] }>
 }
+
+type OwnTx = { id: string; booked?: boolean; anchored?: boolean }
+type TxFilter = { op: 'eq' | 'is' | 'in'; col: string; value: unknown }
 
 function makeUpsertStub(partial: Partial<UpsertStub> = {}): UpsertStub {
   return {
@@ -515,6 +526,8 @@ function makeUpsertStub(partial: Partial<UpsertStub> = {}): UpsertStub {
     rpcCalls: [],
     transactionFilters: [],
     txRebinds: [],
+    anchorProbes: [],
+    ownTransactions: [],
     ...partial,
   }
 }
@@ -539,29 +552,81 @@ function makeUpsertSupabase(stub: UpsertStub) {
         }
       }
       if (table === 'transactions') {
-        const chain = {
-          select: vi.fn(() => chain),
+        const selectChain = {
           eq: vi.fn((col: string, value: unknown) => {
             stub.transactionFilters.push({ col, value })
-            return chain
+            return selectChain
           }),
-          limit: vi.fn(() =>
+          is: vi.fn((col: string, value: unknown) => {
+            stub.transactionFilters.push({ col, value })
+            return selectChain
+          }),
+          order: vi.fn(() => selectChain),
+          // Candidate scan (movable rows): mirrors the .is(null) column gate.
+          range: vi.fn((from: number, to: number) =>
             Promise.resolve({
-              data: stub.ownHasTransactions ? [{ id: 'tx-1' }] : [],
+              data: stub.ownTransactions
+                .filter((t) => !t.booked)
+                .slice(from, to + 1)
+                .map((t) => ({ id: t.id })),
               error: null,
             }),
           ),
+          // Demote-or-delete probe: anything still bound after the rebind.
+          limit: vi.fn(() =>
+            Promise.resolve({
+              data: stub.ownTransactions.slice(0, 1).map((t) => ({ id: t.id })),
+              error: null,
+            }),
+          ),
+        }
+        return {
+          select: vi.fn(() => selectChain),
           update: vi.fn((payload: Record<string, unknown>) => {
-            stub.txRebinds.push(payload)
-            const eqChain = {
+            const rebind = { payload, filters: [] as TxFilter[] }
+            stub.txRebinds.push(rebind)
+            let ids: string[] = []
+            const chain = {
               eq: vi.fn((col: string, value: unknown) => {
-                stub.transactionFilters.push({ col, value })
-                return eqChain
+                rebind.filters.push({ op: 'eq', col, value })
+                return chain
               }),
-              then: (onFulfilled: (v: { error: null }) => unknown) =>
-                Promise.resolve({ error: null }).then(onFulfilled),
+              is: vi.fn((col: string, value: unknown) => {
+                rebind.filters.push({ op: 'is', col, value })
+                return chain
+              }),
+              in: vi.fn((col: string, value: string[]) => {
+                rebind.filters.push({ op: 'in', col, value })
+                ids = value
+                return chain
+              }),
+              select: vi.fn(() => {
+                const moved = stub.ownTransactions.filter((t) => ids.includes(t.id) && !t.booked)
+                stub.ownTransactions = stub.ownTransactions.filter((t) => !moved.includes(t))
+                return Promise.resolve({ data: moved.map((t) => ({ id: t.id })), error: null })
+              }),
             }
-            return eqChain
+            return chain
+          }),
+        }
+      }
+      if (
+        table === 'transaction_voucher_links' ||
+        table === 'invoice_payments' ||
+        table === 'supplier_invoice_payments'
+      ) {
+        const chain = {
+          select: vi.fn(() => chain),
+          eq: vi.fn(() => chain),
+          in: vi.fn((_col: string, ids: string[]) => {
+            stub.anchorProbes.push({ table, ids })
+            const rows =
+              table === 'transaction_voucher_links'
+                ? stub.ownTransactions
+                    .filter((t) => t.anchored && ids.includes(t.id))
+                    .map((t) => ({ transaction_id: t.id }))
+                : []
+            return Promise.resolve({ data: rows, error: null })
           }),
         }
         return chain
@@ -763,30 +828,102 @@ describe('upsertFromPsd2', () => {
       holder: { id: 'row-old', bank_connection_id: 'conn-old' },
       connections: [{ id: 'conn-old', status: 'revoked' }],
       ownRow: { id: 'row-dup', is_primary: false },
-      ownHasTransactions: false,
     })
     await upsertFromPsd2(makeUpsertSupabase(stub), 'c1', UPSERT_INPUT)
 
     expect(stub.deletes).toEqual(['row-dup'])
+    expect(stub.txRebinds).toHaveLength(0)
     expect(stub.updates).toHaveLength(1)
     expect(stub.updates[0].id).toBe('row-old')
     expect(stub.rpcCalls).toHaveLength(0)
   })
 
   it('rebinds linked transactions then deletes the overflow duplicate', async () => {
+    // The reconnect callback mirrored uid-1 onto 1931 and the sync imported
+    // rows there; the user then mapped the IBAN to 1930. Unbooked rows follow
+    // the promoted ledger so booking proposes 1930, and the emptied 1931
+    // mirror is removed.
     const stub = makeUpsertStub({
       holder: { id: 'row-old', bank_connection_id: 'conn-old' },
       connections: [{ id: 'conn-old', status: 'revoked' }],
       ownRow: { id: 'row-dup', is_primary: false },
-      ownHasTransactions: true,
+      ownTransactions: [{ id: 'tx-1' }, { id: 'tx-2' }],
     })
     await upsertFromPsd2(makeUpsertSupabase(stub), 'c1', UPSERT_INPUT)
 
-    expect(stub.txRebinds).toEqual([{ cash_account_id: 'row-old' }])
+    expect(stub.txRebinds).toHaveLength(1)
+    expect(stub.txRebinds[0].payload).toEqual({ cash_account_id: 'row-old' })
+    // The movable gate (#1570) is re-asserted on the UPDATE itself.
+    expect(stub.txRebinds[0].filters).toEqual(
+      expect.arrayContaining([
+        { op: 'eq', col: 'company_id', value: 'c1' },
+        { op: 'eq', col: 'cash_account_id', value: 'row-dup' },
+        { op: 'in', col: 'id', value: ['tx-1', 'tx-2'] },
+        { op: 'is', col: 'journal_entry_id', value: null },
+        { op: 'is', col: 'invoice_id', value: null },
+        { op: 'is', col: 'supplier_invoice_id', value: null },
+      ]),
+    )
+    // Junction/payment anchors (no journal_entry_id on the tx) were checked.
+    expect(stub.anchorProbes.map((p) => p.table).sort()).toEqual([
+      'invoice_payments',
+      'supplier_invoice_payments',
+      'transaction_voucher_links',
+    ])
     expect(stub.deletes).toEqual(['row-dup'])
     expect(stub.updates).toHaveLength(1)
     expect(stub.updates[0].id).toBe('row-old')
     expect(stub.updates[0].payload).toMatchObject({ bank_connection_id: 'conn-new' })
+  })
+
+  it('demotes (not deletes) the duplicate when booked or voucher-anchored rows remain', async () => {
+    // tx-booked has a journal_entry_id and tx-anchored a transaction_voucher_links
+    // row: both vouchers carry the old 19xx line, so they stay on the duplicate,
+    // which survives as a released manual twin (the #1643 guards handle it).
+    const stub = makeUpsertStub({
+      holder: { id: 'row-old', bank_connection_id: 'conn-old' },
+      connections: [{ id: 'conn-old', status: 'revoked' }],
+      ownRow: { id: 'row-dup', is_primary: false },
+      ownTransactions: [
+        { id: 'tx-movable' },
+        { id: 'tx-booked', booked: true },
+        { id: 'tx-anchored', anchored: true },
+      ],
+    })
+    await upsertFromPsd2(makeUpsertSupabase(stub), 'c1', UPSERT_INPUT)
+
+    // Only the movable row moved; the anchored one was excluded by the pre-check.
+    expect(stub.txRebinds).toHaveLength(1)
+    expect(stub.txRebinds[0].filters).toContainEqual({ op: 'in', col: 'id', value: ['tx-movable'] })
+    expect(stub.ownTransactions.map((t) => t.id).sort()).toEqual(['tx-anchored', 'tx-booked'])
+
+    expect(stub.deletes).toHaveLength(0)
+    expect(stub.updates).toHaveLength(2)
+    // First write releases the duplicate's PSD2 binding, preserving the row
+    // (and its transactions.cash_account_id links) as a manual account.
+    expect(stub.updates[0].id).toBe('row-dup')
+    expect(stub.updates[0].payload).toEqual({ bank_connection_id: null, external_uid: null })
+    // Second write promotes the holder.
+    expect(stub.updates[1].id).toBe('row-old')
+    expect(stub.updates[1].payload).toMatchObject({ bank_connection_id: 'conn-new' })
+  })
+
+  it('skips the rebind UPDATE when every bound row is booked', async () => {
+    const stub = makeUpsertStub({
+      holder: { id: 'row-old', bank_connection_id: 'conn-old' },
+      connections: [{ id: 'conn-old', status: 'revoked' }],
+      ownRow: { id: 'row-dup', is_primary: false },
+      ownTransactions: [{ id: 'tx-booked', booked: true }],
+    })
+    await upsertFromPsd2(makeUpsertSupabase(stub), 'c1', UPSERT_INPUT)
+
+    expect(stub.txRebinds).toHaveLength(0)
+    expect(stub.anchorProbes).toHaveLength(0)
+    expect(stub.deletes).toHaveLength(0)
+    expect(stub.updates[0]).toEqual({
+      id: 'row-dup',
+      payload: { bank_connection_id: null, external_uid: null },
+    })
   })
 
   it('scopes the duplicate linked-transactions probe by company (service-role defense in depth)', async () => {
@@ -794,7 +931,6 @@ describe('upsertFromPsd2', () => {
       holder: { id: 'row-old', bank_connection_id: 'conn-old' },
       connections: [{ id: 'conn-old', status: 'revoked' }],
       ownRow: { id: 'row-dup', is_primary: false },
-      ownHasTransactions: false,
     })
     await upsertFromPsd2(makeUpsertSupabase(stub), 'c1', UPSERT_INPUT)
 
@@ -811,7 +947,6 @@ describe('upsertFromPsd2', () => {
       holder: { id: 'row-old', bank_connection_id: 'conn-old' },
       connections: [{ id: 'conn-old', status: 'revoked' }],
       ownRow: { id: 'row-dup', is_primary: true },
-      ownHasTransactions: false,
     })
     await upsertFromPsd2(makeUpsertSupabase(stub), 'c1', UPSERT_INPUT)
 
@@ -831,12 +966,13 @@ describe('upsertFromPsd2', () => {
       holder: { id: 'row-old', bank_connection_id: 'conn-old' },
       connections: [{ id: 'conn-old', status: 'revoked' }],
       ownRow: { id: 'row-dup', is_primary: true },
-      ownHasTransactions: true,
+      ownTransactions: [{ id: 'tx-booked', booked: true }],
     })
     await upsertFromPsd2(makeUpsertSupabase(stub), 'c1', UPSERT_INPUT)
 
-    expect(stub.deletes).toEqual(['row-dup'])
-    expect(stub.txRebinds).toEqual([{ cash_account_id: 'row-old' }])
+    expect(stub.deletes).toHaveLength(0)
+    expect(stub.updates[0].id).toBe('row-dup')
+    expect(stub.updates[0].payload).toEqual({ bank_connection_id: null, external_uid: null })
     expect(stub.rpcCalls).toEqual([
       {
         fn: 'set_cash_account_primary',
