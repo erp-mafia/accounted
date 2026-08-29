@@ -430,6 +430,31 @@ export async function categorizeMatchedTransaction(
 
   await ensureFiscalPeriod(supabase, userId, companyId, transaction.date, fiscalYearStartMonth)
 
+  // Issue #1661: a private marking books eget uttag/insättning, so a locked
+  // period refuses it like any verifikat, but the trigger's message would
+  // only say "locked" and the MCP/bulk callers would steer to unlock. The row
+  // they want to clear is usually no affärshändelse at all: pre-check private
+  // rows so the refusal names the ignore path (staged gnubok_ignore_transaction
+  // or the page). Business rows keep the trigger/null handling below.
+  if (!isBusiness) {
+    const privateLock = await checkPeriodLock(supabase, companyId, transaction.date)
+    if (privateLock.locked) {
+      log.warn('private marking refused: period is locked', {
+        txId,
+        companyId,
+        date: transaction.date,
+        reason: privateLock.reason ?? null,
+      })
+      return {
+        error:
+          getErrorEntry('TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED')?.message_sv ??
+          'Perioden är låst. Ignorera raden i stället om den inte är en affärshändelse.',
+        errorCode: 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED',
+        status: 400,
+      }
+    }
+  }
+
   let journalEntryId: string | null = null
   try {
     const journalEntry = await createTransactionJournalEntry(
@@ -454,7 +479,11 @@ export async function categorizeMatchedTransaction(
   // checkPeriodLock tells the two null causes apart for an honest message.
   if (!journalEntryId) {
     const verdict = await checkPeriodLock(supabase, companyId, transaction.date)
-    const code = verdict.locked ? 'PERIOD_LOCKED' : 'NO_OPEN_PERIOD_FOR_DATE'
+    const code = verdict.locked
+      ? isBusiness
+        ? 'PERIOD_LOCKED'
+        : 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED'
+      : 'NO_OPEN_PERIOD_FOR_DATE'
     log.warn('journal entry refused: no open fiscal period for date', {
       txId,
       companyId,
@@ -674,7 +703,9 @@ export async function bulkBookMatchedInboxItems(
 
     if (result.error) {
       const reason =
-        result.errorCode === 'PERIOD_LOCKED' || result.errorCode === 'NO_OPEN_PERIOD_FOR_DATE'
+        result.errorCode === 'PERIOD_LOCKED' ||
+        result.errorCode === 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED' ||
+        result.errorCode === 'NO_OPEN_PERIOD_FOR_DATE'
           ? 'no_open_period'
           : result.status === 404 ? 'transaction_not_found'
           : result.status === 409 ? 'already_booked_or_duplicate'

@@ -147,6 +147,8 @@ import { RetagLineDimensionsParamsSchema } from '@/lib/pending-operations/schema
 import { CreateAccountParamsSchema, UpdateAccountParamsSchema } from '@/lib/pending-operations/schemas/account'
 import { defaultRateForVatTreatment } from '@/lib/vat/account-vat-treatment'
 import { SetVoucherNoteParamsSchema } from '@/lib/pending-operations/schemas/voucher-note'
+import { IgnoreTransactionParamsSchema } from '@/lib/pending-operations/schemas/ignore-transaction'
+import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { UpdateCompanySettingsParamsSchema } from '@/lib/pending-operations/schemas/company-settings'
 import { UpdateCustomerParamsSchema } from '@/lib/pending-operations/schemas/customer'
 import {
@@ -1188,6 +1190,51 @@ async function commitSetVoucherNote(
       voucher_series: data.voucher_series,
       voucher_number: data.voucher_number,
       notes: validated.notes,
+    },
+  }
+}
+
+async function commitIgnoreTransaction(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  let validated
+  try {
+    validated = IgnoreTransactionParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
+    }
+    throw err
+  }
+
+  // Issue #1661: the same core the dashboard and v1 routes use, so the three
+  // doors cannot drift. It refuses a booked row through all three anchors
+  // (journal_entry_id, payment allocations, voucher links), is idempotent,
+  // and writes no verifikat: a locked or closed period does not block it.
+  const outcome = await setTransactionIgnored(
+    supabase,
+    companyId,
+    validated.transaction_id,
+    validated.ignored,
+  )
+  if (!outcome.ok) {
+    const entry = getErrorEntry(outcome.code)
+    return {
+      error: entry?.message_sv ?? 'Transaktionen kunde inte ignoreras.',
+      errorCode: outcome.code,
+      status: outcome.status,
+    }
+  }
+
+  return {
+    data: {
+      transaction_id: outcome.transaction_id,
+      is_ignored: outcome.is_ignored,
+      // false when the row was already in the requested state.
+      changed: outcome.changed,
     },
   }
 }
@@ -6450,6 +6497,9 @@ async function commitPendingOperationInner(
         break
       case 'set_voucher_note':
         result = await commitSetVoucherNote(supabase, companyId, pendingOp.params)
+        break
+      case 'ignore_transaction':
+        result = await commitIgnoreTransaction(supabase, companyId, pendingOp.params)
         break
       case 'create_dimension_value':
         result = await commitCreateDimensionValue(supabase, userId, companyId, pendingOp.params)

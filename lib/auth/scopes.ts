@@ -135,6 +135,10 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'POST /api/v1/companies/:companyId/transactions/:id/uncategorize': 'transactions:write',
   'POST /api/v1/companies/:companyId/transactions/:id/match-invoice': 'transactions:write',
   'POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invoice': 'transactions:write',
+  // Ignore / restore: no verifikat, so it is the locked-period escape hatch
+  // for rows that are not business events (issue #1661).
+  'POST /api/v1/companies/:companyId/transactions/:id/ignore': 'transactions:write',
+  'DELETE /api/v1/companies/:companyId/transactions/:id/ignore': 'transactions:write',
   // Writes: bulk
   'POST /api/v1/companies/:companyId/transactions/ingest': 'transactions:write',
   'POST /api/v1/companies/:companyId/transactions/batch-categorize': 'transactions:write',

@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `139`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `141`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -13,6 +13,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "DELETE /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId",
   "DELETE /api/v1/companies/:companyId/salary-runs/:id/lines/:lineId",
   "DELETE /api/v1/companies/:companyId/suppliers/:id",
+  "DELETE /api/v1/companies/:companyId/transactions/:id/ignore",
   "DELETE /api/v1/companies/:companyId/webhooks/:id",
   "GET /api/v1/companies",
   "GET /api/v1/companies/:companyId/accounts",
@@ -130,6 +131,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/suppliers",
   "POST /api/v1/companies/:companyId/suppliers/bulk-create",
   "POST /api/v1/companies/:companyId/transactions/:id/categorize",
+  "POST /api/v1/companies/:companyId/transactions/:id/ignore",
   "POST /api/v1/companies/:companyId/transactions/:id/match-invoice",
   "POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invoice",
   "POST /api/v1/companies/:companyId/transactions/:id/uncategorize",

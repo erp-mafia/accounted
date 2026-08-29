@@ -49,6 +49,10 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
       // verifikat: links without creating new bookkeeping. Categorizing such a
       // transaction would double-book it.
       'gnubok_link_transaction_to_journal_entry',
+      // Rows that are not business events (PSD2 ghost rows, duplicates):
+      // ignore writes no verifikat and is allowed in a locked period, the
+      // answer to TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED (issue #1661).
+      'gnubok_ignore_transaction',
       // Tagging: check the registry before writing dimensions bags on
       // categorize calls (resolve-don't-select needs real codes/names).
       'gnubok_list_dimensions',
@@ -63,6 +67,9 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
     tools: [
       'gnubok_list_fiscal_periods',
       'gnubok_list_uncategorized_transactions',
+      // Clears non-business rows out of the period without a verifikat; the
+      // lock guard counts untriaged rows, ignored ones no longer block it.
+      'gnubok_ignore_transaction',
       'gnubok_get_reconciliation_status',
       // Account-keyed reconciliation: the rows behind the bridge and the
       // staged link (bank accounts and skattekonto alike).
@@ -92,6 +99,8 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
       // verifikat that already holds the affärshändelse.
       'gnubok_categorize_transaction',
       'gnubok_link_transaction_to_journal_entry',
+      // A row that will never be booked (duplicate, noise line): ignore it.
+      'gnubok_ignore_transaction',
       'gnubok_reconcile_signoff',
       'gnubok_approve_pending_operation',
     ],

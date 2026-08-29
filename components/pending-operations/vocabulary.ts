@@ -46,6 +46,7 @@ export const OPERATION_LABEL_KEYS: Record<string, string> = {
   link_supplier_invoice_voucher: 'type_link_supplier_invoice_voucher',
   link_transaction_journal_entry: 'type_link_transaction_journal_entry',
   uncategorize_transaction: 'type_uncategorize_transaction',
+  ignore_transaction: 'type_ignore_transaction',
   retag_line_dimensions: 'type_retag_line_dimensions',
   set_voucher_note: 'type_set_voucher_note',
   // Bulk booking / allocation

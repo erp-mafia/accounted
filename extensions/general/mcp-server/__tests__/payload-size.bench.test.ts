@@ -295,12 +295,21 @@ describe('tools/list payload size guard', () => {
     //     deliberately: picking which read to demote needs prod usage data
     //     (MCP usage profile), not a guess inside a payroll PR: do that
     //     demotion as its own change and ratchet this ceiling back down.
+    //   * 64.4K to 65K with gnubok_ignore_transaction in the default catalog
+    //     (issue #1661: private marking in a locked period). Same reason as
+    //     set_run_salary: a search-only WRITE is uncallable on Claude.ai, and
+    //     the TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED remediation, three loadouts
+    //     and the reconcile-month skill instruct agents to CALL it. Measured
+    //     64 863 on the accounted projection (+548: a 4-property schema plus
+    //     the staging envelope; the description is one sentence per fact).
+    //     Same deliberate skip of the read-demotion rule as the entry above:
+    //     the demotion needs prod usage data, not a guess inside this PR.
     // Long-term answer to growth is no longer a ceiling bump. gnubok_call_tool
     // makes `catalogVisibility: 'search'` usable for READ tools on hosts that
     // can only invoke what tools/list showed them, which is the constraint that
     // forced gnubok_reconcile_match back into the default catalog on
     // 2026-08-26. Demote a read to search-only before proposing a bump.
-    expect(approxTokens).toBeLessThan(64_400)
+    expect(approxTokens).toBeLessThan(65_000)
   })
 
   it('keeps the accounted_* namespace as the measured worst case', () => {

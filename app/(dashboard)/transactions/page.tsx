@@ -1807,6 +1807,29 @@ export default function TransactionsPage() {
           setProcessingId(null)
           return { ok: false, journalEntryId: null }
         }
+        if (result?.error?.code === 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED') {
+          // Issue #1661: a private marking is a real booking (eget uttag /
+          // insättning), so a locked period refuses it. The row being cleared
+          // is usually no affärshändelse at all: offer Ignorera (no verifikat,
+          // allowed in a locked period) on the toast. Interactive escalation,
+          // so it shows for batch rows too: it is the only way forward.
+          const lockedTx = transactions.find((t) => t.id === id)
+          toast({
+            title: t('private_locked_title'),
+            description: getErrorMessage(result, { context: 'transaction', statusCode: response.status }),
+            variant: 'destructive',
+            action: lockedTx ? (
+              <ToastAction
+                altText={t('private_locked_ignore_action')}
+                onClick={() => void handleIgnoreTransaction(lockedTx)}
+              >
+                {t('private_locked_ignore_action')}
+              </ToastAction>
+            ) : undefined,
+          })
+          setProcessingId(null)
+          return { ok: false, journalEntryId: null }
+        }
         if (!silent) {
           toast({
             title: 'Kategorisering misslyckades',

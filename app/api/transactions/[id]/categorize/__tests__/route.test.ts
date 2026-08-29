@@ -685,6 +685,36 @@ describe('POST /api/transactions/[id]/categorize', () => {
       expect(mockSaveUserMappingRule).not.toHaveBeenCalled()
       expect(mockReverseOrphanedJournalEntry).not.toHaveBeenCalled()
     })
+
+    it('returns TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED (suggested_action ignore) for a private marking in a locked period (issue #1661)', async () => {
+      // A private marking books eget uttag/insättning, so the lock applies,
+      // but the row is usually no affärshändelse: the pre-check answers with
+      // the ignore-steering code before the engine is asked to book anything.
+      enqueueUpToEngine()
+      mockCheckPeriodLock.mockResolvedValue({
+        locked: true,
+        reason: 'period_locked_at_set',
+        fiscal_period_id: 'fp-2024',
+      })
+
+      const request = createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: false },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+      const { status, body } = await parseJsonResponse<{
+        error: { code: string; message: string; details?: { reason?: string; suggested_action?: string } }
+      }>(response)
+
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED')
+      expect(body.error.message).toContain('Ignorera')
+      expect(body.error.details?.reason).toBe('period_locked_at_set')
+      expect(body.error.details?.suggested_action).toBe('ignore')
+      expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+      expect(findCalls('transactions', 'update')).toEqual([])
+      expect(mockReverseOrphanedJournalEntry).not.toHaveBeenCalled()
+    })
   })
 
   it('returns 500 when transaction update fails', async () => {
