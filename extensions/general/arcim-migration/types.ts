@@ -76,7 +76,7 @@ export interface SkipReasons {
  * failure classifies, otherwise a generic sentence with the provider's reply).
  */
 export interface MigrationStepError {
-  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'reconciliation'
+  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'registrationLinks' | 'reconciliation'
   /** Structured code when the failure classifies (e.g. PROVIDER_API_MODULE_INACTIVE), else null. */
   code: string | null
   message: string
@@ -123,6 +123,21 @@ export interface MigrationResults {
    * are now marked paid; `ambiguous` need manual review; `unmatched` had no
    * candidate voucher.
    */
+  /**
+   * Imported invoices linked to the SIE-imported verifikat that BOOKED them
+   * (the registration voucher the provider named on the invoice). Only exact,
+   * amount-corroborated matches are written; the other buckets stay unlinked
+   * and explain why. See lib/invoices/link-migrated-registration-vouchers.ts.
+   */
+  registrationLinks?: {
+    scanned: number
+    linked: number
+    noRef: number
+    unresolved: number
+    ambiguous: number
+    amountMismatch: number
+    alreadyLinked: number
+  }
   reconciliation?: { scanned: number; autoLinked: number; ambiguous: number; unmatched: number }
   /**
    * Steps that failed against the provider API. Present (non-empty) whenever a

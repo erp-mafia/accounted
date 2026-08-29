@@ -25,6 +25,7 @@ import {
   importProviderDocuments,
 } from './lib/import-documents'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
+import { relinkRegistrationVouchers } from './lib/relink-registration-vouchers'
 import type { ArcimProvider } from './types'
 import { ARCIM_PROVIDERS } from './types'
 import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
@@ -1320,6 +1321,12 @@ export const arcimMigrationExtension: Extension = {
     // auto-link settled supplier invoices to their existing vouchers. Pass
     // { dryRun: true } to preview the plan (incl. items needing manual review)
     // without writing.
+    //
+    // Pass { consentId } to ALSO re-link registration vouchers (the verifikat
+    // that BOOKED each invoice). The imported rows do not store the provider's
+    // voucher ref, so that pass re-fetches both registers from the provider
+    // through the given consent; without a consentId it is skipped and the
+    // response carries no `registrationLinks`.
     {
       method: 'POST',
       path: '/reconcile',
@@ -1335,9 +1342,11 @@ export const arcimMigrationExtension: Extension = {
         const companyId = ctx?.companyId ?? user.id
 
         let dryRun = false
+        let consentId: string | null = null
         try {
-          const body = (await request.json()) as { dryRun?: boolean }
+          const body = (await request.json()) as { dryRun?: boolean; consentId?: unknown }
           dryRun = body?.dryRun === true
+          consentId = typeof body?.consentId === 'string' && body.consentId ? body.consentId : null
         } catch {
           // empty body is fine: default to a real run
         }
@@ -1356,7 +1365,29 @@ export const arcimMigrationExtension: Extension = {
             ambiguous: result.ambiguous,
             unmatched: result.unmatched,
           })
-          return NextResponse.json({ success: true, dryRun, result })
+
+          if (!consentId) {
+            return NextResponse.json({ success: true, dryRun, result })
+          }
+
+          // Company-scoped: a foreign consent throws ConsentNotFoundError
+          // inside resolveConsent, same as a nonexistent one.
+          const registrationLinks = await relinkRegistrationVouchers({
+            supabase,
+            companyId,
+            consentId,
+            dryRun,
+          })
+          log.info('arcim registration relink completed', {
+            companyId,
+            dryRun,
+            providerInvoices: registrationLinks.providerInvoices,
+            matched: registrationLinks.matched,
+            linked: registrationLinks.linked,
+            ambiguous: registrationLinks.ambiguous,
+            amountMismatch: registrationLinks.amountMismatch,
+          })
+          return NextResponse.json({ success: true, dryRun, result, registrationLinks })
         } catch (error) {
           log.error('arcim reconcile failed', error as Error)
           return errorResponseFromCode('PROVIDER_MIGRATE_FAILED', moduleLog, {
