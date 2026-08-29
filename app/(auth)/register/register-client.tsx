@@ -926,6 +926,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
                     provider={provider}
                     compact
                     onError={(message) => setFormError({ kind: 'oauth', message })}
+                    next={nextPath}
                   />
                 ))}
                 {showEmailChip && (
