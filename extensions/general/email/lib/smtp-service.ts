@@ -11,7 +11,14 @@
  *   SMTP_HOST                      required
  *   SMTP_PORT                      default 587
  *   SMTP_SECURE                    "true" = implicit TLS (port 465); default
- *                                  false = plain + STARTTLS upgrade
+ *                                  false = STARTTLS, required by default
+ *   SMTP_REQUIRE_TLS               default true: with SMTP_SECURE=false the
+ *                                  session MUST upgrade to TLS via STARTTLS
+ *                                  before AUTH and mail (nodemailer's own
+ *                                  default is opportunistic, which lets an
+ *                                  on-path STARTTLS-stripping attacker read
+ *                                  the credentials and every invoice PDF).
+ *                                  "false" only for a plaintext LAN relay.
  *   SMTP_USER / SMTP_PASS          optional (an internal relay may be open to
  *                                  the Docker network only)
  *   SMTP_FROM_EMAIL                required: the envelope/From address
@@ -53,18 +60,24 @@ const FROM_ADDRESS_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}@[a-z0-9.-]{4,253}$/
  * Builds the From header exactly like resend-service.ts buildFromHeader().
  * With an explicit `from` (the company's own verified sending domain, #1802)
  * the mail leaves as "<name> <address>" and the relay's default sender is not
- * involved; otherwise "<fromName> via <App> <SMTP_FROM_EMAIL>" or
- * "<App> <SMTP_FROM_EMAIL>". A malformed explicit sender falls through to the
+ * involved. `fromAddress` is only ever set by lib/email/brand-sender.ts for
+ * VERIFIED brand sender domains (WL-13): "<fromName> <fromAddress>". Otherwise
+ * the platform default: "<fromName> <SMTP_FROM_EMAIL>" or
+ * "<App> <SMTP_FROM_EMAIL>". A fromName WITHOUT an explicit address shows the
+ * name ALONE (founder call 2026-08-05: no "via <platform>" in the display
+ * name; the platform stays visible in the actual From address until a sender
+ * domain is verified). A malformed explicit sender falls through to the
  * platform default rather than failing the send.
  *
  * Mirrored rather than imported because the platform fallback address differs
  * per provider (RESEND_FROM_EMAIL there, SMTP_FROM_EMAIL here). Same
  * header-injection defence: CRLF and angle brackets are stripped from every
- * name part. Exported for unit tests.
+ * name and address part. Exported for unit tests.
  */
 export function buildSmtpFromHeader(input: {
   fromName?: string
   from?: { name: string; address: string }
+  fromAddress?: string
   defaultFromEmail: string
 }): string {
   const safeAppName = sanitizeHeaderPart(getBranding().appName)
@@ -78,8 +91,14 @@ export function buildSmtpFromHeader(input: {
   }
 
   const safeFromName = input.fromName ? sanitizeHeaderPart(input.fromName) : null
+  const safeFromAddress = input.fromAddress ? sanitizeHeaderPart(input.fromAddress) : null
+  if (safeFromAddress) {
+    return safeFromName
+      ? `${encodeDisplayName(safeFromName)} <${safeFromAddress}>`
+      : safeFromAddress
+  }
   return safeFromName
-    ? `${encodeDisplayName(`${safeFromName} via ${safeAppName}`)} <${input.defaultFromEmail}>`
+    ? `${encodeDisplayName(safeFromName)} <${input.defaultFromEmail}>`
     : `${encodeDisplayName(safeAppName)} <${input.defaultFromEmail}>`
 }
 
@@ -105,6 +124,8 @@ export interface SmtpSettings {
   pass: string | null
   fromEmail: string
   rejectUnauthorized: boolean
+  /** STARTTLS is mandatory (default). Only false for a plaintext LAN relay. */
+  requireTLS: boolean
 }
 
 /** Read the SMTP settings from the environment; null when the minimum (host + from) is missing. */
@@ -122,6 +143,7 @@ export function readSmtpSettings(): SmtpSettings | null {
     pass: process.env.SMTP_PASS ?? null,
     fromEmail,
     rejectUnauthorized: envBool('SMTP_TLS_REJECT_UNAUTHORIZED', true),
+    requireTLS: envBool('SMTP_REQUIRE_TLS', true),
   }
 }
 
@@ -138,6 +160,11 @@ function getTransport(settings: SmtpSettings): Transporter {
     host: settings.host,
     port: settings.port,
     secure: settings.secure,
+    // nodemailer's default STARTTLS is opportunistic: it silently carries on in
+    // cleartext when the relay (or an on-path attacker stripping the STARTTLS
+    // capability) does not offer TLS. Refuse that unless the operator opted
+    // out for a plaintext LAN relay. Irrelevant with implicit TLS (secure).
+    requireTLS: !settings.secure && settings.requireTLS,
     ...(settings.user ? { auth: { user: settings.user, pass: settings.pass ?? '' } } : {}),
     tls: { rejectUnauthorized: settings.rejectUnauthorized },
   })
@@ -152,14 +179,16 @@ export function resetSmtpTransportForTests(): void {
 
 export class SmtpEmailService implements EmailService {
   async sendEmail(options: SendEmailOptions): Promise<SendEmailResult> {
-    const { to, cc, bcc, subject, html, text, replyTo, fromName, attachments } = options
+    const { to, cc, bcc, subject, html, text, replyTo, fromName, fromAddress, attachments } = options
 
     const settings = readSmtpSettings()
     if (!settings) {
       return { success: false, error: 'Email service is not configured' }
     }
 
-    const from = buildSmtpFromHeader({ fromName, from: options.from, defaultFromEmail: settings.fromEmail })
+    const from = buildSmtpFromHeader({ fromName, from: options.from, fromAddress, defaultFromEmail: settings.fromEmail })
+    // The retry deliberately drops both the company sender and the brand
+    // address so it differs from `from` whenever either was set.
     const platformFrom = buildSmtpFromHeader({ fromName, defaultFromEmail: settings.fromEmail })
     const mail = {
       to: Array.isArray(to) ? to : [to],

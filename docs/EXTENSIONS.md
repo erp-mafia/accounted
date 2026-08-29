@@ -63,7 +63,7 @@ extensions/
     calendar/                 ← Kalender: month/week/day views
     cloud-backup/             ← Molnsynkronisering: sync the säkerhetsbackup to the user's own cloud storage
     document-extraction/      ← AI-extrahering av underlag: reads receipts and invoices, fills supplier/amount/VAT/date
-    email/                    ← E-post (Resend): invoices and reminders by e-mail
+    email/                    ← E-post (Resend or SMTP): invoices and reminders by e-mail
     enable-banking/           ← Bankintegration (PSD2): automatic bank transaction sync
     invoice-inbox/            ← Dokumentinkorg: forward supplier invoices to a unique address
     mail/                     ← Brevlådor: lets Kvittojakten (receipt hunt) search the user's mailboxes

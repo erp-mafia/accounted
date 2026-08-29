@@ -313,14 +313,15 @@ Requires a [Resend](https://resend.com) account with a verified sender domain.
 EMAIL_PROVIDER=smtp
 SMTP_HOST=smtp.example.se
 SMTP_PORT=587                         # default 587; 465 with SMTP_SECURE=true
-SMTP_SECURE=false                     # true = implicit TLS, false = STARTTLS
+SMTP_SECURE=false                     # true = implicit TLS, false = STARTTLS required (set SMTP_REQUIRE_TLS=false only for a plaintext LAN relay)
 SMTP_USER=...                         # optional for an internal relay
 SMTP_PASS=...
 SMTP_FROM_EMAIL=faktura@your-domain.se
+# SMTP_REQUIRE_TLS=false              # only for a plaintext relay on a trusted LAN: without it a relay that cannot STARTTLS fails the send instead of leaking credentials and invoice PDFs in cleartext
 # SMTP_TLS_REJECT_UNAUTHORIZED=false  # only for a LAN relay with a self-signed certificate
 ```
 
-`EMAIL_PROVIDER` is optional: with a `RESEND_API_KEY` present Resend is used, otherwise `SMTP_HOST` selects SMTP, so adding SMTP variables next to an existing Resend key never moves mail by accident. Set it explicitly when both are configured. The From header is built the same way on both providers (`<sender name> via <app name> <from address>`), and the delivery-status webhook is Resend-only.
+`EMAIL_PROVIDER` is optional: with a `RESEND_API_KEY` present Resend is used, otherwise `SMTP_HOST` selects SMTP, so adding SMTP variables next to an existing Resend key never moves mail by accident. Set it explicitly when both are configured. The From header is built identically on both providers (the company or brand name as display name, the platform address from `RESEND_FROM_EMAIL` or `SMTP_FROM_EMAIL` unless the company has a verified sending domain); the delivery-status webhook is Resend-only.
 
 Without either, invoices can still be generated as PDFs but cannot be emailed.
 

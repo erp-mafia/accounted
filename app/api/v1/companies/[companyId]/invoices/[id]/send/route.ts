@@ -26,7 +26,7 @@
  *      failure never blocks the send; it surfaces as a PAYMENT_LINK_FAILED
  *      warning on the response once the email is delivered.
  *   7. Final PDF render with the real number.
- *   8. Email send via Resend (the email extension). Fail → 502
+ *   8. Email send via the email extension (Resend or SMTP). Fail → 502
  *      INVOICE_SEND_PROVIDER_FAILED. The number IS consumed at this point;
  *      same orphan-window as :mark-sent (architecturally tracked).
  *   9. POINT OF NO RETURN. Steps below are best-effort; failures surface
@@ -123,7 +123,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/send',
   summary: 'Send a draft invoice to the customer by email.',
   description:
-    'The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → email via Resend (PDF attachment, copy to company) → flip status to sent → post journal entry (real invoice, unless kontantmetoden or defer_invoice_booking) → archive PDF as underlag → emit invoice.sent. Email failure is a hard 502 before state changes; post-email failures surface as warnings but the invoice IS marked sent.',
+    'The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → email via the email extension (Resend or SMTP; PDF attachment, copy to company) → flip status to sent → post journal entry (real invoice, unless kontantmetoden or defer_invoice_booking) → archive PDF as underlag → emit invoice.sent. Email failure is a hard 502 before state changes; post-email failures surface as warnings but the invoice IS marked sent.',
   useWhen:
     'You want Accounted to deliver the invoice to the customer via email. For invoices delivered through another channel (Peppol, postal, own SMTP) use :mark-sent instead.',
   doNotUseFor:

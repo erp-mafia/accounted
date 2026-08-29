@@ -16,6 +16,7 @@
     "SMTP_USER",
     "SMTP_PASS",
     "SMTP_FROM_EMAIL",
+    "SMTP_REQUIRE_TLS",
     "SMTP_TLS_REJECT_UNAUTHORIZED"
   ],
   "npmDependencies": [
