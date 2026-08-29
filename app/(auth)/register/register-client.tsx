@@ -44,7 +44,7 @@ const BankIdAuth = dynamic(
 )
 
 export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSettings }) {
-  const { providers, passwordLoginEnabled } = authSettings
+  const { providers, passwordLoginEnabled, registrationEnabled } = authSettings
   // `invite` and `next` are the only query parameters this page reads.
   //
   // `next` is the post-signup destination /login forwards when a visitor with
