@@ -366,6 +366,24 @@ export interface InvoiceEmailTexts {
   en?: InvoiceEmailTextOverrides
 }
 
+// Editable reminder email texts per reminder level (Swedish only, matching
+// the reminder templates). Missing / whitespace-only fields fall back to the
+// defaults in lib/email/reminder-templates.ts (REMINDER_EMAIL_DEFAULT_TEXTS).
+// Supports the fixed placeholder set {fakturanummer} {kundnamn} {förnamn}
+// {företag} {fakturadatum} {förfallodatum} {belopp} {dagar}. TEXT only:
+// reminder fee and interest math are unaffected (Lag 1981:739 caps the
+// påminnelseavgift at 60 kr; the 450 kr förseningsersättning is out of scope).
+export interface ReminderTextOverride {
+  subject?: string
+  body?: string
+}
+
+export interface ReminderTextOverrides {
+  level_1?: ReminderTextOverride
+  level_2?: ReminderTextOverride
+  level_3?: ReminderTextOverride
+}
+
 export type InvoiceFontFamily =
   | 'Helvetica'
   | 'Times-Roman'
@@ -544,6 +562,8 @@ export interface CompanySettings {
   reminder_days_level_1: number
   reminder_days_level_2: number
   reminder_days_level_3: number
+  // Editable reminder email texts per level. null = all defaults.
+  reminder_text_overrides: ReminderTextOverrides | null
 
   // Reminder surcharges (dröjsmålsränta + lagstadgad påminnelseavgift)
   reminder_fee_enabled: boolean
