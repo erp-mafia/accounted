@@ -211,6 +211,40 @@ describe('Skills registry', () => {
       // The fallback path stays documented for companies without access.
       expect(text).toMatch(/external e-invoice provider/i)
       expect(text).toContain('gnubok_mark_invoice_as_sent')
+      // The exporter refuses personnummer-based BUYER identifiers too (prepareParty('buyer') in
+      // peppol-bis-billing.ts), so an enskild firma customer must not be promised a send.
+      expect(text).toMatch(/(?:buyer|customer)[^.\n]*personnummer/i)
+      // The mark-sent recovery applies to the still-draft invoice only: INVOICE_MARK_SENT_REPAIR_REQUIRED
+      // leaves the invoice sent with the verifikat posted, and a second mark-sent returns 409.
+      expect(text).toMatch(/still-draft invoice/i)
+    }
+
+    // The numbered workflow must route an e-invoice customer to the Peppol section from Step 4
+    // itself, so an agent reading top-down never reaches the external-provider fallback first.
+    const invoicingRules = truthfulSkills[0].body
+    expect(invoicingRules).toMatch(/### Step 4: Send[\s\S]*?Peppol[\s\S]*?### Step 5/)
+    // Kontantmetod and defer_invoice_booking companies get no verifikat at issue (Step 3 says the same).
+    expect(invoicingRules).toMatch(/issues the invoice itself \(number, status, and the verifikat under faktureringsmetoden\)/)
+
+    // The v1 :send / :mark-sent descriptions (source of skills/accounted-api/references/invoices.md)
+    // are the fourth and fifth corrected surfaces; apiskill:check only detects generated-vs-source
+    // drift, so the truthful claim is pinned here on the route source itself.
+    const v1RouteTexts = [
+      'app/api/v1/companies/[companyId]/invoices/[id]/send/route.ts',
+      'app/api/v1/companies/[companyId]/invoices/[id]/mark-sent/route.ts',
+    ].map((relativePath) => readFileSync(join(process.cwd(), relativePath), 'utf8'))
+    for (const text of v1RouteTexts) {
+      for (const pattern of capabilityAbsentPatterns) {
+        expect(text).not.toMatch(pattern)
+      }
+      // The pre-#546 framing listed Peppol as an external channel next to postal mail.
+      expect(text).not.toMatch(/\(Peppol, postal/)
+      expect(text).toMatch(/a v1 or MCP Peppol send action is not yet available/)
+      expect(text).toMatch(/per-company access grant/)
+      expect(text).toContain('Inställningar > Fakturering (Settings > Invoicing)')
+      expect(text).toMatch(/aktiebolag senders, standard invoices only/)
+      expect(text).toMatch(/buyers whose org number is not a personnummer/)
+      expect(text).toMatch(/could not be marked as sent/)
     }
   })
 
