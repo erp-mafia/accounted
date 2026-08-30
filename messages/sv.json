@@ -738,6 +738,8 @@
     "type_vacation_year_close": "Semesterårsavslut",
     "type_submit_vat_declaration": "Momsdeklaration",
     "type_submit_agi": "Arbetsgivardeklaration",
+    "type_book_skattekonto_row": "Bokför skattekontohändelse",
+    "type_book_skattekonto_rows": "Bokför skattekontohändelser",
     "origin_agent_chat": "Föreslaget av AI-assistenten via chatt",
     "origin_mcp": "Föreslaget av AI-assistent via {label}",
     "origin_api": "Föreslaget via API-integration",

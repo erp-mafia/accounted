@@ -106,6 +106,7 @@ import { extensionRegistry } from '@/lib/extensions/registry'
 import {
   SkatteverketRecoverableError,
   type SkatteverketCommitServices,
+  type SkattekontoBookingCommitService,
   type SkvSubmitResult,
 } from '@/lib/pending-operations/skatteverket-commit'
 import { PartialCommitError } from '@/lib/pending-operations/errors'
@@ -5969,6 +5970,80 @@ async function commitSubmitAgi(
   return handleSkvSubmitResult(result)
 }
 
+// ── Skattekonto row booking commit handler ────────────────────────
+//
+// Commit side of the staged book_skattekonto_row / book_skattekonto_rows MCP
+// ops. The booking logic lives in the skatteverket extension
+// (lib/skattekonto-booking.ts, same helper the HTTP bokfor-batch route uses),
+// so this reaches it through the registry-resolved `services` channel exactly
+// like the filing handlers above. Separate getter: the booking service must
+// work (or fail recoverable) independently of the SKV filing services.
+
+function getSkattekontoBookingService(): SkattekontoBookingCommitService {
+  const services = extensionRegistry.get('skatteverket')?.services as
+    | Partial<SkattekontoBookingCommitService>
+    | undefined
+  if (!services?.commitBookSkattekontoRows) {
+    // Extension absent or not wired. Recoverable: leave the op pending so a
+    // re-enable + re-approve works without re-staging.
+    throw new SkatteverketRecoverableError(
+      'Skatteverket-integrationen är inte tillgänglig.',
+      'EXTENSION_DISABLED',
+      503,
+    )
+  }
+  return services as SkattekontoBookingCommitService
+}
+
+async function commitBookSkattekontoRows(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>,
+): Promise<ExecutorResult> {
+  // Accept both staged shapes: the single-row op stores { transaction_id },
+  // the batch op stores { ids }. Normalised to one id list for the service.
+  const ids = Array.isArray(params.ids)
+    ? params.ids.filter((v): v is string => typeof v === 'string' && v.length > 0)
+    : typeof params.transaction_id === 'string' && params.transaction_id.length > 0
+      ? [params.transaction_id]
+      : []
+  if (ids.length === 0) {
+    return { error: 'ids (eller transaction_id) krävs', status: 400 }
+  }
+
+  const services = getSkattekontoBookingService()
+  const result = await services.commitBookSkattekontoRows(supabase, userId, companyId, { ids })
+  if (!result.ok) {
+    if (result.recoverable) {
+      throw new SkatteverketRecoverableError(result.error, result.code, result.http_status)
+    }
+    return { error: result.error, status: result.http_status, errorCode: result.code }
+  }
+
+  if (result.summary.succeeded === 0) {
+    // Nothing was booked: reject (consume) the op with the per-row reasons in
+    // result_data so the user fixes the rows (unignore, unlock period, add a
+    // rule) and re-stages. 409: the dominant causes are state conflicts
+    // (already booked / ignored / unsettled).
+    const firstError = result.results.find((r) => !r.ok)
+    return {
+      error: firstError?.error_message ?? 'Ingen skattekontorad kunde bokföras.',
+      status: 409,
+      data: { results: result.results, summary: result.summary },
+    }
+  }
+
+  log.info('book_skattekonto_rows committed', {
+    companyId,
+    operationType: 'book_skattekonto_rows',
+    total: result.summary.total,
+    succeeded: result.summary.succeeded,
+    failed: result.summary.failed,
+  })
+  return { data: { results: result.results, summary: result.summary } }
+}
+
 // ── Multi-tx commit handlers (PRs #603/#606/#608/#610) ────────────
 //
 // Both wrap their SQL RPC. The RPCs do all the heavy lifting (locking,
@@ -6698,6 +6773,10 @@ async function commitPendingOperationInner(
         break
       case 'reconciliation_residual':
         result = await commitReconciliationResidual(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'book_skattekonto_row':
+      case 'book_skattekonto_rows':
+        result = await commitBookSkattekontoRows(supabase, userId, companyId, pendingOp.params)
         break
       case 'submit_vat_declaration':
         result = await commitSubmitVatDeclaration(supabase, userId, companyId, pendingOp.params)

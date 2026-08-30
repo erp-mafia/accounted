@@ -53,6 +53,9 @@ export const OPERATION_LABEL_KEYS: Record<string, string> = {
   match_batch_allocate: 'type_match_batch_allocate',
   bulk_book_transactions: 'type_bulk_book_transactions',
   bulk_book_inbox_items: 'type_bulk_book_inbox_items',
+  // Skattekonto row booking
+  book_skattekonto_row: 'type_book_skattekonto_row',
+  book_skattekonto_rows: 'type_book_skattekonto_rows',
   // Periods, year-end, depreciation
   close_period: 'type_close_period',
   lock_period: 'type_lock_period',
