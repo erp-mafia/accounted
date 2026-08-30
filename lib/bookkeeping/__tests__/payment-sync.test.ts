@@ -239,6 +239,34 @@ describe('syncInvoiceStatusFromPaymentEntry', () => {
     expect(wasDeleted('invoice_payments')).toBe(true)
   })
 
+  // ROT/RUT: remaining_amount is the CUSTOMER share (total - deduction_total),
+  // as build-invoice-write stores it. Recomputing it gross on reversal used to
+  // inflate remaining to total, after which the net customer settlement could
+  // never reach it again and the invoice was permanently un-payable.
+  it('customer cash-payment reversal keeps remaining net of the ROT/RUT deduction', async () => {
+    const { supabase, updatePayload } = createRecordingSupabase([
+      { data: null }, // invoice_payments select amount → none (cash entry)
+      { data: { paid_amount: 86800, total: 124000, deduction_total: 37200, due_date: '2099-12-31' } }, // invoices select
+      { data: null }, // invoices update
+      { data: [] }, // invoice_payments select transaction_id
+      { data: null }, // invoice_payments delete
+      { data: null }, // transactions update
+    ])
+
+    await syncInvoiceStatusFromPaymentEntry(
+      supabase,
+      'co-1',
+      entry({ source_type: 'invoice_cash_payment', source_id: 'invoice-1' }),
+    )
+
+    expect(updatePayload('invoices')).toEqual({
+      status: 'sent',
+      paid_at: null,
+      paid_amount: 0,
+      remaining_amount: 86800,
+    })
+  })
+
   // Partial reversal (clearing entry with a payment row): only the reversed
   // amount comes off, remaining = total - newPaid, status stays partially_paid.
   it('customer partial reversal keeps remaining_amount = total - newPaid', async () => {
