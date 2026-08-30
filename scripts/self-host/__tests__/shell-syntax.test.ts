@@ -11,11 +11,15 @@ import { join } from 'node:path'
 const DIR = join(__dirname, '..')
 const SCRIPTS = ['backup.sh', 'restore.sh']
 // A clean environment: none of the BACKUP_* / RESTORE_* variables, so the
-// scripts' own guards are what runs.
-const BARE_ENV: ExecFileSyncOptions = { env: { PATH: process.env.PATH ?? '', NODE_ENV: 'test' }, stdio: 'pipe' }
+// scripts' own guards are what runs. Typed as ProcessEnv (the repo's
+// augmentation makes NODE_ENV a required key) so it can be spread into the
+// per-test environments below without a cast.
+const BARE_PROCESS_ENV: NodeJS.ProcessEnv = { PATH: process.env.PATH ?? '', NODE_ENV: 'test' }
+const BARE_ENV: ExecFileSyncOptions = { env: BARE_PROCESS_ENV, stdio: 'pipe' }
 // Enough environment for backup.sh to get past its required-variable guards;
 // nothing here is ever contacted (the tests below stop before any tool runs).
-const BACKUP_REQUIRED_ENV: Record<string, string> = {
+const BACKUP_REQUIRED_ENV: NodeJS.ProcessEnv = {
+  ...BARE_PROCESS_ENV,
   BACKUP_DATABASE_URL: 'postgresql://postgres:x@127.0.0.1:1/postgres',
   BACKUP_S3_ENDPOINT: 'https://s3.invalid',
   BACKUP_S3_BUCKET: 'bucket',
@@ -23,7 +27,7 @@ const BACKUP_REQUIRED_ENV: Record<string, string> = {
   AWS_SECRET_ACCESS_KEY: 'secret',
 }
 
-function runBash(args: string[], env: Record<string, string>): { status: number; stderr: string } {
+function runBash(args: string[], env: NodeJS.ProcessEnv): { status: number; stderr: string } {
   try {
     execFileSync('bash', args, { env, stdio: 'pipe' })
     return { status: 0, stderr: '' }
@@ -114,7 +118,7 @@ describe('self-host shell scripts', () => {
     try {
       execFileSync('bash', [join(DIR, 'restore.sh'), 'nightly-20260101T000000Z', '--yes'], {
         ...BARE_ENV,
-        env: { ...(BARE_ENV.env as Record<string, string>), RESTORE_SKIP_DATABASE: '1' },
+        env: { ...BARE_PROCESS_ENV, RESTORE_SKIP_DATABASE: '1' },
       })
     } catch (err) {
       status = (err as { status?: number }).status ?? -1
@@ -138,11 +142,10 @@ describe('self-host shell scripts', () => {
   it('backup.sh refuses a quiesce hook without its resume hook, and the reverse, before running anything', () => {
     // A quiesce command with no resume command would leave the operator's app
     // stopped after every run; refusing up front is the only safe answer.
-    const base = { ...(BARE_ENV.env as Record<string, string>), ...BACKUP_REQUIRED_ENV }
-    const quiesceOnly = runBash([join(DIR, 'backup.sh')], { ...base, BACKUP_QUIESCE_CMD: 'true' })
+    const quiesceOnly = runBash([join(DIR, 'backup.sh')], { ...BACKUP_REQUIRED_ENV, BACKUP_QUIESCE_CMD: 'true' })
     expect(quiesceOnly.status).toBe(2)
     expect(quiesceOnly.stderr).toContain('BACKUP_QUIESCE_CMD is set but BACKUP_RESUME_CMD is not')
-    const resumeOnly = runBash([join(DIR, 'backup.sh')], { ...base, BACKUP_RESUME_CMD: 'true' })
+    const resumeOnly = runBash([join(DIR, 'backup.sh')], { ...BACKUP_REQUIRED_ENV, BACKUP_RESUME_CMD: 'true' })
     expect(resumeOnly.status).toBe(2)
     expect(resumeOnly.stderr).toContain('BACKUP_RESUME_CMD is set but BACKUP_QUIESCE_CMD is not')
   })
@@ -162,7 +165,6 @@ describe('self-host shell scripts', () => {
       }
       const marker = join(stubs, 'resumed')
       const result = runBash([join(DIR, 'backup.sh')], {
-        ...(BARE_ENV.env as Record<string, string>),
         ...BACKUP_REQUIRED_ENV,
         PATH: `${stubs}:${process.env.PATH ?? ''}`,
         BACKUP_QUIESCE_CMD: 'exit 3',
