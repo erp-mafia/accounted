@@ -69,10 +69,21 @@ describe('gnubok_list_supplier_invoices: filters', () => {
 
     expect(result.count).toBe(1)
     expect(findCall('suppliers', 'ilike')).toEqual(['name', '%office%'])
+    // The lookup is bounded: cap + 1 rows fetched so overflow is detectable.
+    expect(findCall('suppliers', 'limit')).toEqual([201])
     expect(findCalls('supplier_invoices', 'in')).toContainEqual([
       'supplier_id',
       ['sup-1', 'sup-2'],
     ])
+  })
+
+  it('rejects a supplier_name matching more suppliers than the cap', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: Array.from({ length: 201 }, (_, i) => ({ id: `sup-${i}` })) })
+
+    await expect(
+      tool().execute({ supplier_name: 'a' }, COMPANY, USER, supabase as never),
+    ).rejects.toThrow(/matches more than 200 suppliers/)
   })
 
   it('escapes LIKE wildcards in supplier_name so % and _ match literally', async () => {

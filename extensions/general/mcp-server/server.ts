@@ -7618,31 +7618,32 @@ export const tools: McpTool[] = [
       // substring, same ilike semantics as the v1 suppliers ?search filter).
       // LIKE wildcards escaped so the filter matches literal % / _; backslash
       // FIRST because it is LIKE's own escape character. Archived suppliers
-      // are included on purpose: their invoices still exist.
+      // are included on purpose: their invoices still exist. The match set is
+      // bounded (cap + 1 fetched, cap enforced loudly): an unbounded id list
+      // fed to .in() below could exceed PostgREST URL limits, so a too-broad
+      // substring gets a refine hint instead of a degraded query.
+      const NAME_MATCH_CAP = 200
       let nameMatchedSupplierIds: string[] | undefined
       if (supplierName) {
         const escaped = supplierName
           .replace(/\\/g, '\\\\')
           .replace(/%/g, '\\%')
           .replace(/_/g, '\\_')
-        // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects
-        // at 1000 rows. Page on the unique id (ordering invariant).
-        let matched: { id: string }[]
-        try {
-          matched = await fetchAllRows<{ id: string }>(({ from, to }) =>
-            supabase
-              .from('suppliers')
-              .select('id')
-              .eq('company_id', companyId)
-              .ilike('name', `%${escaped}%`)
-              .order('id', { ascending: true })
-              .range(from, to)
+        const { data: matched, error: supplierError } = await supabase
+          .from('suppliers')
+          .select('id')
+          .eq('company_id', companyId)
+          .ilike('name', `%${escaped}%`)
+          .order('id', { ascending: true })
+          .limit(NAME_MATCH_CAP + 1)
+        if (supplierError) throw dbError(supplierError)
+        if (!matched || matched.length === 0) return { invoices: [], count: 0 }
+        if (matched.length > NAME_MATCH_CAP) {
+          throw new Error(
+            `supplier_name matches more than ${NAME_MATCH_CAP} suppliers; refine the name or use supplier_id.`,
           )
-        } catch (error) {
-          throw dbError(error)
         }
-        if (matched.length === 0) return { invoices: [], count: 0 }
-        nameMatchedSupplierIds = matched.map((s) => s.id)
+        nameMatchedSupplierIds = matched.map((s: { id: string }) => s.id)
       }
 
       let query = supabase
