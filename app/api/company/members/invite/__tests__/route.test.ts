@@ -100,6 +100,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   delete process.env.AUTH_SIGNUPS_DISABLED
   if (originalAppUrl === undefined) delete process.env.NEXT_PUBLIC_APP_URL
   else process.env.NEXT_PUBLIC_APP_URL = originalAppUrl
@@ -154,7 +155,7 @@ describe('POST /api/company/members/invite', () => {
     enqueue({ data: null }) // insert invitation
 
     const { status, body } = await parseJsonResponse<{
-      data: { email: string; email_sent: boolean }
+      data: { email: string; email_sent: boolean; inviteUrl: string }
     }>(await post({ email: 'Client@Example.com', role: 'viewer' }))
 
     expect(status).toBe(200)
@@ -163,6 +164,10 @@ describe('POST /api/company/members/invite', () => {
     expect(sendEmailMock).toHaveBeenCalledWith(
       expect.objectContaining({ to: 'client@example.com' })
     )
+    // The accept link is always returned (vitest runs with NODE_ENV=test,
+    // so this pins the removal of the old development-only gate): the
+    // inviter can share it directly even when the mail went out.
+    expect(body.data.inviteUrl).toBe('https://app.accounted.test/invite/tok-plain')
   })
 
   it('sends the branded invite: brand link base, brand appName, brand sender', async () => {
@@ -180,7 +185,7 @@ describe('POST /api/company/members/invite', () => {
     enqueue({ data: { name: 'Kund AB' } })
     enqueue({ data: null })
 
-    const { status } = await parseJsonResponse(
+    const { status, body } = await parseJsonResponse<{ data: { inviteUrl: string } }>(
       await post({ email: 'client@example.com' })
     )
 
@@ -191,6 +196,8 @@ describe('POST /api/company/members/invite', () => {
         appName: 'Siffra',
       })
     )
+    // The returned link follows the brand base too, same as the mailed one.
+    expect(body.data.inviteUrl).toBe('https://app.siffra.se/invite/tok-plain')
     expect(sendEmailMock).toHaveBeenCalledWith(
       expect.objectContaining({
         fromName: 'Siffra',
@@ -233,12 +240,54 @@ describe('POST /api/company/members/invite', () => {
     sendEmailMock.mockResolvedValue({ success: false, error: 'smtp down' })
 
     const { status, body } = await parseJsonResponse<{
-      data: { email_sent: boolean; status: string }
+      data: { email_sent: boolean; status: string; inviteUrl: string }
     }>(await post({ email: 'client@example.com' }))
 
     expect(status).toBe(200)
     expect(body.data.status).toBe('pending')
     expect(body.data.email_sent).toBe(false)
+    // The link is the inviter's recovery path when the mail bounced.
+    expect(body.data.inviteUrl).toBe('https://app.accounted.test/invite/tok-plain')
+  })
+
+  it('no mail provider configured: invite created, link returned, nothing sent, warn logged (#1710)', async () => {
+    // NODE_ENV=production is the Docker image's setting and exactly the case
+    // the old development-only gate hid the link from. It also lets the
+    // logger emit (info/warn are suppressed under NODE_ENV=test).
+    vi.stubEnv('NODE_ENV', 'production')
+    isConfiguredMock.mockReturnValue(false)
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    enqueue({ data: { role: 'owner' } })
+    enqueue({ data: [] })
+    enqueue({ data: null })
+    enqueue({ data: { name: 'Acme AB' } })
+    enqueue({ data: null })
+
+    const { status, body } = await parseJsonResponse<{
+      data: {
+        email_sent: boolean
+        user_provisioned: boolean
+        status: string
+        inviteUrl: string
+      }
+    }>(await post({ email: 'client@example.com' }))
+
+    expect(status).toBe(200)
+    expect(body.data.status).toBe('pending')
+    expect(body.data.email_sent).toBe(false)
+    expect(body.data.user_provisioned).toBe(false)
+    // Self-hosted without Resend: the in-band link is the ONLY way the
+    // invitee can ever accept, so it must be present outside development.
+    expect(body.data.inviteUrl).toBe('https://app.accounted.test/invite/tok-plain')
+    expect(sendEmailMock).not.toHaveBeenCalled()
+    const warned = consoleWarnSpy.mock.calls
+      .flat()
+      .map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg)))
+      .join(' ')
+    expect(warned).toContain('email service not configured')
+    // The raw token never reaches the log: it is stored hashed at rest.
+    expect(warned).not.toContain('tok-plain')
+    consoleWarnSpy.mockRestore()
   })
 
   it('uses a registered white-label request host in the invitation email', async () => {
@@ -465,5 +514,34 @@ describe('POST /api/company/members/invite: AUTH_SIGNUPS_DISABLED provisioning',
     expect(status).toBe(200)
     expect(body.data.user_provisioned).toBe(false)
     expect(body.data.email_sent).toBe(true)
+  })
+
+  it('flag on + no account + no mail provider: GoTrue provisions and mails, app sends nothing, link still returned', async () => {
+    process.env.AUTH_SIGNUPS_DISABLED = 'true'
+    isConfiguredMock.mockReturnValue(false)
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    enqueue({ data: { role: 'owner' } }) // caller membership
+    enqueue({ data: [] }) // existing members
+    enqueue({ data: null }) // existing invite
+    enqueue({ data: { name: 'Acme AB' } }) // company name
+    enqueue({ data: false }) // rpc check_email_exists -> no account
+    enqueue({ data: null }) // insert invitation
+
+    const { status, body } = await parseJsonResponse<{
+      data: { email_sent: boolean; user_provisioned: boolean; inviteUrl: string }
+    }>(await post({ email: 'client@example.com' }))
+
+    expect(status).toBe(200)
+    expect(inviteUserByEmailMock).toHaveBeenCalledWith('client@example.com', {
+      redirectTo: 'https://app.accounted.test/invite/tok-plain',
+    })
+    // email_sent reports the APP's mail only: GoTrue sent its own invite
+    // mail via the Supabase SMTP settings, so the UI must not call this a
+    // failed send (it branches on email_sent === false && !user_provisioned).
+    expect(body.data.user_provisioned).toBe(true)
+    expect(body.data.email_sent).toBe(false)
+    expect(sendEmailMock).not.toHaveBeenCalled()
+    expect(body.data.inviteUrl).toBe('https://app.accounted.test/invite/tok-plain')
+    consoleWarnSpy.mockRestore()
   })
 })
