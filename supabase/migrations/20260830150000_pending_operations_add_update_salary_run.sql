@@ -13,8 +13,9 @@
 --
 -- NOTE on the value list: this constraint is re-created wholesale (the
 -- established pattern here), so the list below is every value of the
--- constraint as left by 20260828160000 PLUS the new value. Dropping any
--- existing value here would silently revoke it.
+-- constraint as left by 20260830130000 (which added book_skattekonto_row /
+-- book_skattekonto_rows on top of 20260828160000) PLUS the new value.
+-- Dropping any existing value here would silently revoke it.
 --
 -- NOT VALID + separate VALIDATE migration (paired file, same pattern as
 -- 20260828160000 / 20260828160001).
@@ -96,5 +97,7 @@ ALTER TABLE public.pending_operations
     'reconciliation_match',
     'reconciliation_unmatch',
     'reconciliation_signoff',
-    'reconciliation_residual'
+    'reconciliation_residual',
+    'book_skattekonto_row',
+    'book_skattekonto_rows'
   )) NOT VALID;
