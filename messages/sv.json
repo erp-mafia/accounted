@@ -702,6 +702,7 @@
     "type_credit_supplier_invoice": "Leverantörskreditfaktura",
     "type_credit_invoice": "Kreditfaktura",
     "type_convert_invoice": "Konvertera faktura",
+    "type_delete_draft_invoice": "Ta bort fakturautkast",
     "type_attach_document_to_transaction": "Bifoga underlag",
     "type_link_document_to_voucher": "Länka underlag",
     "type_link_documents_to_vouchers": "Länka underlag (bulk)",

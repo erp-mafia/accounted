@@ -2522,6 +2522,9 @@ export type PendingOperationType =
   // Stream 1 Phase 1: invoice operations beyond simple create/send
   | 'credit_invoice'
   | 'convert_invoice'
+  // Draft-only invoice removal: unnumbered drafts hard delete, numbered
+  // drafts are makulerade (number retained). Non-drafts are refused.
+  | 'delete_draft_invoice'
   // Draft-only invoice edit (items full-replace); sent/booked stays immutable,
   // correction is a kreditfaktura.
   | 'update_invoice'

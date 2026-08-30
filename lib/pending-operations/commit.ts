@@ -166,6 +166,7 @@ import {
   type InvoiceWriteInput,
   type InvoiceWriteItemInput,
 } from '@/lib/invoices/build-invoice-write'
+import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import { applyRecurringScheduleUpdate } from '@/lib/invoices/apply-recurring-schedule-update'
@@ -4640,6 +4641,75 @@ async function commitCreditInvoice(
   return { data: { credit_note_id: creditNote.id, journal_entry_id: journalEntryId } }
 }
 
+/**
+ * delete_draft_invoice: remove a DRAFT customer invoice via the shared
+ * deleteDraftInvoice service (also behind the cookie and v1 DELETE routes).
+ * Unnumbered draft: hard delete + invoice.draft_deleted audit event.
+ * Numbered draft: makulering (status 'cancelled', F-series number retained).
+ * The service re-validates status at commit time with TOCTOU write guards,
+ * so a draft that was sent between staging and approval is refused (409 ->
+ * auto-reject), never cancelled. expected_invoice_number (staged alongside
+ * invoice_id) additionally pins the approved OUTCOME: an unnumbered draft
+ * that was finalized between staging and approval is refused too, instead of
+ * silently switching from the approved hard delete to a makulering.
+ */
+async function commitDeleteDraftInvoice(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const invoiceId = params.invoice_id as string
+  if (!invoiceId) return { error: 'invoice_id is required', status: 400 }
+
+  const result = await deleteDraftInvoice({
+    supabase,
+    companyId,
+    userId,
+    invoiceId,
+    // Only pin when the staging tool recorded an expectation; absent means an
+    // op staged before the pin existed, which keeps legacy semantics.
+    ...('expected_invoice_number' in params
+      ? { expectedInvoiceNumber: params.expected_invoice_number as string | null }
+      : {}),
+  })
+
+  if (!result.ok) {
+    switch (result.code) {
+      case 'INVOICE_NOT_FOUND':
+        return { error: 'Invoice not found', errorCode: 'INVOICE_NOT_FOUND', status: 404 }
+      case 'INVOICE_DELETE_NOT_DRAFT':
+        return {
+          error: `Only draft invoices can be deleted (status: ${result.currentStatus}). Issued invoices are immutable: use gnubok_credit_invoice instead.`,
+          errorCode: 'INVOICE_DELETE_NOT_DRAFT',
+          status: 409,
+        }
+      case 'INVOICE_CANCEL_RACE':
+        return {
+          error:
+            result.currentInvoiceNumber != null
+              ? `Invoice changed after staging: the draft was finalized and now carries number ${result.currentInvoiceNumber}, so the approved hard delete no longer applies. Stage the deletion again to makulera it instead.`
+              : 'Invoice was finalized or modified concurrently and could not be removed. Re-read it and stage again if it is still a draft.',
+          errorCode: 'INVOICE_CANCEL_RACE',
+          status: 409,
+        }
+      case 'INVOICE_DELETE_FAILED':
+        return {
+          error: `Failed to remove draft invoice: ${result.cause.message}`,
+          errorCode: 'INVOICE_DELETE_FAILED',
+          status: 500,
+        }
+    }
+  }
+
+  return {
+    data:
+      result.outcome === 'deleted'
+        ? { invoice_id: invoiceId, deleted: true }
+        : { invoice_id: invoiceId, cancelled: true, invoice_number: result.invoiceNumber },
+  }
+}
+
 async function commitConvertInvoice(
   supabase: SupabaseClient,
   userId: string,
@@ -6662,6 +6732,9 @@ async function commitPendingOperationInner(
         break
       case 'credit_invoice':
         result = await commitCreditInvoice(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'delete_draft_invoice':
+        result = await commitDeleteDraftInvoice(supabase, userId, companyId, pendingOp.params)
         break
       case 'import_sie':
         result = await commitImportSie(supabase, userId, companyId, pendingOp.params)
