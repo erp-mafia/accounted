@@ -10,6 +10,7 @@ import {
 import { createServiceClient } from '@/lib/supabase/server'
 import { validateBody } from '@/lib/api/validate'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
+import { dbError } from '@/lib/errors/db-error'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import { extractInvoiceFields, ExtractionSchema, emptyResult } from './lib/extract-invoice-fields'
 import { mirrorExtractionToDocument } from './lib/mirror-extraction'
@@ -194,7 +195,7 @@ async function findInboxItemForDocument(
     .order('created_at', { ascending: true })
     .limit(1)
     .maybeSingle()
-  if (error) throw new Error(`Completed-upload lookup failed: ${error.message}`)
+  if (error) throw dbError(error, 'Completed-upload lookup failed')
   if (!data) return null
   return {
     document_id: documentId,

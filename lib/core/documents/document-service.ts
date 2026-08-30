@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { dbError } from '@/lib/errors/db-error'
 import { eventBus } from '@/lib/events'
 import type { DocumentExtractionOwner } from '@/lib/events/types'
 import type { DocumentAttachment, DocumentUploadSource } from '@/types'
@@ -618,9 +619,7 @@ export async function completePendingDocumentUpload(
       .eq('is_current_version', true)
       .order('created_at', { ascending: true })
       .limit(1)
-    if (dedupeError) {
-      throw new Error(`Content dedupe lookup failed: ${dedupeError.message}`)
-    }
+    if (dedupeError) throw dbError(dedupeError, 'Content dedupe lookup failed')
     const hit = (existingByContent as DocumentAttachment[] | null)?.[0]
     if (hit) {
       await storage.remove([sourcePath])
@@ -670,13 +669,12 @@ export async function completePendingDocumentUpload(
       return { document: concurrent, buffer }
     }
     await storage.remove([permanentPath])
-    // Keep the SQLSTATE on the thrown error: a viewer-role member passes the
-    // storage policy (membership only) but not the document_attachments
-    // insert policy (writers only), and 42501 is what lets the caller answer
-    // "no permission" in Swedish instead of a generic failure.
-    throw Object.assign(new Error(`Failed to create document record: ${error.message}`), {
-      code: error.code,
-    })
+    // dbError keeps the SQLSTATE on the thrown error: a viewer-role member
+    // passes the storage policy (membership only) but not the
+    // document_attachments insert policy (writers only), and 42501 is what
+    // lets the caller answer "no permission" in Swedish instead of a generic
+    // failure.
+    throw dbError(error, 'Failed to create document record')
   }
 
   const document = data as DocumentAttachment
