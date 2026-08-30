@@ -62,9 +62,10 @@ describe('fetchSalesInvoicesHydrated (fortnox)', () => {
   it('fills in the VAT the list payload omitted', async () => {
     stubFetch((url) => url.includes('/invoices/4') ? json(detailFor(4, 1250)) : json(listResponse([OPEN])));
 
-    const { invoices, hydration } = await fetchSalesInvoicesHydrated('fortnox', 'token');
+    const { invoices, hydration, unhydratedIds } = await fetchSalesInvoicesHydrated('fortnox', 'token');
 
     expect(hydration).toMatchObject({ needed: 1, hydrated: 1, failed: 0, skippedForBudget: 0 });
+    expect(unhydratedIds.size).toBe(0);
     expect(invoices[0]?.taxTotal?.taxAmount.value).toBe(250);
     expect(invoices[0]?.legalMonetaryTotal.lineExtensionAmount?.value).toBe(1000);
     expect(invoices[0]?.lines).toHaveLength(1);
@@ -100,11 +101,13 @@ describe('fetchSalesInvoicesHydrated (fortnox)', () => {
   it('reports what the budget could not reach instead of looking complete', async () => {
     stubFetch(() => json(listResponse([OPEN, PAID])));
 
-    const { invoices, hydration } = await fetchSalesInvoicesHydrated('fortnox', 'token', undefined, 0);
+    const { invoices, hydration, unhydratedIds } = await fetchSalesInvoicesHydrated('fortnox', 'token', undefined, 0);
 
     expect(hydration).toMatchObject({ needed: 2, hydrated: 0, skippedForBudget: 2 });
-    // The invoices themselves are still returned, unhydrated.
+    // The invoices themselves are still returned, unhydrated, and named as
+    // such: a detail-only field (Fortnox's voucher ref) is unknown for these.
     expect(invoices).toHaveLength(2);
+    expect([...unhydratedIds].sort()).toEqual(['4', '5']);
     expect(requested.filter((u) => /\/invoices\/\d/.test(u))).toHaveLength(0);
   });
 
@@ -152,11 +155,12 @@ describe('fetchSalesInvoicesHydrated (fortnox)', () => {
       ? new Response('boom', { status: 404 })
       : json(listResponse([OPEN])));
 
-    const { invoices, hydration } = await fetchSalesInvoicesHydrated('fortnox', 'token');
+    const { invoices, hydration, unhydratedIds } = await fetchSalesInvoicesHydrated('fortnox', 'token');
 
     expect(hydration).toMatchObject({ needed: 1, hydrated: 0, failed: 1 });
     expect(invoices).toHaveLength(1);
     expect(invoices[0]?.legalMonetaryTotal.payableAmount.value).toBe(1250);
+    expect(unhydratedIds.has('4')).toBe(true);
   });
 });
 
