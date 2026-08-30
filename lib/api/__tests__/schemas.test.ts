@@ -1856,6 +1856,73 @@ describe('UpdateSettingsSchema', () => {
     })
   })
 
+  describe('reminder_text_overrides', () => {
+    it('accepts a valid nested partial', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        reminder_text_overrides: { level_2: { body: 'Betala nu, tack.' } },
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.reminder_text_overrides).toEqual({
+          level_2: { body: 'Betala nu, tack.' },
+        })
+      }
+    })
+
+    it('accepts all three levels with subject and body', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        reminder_text_overrides: {
+          level_1: { subject: 'Påminnelse: {fakturanummer}', body: 'Vänligen betala.' },
+          level_2: { subject: 'Andra påminnelsen', body: 'Betala omgående.' },
+          level_3: { subject: 'Inkassovarning', body: 'Sista påminnelsen innan inkasso.' },
+        },
+      })
+      expect(result.success).toBe(true)
+    })
+
+    it('accepts null to clear all overrides', () => {
+      const result = UpdateSettingsSchema.safeParse({ reminder_text_overrides: null })
+      expect(result.success).toBe(true)
+      if (result.success) expect(result.data.reminder_text_overrides).toBeNull()
+    })
+
+    it('rejects body over 2000 characters', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        reminder_text_overrides: { level_1: { body: 'x'.repeat(2001) } },
+      })
+      expect(result.success).toBe(false)
+    })
+
+    it('rejects subject over 200 characters', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        reminder_text_overrides: { level_1: { subject: 'x'.repeat(201) } },
+      })
+      expect(result.success).toBe(false)
+    })
+
+    it('rejects a non-string field value', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        reminder_text_overrides: { level_1: { subject: 123 } },
+      })
+      expect(result.success).toBe(false)
+    })
+
+    it('strips unknown keys inside a level object', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        reminder_text_overrides: { level_1: { body: 'Hej', subjct: 'typo' } },
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.reminder_text_overrides).toEqual({ level_1: { body: 'Hej' } })
+      }
+    })
+
+    it('rejects a bare string as the column value', () => {
+      const result = UpdateSettingsSchema.safeParse({ reminder_text_overrides: 'Betala!' })
+      expect(result.success).toBe(false)
+    })
+  })
+
   describe('default_voucher_series_per_source_type', () => {
     it('accepts a partial map that omits source types (regression: Zod 4 enum-keyed z.record is exhaustive)', () => {
       const result = UpdateSettingsSchema.safeParse({
