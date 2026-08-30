@@ -60,14 +60,14 @@ const CONTENT: Record<AuthEmailActionType, AuthEmailContent> = {
     subject: 'Bekräfta din nya e-postadress',
     heading: 'Bekräfta din nya e-postadress',
     body: (appName) =>
-      `Klicka på knappen nedan för att bekräfta din nya e-postadress hos ${appName}.`,
+      `Klicka på knappen nedan för att bekräfta din nya e-postadress hos ${appName}. Av säkerhetsskäl skickas två mail, ett till din nya adress och ett till din nuvarande. Bytet slutförs först när du klickat på länken i båda.`,
     cta: 'Bekräfta ny e-postadress',
   },
   email_change_current: {
     subject: 'Godkänn ändrad e-postadress',
     heading: 'Godkänn ändrad e-postadress',
     body: (appName) =>
-      `En ändring av e-postadressen för ditt konto hos ${appName} har begärts. Klicka på knappen nedan för att godkänna ändringen från din nuvarande adress.`,
+      `En ändring av e-postadressen för ditt konto hos ${appName} har begärts. Klicka på knappen nedan för att godkänna ändringen från din nuvarande adress. Av säkerhetsskäl skickas två mail, ett till din nuvarande adress och ett till din nya. Bytet slutförs först när du klickat på länken i båda.`,
     cta: 'Godkänn ändringen',
   },
   reauthentication: {

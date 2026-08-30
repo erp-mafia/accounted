@@ -242,11 +242,14 @@ export function AccountSettingsContent() {
                 !currentEmail ||
                 savingEmail ||
                 !email.trim() ||
-                email.trim().toLowerCase() === currentEmail.toLowerCase() ||
-                email.trim().toLowerCase() === pendingEmail
+                email.trim().toLowerCase() === currentEmail.toLowerCase()
               }
             >
-              {savingEmail ? tCommon('saving') : tCommon('save')}
+              {savingEmail
+                ? tCommon('saving')
+                : email.trim().toLowerCase() === pendingEmail
+                  ? tSettings('email_resend')
+                  : tCommon('save')}
             </Button>
           </SettingsRowEnd>
         </SettingsRow>
