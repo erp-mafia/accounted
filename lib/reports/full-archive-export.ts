@@ -1071,6 +1071,7 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Salary (räkenskapsinformation with 7-year retention)
   { name: 'employees', file: 'employees.json', orderBy: 'created_at' },
   { name: 'employee_benefits', file: 'employee_benefits.json', orderBy: 'created_at' },
+  { name: 'employee_recurring_lines', file: 'employee_recurring_lines.json', orderBy: 'created_at' },
   { name: 'salary_runs', file: 'salary_runs.json', orderBy: 'created_at' },
   { name: 'salary_run_employees', file: 'salary_run_employees.json', orderBy: 'created_at' },
   { name: 'salary_line_items', file: 'salary_line_items.json', orderBy: 'created_at' },

@@ -130,6 +130,12 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
  * same patch-shape rationale as webshop-orders ingest: one literal per key
  * combination is not viable. The field set is pinned by validatePatch and
  * covered by payroll-executors.test.ts; both selects around it are literals.
+ *
+ * 2026-08-30 recurring payroll lines (#2042): +2 for the same two shapes the
+ * employee_benefits code already carries: the step-8d3 derived-rows insert
+ * (rows built in a .map with literal keys, opaque to the scanner) and the
+ * PATCH route's merged-updates payload (explicit literal keys, but assembled
+ * conditionally into a variable).
  */
 // 2026-08-20: +1 for lib/connect/instance/sync.ts, whose capability_grants
 // upsert is a per-company x per-scope row array built at runtime (one chunked
@@ -145,7 +151,9 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // lib/stripe/subscription-sync.ts scopes the cancel-time multi_user expiry
 // update with an .or() interpolating a timestamp; every column named in both
 // strings is a literal (company_id, team_id, expires_at).
-const UNRESOLVED_CEILING = 393
+// 2026-09-02: rebase of #2042 onto main re-measured the merged tree at 395
+// (the two deltas above overlap by nothing; scanner output is authoritative).
+const UNRESOLVED_CEILING = 395
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

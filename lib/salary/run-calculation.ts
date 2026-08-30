@@ -31,6 +31,7 @@ import { loadPayrollConfig, serializePayrollConfig } from './payroll-config'
 import { fetchAllTaxTableRatesForRun, TaxTableUnavailableError } from './tax-tables'
 import { loadAndDeriveAbsence } from './derive-absence-line-items'
 import { getLineItemAccount } from './account-mapping'
+import { recurringLineFlags, type RecurringLineItemType } from './recurring-lines'
 import { computePremiumLines } from './shift-premium-engine'
 import { roundOre } from '@/lib/money'
 import { computePriorYtd, loadOpeningBalances } from './ytd'
@@ -502,6 +503,66 @@ export async function runSalaryCalculation(
       }
     }
 
+    // 8d3. Derive recurring line items from employee_recurring_lines: same
+    //      lifecycle as the benefit rows (delete by back-link, re-derive for
+    //      rows whose validity window covers the payment date). Flags come
+    //      from the item type so a stored row can never contradict the
+    //      payslip math.
+    // valid_to is filtered in JS rather than with a dynamic .or() so the
+    // phantom-column scanner can resolve every expression in this query.
+    const { data: recurringRows, error: recurringErr } = await supabase
+      .from('employee_recurring_lines')
+      .select('id, item_type, description, amount, account_number, valid_to')
+      .eq('employee_id', emp.id)
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .lte('valid_from', run.payment_date)
+    if (recurringErr) {
+      return { ok: false, code: 'DATABASE_ERROR', details: recurringErr }
+    }
+    const activeRecurring = (recurringRows ?? []).filter(
+      (r) => !r.valid_to || r.valid_to >= run.payment_date,
+    )
+
+    const { error: delRecurringErr } = await supabase
+      .from('salary_line_items')
+      .delete()
+      .eq('salary_run_employee_id', sre.id)
+      .not('source_recurring_line_id', 'is', null)
+    if (delRecurringErr) {
+      return { ok: false, code: 'DATABASE_ERROR', details: delRecurringErr }
+    }
+
+    const derivedRecurringRows = activeRecurring.map((r, idx) => {
+      const itemType = r.item_type as RecurringLineItemType
+      const flags = recurringLineFlags(itemType)
+      return {
+        salary_run_employee_id: sre.id,
+        company_id: companyId,
+        item_type: itemType,
+        description: r.description,
+        quantity: 1,
+        amount: Math.round(r.amount * 100) / 100,
+        is_taxable: flags.is_taxable,
+        is_avgift_basis: flags.is_avgift_basis,
+        is_vacation_basis: flags.is_vacation_basis,
+        is_gross_deduction: flags.is_gross_deduction,
+        is_net_deduction: flags.is_net_deduction,
+        account_number: r.account_number || getLineItemAccount(itemType, emp.employment_type),
+        sort_order: 250 + idx,
+        source_recurring_line_id: r.id,
+      }
+    })
+
+    if (derivedRecurringRows.length > 0) {
+      const { error: insRecurringErr } = await supabase
+        .from('salary_line_items')
+        .insert(derivedRecurringRows)
+      if (insRecurringErr) {
+        return { ok: false, code: 'DATABASE_ERROR', details: insRecurringErr }
+      }
+    }
+
     if (absenceResult.lineItems.length > 0) {
       const rows = absenceResult.lineItems.map((li, idx) => ({
         salary_run_employee_id: sre.id,
@@ -606,6 +667,7 @@ export async function runSalaryCalculation(
         if (DERIVED_ABSENCE_TYPES.includes(li.item_type as SalaryLineItemType)) return false
         if (DERIVED_PREMIUM_TYPES.includes(li.item_type as ShiftPremiumItemType)) return false
         if (li.source_benefit_id) return false
+        if (li.source_recurring_line_id) return false
         if (li.item_type === 'semesterersattning') return false
         if (li.item_type === 'oresavrundning') return false
         return true
