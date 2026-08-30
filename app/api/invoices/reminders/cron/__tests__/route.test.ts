@@ -3,8 +3,10 @@
  * been deliberately disabled since May 2026 (PR #583). The route and the
  * invoice settings UI both read REMINDERS_SENDING_ENABLED, so these tests
  * pin the contract: while the flag is off the route answers 503 and never
- * touches the reminder processor; when the flag is flipped on, the original
- * sending pipeline runs again without further code changes.
+ * touches the reminder processor; when the flag is flipped on, the route
+ * runs the original sending pipeline. Scheduling the route again (it has
+ * had no vercel.json cron entry since PR #559) and the pre-flip idempotency
+ * work are separate steps; see lib/invoices/reminders-enabled.ts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -41,7 +43,7 @@ function cronRequest(): Request {
 }
 
 describe('REMINDERS_SENDING_ENABLED flag', () => {
-  it('is off: automatic reminder sending is a founder decision, not a code change', () => {
+  it('is off: re-enabling automatic reminder sending is a deliberate founder decision', () => {
     expect(REMINDERS_SENDING_ENABLED).toBe(false)
   })
 })

@@ -6,14 +6,16 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 /**
- * GET/POST /api/invoices/reminders/cron: daily 08:00 UTC.
- * Sends overdue invoice reminders. POST exists so the dashboard can
- * trigger a run manually.
+ * GET/POST /api/invoices/reminders/cron: sends overdue invoice reminders.
+ * Both verbs require the cron secret via withCronContext; POST mirrors GET
+ * so a secret-bearing operator can trigger a run outside the schedule.
  *
  * Gated behind REMINDERS_SENDING_ENABLED (off since May 2026, PR #583):
- * while the flag is off this route answers 503 and nothing is sent. The
- * invoice settings UI reads the same flag to disclose that state, so
- * flipping the flag re-enables sending and removes the notice together.
+ * while the flag is off this route answers 503 and nothing is sent, and
+ * the invoice settings UI reads the same flag to disclose that state.
+ * On hosted the route is also unscheduled (no vercel.json cron entry
+ * since PR #559), so the flag flip alone does not resume sending there;
+ * see lib/invoices/reminders-enabled.ts for the full re-enable checklist.
  */
 export const GET = withCronContext('cron.invoice_reminders', async (_request, ctx) => {
   if (!REMINDERS_SENDING_ENABLED) {
