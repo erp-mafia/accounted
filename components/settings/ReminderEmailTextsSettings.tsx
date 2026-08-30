@@ -103,25 +103,33 @@ export function ReminderEmailTextsSettings({ settings, onUpdate }: ReminderEmail
     setTexts((prev) => ({ ...prev, [level]: { ...prev[level], [field]: value } }))
   }
 
+  // Serializes the whole-object saves below: a blur and a reset can otherwise
+  // race, and the older snapshot would replace the newer JSONB value.
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve())
+
   // Whole-object save: a JSONB column update replaces the stored value, and
   // the inactive levels' fields are unmounted (conditional render below),
-  // so per-field PATCHes can't work.
-  const persist = useCallback(async (display: DisplayTexts) => {
+  // so per-field PATCHes can't work. Writes are queued so they reach the
+  // server in submission order.
+  const persist = useCallback((display: DisplayTexts) => {
     const overrides = toOverrides(display)
     const serialized = JSON.stringify(overrides)
-    if (serialized === lastSavedRef.current) return
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reminder_text_overrides: overrides }),
-      })
-      if (!response.ok) throw new Error()
-      lastSavedRef.current = serialized
-      onUpdate({ reminder_text_overrides: overrides })
-    } catch {
-      toast({ title: t('toast_save_failed'), variant: 'destructive' })
-    }
+    saveQueueRef.current = saveQueueRef.current.then(async () => {
+      if (serialized === lastSavedRef.current) return
+      try {
+        const response = await fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reminder_text_overrides: overrides }),
+        })
+        if (!response.ok) throw new Error()
+        lastSavedRef.current = serialized
+        onUpdate({ reminder_text_overrides: overrides })
+      } catch {
+        toast({ title: t('toast_save_failed'), variant: 'destructive' })
+      }
+    })
+    return saveQueueRef.current
   }, [onUpdate, toast, t])
 
   const handleBlur = () => {

@@ -2378,7 +2378,7 @@
     "tab_level_1": "Påminnelse 1",
     "tab_level_2": "Påminnelse 2",
     "tab_level_3": "Slutlig påminnelse",
-    "level_3_hint": "Slutliga påminnelsen är en inkassovarning: sista meddelandet innan fordran kan lämnas till inkasso.",
+    "level_3_hint": "Den slutliga påminnelsen är en inkassovarning: sista meddelandet innan fordran kan lämnas till inkasso.",
     "subject_label": "Ämnesrad",
     "body_label": "Brödtext",
     "placeholders_help": "Tillgängliga platshållare (okända lämnas kvar som text):",
