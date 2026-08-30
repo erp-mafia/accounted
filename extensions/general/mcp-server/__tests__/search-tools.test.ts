@@ -156,6 +156,102 @@ describe('gnubok_search_tools', () => {
     }
   })
 
+  // Swedish keyword synonyms: matcher-side `keywords` on tool definitions let
+  // Swedish queries hit the right tools without inflating any payload.
+  describe('Swedish keyword synonyms', () => {
+    it('"bankkonto" ranks list_cash_accounts first; "kassakonto" finds it too', async () => {
+      const bank = await call({ query: 'bankkonto', limit: 10 })
+      expect(bank.tools.length).toBeGreaterThan(0)
+      expect(bank.tools[0].name).toBe('gnubok_list_cash_accounts')
+
+      const kassa = await call({ query: 'kassakonto', limit: 10 })
+      expect(kassa.tools.map((t) => t.name)).toContain('gnubok_list_cash_accounts')
+    })
+
+    it('"kundfaktura" ranks list_invoices first and includes create_invoice', async () => {
+      const result = await call({ query: 'kundfaktura', limit: 50 })
+      expect(result.tools[0].name).toBe('gnubok_list_invoices')
+      expect(result.tools.map((t) => t.name)).toContain('gnubok_create_invoice')
+    })
+
+    it('"leverantörsfaktura" ranks list_supplier_invoices first', async () => {
+      const result = await call({ query: 'leverantörsfaktura', limit: 50 })
+      expect(result.tools[0].name).toBe('gnubok_list_supplier_invoices')
+      const names = result.tools.map((t) => t.name)
+      expect(names).toContain('gnubok_approve_supplier_invoice')
+      expect(names).toContain('gnubok_get_supplier_ledger')
+    })
+
+    it('"lönekörning" finds the salary run tools', async () => {
+      const result = await call({ query: 'lönekörning', limit: 50 })
+      const names = result.tools.map((t) => t.name)
+      expect(names).toContain('gnubok_create_salary_run')
+      expect(names).toContain('gnubok_calculate_salary_run')
+      expect(names).toContain('gnubok_book_salary_run')
+    })
+
+    it('"verifikat" finds voucher and journal tools', async () => {
+      const result = await call({ query: 'verifikat', limit: 50 })
+      const names = result.tools.map((t) => t.name)
+      expect(names).toContain('gnubok_create_voucher')
+      expect(names).toContain('gnubok_query_journal')
+    })
+
+    it('"momsdeklaration" finds the VAT tools', async () => {
+      const result = await call({ query: 'momsdeklaration', limit: 50 })
+      const names = result.tools.map((t) => t.name)
+      expect(names).toContain('gnubok_get_vat_report')
+      expect(names).toContain('gnubok_vat_declaration_submit')
+    })
+
+    it('"kontoplan" ranks list_accounts first', async () => {
+      const result = await call({ query: 'kontoplan', limit: 10 })
+      expect(result.tools[0].name).toBe('gnubok_list_accounts')
+    })
+
+    it('"avstämning" and "skattekonto" rank reconciliation status first', async () => {
+      const avstamning = await call({ query: 'avstämning', limit: 50 })
+      expect(avstamning.tools[0].name).toBe('gnubok_get_reconciliation_status')
+      expect(avstamning.tools.map((t) => t.name)).toContain('gnubok_reconcile_match')
+
+      const skattekonto = await call({ query: 'skattekonto', limit: 50 })
+      expect(skattekonto.tools[0].name).toBe('gnubok_get_reconciliation_status')
+    })
+
+    it('"anställd" ranks list_employees first', async () => {
+      const result = await call({ query: 'anställd', limit: 50 })
+      expect(result.tools[0].name).toBe('gnubok_list_employees')
+      expect(result.tools.map((t) => t.name)).toContain('gnubok_create_employee')
+    })
+
+    it('"kvitto" and "underlag" find document and inbox tools', async () => {
+      const kvitto = await call({ query: 'kvitto', limit: 50 })
+      const kvittoNames = kvitto.tools.map((t) => t.name)
+      expect(kvittoNames).toContain('gnubok_list_inbox_items')
+      expect(kvittoNames).toContain('gnubok_upload_document')
+
+      const underlag = await call({ query: 'underlag', limit: 50 })
+      expect(underlag.tools.map((t) => t.name)).toContain('gnubok_list_unmatched_documents')
+    })
+
+    it('"påminnelse" finds list_invoices (chasing overdue invoices)', async () => {
+      const result = await call({ query: 'påminnelse', limit: 10 })
+      expect(result.tools.map((t) => t.name)).toContain('gnubok_list_invoices')
+    })
+
+    it('keywords are matcher-side only: never serialized into search results', async () => {
+      // A keyword-only match proves the keywords were consulted; the payload
+      // must still not carry them at any detail level.
+      for (const detail of ['name', 'summary', 'full'] as const) {
+        const result = await call({ query: 'bankkonto', detail, limit: 5 })
+        expect(result.tools.length).toBeGreaterThan(0)
+        const raw = JSON.stringify(result)
+        expect(raw).not.toContain('"keywords"')
+        expect(raw).not.toContain('kassakonto')
+      }
+    })
+  })
+
   it('fail-closed: explicitly empty __keyScopes also hides scoped tools', async () => {
     // The "scopes were checked, granted set is empty" case must behave the same
     // as "scopes were not injected at all". Both indicate no scoped access.
