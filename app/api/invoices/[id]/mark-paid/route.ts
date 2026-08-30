@@ -3,6 +3,7 @@ import { MarkInvoicePaidSchema } from '@/lib/api/schemas'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { deriveCustomerSettlementAmount } from '@/lib/invoices/apply-invoice-payment'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { roundOre } from '@/lib/money'
@@ -121,9 +122,6 @@ export const POST = withRouteContext(
     }
     const remainingAmount =
       invForRemaining.remaining_amount ?? invoice.total - (invForRemaining.paid_amount ?? 0)
-    const paymentAmount = customLines
-      ? customLines.reduce((s, l) => s + l.debit_amount, 0)
-      : remainingAmount
 
     // Unit contract: total / paid_amount / remaining_amount are stored in the
     // INVOICE currency (total_sek carries the SEK view of total); custom lines
@@ -150,6 +148,22 @@ export const POST = withRouteContext(
         details: { invoice_id: id, currency: invoice.currency },
       })
     }
+
+    // Payment amount = customer settlement, not the gross debit sum: the
+    // kontantmetoden ROT/RUT entry carries a second debit leg on 1513
+    // (Skatteverket's share) while remaining_amount is stored net of the
+    // deduction, so summing all debits would reject every such invoice with
+    // MATCH_AMOUNT_EXCEEDS_REMAINING by exactly deduction_total (see
+    // deriveCustomerSettlementAmount). deduction_total is invoice-currency;
+    // the cap is converted to SEK to match the lines.
+    const deductionTotal = (invoice as { deduction_total?: number | null }).deduction_total ?? 0
+    const deductionCapSek =
+      deductionTotal > 0 && needsFxConversion
+        ? roundOre(deductionTotal * fxRate!)
+        : deductionTotal
+    const paymentAmount = customLines
+      ? deriveCustomerSettlementAmount(customLines, deductionCapSek)
+      : remainingAmount
     const paymentAmountInInvoiceCurrency = needsFxConversion
       ? roundOre(paymentAmount / fxRate!)
       : paymentAmount
