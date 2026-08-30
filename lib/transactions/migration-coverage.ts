@@ -12,12 +12,24 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  * user report). The imported vouchers themselves end where the old system's
  * data ends, which is the boundary the marker is about.
  *
- * Only the SIE importer creates source_type='import' entries, so the max is
- * exactly migration coverage. Series M is excluded because the importer's
- * omföringsverifikation (adjustment for skipped vouchers) is deliberately
- * dated at fiscal year end and would reintroduce the future-date bug. If a
- * company's SIE file genuinely uses series M its latest voucher may be
- * missed, which only narrows the marker, never future-dates it.
+ * Armed only when a completed sie_imports row exists: source_type='import'
+ * is accepted from API clients too (CreateJournalEntrySchema), so without
+ * the gate a third-party backfill labeled 'import' would paint a false
+ * pre-migration marker across a company that never migrated. With the gate,
+ * such entries can still stretch a real migrator's cutoff, but a company
+ * labeling API entries 'import' post-migration is doing exactly what the
+ * label says.
+ *
+ * The importer's omföringsverifikation (skipped-voucher adjustment) is
+ * excluded by its hardcoded description prefix: it is deliberately dated at
+ * fiscal year end (sie-import.ts) and would reintroduce the future-date bug
+ * for any import with skipped vouchers. Excluding by description rather
+ * than by its 'M' voucher series keeps genuine series-M vouchers from the
+ * source file in the max (prod has companies whose files use series M for
+ * ordinary vouchers, e.g. moms). Known residual gap: bank movement covered
+ * only by the omföring (skipped vouchers dated after the last cleanly
+ * imported one) falls outside the cutoff; the duplicate-booking soft guard
+ * remains the backstop there.
  *
  * Undo/replace of an import deletes or recreates these entries, so the
  * cutoff self-corrects with no stored state to maintain. Returns null when
@@ -27,13 +39,22 @@ export async function fetchMigrationCoverageEnd(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<string | null> {
+  const { data: completedImport } = await supabase
+    .from('sie_imports')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('status', 'completed')
+    .limit(1)
+    .maybeSingle()
+  if (!completedImport) return null
+
   const { data } = await supabase
     .from('journal_entries')
     .select('entry_date')
     .eq('company_id', companyId)
     .eq('status', 'posted')
     .eq('source_type', 'import')
-    .neq('voucher_series', 'M')
+    .not('description', 'like', 'Omföringsverifikation:%')
     .order('entry_date', { ascending: false })
     .limit(1)
     .maybeSingle()
