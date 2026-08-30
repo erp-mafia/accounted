@@ -224,6 +224,13 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // links the selection: a typed, bounded booking like categorize_transaction,
   // undone by storno + unmatch, so 'medium' rather than create_voucher's 'high'.
   reconciliation_residual: 'medium',
+  // Book synced skattekonto rows as posted verifikat: 1630 against the
+  // skattekonto_rules-matched counter account, amounts straight from the
+  // synced Skatteverket data. No caller-supplied lines (the agent passes only
+  // row ids), reversible via storno: same bounded-booking tier as
+  // book_mileage_period, not create_voucher's arbitrary-line 'high'.
+  book_skattekonto_row: 'medium',
+  book_skattekonto_rows: 'medium',
 
   // ── Körjournal (mileage) ───────────────────────────────────────────
   // A trip row is pure travel documentation: no booking impact until a

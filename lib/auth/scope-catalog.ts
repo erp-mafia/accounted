@@ -236,6 +236,10 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_bulk_book_transactions:              'transactions:write',
   gnubok_bulk_book_inbox_items:               'transactions:write',
   gnubok_auto_match_period:                   'transactions:write',
+  // Skattekonto row booking writes a verifikat from an outside (SKV) row:
+  // same scope family as reconcile_residual / bulk_book above.
+  gnubok_book_skattekonto_row:                'transactions:write',
+  gnubok_book_skattekonto_rows:               'transactions:write',
   // Customers
   gnubok_list_customers:                  'customers:read',
   gnubok_create_customer:                 'customers:write',
