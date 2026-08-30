@@ -2,8 +2,11 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import {
   HOSTED_MAX_UPLOAD_BYTES,
   HOSTED_REQUEST_BODY_LIMIT_BYTES,
+  INBOX_MAX_UPLOAD_BYTES,
   exceedsHostedUploadLimit,
+  exceedsInboxUploadLimit,
   formatMegabytes,
+  inboxTooLargeMessage,
   isShrinkableImage,
   tooLargeMessage,
 } from '../upload-size'
@@ -43,6 +46,29 @@ describe('upload size limits', () => {
     const message = tooLargeMessage(6 * 1024 * 1024)
     expect(message).toContain('6,0 MB')
     expect(message).toContain(formatMegabytes(HOSTED_MAX_UPLOAD_BYTES))
+  })
+})
+
+// The inbox ceiling is the route's own MAX_FILE_SIZE (10 MB), mirrored here
+// because core components cannot import from the extension. Files between
+// the hosted body limit and this one take the direct-to-storage path.
+describe('inbox upload ceiling', () => {
+  it('sits above the hosted body limit and matches the route promise of 10 MB', () => {
+    expect(INBOX_MAX_UPLOAD_BYTES).toBe(10 * 1024 * 1024)
+    expect(INBOX_MAX_UPLOAD_BYTES).toBeGreaterThan(HOSTED_REQUEST_BODY_LIMIT_BYTES)
+  })
+
+  it('applies on every deployment: self-hosted has the same route cap', () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    expect(exceedsInboxUploadLimit(INBOX_MAX_UPLOAD_BYTES + 1)).toBe(true)
+    expect(exceedsInboxUploadLimit(INBOX_MAX_UPLOAD_BYTES)).toBe(false)
+  })
+
+  it('names the actual size and the inbox ceiling, not the hosted one', () => {
+    const message = inboxTooLargeMessage(12 * 1024 * 1024)
+    expect(message).toContain('12,0 MB')
+    expect(message).toContain(formatMegabytes(INBOX_MAX_UPLOAD_BYTES))
+    expect(message).not.toContain(formatMegabytes(HOSTED_MAX_UPLOAD_BYTES))
   })
 })
 
