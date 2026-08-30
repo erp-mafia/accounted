@@ -267,8 +267,13 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     // routing reads it; omitting it silently forces the cash path.
     expect(invoiceSelects.length).toBeGreaterThanOrEqual(2)
     expect(String(invoiceSelects[0].args[0])).toContain('journal_entry_id')
+    // ...and deduction_total: the ROT/RUT settlement derivation reads it, and
+    // the mock harness ignores projections, so without this assertion the
+    // route can green-test while fetching a row that lacks the column.
+    expect(String(invoiceSelects[0].args[0])).toContain('deduction_total')
     // Response select (the update's .select) keeps the public contract unchanged.
     expect(String(invoiceSelects[1].args[0])).not.toContain('journal_entry_id')
+    expect(String(invoiceSelects[1].args[0])).not.toContain('deduction_total')
   })
 
   it('clears AR (payment entry) when a cash-method company pays an invoice booked at send', async () => {
@@ -441,6 +446,52 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     expect(body.data.status).toBe('paid')
     expect(body.data.remaining_amount).toBe(0)
     expect(body.data.paid_amount).toBe(86800)
+  })
+
+  it('rejects the cash-shaped 1513 lines on a ROT invoice already booked at send', async () => {
+    // Booked-at-send accrual ROT invoice: 1513 was debited in the
+    // registration entry, so a 1513 debit in the PAYMENT lines would double
+    // 1513 and double-count revenue + VAT. The 1513 exclusion must be gated
+    // off, leaving the gross sum (124 000) to trip the overpayment guard
+    // against the net remaining (86 800), exactly as before the fix.
+    const BOOKED_ROT_INVOICE = {
+      ...SENT_INVOICE,
+      subtotal: 99200,
+      vat_amount: 24800,
+      total: 124000,
+      deduction_total: 37200,
+      remaining_amount: 86800,
+      journal_entry_id: 'rrrrrrrr-rrrr-4rrr-8rrr-rrrrrrrrrrrr',
+    }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: BOOKED_ROT_INVOICE, error: null },
+        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        transactions: { data: [], error: null },
+      }),
+    )
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        {
+          lines: [
+            { account_number: '1930', debit_amount: 86800, credit_amount: 0 },
+            { account_number: '1513', debit_amount: 37200, credit_amount: 0 },
+            { account_number: '3001', debit_amount: 0, credit_amount: 99200 },
+            { account_number: '2611', debit_amount: 0, credit_amount: 24800 },
+          ],
+        },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('MATCH_AMOUNT_EXCEEDS_REMAINING')
+    expect(mockPayment).not.toHaveBeenCalled()
+    expect(mockCash).not.toHaveBeenCalled()
   })
 
   it('still rejects when the bank leg alone overpays a ROT invoice', async () => {

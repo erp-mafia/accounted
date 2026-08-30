@@ -156,7 +156,18 @@ export const POST = withRouteContext(
     // MATCH_AMOUNT_EXCEEDS_REMAINING by exactly deduction_total (see
     // deriveCustomerSettlementAmount). deduction_total is invoice-currency;
     // the cap is converted to SEK to match the lines.
-    const deductionTotal = (invoice as { deduction_total?: number | null }).deduction_total ?? 0
+    //
+    // Gated on the invoice NOT being booked yet: an invoice booked at send
+    // already debited 1513 in its registration entry, so a 1513 debit in the
+    // PAYMENT lines is always wrong there (it would double 1513 and, with
+    // revenue credits, double 30xx/26xx). For those, the gross sum stays the
+    // payment amount and the overpayment guard keeps rejecting the
+    // wrong-shaped entry exactly as before.
+    const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null })
+      .journal_entry_id
+    const deductionTotal = invoiceAlreadyBooked
+      ? 0
+      : (invoice as { deduction_total?: number | null }).deduction_total ?? 0
     const deductionCapSek =
       deductionTotal > 0 && needsFxConversion
         ? roundOre(deductionTotal * fxRate!)

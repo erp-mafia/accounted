@@ -698,6 +698,41 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     )
   })
 
+  it('rejects the cash-shaped 1513 lines on a ROT invoice already booked at send', async () => {
+    // 1513 was already debited in the registration entry; a 1513 debit in the
+    // payment lines would double it and double-count revenue + VAT. The
+    // exclusion is gated off for booked invoices, so the gross sum (124 000)
+    // still trips the guard against the net remaining (86 800).
+    const invoice = makeInvoice({
+      id: 'inv-1',
+      status: 'sent',
+      total: 124000,
+      deduction_total: 37200,
+      remaining_amount: 86800,
+      journal_entry_id: 'je-registration',
+    })
+
+    enqueue({ data: invoice, error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+      method: 'POST',
+      body: {
+        lines: [
+          { account_number: '1930', debit_amount: 86800, credit_amount: 0 },
+          { account_number: '1513', debit_amount: 37200, credit_amount: 0 },
+          { account_number: '3001', debit_amount: 0, credit_amount: 99200 },
+          { account_number: '2611', debit_amount: 0, credit_amount: 24800 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect((body.error as unknown as { code: string }).code).toBe('MATCH_AMOUNT_EXCEEDS_REMAINING')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('still rejects when the bank leg alone overpays a ROT invoice', async () => {
     const invoice = makeInvoice({
       id: 'inv-1',

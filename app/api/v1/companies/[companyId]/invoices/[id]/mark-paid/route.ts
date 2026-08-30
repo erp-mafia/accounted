@@ -180,13 +180,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     // Pre-flight: fetch invoice with relations needed for journal entry.
-    // journal_entry_id is fetched for booking-state routing only (it stays out
-    // of INVOICE_MARK_PAID_RESPONSE_COLUMNS so the response contract and the
-    // invoice.paid event payload are unchanged).
+    // journal_entry_id (booking-state routing) and deduction_total (ROT/RUT
+    // settlement derivation) are fetched ad hoc: they stay out of
+    // INVOICE_MARK_PAID_RESPONSE_COLUMNS so the response contract and the
+    // invoice.paid event payload are unchanged.
     const { data: invoice, error: fetchErr } = await ctx.supabase
       .from('invoices')
       .select(
-        `${INVOICE_MARK_PAID_RESPONSE_COLUMNS}, journal_entry_id, customer:customers(id, name, customer_type), items:invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, dimensions)`,
+        `${INVOICE_MARK_PAID_RESPONSE_COLUMNS}, journal_entry_id, deduction_total, customer:customers(id, name, customer_type), items:invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, dimensions)`,
       )
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)
@@ -311,7 +312,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // MATCH_AMOUNT_EXCEEDS_REMAINING by exactly deduction_total (see
     // deriveCustomerSettlementAmount). deduction_total is invoice-currency;
     // the cap is converted to SEK to match the lines.
-    const deductionTotal = (typed as { deduction_total?: number | null }).deduction_total ?? 0
+    //
+    // Gated on the invoice NOT being booked yet: an invoice booked at send
+    // already debited 1513 in its registration entry, so a 1513 debit in the
+    // PAYMENT lines is always wrong there (double 1513, double 30xx/26xx).
+    // For those, the gross sum stays the payment amount and the overpayment
+    // guard keeps rejecting the wrong-shaped entry exactly as before.
+    const deductionTotal = invoiceAlreadyBooked
+      ? 0
+      : (typed as { deduction_total?: number | null }).deduction_total ?? 0
     const deductionCapSek =
       deductionTotal > 0 && needsFxConversion
         ? roundOre(deductionTotal * fxRate!)
