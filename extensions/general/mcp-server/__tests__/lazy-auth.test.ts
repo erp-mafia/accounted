@@ -102,6 +102,19 @@ describe('MCP lazy authentication', () => {
     expect(names.length).toBeGreaterThan(20)
   })
 
+  it('tools/list never serializes matcher-side search keywords', async () => {
+    // Swedish search synonyms live on the tool definitions for
+    // gnubok_search_tools matching only; the tools/list payload budget has
+    // zero headroom, so they must never reach the wire.
+    const response = await handleMcpRequest(rpc('tools/list'))
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    const raw = JSON.stringify(body.result.tools)
+    expect(raw).not.toContain('"keywords"')
+    expect(raw).not.toContain('bankkonto')
+    expect(raw).not.toContain('lönekörning')
+  })
+
   it('runs a public documentation tool without a token', async () => {
     const response = await handleMcpRequest(
       rpc('tools/call', { name: 'gnubok_list_skills', arguments: {} })
