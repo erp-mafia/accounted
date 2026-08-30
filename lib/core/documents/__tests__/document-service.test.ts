@@ -696,8 +696,156 @@ describe('model-free signed document uploads', () => {
         'invoice.pdf',
         'application/pdf',
       ),
-    ).rejects.toThrow(/kunde inte verifieras/)
+    ).rejects.toMatchObject({
+      code: 'DOC_UPLOAD_INVALID_CONTENT',
+      message: expect.stringMatching(/kunde inte verifieras/),
+      messageSv: expect.stringMatching(/kunde inte verifieras/),
+    })
     expect(remove).toHaveBeenCalledWith([pendingPath])
+  })
+
+  it('codes an empty pending object as DOC_UPLOAD_EMPTY and removes it', async () => {
+    results = [{ data: null, error: null }]
+    const pendingPath = buildPendingDocumentStoragePath(company, user, uploadId, 'invoice.pdf')
+    const remove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({
+      download: vi.fn().mockResolvedValue({ data: new Blob([]), error: null }),
+      remove,
+    })
+
+    await expect(
+      completePendingDocumentUpload(makeClient() as never, company, user, uploadId, 'invoice.pdf', 'application/pdf'),
+    ).rejects.toMatchObject({ code: 'DOC_UPLOAD_EMPTY' })
+    expect(remove).toHaveBeenCalledWith([pendingPath])
+  })
+
+  // The insert payload of a completion: from() call #0 is findReservedDocument,
+  // #1 the insert (no dedupe lookup in between unless opted in).
+  function insertPayloadOf(client: ReturnType<typeof makeClient>, fromIndex: number) {
+    const builder = client.from.mock.results[fromIndex]?.value as { insert: ReturnType<typeof vi.fn> }
+    return builder.insert.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+  }
+
+  it("stamps upload_source 'api' by default (the MCP tools' provenance)", async () => {
+    const buffer = pdfBuffer('api upload')
+    const document = makeDocumentAttachment({ id: uploadId, sha256_hash: await computeSHA256(buffer) })
+    results = [
+      { data: null, error: null },
+      { data: document, error: null },
+    ]
+    serviceClientOverride = makeClient({
+      download: vi.fn().mockResolvedValue({ data: new Blob([buffer]), error: null }),
+    })
+    const client = makeClient()
+
+    await completePendingDocumentUpload(client as never, company, user, uploadId, 'invoice.pdf', 'application/pdf')
+
+    expect(insertPayloadOf(client, 1)?.upload_source).toBe('api')
+  })
+
+  it("stamps upload_source 'file_upload' for the browser direct-to-storage path", async () => {
+    const buffer = pdfBuffer('browser upload')
+    const document = makeDocumentAttachment({ id: uploadId, sha256_hash: await computeSHA256(buffer) })
+    results = [
+      { data: null, error: null },
+      { data: document, error: null },
+    ]
+    serviceClientOverride = makeClient({
+      download: vi.fn().mockResolvedValue({ data: new Blob([buffer]), error: null }),
+    })
+    const client = makeClient()
+
+    await completePendingDocumentUpload(
+      client as never,
+      company,
+      user,
+      uploadId,
+      'invoice.pdf',
+      'application/pdf',
+      undefined,
+      { uploadSource: 'file_upload' },
+    )
+
+    expect(insertPayloadOf(client, 1)?.upload_source).toBe('file_upload')
+    // No content-dedupe lookup unless asked for: exactly two from() calls.
+    expect(client.from).toHaveBeenCalledTimes(2)
+  })
+
+  it('opt-in content dedupe returns the existing document and removes the pending object', async () => {
+    const buffer = pdfBuffer('already archived')
+    const existingId = '55555555-5555-4555-8555-555555555555'
+    const existing = makeDocumentAttachment({
+      id: existingId,
+      company_id: company,
+      sha256_hash: await computeSHA256(buffer),
+    })
+    results = [
+      { data: null, error: null }, // findReservedDocument
+      { data: [existing], error: null }, // dedupe lookup
+    ]
+    const move = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const remove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({
+      download: vi.fn().mockResolvedValue({ data: new Blob([buffer]), error: null }),
+      move,
+      remove,
+    })
+    const client = makeClient()
+
+    const completed = await completePendingDocumentUpload(
+      client as never,
+      company,
+      user,
+      uploadId,
+      'invoice.pdf',
+      'application/pdf',
+      undefined,
+      { dedupeByContent: true },
+    )
+
+    expect(completed.document.id).toBe(existingId)
+    expect(completed.document.deduplicated).toBe(true)
+    expect(remove).toHaveBeenCalledWith([buildPendingDocumentStoragePath(company, user, uploadId, 'invoice.pdf')])
+    expect(move).not.toHaveBeenCalled()
+    // findReservedDocument + dedupe lookup, and never an insert
+    expect(client.from).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the SQLSTATE on a rejected document insert so callers can map an RLS denial', async () => {
+    const buffer = pdfBuffer('viewer upload')
+    results = [
+      { data: null, error: null }, // findReservedDocument
+      {
+        data: null,
+        error: {
+          code: '42501',
+          message: 'new row violates row-level security policy for table "document_attachments"',
+        },
+      },
+      { data: null, error: null }, // concurrent-completion check
+    ]
+    const remove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({
+      download: vi.fn().mockResolvedValue({ data: new Blob([buffer]), error: null }),
+      remove,
+    })
+
+    await expect(
+      completePendingDocumentUpload(makeClient() as never, company, user, uploadId, 'invoice.pdf', 'application/pdf'),
+    ).rejects.toMatchObject({ code: '42501' })
+    // The moved object is taken back out: no row, no orphan.
+    expect(remove).toHaveBeenCalledWith([buildReservedDocumentStoragePath(company, user, uploadId, 'invoice.pdf')])
+  })
+
+  it('codes a missing or expired reservation as DOCUMENT_UPLOAD_NOT_FOUND', async () => {
+    results = [{ data: null, error: null }]
+    serviceClientOverride = makeClient({
+      download: vi.fn().mockResolvedValue({ data: null, error: { message: 'Object not found' } }),
+    })
+
+    await expect(
+      completePendingDocumentUpload(makeClient() as never, company, user, uploadId, 'invoice.pdf', 'application/pdf'),
+    ).rejects.toMatchObject({ code: 'DOCUMENT_UPLOAD_NOT_FOUND' })
   })
 
   it('cleans only expired pending objects in a bounded company and user prefix', async () => {
