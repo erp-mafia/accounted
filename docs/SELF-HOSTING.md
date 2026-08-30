@@ -211,7 +211,7 @@ The stock self-hosted image includes both extraction extensions, so these creden
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-**Option 2: AWS Bedrock.** Requires an AWS account with Bedrock model access to Claude. This is what the hosted service runs, because it keeps inference inside eu-north-1: choose it if you need the AI calls to stay in the EU, which the direct API does not guarantee.
+**Option 2: AWS Bedrock.** Requires an AWS account with Bedrock model access to Claude. This is what the hosted service runs, because it keeps inference inside the EU (the `eu.` cross-region inference profile; `AWS_REGION` is the API endpoint, not a pin to one region): choose it if you need the AI calls to stay in the EU, which the direct API does not guarantee.
 
 ```bash
 AWS_ACCESS_KEY_ID=...
@@ -265,7 +265,7 @@ AI_PROVIDER=bedrock|anthropic|openai-compatible   # force the backend (see below
 
 The pre-existing names `BEDROCK_MODEL_ID`, `BEDROCK_OPUS_MODEL_ID`, `BEDROCK_SONNET_MODEL_ID` and `BEDROCK_MAX_TOKENS` keep working as the same overrides (extraction, heavy, standard, extraction cap) on every backend; the `AI_*` names take precedence when both are set. Claude deployments default every tier to `claude-sonnet-5`.
 
-When several credential sets are present, Bedrock wins, then the direct Anthropic API, then the OpenAI-compatible endpoint, so that adding a key for an experiment cannot silently move production inference out of eu-north-1. Set `AI_PROVIDER` to say which you mean. A model id written without a provider prefix is adapted to whichever backend is active; an id that already carries one (`eu.anthropic.…`) is used as-is.
+When several credential sets are present, Bedrock wins, then the direct Anthropic API, then the OpenAI-compatible endpoint, so that adding a key for an experiment cannot silently move production inference out of the EU. Set `AI_PROVIDER` to say which you mean. A model id written without a provider prefix is adapted to whichever backend is active; an id that already carries one (`eu.anthropic.…`) is used as-is.
 
 Without working credentials the rest of the app runs normally: uploads are stored but not auto-interpreted (the upload UI sees that immediately rather than waiting for a timeout), and the AI assistant answers `503 ai_unconfigured`.
 
@@ -540,7 +540,7 @@ portable base file alone.
 
 ### What you give up vs. cloud Supabase
 
-- **Backups** are entirely your responsibility: set up `pg_dump` (or a tool like restic) to off-host storage. As a portable, vendor-neutral *logical* backup on top of the raw dump, you can also export each fiscal period as a standard **SIE4** file via the API and archive it: any Swedish bookkeeping system can re-import it:
+- **Backups** are entirely your responsibility. The repo ships `scripts/self-host/backup.sh` / `restore.sh` (`pg_dump` custom format with ACLs kept, ACL manifest, storage tar, optional db-config volume, to any S3-compatible bucket with Object Lock; see [SOVEREIGN.md, section 5](SOVEREIGN.md#5-backup-and-restore-ship-it-do-not-improvise-it)); scheduling and monitoring them is still on you. As a portable, vendor-neutral *logical* backup on top of the raw dump, you can also export each fiscal period as a standard **SIE4** file via the API and archive it: any Swedish bookkeeping system can re-import it:
 
   ```bash
   curl -fsS -H "Authorization: Bearer <reports:read API key>" \

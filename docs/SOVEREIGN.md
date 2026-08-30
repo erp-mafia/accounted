@@ -36,7 +36,7 @@ Three things carry the sovereign claim, in order of how much they matter:
 
 ## 2. What is and is not covered
 
-| Free and local on a self-host (AGPL) | Hosted-only today |
+| Free and local on a self-host (AGPL) | Hosted-only or backend-restricted today |
 |---|---|
 | Double-entry bookkeeping, invoicing, supplier invoices, reports, SIE import/export | Bank sync via Enable Banking (runs on Accounted's PSD2/AISP credentials) |
 | VAT and AGI file generation for manual filing at Skatteverket | Skatteverket API submission and skattekonto sync (Accounted's API client registration) |
@@ -45,7 +45,7 @@ Three things carry the sovereign claim, in order of how much they matter:
 | AI document extraction, assistant Q&A and one-tap categorization on a BYO endpoint; HTML mail invoices | Specialized conversational flows (VAT review, KPI explanation, settings help, bokslut helpers): Anthropic-family backend only (Bedrock or the direct API), not a BYO OpenAI-compatible endpoint ([#1800](https://github.com/erp-mafia/accounted/issues/1800)) |
 | Push notifications (your VAPID keys), invoice email via Resend (section 6; an SMTP relay option is proposed in #1746) | |
 
-The hosted-only column is what a connector subscription for self-hosted instances would unlock (priced at parity with hosted, per active company). That connector-key registry is proposed (PRs #1747, #1748, #1751, #1757 and #1758, none merged) and **not yet available**: today there is no instance-side variable to set and nothing to subscribe to, and the extensions' settings screens will tell you those services are unconfigured.
+The hosted-only rows (everything in the right column except the AI row, which is a backend restriction a connector key would not change) are what a connector subscription for self-hosted instances would unlock (priced at parity with hosted, per active company). That connector-key registry is proposed (PRs #1747, #1748, #1751, #1757 and #1758, none merged) and **not yet available**: today there is no instance-side variable to set and nothing to subscribe to, and the extensions' settings screens will tell you those services are unconfigured.
 
 ## 3. Choosing Swedish infrastructure
 
@@ -107,10 +107,14 @@ These are the things that cost people an afternoon. Source: the upstream Docker 
 
 Swedish bookkeeping law requires the ledger and its underlag to be kept for seven years after the end of the fiscal year, and self-hosted Supabase gives you no backups. Two scripts in this repo cover the minimum:
 
-- `scripts/self-host/backup.sh`: logical `pg_dump` (custom format) of the Supabase database, a tar of the storage volume (the documents), optionally the `db-config` Docker volume (the pgsodium root key; without it Vault-encrypted columns are unreadable after a restore), SHA-256 manifest, uploaded to an S3-compatible bucket with optional **COMPLIANCE-mode Object Lock**.
-- `scripts/self-host/restore.sh <name> --yes`: downloads a set, verifies checksums, restores the database (`pg_restore --clean`; any reported error stops it before storage is touched, re-run with `RESTORE_TOLERATE_ERRORS=1` once you have read the log and the errors are the expected "already exists" kind on a Supabase target), unpacks storage and db-config.
+- `scripts/self-host/backup.sh`: logical `pg_dump` (custom format, `--no-owner`, ACLs kept) of the Supabase database, an ACL manifest of the `public` schema (`scripts/self-host/acl-manifest.sql`: what anon, authenticated and service_role may do with every function and relation), a tar of the storage volume (the documents), optionally the `db-config` Docker volume (the pgsodium root key; without it Vault-encrypted columns are unreadable after a restore), SHA-256 manifest, uploaded to an S3-compatible bucket with optional **COMPLIANCE-mode Object Lock**.
+- `scripts/self-host/restore.sh <name> --yes`: downloads a set, verifies checksums, unpacks db-config if asked, restores the database (`pg_restore --clean --if-exists --no-owner`), then re-runs the ACL manifest against the restored database and **stops on any difference**, then unpacks storage.
 
-Requirements on the host running them: `pg_dump`/`pg_restore` matching the server major, `tar`, `gzip`, AWS CLI v2 (talks to any S3-compatible endpoint via `--endpoint-url`), and `docker` only if you back up the db-config volume. Uploads go through `aws s3api put-object`, which caps a single object at 5 GB and has no multipart fallback in the script: a dump or storage tar past that size needs splitting or another uploader before the run succeeds.
+Why the ACL step exists: the migrations lock SECURITY DEFINER RPCs away from `anon`/`authenticated` with role-specific `REVOKE`s, but `pg_dump` writes ACLs as a diff against PostgreSQL's built-in defaults, so the dump only says "REVOKE FROM PUBLIC; GRANT TO service_role" and never "REVOKE FROM anon". A Supabase stack's `ALTER DEFAULT PRIVILEGES` would then hand `anon` EXECUTE back to every restored function. `restore.sh` resets the restoring role's default privileges to PostgreSQL's built-in ones right before `pg_restore` (the dump's own last section re-creates the source's defaults once every object exists, so later migrations still get the grants PostgREST needs) and the manifest diff proves the result. Reproduced on `supabase/postgres` 15 and `postgres` 17 (without the step, hardened RPCs and tables come back anon-reachable) and drilled with the real scripts against a migrated database: 576 `public` objects identical after the restore, a tampered manifest stops it.
+
+`pg_restore` reports errors on a Supabase target even when the restore is fine, because the restoring `postgres` role is not a superuser and the stack already owns and grants its own objects. Expected classes: "already exists"; "does not exist" from `DROP ... IF EXISTS` of policies and triggers on a fresh target; "must be member of role supabase_*", "must be owner of ...", "permission denied ..." and "grant options cannot be granted back" on `GRANT`/`REVOKE`/`ALTER DEFAULT PRIVILEGES` for objects in `auth`, `storage`, `realtime`, `extensions`, `cron`, `vault`, `graphql*`, `pgbouncer`. Any error on a `public.*` object is **not** expected: investigate it. On errors the script stops before the ACL check and storage (the db-config volume, if requested, is already unpacked at that point); re-run with `RESTORE_TOLERATE_ERRORS=1` once you have read the log. An ACL mismatch has no override: fix the named objects by hand from the printed diff, or restore into a fresh stack.
+
+Requirements on the host running them: `pg_dump`/`pg_restore`/`psql` matching the server major, `tar`, `gzip`, AWS CLI v2 (talks to any S3-compatible endpoint via `--endpoint-url`), and `docker` only if you back up the db-config volume. Uploads go through `aws s3api put-object`, which caps a single object at 5 GB and has no multipart fallback in the script: a dump or storage tar past that size needs splitting or another uploader before the run succeeds.
 
 ### Nightly plus yearly
 
@@ -138,8 +142,10 @@ Alert on a non-zero exit: the script prints a few progress lines on success and 
 ### Restore drill (do this once before you need it)
 
 1. Bring up a fresh Supabase stack on a scratch VM with the **same** `JWT_SECRET`, `ANON_KEY` and `SERVICE_ROLE_KEY` as production (or re-issue keys into Accounted's `.env` afterwards).
-2. Stop the database container, `RESTORE_DB_CONFIG_VOLUME=<volume> scripts/self-host/restore.sh <name> --yes` with `RESTORE_DATABASE_URL` pointing at the scratch database and `RESTORE_STORAGE_DIR` at its `volumes/storage`, then start the stack again. (Order: db-config before the database container's first start, then database, then storage, then restart storage-api.)
-3. Point a scratch Accounted at it, log in, open a verifikat and its underlag, run the document-archive verification cron once (`/api/documents/verify/cron`): it recomputes SHA-256 over the archive and reports mismatches.
+2. Two passes, because the db-config volume can only be replaced while the database container is stopped and `pg_restore` needs it running:
+   - Stop the database container, then `RESTORE_DB_CONFIG_VOLUME=<volume> RESTORE_SKIP_DATABASE=1 scripts/self-host/restore.sh <name> --yes` (unpacks the pgsodium root key, touches nothing else). Start the database container again.
+   - `RESTORE_DATABASE_URL=postgresql://postgres:...@<scratch-db>:5432/postgres RESTORE_STORAGE_DIR=<supabase-dir>/volumes/storage scripts/self-host/restore.sh <name> --yes` (database, ACL check, storage). Expect the first attempt to stop on the Supabase error classes above; read the log, re-run with `RESTORE_TOLERATE_ERRORS=1`. Then restart storage-api.
+3. Point a scratch Accounted at it, log in, open a verifikat and its underlag, run the document-archive verification cron once (`/api/documents/verify/cron`): it recomputes SHA-256 over the archive and reports mismatches. The ACL check already ran inside `restore.sh` ("ACL manifest verified"); if you want to see it with your own eyes, `select has_function_privilege('anon', 'public.get_dashboard_nav_flags(uuid)', 'EXECUTE')` must be `false`.
 4. Write down how long it took. That number is your recovery time.
 
 ## 6. Honest dependency list (what still touches a non-Swedish party)
@@ -149,7 +155,7 @@ A sovereign deployment still has these touchpoints. None carries accounting data
 - **Image distribution**: the app image is pulled from GitHub Container Registry (`ghcr.io/erp-mafia/gnubok`), and the cron sidecar downloads `supercronic` from GitHub Releases at build time. Mirror both into your own registry for an air-gapped setup (build from source: `docker compose -f docker-compose.yml -f docker-compose.build.yml up --build`).
 - **Fonts**: `next/font/google` downloads Geist and Hedvig Letters Serif **at build time** and self-hosts them; browsers never call Google. The GitHub-built image therefore has no runtime font dependency; a source build fetches them once during `next build`.
 - **Invoice email**: the email extension sends through Resend (US) only today; an SMTP mailer behind the same seam is proposed in #1746 and, once merged, `EMAIL_PROVIDER=smtp` selects it (your own relay: a Swedish mail provider, an M365/Workspace relay, Postfix on the host). Until then, either accept Resend as the one non-Swedish touchpoint or leave invoice email unconfigured (invoices download as PDF). Resend carries invoice PDFs to your customers but no ledger data.
-- **Telemetry**: none. Analytics (PostHog), Vercel Speed Insights and error tracking are hosted-only and switched off by `NEXT_PUBLIC_SELF_HOSTED=true`; there is no call-home licence check, by design.
+- **Telemetry**: none. Analytics (PostHog) and Vercel Speed Insights are hosted-only and switched off by `NEXT_PUBLIC_SELF_HOSTED=true`; there is no error-tracking integration at all (SELF-HOSTING.md, Error Tracking: errors go to the container logs); there is no call-home licence check, by design.
 - **Upstream services you opt into**: Enable Banking, Skatteverket, TIC, the migration gateway, Google OAuth for receipt hunt, Meta for WhatsApp are hosted-only today (section 2) and simply stay unconfigured.
 
 ## 7. Checklist

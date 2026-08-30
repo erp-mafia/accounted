@@ -9,9 +9,10 @@
 # bucket alongside it, on storage the operator controls. See
 # docs/SOVEREIGN.md ("Backup and restore") for the runbook and the cron line.
 #
-# Requirements on the host running it: bash, pg_dump (matching the server's
-# major version), tar, gzip, sha256sum (or shasum), AWS CLI v2 (works against
-# any S3-compatible endpoint: Safespring, GleSYS, Elastx via --endpoint-url).
+# Requirements on the host running it: bash, pg_dump and psql (matching the
+# server's major version), tar, gzip, sha256sum (or shasum), AWS CLI v2 (works
+# against any S3-compatible endpoint: Safespring, GleSYS, Elastx via
+# --endpoint-url).
 #
 # Environment (required unless marked optional):
 #   BACKUP_DATABASE_URL      postgresql://postgres:<password>@<host>:<port>/postgres
@@ -78,11 +79,12 @@ fi
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 NAME="${LABEL}-${STAMP}"
 
-for bin in pg_dump tar gzip aws; do
+for bin in pg_dump psql tar gzip aws; do
   command -v "$bin" >/dev/null 2>&1 || { echo "backup: missing required tool: $bin" >&2; exit 2; }
 done
 if command -v sha256sum >/dev/null 2>&1; then SHA="sha256sum"; else SHA="shasum -a 256"; fi
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORK="${BACKUP_WORKDIR:-$(mktemp -d "${TMPDIR:-/tmp}/accounted-backup.XXXXXX")}"
 mkdir -p "$WORK"
 chmod 700 "$WORK"
@@ -119,14 +121,26 @@ fi
 
 # 1. Database: custom-format dump (compressed, selective restore possible).
 #    --no-owner so it restores into a fresh Supabase stack whose roles were
-#    created by that stack, not by us. ACLs (GRANT/REVOKE) are kept on purpose:
-#    the Supabase roles (anon, authenticated, service_role, postgres) exist
-#    under the same names in every stack, and the migrations' REVOKE/GRANT
-#    hardening of SECURITY DEFINER RPCs must survive a restore; --no-privileges
-#    would re-expose service_role-only functions to anon/authenticated.
+#    created by that stack, not by us. ACLs (GRANT/REVOKE) are kept (no
+#    --no-privileges): the migrations lock SECURITY DEFINER RPCs away from
+#    anon/authenticated, and the dump is the only record of that. Keeping them
+#    is necessary but not sufficient: pg_dump writes ACLs as a diff against
+#    PostgreSQL's built-in defaults, so a role-specific "REVOKE ... FROM anon"
+#    is not in the dump at all, and a Supabase target's ALTER DEFAULT
+#    PRIVILEGES would hand anon/authenticated EXECUTE back to every restored
+#    function. restore.sh neutralizes those default privileges before
+#    pg_restore and then diffs the ACL manifest taken in step 1b against the
+#    restored database, so a re-exposure fails the restore instead of hiding.
 DB_FILE="${WORK}/${NAME}.db.dump"
 pg_dump --format=custom --no-owner --file "$DB_FILE" "$BACKUP_DATABASE_URL"
 echo "backup: database dump $(du -h "$DB_FILE" | cut -f1)"
+
+# 1b. ACL manifest: what anon/authenticated/service_role may do with every
+#     function and relation in public (scripts/self-host/acl-manifest.sql).
+#     restore.sh compares the restored database against this file.
+ACL_FILE="${WORK}/${NAME}.acl.txt"
+psql -X -A -t -q -v ON_ERROR_STOP=1 -f "${SCRIPT_DIR}/acl-manifest.sql" "$BACKUP_DATABASE_URL" > "$ACL_FILE"
+echo "backup: ACL manifest $(wc -l < "$ACL_FILE" | tr -d ' ') objects"
 
 # 2. Documents (the BFL underlag) when storage-api uses the file backend.
 STORAGE_FILE=""
@@ -154,11 +168,11 @@ fi
 
 # 4. Checksums, then upload everything under one prefix.
 MANIFEST="${WORK}/${NAME}.sha256"
-( cd "$WORK" && $SHA "$(basename "$DB_FILE")" \
+( cd "$WORK" && $SHA "$(basename "$DB_FILE")" "$(basename "$ACL_FILE")" \
     ${STORAGE_FILE:+"$(basename "$STORAGE_FILE")"} \
     ${DBCONFIG_FILE:+"$(basename "$DBCONFIG_FILE")"} > "$MANIFEST" )
 
-for f in "$DB_FILE" ${STORAGE_FILE:+"$STORAGE_FILE"} ${DBCONFIG_FILE:+"$DBCONFIG_FILE"} "$MANIFEST"; do
+for f in "$DB_FILE" "$ACL_FILE" ${STORAGE_FILE:+"$STORAGE_FILE"} ${DBCONFIG_FILE:+"$DBCONFIG_FILE"} "$MANIFEST"; do
   upload "$f" "${PREFIX}/${NAME}/$(basename "$f")"
 done
 
