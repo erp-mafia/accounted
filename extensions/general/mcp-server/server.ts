@@ -7583,16 +7583,19 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_supplier_invoices',
     title: 'List Supplier Invoices',
-    description: 'List supplier invoices (leverantörsfakturor), sorted by due date. Optional status filter; "to_pay" combines approved+overdue.',
+    description: 'List supplier invoices (leverantörsfakturor), sorted by due date. Filters: status (to_pay = approved+overdue), supplier_id, supplier_name (substring), date_from/date_to on invoice_date (YYYY-MM-DD).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         status: {
           type: 'string',
-          description: 'Filter: registered, approved, overdue, paid, to_pay, all (default)',
           enum: ['registered', 'approved', 'overdue', 'paid', 'to_pay', 'all'],
         },
+        supplier_id: { type: 'string' },
+        supplier_name: { type: 'string' },
+        date_from: { type: 'string' },
+        date_to: { type: 'string' },
         limit: { type: 'number', description: 'Max results 1-100 (default 50)' },
       },
     },
@@ -7602,6 +7605,8 @@ export const tools: McpTool[] = [
       properties: {
         invoices: { type: 'array', items: { type: 'object' } },
         count: { type: 'number' },
+        total_count: { type: 'number' },
+        has_more: { type: 'boolean' },
       },
       required: ['invoices', 'count'],
     },
@@ -7615,9 +7620,92 @@ export const tools: McpTool[] = [
       const limit = Math.min(Math.max(1, Number(args.limit) || 50), 100)
       const status = (args.status as string) || 'all'
 
+      // Loud validation: a mistyped filter must never silently degrade to the
+      // UNFILTERED list (the silent-drop failure class arg-guard exists for,
+      // feedback seq 261545). Hosts do not reliably enforce inputSchema types,
+      // so non-string values reach execute() and are rejected here.
+      for (const key of ['supplier_id', 'supplier_name', 'date_from', 'date_to'] as const) {
+        if (args[key] !== undefined && typeof args[key] !== 'string') {
+          throw new Error(`${key} must be a string.`)
+        }
+      }
+      const supplierId = args.supplier_id as string | undefined
+      const supplierName = (args.supplier_name as string | undefined)?.trim()
+      const dateFrom = args.date_from as string | undefined
+      const dateTo = args.date_to as string | undefined
+
+      if (supplierName === '') {
+        throw new Error('supplier_name must not be blank.')
+      }
+      // Clear message instead of a raw Postgres uuid cast error: an agent may
+      // well pass a supplier's name here; point it at supplier_name instead.
+      if (supplierId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(supplierId)) {
+        throw new Error('supplier_id must be a supplier UUID (suppliers.id). To filter by name, use supplier_name.')
+      }
+      for (const [key, value] of [['date_from', dateFrom], ['date_to', dateTo]] as const) {
+        if (value === undefined) continue
+        // Shape AND calendar validity: '2026-02-30' must fail here with a
+        // clear message, not as a raw Postgres date-cast error downstream.
+        const parsed = new Date(`${value}T00:00:00Z`)
+        if (
+          !ISO_DATE_RE.test(value) ||
+          Number.isNaN(parsed.getTime()) ||
+          parsed.toISOString().slice(0, 10) !== value
+        ) {
+          throw new Error(`${key} must be a valid ISO date (YYYY-MM-DD).`)
+        }
+      }
+      if (dateFrom && dateTo && dateFrom > dateTo) {
+        throw new Error('date_from must not be after date_to.')
+      }
+
+      // supplier_name resolves server-side to supplier ids: a LITERAL
+      // case-insensitive substring matched in JS over the company's suppliers
+      // (fetchAllRows, same shape as gnubok_list_suppliers). Not ilike:
+      // PostgREST rewrites `*` in like/ilike values to `%`, so a DB-side
+      // pattern silently broadens names containing `*` and there is no
+      // server-side escape for it. Archived suppliers are included on
+      // purpose: their invoices still exist. The match set is bounded: an
+      // unbounded id list fed to .in() below could exceed PostgREST URL
+      // limits, so past the cap the tool fails loudly with a refine hint
+      // instead of degrading.
+      const NAME_MATCH_CAP = 200
+      let nameMatchedSupplierIds: string[] | undefined
+      if (supplierName) {
+        const needle = supplierName.toLowerCase()
+        let suppliers: { id: string; name: string | null }[]
+        try {
+          suppliers = await fetchAllRows<{ id: string; name: string | null }>(({ from, to }) =>
+            supabase
+              .from('suppliers')
+              .select('id, name')
+              .eq('company_id', companyId)
+              .order('id', { ascending: true })
+              .range(from, to)
+          )
+        } catch (error) {
+          throw dbError(error)
+        }
+        const matchedIds = suppliers
+          .filter((s) => (s.name ?? '').toLowerCase().includes(needle))
+          .map((s) => s.id)
+        if (matchedIds.length === 0) {
+          return { invoices: [], count: 0, total_count: 0, has_more: false }
+        }
+        if (matchedIds.length > NAME_MATCH_CAP) {
+          throw new Error(
+            `supplier_name matches more than ${NAME_MATCH_CAP} suppliers; refine the name or use supplier_id.`,
+          )
+        }
+        nameMatchedSupplierIds = matchedIds
+      }
+
+      // count: 'exact' so truncation is SIGNALLED (total_count/has_more): the
+      // date filters invite period reconciliation, and a silently capped
+      // listing reads as complete (same contract as gnubok_list_invoices).
       let query = supabase
         .from('supplier_invoices')
-        .select('id, supplier_invoice_number, invoice_date, due_date, status, total, total_sek, currency, vat_treatment, remaining_amount, default_dimensions, supplier:suppliers(id, name)')
+        .select('id, supplier_invoice_number, invoice_date, due_date, status, total, total_sek, currency, vat_treatment, remaining_amount, default_dimensions, supplier:suppliers(id, name)', { count: 'exact' })
         .eq('company_id', companyId)
 
       if (status !== 'all') {
@@ -7628,11 +7716,30 @@ export const tools: McpTool[] = [
         }
       }
 
-      const { data, error } = await query.order('due_date', { ascending: true }).limit(limit)
+      // Same filter shapes as the v1 supplier-invoices list: eq on
+      // supplier_id, gte/lte on invoice_date.
+      if (supplierId) query = query.eq('supplier_id', supplierId)
+      if (nameMatchedSupplierIds) query = query.in('supplier_id', nameMatchedSupplierIds)
+      if (dateFrom) query = query.gte('invoice_date', dateFrom)
+      if (dateTo) query = query.lte('invoice_date', dateTo)
+
+      // Tiebreak on the unique id: due_date alone leaves which rows fall past
+      // the cap nondeterministic between identical calls.
+      const { data, error, count } = await query
+        .order('due_date', { ascending: true })
+        .order('id', { ascending: true })
+        .limit(limit)
 
       if (error) throw dbError(error)
 
-      return { invoices: data ?? [], count: data?.length ?? 0 }
+      const invoices = data ?? []
+      const totalCount = count ?? invoices.length
+      return {
+        invoices,
+        count: invoices.length,
+        total_count: totalCount,
+        has_more: totalCount > invoices.length,
+      }
     },
   },
 
