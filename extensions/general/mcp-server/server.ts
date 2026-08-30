@@ -17337,6 +17337,80 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_delete_draft_invoice',
+    title: 'Delete Draft Invoice',
+    description:
+      'Stage removal of a DRAFT invoice for approval. Drafts only: an unnumbered draft is hard deleted; a numbered draft is makulerad (status cancelled, number kept so the F-series stays gap-free). Sent/paid/credited invoices are refused: use gnubok_credit_invoice instead.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        invoice_id: { type: 'string', description: 'UUID of the draft invoice, from gnubok_list_invoices.' },
+        dry_run: { type: 'boolean', description: 'Validate and preview without staging or changing data.' },
+        idempotency_key: { type: 'string', description: 'Random per-operation UUID. Reusing it with the same payload returns the original staged response.' },
+      },
+      required: ['invoice_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    catalogVisibility: 'search',
+    async execute(args, companyId, userId, supabase, actor) {
+      const invoiceId = args.invoice_id as string
+      if (!invoiceId) throw new Error('invoice_id is required. Use gnubok_list_invoices to find IDs.')
+
+      const { data: inv } = await supabase
+        .from('invoices')
+        .select('id, invoice_number, status, total, currency, customer:customers(name)')
+        .eq('id', invoiceId).eq('company_id', companyId).single()
+
+      if (!inv) throw new Error('Invoice not found')
+      if (inv.status !== 'draft') {
+        throw new Error(
+          `Only draft invoices can be deleted (status: ${inv.status}). ` +
+          'Issued invoices are immutable per BFL: use gnubok_credit_invoice instead.'
+        )
+      }
+
+      // Unnumbered draft = hard delete (no F-series number was consumed, so
+      // no gap arises); numbered draft = makulering (number retained so the
+      // F-series stays gap-free). The commit executor re-validates status
+      // with TOCTOU write guards, so a draft sent between staging and
+      // approval is refused, never cancelled.
+      const willHardDelete = !inv.invoice_number
+
+      return stagePendingOperation(supabase, companyId, userId, 'delete_draft_invoice',
+        willHardDelete
+          ? 'Ta bort fakturautkast (onumrerat)'
+          : `Makulera fakturautkast ${inv.invoice_number}`,
+        // expected_invoice_number pins the APPROVED outcome: if the draft is
+        // finalized (gains a number) between staging and approval, the
+        // executor refuses instead of silently makulera what the approver saw
+        // as a hard delete.
+        { invoice_id: invoiceId, expected_invoice_number: inv.invoice_number ?? null },
+        {
+          invoice_id: inv.id,
+          invoice_number: inv.invoice_number ?? null,
+          customer_name: (inv.customer as { name?: string } | null)?.name ?? null,
+          total: inv.total,
+          currency: inv.currency,
+          method: willHardDelete
+            ? 'hard delete: the unnumbered draft and its lines are removed; no F-series number was consumed, so no gap arises'
+            : 'makulering: status flips to cancelled and the invoice number is retained, keeping the F-series gap-free',
+        },
+        actor,
+        {
+          description: 'After approval the draft is removed (unnumbered) or makulerad (numbered). Both outcomes are permanent.',
+          tool: 'gnubok_list_invoices',
+        },
+        {
+          dryRun: Boolean(args.dry_run),
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+        },
+      )
+    },
+  },
+
+  {
     name: 'gnubok_create_sie_upload',
     keywords: ['sie', 'sie-fil', 'importera bokföring'],
     title: 'Create SIE Upload',
