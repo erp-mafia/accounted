@@ -47,6 +47,7 @@ import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { dbError } from '@/lib/errors/db-error'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
@@ -1055,7 +1056,7 @@ async function resolveJournalEntryRef(
     .order('entry_date', { ascending: false })
 
   if (error) {
-    throw new Error(`Database error resolving voucher "${series}-${number}": ${error.message}`)
+    throw dbError(error, `Database error resolving voucher "${series}-${number}"`)
   }
 
   const matches = (data ?? []) as Array<{ id: string; entry_date: string; description: string }>
@@ -3799,7 +3800,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!data) throw new Error('Company settings not found.')
 
       return {
@@ -3916,7 +3917,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!current) throw new Error('Company settings not found.')
 
       const currentPreview = {
@@ -5041,7 +5042,7 @@ export const tools: McpTool[] = [
       if (cashAccountId) countQuery = countQuery.eq('cash_account_id', cashAccountId)
       const { count: totalCount, error: countError } = await countQuery
 
-      if (countError) throw new Error(`Database error: ${countError.message}`)
+      if (countError) throw dbError(countError)
 
       let listQuery = supabase
         .from('transactions')
@@ -5055,7 +5056,7 @@ export const tools: McpTool[] = [
         .order('date', { ascending: false })
         .range(offset, offset + limit - 1)
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       // Resolve the bank account's BAS ledger for the rows on this page so a
       // per-account reconciliation can be driven from outside (customer
@@ -5070,7 +5071,7 @@ export const tools: McpTool[] = [
           .select('id, ledger_account')
           .eq('company_id', companyId)
           .in('id', cashAccountIds)
-        if (cashError) throw new Error(`Database error: ${cashError.message}`)
+        if (cashError) throw dbError(cashError)
         for (const c of (cashRows ?? []) as Array<{ id: string; ledger_account: string }>) {
           ledgerByCashAccount.set(c.id, c.ledger_account)
         }
@@ -5150,7 +5151,7 @@ export const tools: McpTool[] = [
         p_limit: limit,
         p_offset: offset,
       })
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       const result = data as {
         ok: boolean
@@ -5228,7 +5229,7 @@ export const tools: McpTool[] = [
         p_limit: limit,
         p_offset: offset,
       })
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       const result = data as {
         ok: boolean
@@ -5490,7 +5491,7 @@ export const tools: McpTool[] = [
         .order('date', { ascending: false })
         .limit(limit)
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       return {
         transactions: data ?? [],
@@ -5551,7 +5552,7 @@ export const tools: McpTool[] = [
             .range(from, to)
         })
       } catch (error) {
-        throw new Error(`Database error: ${error instanceof Error ? error.message : 'unknown error'}`)
+        throw dbError(error)
       }
       rows.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
 
@@ -5843,7 +5844,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!current) throw new Error('Customer not found.')
 
       // Same guard as gnubok_create_customer and the REST PATCH route: only
@@ -5971,7 +5972,7 @@ export const tools: McpTool[] = [
           return q.order('id', { ascending: true }).range(from, to)
         })
       } catch (error) {
-        throw new Error(`Database error: ${error instanceof Error ? error.message : 'unknown error'}`)
+        throw dbError(error)
       }
       articles.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
 
@@ -6157,7 +6158,7 @@ export const tools: McpTool[] = [
         .order('id', { ascending: false })
         .range(offset, offset + limit)
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       const rows = data ?? []
       const invoices = rows.slice(0, limit).map((inv: Record<string, unknown>) => ({
@@ -6285,7 +6286,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!invoice) throw new Error('Invoice not found. Use gnubok_list_invoices to find valid IDs.')
 
       type InvoiceLineRow = {
@@ -7258,7 +7259,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (invoiceError) throw new Error(`Database error: ${invoiceError.message}`)
+      if (invoiceError) throw dbError(invoiceError)
       if (!invoice) throw new Error('Invoice not found')
 
       // Never read invoice_deliveries directly: the row carries the exact
@@ -7270,7 +7271,7 @@ export const tools: McpTool[] = [
         'list_invoice_delivery_summaries_for_service',
         { p_company_id: companyId, p_user_id: userId, p_invoice_id: invoiceId },
       )
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       // Mirrors the RETURNS TABLE of the RPC. body_html, body_text and
       // bcc_addresses are absent by construction, not filtered here.
@@ -7411,7 +7412,7 @@ export const tools: McpTool[] = [
             .range(from, to)
         })
       } catch (error) {
-        throw new Error(`Database error: ${error instanceof Error ? error.message : 'unknown error'}`)
+        throw dbError(error)
       }
       suppliers.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
 
@@ -7605,7 +7606,7 @@ export const tools: McpTool[] = [
 
       const { data, error } = await query.order('due_date', { ascending: true }).limit(limit)
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       return { invoices: data ?? [], count: data?.length ?? 0 }
     },
@@ -7650,7 +7651,7 @@ export const tools: McpTool[] = [
         .order('occurrence_count', { ascending: false })
         .limit(limit)
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       return {
         templates: (data ?? []).map((t) => ({
@@ -7710,7 +7711,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .in('id', limitedIds)
 
-      if (txError) throw new Error(`Database error: ${txError.message}`)
+      if (txError) throw dbError(txError)
       if (!transactions || transactions.length === 0) throw new Error('No transactions found')
 
       // Fetch mapping rules
@@ -7846,7 +7847,7 @@ export const tools: McpTool[] = [
           return query.order('account_number', { ascending: true }).range(from, to)
         })
       } catch (error) {
-        throw new Error(`Database error: ${error instanceof Error ? error.message : 'unknown error'}`)
+        throw dbError(error)
       }
 
       // Postgres ordered by sort_order ascending with nulls last; keep that
@@ -7917,7 +7918,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .eq('account_number', accountNumber)
         .maybeSingle()
-      if (existingErr) throw new Error(`Database error: ${existingErr.message}`)
+      if (existingErr) throw dbError(existingErr)
       if (existing) {
         throw new Error(
           existing.is_active
@@ -8038,7 +8039,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .eq('account_number', accountNumber)
         .maybeSingle()
-      if (fetchErr) throw new Error(`Database error: ${fetchErr.message}`)
+      if (fetchErr) throw dbError(fetchErr)
       if (!current) {
         throw new Error(`Konto ${accountNumber} finns inte i kontoplanen. Skapa det med gnubok_create_account.`)
       }
@@ -8240,7 +8241,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .eq('sie_dim_no', sieDimNo)
         .maybeSingle()
-      if (dimError) throw new Error(`Database error: ${dimError.message}`)
+      if (dimError) throw dbError(dimError)
       if (!dimension) {
         throw new Error(
           `Dimension ${sieDimNo} finns inte i registret. Anropa gnubok_list_dimensions för att se registrerade dimensioner.`,
@@ -8256,7 +8257,7 @@ export const tools: McpTool[] = [
       if (!includeInactive) valuesQuery = valuesQuery.eq('is_active', true)
 
       const { data: rows, error: valuesError } = await valuesQuery
-      if (valuesError) throw new Error(`Database error: ${valuesError.message}`)
+      if (valuesError) throw dbError(valuesError)
       const all = (rows ?? []) as Array<{
         id: string
         code: string
@@ -8350,7 +8351,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .eq('sie_dim_no', params.sie_dim_no)
         .maybeSingle()
-      if (dimError) throw new Error(`Database error: ${dimError.message}`)
+      if (dimError) throw dbError(dimError)
       if (!dimension) {
         throw new Error(
           `Okänd dimension ${params.sie_dim_no}. Endast registrerade dimensioner kan få nya värden: ` +
@@ -8370,7 +8371,7 @@ export const tools: McpTool[] = [
         .eq('dimension_id', dimension.id)
         .eq('code', params.code)
         .maybeSingle()
-      if (existingError) throw new Error(`Database error: ${existingError.message}`)
+      if (existingError) throw dbError(existingError)
       if (existing?.is_active) {
         throw new Error(
           `Värdet "${params.code}" (${existing.name}) finns redan i ${dimension.name}: använd koden direkt i dimensions-baggen.`,
@@ -10925,7 +10926,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .order('period_start', { ascending: false })
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       const periods = (data ?? []).map((p) => ({
         id: p.id,
@@ -11719,7 +11720,7 @@ export const tools: McpTool[] = [
       }
 
       const { data, error } = await query
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       const mapped = (data || []).map((item) => {
         const extracted = item.extracted_data as Record<string, unknown> | null
@@ -11819,7 +11820,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .single()
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!data) throw new Error('Inbox item not found')
 
       return data
@@ -12275,7 +12276,7 @@ export const tools: McpTool[] = [
       }
 
       const { data: inboxRows, error: inboxError } = await inboxQuery
-      if (inboxError) throw new Error(`Database error: ${inboxError.message}`)
+      if (inboxError) throw dbError(inboxError)
       if (!inboxRows || inboxRows.length === 0) {
         return { items: [], count: 0 }
       }
@@ -12287,7 +12288,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .in('document_id', docIds)
 
-      if (txError) throw new Error(`Database error: ${txError.message}`)
+      if (txError) throw dbError(txError)
       const matchedDocIds = new Set((txMatches || []).map((t) => t.document_id))
 
       const unmatched = inboxRows
@@ -12402,7 +12403,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (docError) throw new Error(`Database error: ${docError.message}`)
+      if (docError) throw dbError(docError)
       if (!doc) throw new Error('Document not found')
 
       const ttlSeconds = 300
@@ -12717,7 +12718,7 @@ export const tools: McpTool[] = [
         .from('fiscal_periods')
         .select('id, period_start, period_end')
         .eq('company_id', companyId)
-      if (periodsError) throw new Error(`Database error: ${periodsError.message}`)
+      if (periodsError) throw dbError(periodsError)
 
       const periodsByYear = new Map<number, Array<{ id: string; period_start: string; period_end: string }>>()
       for (const p of periods ?? []) {
@@ -12734,7 +12735,7 @@ export const tools: McpTool[] = [
         .select('id, file_name, mime_type, journal_entry_id')
         .in('id', documentIds)
         .eq('company_id', companyId)
-      if (docsError) throw new Error(`Database error: ${docsError.message}`)
+      if (docsError) throw dbError(docsError)
       const docsById = new Map((docs ?? []).map((d) => [d.id as string, d as {
         id: string; file_name: string; mime_type: string; journal_entry_id: string | null
       }]))
@@ -12820,7 +12821,7 @@ export const tools: McpTool[] = [
           .select('id, status')
           .eq('company_id', companyId)
           .in('id', existingJeIds)
-        if (existingErr) throw new Error(`Database error: ${existingErr.message}`)
+        if (existingErr) throw dbError(existingErr)
         for (const je of existingJes ?? []) {
           if ((je as { status: string }).status === 'posted') postedExistingJeIds.add(je.id as string)
         }
@@ -13185,7 +13186,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
       if (activeOnly) query = query.eq('is_active', true)
       const { data, error } = await query.order('last_name')
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       // Shared masking helper: strips personnummer (ciphertext) AND
       // personnummer_last4, exposing only personnummer_masked: same shape as
       // the app routes and the other MCP payroll tools.
@@ -13370,7 +13371,7 @@ export const tools: McpTool[] = [
         .eq('id', id)
         .eq('company_id', companyId)
         .maybeSingle()
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!run) throw new Error('Salary run not found')
       if (run.status === 'booked') throw new Error('Salary run is already booked')
       if (!['draft', 'review', 'approved', 'paid'].includes(run.status as string)) {
@@ -13383,7 +13384,7 @@ export const tools: McpTool[] = [
         .from('salary_run_employees')
         .select('id, calculation_breakdown')
         .eq('salary_run_id', id)
-      if (rosterError) throw new Error(`Database error: ${rosterError.message}`)
+      if (rosterError) throw dbError(rosterError)
       const rosterRows = roster ?? []
       const uncalculated = rosterRows.filter((r) => !r.calculation_breakdown).length
       if (uncalculated > 0) {
@@ -13880,7 +13881,7 @@ export const tools: McpTool[] = [
         .eq('id', employeeId)
         .eq('company_id', companyId)
         .maybeSingle()
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!e) throw new Error('Employee not found')
       // LLM context is a leak surface: personnummer is ALWAYS masked on MCP,
       // there is no full-value drill-in on this surface.
@@ -13977,7 +13978,7 @@ export const tools: McpTool[] = [
         .eq('employee_id', employeeId)
         .eq('company_id', companyId)
         .maybeSingle()
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!sre) throw new Error('Employee not found in this salary run')
       const emp = sre.employee as { first_name: string; last_name: string; personnummer: string } | null
       const lineItems = ((sre.line_items ?? []) as Array<Record<string, unknown>>)
@@ -14593,7 +14594,7 @@ export const tools: McpTool[] = [
         .eq('id', employee_id)
         .eq('company_id', companyId)
         .maybeSingle()
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!existing) throw new Error('Employee not found')
 
       const changes = Object.entries(patch).map(([field, to]) => ({
@@ -14714,7 +14715,7 @@ export const tools: McpTool[] = [
         .select(`employee_id, ${MERGEABLE_FIELDS.join(', ')}`)
         .eq('company_id', companyId)
         .in('employee_id', employeeIds)
-      if (storedErr) throw new Error(`Database error: ${storedErr.message}`)
+      if (storedErr) throw dbError(storedErr)
       const storedByEmployee = new Map(
         ((storedRows ?? []) as unknown as Array<Record<string, unknown>>).map((r) => [
           r.employee_id as string,
@@ -14837,7 +14838,7 @@ export const tools: McpTool[] = [
         .order('vacation_year_start', { ascending: false })
         .limit(1)
         .maybeSingle()
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!balance) throw new Error('No vacation balance exists for the employee yet (the ledger seeds on first booking)')
       const { id, ...rest } = balance as { id: string } & Record<string, unknown>
       const entitled = (rest.entitled_days as number) ?? 0
@@ -14855,7 +14856,7 @@ export const tools: McpTool[] = [
         .eq('id', employeeId)
         .eq('company_id', companyId)
         .maybeSingle()
-      if (empErr) throw new Error(`Database error: ${empErr.message}`)
+      if (empErr) throw dbError(empErr)
       if (!employee) throw new Error(`Employee ${employeeId} not found for this company`)
       const savedTotal = Object.values((rest.saved_days as Record<string, number> | null) ?? {})
         .reduce((s, d) => s + (Number(d) || 0), 0)
@@ -16121,7 +16122,7 @@ export const tools: McpTool[] = [
         .eq('id', journalEntryId)
         .eq('company_id', companyId)
         .maybeSingle()
-      if (fetchErr) throw new Error(`Database error: ${fetchErr.message}`)
+      if (fetchErr) throw dbError(fetchErr)
       if (!entry) throw new Error('Verifikationen hittades inte.')
 
       const voucherLabel = entry.voucher_number
@@ -16555,7 +16556,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!invoice) throw new Error('Invoice not found. Use gnubok_list_invoices to find valid IDs.')
 
       // Editable drafts only: the shared predicate the web PATCH route gates
@@ -16700,7 +16701,7 @@ export const tools: McpTool[] = [
           .select('line_type, description, quantity, unit, unit_price, line_total, vat_rate, revenue_account, article_id, deduction_type, accrual_period_start, accrual_period_end')
           .eq('invoice_id', invoice.id)
           .order('sort_order', { ascending: true })
-        if (currentError) throw new Error(`Database error: ${currentError.message}`)
+        if (currentError) throw dbError(currentError)
         currentItems = (currentRows ?? []).map((row: Record<string, unknown>) => ({
           line_type: row.line_type ?? 'product',
           description: row.description,
@@ -17715,7 +17716,7 @@ export const tools: McpTool[] = [
       const original = data as OriginalRow | null
 
       if (origErr) {
-        throw new Error(`Database error looking up journal entry ${entryId}: ${origErr.message}`)
+        throw dbError(origErr, `Database error looking up journal entry ${entryId}`)
       }
       if (!original) {
         throw new Error(
@@ -17883,7 +17884,7 @@ export const tools: McpTool[] = [
       const original = data as OriginalRow | null
 
       if (origErr) {
-        throw new Error(`Database error looking up journal entry ${entryId}: ${origErr.message}`)
+        throw dbError(origErr, `Database error looking up journal entry ${entryId}`)
       }
       if (!original) {
         throw new Error(
@@ -18897,7 +18898,7 @@ export const tools: McpTool[] = [
         .order('id', { ascending: false })
         .range(offset, offset + limit)
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       const rows = data ?? []
       const schedules = rows.slice(0, limit).map((row: Record<string, unknown>) => {
@@ -19095,7 +19096,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!customer) throw new Error('Customer not found. Use gnubok_list_customers to find IDs.')
       if (params.auto_send && !customer.email) {
         throw new Error('Customer has no email address: auto_send requires one. Stage with auto_send=false or add an email first.')
@@ -19290,7 +19291,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!current) throw new Error('Recurring schedule not found. Use gnubok_list_recurring_schedules to find IDs.')
 
       // Turning auto_send on, or moving the schedule to another customer,
@@ -19305,7 +19306,7 @@ export const tools: McpTool[] = [
           .eq('id', parsedChanges.customer_id)
           .eq('company_id', companyId)
           .maybeSingle()
-        if (targetError) throw new Error(`Database error: ${targetError.message}`)
+        if (targetError) throw dbError(targetError)
         if (!target) throw new Error('Customer not found. Use gnubok_list_customers to find IDs.')
         if (effectiveAutoSend && !target.email) {
           throw new Error('Customer has no email address: auto_send requires one.')
