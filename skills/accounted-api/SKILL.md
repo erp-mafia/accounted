@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 138 endpoints.
+  pagination, scopes), and all 139 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -142,7 +142,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 138 operations. Paths are shown without
+API version `2026-05-12`, 139 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (5)
@@ -303,7 +303,7 @@ PUT /companies/{companyId}/employees/opening-balances : Bulk-set payroll cutover
 POST /companies/{companyId}/salary/vacation-year-close : Close a vacation year (semesterberedning + arsavslut) [scope:payroll:write risk:high idempotent dry-run]
 ```
 
-### Salary runs (18)
+### Salary runs (19)
 
 Full detail: [references/salary-runs.md](references/salary-runs.md)
 
@@ -319,6 +319,7 @@ POST /companies/{companyId}/salary-runs/{id}/calculate : Calculate a draft salar
 GET /companies/{companyId}/salary-runs/{id}/employees : List per-employee results of a salary run [scope:payroll:read risk:low idempotent]
 POST /companies/{companyId}/salary-runs/{id}/employees : Add an employee to a draft salary run [scope:payroll:write risk:low idempotent dry-run reversible]
 GET /companies/{companyId}/salary-runs/{id}/employees/{employeeId} : Get one employee's payslip in a salary run [scope:payroll:read risk:low idempotent]
+PATCH /companies/{companyId}/salary-runs/{id}/employees/{employeeId} : Set this run's base salary for one employee [scope:payroll:write risk:medium idempotent dry-run reversible]
 DELETE /companies/{companyId}/salary-runs/{id}/employees/{employeeId} : Remove an employee from a draft salary run [scope:payroll:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/salary-runs/{id}/employees/{employeeId}/lines : Add a payslip line to an employee in a draft salary run [scope:payroll:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/salary-runs/{id}/generate-agi : Generate the Skatteverket AGI XML for a salary run [scope:payroll:write risk:medium idempotent]

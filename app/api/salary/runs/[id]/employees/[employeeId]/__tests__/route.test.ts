@@ -129,11 +129,12 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: monthly salary edi
   it('updates the per-run monthly salary while the run is a draft', async () => {
     const { enqueueMany } = authed()
     enqueueMany([
-      { data: { id: 'run-1', status: 'draft' } }, // salary_runs lookup
+      { data: { id: 'run-1', status: 'draft' } }, // service: salary_runs draft gate
       {
-        data: { id: 'sre-1', employment_degree: 100, salary_type: 'monthly', monthly_salary: 30000 },
-      }, // salary_run_employees update
-      { data: null }, // salary_line_items Grundlön refresh
+        data: { id: 'sre-1', employee_id: 'emp-1', employment_degree: 100, salary_type: 'monthly', monthly_salary: 25000 },
+      }, // service: salary_run_employees select
+      { data: null }, // service: salary_run_employees update
+      { data: null }, // service: salary_line_items Grundlön refresh
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
@@ -154,7 +155,8 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: monthly salary edi
     const { enqueueMany } = authed()
     enqueueMany([
       { data: { id: 'run-1', status: 'draft' } },
-      { data: { id: 'sre-1', employment_degree: 100, salary_type: 'monthly', monthly_salary: 0 } },
+      { data: { id: 'sre-1', employee_id: 'emp-1', employment_degree: 100, salary_type: 'monthly', monthly_salary: 25000 } },
+      { data: null },
       { data: null },
     ])
 

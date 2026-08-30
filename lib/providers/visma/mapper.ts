@@ -14,6 +14,7 @@ import {
   lineVatFromPercent,
   multiplyIfBothPresent,
 } from '../amounts';
+import { parseSourceVoucherRef } from '../source-voucher';
 
 function amount(value: number | undefined | null, currency: string = 'SEK'): AmountType {
   return { value: value ?? 0, currencyCode: currency };
@@ -192,6 +193,9 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
     taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
     paymentStatus,
+    // eAccounting names the booking voucher on the invoice itself
+    // (`VoucherNumber`, "A329"). Kept only when it parses cleanly.
+    sourceVoucher: parseSourceVoucherRef(raw['VoucherNumber']) ?? undefined,
     createdAt: raw['CreatedUtc'] as string | undefined,
     updatedAt: raw['ModifiedUtc'] as string | undefined,
     _raw: raw,
@@ -263,6 +267,7 @@ export function mapVismaToSupplierInvoice(raw: Record<string, unknown>): Supplie
     taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
     paymentStatus,
+    sourceVoucher: parseSourceVoucherRef(raw['VoucherNumber']) ?? undefined,
     updatedAt: raw['ModifiedUtc'] as string | undefined,
     _raw: raw,
   };

@@ -85,3 +85,22 @@ export function getPrimaryJournalEntryId(
   const payment = payments.find((p) => p.transaction_id === tx.id && p.journal_entry_id != null)
   return payment?.journal_entry_id ?? null
 }
+
+/**
+ * The re-booking guards' narrower question: does an embedded
+ * transaction_voucher_links set hold a 'bank_line' row? A bank_line row is a
+ * slice of the row's bank amount (the bulk-book samlingsverifikat, the 1:N
+ * split of issue #1553), so its presence means the row is booked and a
+ * second booking (manualLink, categorize, link-journal-entry) must refuse.
+ * Rows with role 'other' (a residual booking, lib/reconciliation/residual.ts)
+ * or 'clearing' are supplementary anchors: after a storno of the main
+ * verifikat nulls the pointer, that leftover row must not strand the
+ * transaction with no way to re-book it. The list readers (fetchJunction-
+ * LinkedTxIds, is_transaction_booked()) keep counting every role.
+ */
+export function hasBankLineJunctionRow(
+  rows: Array<{ role?: string | null }> | null | undefined,
+): boolean {
+  if (!Array.isArray(rows)) return false
+  return rows.some((row) => (row.role ?? 'bank_line') === 'bank_line')
+}

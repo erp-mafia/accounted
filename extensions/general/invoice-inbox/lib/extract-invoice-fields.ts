@@ -524,19 +524,57 @@ export async function extractInvoiceFields(
   let rawText: string | null = null
   let model: string | null = null
   try {
-    const result = await service.extractFromDocument({
+    const baseMaxTokens = readAiConfig().extractionMaxTokens
+    const request = {
       document: toDocumentInput(input),
       system: SYSTEM_PROMPT,
       instruction: EXTRACTION_INSTRUCTION,
-      maxTokens: readAiConfig().extractionMaxTokens,
       jsonSchema: EXTRACTION_JSON_SCHEMA,
-    })
+    }
+    let result = await service.extractFromDocument({ ...request, maxTokens: baseMaxTokens })
     if (!result.ok) {
       // Not a failure: the deployment cannot read this document at all.
       // `ai_unconfigured` is the self-host "no key yet" case the 30 s
       // upload hang used to hide; the others are honest capability gaps.
       log.warn('AI extraction skipped', { file_name_hash: fileNameHash, reason: result.skipped })
       return { data: emptyResult(), rawText: null, skipped: result.skipped }
+    }
+    if (result.truncated) {
+      // The output hit maxTokens mid-JSON (line-item-heavy documents). Left
+      // alone this parsed to nothing and looked like an unreadable document;
+      // one retry at double the cap recovers it. A second truncation falls
+      // through to the normal parse path, which fails visibly in the log
+      // below instead of silently.
+      log.warn('ai_extraction_truncated', {
+        file_name_hash: fileNameHash,
+        max_tokens: baseMaxTokens,
+        retrying: true,
+      })
+      // A retry that THROWS (throttle, network) must not sink the first
+      // response: its text may still parse despite the truncation flag, and
+      // the outer catch would otherwise return the empty skeleton with
+      // rawText null. Swallow locally and continue with the first result.
+      try {
+        const retry = await service.extractFromDocument({
+          ...request,
+          maxTokens: baseMaxTokens * 2,
+        })
+        if (retry.ok) {
+          result = retry
+          if (retry.truncated) {
+            log.warn('ai_extraction_truncated', {
+              file_name_hash: fileNameHash,
+              max_tokens: baseMaxTokens * 2,
+              retrying: false,
+            })
+          }
+        }
+      } catch (retryErr) {
+        log.warn('ai_extraction_retry_failed', {
+          file_name_hash: fileNameHash,
+          error: retryErr instanceof Error ? retryErr.message : String(retryErr),
+        })
+      }
     }
     rawText = result.text
     model = result.model

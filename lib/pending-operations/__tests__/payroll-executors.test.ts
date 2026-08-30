@@ -131,6 +131,70 @@ describe('commitPendingOperation: update_payslip_line', () => {
   })
 })
 
+describe('commitPendingOperation: set_run_salary', () => {
+  const SRE_ROW = {
+    id: 'sre-1',
+    employee_id: 'emp-1',
+    salary_type: 'monthly',
+    employment_degree: 100,
+    monthly_salary: 30000,
+  }
+
+  it('writes the per-run salary through the shared service (happy path)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'run-1', status: 'draft' } }) // service draft gate
+    enqueue({ data: SRE_ROW }) // service sre lookup
+    enqueue({ data: null }) // sre update
+    enqueue({ data: null }) // display-line update
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'set_run_salary',
+      params: { salary_run_id: 'run-1', employee_id: 'emp-1', monthly_salary: 45000 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({
+      salary_run_id: 'run-1',
+      employee_id: 'emp-1',
+      previous_monthly_salary: 30000,
+      monthly_salary: 45000,
+    })
+  })
+
+  it('fails cleanly when the run advanced between staging and approval', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'run-1', status: 'review' } }) // draft gate trips
+    enqueue({ data: null, error: null }) // finalize (failed)
+
+    const op = makePendingOp({
+      operation_type: 'set_run_salary',
+      params: { salary_run_id: 'run-1', employee_id: 'emp-1', monthly_salary: 45000 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+  })
+
+  it('rejects missing params with 400', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // finalize (failed)
+
+    const op = makePendingOp({
+      operation_type: 'set_run_salary',
+      params: { salary_run_id: 'run-1', employee_id: 'emp-1' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+  })
+})
+
 describe('commitPendingOperation: register_absence', () => {
   it('upserts the expanded range through the shared service (happy path)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()

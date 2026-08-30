@@ -69,6 +69,7 @@ export const OPERATION_LABEL_KEYS: Record<string, string> = {
   book_salary_run: 'type_book_salary_run',
   generate_agi: 'type_generate_agi',
   update_payslip_line: 'type_update_payslip_line',
+  set_run_salary: 'type_set_run_salary',
   register_absence: 'type_register_absence',
   delete_absence: 'type_delete_absence',
   create_employee: 'type_create_employee',

@@ -77,8 +77,13 @@ import {
   getResponseErrorMessage,
 } from '@/lib/errors/get-error-message'
 import { notifySessionExpired } from '@/lib/auth/session-timeout-shared'
-import { exceedsHostedUploadLimit, tooLargeMessage } from '@/lib/documents/upload-size'
+import {
+  exceedsHostedUploadLimit,
+  exceedsInboxUploadLimit,
+  inboxTooLargeMessage,
+} from '@/lib/documents/upload-size'
 import { shrinkImageForUpload } from '@/lib/documents/shrink-image'
+import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
 
 type AccountingMethod = 'accrual' | 'cash'
 
@@ -786,19 +791,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       }
       const { data } = await res.json()
       if (docRequestRef.current !== request) return
-      const url: string | null = data?.download_url ?? null
-      // HTML mail underlag renders via the same-origin inline proxy: it
-      // serves text/html with a CSP sandbox header and guaranteed inline
-      // disposition. Other types keep the signed storage URL.
-      const effectiveUrl =
-        data?.mime_type === 'text/html' ? `/api/documents/${documentId}/inline` : url
-      if (!url) {
-        // The document row exists but no signed URL came back: still a load
-        // failure, not an absent underlag.
-        setDocState('error')
-        return
-      }
-      setDocUrl(effectiveUrl)
+      // Always preview via the same-origin inline proxy. Signed Storage URLs
+      // are served as Content-Disposition: attachment, which Chrome blocks in
+      // iframe/img with "Det här innehållet har blockerats".
+      setDocUrl(`/api/documents/${documentId}/inline`)
       setDocMime(data?.mime_type ?? null)
       setDocState('ready')
     } catch {
@@ -888,25 +884,28 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   ) => {
     // A phone photo is routinely larger than the request body the platform
     // will carry, and it rejects the upload itself, before the route can say
-    // anything useful about it. Shrink what can be shrunk, and refuse the rest
-    // here, where we can name the size instead of letting the transfer fail.
+    // anything useful about it. Shrink what can be shrunk; what cannot be (a
+    // scanned PDF) goes straight to Storage through a signed URL instead of a
+    // multipart body. Only the inbox's own ceiling refuses anything now, here,
+    // where we can name the size instead of letting the transfer fail.
     const file = exceedsHostedUploadLimit(original.size)
       ? await shrinkImageForUpload(original)
       : original
-    if (exceedsHostedUploadLimit(file.size)) {
+    if (exceedsInboxUploadLimit(file.size)) {
       reportUploadFailure({
         status: 0,
         size: file.size,
         type: file.type || 'unknown',
-        reason: 'over hosted body limit, refused client-side',
+        reason: 'over inbox ceiling, refused client-side',
       })
       toast({
         title: 'Uppladdning misslyckades',
-        description: tooLargeMessage(file.size),
+        description: inboxTooLargeMessage(file.size),
         variant: 'destructive',
       })
       return undefined
     }
+    const directToStorage = exceedsHostedUploadLimit(file.size)
 
     // Optimistic placeholder: gives the user an immediate visual response
     // for the 3-8s while extraction runs. Removed once the real row arrives.
@@ -938,12 +937,17 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     }
     setIsUploading(true)
     try {
-      const fd = new FormData()
-      fd.append('file', file)
-      const res = await fetch('/api/extensions/ext/invoice-inbox/upload', {
-        method: 'POST',
-        body: fd,
-      })
+      let res: Response
+      if (directToStorage) {
+        res = await uploadViaSignedUrl(file)
+      } else {
+        const fd = new FormData()
+        fd.append('file', file)
+        res = await fetch('/api/extensions/ext/invoice-inbox/upload', {
+          method: 'POST',
+          body: fd,
+        })
+      }
       if (!res.ok) throw await resolveFailure(res)
       const json = await res.json()
       if (json.data?.extraction_skipped) {
@@ -2326,7 +2330,7 @@ export function DocumentPreview({
       ) : (
         // PDF: iframe needs explicit height, frame fills the available pane.
         <div className="h-full w-full max-w-3xl bg-background rounded-lg border overflow-hidden">
-          <iframe src={docUrl} className="w-full h-full border-0" title="Underlag" />
+          <embed src={docUrl} type="application/pdf" className="w-full h-full border-0" title="Underlag" />
         </div>
       )}
     </div>

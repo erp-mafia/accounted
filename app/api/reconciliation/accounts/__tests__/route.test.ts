@@ -53,6 +53,8 @@ import { POST as ignorePOST } from '../[accountKey]/items/[itemId]/ignore/route'
 
 const ROW = '22222222-2222-4222-8222-222222222222'
 const ENTRY = '33333333-3333-4333-8333-333333333333'
+const ENTRY_2 = '44444444-4444-4444-8444-444444444444'
+const CASH = '55555555-5555-4555-8555-555555555555'
 // Dynamic-route params for the handlers under test; `never` keeps each
 // handler's own params type while letting one helper serve all of them.
 const p = (obj: Record<string, string>) => ({ params: Promise.resolve(obj) }) as never
@@ -142,6 +144,33 @@ describe('dashboard reconciliation routes', () => {
       { pairs: [{ external_ids: [ROW], journal_entry_ids: [ENTRY] }] },
       { dryRun: true },
     )
+  })
+
+  it('links: forwards a bank 1:N pair with allocations, and rejects a one-element allocations array (#1553)', async () => {
+    matchMock.mockResolvedValue({ dry_run: false, considered: 1, applied: [], skipped: [] })
+    const pair = {
+      external_ids: [ROW],
+      journal_entry_ids: [ENTRY, ENTRY_2],
+      allocations: [
+        { journal_entry_id: ENTRY, amount: -500 },
+        { journal_entry_id: ENTRY_2, amount: -300 },
+      ],
+    }
+    const res = await linksPOST(
+      createMockRequest(`/api/reconciliation/accounts/bank:${CASH}/links`, { method: 'POST', body: { pairs: [pair] } }),
+      p({ accountKey: `bank:${CASH}` }),
+    )
+    expect(res.status).toBe(200)
+    expect(matchMock).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', `bank:${CASH}`, { pairs: [pair] }, { dryRun: false })
+
+    const invalid = await linksPOST(
+      createMockRequest(`/api/reconciliation/accounts/bank:${CASH}/links`, {
+        method: 'POST',
+        body: { pairs: [{ ...pair, allocations: [{ journal_entry_id: ENTRY, amount: -800 }] }] },
+      }),
+      p({ accountKey: `bank:${CASH}` }),
+    )
+    expect(invalid.status).toBe(400)
   })
 
   it('unlink and ignore call the service with the ids', async () => {

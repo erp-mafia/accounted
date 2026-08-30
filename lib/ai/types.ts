@@ -149,7 +149,20 @@ export type ExtractionSkipReason =
   | 'pdf_rasterize_failed'
 
 export type ExtractFromDocumentResult =
-  | { ok: true; text: string; model: string; usage: AiUsage; pagesRasterized?: number }
+  | {
+      ok: true
+      text: string
+      model: string
+      usage: AiUsage
+      pagesRasterized?: number
+      /**
+       * The model stopped because it hit maxTokens, so `text` is cut mid-answer
+       * (Anthropic stop_reason 'max_tokens', OpenAI finish_reason 'length').
+       * Callers that parse the text should retry with a higher cap instead of
+       * treating the truncated output as a failed parse.
+       */
+      truncated?: boolean
+    }
   | { ok: false; skipped: ExtractionSkipReason }
 
 export interface AiService {

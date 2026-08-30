@@ -126,6 +126,23 @@ describe('GET /api/transactions', () => {
     expect(isCall).toEqual({ method: 'is', args: ['journal_entry_id', null] })
   })
 
+  it('hides rows anchored only through transaction_voucher_links from unmatched=true (bulk-book, 1:N split, #1553)', async () => {
+    const txs = [
+      makeTransaction({ id: 'tx-open', journal_entry_id: null }),
+      makeTransaction({ id: 'tx-split', journal_entry_id: null }),
+    ]
+    enqueue({ data: txs, error: null }) // transactions list
+    enqueue({ data: [{ transaction_id: 'tx-split' }], error: null }) // transaction_voucher_links
+
+    const request = createMockRequest('/api/transactions?unmatched=true')
+    const response = await GET(request, createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<{ data: Array<{ id: string }>; has_more: boolean }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.map((t) => t.id)).toEqual(['tx-open'])
+    expect(body.has_more).toBe(false)
+  })
+
   it('filters by reconciled=true', async () => {
     const fromSpy = vi.fn(() => {
       const chain: Record<string, unknown> = {}

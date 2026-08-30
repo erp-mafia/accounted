@@ -1728,6 +1728,7 @@ function ResultStep({
   onDismissDocuments: () => void
   onReconnectDocuments: () => void
 }) {
+  const t = useTranslations('extensions')
   if (error) {
     return (
       <div className="stagger-enter space-y-8">
@@ -1851,6 +1852,24 @@ function ResultStep({
           ? formatSkipReasons(results.supplierInvoices.skipReasons, 'invoice', results.supplierInvoices.errorSample) ?? `${results.supplierInvoices.skipped} hoppades över`
           : undefined,
         failed: entityRowStatus(results.supplierInvoices.imported, results.supplierInvoices.skipReasons) === 'error',
+      })
+    }
+    if (results.registrationLinks && results.registrationLinks.scanned > 0) {
+      const links = results.registrationLinks
+      const unlinked = links.scanned - links.linked - links.alreadyLinked
+      entityLines.push({
+        label: t('ext_arcim_registration_links_label'),
+        value: t('ext_arcim_registration_links_value', { linked: links.linked, scanned: links.scanned }),
+        detail: unlinked > 0
+          ? t('ext_arcim_registration_links_detail', {
+              unlinked,
+              noRef: links.noRef,
+              refNotFetched: links.refNotFetched ?? 0,
+              unresolved: links.unresolved + links.ambiguous,
+              amountMismatch: links.amountMismatch,
+            })
+          : undefined,
+        failed: false,
       })
     }
     if (results.assets && (results.assets.imported > 0 || results.assets.skipped > 0 || results.assets.scopesMissing)) {
@@ -2006,6 +2025,7 @@ const STEP_ERROR_LABELS: Record<MigrationStepError['step'], string> = {
   salesInvoices: 'Kundfakturor',
   supplierInvoices: 'Leverantörsfakturor',
   assets: 'Anläggningstillgångar',
+  registrationLinks: 'Koppling till verifikationer',
   reconciliation: 'Avstämning av betalningar',
 }
 

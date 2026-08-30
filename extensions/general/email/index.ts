@@ -8,7 +8,7 @@ import { createLogger } from '@/lib/logger'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
-import { ResendEmailService } from './lib/resend-service'
+import { createEmailService } from './lib/email-provider'
 import {
   ResendDeliverySignatureError,
   isDeliveryWebhookConfigured,
@@ -24,8 +24,10 @@ import {
   updateSendingDomainSettings,
 } from './lib/sending-domains'
 
-// Register the Resend implementation immediately when this extension is loaded
-registerEmailService(new ResendEmailService())
+// Register the implementation for this deployment immediately when the
+// extension is loaded: Resend (hosted default) or SMTP (EMAIL_PROVIDER=smtp,
+// the sovereign self-host path). See lib/email-provider.ts for precedence.
+registerEmailService(createEmailService())
 
 const log = createLogger('email-delivery-webhook')
 
@@ -84,7 +86,7 @@ async function guardSendingDomainRoute(
 
 export const emailExtension: Extension = {
   id: 'email',
-  name: 'E-post (Resend)',
+  name: 'E-post',
   version: '1.0.0',
 
   apiRoutes: [
