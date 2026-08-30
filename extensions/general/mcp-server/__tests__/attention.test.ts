@@ -26,8 +26,10 @@ const ctx = (supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']) 
  * Tests can override individual slots before invoking by enqueueing in advance.
  */
 function enqueueEmpty(enqueue: (r: { data?: unknown; error?: unknown; count?: number | null }) => void) {
-  // 1. unbookedHead
-  enqueue({ count: 0 })
+  // 1. unbookedIds (every pointer-null business row; the junction-linked
+  //    ones are subtracted by a lookup that runs after slot 15 and only
+  //    when this list is non-empty)
+  enqueue({ data: [] })
   // 2. unbookedSamples
   enqueue({ data: [] })
   // 3. overdueRows
@@ -80,7 +82,7 @@ describe('Accounted://attention', () => {
       { id: 't-2', date: today, amount: -200, currency: 'SEK', description: 'Office', merchant_name: 'Clas Ohlson' },
     ]
 
-    enqueue({ count: 2 })            // unbookedHead
+    enqueue({ data: txns.map((t) => ({ id: t.id })) }) // unbookedIds
     enqueue({ data: txns })          // unbookedSamples
     enqueue({ data: [] })            // overdueRows
     enqueue({ count: 0 })            // pendingSupplierHead
@@ -108,12 +110,33 @@ describe('Accounted://attention', () => {
     expect(result.summary).toEqual({ total_items: 2, critical: 0, warning: 1, info: 0 })
   })
 
+  it('does not count a row anchored only through transaction_voucher_links as unbooked (bulk-book, 1:N split)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const today = new Date().toISOString().slice(0, 10)
+    const txns = [
+      { id: 't-split', date: today, amount: -800, currency: 'SEK', description: 'Utlägg', merchant_name: null },
+      { id: 't-open', date: today, amount: -200, currency: 'SEK', description: 'Office', merchant_name: 'Clas Ohlson' },
+    ]
+    enqueue({ data: txns.map((t) => ({ id: t.id })) }) // 1. unbookedIds
+    enqueue({ data: txns })                            // 2. unbookedSamples
+    for (let i = 3; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
+    enqueue({ data: [] })                              // 15. unlinked-document candidates
+    enqueue({ data: [{ transaction_id: 't-split' }] }) // 16. fetchJunctionLinkedTxIds
+
+    const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
+
+    const cat = result.categories.find((c) => c.key === 'unbooked_transactions')
+    expect(cat?.count).toBe(1)
+    expect(cat?.samples.map((s) => s.id)).toEqual(['t-open'])
+    expect(cat?.next?.args).toEqual({ transaction_id: 't-open' })
+  })
+
   it('escalates unbooked transactions to critical when oldest is > 30 days old', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const fortyDaysAgo = new Date(Date.now() - 40 * 86_400_000).toISOString().slice(0, 10)
     const txns = [{ id: 't-old', date: fortyDaysAgo, amount: -100, currency: 'SEK', description: 'X', merchant_name: null }]
 
-    enqueue({ count: 1 })
+    enqueue({ data: [{ id: 't-old' }] })
     enqueue({ data: txns })
     enqueue({ data: [] })
     enqueue({ count: 0 })
@@ -353,7 +376,7 @@ describe('Accounted://attention', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const today = new Date().toISOString().slice(0, 10)
 
-    enqueue({ count: 1 })                                                  // unbookedHead
+    enqueue({ data: [{ id: 't-1' }] })                                     // unbookedIds
     enqueue({ data: [{ id: 't-1', date: today, amount: -50, currency: 'SEK', description: 'X', merchant_name: null }] })
     enqueue({ data: [] })                                                  // overdueRows
     enqueue({ count: 1 })                                                  // pendingSupplierHead
