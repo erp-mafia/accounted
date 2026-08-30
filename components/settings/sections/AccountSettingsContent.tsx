@@ -128,8 +128,12 @@ export function AccountSettingsContent() {
         return
       }
       setPendingEmail(trimmed)
+      const resent = (json as { data?: { resent?: boolean } } | null)?.data?.resent
       toast({
-        title: tSettings('email_change_requested'),
+        title:
+          resent === false
+            ? tSettings('email_change_already_pending')
+            : tSettings('email_change_requested'),
         description: tSettings('email_change_requested_help'),
       })
     } catch (err) {

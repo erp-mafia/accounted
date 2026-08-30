@@ -282,6 +282,21 @@ async function updateSessionInner(
     return supabaseResponse
   }
 
+  // Email-change confirmations are reachable in both auth states, for the
+  // same reason as /reset-password above. The change starts in settings, so
+  // the confirmation links are usually clicked while still logged in, and the
+  // completing verify mints a fresh session itself. Bouncing authenticated
+  // requests off these paths (a) dropped the confirmation click before
+  // verifyOtp could consume the token, so the change never completed, and
+  // (b) hid the /auth/email-change status page in exactly the success case.
+  if (
+    pathname.startsWith('/auth/email-change') ||
+    (pathname.startsWith('/auth/callback') &&
+      request.nextUrl.searchParams.get('type') === 'email_change')
+  ) {
+    return supabaseResponse
+  }
+
   // Public agent-discovery + API docs surfaces. /llms.txt and /llms-full.txt
   // exist FOR anonymous consumers (the llms.txt convention targets logged-out
   // crawlers and IDE agents), and /docs is the public API documentation the

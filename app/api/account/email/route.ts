@@ -69,7 +69,9 @@ export async function POST(request: Request) {
     const fresh =
       Number.isFinite(sentAt) && Date.now() - sentAt < FRESH_PENDING_MS
     if (fresh) {
-      return NextResponse.json({ data: { ok: true, pending_email: email } })
+      return NextResponse.json({
+        data: { ok: true, pending_email: email, resent: false },
+      })
     }
   }
 
@@ -113,5 +115,7 @@ export async function POST(request: Request) {
 
   log.info('email change requested', { userId: user.id })
 
-  return NextResponse.json({ data: { ok: true, pending_email: email } })
+  return NextResponse.json({
+    data: { ok: true, pending_email: email, resent: true },
+  })
 }

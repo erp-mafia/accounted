@@ -1,6 +1,9 @@
 import Link from 'next/link'
+import { headers } from 'next/headers'
 import { MailCheck, MailWarning, Mails } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { createClient } from '@/lib/supabase/server'
+import { resolveLandingDestination } from '@/lib/company/landing-server'
 
 /**
  * Landing page for email-change confirmation clicks (/auth/callback redirects
@@ -51,6 +54,27 @@ export default async function EmailChangeStatusPage({
   const { status } = await searchParams
   const resolved: EmailChangeStatus = isEmailChangeStatus(status) ? status : 'failed'
   const content = CONTENT[resolved]
+
+  // On completion the CTA goes where the callback would have sent the user
+  // before this page existed (WL-14: byrå staff on their home domain land in
+  // the cockpit, everyone else on the dashboard). Any failure degrades to '/'.
+  let href = content.href
+  if (resolved === 'done') {
+    try {
+      const supabase = await createClient()
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+      if (user) {
+        const headerStore = await headers()
+        const host =
+          headerStore.get('x-forwarded-host') ?? headerStore.get('host') ?? ''
+        href = await resolveLandingDestination(supabase, user.id, host)
+      }
+    } catch {
+      href = content.href
+    }
+  }
   const Icon =
     resolved === 'done' ? MailCheck : resolved === 'partial' ? Mails : MailWarning
 
@@ -65,7 +89,7 @@ export default async function EmailChangeStatusPage({
         <h1 className="font-display text-3xl tracking-tight">{content.heading}</h1>
         <p className="text-muted-foreground text-sm mt-2">{content.body}</p>
         <Button asChild className="mt-8 h-11 px-6">
-          <Link href={content.href}>{content.cta}</Link>
+          <Link href={href}>{content.cta}</Link>
         </Button>
       </div>
     </div>

@@ -589,6 +589,7 @@
     "email_description": "Din inloggningsadress. Vid byte skickas bekräftelselänkar till både din nuvarande och din nya adress.",
     "email_change_pending": "Bekräftelse väntar för {email}. Klicka på länkarna i mejlen till både din gamla och din nya adress. Har länkarna gått ut kan du skicka nya med Skicka igen.",
     "email_change_requested": "Bekräftelsemejl skickade",
+    "email_change_already_pending": "Bekräftelsemejl är redan skickade",
     "email_resend": "Skicka igen",
     "email_change_requested_help": "Klicka på länkarna i mejlen till både din gamla och din nya adress för att slutföra bytet.",
     "email_change_failed": "Kunde inte begära e-poständring",
