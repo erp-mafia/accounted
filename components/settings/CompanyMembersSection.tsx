@@ -162,8 +162,10 @@ export function CompanyMembersSection() {
       if (payload?.inviteUrl) {
         setShareInvite({ email, url: payload.inviteUrl, sent, provisioned })
       }
+      // The title must not claim a send that never happened (self-hosted
+      // without a mail provider): 'created' when nothing was mailed.
       toast({
-        title: t('members_invite_sent_title'),
+        title: sent || provisioned ? t('members_invite_sent_title') : t('members_invite_created_title'),
         description:
           sent || provisioned
             ? t('members_invite_sent_description', { email })
@@ -342,30 +344,33 @@ export function CompanyMembersSection() {
           banner. A send that failed or was skipped (no mail provider) is the
           page's single attn line; a sent or GoTrue-provisioned invite is a
           quiet muted line with the same copy action, since the link is a
-          legitimate share path either way. */}
-      {canInvite && shareInvite && (
-        <div className="px-1 pt-3" role="status" aria-live="polite">
-          {shareInvite.sent || shareInvite.provisioned ? (
-            <p className="text-[12.5px] leading-5 text-muted-foreground">
-              {t('members_invite_link_sent', { email: shareInvite.email })}{' '}
-              <button
-                type="button"
-                onClick={() => void handleCopyInviteLink(shareInvite.url)}
-                className="underline underline-offset-2 hover:text-foreground"
+          legitimate share path either way. The live region stays mounted
+          (empty until a link exists) so the line is announced when it
+          appears, not merely inserted; same reason as the roster block. */}
+      {canInvite && (
+        <div className={shareInvite ? 'px-1 pt-3' : undefined} role="status" aria-live="polite">
+          {shareInvite &&
+            (shareInvite.sent || shareInvite.provisioned ? (
+              <p className="text-[12.5px] leading-5 text-muted-foreground">
+                {t('members_invite_link_sent', { email: shareInvite.email })}{' '}
+                <button
+                  type="button"
+                  onClick={() => void handleCopyInviteLink(shareInvite.url)}
+                  className="underline underline-offset-2 hover:text-foreground"
+                >
+                  {t('members_invite_link_copy_action')}
+                </button>
+              </p>
+            ) : (
+              <AttnLine
+                action={{
+                  label: t('members_invite_link_copy_action'),
+                  onClick: () => void handleCopyInviteLink(shareInvite.url),
+                }}
               >
-                {t('members_invite_link_copy_action')}
-              </button>
-            </p>
-          ) : (
-            <AttnLine
-              action={{
-                label: t('members_invite_link_copy_action'),
-                onClick: () => void handleCopyInviteLink(shareInvite.url),
-              }}
-            >
-              {t('members_invite_link_not_sent', { email: shareInvite.email })}
-            </AttnLine>
-          )}
+                {t('members_invite_link_not_sent', { email: shareInvite.email })}
+              </AttnLine>
+            ))}
         </div>
       )}
 

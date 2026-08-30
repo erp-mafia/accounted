@@ -58,7 +58,7 @@ export const POST = withRouteContext(
     const { companyId, user, log } = ctx
     const serviceClient = await createServiceClient()
 
-    // Check caller has permission (owner/admin — stricter than requireWrite)
+    // Check caller has permission (owner/admin: stricter than requireWrite)
     const { data: callerMembership } = await serviceClient
       .from('company_members')
       .select('role')
