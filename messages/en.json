@@ -2272,6 +2272,7 @@
     "default_notes_help": "Suggested automatically for new invoices.",
     "reminder_days_heading": "Automatic reminders",
     "reminder_days_help": "Choose how many days after the due date each reminder is sent. The days must be in ascending order.",
+    "sending_disabled_notice": "Automatic reminder sending is currently disabled in Accounted and no reminder emails go out. Your schedule is saved and takes effect when sending is enabled.",
     "send_reminders_label": "Send automatic reminders",
     "send_reminders_help": "When off, no automatic reminder emails are sent to customers with overdue invoices.",
     "reminder_days_level_1": "First reminder (days)",

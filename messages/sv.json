@@ -2272,6 +2272,7 @@
     "default_notes_help": "Föreslås automatiskt vid ny faktura.",
     "reminder_days_heading": "Automatiska påminnelser",
     "reminder_days_help": "Ange hur många dagar efter förfallodatum varje påminnelse skickas. Dagarna måste vara i stigande ordning.",
+    "sending_disabled_notice": "Automatiska påminnelser är för närvarande inaktiverade i Accounted och inga påminnelsemejl skickas. Ditt schema sparas och börjar gälla när utskicken aktiveras.",
     "send_reminders_label": "Skicka automatiska påminnelser",
     "send_reminders_help": "När detta är avstängt skickas inga automatiska påminnelsemejl till kunder med förfallna fakturor.",
     "reminder_days_level_1": "Första påminnelsen (dagar)",
