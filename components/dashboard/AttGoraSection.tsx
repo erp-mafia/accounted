@@ -60,6 +60,14 @@ interface AttGoraSectionProps {
    * state then says "nothing here yet" instead of a false "all caught up".
    */
   emptyLedger?: boolean
+  /**
+   * False when the company has no active bank connection. The all-clear state
+   * then explains that nothing flows in automatically and offers "Anslut bank"
+   * instead of a bare "all caught up": for a disconnected company the silence
+   * is a setup gap, not an achievement. Defaults to true so a fetch error
+   * degrades to the ordinary all-clear copy, never to a wrong nag.
+   */
+  hasActiveBankConnection?: boolean
 }
 
 interface WorklistRowProps {
@@ -108,6 +116,7 @@ export default function AttGoraSection({
   suggestedMatches,
   expiringBankConnections = [],
   emptyLedger = false,
+  hasActiveBankConnection = true,
 }: AttGoraSectionProps) {
   const t = useTranslations('dashboard')
   const { toast } = useToast()
@@ -237,11 +246,20 @@ export default function AttGoraSection({
                 description={t('att_gora_new_body')}
                 className="py-10"
               />
-            ) : (
+            ) : hasActiveBankConnection ? (
               <EmptyState
                 icon={CheckCircle2}
                 title={t('att_gora_empty_title')}
                 description={t('att_gora_empty_body')}
+                className="py-10"
+              />
+            ) : (
+              <EmptyState
+                icon={Landmark}
+                title={t('att_gora_no_bank_title')}
+                description={t('att_gora_no_bank_body')}
+                actionLabel={t('att_gora_no_bank_action')}
+                actionHref="/settings/banking"
                 className="py-10"
               />
             )
