@@ -117,7 +117,7 @@ describe('gnubok_ignore_transaction: staging', () => {
 
     const result = (await tool.execute(
       { transaction_id: TX_ID, dry_run: true },
-      'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
     )) as { staged: boolean; dry_run?: boolean; risk_level: string; preview: Record<string, unknown> }
 
     expect(result.staged).toBe(false)
@@ -146,7 +146,7 @@ describe('gnubok_ignore_transaction: staging', () => {
 
     const result = (await tool.execute(
       { transaction_id: TX_ID },
-      'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
     )) as { staged: boolean; operation_id?: string; next?: { tool: string } }
 
     expect(result.staged).toBe(true)
@@ -173,7 +173,7 @@ describe('gnubok_ignore_transaction: staging', () => {
 
     const result = (await tool.execute(
       { transaction_id: TX_ID, restore: true },
-      'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
     )) as { staged: boolean; preview: Record<string, unknown>; next?: { tool: string } }
 
     expect(result.staged).toBe(true)
