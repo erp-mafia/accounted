@@ -171,6 +171,13 @@ describe('scoreUnderlagCandidates', () => {
     expect(out).toHaveLength(1)
     expect(out[0].inbox_item_id).toBe('item-avtal')
     expect(out[0].confidence).toBeGreaterThanOrEqual(CANDIDATE_MIN_CONFIDENCE)
+    // ...but never as certainty: a printed figure is not an invoice total.
+    expect(out[0].confidence).toBeLessThan(1)
+    // The reason names WHICH figure matched, since total_amount stays null.
+    expect(out[0].total_amount).toBeNull()
+    // toLocaleString('sv-SE') groups with a non-breaking space (U+00A0).
+    expect(out[0].matchReasons.join(' ')).toContain(`2${' '}500`)
+    expect(out[0].matchReasons.join(' ')).toContain('Anslutnings-/Engångspris')
   })
 
   it('does not let a prominent amount alone carry a dateless document over the floor', () => {
@@ -193,15 +200,39 @@ describe('scoreUnderlagCandidates', () => {
     expect(out).toEqual([])
   })
 
+  it('does not match an avtal to a later charge on amount + merchant alone', () => {
+    // A Telia avtal listing 349 kr must not surface for every future 349 kr
+    // Telia charge: the fallback requires the document date to agree within
+    // the normal tolerance.
+    const out = scoreUnderlagCandidates(
+      { ...tx, description: 'TELIA SVERIGE AB', merchant_name: 'Telia Sverige AB', amount: -349 },
+      [
+        {
+          id: 'item-telia',
+          document_id: 'doc-telia',
+          extracted_data: extraction({
+            supplier: 'Telia Sverige AB',
+            date: '2026-01-15',
+            total: null,
+            prominentAmounts: [{ amount: 349, label: 'Månadspris' }],
+          }),
+          channel_context: null,
+        },
+      ],
+    )
+    expect(out).toEqual([])
+  })
+
   it('rejects a non-invoice document whose prominent amounts all disagree', () => {
-    // Same-day but wrong amount and no merchant signal: the fallback must not
-    // manufacture confidence out of the date alone.
+    // Same-day, same merchant, but the printed amounts match nothing: the
+    // discount keeps this under the floor, where a real disagreeing invoice
+    // total would sit exactly at it.
     const out = scoreUnderlagCandidates(tx, [
       {
         id: 'item-wrong',
         document_id: 'doc-wrong',
         extracted_data: extraction({
-          supplier: null,
+          supplier: 'Espresso House',
           date: '2026-05-12',
           total: null,
           prominentAmounts: [{ amount: 9999, label: 'Pris' }],

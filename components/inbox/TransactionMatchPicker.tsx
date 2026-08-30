@@ -17,7 +17,7 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { Loader2, Search } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import {
-  FALLBACK_AMOUNT_WEIGHT,
+  FALLBACK_CONFIDENCE_FACTOR,
   amountVarianceForMatch,
   bestProminentAmountVariance,
   calculateMatchConfidence,
@@ -135,13 +135,13 @@ export default function TransactionMatchPicker({
   const receiptCurrency = (extractedData?.invoice?.currency ?? 'SEK').toUpperCase()
   const supplier = extractedData?.supplier?.name ?? null
   // Non-invoice documents (bankintyg, avtal) have no total but often show the
-  // money amount anyway; those feed a reduced-weight amount fallback below.
+  // money amount anyway; those feed a discounted amount fallback below.
   const prominentAmounts = useMemo(
     () =>
       total == null
-        ? (extractedData?.prominentAmounts ?? [])
-            .map((a) => a.amount)
-            .filter((a) => Number.isFinite(a) && a !== 0)
+        ? (extractedData?.prominentAmounts ?? []).filter(
+            (a) => Number.isFinite(a.amount) && a.amount !== 0,
+          )
         : [],
     [extractedData, total],
   )
@@ -277,31 +277,35 @@ export default function TransactionMatchPicker({
       )
 
       // No total (bankintyg, avtal): fall back to the closest prominent
-      // amount, scored at reduced weight below.
-      const usedFallbackAmount = total == null && prominentAmounts.length > 0
-      if (usedFallbackAmount) {
-        amountVariance = bestProminentAmountVariance(
-          prominentAmounts,
-          receiptCurrency,
-          tx.amount,
-          txCurrency,
-          txSek,
-        )
-      }
+      // amount, discounted below so a printed figure never presents as the
+      // certainty a real total gives.
+      const fallbackMatch =
+        total == null && prominentAmounts.length > 0
+          ? bestProminentAmountVariance(
+              prominentAmounts,
+              receiptCurrency,
+              tx.amount,
+              txCurrency,
+              txSek,
+            )
+          : null
+      if (fallbackMatch) amountVariance = fallbackMatch.variance
 
       const dateVariance = Math.abs(
         (new Date(tx.date).getTime() - invoiceDate.getTime()) / (1000 * 60 * 60 * 24),
       )
       const merchant = tx.merchant_name || tx.description || ''
       const similarity = supplier ? calculateMerchantSimilarity(supplier, merchant) : 0
-      const { confidence, matchReasons } = calculateMatchConfidence(
+      const scoredMatch = calculateMatchConfidence(
         dateVariance,
         amountVariance,
         similarity,
         MATCH_DATE_TOLERANCE_DAYS,
-        undefined,
-        usedFallbackAmount ? FALLBACK_AMOUNT_WEIGHT : undefined,
       )
+      const matchReasons = scoredMatch.matchReasons
+      const confidence = fallbackMatch
+        ? Math.round(scoredMatch.confidence * FALLBACK_CONFIDENCE_FACTOR * 100) / 100
+        : scoredMatch.confidence
 
       return {
         id: tx.id,
@@ -389,7 +393,7 @@ export default function TransactionMatchPicker({
             )}
             {total == null && prominentAmounts.length > 0 && (
               <span className="tabular-nums font-medium shrink-0">
-                {prominentAmounts.map((a) => formatCurrency(a, receiptCurrency)).join(' · ')}
+                {prominentAmounts.map((a) => formatCurrency(a.amount, receiptCurrency)).join(' · ')}
               </span>
             )}
             {hasInvoiceDate && rawInvoiceDate && (

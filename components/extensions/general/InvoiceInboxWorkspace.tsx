@@ -290,8 +290,11 @@ function hasAnyExtractedField(data: InvoiceExtractionResult | null): boolean {
 
 /**
  * The fields the extraction is scored against, in the order a person reads
- * them. Deliberately the same list hasAnyExtractedField checks, so the summary
- * cannot claim a field the "is anything here at all" test does not count.
+ * them. A subset of what hasAnyExtractedField checks (that test also counts
+ * lineItems, vatBreakdown and prominentAmounts), so the "fält ifyllda" counter
+ * never claims a field the "is anything here at all" test does not count: the
+ * reverse can differ, e.g. a bankintyg with only prominentAmounts has fields
+ * but counts 0 here.
  */
 const EXTRACTED_FIELD_ACCESSORS: ((d: InvoiceExtractionResult) => unknown)[] = [
   (d) => d.supplier?.name,

@@ -263,7 +263,7 @@ Rules:
 - If a field is missing or unreadable, set it to null. Never invent values.
 - lineItems: include every line. Empty array is fine if the document has no itemised lines.
 - vatBreakdown: include one entry per distinct VAT rate. Empty array is fine.
-- prominentAmounts: ONLY when totals.total is null AND the document still displays clear monetary amounts (a price, fee, deposit or paid-in sum: "Engångspris", "Anslutningspris", "Insatt belopp", "Månadspris", "Pris", "Belopp"). Typical sources: bankintyg, bank/account agreements, contracts, statements. One entry per distinct amount, label = the document's own label for it. NEVER include account numbers, org numbers, phone numbers, OCR/reference numbers, dates, percentages, or zero amounts. Empty array for ordinary invoices and receipts.`
+- prominentAmounts: ONLY for documents that are NOT invoices or receipts (documentKind "other" or "government_letter") AND where totals.total is null, when the document still displays clear monetary amounts (a price, fee, deposit or paid-in sum: "Engångspris", "Anslutningspris", "Insatt belopp", "Månadspris", "Pris", "Belopp"). Typical sources: bankintyg, bank/account agreements, contracts, statements. One entry per distinct amount, label = the document's own label for it. NEVER include account numbers, org numbers, phone numbers, OCR/reference numbers, dates, percentages, or zero amounts. ALWAYS an empty array for invoices and receipts, including ones whose total is unreadable: never move an invoice total here.`
 
 export function emptyResult(): InvoiceExtractionResult {
   return {

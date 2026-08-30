@@ -37,17 +37,23 @@ export const AMOUNT_TOLERANCE_PERCENT = 0.05
 export const CONVERTED_AMOUNT_TOLERANCE_PERCENT = 0.09
 export const MIN_MATCH_CONFIDENCE = 0.4
 
-/** Default weight of the amount signal in calculateMatchConfidence. */
-export const AMOUNT_WEIGHT = 0.4
-
 /**
- * Reduced amount weight when the amount did not come from an invoice-style
- * total but from a prominentAmounts fallback (bankintyg, avtal, contracts).
- * Such an amount is one of possibly several figures printed on the document
- * rather than "what the buyer pays", so an agreement is real evidence but
- * weaker than a total agreeing.
+ * Flat discount on a confidence scored from a prominentAmounts fallback
+ * (bankintyg, avtal, contracts: no invoice-style total). Such an amount is one
+ * of possibly several figures printed on the document rather than "what the
+ * buyer pays", so an agreement is real evidence but must stay weaker than a
+ * total agreeing.
+ *
+ * A discount FACTOR, deliberately not a reduced amount weight inside
+ * calculateMatchConfidence: the confidence is normalised over the included
+ * weights, so shrinking the amount weight both let a date+amount-only fallback
+ * reach 1.0 ((0.25+0.3)/0.55) and, when the amount DISAGREED, shrank the
+ * penalty so a wrong fallback amount outscored a wrong invoice total
+ * (0.67 vs 0.60). Scoring at full weight and discounting the result keeps
+ * agreement capped below certainty and disagreement at least as damning as it
+ * is for a real total.
  */
-export const FALLBACK_AMOUNT_WEIGHT = 0.3
+export const FALLBACK_CONFIDENCE_FACTOR = 0.85
 
 /**
  * Normalize a merchant name for comparison.
@@ -275,6 +281,14 @@ export function amountVarianceForMatch(
   return null
 }
 
+export interface ProminentAmountMatch {
+  variance: number
+  /** The printed amount that produced the variance. */
+  amount: number
+  /** The document's own label for it ("Insatt belopp", "Engångspris"). */
+  label: string | null
+}
+
 /**
  * Fallback amount variance for documents with no invoice-style total but one
  * or more prominent amounts (bankintyg "Insatt belopp", an agreement's
@@ -284,30 +298,34 @@ export function amountVarianceForMatch(
  * Same-currency only by construction: prominent amounts never carry a resolved
  * SEK value, so a cross-currency pair stays incomparable (receiptSek = null in
  * amountVarianceForMatch) exactly like a cross-currency total without a rate.
+ * Returns the closest amount with its variance and the document's own label.
  *
- * Callers that score a fallback variance should pass FALLBACK_AMOUNT_WEIGHT to
- * calculateMatchConfidence: one of several printed figures agreeing is weaker
- * evidence than the document's total agreeing.
+ * Callers must multiply the resulting confidence by
+ * FALLBACK_CONFIDENCE_FACTOR (see its comment for why a factor, not a weight),
+ * and should surface WHICH amount matched: a bare "Exakt belopp" with no
+ * number attached is certainty the reader cannot check.
  */
 export function bestProminentAmountVariance(
-  amounts: readonly number[],
+  amounts: readonly { amount: number; label: string | null }[],
   receiptCurrency: string,
   txAmount: number,
   txCurrency: string,
   txSek: number,
-): number | null {
-  let best: number | null = null
-  for (const amount of amounts) {
-    if (!Number.isFinite(amount)) continue
+): ProminentAmountMatch | null {
+  let best: ProminentAmountMatch | null = null
+  for (const candidate of amounts) {
+    if (!Number.isFinite(candidate.amount)) continue
     const variance = amountVarianceForMatch(
-      amount,
+      candidate.amount,
       receiptCurrency,
       null,
       txAmount,
       txCurrency,
       txSek,
     )
-    if (variance != null && (best == null || variance < best)) best = variance
+    if (variance != null && (best == null || variance < best.variance)) {
+      best = { variance, amount: candidate.amount, label: candidate.label }
+    }
   }
   return best
 }
@@ -330,10 +348,7 @@ export function calculateMatchConfidence(
   amountVariance: number | null,
   merchantSimilarity: number,
   dateTolerance: number = DATE_TOLERANCE_DAYS,
-  amountTolerance: number = AMOUNT_TOLERANCE_PERCENT,
-  // FALLBACK_AMOUNT_WEIGHT when the variance came from prominentAmounts
-  // rather than an invoice-style total.
-  amountWeight: number = AMOUNT_WEIGHT
+  amountTolerance: number = AMOUNT_TOLERANCE_PERCENT
 ): { confidence: number; matchReasons: string[] } {
   const matchReasons: string[] = []
   let totalWeight = 0
@@ -347,9 +362,8 @@ export function calculateMatchConfidence(
   weightedScore += dateScore * 0.25
   totalWeight += 0.25
 
-  // Amount score (weight: 40%, reduced for prominent-amount fallbacks): only
-  // counted when the amounts are comparable (same currency, or both
-  // normalisable to SEK).
+  // Amount score (weight: 40%): only counted when the amounts are comparable
+  // (same currency, or both normalisable to SEK).
   if (amountVariance != null) {
     const amountScore = Math.max(0, 1 - amountVariance / amountTolerance)
     if (amountVariance < 0.01) {
@@ -357,8 +371,8 @@ export function calculateMatchConfidence(
     } else if (amountVariance < amountTolerance) {
       matchReasons.push(`Belopp ±${Math.round(amountVariance * 100)}%`)
     }
-    weightedScore += amountScore * amountWeight
-    totalWeight += amountWeight
+    weightedScore += amountScore * 0.4
+    totalWeight += 0.4
   }
 
   // Merchant score (weight: 35%): only counted when there's data

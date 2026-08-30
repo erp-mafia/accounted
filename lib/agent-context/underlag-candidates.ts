@@ -24,7 +24,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   CONVERTED_AMOUNT_TOLERANCE_PERCENT,
-  FALLBACK_AMOUNT_WEIGHT,
+  DATE_TOLERANCE_DAYS,
+  FALLBACK_CONFIDENCE_FACTOR,
   amountVarianceForMatch,
   bestProminentAmountVariance,
   calculateMatchConfidence,
@@ -107,9 +108,9 @@ function extractionSignals(extracted: InvoiceExtractionResult | null | undefined
     currency: (extracted?.invoice?.currency || 'SEK').toUpperCase(),
     // Non-invoice documents (bankintyg, avtal) carry no total but often show
     // the money amount anyway; the extractor lists those here.
-    prominentAmounts: (extracted?.prominentAmounts ?? [])
-      .map((a) => a.amount)
-      .filter((a) => Number.isFinite(a) && a !== 0),
+    prominentAmounts: (extracted?.prominentAmounts ?? []).filter(
+      (a) => Number.isFinite(a.amount) && a.amount !== 0,
+    ),
   }
 }
 
@@ -151,20 +152,28 @@ export function scoreUnderlagCandidates(
       txSek,
     )
 
+    const dateVariance = sig.date
+      ? Math.abs((new Date(sig.date).getTime() - txDateMs) / (1000 * 60 * 60 * 24))
+      : Number.POSITIVE_INFINITY
+
     // A document with no invoice-style total (bankintyg, avtal: documentKind
     // "other") but visible amounts falls back to the closest prominent
-    // amount, at reduced weight: one of several printed figures agreeing is
-    // weaker evidence than the document's total agreeing.
-    const usedFallbackAmount = sig.total == null && amountVariance == null
-    if (usedFallbackAmount) {
-      amountVariance = bestProminentAmountVariance(
-        sig.prominentAmounts,
-        sig.currency,
-        tx.amount,
-        txCurrency,
-        txSek,
-      )
-    }
+    // amount. Two guards keep this precision-first: the document's date must
+    // agree within the normal tolerance (an avtal listing 349 kr must not
+    // match every future 349 kr charge from the same counterparty on amount +
+    // merchant alone), and the confidence is discounted below so a fallback
+    // can never present as certainty.
+    const fallbackMatch =
+      sig.total == null && amountVariance == null && dateVariance <= DATE_TOLERANCE_DAYS
+        ? bestProminentAmountVariance(
+            sig.prominentAmounts,
+            sig.currency,
+            tx.amount,
+            txCurrency,
+            txSek,
+          )
+        : null
+    if (fallbackMatch) amountVariance = fallbackMatch.variance
 
     // No comparable amount means no candidate. calculateMatchConfidence drops
     // the amount signal when it cannot normalise the currencies, which leaves
@@ -176,22 +185,33 @@ export function scoreUnderlagCandidates(
     // through the picker; they are just not proposed.
     if (amountVariance == null) continue
 
-    const dateVariance = sig.date
-      ? Math.abs((new Date(sig.date).getTime() - txDateMs) / (1000 * 60 * 60 * 24))
-      : Number.POSITIVE_INFINITY
     const similarity = sig.supplier ? calculateMerchantSimilarity(sig.supplier, txMerchant) : 0
 
     // A converted total is judged against the wider bar, because the rate
     // spread is a known error rather than a disagreement about the sum.
-    const converted = sig.currency !== txCurrency && item.sek_total != null
-    const { confidence, matchReasons } = calculateMatchConfidence(
+    const scoredMatch = calculateMatchConfidence(
       dateVariance,
       amountVariance,
       similarity,
       undefined,
-      converted ? CONVERTED_AMOUNT_TOLERANCE_PERCENT : undefined,
-      usedFallbackAmount ? FALLBACK_AMOUNT_WEIGHT : undefined,
+      sig.currency !== txCurrency && item.sek_total != null
+        ? CONVERTED_AMOUNT_TOLERANCE_PERCENT
+        : undefined,
     )
+    let confidence = scoredMatch.confidence
+    let matchReasons = scoredMatch.matchReasons
+    if (fallbackMatch) {
+      confidence = Math.round(confidence * FALLBACK_CONFIDENCE_FACTOR * 100) / 100
+      // Name the figure that matched. A bare "Exakt belopp" would reach the
+      // agent while total_amount stays null: certainty without a number the
+      // agent or the user could check against the document.
+      const label = fallbackMatch.label ? ` (${fallbackMatch.label})` : ''
+      matchReasons = matchReasons.map((reason) =>
+        reason.startsWith('Exakt belopp') || reason.startsWith('Belopp ±')
+          ? `${reason} i dokumentet: ${fallbackMatch.amount.toLocaleString('sv-SE')} ${sig.currency}${label}`
+          : reason,
+      )
+    }
     if (confidence < CANDIDATE_MIN_CONFIDENCE) continue
 
     scored.push({
