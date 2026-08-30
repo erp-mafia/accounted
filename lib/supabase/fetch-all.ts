@@ -1,4 +1,5 @@
 import { createLogger } from '@/lib/logger'
+import { dbError } from '@/lib/errors/db-error'
 
 const log = createLogger('fetch-all')
 
@@ -71,7 +72,19 @@ export async function fetchAllRows<T>(
 
   while (true) {
     const { data, error } = await queryFn({ from, to: from + PAGE_SIZE - 1 })
-    if (error) throw new Error(error.message)
+    // dbError, not `new Error(error.message)`: the bare form discarded the
+    // driver's SQLSTATE, and `isTransientFailure()` checks that code FIRST.
+    // A statement timeout (57014) therefore arrived as an anonymous Error and
+    // resolved to UNKNOWN_ERROR ("Något gick fel. Försök igen.") instead of
+    // the retryable TRANSIENT_ERROR. This is the single highest-traffic strip
+    // point in the codebase: every paginated read goes through it, including
+    // gnubok_query_journal, which failed 164 times in 60 days at a p50 of
+    // 8 110 ms while every other failing tool sat between 1 and 315 ms.
+    //
+    // The message is kept VERBATIM (context: null). Callers such as
+    // query_journal's sanitizeDbError already match on it, and this change is
+    // meant to add the code, not to reword anything.
+    if (error) throw dbError(error, null)
     if (!data || data.length === 0) break
     allRows.push(...data)
     pages += 1
