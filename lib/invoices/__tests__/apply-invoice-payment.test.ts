@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  deriveCustomerSettlementAmount,
   planInvoicePayment,
   planInvoicePaymentForLines,
   PAYMENT_OVERSHOOT_TOLERANCE,
@@ -245,5 +246,83 @@ describe('planInvoicePaymentForLines', () => {
   it('without lines it behaves exactly like the strict plan', () => {
     expect(planInvoicePaymentForLines(INV, 1234.75, undefined, 'SEK').ok).toBe(true)
     expect(planInvoicePaymentForLines(INV, 1235, undefined, 'SEK').ok).toBe(false)
+  })
+})
+
+describe('deriveCustomerSettlementAmount', () => {
+  // The kontantmetoden ROT shape from proposeCashLines: total 124 000,
+  // deduction 37 200 (30 %), customer share 86 800.
+  const ROT_CASH_LINES = [
+    { account_number: '1930', debit_amount: 86800, credit_amount: 0 },
+    { account_number: '1513', debit_amount: 37200, credit_amount: 0 },
+    { account_number: '3001', debit_amount: 0, credit_amount: 99200 },
+    { account_number: '2611', debit_amount: 0, credit_amount: 24800 },
+  ]
+
+  it('excludes the 1513 leg on a ROT invoice (the reported bug)', () => {
+    expect(deriveCustomerSettlementAmount(ROT_CASH_LINES, 37200)).toBe(86800)
+  })
+
+  it('is the plain debit sum without any 1513 line', () => {
+    const lines = [
+      { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+    ]
+    expect(deriveCustomerSettlementAmount(lines, 0)).toBe(1000)
+    expect(deriveCustomerSettlementAmount(lines, 37200)).toBe(1000)
+  })
+
+  it('with cap 0 a hand-added 1513 debit still counts as payment (non-ROT unchanged)', () => {
+    const lines = [
+      { account_number: '1930', debit_amount: 900, credit_amount: 0 },
+      { account_number: '1513', debit_amount: 100, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+    ]
+    expect(deriveCustomerSettlementAmount(lines, 0)).toBe(1000)
+  })
+
+  it('excludes at most the deduction cap when the 1513 debit overshoots it', () => {
+    const lines = [
+      { account_number: '1930', debit_amount: 86800, credit_amount: 0 },
+      { account_number: '1513', debit_amount: 40000, credit_amount: 0 },
+      { account_number: '3001', debit_amount: 0, credit_amount: 102000 },
+      { account_number: '2611', debit_amount: 0, credit_amount: 24800 },
+    ]
+    // Only 37 200 of the 40 000 is deduction; the surplus stays in the amount
+    // so the overpayment guard still sees it.
+    expect(deriveCustomerSettlementAmount(lines, 37200)).toBe(89600)
+  })
+
+  it('nets 1513 debits against 1513 credits before excluding', () => {
+    // A self-canceling 1513 debit/credit pair does not raise the exclusion:
+    // net 1513 stays 37 200, so the extra 500 debit stays in the settlement
+    // amount and the overpayment guard sees it (safe direction: rejects
+    // rather than silently excludes).
+    const lines = [
+      ...ROT_CASH_LINES,
+      { account_number: '1513', debit_amount: 500, credit_amount: 0 },
+      { account_number: '1513', debit_amount: 0, credit_amount: 500 },
+    ]
+    expect(deriveCustomerSettlementAmount(lines, 37200)).toBe(87300)
+  })
+
+  it('a net 1513 credit is not added to the settlement', () => {
+    const lines = [
+      { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '1513', debit_amount: 0, credit_amount: 200 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 800 },
+    ]
+    expect(deriveCustomerSettlementAmount(lines, 37200)).toBe(1000)
+  })
+
+  it('leaves 3740 öre legs untouched and rounds float sums', () => {
+    const lines = [
+      { account_number: '1930', debit_amount: 86800.4, credit_amount: 0 },
+      { account_number: '1513', debit_amount: 37200, credit_amount: 0 },
+      { account_number: '3740', debit_amount: 0.1, credit_amount: 0 },
+      { account_number: '3001', debit_amount: 0, credit_amount: 99200.5 },
+      { account_number: '2611', debit_amount: 0, credit_amount: 24800 },
+    ]
+    expect(deriveCustomerSettlementAmount(lines, 37200)).toBe(86800.5)
   })
 })
