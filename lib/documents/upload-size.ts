@@ -65,10 +65,43 @@ export function formatMegabytes(bytes: number): string {
  * or an image the browser would not decode). Names both the actual size and
  * the ceiling: "too large" without either is the kind of message that sends a
  * user back to support rather than to a solution.
+ *
+ * Still the right message for the surfaces that post a multipart body
+ * (ReconciliationUnderlag, support attachments). The document inbox no
+ * longer refuses at this ceiling: see inboxTooLargeMessage.
  */
 export function tooLargeMessage(size: number): string {
   return (
     `Filen är ${formatMegabytes(size)} och gränsen är ${formatMegabytes(HOSTED_MAX_UPLOAD_BYTES)}. ` +
     'Fotografera om kvittot, eller komprimera PDF:en, och försök igen.'
+  )
+}
+
+/**
+ * The document inbox's own ceiling: MAX_FILE_SIZE in the invoice-inbox
+ * extension and MAX_DOCUMENT_SIZE in the document service, both 10 MB.
+ * Mirrored here because core components must not import from extensions.
+ *
+ * Between HOSTED_MAX_UPLOAD_BYTES and this one, the inbox sends the bytes
+ * straight to Storage through a signed URL (direct-upload.ts) so the
+ * platform's body cap no longer decides what can be filed; this one still
+ * does, on hosted and self-hosted alike.
+ */
+export const INBOX_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+/** True when the file is over the inbox ceiling on any deployment. */
+export function exceedsInboxUploadLimit(size: number): boolean {
+  return size > INBOX_MAX_UPLOAD_BYTES
+}
+
+/**
+ * The inbox's sentence for a file over its ceiling. Same shape as
+ * tooLargeMessage (actual size, then the limit), but the limit it names is
+ * the one that actually applies on that surface now.
+ */
+export function inboxTooLargeMessage(size: number): string {
+  return (
+    `Filen är ${formatMegabytes(size)} och gränsen för dokumentinkorgen är ${formatMegabytes(INBOX_MAX_UPLOAD_BYTES)}. ` +
+    'Komprimera PDF:en, eller dela upp den, och försök igen.'
   )
 }
