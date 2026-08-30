@@ -13,7 +13,7 @@ The first slice implemented the invoice profile. The second slice added an immut
 
 `POST /api/invoices/{id}/peppol` now stores the exact generated XML as an immutable staged delivery. Staging assigns a stable UUID idempotency key, stores the recipient, profile identifiers, filename, SHA-256, retention date, and an append-only local audit event. It explicitly returns `network_submitted: false`. Repeating the request for the same invoice and XML returns the existing staged record.
 
-`GET /api/invoices/{id}/peppol/deliveries` returns a minimized status timeline projection without exposing XML, raw webhooks, or provider evidence. The invoice page can prepare a delivery, but its network send control remains disabled with a provider-required explanation.
+`GET /api/invoices/{id}/peppol/deliveries` returns a minimized status timeline projection without exposing XML, raw webhooks, or provider evidence. The invoice page can prepare a delivery; since 2026-08-21 its send control performs the network send through `POST /api/invoices/{id}/peppol/send` for companies holding a Peppol access grant (aktiebolag senders, standard invoices only; see "Access point: Qvalia" below).
 
 The provider-neutral `PeppolTransport` boundary separates:
 
@@ -22,7 +22,7 @@ The provider-neutral `PeppolTransport` boundary separates:
 - cryptographically verified webhook normalization;
 - evidence retrieval, including an optional exact transmitted document.
 
-No adapter is registered by core and no environment value can make an absent adapter appear available.
+Core registers an adapter only when provider credentials are present in the environment (`lib/init.ts`); no environment value can make an absent adapter appear available.
 
 The export supports:
 
@@ -42,6 +42,8 @@ Sole-trader sellers and personnummer-derived `0007` identifiers are rejected. Th
 The local preflight is not a replacement for the official validation stack. Before network delivery, every document must pass the UBL XSD, EN 16931 Schematron rules, and the Peppol BIS Billing rules for the active release. The selected access-point provider must perform that validation as part of submission. Accounted should also run the same release-pinned artifacts before calling the provider so failures can be explained before transport.
 
 ## Remaining architecture
+
+The subsections below are the requirements written before the Qvalia decision. Access-point delivery and the UI send flow shipped on 2026-08-21 and are described under "Access point: Qvalia"; the text is kept as the acceptance criteria that work met. Standards validation (the release-pinned validator run before transport) is still open.
 
 ### Standards validation
 
@@ -78,7 +80,7 @@ Inbound invoices are a separate acceptance slice. It requires provider webhook a
 
 ### UI and API
 
-The UI downloads a locally checked XML file and can prepare an immutable delivery snapshot. Both actions state that they did not send the invoice. Once an adapter exists, sending must be a distinct confirmation flow that performs recipient lookup, shows the discovered participant and capabilities, and records the resulting timeline. The download remains available for diagnosis and interoperability testing.
+The UI downloads a locally checked XML file and can prepare an immutable delivery snapshot. Both actions state that they did not send the invoice. Once an adapter exists, sending must be a distinct confirmation flow that performs recipient lookup, shows the discovered participant and capabilities, and records the resulting timeline. The download remains available for diagnosis and interoperability testing. Shipped 2026-08-21: the confirmation dialog on the invoice page and `POST /api/invoices/{id}/peppol/send` (see "Access point: Qvalia").
 
 ### Access point: Qvalia (decided 2026-08-21)
 
