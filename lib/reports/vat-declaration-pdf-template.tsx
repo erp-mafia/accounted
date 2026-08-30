@@ -5,6 +5,7 @@ import {
   View,
   StyleSheet,
 } from '@react-pdf/renderer'
+import { pdfNumberText } from '@/lib/pdf/number-text'
 import type { CompanySettings } from '@/types'
 import type { ManualFilingRow } from '@/lib/reports/vat-manual-filing'
 
@@ -94,7 +95,9 @@ const styles = StyleSheet.create({
 // already truncated to whole kronor (öretal faller bort, see
 // buildManualFilingRows), so format with no decimals.
 function formatKr(amount: number): string {
-  return new Intl.NumberFormat('sv-SE', { maximumFractionDigits: 0 }).format(amount)
+  // pdfNumberText: Intl's U+2212 has no glyph in the bundled Helvetica/Courier,
+  // so moms att få tillbaka would print as moms att betala (issue #1982).
+  return pdfNumberText(new Intl.NumberFormat('sv-SE', { maximumFractionDigits: 0 }).format(amount))
 }
 
 function formatOrgNumber(orgNumber: string): string {
