@@ -43,7 +43,7 @@ Three things carry the sovereign claim, in order of how much they matter:
 | Document archive with SHA-256 integrity and WORM bucket | Company lookup (TIC), migration from Fortnox/Visma/Bokio/Björn Lundén via the Arcim gateway |
 | MCP server, API keys, staged approvals | Receipt hunt in a connected mailbox (Accounted's Google OAuth app), WhatsApp intake (Accounted's Meta credentials), Stripe billing |
 | AI document extraction, assistant Q&A and one-tap categorization on a BYO endpoint; HTML mail invoices | Specialized conversational flows (VAT review, KPI explanation, settings help, bokslut helpers): Anthropic-family backend only (Bedrock or the direct API), not a BYO OpenAI-compatible endpoint ([#1800](https://github.com/erp-mafia/accounted/issues/1800)) |
-| Push notifications (your VAPID keys), invoice email via Resend (section 6; an SMTP relay option is proposed in #1746) | |
+| Push notifications (your VAPID keys), invoice email via your own SMTP relay (`EMAIL_PROVIDER=smtp`) or Resend (section 6) | |
 
 The hosted-only rows (everything in the right column except the AI row, which is a backend restriction a connector key would not change) are what a connector subscription for self-hosted instances would unlock (priced at parity with hosted, per active company). That connector-key registry is proposed (PRs #1747, #1748, #1751, #1757 and #1758, none merged) and **not yet available**: today there is no instance-side variable to set and nothing to subscribe to, and the extensions' settings screens will tell you those services are unconfigured.
 
@@ -154,7 +154,7 @@ A sovereign deployment still has these touchpoints. None carries accounting data
 
 - **Image distribution**: the app image is pulled from GitHub Container Registry (`ghcr.io/erp-mafia/gnubok`), and the cron sidecar downloads `supercronic` from GitHub Releases at build time. Mirror both into your own registry for an air-gapped setup (build from source: `docker compose -f docker-compose.yml -f docker-compose.build.yml up --build`).
 - **Fonts**: `next/font/google` downloads Geist and Hedvig Letters Serif **at build time** and self-hosts them; browsers never call Google. The GitHub-built image therefore has no runtime font dependency; a source build fetches them once during `next build`.
-- **Invoice email**: the email extension sends through Resend (US) only today; an SMTP mailer behind the same seam is proposed in #1746 and, once merged, `EMAIL_PROVIDER=smtp` selects it (your own relay: a Swedish mail provider, an M365/Workspace relay, Postfix on the host). Until then, either accept Resend as the one non-Swedish touchpoint or leave invoice email unconfigured (invoices download as PDF). Resend carries invoice PDFs to your customers but no ledger data.
+- **Invoice email**: the email extension sends through Resend (US) or, with `EMAIL_PROVIDER=smtp`, through your own relay: a Swedish mail provider, an M365/Workspace relay, Postfix on the host (variables in SELF-HOSTING.md, Email section; TLS is required unless you set `SMTP_REQUIRE_TLS=false` for a plaintext relay on a trusted LAN). Pick SMTP for a sovereign deployment, or leave invoice email unconfigured (invoices download as PDF). Resend, if you choose it, carries invoice PDFs to your customers but no ledger data.
 - **Telemetry**: none. Analytics (PostHog) and Vercel Speed Insights are hosted-only and switched off by `NEXT_PUBLIC_SELF_HOSTED=true`; there is no error-tracking integration at all (SELF-HOSTING.md, Error Tracking: errors go to the container logs); there is no call-home licence check, by design.
 - **Upstream services you opt into**: Enable Banking, Skatteverket, TIC, the migration gateway, Google OAuth for receipt hunt, Meta for WhatsApp are hosted-only today (section 2) and simply stay unconfigured.
 
@@ -166,5 +166,5 @@ A sovereign deployment still has these touchpoints. None carries accounting data
 - [ ] `NEXT_PUBLIC_SELF_HOSTED=true`, `CRON_SECRET` set, cron sidecar healthy (`docker compose ps`), `/api/health` green.
 - [ ] Backup bucket created **with Object Lock**, `backup.sh` scheduled nightly + yearly, one restore drill completed and timed.
 - [ ] AI: either none (MCP-only deployment) or `AI_BASE_URL`/`AI_API_KEY`/`AI_MODEL` set and `npx tsx scripts/smoke-ai-provider.ts receipt.pdf` green.
-- [ ] Decide on invoice email (Resend, or none until the SMTP relay in #1746 lands) and record it in your register.
+- [ ] Decide on invoice email (your own SMTP relay with `EMAIL_PROVIDER=smtp`, Resend, or none) and record it in your register.
 - [ ] Read the national cloud policy yourself before quoting it to a buyer: it is principles, not mandates. https://www.regeringen.se/informationsmaterial/2026/05/en-molnpolicy-for-sverige--for-okad-sakerhet-effektivitet-och-innovation-i-den-offentliga-forvaltningen/
