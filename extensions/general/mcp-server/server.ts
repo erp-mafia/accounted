@@ -10952,13 +10952,13 @@ export const tools: McpTool[] = [
       properties: {
         account_key: {
           type: 'string',
-          description: '"skattekonto", "bank:<cash_account_id>" or "manual:<BAS>". Returns the account-keyed status (bridge[], counts, kind block); for manual keys date_to is the balansdag.',
+          description: '"skattekonto", "bank:<cash_account_id>" or "manual:<BAS>"; for manual keys date_to is the balansdag.',
         },
         date_from: { type: 'string', description: 'Start date YYYY-MM-DD' },
         date_to: { type: 'string', description: 'End date YYYY-MM-DD' },
         account_number: {
           type: 'string',
-          description: 'Legacy: cash-account BAS code to reconcile, e.g. "1940". Defaults to "1930". Ignored when account_key is set.',
+          description: 'Legacy: BAS code, default "1930". Ignored when account_key is set.',
         },
       },
     },
@@ -11007,7 +11007,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_reconciliation_items',
     title: 'Reconciliation Items',
-    description: 'Rows behind one account\'s reconciliation bridge, bucketed (proposed, unmatched_external, unmatched_ledger, matched, ignored, upcoming): side, qualified id, amount, proposal with confidence + reasons, allowed actions. Link via gnubok_reconcile_match.',
+    description: 'Rows behind one account\'s reconciliation bridge, by bucket: side, qualified id, amount, proposal with confidence + reasons, allowed actions. Link via gnubok_reconcile_match.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -11072,13 +11072,23 @@ export const tools: McpTool[] = [
         account_key: { type: 'string', description: '"skattekonto" or "bank:<cash_account_id>"' },
         pairs: {
           type: 'array',
-          description: 'One outside row id + one journal_entry_id per pair',
+          description: 'Rows against one verifikat, or (bank) one row against several',
           items: {
             type: 'object',
             additionalProperties: false,
             properties: {
               external_ids: { type: 'array', items: { type: 'string' } },
               journal_entry_ids: { type: 'array', items: { type: 'string' } },
+              allocations: {
+                type: 'array',
+                description: 'Bank 1:N: signed slice per verifikat, summing to the row',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: { journal_entry_id: { type: 'string' }, amount: { type: 'number' } },
+                  required: ['journal_entry_id', 'amount'],
+                },
+              },
             },
             required: ['external_ids', 'journal_entry_ids'],
           },
@@ -11099,7 +11109,14 @@ export const tools: McpTool[] = [
     },
     async execute(args, companyId, userId, supabase, actor) {
       const accountKey = args.account_key as string
-      const pairs = (args.pairs as Array<{ external_ids: string[]; journal_entry_ids: string[] }> | undefined) ?? []
+      const pairs =
+        (args.pairs as
+          | Array<{
+              external_ids: string[]
+              journal_entry_ids: string[]
+              allocations?: Array<{ journal_entry_id: string; amount: number }>
+            }>
+          | undefined) ?? []
       const useProposals = args.use_proposals === true
       if (pairs.length === 0 && !useProposals) {
         throw new Error('Pass pairs, or use_proposals: true')
@@ -11118,10 +11135,32 @@ export const tools: McpTool[] = [
         { dryRun: true },
       )
       if (!preview) throw new Error(`Unknown account_key "${accountKey}" for this company`)
-      const resolvedPairs = preview.applied.map((a) => ({
-        external_ids: [a.external_id],
-        journal_entry_ids: [a.journal_entry_id],
-      }))
+      // Rebuild the staged pairs from the preview: 1:1 links stay one pair
+      // each; the links of a bank 1:N split (they carry allocated_amount, all
+      // on the same row) fold back into ONE pair with explicit allocations, so
+      // the executor re-validates the exact slices the reviewer approved.
+      const resolvedPairs: Array<{
+        external_ids: string[]
+        journal_entry_ids: string[]
+        allocations?: Array<{ journal_entry_id: string; amount: number }>
+      }> = []
+      const splitByRow = new Map<string, Array<{ journal_entry_id: string; amount: number }>>()
+      for (const a of preview.applied) {
+        if (typeof a.allocated_amount === 'number') {
+          const slices = splitByRow.get(a.external_id) ?? []
+          slices.push({ journal_entry_id: a.journal_entry_id, amount: a.allocated_amount })
+          splitByRow.set(a.external_id, slices)
+          continue
+        }
+        resolvedPairs.push({ external_ids: [a.external_id], journal_entry_ids: [a.journal_entry_id] })
+      }
+      for (const [externalId, slices] of splitByRow) {
+        resolvedPairs.push({
+          external_ids: [externalId],
+          journal_entry_ids: slices.map((s) => s.journal_entry_id),
+          allocations: slices,
+        })
+      }
       if (resolvedPairs.length === 0) {
         throw new Error('No linkable pairs: nothing to stage')
       }

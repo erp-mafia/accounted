@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { scopeTransactionsToAccount } from '@/lib/reconciliation/bank-reconciliation'
+import { fetchJunctionLinkedTxIds, scopeTransactionsToAccount } from '@/lib/reconciliation/bank-reconciliation'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateTransactionSchema } from '@/lib/api/schemas'
@@ -93,9 +93,25 @@ export const GET = withRouteContext('transaction.list', async (request, { supaba
     return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
-  const rows = data || []
+  let rows = data || []
+  // has_more is decided on what the DB returned, before the junction filter
+  // below: a page that came back full means more rows exist past it whether
+  // or not some of this page's rows turn out to be booked.
   const hasMore = rows.length > MAX_ROWS
-  const truncated = hasMore ? rows.slice(0, MAX_ROWS) : rows
+  // journal_entry_id IS NULL is only the first of the three "booked" anchors
+  // (lib/transactions/is-booked.ts): a row bulk-booked into a
+  // samlingsverifikat or split over several verifikat (1:N, #1553) is
+  // anchored through transaction_voucher_links alone and must leave
+  // "Att bokföra" all the same.
+  if (unmatched && rows.length > 0) {
+    const junctionLinked = await fetchJunctionLinkedTxIds(
+      supabase,
+      companyId,
+      rows.map((row) => row.id as string),
+    )
+    if (junctionLinked.size > 0) rows = rows.filter((row) => !junctionLinked.has(row.id as string))
+  }
+  const truncated = rows.length > MAX_ROWS ? rows.slice(0, MAX_ROWS) : rows
 
   return NextResponse.json({ data: truncated, has_more: hasMore, limit: MAX_ROWS })
 })

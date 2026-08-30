@@ -913,12 +913,19 @@ describe('reverseEntry: bank transaction unlink', () => {
   type Filter = [op: string, column: string, value: unknown]
   interface RecordedWrite { payload?: unknown; op?: string; filters: Filter[] }
 
+  type RemainingRow = { transaction_id: string; role?: string; allocated_amount?: number }
+  type TxRow = { id: string; amount: number; journal_entry_id: string | null }
+
   /**
    * Mock for reverseEntry. `voucherLinks` are the transaction ids the junction
    * holds for entry-1; `remainingLinks` what it still holds for those ids after
-   * the delete (a row anchored to some other verifikat too).
+   * the delete (a row anchored to some other verifikat too), as ids (one
+   * bank_line row each, no amount) or as full rows. `txRows` is what the
+   * partial-split read returns for the rows that still have anchors.
    */
-  function setup(opts: { voucherLinks?: string[]; remainingLinks?: string[] } = {}) {
+  function setup(
+    opts: { voucherLinks?: string[]; remainingLinks?: Array<string | RemainingRow>; txRows?: TxRow[] } = {},
+  ) {
     let jeCall = 0
     const jeResults = [
       { data: original, error: null },                   // fetch original (.single)
@@ -985,12 +992,21 @@ describe('reverseEntry: bank transaction unlink', () => {
         if (table === 'journal_entry_lines') {
           return { insert: vi.fn().mockResolvedValue({ error: null }) }
         }
-        if (table === 'transactions') return recorder(txWrites, () => ({ error: null }))
+        if (table === 'transactions') {
+          return recorder(txWrites, (current) =>
+            current.op === 'select' ? { data: opts.txRows ?? [], error: null } : { error: null },
+          )
+        }
         if (table === 'transaction_voucher_links') {
           return recorder(linkOps, (current) => {
             if (current.op !== 'select') return { error: null }
-            const ids = linkSelectCall++ === 0 ? opts.voucherLinks ?? [] : opts.remainingLinks ?? []
-            return { data: ids.map((transaction_id) => ({ transaction_id })), error: null }
+            if (linkSelectCall++ === 0) {
+              return { data: (opts.voucherLinks ?? []).map((transaction_id) => ({ transaction_id })), error: null }
+            }
+            const rows = (opts.remainingLinks ?? []).map((r) =>
+              typeof r === 'string' ? { transaction_id: r, role: 'bank_line', allocated_amount: 0 } : r,
+            )
+            return { data: rows, error: null }
           })
         }
         return createMockChain()
@@ -1062,7 +1078,7 @@ describe('reverseEntry: bank transaction unlink', () => {
       },
       {
         op: 'select',
-        payload: 'transaction_id',
+        payload: 'transaction_id, role, allocated_amount',
         filters: [
           ['eq', 'company_id', 'company-1'],
           ['in', 'transaction_id', ['tx-a', 'tx-b', 'tx-c']],
@@ -1070,11 +1086,21 @@ describe('reverseEntry: bank transaction unlink', () => {
       },
     ])
 
-    expect(txWrites).toHaveLength(2)
-    expect(txWrites[1].payload).toEqual({ is_business: null, category: null, reconciliation_method: null })
+    // [0] unlink, [1] the partial-split read for the row still anchored
+    // (tx-c), [2] the release of the rows with no anchor left.
+    expect(txWrites).toHaveLength(3)
+    expect(txWrites[1]).toEqual({
+      op: 'select',
+      payload: 'id, amount, journal_entry_id',
+      filters: [
+        ['eq', 'company_id', 'company-1'],
+        ['in', 'id', ['tx-c']],
+      ],
+    })
+    expect(txWrites[2].payload).toEqual({ is_business: null, category: null, reconciliation_method: null })
     // Only rows with no anchor left, and never a row whose journal_entry_id
     // still points at another verifikat (residual booking).
-    expect(txWrites[1].filters).toEqual([
+    expect(txWrites[2].filters).toEqual([
       ['eq', 'company_id', 'company-1'],
       ['in', 'id', ['tx-a', 'tx-b']],
       ['is', 'journal_entry_id', null],
@@ -1090,7 +1116,58 @@ describe('reverseEntry: bank transaction unlink', () => {
     await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
 
     expect(linkOps.map((o) => o.op)).toEqual(['select', 'delete', 'select'])
-    expect(txWrites).toHaveLength(1)
+    // The unlink plus the partial-split read; no release.
+    expect(txWrites.map((w) => w.op)).toEqual(['update', 'select'])
+  })
+
+  it('releases a 1:N split whole when one of its verifikat is reversed (#1553): surviving slices dropped', async () => {
+    // tx-s (amount -800) was split over entry-1 (-500) and entry-2 (-300).
+    // Reversing entry-1 leaves a -300 bank_line slice that no longer explains
+    // the row: the slice goes, and the row returns to Att bokföra.
+    const { supabase, txWrites, linkOps } = setup({
+      voucherLinks: ['tx-s'],
+      remainingLinks: [{ transaction_id: 'tx-s', role: 'bank_line', allocated_amount: -300 }],
+      txRows: [{ id: 'tx-s', amount: -800, journal_entry_id: null }],
+    })
+
+    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(linkOps.map((o) => o.op)).toEqual(['select', 'delete', 'select', 'delete'])
+    expect(linkOps[3].filters).toEqual([
+      ['eq', 'company_id', 'company-1'],
+      ['in', 'transaction_id', ['tx-s']],
+    ])
+    const release = txWrites[txWrites.length - 1]
+    expect(release.op).toBe('update')
+    expect(release.payload).toEqual({ is_business: null, category: null, reconciliation_method: null })
+    expect(release.filters).toEqual([
+      ['eq', 'company_id', 'company-1'],
+      ['in', 'id', ['tx-s']],
+      ['is', 'journal_entry_id', null],
+    ])
+  })
+
+  it('keeps a row whose surviving slices still sum to its amount, or that carries a non-bank_line anchor', async () => {
+    // tx-full: a bulk-booked-style anchor on another verifikat covering the
+    // whole amount. tx-res: a residual booking's 'other' row (its main
+    // verifikat pointer is null here because the storno of THAT verifikat is
+    // what left it; the residual row is not a slice and is never judged).
+    const { supabase, txWrites, linkOps } = setup({
+      voucherLinks: ['tx-full', 'tx-res'],
+      remainingLinks: [
+        { transaction_id: 'tx-full', role: 'bank_line', allocated_amount: -800 },
+        { transaction_id: 'tx-res', role: 'other', allocated_amount: -10 },
+      ],
+      txRows: [
+        { id: 'tx-full', amount: -800, journal_entry_id: null },
+        { id: 'tx-res', amount: -1010, journal_entry_id: null },
+      ],
+    })
+
+    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(linkOps.map((o) => o.op)).toEqual(['select', 'delete', 'select'])
+    expect(txWrites.map((w) => w.op)).toEqual(['update', 'select'])
   })
 })
 

@@ -1295,7 +1295,7 @@ export async function reverseEntry(
     } else {
       const { data: remainingRows, error: remainingError } = await supabase
         .from('transaction_voucher_links')
-        .select('transaction_id')
+        .select('transaction_id, role, allocated_amount')
         .eq('company_id', companyId)
         .in('transaction_id', junctionTxIds)
       if (remainingError) {
@@ -1303,8 +1303,67 @@ export async function reverseEntry(
           entryId,
         })
       } else {
+        const remainingByTx = new Map<string, Array<{ role: string; allocated_amount: number }>>()
+        for (const row of (remainingRows ?? []) as Array<{
+          transaction_id: string
+          role?: string | null
+          allocated_amount?: number | string | null
+        }>) {
+          const rows = remainingByTx.get(row.transaction_id) ?? []
+          rows.push({ role: row.role ?? 'bank_line', allocated_amount: Number(row.allocated_amount ?? 0) })
+          remainingByTx.set(row.transaction_id, rows)
+        }
+        // A row split over several verifikat (1:N, lib/reconciliation/
+        // bank-reconciliation.ts linkTransactionToVouchers) is anchored by
+        // 'bank_line' slices that sum to its amount. Reversing one of them
+        // leaves a partial anchor: the row would read as booked while the
+        // ledger no longer explains it, and the reconciliation difference
+        // would move by the reversed slice with nothing to act on. Such a
+        // row goes back to Att bokföra whole: the surviving slices are
+        // dropped (their vouchers surface as unmatched again) and the row is
+        // released like a bulk-booked one. Rows whose remaining anchors
+        // still sum to the amount (bulk-book, one row per transaction) or
+        // include a non-bank_line anchor (a residual booking) are untouched.
+        const partialSplitIds: string[] = []
+        const candidates = junctionTxIds.filter((id) => (remainingByTx.get(id) ?? []).length > 0)
+        if (candidates.length > 0) {
+          const { data: txRows, error: txReadError } = await supabase
+            .from('transactions')
+            .select('id, amount, journal_entry_id')
+            .eq('company_id', companyId)
+            .in('id', candidates)
+          if (txReadError) {
+            log.error('failed to read split transactions after storno', txReadError, { entryId })
+          } else {
+            for (const tx of (txRows ?? []) as Array<{
+              id: string
+              amount: number | string | null
+              journal_entry_id: string | null
+            }>) {
+              if (tx.journal_entry_id) continue
+              const rows = remainingByTx.get(tx.id) ?? []
+              if (!rows.every((r) => r.role === 'bank_line')) continue
+              const anchored = rows.reduce((sum, r) => sum + r.allocated_amount, 0)
+              if (Math.abs(Math.round((anchored - Number(tx.amount ?? 0)) * 100) / 100) > 0.005) {
+                partialSplitIds.push(tx.id)
+              }
+            }
+          }
+        }
+        if (partialSplitIds.length > 0) {
+          const { error: partialDeleteError } = await supabase
+            .from('transaction_voucher_links')
+            .delete()
+            .eq('company_id', companyId)
+            .in('transaction_id', partialSplitIds)
+          if (partialDeleteError) {
+            log.error('failed to drop the surviving slices of a split transaction after storno', partialDeleteError, {
+              entryId,
+            })
+          }
+        }
         const stillAnchored = new Set(
-          ((remainingRows ?? []) as Array<{ transaction_id: string }>).map((r) => r.transaction_id),
+          [...remainingByTx.keys()].filter((id) => !partialSplitIds.includes(id)),
         )
         const releaseIds = junctionTxIds.filter((id) => !stillAnchored.has(id))
         if (releaseIds.length > 0) {

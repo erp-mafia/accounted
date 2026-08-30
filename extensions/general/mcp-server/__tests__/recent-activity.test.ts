@@ -54,6 +54,7 @@ function createRecordingSupabase(results: Record<string, TableResult> = {}) {
         return chain
       }
       chain.eq = passthrough
+      chain.in = passthrough
       chain.order = passthrough
       chain.limit = passthrough
       chain.then = (resolve: (v: unknown) => void) =>
@@ -127,6 +128,26 @@ describe('Accounted://recent-activity', () => {
     expect(result.limit).toBe(5)
     expect(result.journal_entries).toHaveLength(1)
     expect(result.invoices[0].total).toBe(1250)
+    expect(result.uncategorized_transaction_count).toBe(1)
+  })
+
+  it('does not count a pointer-null row anchored through transaction_voucher_links (bulk-book, 1:N split)', async () => {
+    const { supabase, selects } = createRecordingSupabase({
+      transactions: {
+        data: [
+          { id: 't-1', journal_entry_id: 'je-1' },
+          { id: 't-split', journal_entry_id: null },
+          { id: 't-open', journal_entry_id: null },
+        ],
+      },
+      transaction_voucher_links: { data: [{ transaction_id: 't-split' }] },
+    })
+
+    const result = (await recentActivityResource.read(ctx(supabase))) as {
+      uncategorized_transaction_count: number
+    }
+
+    expect(selects.transaction_voucher_links).toBe('transaction_id')
     expect(result.uncategorized_transaction_count).toBe(1)
   })
 
