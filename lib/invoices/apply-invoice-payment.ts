@@ -120,6 +120,44 @@ export function planInvoicePayment(
 /** BAS öres- och kronutjämning: the only account that may carry an absorbed residual. */
 const ORE_ROUNDING_ACCOUNT = '3740'
 
+/** BAS 1513, Kundfordringar delad faktura: Skatteverket's ROT/RUT share. */
+export const ROT_RUT_RECEIVABLE_ACCOUNT = '1513'
+
+/**
+ * Derives the customer-settlement amount from caller-supplied booking lines.
+ *
+ * `remaining_amount` on a ROT/RUT invoice is stored NET of the deduction
+ * (total - deduction_total): the customer owes only their share, and
+ * Skatteverket's share sits on 1513 until the payout-request flow clears it.
+ * The kontantmetoden payment entry, however, correctly books TWO debit legs
+ * (bank = customer share, 1513 = deduction), so a naive sum of all debits
+ * yields the gross total and every ROT/RUT cash invoice fails the
+ * overpayment guard by exactly the deduction.
+ *
+ * The 1513 exclusion is netted against 1513 credits (a debit/credit
+ * correction pair in one entry must not shrink the settlement) and capped at
+ * the invoice's own deduction, so on an invoice without a deduction the
+ * result is the plain debit sum and behavior is unchanged, including the
+ * rejection of a hand-added 1513 debit that overshoots the remaining.
+ *
+ * `deductionCapSek` must be in SEK (the lines' currency); the caller owns
+ * converting a foreign-currency invoice's deduction_total.
+ */
+export function deriveCustomerSettlementAmount(
+  lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>,
+  deductionCapSek: number,
+): number {
+  const totalDebit = lines.reduce((s, l) => s + l.debit_amount, 0)
+  if (deductionCapSek <= 0) return totalDebit
+  const net1513 = roundOre(
+    lines
+      .filter((l) => l.account_number === ROT_RUT_RECEIVABLE_ACCOUNT)
+      .reduce((s, l) => s + l.debit_amount - l.credit_amount, 0),
+  )
+  const excluded = Math.min(Math.max(net1513, 0), deductionCapSek)
+  return roundOre(totalDebit - excluded)
+}
+
 /**
  * `planInvoicePayment` for caller-supplied booking lines (the mark-paid
  * dialog and the v1 API), where the server does NOT build the verifikat.
