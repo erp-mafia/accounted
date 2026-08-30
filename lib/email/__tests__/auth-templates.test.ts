@@ -49,6 +49,18 @@ describe('buildAuthEmail', () => {
     expect(mail.text).toMatchSnapshot()
   })
 
+  it('tells the user both mails must be clicked for an email change', () => {
+    for (const actionType of ['email_change', 'email_change_current'] as const) {
+      const mail = buildAuthEmail({
+        actionType,
+        appName: 'Siffra',
+        actionUrl: URL_EXAMPLE,
+      })
+      expect(mail.text).toContain('två mail')
+      expect(mail.text).toContain('länken i båda')
+    }
+  })
+
   it('renders the reauthentication code without a link', () => {
     const mail = buildAuthEmail({
       actionType: 'reauthentication',
