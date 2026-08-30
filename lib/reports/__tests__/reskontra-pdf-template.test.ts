@@ -7,6 +7,7 @@ import {
   type ReskontraInvoiceRow,
 } from '../reskontra-pdf-template'
 import type { CompanySettings } from '@/types'
+import { pdfTextStrings } from '@/tests/pdf-text'
 
 /**
  * Flatten every string/number leaf of a react-pdf element tree in document
@@ -217,4 +218,21 @@ describe('ReskontraPDF unit disclosure', () => {
     expect(buffer.length).toBeGreaterThan(1000)
     // Real react-pdf layout plus font loading: slower than the 5s default.
   }, 30000)
+})
+
+describe('ReskontraPDF sign rendering (issue #1982)', () => {
+  it('prints a credit-note balance with an ASCII minus the bundled font can draw', async () => {
+    const buffer = await renderToBuffer(
+      build({
+        aging: [agingRow({ current: -500, total_outstanding: -500 })],
+        totals: agingRow({ name: 'Summa', current: -500, total_outstanding: -500 }),
+        invoices: [invoiceRow({ outstanding: -500, outstanding_sek: -500 })],
+        unpaidCount: 1,
+      })
+    )
+    const text = pdfTextStrings(buffer).join('\n')
+    expect(text).toContain('-500,00')
+    expect(text).not.toContain(String.fromCharCode(0x12))
+    expect(text).not.toContain('\u2212')
+  }, 30_000)
 })
