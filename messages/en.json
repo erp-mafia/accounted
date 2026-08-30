@@ -2373,6 +2373,20 @@
     "firstname_note": "The first-name placeholder uses the first word of the customer's name.",
     "toast_save_failed": "Could not save"
   },
+  "settings_reminder_texts": {
+    "heading": "Reminder texts",
+    "description": "The texts in the reminder emails, per reminder level. Edit freely: only your changes are saved.",
+    "reset_label": "Reset to standard",
+    "tab_level_1": "Reminder 1",
+    "tab_level_2": "Reminder 2",
+    "tab_level_3": "Final reminder",
+    "level_3_hint": "The final reminder is a debt collection warning: the last notice before the claim can be handed to collection.",
+    "subject_label": "Subject line",
+    "body_label": "Body text",
+    "placeholders_help": "Available placeholders (unknown ones are left as text):",
+    "amounts_note": "Amounts, late payment interest and the reminder fee are always calculated automatically and are not controlled by the texts.",
+    "toast_save_failed": "Could not save"
+  },
   "settings_invoice_email_recipients": {
     "heading": "Invoice email recipients",
     "description": "These recipients are added automatically to every invoice email. You can add more recipients when sending an individual invoice.",

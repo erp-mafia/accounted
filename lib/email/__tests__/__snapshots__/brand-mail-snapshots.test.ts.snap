@@ -235,12 +235,7 @@ exports[`reminder mail (template class: reminder) > unbranded: canonical action 
           Hej Erik,
         </p>
 
-        
-        <p style="margin: 0 0 15px 0;">
-          Vi vill påminna dig om att faktura F-1001 förföll till betalning den 2026-06-01.
-          Om du redan har betalat kan du bortse från denna påminnelse.
-        </p>
-        
+        <p style="margin: 0 0 15px 0;">Vi vill påminna dig om att faktura F-1001 förföll till betalning den 2026-06-01. Om du redan har betalat kan du bortse från denna påminnelse.</p>
       </div>
 
       <!-- Invoice Summary Box -->
