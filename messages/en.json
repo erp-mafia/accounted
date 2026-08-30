@@ -6927,7 +6927,7 @@
     "att_gora_empty_body": "No transactions to record and no documents to handle.",
     "att_gora_new_status": "Nothing here yet",
     "att_gora_no_bank_title": "All clear for now",
-    "att_gora_no_bank_body": "No bank is connected, so new transactions won't come in automatically.",
+    "att_gora_no_bank_body": "No bank is connected. Connect your bank to fetch new transactions automatically.",
     "att_gora_no_bank_action": "Connect bank",
     "att_gora_new_title": "Your books are empty so far",
     "att_gora_new_body": "The get-started steps above will fill them: your history, the bank and the receipts.",
