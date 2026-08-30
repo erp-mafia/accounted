@@ -3540,6 +3540,7 @@
     "payment_invoice": "Invoiced",
     "payment_other": "Other",
     "pages_partial_note": "Extracted from {analyzed} of {total} pages.",
+    "prominent_amounts_label": "Amounts",
     "heic_hint": "HEIC images cannot be AI-extracted yet. Upload the receipt as JPEG or PDF, or fill in the fields manually.",
     "skipped_hint": "AI extraction did not run for this document. You can link the document to a transaction or create a supplier invoice manually.",
     "retry_overwrite_confirm": "Re-running extraction overwrites the fields, including your own edits. Continue?",
