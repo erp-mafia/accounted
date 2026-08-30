@@ -242,7 +242,19 @@ function timeAgo(iso: string): string {
 }
 
 function pickAmount(item: InboxItem): number | null {
-  return item.extracted_data?.totals?.total ?? null
+  const total = item.extracted_data?.totals?.total
+  if (total != null) return total
+  // Non-invoice documents (bankintyg, avtal) have no total; when exactly one
+  // distinct amount was read off the document, that is the amount to show.
+  // Two or more stay ambiguous and render as no amount.
+  const distinct = [
+    ...new Set(
+      (item.extracted_data?.prominentAmounts ?? [])
+        .map((a) => a.amount)
+        .filter((a) => Number.isFinite(a) && a !== 0),
+    ),
+  ]
+  return distinct.length === 1 ? distinct[0] : null
 }
 
 function pickCurrency(item: InboxItem): string {
@@ -271,7 +283,8 @@ function hasAnyExtractedField(data: InvoiceExtractionResult | null): boolean {
     s?.name || s?.orgNumber || s?.vatNumber || s?.bankgiro || s?.plusgiro ||
     inv?.invoiceNumber || inv?.invoiceDate || inv?.dueDate || inv?.paymentReference ||
     t?.subtotal != null || t?.vatAmount != null || t?.total != null ||
-    (data.lineItems?.length ?? 0) > 0 || (data.vatBreakdown?.length ?? 0) > 0
+    (data.lineItems?.length ?? 0) > 0 || (data.vatBreakdown?.length ?? 0) > 0 ||
+    (data.prominentAmounts?.length ?? 0) > 0
   )
 }
 
@@ -2893,7 +2906,10 @@ function FieldsRail({
       {/* AI classification: what kind of document this is and how it was
           paid. Read-only context above the editable fields; absent for
           extractions from before the fields existed. */}
-      {(data?.documentKind || data?.payment?.method || data?.pages) && (
+      {(data?.documentKind ||
+        data?.payment?.method ||
+        data?.pages ||
+        (data?.totals?.total == null && (data?.prominentAmounts?.length ?? 0) > 0)) && (
         <div className="border-b px-4 py-3 text-xs space-y-1">
           {data?.documentKind && (
             <div className="flex gap-2">
@@ -2908,6 +2924,23 @@ function FieldsRail({
                 {t(`payment_${data.payment.method}`)}
                 {data.payment.cardLast4 ? ` •• ${data.payment.cardLast4}` : ''}
                 {data.purchaseTime ? ` · ${data.purchaseTime}` : ''}
+              </span>
+            </div>
+          )}
+          {/* Amounts read off a non-invoice document (bankintyg, avtal):
+              without this row the empty "Totalt" field reads as if extraction
+              missed them. */}
+          {data?.totals?.total == null && (data?.prominentAmounts?.length ?? 0) > 0 && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground w-14 shrink-0">{t('prominent_amounts_label')}</span>
+              <span className="tabular-nums">
+                {(data?.prominentAmounts ?? [])
+                  .map((a) =>
+                    a.label
+                      ? `${a.label}: ${formatCurrency(a.amount, data?.invoice?.currency ?? 'SEK')}`
+                      : formatCurrency(a.amount, data?.invoice?.currency ?? 'SEK'),
+                  )
+                  .join(' · ')}
               </span>
             </div>
           )}

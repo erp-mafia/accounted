@@ -4390,6 +4390,10 @@ export interface InvoiceExtractionResult {
     roundingAmount?: number | null
   }
   vatBreakdown: VatBreakdownItem[]
+  // Amounts visible on non-invoice documents (bankintyg, avtal, contracts)
+  // with no invoice-style total. Matching hint only, never booked. Optional:
+  // extractions from before the field existed lack it.
+  prominentAmounts?: ProminentAmount[]
   confidence: number
   suggestedTemplateId?: string
   // Set by the caller (not the model) when a long PDF was sliced before
@@ -4412,6 +4416,12 @@ export interface VatBreakdownItem {
   rate: number
   base: number
   amount: number
+}
+
+/** One amount printed on a non-invoice document, with the document's own label. */
+export interface ProminentAmount {
+  amount: number
+  label: string | null
 }
 
 // KPI Report

@@ -15,6 +15,7 @@ function extraction(partial: {
   total?: number | null
   vat?: number | null
   currency?: string
+  prominentAmounts?: { amount: number; label: string | null }[]
 }): InvoiceExtractionResult {
   return {
     supplier: {
@@ -28,6 +29,7 @@ function extraction(partial: {
     lineItems: [],
     totals: { subtotal: null, vatAmount: partial.vat ?? null, total: partial.total ?? null },
     vatBreakdown: [],
+    prominentAmounts: partial.prominentAmounts,
     confidence: 0.9,
   } as InvoiceExtractionResult
 }
@@ -137,6 +139,77 @@ describe('scoreUnderlagCandidates', () => {
       },
     ])
     expect(out[0].inbox_item_id).toBe('strong')
+  })
+
+  it('proposes a non-invoice document via its prominent amounts', () => {
+    // The Robotministeriet case: an SEB account agreement (documentKind
+    // "other") has no "Att betala" total, only "Anslutnings-/Engångspris
+    // 2 500". The bank charges AVGIFT -2500 the same day. Before the
+    // prominentAmounts fallback this document was structurally unmatchable.
+    const avgiftTx = {
+      ...tx,
+      description: 'AVGIFT',
+      merchant_name: null,
+      amount: -2500,
+      date: '2026-08-26',
+    }
+    const out = scoreUnderlagCandidates(avgiftTx, [
+      {
+        id: 'item-avtal',
+        document_id: 'doc-avtal',
+        extracted_data: extraction({
+          supplier: 'SEB',
+          date: '2026-08-26',
+          total: null,
+          prominentAmounts: [
+            { amount: 2500, label: 'Anslutnings-/Engångspris' },
+          ],
+        }),
+        channel_context: null,
+      },
+    ])
+    expect(out).toHaveLength(1)
+    expect(out[0].inbox_item_id).toBe('item-avtal')
+    expect(out[0].confidence).toBeGreaterThanOrEqual(CANDIDATE_MIN_CONFIDENCE)
+  })
+
+  it('does not let a prominent amount alone carry a dateless document over the floor', () => {
+    // Amount agreement without a date is weaker than a total + date pair; the
+    // candidate surface trades recall for precision, so this stays in the
+    // manual picker only.
+    const out = scoreUnderlagCandidates({ ...tx, amount: -25000 }, [
+      {
+        id: 'item-intyg',
+        document_id: 'doc-intyg',
+        extracted_data: extraction({
+          supplier: 'SEB',
+          date: null,
+          total: null,
+          prominentAmounts: [{ amount: 25000, label: 'Insatt belopp' }],
+        }),
+        channel_context: null,
+      },
+    ])
+    expect(out).toEqual([])
+  })
+
+  it('rejects a non-invoice document whose prominent amounts all disagree', () => {
+    // Same-day but wrong amount and no merchant signal: the fallback must not
+    // manufacture confidence out of the date alone.
+    const out = scoreUnderlagCandidates(tx, [
+      {
+        id: 'item-wrong',
+        document_id: 'doc-wrong',
+        extracted_data: extraction({
+          supplier: null,
+          date: '2026-05-12',
+          total: null,
+          prominentAmounts: [{ amount: 9999, label: 'Pris' }],
+        }),
+        channel_context: null,
+      },
+    ])
+    expect(out).toEqual([])
   })
 
   it('returns nothing for a transaction with no date or amount', () => {

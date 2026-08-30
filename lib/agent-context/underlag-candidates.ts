@@ -24,7 +24,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   CONVERTED_AMOUNT_TOLERANCE_PERCENT,
+  FALLBACK_AMOUNT_WEIGHT,
   amountVarianceForMatch,
+  bestProminentAmountVariance,
   calculateMatchConfidence,
   calculateMerchantSimilarity,
 } from '@/lib/documents/core-receipt-matcher'
@@ -103,6 +105,11 @@ function extractionSignals(extracted: InvoiceExtractionResult | null | undefined
     total: extracted?.totals?.total ?? null,
     vat: extracted?.totals?.vatAmount ?? null,
     currency: (extracted?.invoice?.currency || 'SEK').toUpperCase(),
+    // Non-invoice documents (bankintyg, avtal) carry no total but often show
+    // the money amount anyway; the extractor lists those here.
+    prominentAmounts: (extracted?.prominentAmounts ?? [])
+      .map((a) => a.amount)
+      .filter((a) => Number.isFinite(a) && a !== 0),
   }
 }
 
@@ -128,11 +135,11 @@ export function scoreUnderlagCandidates(
 
   for (const item of items) {
     const sig = extractionSignals(item.extracted_data)
-    // An extraction with neither a date nor a total carries no signal the
+    // An extraction with neither a date nor any amount carries no signal the
     // matcher can use; scoring it returns noise dressed as confidence.
-    if (!sig.date && sig.total == null) continue
+    if (!sig.date && sig.total == null && sig.prominentAmounts.length === 0) continue
 
-    const amountVariance = amountVarianceForMatch(
+    let amountVariance = amountVarianceForMatch(
       sig.total,
       sig.currency,
       // A SEK value only when someone resolved a rate for this receipt.
@@ -143,6 +150,21 @@ export function scoreUnderlagCandidates(
       txCurrency,
       txSek,
     )
+
+    // A document with no invoice-style total (bankintyg, avtal: documentKind
+    // "other") but visible amounts falls back to the closest prominent
+    // amount, at reduced weight: one of several printed figures agreeing is
+    // weaker evidence than the document's total agreeing.
+    const usedFallbackAmount = sig.total == null && amountVariance == null
+    if (usedFallbackAmount) {
+      amountVariance = bestProminentAmountVariance(
+        sig.prominentAmounts,
+        sig.currency,
+        tx.amount,
+        txCurrency,
+        txSek,
+      )
+    }
 
     // No comparable amount means no candidate. calculateMatchConfidence drops
     // the amount signal when it cannot normalise the currencies, which leaves
@@ -168,6 +190,7 @@ export function scoreUnderlagCandidates(
       similarity,
       undefined,
       converted ? CONVERTED_AMOUNT_TOLERANCE_PERCENT : undefined,
+      usedFallbackAmount ? FALLBACK_AMOUNT_WEIGHT : undefined,
     )
     if (confidence < CANDIDATE_MIN_CONFIDENCE) continue
 

@@ -17,7 +17,9 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { Loader2, Search } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import {
+  FALLBACK_AMOUNT_WEIGHT,
   amountVarianceForMatch,
+  bestProminentAmountVariance,
   calculateMatchConfidence,
   calculateMerchantSimilarity,
 } from '@/lib/documents/core-receipt-matcher'
@@ -132,6 +134,17 @@ export default function TransactionMatchPicker({
   const total = extractedData?.totals?.total ?? null
   const receiptCurrency = (extractedData?.invoice?.currency ?? 'SEK').toUpperCase()
   const supplier = extractedData?.supplier?.name ?? null
+  // Non-invoice documents (bankintyg, avtal) have no total but often show the
+  // money amount anyway; those feed a reduced-weight amount fallback below.
+  const prominentAmounts = useMemo(
+    () =>
+      total == null
+        ? (extractedData?.prominentAmounts ?? [])
+            .map((a) => a.amount)
+            .filter((a) => Number.isFinite(a) && a !== 0)
+        : [],
+    [extractedData, total],
+  )
 
   // SEK value of the underlag total. For a SEK underlag that's the total
   // itself; for a foreign one it needs the fetched FX rate.
@@ -254,7 +267,7 @@ export default function TransactionMatchPicker({
 
       // Currency-aware variance: null when uncomparable, which makes the
       // matcher drop the amount signal instead of matching 750 EUR to 750 SEK.
-      const amountVariance = amountVarianceForMatch(
+      let amountVariance = amountVarianceForMatch(
         total,
         receiptCurrency,
         receiptSek,
@@ -262,6 +275,19 @@ export default function TransactionMatchPicker({
         txCurrency,
         txSek,
       )
+
+      // No total (bankintyg, avtal): fall back to the closest prominent
+      // amount, scored at reduced weight below.
+      const usedFallbackAmount = total == null && prominentAmounts.length > 0
+      if (usedFallbackAmount) {
+        amountVariance = bestProminentAmountVariance(
+          prominentAmounts,
+          receiptCurrency,
+          tx.amount,
+          txCurrency,
+          txSek,
+        )
+      }
 
       const dateVariance = Math.abs(
         (new Date(tx.date).getTime() - invoiceDate.getTime()) / (1000 * 60 * 60 * 24),
@@ -273,6 +299,8 @@ export default function TransactionMatchPicker({
         amountVariance,
         similarity,
         MATCH_DATE_TOLERANCE_DAYS,
+        undefined,
+        usedFallbackAmount ? FALLBACK_AMOUNT_WEIGHT : undefined,
       )
 
       return {
@@ -289,7 +317,7 @@ export default function TransactionMatchPicker({
     })
     scored.sort((a, b) => b.confidence - a.confidence)
     return scored
-  }, [rawRows, invoiceDate, total, receiptCurrency, receiptSek, supplier])
+  }, [rawRows, invoiceDate, total, prominentAmounts, receiptCurrency, receiptSek, supplier])
 
   // Instant client-side narrowing while the debounced server query catches up.
   const filtered = useMemo(() => {
@@ -344,7 +372,7 @@ export default function TransactionMatchPicker({
 
         {/* Underlag reference: what we're matching against, so a currency or
             amount mismatch with a candidate is obvious at a glance. */}
-        {(total != null || supplier) && (
+        {(total != null || prominentAmounts.length > 0 || supplier) && (
           <div className="rounded-lg border bg-muted/30 px-3 py-2 text-xs flex items-center gap-x-3 gap-y-1 flex-wrap">
             <span className="text-muted-foreground shrink-0">Underlag</span>
             {supplier && <span className="font-medium truncate">{supplier}</span>}
@@ -357,6 +385,11 @@ export default function TransactionMatchPicker({
                     ≈ {formatCurrency(receiptSek, 'SEK')}
                   </span>
                 )}
+              </span>
+            )}
+            {total == null && prominentAmounts.length > 0 && (
+              <span className="tabular-nums font-medium shrink-0">
+                {prominentAmounts.map((a) => formatCurrency(a, receiptCurrency)).join(' · ')}
               </span>
             )}
             {hasInvoiceDate && rawInvoiceDate && (

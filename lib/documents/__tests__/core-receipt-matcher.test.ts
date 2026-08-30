@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import {
+  FALLBACK_AMOUNT_WEIGHT,
   levenshteinDistance,
   normalizeMerchantName,
   normalizeForMatch,
   calculateMerchantSimilarity,
   calculateMatchConfidence,
   amountVarianceForMatch,
+  bestProminentAmountVariance,
 } from '../core-receipt-matcher'
 
 describe('levenshteinDistance', () => {
@@ -160,6 +162,30 @@ describe('amountVarianceForMatch', () => {
 
   it('treats currency codes case-insensitively', () => {
     expect(amountVarianceForMatch(100, 'eur', null, -100, 'EUR', -1150)).toBe(0)
+  })
+})
+
+describe('bestProminentAmountVariance', () => {
+  it('picks the closest of several printed amounts', () => {
+    // An agreement listing both a monthly price and a one-off price: the
+    // one-off 2500 matches the -2500 AVGIFT charge exactly.
+    expect(bestProminentAmountVariance([49, 2500], 'SEK', -2500, 'SEK', -2500)).toBe(0)
+  })
+
+  it('returns null when nothing is comparable', () => {
+    expect(bestProminentAmountVariance([], 'SEK', -2500, 'SEK', -2500)).toBeNull()
+    // Cross-currency without a rate stays incomparable, like a total would.
+    expect(bestProminentAmountVariance([2500], 'EUR', -2500, 'SEK', -2500)).toBeNull()
+    // Zero amounts carry no signal (amountVarianceForMatch drops them).
+    expect(bestProminentAmountVariance([0], 'SEK', -2500, 'SEK', -2500)).toBeNull()
+  })
+
+  it('scores lower at the fallback weight than the same variance at full weight', () => {
+    // The reduced weight makes a prominent-amount agreement weaker evidence
+    // than a total agreeing, all other signals equal.
+    const asTotal = calculateMatchConfidence(60, 0, 0, 120)
+    const asFallback = calculateMatchConfidence(60, 0, 0, 120, undefined, FALLBACK_AMOUNT_WEIGHT)
+    expect(asFallback.confidence).toBeLessThan(asTotal.confidence)
   })
 })
 
