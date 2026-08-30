@@ -285,7 +285,7 @@ Partial update for invoices in draft status. Allowed fields: invoice_date, due_d
 
 **Pitfalls:**
 - Idempotency-Key is mandatory.
-- A 409 INVOICE_UPDATE_NOT_DRAFT means the invoice has been sent / paid / credited / cancelled. The error code name is shared with the DELETE handler.
+- A 409 INVOICE_UPDATE_NOT_DRAFT means the invoice has been sent / paid / credited / cancelled. The DELETE handler on this path uses its own code, INVOICE_DELETE_NOT_DRAFT.
 - items is a FULL REPLACE (no per-line merge): send the complete new line set, minimum one item. Omitting items keeps the current lines untouched. VAT rates are re-validated against the customer type and totals are recomputed server-side.
 - items are always built against the invoice's EXISTING customer: customer_id cannot change on PATCH.
 - default_dimensions replaces the entire bag (no per-key merge): read the current value first if you want to add a tag. Send {} to clear all tags. Codes are validated against the dimension registry at :send, not at PATCH time.
@@ -352,6 +352,57 @@ Example response `200`:
     "status": "draft",
     "due_date": "2026-07-15",
     "notes": "Förlängd förfallotid"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/invoices/{id}`
+
+**Delete a draft invoice (hard delete if unnumbered, makulering if numbered).**
+`scope:invoices:write · risk:medium · dry-run`
+
+Removes an invoice in draft status. An unnumbered draft (never finalized: no F-series number was consumed) is hard deleted and responds { deleted: true }; its line items cascade. A numbered draft is makulerad: the row and its number are retained, status flips to cancelled, and the response is { cancelled: true, invoice_number } so the F-series stays gap-free per ML 17 kap 24 and BFNAR 2013:2. Returns 409 INVOICE_DELETE_NOT_DRAFT for any non-draft status: sent / paid / credited invoices are immutable and must be reversed via a credit note. Requires Idempotency-Key; dry-runnable.
+
+**Use when:** You created a draft by mistake, or want to discard a draft instead of sending it. Check the response shape: deleted means the row is gone, cancelled means it survives as makulerad with its number.
+**Do not use for:** Withdrawing a sent / paid invoice (issue a credit note via POST /:id/credit). Editing a draft (use PATCH). Cancelling recurring schedules.
+
+**Pitfalls:**
+- Idempotency-Key is mandatory. A repeated DELETE with a fresh key returns 404 for a hard-deleted draft (the row is gone) and 409 INVOICE_DELETE_NOT_DRAFT for a makulerad one (status is now cancelled).
+- 409 INVOICE_DELETE_NOT_DRAFT means the invoice left draft status: it is immutable and can only be reversed via a credit note.
+- 409 INVOICE_CANCEL_RACE means the invoice was finalized or sent concurrently: re-read the invoice before retrying.
+- The hard-delete path emits an invoice.draft_deleted audit event; the makulering path leaves its trail in the invoice row itself.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: { deleted?: boolean, cancelled?: boolean, invoice_number?: string },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "cancelled": true,
+    "invoice_number": "2026-0042"
   },
   "meta": {
     "request_id": "req_…",
