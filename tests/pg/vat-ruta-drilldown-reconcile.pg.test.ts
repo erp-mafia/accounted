@@ -224,4 +224,30 @@ describe('VAT ruta drill-down reconciles with the declaration figure', () => {
     const lines = await drillDown(companyId, ['2641'])
     expect(lines.map((l) => l.description)).toContain('Ingående balans')
   }, 30_000)
+
+  it('grants EXECUTE to authenticated and service_role but not anon', async () => {
+    // 20260828172003 DROPped the 9-arg overload and CREATEd this 11-arg one
+    // without restating the REVOKE/GRANT from 20260721103000; DROP FUNCTION
+    // discards the ACL, so the new signature fell back to EXECUTE for PUBLIC
+    // (which includes anon). 20260829090500 restores least privilege. The
+    // overload count pins the other half of that migration: exactly one
+    // signature, so PostgREST never has to choose.
+    const { rows } = await getPool().query<{
+      anon_can: boolean
+      authenticated_can: boolean
+      service_role_can: boolean
+      overloads: string
+    }>(
+      `SELECT has_function_privilege('anon', 'public.get_vat_ruta_source_lines(uuid,date,date,text[],text[],text[],date,integer,uuid,uuid,integer)', 'EXECUTE') AS anon_can,
+              has_function_privilege('authenticated', 'public.get_vat_ruta_source_lines(uuid,date,date,text[],text[],text[],date,integer,uuid,uuid,integer)', 'EXECUTE') AS authenticated_can,
+              has_function_privilege('service_role', 'public.get_vat_ruta_source_lines(uuid,date,date,text[],text[],text[],date,integer,uuid,uuid,integer)', 'EXECUTE') AS service_role_can,
+              (SELECT count(*) FROM pg_proc p
+                 JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = 'public' AND p.proname = 'get_vat_ruta_source_lines')::text AS overloads`,
+    )
+    expect(rows[0]!.anon_can).toBe(false)
+    expect(rows[0]!.authenticated_can).toBe(true)
+    expect(rows[0]!.service_role_can).toBe(true)
+    expect(rows[0]!.overloads).toBe('1')
+  }, 30_000)
 })
