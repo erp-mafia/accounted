@@ -52,7 +52,9 @@
 #                            set. Stopping the app for the window makes the
 #                            set consistent; recommended for the yearly
 #                            archive run, optional for nightly runs where the
-#                            next night's set covers the gap.
+#                            next night's set covers the gap. Set both or
+#                            neither: one without the other is refused
+#                            before anything runs.
 #
 # Prints a short progress log on stdout; exit status is non-zero on any
 # failure, which is what a cron wrapper should alert on.
@@ -66,6 +68,19 @@ umask 077
 : "${BACKUP_S3_BUCKET:?BACKUP_S3_BUCKET is required}"
 : "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required}"
 : "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required}"
+
+# The hooks are a pair. A quiesce command without its resume command would
+# leave the operator's app stopped after every run (and a resume command
+# without a quiesce command would start containers nobody stopped), so refuse
+# before anything else happens.
+if [ -n "${BACKUP_QUIESCE_CMD:-}" ] && [ -z "${BACKUP_RESUME_CMD:-}" ]; then
+  echo "backup: BACKUP_QUIESCE_CMD is set but BACKUP_RESUME_CMD is not; set both or neither" >&2
+  exit 2
+fi
+if [ -n "${BACKUP_RESUME_CMD:-}" ] && [ -z "${BACKUP_QUIESCE_CMD:-}" ]; then
+  echo "backup: BACKUP_RESUME_CMD is set but BACKUP_QUIESCE_CMD is not; set both or neither" >&2
+  exit 2
+fi
 
 export AWS_DEFAULT_REGION="${BACKUP_S3_REGION:-us-east-1}"
 PREFIX="${BACKUP_S3_PREFIX:-accounted}"
@@ -88,9 +103,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORK="${BACKUP_WORKDIR:-$(mktemp -d "${TMPDIR:-/tmp}/accounted-backup.XXXXXX")}"
 mkdir -p "$WORK"
 chmod 700 "$WORK"
-QUIESCED=0
+# Flipped to 1 BEFORE the quiesce hook runs, not after it succeeds: a hook
+# that stops one container and then fails ends the script (set -e), and the
+# EXIT trap must still run the resume hook, otherwise a failed backup leaves
+# the app stopped.
+QUIESCE_ATTEMPTED=0
 cleanup() {
-  if [ "$QUIESCED" = 1 ] && [ -n "${BACKUP_RESUME_CMD:-}" ]; then
+  if [ "$QUIESCE_ATTEMPTED" = 1 ] && [ -n "${BACKUP_RESUME_CMD:-}" ]; then
     bash -c "$BACKUP_RESUME_CMD" || echo "backup: BACKUP_RESUME_CMD failed; check that the app is running" >&2
   fi
   [ -z "${BACKUP_WORKDIR:-}" ] && rm -rf "$WORK"
@@ -114,8 +133,8 @@ upload() {
 echo "backup: starting ${NAME}"
 
 if [ -n "${BACKUP_QUIESCE_CMD:-}" ]; then
+  QUIESCE_ATTEMPTED=1
   bash -c "$BACKUP_QUIESCE_CMD"
-  QUIESCED=1
   echo "backup: application quiesced for a consistent set"
 fi
 
@@ -136,7 +155,8 @@ pg_dump --format=custom --no-owner --file "$DB_FILE" "$BACKUP_DATABASE_URL"
 echo "backup: database dump $(du -h "$DB_FILE" | cut -f1)"
 
 # 1b. ACL manifest: what anon/authenticated/service_role may do with every
-#     function and relation in public (scripts/self-host/acl-manifest.sql).
+#     function, relation and sequence in public
+#     (scripts/self-host/acl-manifest.sql).
 #     restore.sh compares the restored database against this file.
 ACL_FILE="${WORK}/${NAME}.acl.txt"
 psql -X -A -t -q -v ON_ERROR_STOP=1 -f "${SCRIPT_DIR}/acl-manifest.sql" "$BACKUP_DATABASE_URL" > "$ACL_FILE"

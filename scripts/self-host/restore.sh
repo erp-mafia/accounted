@@ -227,7 +227,7 @@ SQL
     psql -X -A -t -q -v ON_ERROR_STOP=1 -f "${SCRIPT_DIR}/acl-manifest.sql" "$RESTORE_DATABASE_URL" > "$ACL_NOW"
     if ! diff -u "${WORK}/${NAME}.acl.txt" "$ACL_NOW" > "${WORK}/acl.diff"; then
       echo "restore: ACL MISMATCH between the source manifest (-) and the restored database (+):" >&2
-      grep -E "^[-+](function|relation) " "${WORK}/acl.diff" | head -60 >&2
+      grep -E "^[-+](function|relation|sequence) " "${WORK}/acl.diff" | head -60 >&2
       echo "restore: stopping before storage. The restored database does not grant the PostgREST roles what the source did; see the lines above." >&2
       exit 1
     fi

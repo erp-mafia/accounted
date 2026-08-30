@@ -1,6 +1,6 @@
--- ACL manifest of the application schema: one line per function and relation
--- in `public`, stating what each PostgREST role (anon, authenticated,
--- service_role) may do with it. backup.sh writes this next to the dump;
+-- ACL manifest of the application schema: one line per function, relation
+-- and sequence in `public`, stating what each PostgREST role (anon,
+-- authenticated, service_role) may do with it. backup.sh writes this next to the dump;
 -- restore.sh runs it again after pg_restore and diffs the two. Any difference
 -- means the restored database exposes an object differently than the source
 -- did, which is exactly the failure a restore drill must surface (the
@@ -41,5 +41,27 @@ select line from (
   from pg_class c
   where c.relnamespace = 'public'::regnamespace
     and c.relkind in ('r', 'p', 'v', 'm')
+  union all
+  -- Sequences carry their own privilege set (has_table_privilege does not
+  -- see them), and the Supabase defaults grant them to every PostgREST role:
+  -- a restore that changes them (nextval on an id sequence for anon, say)
+  -- must fail the diff like any other object. Three digits per role:
+  -- USAGE SELECT UPDATE.
+  select 'sequence ' || c.oid::regclass::text
+    || ' anon='
+    || has_sequence_privilege('anon', c.oid, 'USAGE')::int
+    || has_sequence_privilege('anon', c.oid, 'SELECT')::int
+    || has_sequence_privilege('anon', c.oid, 'UPDATE')::int
+    || ' authenticated='
+    || has_sequence_privilege('authenticated', c.oid, 'USAGE')::int
+    || has_sequence_privilege('authenticated', c.oid, 'SELECT')::int
+    || has_sequence_privilege('authenticated', c.oid, 'UPDATE')::int
+    || ' service_role='
+    || has_sequence_privilege('service_role', c.oid, 'USAGE')::int
+    || has_sequence_privilege('service_role', c.oid, 'SELECT')::int
+    || has_sequence_privilege('service_role', c.oid, 'UPDATE')::int
+  from pg_class c
+  where c.relnamespace = 'public'::regnamespace
+    and c.relkind = 'S'
 ) t
 order by line collate "C";
