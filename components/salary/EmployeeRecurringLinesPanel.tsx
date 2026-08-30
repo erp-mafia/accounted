@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -64,6 +64,9 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
   const [loading, setLoading] = useState(true)
   const [adding, setAdding] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  // Monotonic request id: a reload issued after a create/delete must not be
+  // overwritten by an earlier, slower in-flight load resolving late.
+  const loadSeq = useRef(0)
 
   const [type, setType] = useState<RecurringLineType>('gross_deduction_other')
   const [description, setDescription] = useState('')
@@ -74,13 +77,20 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
   const isDeduction = type !== 'other'
 
   async function load() {
+    const seq = ++loadSeq.current
     setLoading(true)
-    const res = await fetch(`/api/salary/employees/${employeeId}/recurring-lines`)
-    if (res.ok) {
-      const { data } = await res.json()
-      setLines(data || [])
+    try {
+      const res = await fetch(`/api/salary/employees/${employeeId}/recurring-lines`)
+      if (res.ok) {
+        const { data } = await res.json()
+        if (seq === loadSeq.current) setLines(data || [])
+      }
+    } catch {
+      // Network failure: keep whatever is shown; the empty/stale list plus
+      // the still-enabled actions let the user retry.
+    } finally {
+      if (seq === loadSeq.current) setLoading(false)
     }
-    setLoading(false)
   }
 
   useEffect(() => {
@@ -99,44 +109,53 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
 
   async function handleAdd() {
     setSubmitting(true)
-    // The field takes a positive number; deductions are stored negative so the
-    // payslip math reads the sign from the row.
-    const magnitude = Math.abs(parseFloat(amount) || 0)
-    const body: Record<string, unknown> = {
-      item_type: type,
-      description: description || LINE_LABELS[type],
-      amount: isDeduction ? -magnitude : magnitude,
-      valid_from: validFrom,
-    }
-    if (validTo) body.valid_to = validTo
+    try {
+      // The field takes a positive number; deductions are stored negative so
+      // the payslip math reads the sign from the row.
+      const magnitude = Math.abs(parseFloat(amount) || 0)
+      const body: Record<string, unknown> = {
+        item_type: type,
+        description: description || LINE_LABELS[type],
+        amount: isDeduction ? -magnitude : magnitude,
+        valid_from: validFrom,
+      }
+      if (validTo) body.valid_to = validTo
 
-    const res = await fetch(`/api/salary/employees/${employeeId}/recurring-lines`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-
-    if (res.ok) {
-      toast({ title: t('recurring_added') })
-      reset()
-      await load()
-    } else {
-      const result = await res.json()
-      toast({
-        title: t('recurring_save_failed'),
-        description: getErrorMessage(result, { statusCode: res.status }),
-        variant: 'destructive',
+      const res = await fetch(`/api/salary/employees/${employeeId}/recurring-lines`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
       })
+
+      if (res.ok) {
+        toast({ title: t('recurring_added') })
+        reset()
+        await load()
+      } else {
+        const result = await res.json()
+        toast({
+          title: t('recurring_save_failed'),
+          description: getErrorMessage(result, { statusCode: res.status }),
+          variant: 'destructive',
+        })
+      }
+    } catch {
+      toast({ title: t('recurring_save_failed'), variant: 'destructive' })
+    } finally {
+      setSubmitting(false)
     }
-    setSubmitting(false)
   }
 
   async function handleDelete(id: string) {
-    const res = await fetch(`/api/salary/employees/${employeeId}/recurring-lines/${id}`, { method: 'DELETE' })
-    if (res.ok) {
-      toast({ title: t('recurring_removed') })
-      await load()
-    } else {
+    try {
+      const res = await fetch(`/api/salary/employees/${employeeId}/recurring-lines/${id}`, { method: 'DELETE' })
+      if (res.ok) {
+        toast({ title: t('recurring_removed') })
+        await load()
+      } else {
+        toast({ title: t('recurring_remove_failed'), variant: 'destructive' })
+      }
+    } catch {
       toast({ title: t('recurring_remove_failed'), variant: 'destructive' })
     }
   }
@@ -158,11 +177,14 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
           <Skeleton className="h-4 w-full" />
           <Skeleton className="h-4 w-2/3" />
         </div>
-      ) : lines.length === 0 ? (
+      ) : lines.filter((l) => l.is_active).length === 0 ? (
         <p className="text-sm text-muted-foreground">{t('recurring_empty')}</p>
       ) : (
         <ul className="divide-y divide-border text-sm">
-          {lines.map((l) => {
+          {/* Deactivated lines are hidden: "Ta bort" soft-deactivates a line
+              that has already been derived into a run, and showing it again
+              would read as the delete having failed. */}
+          {lines.filter((l) => l.is_active).map((l) => {
             const typeLabel = t(`recurring_type_${l.item_type}`)
             // The description defaults to the Swedish type label when left
             // empty on creation; repeating it next to the type says nothing.

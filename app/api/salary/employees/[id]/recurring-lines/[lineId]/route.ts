@@ -117,6 +117,35 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string; lineId: s
   async (_request, { supabase, companyId }, { params }) => {
     const { id, lineId } = await params
 
+    // A line that has already been derived into a run is deactivated, not
+    // deleted: the FK is ON DELETE SET NULL so booked history survives a
+    // delete, but a nulled back-link would make a DRAFT run's derived row
+    // look manual, and the next recalculation would keep it forever instead
+    // of removing it. Deactivating keeps the provenance link intact; the
+    // recalculation then drops the draft rows and never re-derives.
+    const { data: derivedRef, error: refError } = await supabase
+      .from('salary_line_items')
+      .select('id')
+      .eq('source_recurring_line_id', lineId)
+      .limit(1)
+      .maybeSingle()
+    if (refError) {
+      return NextResponse.json({ error: getUserErrorMessage(refError) }, { status: 500 })
+    }
+
+    if (derivedRef) {
+      const { error } = await supabase
+        .from('employee_recurring_lines')
+        .update({ is_active: false })
+        .eq('id', lineId)
+        .eq('employee_id', id)
+        .eq('company_id', companyId)
+
+      if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
+
+      return NextResponse.json({ data: { id: lineId, deleted: false, deactivated: true } })
+    }
+
     const { error } = await supabase
       .from('employee_recurring_lines')
       .delete()

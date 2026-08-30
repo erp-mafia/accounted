@@ -708,7 +708,22 @@ export async function runSalaryCalculation(
       isGrossDeduction: false,
       isNetDeduction: false,
     }))
-    const lineItems = [...manualLineItems, ...derivedLineItems, ...derivedBenefitLineItems, ...derivedPremiumLineItems]
+    const derivedRecurringLineItems = derivedRecurringRows.map((row) => ({
+      itemType: row.item_type as SalaryLineItemType,
+      amount: row.amount,
+      isTaxable: row.is_taxable,
+      isAvgiftBasis: row.is_avgift_basis,
+      isVacationBasis: row.is_vacation_basis,
+      isGrossDeduction: row.is_gross_deduction,
+      isNetDeduction: row.is_net_deduction,
+    }))
+    const lineItems = [
+      ...manualLineItems,
+      ...derivedLineItems,
+      ...derivedBenefitLineItems,
+      ...derivedPremiumLineItems,
+      ...derivedRecurringLineItems,
+    ]
 
     // 8f. Run the engine for this employee.
     const result = calculateSalary(

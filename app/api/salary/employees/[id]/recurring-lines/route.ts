@@ -34,13 +34,17 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (!validation.success) return validation.response
     const body = validation.data
 
-    // Confirm employee belongs to the company
-    const { data: emp } = await supabase
+    // Confirm employee belongs to the company. maybeSingle separates the two
+    // empty outcomes: a lookup failure is a 500, only zero rows is a 404.
+    const { data: emp, error: empError } = await supabase
       .from('employees')
       .select('id')
       .eq('id', id)
       .eq('company_id', companyId)
-      .single()
+      .maybeSingle()
+    if (empError) {
+      return NextResponse.json({ error: getUserErrorMessage(empError) }, { status: 500 })
+    }
     if (!emp) return NextResponse.json({ error: 'Anställd hittades inte' }, { status: 404 })
 
     const { data, error } = await supabase

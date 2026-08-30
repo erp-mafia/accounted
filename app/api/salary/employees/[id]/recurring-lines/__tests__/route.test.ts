@@ -84,10 +84,17 @@ describe('POST /api/salary/employees/[id]/recurring-lines', () => {
   })
 
   it('returns 404 when the employee is not in the company', async () => {
-    enqueue({ data: null }) // employee ownership check → not found
+    enqueue({ data: null }) // employee ownership check → zero rows, no error
 
     const response = await POST(post(validLine), params)
     expect(response.status).toBe(404)
+  })
+
+  it('reports an employee-lookup failure as 500, not 404', async () => {
+    enqueue({ data: null, error: { code: '08006', message: 'connection failure' } })
+
+    const response = await POST(post(validLine), params)
+    expect(response.status).toBe(500)
   })
 
   // Amount sign: mirrors the employee_recurring_lines_amount_sign CHECK.
