@@ -2,13 +2,21 @@ import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { NextResponse } from 'next/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { z } from 'zod'
-import { uploadDocument } from '@/lib/core/documents/document-service'
+import {
+  uploadDocument,
+  createPendingDocumentUpload,
+  completePendingDocumentUpload,
+} from '@/lib/core/documents/document-service'
 import { createServiceClient } from '@/lib/supabase/server'
+import { validateBody } from '@/lib/api/validate'
+import { hasErrorEntry } from '@/lib/errors/structured-errors'
+import { dbError } from '@/lib/errors/db-error'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import { extractInvoiceFields, ExtractionSchema, emptyResult } from './lib/extract-invoice-fields'
 import { mirrorExtractionToDocument } from './lib/mirror-extraction'
 import {
   uploadAndExtract,
+  processArchivedDocument,
   sanitiseFilename,
   sanitiseMime,
   isSandboxCompany,
@@ -50,7 +58,7 @@ import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-sugges
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import {
   resolveSupplierInvoiceExchangeRate,
   supplierInvoiceSekAmounts,
@@ -148,6 +156,100 @@ const UpdateExtractedDataSchema = z.object({
 const ClaimDomainSchema = z.object({
   domain: z.string().trim().min(1).max(255),
 })
+
+// Direct-to-storage upload (signed URL, see the /upload/create route).
+// size_bytes is the browser's own report: the server re-measures the object
+// on completion, so this only refuses the obviously oversized before a URL
+// is handed out. file_name must be sent identically to both steps: it is
+// part of the reserved storage key.
+const CreateSignedUploadSchema = z.object({
+  file_name: z.string().trim().min(1).max(255),
+  mime_type: z.string().trim().min(1).max(120),
+  size_bytes: z.number().int().min(1),
+})
+
+const CompleteSignedUploadSchema = z.object({
+  upload_id: z.string().uuid(),
+  file_name: z.string().trim().min(1).max(255),
+  mime_type: z.string().trim().min(1).max(120),
+  matched_transaction_id: z.string().uuid().nullable().optional(),
+  skip_extraction: z.boolean().optional(),
+})
+
+/**
+ * The inbox item already filed for an archived document, in the /upload
+ * response shape. Lets /upload/complete be retried after a lost response:
+ * completePendingDocumentUpload converges on the same document row, and
+ * this keeps the pipeline from filing a second item for it.
+ */
+async function findInboxItemForDocument(
+  supabase: import('@supabase/supabase-js').SupabaseClient,
+  companyId: string,
+  documentId: string,
+) {
+  const { data, error } = await supabase
+    .from('invoice_inbox_items')
+    .select('id, status, extracted_data, matched_supplier_id, matched_transaction_id, extraction_skipped')
+    .eq('company_id', companyId)
+    .eq('document_id', documentId)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  if (error) throw dbError(error, 'Completed-upload lookup failed')
+  if (!data) return null
+  return {
+    document_id: documentId,
+    inbox_item_id: data.id as string,
+    status: data.status as string,
+    extracted_data: data.extracted_data,
+    matched_supplier_id: data.matched_supplier_id as string | null,
+    matched_transaction_id: data.matched_transaction_id as string | null,
+    extraction_skipped: data.extraction_skipped === true,
+    skip_reason: null,
+    page_count: null,
+    already_completed: true as const,
+  }
+}
+
+/**
+ * Map a failure in the signed-upload steps to the error envelope. Coded
+ * failures get their own status and copy: a viewer-role member's 42501 on
+ * the document insert (the storage policy admits the bytes on membership
+ * alone), an expired or never-written reservation, and the document
+ * service's content verdicts (empty object, over the cap, bytes that are
+ * not the declared type; that last one carries its authored Swedish
+ * sentence as `messageSv`). Everything else lands on INBOX_UPLOAD_FAILED
+ * with the registry copy: the raw message goes to the log only.
+ */
+function signedUploadFailureResponse(
+  error: unknown,
+  ctx: ExtensionContext,
+  step: 'upload/create' | 'upload/complete',
+): NextResponse {
+  const reason = error instanceof Error ? error.message : String(error)
+  ctx.log.error(`[invoice-inbox/${step}] Failed`, error)
+  const coded = (typeof error === 'object' && error !== null ? error : {}) as {
+    code?: unknown
+    messageSv?: unknown
+  }
+  const code = typeof coded.code === 'string' ? coded.code : null
+  if (code === '42501') {
+    return errorResponseFromCode('INBOX_UPLOAD_NOT_PERMITTED', ctx.log, {
+      requestId: ctx.requestId,
+      reason,
+    })
+  }
+  if (code && hasErrorEntry(code)) {
+    return errorResponseFromCode(code, ctx.log, {
+      requestId: ctx.requestId,
+      reason,
+      ...(typeof coded.messageSv === 'string' && coded.messageSv.trim()
+        ? { messageSv: coded.messageSv }
+        : {}),
+    })
+  }
+  return errorResponseFromCode('INBOX_UPLOAD_FAILED', ctx.log, { requestId: ctx.requestId, reason })
+}
 
 // Custom inbound domains are fully built but deliberately not exposed,
 // product decision 2026-07-02: the default is the Fortnox-style shared
@@ -302,6 +404,174 @@ export const invoiceInboxExtension: Extension = {
             },
             { status: 500 }
           )
+        }
+      },
+    },
+
+    // ── Direct-to-storage upload (signed URL, two steps) ────
+    // A hosted function body is capped at 4.5 MB by the platform, before the
+    // route runs, so a scanned PDF above that can never reach /upload
+    // (issue #1551). The browser instead asks for a short-lived signed URL
+    // here, PUTs the bytes straight to Storage, and hands the reservation to
+    // /upload/complete, which reads the object back out of Storage, hashes
+    // and archives it: the integrity chain stays server-computed. Two path
+    // segments so the dispatcher's segment-count match never confuses these
+    // with /upload. Rate-limited on create only: complete cannot mint
+    // anything the create step did not already pay for.
+    {
+      method: 'POST',
+      path: '/upload/create',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+        const limit = await checkInboxUploadRateLimit(ctx.supabase, ctx.companyId)
+        if (!limit.ok) {
+          return NextResponse.json(
+            {
+              error: {
+                code: 'RATE_LIMITED',
+                message:
+                  limit.scope === 'minute'
+                    ? 'För många uppladdningar på kort tid. Försök igen om en stund.'
+                    : 'Dagsgränsen för uppladdningar är nådd. Försök igen imorgon.',
+                message_en:
+                  limit.scope === 'minute'
+                    ? 'Too many uploads in a short time. Try again in a moment.'
+                    : 'The daily upload limit has been reached. Try again tomorrow.',
+              },
+              retry_after: limit.retryAfterSec,
+            },
+            { status: 429, headers: { 'Retry-After': String(limit.retryAfterSec ?? 60) } },
+          )
+        }
+
+        const parsed = await validateBody(request, CreateSignedUploadSchema)
+        if (!parsed.success) return parsed.response
+        const { file_name: fileName, mime_type: mimeType, size_bytes: sizeBytes } = parsed.data
+
+        if (!UPLOAD_ALLOWED_MIME_TYPES.has(mimeType)) {
+          return errorResponseFromCode('INBOX_UPLOAD_UNSUPPORTED_TYPE', ctx.log, {
+            requestId: ctx.requestId,
+            messageSv: `Filtypen stöds inte: ${mimeType}. Tillåtna format: PDF, JPEG, PNG, HEIC och WebP.`,
+            messageEn: `Unsupported file type: ${mimeType}. Allowed: PDF, JPEG, PNG, HEIC, WebP.`,
+          })
+        }
+        if (sizeBytes > MAX_FILE_SIZE) {
+          return errorResponseFromCode('INBOX_UPLOAD_TOO_LARGE', ctx.log, {
+            requestId: ctx.requestId,
+            messageSv: `Filen är för stor. Maxstorlek är ${MAX_FILE_SIZE / 1024 / 1024} MB.`,
+            messageEn: `File exceeds the ${MAX_FILE_SIZE / 1024 / 1024} MB size limit.`,
+          })
+        }
+
+        try {
+          const uploadId = crypto.randomUUID()
+          const reservation = await createPendingDocumentUpload(
+            ctx.supabase,
+            ctx.companyId,
+            ctx.userId,
+            uploadId,
+            fileName,
+          )
+          // The RAW Storage URL, deliberately not the same-origin proxy the
+          // MCP tools hand out (toSameOriginStorageUrl): that proxy buffers
+          // the PUT body inside a function and so sits under the very
+          // ceiling this route exists to get around. CSP connect-src
+          // already allows the Storage host.
+          return NextResponse.json({
+            data: {
+              upload_id: reservation.uploadId,
+              upload_url: reservation.signedUrl,
+              expires_at: reservation.expiresAt,
+            },
+          })
+        } catch (error) {
+          return signedUploadFailureResponse(error, ctx, 'upload/create')
+        }
+      },
+    },
+
+    {
+      method: 'POST',
+      path: '/upload/complete',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+        const parsed = await validateBody(request, CompleteSignedUploadSchema)
+        if (!parsed.success) return parsed.response
+        const { upload_id: uploadId, file_name: fileName, mime_type: mimeType } = parsed.data
+        const matchedTransactionId = parsed.data.matched_transaction_id ?? null
+        const skipExtraction = parsed.data.skip_extraction === true
+
+        // The declared type drives the magic-byte check on completion, so
+        // it is gated exactly like the multipart route's file.type.
+        if (!UPLOAD_ALLOWED_MIME_TYPES.has(mimeType)) {
+          return errorResponseFromCode('INBOX_UPLOAD_UNSUPPORTED_TYPE', ctx.log, {
+            requestId: ctx.requestId,
+            messageSv: `Filtypen stöds inte: ${mimeType}. Tillåtna format: PDF, JPEG, PNG, HEIC och WebP.`,
+            messageEn: `Unsupported file type: ${mimeType}. Allowed: PDF, JPEG, PNG, HEIC, WebP.`,
+          })
+        }
+
+        // Same ownership check as /upload: fail fast with a clear code
+        // rather than letting RLS reject the insert after extraction.
+        if (matchedTransactionId) {
+          const { data: tx, error: txErr } = await ctx.supabase
+            .from('transactions')
+            .select('id')
+            .eq('id', matchedTransactionId)
+            .eq('company_id', ctx.companyId)
+            .maybeSingle()
+          if (txErr) {
+            return errorResponse(txErr, ctx.log, { requestId: ctx.requestId })
+          }
+          if (!tx) {
+            return errorResponseFromCode('INBOX_UPLOAD_TX_NOT_IN_COMPANY', ctx.log, {
+              requestId: ctx.requestId,
+            })
+          }
+        }
+
+        try {
+          // Idempotent: a retry after a lost response (tab reloaded, network
+          // dropped) must return the item that already exists, not file a
+          // second one. The document id IS the upload id.
+          const existing = await findInboxItemForDocument(ctx.supabase, ctx.companyId, uploadId)
+          if (existing) return NextResponse.json({ data: existing })
+
+          const completed = await completePendingDocumentUpload(
+            ctx.supabase,
+            ctx.companyId,
+            ctx.userId,
+            uploadId,
+            fileName,
+            mimeType,
+            undefined,
+            {
+              extractionOwner: 'invoice-inbox',
+              uploadSource: 'file_upload',
+              // Same content dedupe the multipart route gets from
+              // uploadDocument: the same receipt uploaded twice must not
+              // become a second archived document.
+              dedupeByContent: true,
+            },
+          )
+          // From here on this is the multipart route, byte for byte: same
+          // staged extraction, same inbox row, same response shape.
+          const result = await processArchivedDocument(
+            ctx.supabase,
+            ctx.userId,
+            ctx.companyId,
+            completed.document,
+            { name: fileName, buffer: completed.buffer, type: mimeType },
+            'upload',
+            undefined,
+            matchedTransactionId,
+            { skipExtraction, deferExtraction: true },
+          )
+          return NextResponse.json({ data: result })
+        } catch (error) {
+          return signedUploadFailureResponse(error, ctx, 'upload/complete')
         }
       },
     },
