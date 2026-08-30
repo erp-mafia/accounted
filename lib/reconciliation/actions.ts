@@ -8,7 +8,12 @@ import {
   SkattekontoLinkError,
   unlinkSkattekontoRow,
 } from '@/lib/skatteverket/skattekonto-link'
-import { manualLink, unlinkReconciliation } from './bank-reconciliation'
+import {
+  fetchJunctionLinkedTxIds,
+  linkTransactionToVouchers,
+  manualLink,
+  unlinkReconciliation,
+} from './bank-reconciliation'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
 import { parseAccountKey } from './schemas'
 
@@ -27,6 +32,13 @@ export interface ReconciliationPair {
   /** Outside rows: transaction ids (bank) or skattekonto_transaction ids. */
   external_ids: string[]
   journal_entry_ids: string[]
+  /**
+   * Bank only, for the 1:N shape (one transaction over several verifikat):
+   * the signed slice per verifikat, in the transaction's sign convention.
+   * Omitted: each slice defaults to the voucher's net line on the account.
+   * Either way the slices must sum to the transaction amount.
+   */
+  allocations?: Array<{ journal_entry_id: string; amount: number }>
 }
 
 export type PairSkipCode =
@@ -44,6 +56,8 @@ export interface AppliedLink {
   external_id: string
   journal_entry_id: string
   via?: 'line' | 'entry_total'
+  /** Present on the links of a 1:N split: the slice of the row this verifikat settles. */
+  allocated_amount?: number
 }
 
 export interface SkippedPair {
@@ -118,9 +132,12 @@ async function proposalsAsPairs(
 /**
  * Link pairs on one account. A pair is one OR MANY outside rows against
  * exactly one verifikat (bank: independent links per transaction; skattekonto:
- * all-or-nothing with the sum settling the verifikat). One row against many
- * verifikat waits for the residual link table and is reported as
- * UNSUPPORTED_PAIR_SHAPE, never silently reduced. Dry run validates shapes and resolves proposals without writing.
+ * all-or-nothing with the sum settling the verifikat), or, on a bank account,
+ * ONE transaction against SEVERAL verifikat (1:N, issue #1553): all-or-nothing
+ * with the slices summing to the transaction. Any other shape is reported as
+ * UNSUPPORTED_PAIR_SHAPE, never silently reduced. Dry run validates shapes and
+ * resolves proposals without writing; a 1:N dry run also resolves the slices
+ * so a reviewer sees exactly what would be linked.
  * Partial success is first-class: `applied` and `skipped` together cover
  * every considered pair.
  */
@@ -160,16 +177,94 @@ export async function matchPairs(
     })
   }
 
+  // Resolved once, lazily: only bank pairs need the ledger account.
+  let ledgerAccount: string | null = null
+  const resolveLedgerAccount = async (): Promise<string> => {
+    if (ledgerAccount) return ledgerAccount
+    if (parsed.kind !== 'bank') return '1930'
+    const { data: account } = await supabase
+      .from('cash_accounts')
+      .select('ledger_account')
+      .eq('company_id', companyId)
+      .eq('id', parsed.cashAccountId)
+      .maybeSingle<{ ledger_account: string }>()
+    ledgerAccount = account?.ledger_account ?? '1930'
+    return ledgerAccount
+  }
+
   for (const pair of pairs) {
-    // N outside rows may settle ONE verifikat (the worksheet selection); the
-    // reverse shape (one row over several verifikat) waits for the residual
-    // link table and is refused loudly, never silently reduced.
+    // N outside rows may settle ONE verifikat (the worksheet selection). ONE
+    // bank transaction may settle SEVERAL verifikat (the split, #1553). A
+    // skattekonto row never splits (Skatteverket posts each event as its own
+    // row), and N:M is refused loudly, never silently reduced.
     if (pair.journal_entry_ids.length !== 1) {
-      skipped.push({
-        pair,
-        code: 'UNSUPPORTED_PAIR_SHAPE',
-        message: 'Flera verifikat i samma par stöds inte ännu: ett par är en eller flera händelser mot ett verifikat.',
-      })
+      const journalEntryIds = [...new Set(pair.journal_entry_ids)]
+      const isBankSplit =
+        parsed.kind === 'bank' && pair.external_ids.length === 1 && journalEntryIds.length >= 2
+      if (!isBankSplit) {
+        skipped.push({
+          pair,
+          code: 'UNSUPPORTED_PAIR_SHAPE',
+          message:
+            parsed.kind === 'bank'
+              ? 'Ett par är en eller flera händelser mot ett verifikat, eller en händelse mot flera verifikat.'
+              : 'Flera verifikat i samma par stöds inte på skattekontot: ett par är en eller flera händelser mot ett verifikat.',
+        })
+        continue
+      }
+      if (journalEntryIds.length > 50) {
+        skipped.push({
+          pair,
+          code: 'UNSUPPORTED_PAIR_SHAPE',
+          message: 'En händelse kan delas på högst 50 verifikat.',
+        })
+        continue
+      }
+      // Explicit allocations must name exactly the pair's verifikat, once each.
+      const given = pair.allocations
+      if (given) {
+        const namedIds = given.map((a) => a.journal_entry_id)
+        const namedSet = new Set(namedIds)
+        const coversPair =
+          namedSet.size === namedIds.length &&
+          namedSet.size === journalEntryIds.length &&
+          journalEntryIds.every((id) => namedSet.has(id))
+        if (!coversPair) {
+          skipped.push({
+            pair,
+            code: 'UNSUPPORTED_PAIR_SHAPE',
+            message: 'allocations måste ange ett belopp för varje verifikat i paret, och inga andra.',
+          })
+          continue
+        }
+      }
+      const [externalId] = pair.external_ids
+      const allocationInput = journalEntryIds.map((id) => ({
+        journal_entry_id: id,
+        amount: given?.find((a) => a.journal_entry_id === id)?.amount,
+      }))
+      try {
+        const r = await linkTransactionToVouchers(
+          supabase,
+          companyId,
+          externalId,
+          allocationInput,
+          userId,
+          await resolveLedgerAccount(),
+          { dryRun },
+        )
+        if (!r.success || !r.allocations) {
+          skipped.push({ pair, code: 'PAIR_NOT_CLOSED', message: r.error ?? 'Kunde inte koppla' })
+          continue
+        }
+        for (const a of r.allocations) {
+          applied.push({ external_id: externalId, journal_entry_id: a.journal_entry_id, allocated_amount: a.amount })
+          if (!dryRun) await emitMatched(externalId, a.journal_entry_id)
+        }
+      } catch (err) {
+        const { code, message } = skipCodeFor(err)
+        skipped.push({ pair, code, message })
+      }
       continue
     }
     const externalIds = [...new Set(pair.external_ids)]
@@ -206,24 +301,12 @@ export async function matchPairs(
           }
         }
       } else {
-        const { data: account } = await supabase
-          .from('cash_accounts')
-          .select('ledger_account')
-          .eq('company_id', companyId)
-          .eq('id', parsed.cashAccountId)
-          .maybeSingle<{ ledger_account: string }>()
+        const account = await resolveLedgerAccount()
         // Bank N:1 is per-transaction by design (manualLink documents why the
         // engine allows several transactions on one verifikat): each link is
         // independent, so partial success is reported per transaction.
         for (const externalId of externalIds) {
-          const r = await manualLink(
-            supabase,
-            companyId,
-            externalId,
-            journalEntryId,
-            userId,
-            account?.ledger_account ?? '1930',
-          )
+          const r = await manualLink(supabase, companyId, externalId, journalEntryId, userId, account)
           if (!r.success) {
             skipped.push({
               pair: { external_ids: [externalId], journal_entry_ids: [journalEntryId] },
@@ -279,9 +362,11 @@ export async function unmatchLink(
       .eq('company_id', companyId)
       .eq('id', linkId)
       .maybeSingle<{ journal_entry_id: string | null }>()
-    previous = tx?.journal_entry_id ?? null
     const r = await unlinkReconciliation(supabase, companyId, linkId, userId)
     if (!r.success) throw new Error(r.error ?? 'Kunde inte koppla bort')
+    // A split row (1:N) has no pointer: the engine collected its junction
+    // vouchers before deleting them, so the first one is reported here.
+    previous = tx?.journal_entry_id ?? r.previousJournalEntryIds?.[0] ?? null
   }
   await eventBus.emit({
     type: 'reconciliation.unmatched',
@@ -317,6 +402,16 @@ export async function setItemIgnored(
   if (!tx) throw new SkattekontoLinkError('Transaktionen hittades inte.', 'TRANSACTION_NOT_FOUND')
   if (ignored && tx.journal_entry_id) {
     throw new SkattekontoLinkError('En bokförd transaktion kan inte ignoreras.', 'ALREADY_BOOKED')
+  }
+  // A row anchored only through transaction_voucher_links (bulk-book, 1:N
+  // split) has two counterparts in the ledger; ignoring it would drop the
+  // bank side while the ledger keeps it and manufacture a difference of the
+  // full amount (issue #1553, field note).
+  if (ignored && !tx.journal_entry_id) {
+    const junctionLinked = await fetchJunctionLinkedTxIds(supabase, companyId, [itemId])
+    if (junctionLinked.has(itemId)) {
+      throw new SkattekontoLinkError('En bokförd transaktion kan inte ignoreras.', 'ALREADY_BOOKED')
+    }
   }
   if (Boolean(tx.is_ignored) !== ignored) {
     const { error: updateError } = await supabase

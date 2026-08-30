@@ -46,7 +46,7 @@ Per account: outside vs ledger, what was linked, what the user still has to book
 ## Rules
 
 - Links and sign-offs never touch the ledger; booking does, and always stages.
-- One or more outside rows link to one verifikat; other shapes come back as UNSUPPORTED_PAIR_SHAPE. A small fee, interest or rounding difference on a bank account is closed with \`gnubok_reconcile_residual({ account_key, external_ids, journal_entry_id, kind, dry_run: true })\`, then without dry_run: it links the rows and books the difference (6570 / 8410 / 8310 / 3740) in one staged step. Anything larger than the cap is a missing booking, not a fee.
+- One or more outside rows link to one verifikat. On a bank account one row may also settle several verifikat (a lump payout over utlägg booked per receipt, a Bankgirot deposit over two customer payments): pass \`journal_entry_ids\` with several ids, optionally \`allocations: [{ journal_entry_id, amount }]\` (signed, the row's sign convention; omitted = each voucher's bank line); the slices must sum to the row. Other shapes come back as UNSUPPORTED_PAIR_SHAPE. A small fee, interest or rounding difference on a bank account is closed with \`gnubok_reconcile_residual({ account_key, external_ids, journal_entry_id, kind, dry_run: true })\`, then without dry_run: it links the rows and books the difference (6570 / 8410 / 8310 / 3740) in one staged step. Anything larger than the cap is a missing booking, not a fee.
 - Never judge on \`difference\`; the bridge explains it. Judge on \`unexplained_difference\`.
 - A skattekonto sign-off date cannot pass the saldo snapshot; ask for a fetch.
 

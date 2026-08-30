@@ -144,6 +144,66 @@ describe('reconciliation MCP tools', () => {
     expect(out.next).toMatchObject({ tool: 'gnubok_get_reconciliation_status' })
   })
 
+  it('reconcile_match folds the links of a bank 1:N split back into ONE staged pair with explicit allocations (#1553)', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const cash = '55555555-5555-4555-8555-555555555555'
+    const entry2 = '44444444-4444-4444-8444-444444444444'
+    const otherRow = '66666666-6666-4666-8666-666666666666'
+    matchMock.mockResolvedValue({
+      dry_run: true,
+      considered: 2,
+      applied: [
+        { external_id: otherRow, journal_entry_id: ENTRY },
+        { external_id: ROW, journal_entry_id: ENTRY, allocated_amount: -500 },
+        { external_id: ROW, journal_entry_id: entry2, allocated_amount: -300 },
+      ],
+      skipped: [],
+    })
+    const out = (await tool('gnubok_reconcile_match').execute(
+      {
+        account_key: `bank:${cash}`,
+        pairs: [
+          { external_ids: [otherRow], journal_entry_ids: [ENTRY] },
+          { external_ids: [ROW], journal_entry_ids: [ENTRY, entry2] },
+        ],
+        dry_run: true,
+      },
+      COMPANY,
+      USER,
+      supabase as never,
+      { type: 'api_key', id: 'key-1' } as never,
+    )) as Record<string, unknown>
+    expect(matchMock).toHaveBeenCalledWith(
+      supabase,
+      COMPANY,
+      USER,
+      `bank:${cash}`,
+      expect.objectContaining({
+        pairs: [
+          { external_ids: [otherRow], journal_entry_ids: [ENTRY] },
+          { external_ids: [ROW], journal_entry_ids: [ENTRY, entry2] },
+        ],
+      }),
+      { dryRun: true },
+    )
+    const preview = out.preview as Record<string, unknown>
+    expect(preview.pair_count).toBe(2)
+    // The 1:1 link stays a pair of its own; the two split links become one
+    // pair carrying the slices the reviewer saw, so the executor re-validates
+    // exactly those amounts (never two independent manualLink calls).
+    expect(preview.pairs).toEqual([
+      { external_ids: [otherRow], journal_entry_ids: [ENTRY] },
+      {
+        external_ids: [ROW],
+        journal_entry_ids: [ENTRY, entry2],
+        allocations: [
+          { journal_entry_id: ENTRY, amount: -500 },
+          { journal_entry_id: entry2, amount: -300 },
+        ],
+      },
+    ])
+  })
+
   it('reconcile_match refuses an empty request and a request with nothing linkable', async () => {
     const { supabase } = createQueuedMockSupabase()
     await expect(

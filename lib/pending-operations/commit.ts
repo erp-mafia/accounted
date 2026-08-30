@@ -6155,7 +6155,9 @@ async function commitBulkBookInboxItems(
  * same service the page and the v1 API use. Every pair is re-validated at
  * commit time (row still open, entry still posted and unlinked, amounts
  * close); partial success is reported in data.applied / data.skipped rather
- * than failing the whole operation, because the pairs are independent.
+ * than failing the whole operation, because the pairs are independent. A
+ * bank 1:N pair (one row, several verifikat, allocations) is staged as one
+ * pair and re-validated as one all-or-nothing split.
  */
 async function commitReconciliationMatch(
   supabase: SupabaseClient,
@@ -6164,7 +6166,13 @@ async function commitReconciliationMatch(
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
   const accountKey = params.account_key as string | undefined
-  const pairs = params.pairs as Array<{ external_ids: string[]; journal_entry_ids: string[] }> | undefined
+  const pairs = params.pairs as
+    | Array<{
+        external_ids: string[]
+        journal_entry_ids: string[]
+        allocations?: Array<{ journal_entry_id: string; amount: number }>
+      }>
+    | undefined
   if (!accountKey || !Array.isArray(pairs) || pairs.length === 0) {
     return { error: 'account_key and pairs are required', status: 400 }
   }
