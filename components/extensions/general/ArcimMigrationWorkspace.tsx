@@ -227,9 +227,21 @@ interface SkipReasons {
 }
 
 interface MigrationStepError {
-  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'reconciliation'
+  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'registrationLinks' | 'reconciliation'
   code: string | null
   message: string
+}
+
+/** Mirrors MigrationResults.registrationLinks in extensions/general/arcim-migration/types.ts. */
+interface RegistrationLinkCounts {
+  scanned: number
+  linked: number
+  noRef: number
+  refNotFetched: number
+  unresolved: number
+  ambiguous: number
+  amountMismatch: number
+  alreadyLinked: number
 }
 
 interface MigrationResults {
@@ -238,6 +250,7 @@ interface MigrationResults {
   suppliers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
   salesInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
   supplierInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
+  registrationLinks?: RegistrationLinkCounts
   stepErrors?: MigrationStepError[]
 }
 import AccountMappingStep from '@/components/import/AccountMappingStep'
@@ -1711,6 +1724,7 @@ function ResultStep({
   onDismissDocuments: () => void
   onReconnectDocuments: () => void
 }) {
+  const t = useTranslations('extensions')
   if (error) {
     return (
       <div className="stagger-enter space-y-8">
@@ -1833,6 +1847,24 @@ function ResultStep({
           ? formatSkipReasons(results.supplierInvoices.skipReasons, 'invoice', results.supplierInvoices.errorSample) ?? `${results.supplierInvoices.skipped} hoppades över`
           : undefined,
         failed: entityRowStatus(results.supplierInvoices.imported, results.supplierInvoices.skipReasons) === 'error',
+      })
+    }
+    if (results.registrationLinks && results.registrationLinks.scanned > 0) {
+      const links = results.registrationLinks
+      const unlinked = links.scanned - links.linked - links.alreadyLinked
+      entityLines.push({
+        label: t('ext_arcim_registration_links_label'),
+        value: t('ext_arcim_registration_links_value', { linked: links.linked, scanned: links.scanned }),
+        detail: unlinked > 0
+          ? t('ext_arcim_registration_links_detail', {
+              unlinked,
+              noRef: links.noRef,
+              refNotFetched: links.refNotFetched ?? 0,
+              unresolved: links.unresolved + links.ambiguous,
+              amountMismatch: links.amountMismatch,
+            })
+          : undefined,
+        failed: false,
       })
     }
   }
@@ -1974,6 +2006,7 @@ const STEP_ERROR_LABELS: Record<MigrationStepError['step'], string> = {
   suppliers: 'Leverantörer',
   salesInvoices: 'Kundfakturor',
   supplierInvoices: 'Leverantörsfakturor',
+  registrationLinks: 'Koppling till verifikationer',
   reconciliation: 'Avstämning av betalningar',
 }
 
