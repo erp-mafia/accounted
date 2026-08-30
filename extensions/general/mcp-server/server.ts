@@ -7559,16 +7559,20 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_supplier_invoices',
     title: 'List Supplier Invoices',
-    description: 'List supplier invoices (leverantörsfakturor), sorted by due date. Optional status filter; "to_pay" combines approved+overdue.',
+    description: 'List supplier invoices (leverantörsfakturor), sorted by due date. Filters: status (to_pay = approved+overdue), supplier_id, supplier_name (substring), date_from/date_to on invoice_date (YYYY-MM-DD).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         status: {
           type: 'string',
-          description: 'Filter: registered, approved, overdue, paid, to_pay, all (default)',
+          description: 'Default all; to_pay = approved+overdue',
           enum: ['registered', 'approved', 'overdue', 'paid', 'to_pay', 'all'],
         },
+        supplier_id: { type: 'string' },
+        supplier_name: { type: 'string', description: 'Case-insensitive name substring' },
+        date_from: { type: 'string' },
+        date_to: { type: 'string' },
         limit: { type: 'number', description: 'Max results 1-100 (default 50)' },
       },
     },
@@ -7590,6 +7594,56 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 50), 100)
       const status = (args.status as string) || 'all'
+      const supplierId = typeof args.supplier_id === 'string' ? args.supplier_id : undefined
+      const supplierName =
+        typeof args.supplier_name === 'string' ? args.supplier_name.trim() : undefined
+      const dateFrom = typeof args.date_from === 'string' ? args.date_from : undefined
+      const dateTo = typeof args.date_to === 'string' ? args.date_to : undefined
+
+      // Clear message instead of a raw Postgres uuid cast error: an agent may
+      // well pass a supplier's name here; point it at supplier_name instead.
+      if (supplierId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(supplierId)) {
+        throw new Error('supplier_id must be a supplier UUID (suppliers.id). To filter by name, use supplier_name.')
+      }
+      for (const [key, value] of [['date_from', dateFrom], ['date_to', dateTo]] as const) {
+        if (value !== undefined && !ISO_DATE_RE.test(value)) {
+          throw new Error(`${key} must be an ISO date (YYYY-MM-DD).`)
+        }
+      }
+      if (dateFrom && dateTo && dateFrom > dateTo) {
+        throw new Error('date_from must not be after date_to.')
+      }
+
+      // supplier_name resolves server-side to supplier ids (case-insensitive
+      // substring, same ilike semantics as the v1 suppliers ?search filter).
+      // LIKE wildcards escaped so the filter matches literal % / _; backslash
+      // FIRST because it is LIKE's own escape character. Archived suppliers
+      // are included on purpose: their invoices still exist.
+      let nameMatchedSupplierIds: string[] | undefined
+      if (supplierName) {
+        const escaped = supplierName
+          .replace(/\\/g, '\\\\')
+          .replace(/%/g, '\\%')
+          .replace(/_/g, '\\_')
+        // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects
+        // at 1000 rows. Page on the unique id (ordering invariant).
+        let matched: { id: string }[]
+        try {
+          matched = await fetchAllRows<{ id: string }>(({ from, to }) =>
+            supabase
+              .from('suppliers')
+              .select('id')
+              .eq('company_id', companyId)
+              .ilike('name', `%${escaped}%`)
+              .order('id', { ascending: true })
+              .range(from, to)
+          )
+        } catch (error) {
+          throw dbError(error)
+        }
+        if (matched.length === 0) return { invoices: [], count: 0 }
+        nameMatchedSupplierIds = matched.map((s) => s.id)
+      }
 
       let query = supabase
         .from('supplier_invoices')
@@ -7603,6 +7657,13 @@ export const tools: McpTool[] = [
           query = query.eq('status', status)
         }
       }
+
+      // Same filter shapes as the v1 supplier-invoices list: eq on
+      // supplier_id, gte/lte on invoice_date.
+      if (supplierId) query = query.eq('supplier_id', supplierId)
+      if (nameMatchedSupplierIds) query = query.in('supplier_id', nameMatchedSupplierIds)
+      if (dateFrom) query = query.gte('invoice_date', dateFrom)
+      if (dateTo) query = query.lte('invoice_date', dateTo)
 
       const { data, error } = await query.order('due_date', { ascending: true }).limit(limit)
 
