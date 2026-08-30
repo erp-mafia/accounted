@@ -267,6 +267,24 @@ describe('gnubok_update_salary_run', () => {
     ).rejects.toThrow(/SALARY_RUN_PATCH_NOT_DRAFT/)
   })
 
+  it('grandfathers day adjustments for a run whose current date is already outside the period', async () => {
+    // Creation does not enforce the period coupling, so a legally created
+    // out-of-period date must stay correctable within its own month.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...RUN_ROW, payment_date: '2026-04-05' } }) // period 2026-03, paid in April
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
+
+    const result = (await updateSalaryRun.execute(
+      { salary_run_id: 'run-1', payment_date: '2026-04-07' },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.new_payment_date).toBe('2026-04-07')
+  })
+
   it('rejects a payment_date outside the run period month (kontantprincipen)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: RUN_ROW }) // draft gate passes; period is 2026-03

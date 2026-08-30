@@ -146,10 +146,16 @@ export async function updateDraftSalaryRun(
   // books on payment_date. A payment date outside the run's period month
   // would post the entries in one month and declare them in another, so it
   // is refused; a payment truly landing in another month belongs to a run
-  // for that period.
+  // for that period. Grandfather clause: creation does not (yet) enforce
+  // this coupling, so a run whose CURRENT payment date already sits outside
+  // the period month may still be day-adjusted within that same month
+  // (otherwise a legal create state would be uncorrectable). No move can
+  // introduce a NEW wrong month.
   if (changes.payment_date !== undefined) {
     const periodPrefix = `${row.period_year}-${String(row.period_month).padStart(2, '0')}`
-    if (!changes.payment_date.startsWith(periodPrefix)) {
+    const newMonth = changes.payment_date.slice(0, 7)
+    const currentMonth = row.payment_date.slice(0, 7)
+    if (newMonth !== periodPrefix && newMonth !== currentMonth) {
       return {
         ok: false,
         code: 'SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD',

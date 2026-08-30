@@ -407,6 +407,32 @@ describe('PATCH /api/v1/companies/:companyId/salary-runs/:id', () => {
     expect(flex.from).not.toHaveBeenCalledWith('salary_run_employees')
   })
 
+  it('grandfathers day adjustments when the current date is already outside the period', async () => {
+    // Creation does not enforce the period coupling, so a legally created
+    // out-of-period date must stay correctable within its own month.
+    const grandfathered = { ...SAMPLE_RUN, payment_date: '2026-06-05' }
+    const updated = { ...SAMPLE_RUN, payment_date: '2026-06-07' }
+    const flex = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      salary_runs: [{ data: grandfathered, error: null }, { data: updated, error: null }],
+      salary_run_employees: { data: null, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(flex)
+
+    const res = await updateSalaryRun(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ payment_date: '2026-06-07' }),
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.payment_date).toBe('2026-06-07')
+  })
+
   it('returns 400 SALARY_RUN_PATCH_NOT_DRAFT for non-draft status', async () => {
     const approved = { ...SAMPLE_RUN, status: 'approved' }
     mockServiceClient.mockReturnValue(

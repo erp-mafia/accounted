@@ -230,6 +230,46 @@ describe('PATCH /api/salary/runs/[id]', () => {
     expect(findCall('salary_runs', 'update')).toBeUndefined()
   })
 
+  it('grandfathers day adjustments when the current date is already outside the period', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    authorize(supabase)
+
+    enqueueMany([
+      { data: { ...DRAFT_RUN, payment_date: '2026-08-05' } }, // period 2026-07, paid in August
+      { data: { ...DRAFT_RUN, payment_date: '2026-08-07' } }, // update
+      { data: null }, // roster calculation_breakdown clear
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1', {
+      method: 'PATCH',
+      body: { payment_date: '2026-08-07' },
+    })
+    const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(findCall('salary_run_employees', 'update')).toEqual([{ calculation_breakdown: null }])
+  })
+
+  it('rejects an invalid voucher_series value', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    authorize(supabase)
+
+    enqueueMany([
+      { data: DRAFT_RUN }, // lookup
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1', {
+      method: 'PATCH',
+      body: { voucher_series: 'AB' },
+    })
+    const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
+    const { status } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(findCall('salary_runs', 'update')).toBeUndefined()
+  })
+
   it('returns 400 when the run advances past draft between fetch and update (race)', async () => {
     const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
     authorize(supabase)

@@ -4,6 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { formatRedovisare } from '@/lib/skatteverket/format'
 import { maskEmployeeForResponse } from '@/lib/salary/personnummer'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { ISO_DATE_RE } from '@/lib/invariants'
 
 ensureInitialized()
 
@@ -189,6 +190,11 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
 
     const body = await request.json()
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+      return NextResponse.json({ error: 'Ogiltig förfrågan' }, { status: 400 })
+    }
+    // Whitelist keys AND values: only these three fields, with the same value
+    // rules as the v1 UpdateSalaryRunSchema, ever reach the DB.
     const allowedFields = ['payment_date', 'voucher_series', 'notes']
     const updates: Record<string, unknown> = {}
     for (const field of allowedFields) {
@@ -196,15 +202,41 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
         updates[field] = body[field]
       }
     }
+    if (
+      updates.payment_date !== undefined &&
+      (typeof updates.payment_date !== 'string' || !ISO_DATE_RE.test(updates.payment_date))
+    ) {
+      return NextResponse.json({ error: 'Ogiltigt datum (ÅÅÅÅ-MM-DD)' }, { status: 400 })
+    }
+    if (
+      updates.voucher_series !== undefined &&
+      (typeof updates.voucher_series !== 'string' || !/^[A-Z]$/.test(updates.voucher_series))
+    ) {
+      return NextResponse.json(
+        { error: 'Verifikationsserie måste vara en bokstav A-Z' },
+        { status: 400 },
+      )
+    }
+    if (
+      updates.notes !== undefined &&
+      updates.notes !== null &&
+      (typeof updates.notes !== 'string' || updates.notes.length > 2000)
+    ) {
+      return NextResponse.json({ error: 'Anteckningen får vara högst 2000 tecken' }, { status: 400 })
+    }
 
     // Kontantprincipen guard (SFL 26 kap): the AGI derives its
     // redovisningsperiod from period_year/period_month while the verifikat
     // books on payment_date, so a payment date outside the run's period month
     // would post the entries in one month and declare them in another. Same
-    // rule as lib/salary/update-run.ts and the v1 PATCH.
-    if (updates.payment_date !== undefined) {
+    // rule as lib/salary/update-run.ts and the v1 PATCH, including the
+    // grandfather clause: a run created with an out-of-period payment date
+    // may still be day-adjusted within that same month.
+    if (typeof updates.payment_date === 'string') {
       const periodPrefix = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
-      if (typeof updates.payment_date !== 'string' || !updates.payment_date.startsWith(periodPrefix)) {
+      const newMonth = updates.payment_date.slice(0, 7)
+      const currentMonth = String(run.payment_date).slice(0, 7)
+      if (newMonth !== periodPrefix && newMonth !== currentMonth) {
         return NextResponse.json(
           {
             error:
