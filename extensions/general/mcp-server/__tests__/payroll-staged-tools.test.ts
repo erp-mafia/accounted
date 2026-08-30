@@ -232,6 +232,7 @@ describe('gnubok_update_salary_run', () => {
     expect((result.preview.previous as Record<string, unknown>).payment_date).toBe('2026-03-25')
     expect(result.preview.new_payment_date).toBe('2026-03-23')
     expect(result.preview.salary_run_id).toBe('run-1')
+    expect(result.preview.invalidates_calculation).toBe(true)
     expect(result.next?.tool).toBe('gnubok_calculate_salary_run')
   })
 
@@ -249,6 +250,7 @@ describe('gnubok_update_salary_run', () => {
 
     expect(result.staged).toBe(true)
     expect(result.preview.new_notes).toBe('Extra utbetalning i mars')
+    expect(result.preview.invalidates_calculation).toBe(false)
     // Payment date untouched: no recalculation hint.
     expect(result.next).toBeUndefined()
   })

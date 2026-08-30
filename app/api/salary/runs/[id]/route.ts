@@ -175,7 +175,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Only allow updates on draft runs
     const { data: run, error: fetchError } = await supabase
       .from('salary_runs')
-      .select('id, status')
+      .select('id, status, payment_date')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -207,6 +207,23 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     if (error) {
       return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
+    }
+
+    // A payment_date change invalidates any existing calculation: skatteavdrag
+    // and the AGI redovisningsperiod follow the payment month, so clearing
+    // calculation_breakdown makes both book preflights refuse the roster until
+    // a recalculation has run against the new date (same invariant as
+    // setRunEmployeeSalary in lib/salary/run-employees.ts and the MCP path in
+    // lib/salary/update-run.ts).
+    if (updates.payment_date !== undefined && updates.payment_date !== run.payment_date) {
+      const { error: clearError } = await supabase
+        .from('salary_run_employees')
+        .update({ calculation_breakdown: null })
+        .eq('salary_run_id', id)
+        .eq('company_id', companyId)
+      if (clearError) {
+        return NextResponse.json({ error: getUserErrorMessage(clearError) }, { status: 500 })
+      }
     }
 
     return NextResponse.json({ data: updated })

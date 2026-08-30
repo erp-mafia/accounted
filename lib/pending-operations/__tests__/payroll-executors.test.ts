@@ -211,6 +211,7 @@ describe('commitPendingOperation: update_salary_run', () => {
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: RUN_ROW }) // service draft gate + current values
     enqueue({ data: { ...RUN_ROW, payment_date: '2026-03-23' } }) // optimistic-locked update
+    enqueue({ data: null, error: null }) // roster calculation_breakdown clear
     enqueue({ data: null, error: null }) // finalize
 
     const op = makePendingOp({
@@ -225,6 +226,23 @@ describe('commitPendingOperation: update_salary_run', () => {
       payment_date: '2026-03-23',
       changes: { payment_date: '2026-03-23' },
     })
+  })
+
+  it('fails when the calculation-invalidation clear errors (guard is not best-effort)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: RUN_ROW }) // service draft gate + current values
+    enqueue({ data: { ...RUN_ROW, payment_date: '2026-03-23' } }) // optimistic-locked update
+    enqueue({ data: null, error: { message: 'connection reset' } }) // breakdown clear fails
+    enqueue({ data: null, error: null }) // finalize (failed)
+
+    const op = makePendingOp({
+      operation_type: 'update_salary_run',
+      params: { salary_run_id: 'run-1', patch: { payment_date: '2026-03-23' } },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
   })
 
   it('fails cleanly when the run advanced between staging and approval', async () => {

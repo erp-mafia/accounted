@@ -109,10 +109,9 @@ export async function updateDraftSalaryRun(
   if (!validated.ok) return validated
   const changes = validated.data
 
-  const COLUMNS = 'id, status, period_year, period_month, payment_date, voucher_series, notes'
   const { data: run, error } = await supabase
     .from('salary_runs')
-    .select(COLUMNS)
+    .select('id, status, period_year, period_month, payment_date, voucher_series, notes')
     .eq('id', args.salaryRunId)
     .eq('company_id', args.companyId)
     .maybeSingle()
@@ -174,7 +173,7 @@ export async function updateDraftSalaryRun(
     .eq('id', args.salaryRunId)
     .eq('company_id', args.companyId)
     .eq('status', 'draft')
-    .select(COLUMNS)
+    .select('id, status, period_year, period_month, payment_date, voucher_series, notes')
     .maybeSingle()
 
   if (updError) {
@@ -185,6 +184,25 @@ export async function updateDraftSalaryRun(
       ok: false,
       code: 'SALARY_RUN_PATCH_NOT_DRAFT',
       details: { reason: 'race' },
+    }
+  }
+
+  // A payment_date change invalidates any existing calculation: skatteavdrag
+  // and the AGI redovisningsperiod follow the payment month, so clearing
+  // calculation_breakdown makes both book preflights refuse the roster until
+  // a recalculation has run against the new date (same invariant as
+  // setRunEmployeeSalary in lib/salary/run-employees.ts). Unlike the
+  // display-line refresh there, this clear IS the compliance guard, so a
+  // failure surfaces as an error; the header write above has committed and
+  // a retry of the whole operation is idempotent.
+  if (changes.payment_date !== undefined && changes.payment_date !== previous.payment_date) {
+    const { error: clearError } = await supabase
+      .from('salary_run_employees')
+      .update({ calculation_breakdown: null })
+      .eq('salary_run_id', args.salaryRunId)
+      .eq('company_id', args.companyId)
+    if (clearError) {
+      return { ok: false, code: 'INTERNAL_ERROR', details: { message: clearError.message } }
     }
   }
 

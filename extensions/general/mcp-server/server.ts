@@ -14353,11 +14353,16 @@ export const tools: McpTool[] = [
           new_voucher_series: d.voucher_series,
           new_notes: d.notes,
           changes: d.changes,
+          // A payment_date change clears every roster row's
+          // calculation_breakdown at commit (skatteavdrag and the AGI
+          // redovisningsperiod follow the payment month), so booking is
+          // refused until a recalculation has run against the new date.
+          invalidates_calculation: d.changes.payment_date !== undefined,
         },
         actor,
         d.changes.payment_date !== undefined
           ? {
-              description: 'After approval, recalculate an already-calculated run so tax follows the new payment date.',
+              description: 'Approval clears the run\'s calculation (tax follows the payment month): re-run gnubok_calculate_salary_run before booking.',
               tool: 'gnubok_calculate_salary_run',
             }
           : undefined,
