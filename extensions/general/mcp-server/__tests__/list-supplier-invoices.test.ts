@@ -24,12 +24,17 @@ const invoiceRow = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 })
 
-type ListResult = { invoices: Array<Record<string, unknown>>; count: number }
+type ListResult = {
+  invoices: Array<Record<string, unknown>>
+  count: number
+  total_count: number
+  has_more: boolean
+}
 
 describe('gnubok_list_supplier_invoices: filters', () => {
   it('filters by supplier_id alone (eq on supplier_id, no supplier lookup)', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: [invoiceRow()] })
+    enqueue({ data: [invoiceRow()], count: 1 })
 
     const result = (await tool().execute(
       { supplier_id: SUPPLIER_UUID },
@@ -39,6 +44,8 @@ describe('gnubok_list_supplier_invoices: filters', () => {
     )) as ListResult
 
     expect(result.count).toBe(1)
+    expect(result.total_count).toBe(1)
+    expect(result.has_more).toBe(false)
     expect(result.invoices[0].id).toBe('si-1')
     const eqCalls = findCalls('supplier_invoices', 'eq')
     expect(eqCalls).toContainEqual(['supplier_id', SUPPLIER_UUID])
@@ -55,10 +62,39 @@ describe('gnubok_list_supplier_invoices: filters', () => {
     ).rejects.toThrow(/supplier UUID.*supplier_name/)
   })
 
-  it('filters by supplier_name alone: case-insensitive substring resolved to supplier ids', async () => {
+  it('rejects non-string filter values instead of silently returning the unfiltered list', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      tool().execute({ date_from: 20260101 }, COMPANY, USER, supabase as never),
+    ).rejects.toThrow(/date_from must be a string/)
+    await expect(
+      tool().execute({ supplier_name: ['Office Depot'] }, COMPANY, USER, supabase as never),
+    ).rejects.toThrow(/supplier_name must be a string/)
+    await expect(
+      tool().execute({ supplier_id: 42 }, COMPANY, USER, supabase as never),
+    ).rejects.toThrow(/supplier_id must be a string/)
+    await expect(
+      tool().execute({ date_to: null }, COMPANY, USER, supabase as never),
+    ).rejects.toThrow(/date_to must be a string/)
+  })
+
+  it('rejects a blank supplier_name instead of dropping the filter', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      tool().execute({ supplier_name: '   ' }, COMPANY, USER, supabase as never),
+    ).rejects.toThrow(/supplier_name must not be blank/)
+  })
+
+  it('filters by supplier_name alone: literal case-insensitive substring resolved to supplier ids', async () => {
     const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: [{ id: 'sup-1' }, { id: 'sup-2' }] }) // suppliers lookup
-    enqueue({ data: [invoiceRow()] }) // invoice list
+    enqueue({
+      data: [
+        { id: 'sup-1', name: 'Office Depot AB' },
+        { id: 'sup-2', name: 'Nordic OFFICE Supplies' },
+        { id: 'sup-3', name: 'Byggmax AB' },
+      ],
+    }) // suppliers fetch
+    enqueue({ data: [invoiceRow()], count: 1 }) // invoice list
 
     const result = (await tool().execute(
       { supplier_name: 'office' },
@@ -68,37 +104,33 @@ describe('gnubok_list_supplier_invoices: filters', () => {
     )) as ListResult
 
     expect(result.count).toBe(1)
-    expect(findCall('suppliers', 'ilike')).toEqual(['name', '%office%'])
-    // The lookup is bounded: cap + 1 rows fetched so overflow is detectable.
-    expect(findCall('suppliers', 'limit')).toEqual([201])
+    expect(findCall('suppliers', 'select')).toEqual(['id, name'])
+    expect(findCalls('suppliers', 'eq')).toContainEqual(['company_id', COMPANY])
     expect(findCalls('supplier_invoices', 'in')).toContainEqual([
       'supplier_id',
       ['sup-1', 'sup-2'],
     ])
   })
 
-  it('rejects a supplier_name matching more suppliers than the cap', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: Array.from({ length: 201 }, (_, i) => ({ id: `sup-${i}` })) })
+  it('matches supplier_name literally: * and % are not wildcards', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: 'sup-1', name: 'Star*Mart' },
+        { id: 'sup-2', name: 'Starke Martinsson AB' },
+        { id: 'sup-3', name: '100%_AB' },
+      ],
+    })
+    enqueue({ data: [], count: 0 })
 
-    await expect(
-      tool().execute({ supplier_name: 'a' }, COMPANY, USER, supabase as never),
-    ).rejects.toThrow(/matches more than 200 suppliers/)
-  })
+    await tool().execute({ supplier_name: 'Star*Mart' }, COMPANY, USER, supabase as never)
 
-  it('escapes LIKE wildcards in supplier_name so % and _ match literally', async () => {
-    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
-    enqueue({ data: [{ id: 'sup-1' }] })
-    enqueue({ data: [] })
-
-    await tool().execute({ supplier_name: '100%_ab' }, COMPANY, USER, supabase as never)
-
-    expect(findCall('suppliers', 'ilike')).toEqual(['name', '%100\\%\\_ab%'])
+    expect(findCalls('supplier_invoices', 'in')).toContainEqual(['supplier_id', ['sup-1']])
   })
 
   it('unknown supplier_name yields an empty result without querying invoices', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: [] }) // suppliers lookup: no match
+    enqueue({ data: [{ id: 'sup-1', name: 'Byggmax AB' }] }) // no substring match
 
     const result = (await tool().execute(
       { supplier_name: 'no such vendor' },
@@ -107,13 +139,24 @@ describe('gnubok_list_supplier_invoices: filters', () => {
       supabase as never,
     )) as ListResult
 
-    expect(result).toEqual({ invoices: [], count: 0 })
+    expect(result).toEqual({ invoices: [], count: 0, total_count: 0, has_more: false })
     expect(findCalls('supplier_invoices', 'select')).toHaveLength(0)
+  })
+
+  it('rejects a supplier_name matching more suppliers than the cap', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: Array.from({ length: 201 }, (_, i) => ({ id: `sup-${i}`, name: `Byrå AB ${i}` })),
+    })
+
+    await expect(
+      tool().execute({ supplier_name: 'byrå' }, COMPANY, USER, supabase as never),
+    ).rejects.toThrow(/matches more than 200 suppliers/)
   })
 
   it('filters by date_from alone (gte on invoice_date)', async () => {
     const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: [] })
+    enqueue({ data: [], count: 0 })
 
     await tool().execute({ date_from: '2026-01-01' }, COMPANY, USER, supabase as never)
 
@@ -123,7 +166,7 @@ describe('gnubok_list_supplier_invoices: filters', () => {
 
   it('filters by date_to alone (lte on invoice_date)', async () => {
     const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: [] })
+    enqueue({ data: [], count: 0 })
 
     await tool().execute({ date_to: '2026-06-30' }, COMPANY, USER, supabase as never)
 
@@ -133,8 +176,8 @@ describe('gnubok_list_supplier_invoices: filters', () => {
 
   it('combines status, supplier_id, supplier_name and date range', async () => {
     const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: [{ id: SUPPLIER_UUID }] }) // suppliers lookup
-    enqueue({ data: [invoiceRow()] }) // invoice list
+    enqueue({ data: [{ id: SUPPLIER_UUID, name: 'Office Depot AB' }] }) // suppliers fetch
+    enqueue({ data: [invoiceRow()], count: 1 }) // invoice list
 
     const result = (await tool().execute(
       {
@@ -156,16 +199,30 @@ describe('gnubok_list_supplier_invoices: filters', () => {
     expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['supplier_id', SUPPLIER_UUID])
     expect(findCall('supplier_invoices', 'gte')).toEqual(['invoice_date', '2026-01-01'])
     expect(findCall('supplier_invoices', 'lte')).toEqual(['invoice_date', '2026-12-31'])
+    // Deterministic order: due_date with the unique id as tiebreaker.
+    const orderCalls = findCalls('supplier_invoices', 'order')
+    expect(orderCalls).toContainEqual(['due_date', { ascending: true }])
+    expect(orderCalls).toContainEqual(['id', { ascending: true }])
   })
 
   it('rejects a malformed date', async () => {
     const { supabase } = createQueuedMockSupabase()
     await expect(
       tool().execute({ date_from: '01/02/2026' }, COMPANY, USER, supabase as never),
-    ).rejects.toThrow(/date_from must be an ISO date/)
+    ).rejects.toThrow(/date_from must be a valid ISO date/)
     await expect(
       tool().execute({ date_to: '2026-6-1' }, COMPANY, USER, supabase as never),
-    ).rejects.toThrow(/date_to must be an ISO date/)
+    ).rejects.toThrow(/date_to must be a valid ISO date/)
+  })
+
+  it('rejects an impossible calendar date that passes the shape regex', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      tool().execute({ date_from: '2026-02-30' }, COMPANY, USER, supabase as never),
+    ).rejects.toThrow(/date_from must be a valid ISO date/)
+    await expect(
+      tool().execute({ date_to: '2026-13-01' }, COMPANY, USER, supabase as never),
+    ).rejects.toThrow(/date_to must be a valid ISO date/)
   })
 
   it('rejects a reversed date range', async () => {
@@ -180,13 +237,34 @@ describe('gnubok_list_supplier_invoices: filters', () => {
     ).rejects.toThrow(/date_from must not be after date_to/)
   })
 
+  it('signals truncation: total_count and has_more expose rows past the limit', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: Array.from({ length: 50 }, (_, i) => invoiceRow({ id: `si-${i}` })),
+      count: 60,
+    })
+
+    const result = (await tool().execute(
+      { date_from: '2026-01-01', date_to: '2026-03-31' },
+      COMPANY,
+      USER,
+      supabase as never,
+    )) as ListResult
+
+    expect(result.count).toBe(50)
+    expect(result.total_count).toBe(60)
+    expect(result.has_more).toBe(true)
+  })
+
   it('keeps the unfiltered path unchanged: no supplier lookup, no date filters', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: [invoiceRow(), invoiceRow({ id: 'si-2' })] })
+    enqueue({ data: [invoiceRow(), invoiceRow({ id: 'si-2' })], count: 2 })
 
     const result = (await tool().execute({}, COMPANY, USER, supabase as never)) as ListResult
 
     expect(result.count).toBe(2)
+    expect(result.total_count).toBe(2)
+    expect(result.has_more).toBe(false)
     expect(findCalls('suppliers', 'select')).toHaveLength(0)
     expect(findCalls('supplier_invoices', 'gte')).toHaveLength(0)
     expect(findCalls('supplier_invoices', 'lte')).toHaveLength(0)
