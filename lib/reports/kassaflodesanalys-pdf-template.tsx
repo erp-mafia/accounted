@@ -5,6 +5,7 @@ import {
   View,
   StyleSheet,
 } from '@react-pdf/renderer'
+import { pdfNumberText } from '@/lib/pdf/number-text'
 import type { KassaflodesanalysReport } from './kassaflodesanalys'
 import type { CompanySettings } from '@/types'
 
@@ -162,10 +163,14 @@ const styles = StyleSheet.create({
 })
 
 function formatAmount(n: number): string {
-  return new Intl.NumberFormat('sv-SE', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(n)
+  // pdfNumberText: Intl's U+2212 has no glyph in the bundled Helvetica/Courier,
+  // so a negative cash flow would print as positive (issue #1982).
+  return pdfNumberText(
+    new Intl.NumberFormat('sv-SE', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(n),
+  )
 }
 
 function formatOrgNumber(orgNumber: string): string {
