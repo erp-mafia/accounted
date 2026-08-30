@@ -298,12 +298,34 @@ npx tsx scripts/smoke-ai.ts ./receipt.pdf    # also runs document extraction
 
 ### Email (Invoice Sending, Invitations and Reminders)
 
+Outbound mail (invoices, reminders, payslips) goes through one of two providers. Auth/account mail is sent by Supabase Auth and is not affected.
+
+**Option 1: Resend** (what hosted runs):
+
 ```bash
 RESEND_API_KEY=re_...
 RESEND_FROM_EMAIL=noreply@your-domain.com
 ```
 
-Requires a [Resend](https://resend.com) account with a verified sender domain. Without this, invoices can still be generated as PDFs but cannot be emailed.
+Requires a [Resend](https://resend.com) account with a verified sender domain.
+
+**Option 2: your own SMTP relay** (a Swedish mail provider, a Microsoft 365 / Google Workspace relay, Postfix on the host):
+
+```bash
+EMAIL_PROVIDER=smtp
+SMTP_HOST=smtp.example.se
+SMTP_PORT=587                         # default 587; 465 with SMTP_SECURE=true
+SMTP_SECURE=false                     # true = implicit TLS, false = STARTTLS required (set SMTP_REQUIRE_TLS=false only for a plaintext LAN relay)
+SMTP_USER=...                         # optional for an internal relay
+SMTP_PASS=...
+SMTP_FROM_EMAIL=faktura@your-domain.se
+# SMTP_REQUIRE_TLS=false              # only for a plaintext relay on a trusted LAN: without it a relay that cannot STARTTLS fails the send instead of leaking credentials and invoice PDFs in cleartext
+# SMTP_TLS_REJECT_UNAUTHORIZED=false  # only for a LAN relay with a self-signed certificate
+```
+
+`EMAIL_PROVIDER` is optional: with a `RESEND_API_KEY` present Resend is used, otherwise `SMTP_HOST` selects SMTP, so adding SMTP variables next to an existing Resend key never moves mail by accident. Set it explicitly when both are configured. The From header is built identically on both providers (the company or brand name as display name, the platform address from `RESEND_FROM_EMAIL` or `SMTP_FROM_EMAIL` unless the company has a verified sending domain); the delivery-status webhook is Resend-only.
+
+Without either, invoices can still be generated as PDFs but cannot be emailed.
 
 **Invitations do not require Resend.** When no mail provider is configured, the invite is still created and the accept link is returned to the inviter in the app (a copy button under the pending invitations list, plus a warn-level log record whose msg is `email service not configured: invite email skipped`; the Docker image logs JSON, so grep for the message text, not a `WARN` prefix; the token is never logged). Share the link manually; it is valid until the invitation expires. Resend (or plain SMTP once [#1746](https://github.com/erp-mafia/accounted/pull/1746) lands) is only needed if you want the invitation mailed automatically. There is no re-send for company invitations: revoke and invite again for a new link.
 
