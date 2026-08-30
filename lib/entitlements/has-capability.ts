@@ -361,12 +361,6 @@ export interface CompanyEntitlements {
 /** company_subscriptions.status values that count as a live subscription. */
 const PAYING_SUBSCRIPTION_STATUSES = ['active', 'trialing', 'past_due']
 
-/**
- * Resolve which PAID capabilities a company currently holds (entitled AND
- * enabled) plus its trial state, in two queries. Used to seed the client
- * CompanyContext so the UI can hide/disable/upsell gated features.
- * Self-hosted holds everything.
- */
 function normalizeTeamId(raw: string | null | undefined): string | null {
   return raw && isUuid(raw) ? raw : null
 }
@@ -407,6 +401,14 @@ export interface GetCompanyEntitlementsOptions {
   teamId?: string | null
 }
 
+/**
+ * Resolve which PAID capabilities a company currently holds (entitled AND
+ * enabled) plus its trial state, in two queries. Used to seed the client
+ * CompanyContext so the UI can hide/disable/upsell gated features.
+ * Self-hosted holds every local capability outright; the
+ * CONNECTOR_CAPABILITIES are read from `source = 'connector'` grants only
+ * (see connectorGrantsOnly()).
+ */
 export async function getCompanyEntitlements(
   supabase: SupabaseClient,
   companyId: string,

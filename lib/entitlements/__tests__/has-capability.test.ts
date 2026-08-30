@@ -512,6 +512,54 @@ describe('self-hosted connector capabilities', () => {
     expect(withGrant.entitlementState).toBe('paid')
   })
 
+  // The dashboard layout passes teamId, which moves the grants read into the
+  // early wave (#1946). That call site and the fallback read must narrow to
+  // the same key list and carry the same source filter, or the self-host
+  // partition silently reads every paid key on the layout path. The in-loop
+  // source check masks a lost narrowing, so this pins the query itself.
+  it('getCompanyEntitlements with teamId narrows the early grants read to connector keys and source=connector on a self-host', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase(
+      {
+        // Deliberately wrong: the lookup must not run when teamId is supplied.
+        companies: { data: { team_id: null } },
+        capability_grants: { data: [] },
+        company_capability_config: { data: [] },
+        company_subscriptions: { data: null },
+      },
+      calls,
+    )
+    const result = await getCompanyEntitlements(supabase, COMPANY, { teamId: null })
+    const keyFilters = calls.filter((c) => c.table === 'capability_grants' && c.method === 'in')
+    expect(keyFilters.map((c) => c.args)).toEqual([
+      ['capability_key', PAID_CAPABILITIES.filter((k) => CONNECTOR_CAPABILITIES.includes(k))],
+    ])
+    expect(sourceFilters(calls).map((c) => c.args)).toEqual([['source', 'connector']])
+    expect(calls.map((c) => c.table)).not.toContain('companies')
+    expect(result.capabilities).toEqual(PAID_CAPABILITIES.filter((k) => !CONNECTOR_CAPABILITIES.includes(k)))
+    expect(result.entitlementState).toBe('none')
+  })
+
+  it('getCompanyEntitlements with teamId reads every paid key and every source on hosted', async () => {
+    const TEAM = '55555555-5555-4555-8555-555555555555'
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase(
+      {
+        companies: { data: { team_id: null } },
+        capability_grants: { data: [] },
+        company_capability_config: { data: [] },
+        company_subscriptions: { data: null },
+      },
+      calls,
+    )
+    await getCompanyEntitlements(supabase, COMPANY, { teamId: TEAM })
+    const keyFilters = calls.filter((c) => c.table === 'capability_grants' && c.method === 'in')
+    expect(keyFilters.map((c) => c.args)).toEqual([['capability_key', PAID_CAPABILITIES]])
+    expect(sourceFilters(calls)).toHaveLength(0)
+    expect(calls.map((c) => c.table)).not.toContain('companies')
+  })
+
   // The trial-seed trigger writes source='trial' rows for bank_sync and
   // skatteverket on every company insert, self-hosts included. Only the
   // connector sync's own rows may unlock a connector capability there.
