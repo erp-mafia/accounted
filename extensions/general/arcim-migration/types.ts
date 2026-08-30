@@ -118,26 +118,29 @@ export interface MigrationResults {
   salesInvoices?: InvoiceStepResult
   supplierInvoices?: InvoiceStepResult
   /**
-   * Auto-reconciliation of imported supplier invoices to the GL payment
-   * vouchers that the separate SIE import already posted. `autoLinked` invoices
-   * are now marked paid; `ambiguous` need manual review; `unmatched` had no
-   * candidate voucher.
-   */
-  /**
    * Imported invoices linked to the SIE-imported verifikat that BOOKED them
    * (the registration voucher the provider named on the invoice). Only exact,
    * amount-corroborated matches are written; the other buckets stay unlinked
-   * and explain why. See lib/invoices/link-migrated-registration-vouchers.ts.
+   * and explain why. `refNotFetched` counts invoices whose provider detail
+   * payload (where Fortnox carries the ref) was never fetched, so nothing is
+   * known either way. See lib/invoices/link-migrated-registration-vouchers.ts.
    */
   registrationLinks?: {
     scanned: number
     linked: number
     noRef: number
+    refNotFetched: number
     unresolved: number
     ambiguous: number
     amountMismatch: number
     alreadyLinked: number
   }
+  /**
+   * Auto-reconciliation of imported supplier invoices to the GL payment
+   * vouchers that the separate SIE import already posted. `autoLinked` invoices
+   * are now marked paid; `ambiguous` need manual review; `unmatched` had no
+   * candidate voucher.
+   */
   reconciliation?: { scanned: number; autoLinked: number; ambiguous: number; unmatched: number }
   /**
    * Steps that failed against the provider API. Present (non-empty) whenever a

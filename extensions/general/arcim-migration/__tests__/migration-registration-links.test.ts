@@ -104,7 +104,7 @@ function supplierDto(over: Partial<SupplierInvoiceDto> & { invoiceNumber: string
 }
 
 const LINK_COUNTS = {
-  scanned: 2, linked: 1, noRef: 1, unresolved: 0, ambiguous: 0, amountMismatch: 0, alreadyLinked: 0, reports: [],
+  scanned: 2, linked: 1, noRef: 1, refNotFetched: 0, unresolved: 0, ambiguous: 0, amountMismatch: 0, alreadyLinked: 0, reports: [],
 }
 
 function baseOptions(overrides: Record<string, unknown> = {}) {
@@ -135,12 +135,16 @@ describe('executeMigration: registration voucher links', () => {
       invoices: [
         salesDto({ invoiceNumber: '1001', sourceVoucher: { series: 'A', number: 329 } }),
         salesDto({ invoiceNumber: '1002' }),
+        salesDto({ invoiceNumber: '1003', currencyCode: 'EUR' }),
       ],
-      hydration: HYDRATION,
+      hydration: { ...HYDRATION, needed: 1, skippedForBudget: 1 },
+      // 1003's detail form was never fetched: its ref is unknown, not absent.
+      unhydratedIds: new Set(['1003']),
     })
     ;(fetchSupplierInvoicesHydrated as Mock).mockResolvedValue({
       invoices: [supplierDto({ invoiceNumber: 'L-77', sourceVoucher: { series: 'B', number: 5 } })],
       hydration: HYDRATION,
+      unhydratedIds: new Set(),
     })
 
     const results = await executeMigration(
@@ -155,38 +159,56 @@ describe('executeMigration: registration voucher links', () => {
         invoiceId: 'invoices-1',
         kind: 'customer',
         sourceVoucher: { series: 'A', number: 329 },
+        refNotFetched: false,
         invoiceDate: '2025-03-14',
         totalSek: 1000,
+        currencyCode: 'SEK',
         invoiceNumber: '1001',
       },
       {
         invoiceId: 'invoices-2',
         kind: 'customer',
         sourceVoucher: null,
+        refNotFetched: false,
         invoiceDate: '2025-03-14',
         totalSek: 1000,
+        currencyCode: 'SEK',
         invoiceNumber: '1002',
+      },
+      {
+        invoiceId: 'invoices-3',
+        kind: 'customer',
+        sourceVoucher: null,
+        refNotFetched: true,
+        invoiceDate: '2025-03-14',
+        // The SEK total comes from the run's rate index; the linker gets the
+        // currency so a mismatch can be explained as a rate difference.
+        totalSek: expect.any(Number),
+        currencyCode: 'EUR',
+        invoiceNumber: '1003',
       },
       {
         invoiceId: 'supplier_invoices-1',
         kind: 'supplier',
         sourceVoucher: { series: 'B', number: 5 },
+        refNotFetched: false,
         invoiceDate: '2025-05-02',
         totalSek: 2500,
+        currencyCode: 'SEK',
         invoiceNumber: 'L-77',
       },
     ])
 
     expect(results.registrationLinks).toEqual({
-      scanned: 2, linked: 1, noRef: 1, unresolved: 0, ambiguous: 0, amountMismatch: 0, alreadyLinked: 0,
+      scanned: 2, linked: 1, noRef: 1, refNotFetched: 0, unresolved: 0, ambiguous: 0, amountMismatch: 0, alreadyLinked: 0,
     })
-    expect(results.salesInvoices?.imported).toBe(2)
+    expect(results.salesInvoices?.imported).toBe(3)
     expect(results.supplierInvoices?.imported).toBe(1)
     expect(results.stepErrors).toBeUndefined()
   })
 
   it('skips the linker entirely when no invoice was inserted', async () => {
-    ;(fetchSalesInvoicesHydrated as Mock).mockResolvedValue({ invoices: [], hydration: HYDRATION })
+    ;(fetchSalesInvoicesHydrated as Mock).mockResolvedValue({ invoices: [], hydration: HYDRATION, unhydratedIds: new Set() })
 
     const results = await executeMigration(baseOptions({ importSalesInvoices: true }))
 
@@ -198,6 +220,7 @@ describe('executeMigration: registration voucher links', () => {
     ;(fetchSalesInvoicesHydrated as Mock).mockResolvedValue({
       invoices: [salesDto({ invoiceNumber: '1001', sourceVoucher: { series: 'A', number: 1 } })],
       hydration: HYDRATION,
+      unhydratedIds: new Set(),
     })
     mLink.mockRejectedValue(new Error('db down'))
 

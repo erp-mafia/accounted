@@ -11,19 +11,27 @@
  * migration itself uses. Nothing is inserted: an invoice the provider knows
  * but this company does not is skipped, not imported.
  *
- * Join keys are deliberately strict. Sales invoices join on invoice_number
- * (UNIQUE per company). Supplier invoices join on the supplier's invoice
- * number AND the invoice date, and only when that pair is unique on both
- * sides: two suppliers can legitimately issue "1001" in the same year, and a
- * wrong join here would hand the linker a plausible but wrong candidate.
+ * Join keys are deliberately strict: invoice number AND invoice date, on
+ * both registers, and only when that pair is unique on both sides. The
+ * unlinked rows are read from the whole company, so a native (non-migrated)
+ * invoice that is unbooked for its own reasons (a kontantmetod invoice, a
+ * draft) sits next to the migrated ones; requiring the date as well as the
+ * number, and excluding sales drafts (a migrated row is a draft only when the
+ * source had no voucher for it anyway; supplier_invoices has no draft status),
+ * keeps a native invoice that happens to reuse a provider number from being
+ * handed to the linker. Two suppliers can legitimately issue "1001" in the
+ * same year, and a wrong join would hand the linker a plausible but wrong
+ * candidate.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { ISO_DATE_RE } from '@/lib/invariants'
 import type { ProviderName } from '@/lib/providers/types'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
 import {
   fetchSalesInvoicesHydrated,
   fetchSupplierInvoicesHydrated,
+  type HydrationReport,
 } from '@/lib/providers/provider-data-fetcher'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
@@ -46,6 +54,12 @@ export interface RelinkRegistrationVouchersResult extends RegistrationLinkResult
   matched: number
   /** Provider invoices with no unlinked counterpart here (already linked, never imported, or ambiguous join). */
   unmatched: number
+  /**
+   * What the provider re-fetch managed to hydrate. When a budget was
+   * exhausted, the `refNotFetched` bucket above is where those invoices went,
+   * and a re-run (or a larger budget) can still link them.
+   */
+  hydration: { sales: HydrationReport; supplier: HydrationReport }
 }
 
 interface UnlinkedSalesRow {
@@ -53,6 +67,7 @@ interface UnlinkedSalesRow {
   invoice_number: string | null
   invoice_date: string
   total_sek: number | null
+  currency: string | null
 }
 
 interface UnlinkedSupplierRow {
@@ -60,10 +75,19 @@ interface UnlinkedSupplierRow {
   supplier_invoice_number: string | null
   invoice_date: string
   total_sek: number | null
+  currency: string | null
 }
 
-function supplierJoinKey(number: string | null | undefined, date: string | null | undefined): string | null {
-  return number && date ? `${number}::${date}` : null
+/**
+ * "number::YYYY-MM-DD". The DB renders a `date` column as YYYY-MM-DD; the
+ * provider's issue date is passed through the mapper untouched, so it is
+ * trimmed to the same ten characters in case a provider ever ships a
+ * datetime. A date that does not start like an ISO date joins nothing.
+ */
+function joinKey(number: string | null | undefined, date: string | null | undefined): string | null {
+  if (!number || !date) return null
+  const day = date.slice(0, 10)
+  return ISO_DATE_RE.test(day) ? `${number}::${day}` : null
 }
 
 /** A map that remembers keys seen more than once, so those are never joined on. */
@@ -91,25 +115,28 @@ export async function relinkRegistrationVouchers(
   const resolved = await resolveConsent(companyId, consentId)
   const provider = resolved.consent.provider as ProviderName
 
-  const [{ invoices: providerSales }, { invoices: providerSupplier }] = await Promise.all([
+  const [sales, supplier] = await Promise.all([
     fetchSalesInvoicesHydrated(provider, resolved.accessToken, resolved.providerCompanyId),
     fetchSupplierInvoicesHydrated(provider, resolved.accessToken, resolved.providerCompanyId),
   ])
+  const providerSales = sales.invoices
+  const providerSupplier = supplier.invoices
 
   const [unlinkedSales, unlinkedSupplier] = await Promise.all([
     fetchAllRows<UnlinkedSalesRow>(({ from, to }) =>
       supabase
         .from('invoices')
-        .select('id, invoice_number, invoice_date, total_sek')
+        .select('id, invoice_number, invoice_date, total_sek, currency')
         .eq('company_id', companyId)
         .is('journal_entry_id', null)
+        .neq('status', 'draft')
         .order('id', { ascending: true })
         .range(from, to),
     ),
     fetchAllRows<UnlinkedSupplierRow>(({ from, to }) =>
       supabase
         .from('supplier_invoices')
-        .select('id, supplier_invoice_number, invoice_date, total_sek')
+        .select('id, supplier_invoice_number, invoice_date, total_sek, currency')
         .eq('company_id', companyId)
         .is('registration_journal_entry_id', null)
         .order('id', { ascending: true })
@@ -117,26 +144,28 @@ export async function relinkRegistrationVouchers(
     ),
   ])
 
-  const salesByNumber = uniqueByKey(unlinkedSales, (row) => row.invoice_number || null)
+  const salesByKey = uniqueByKey(unlinkedSales, (row) => joinKey(row.invoice_number, row.invoice_date))
   const supplierByKey = uniqueByKey(unlinkedSupplier, (row) =>
-    supplierJoinKey(row.supplier_invoice_number, row.invoice_date),
+    joinKey(row.supplier_invoice_number, row.invoice_date),
   )
-  const providerSalesUnique = uniqueByKey(providerSales, (dto) => dto.invoiceNumber || null)
+  const providerSalesUnique = uniqueByKey(providerSales, (dto) => joinKey(dto.invoiceNumber, dto.issueDate))
   const providerSupplierUnique = uniqueByKey(providerSupplier, (dto) =>
-    supplierJoinKey(dto.invoiceNumber, dto.issueDate),
+    joinKey(dto.invoiceNumber, dto.issueDate),
   )
 
   const inputs: MigratedInvoiceLinkInput[] = []
-  for (const [number, dto] of providerSalesUnique) {
-    const row = salesByNumber.get(number)
+  for (const [key, dto] of providerSalesUnique) {
+    const row = salesByKey.get(key)
     if (!row) continue
     inputs.push({
       invoiceId: row.id,
       kind: 'customer',
       sourceVoucher: dto.sourceVoucher ?? null,
+      refNotFetched: sales.unhydratedIds.has(dto.id),
       invoiceDate: row.invoice_date,
       totalSek: row.total_sek,
-      invoiceNumber: number,
+      currencyCode: row.currency,
+      invoiceNumber: dto.invoiceNumber || null,
     })
   }
   for (const [key, dto] of providerSupplierUnique) {
@@ -146,8 +175,10 @@ export async function relinkRegistrationVouchers(
       invoiceId: row.id,
       kind: 'supplier',
       sourceVoucher: dto.sourceVoucher ?? null,
+      refNotFetched: supplier.unhydratedIds.has(dto.id),
       invoiceDate: row.invoice_date,
       totalSek: row.total_sek,
+      currencyCode: row.currency,
       invoiceNumber: dto.invoiceNumber || null,
     })
   }
@@ -160,5 +191,6 @@ export async function relinkRegistrationVouchers(
     providerInvoices,
     matched: inputs.length,
     unmatched: providerInvoices - inputs.length,
+    hydration: { sales: sales.hydration, supplier: supplier.hydration },
   }
 }

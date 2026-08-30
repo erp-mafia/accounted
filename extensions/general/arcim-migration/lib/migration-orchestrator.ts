@@ -498,7 +498,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
       try {
         // Hydrated, not the bare list: the list payload omits VAT, the net
         // and the line items for most providers (see provider-data-fetcher).
-        const { invoices, hydration } = await fetchSalesInvoicesHydrated(
+        const { invoices, hydration, unhydratedIds } = await fetchSalesInvoicesHydrated(
           provider, accessToken, providerCompanyId,
         )
         console.log(`[migration] Sales invoices: ${invoices.length} total`)
@@ -689,8 +689,10 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               invoiceId: String(invoiceId),
               kind: 'customer',
               sourceVoucher: mappedBatch[i].dto.sourceVoucher ?? null,
+              refNotFetched: unhydratedIds.has(mappedBatch[i].dto.id),
               invoiceDate: mappedBatch[i].dto.issueDate,
               totalSek: mappedBatch[i].invoice.total_sek as number | null,
+              currencyCode: mappedBatch[i].dto.currencyCode || 'SEK',
               invoiceNumber: mappedBatch[i].dto.invoiceNumber || null,
             })
             const fx = mappedBatch[i].fxUnresolved
@@ -729,7 +731,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
     if (options.importSupplierInvoices !== false) {
       emitProgress(options, { status: 'importing', currentStep: 'Importerar leverantörsfakturor...', progress: 80 })
       try {
-        const { invoices, hydration } = await fetchSupplierInvoicesHydrated(
+        const { invoices, hydration, unhydratedIds } = await fetchSupplierInvoicesHydrated(
           provider, accessToken, providerCompanyId,
         )
         console.log(`[migration] Supplier invoices: ${invoices.length} total`)
@@ -934,8 +936,10 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               invoiceId: String(invoiceId),
               kind: 'supplier',
               sourceVoucher: mappedBatch[i].dto.sourceVoucher ?? null,
+              refNotFetched: unhydratedIds.has(mappedBatch[i].dto.id),
               invoiceDate: mappedBatch[i].dto.issueDate,
               totalSek: mappedBatch[i].invoice.total_sek as number | null,
+              currencyCode: mappedBatch[i].dto.currencyCode || 'SEK',
               invoiceNumber: mappedBatch[i].dto.invoiceNumber || null,
             })
             const fx = mappedBatch[i].fxUnresolved
@@ -989,13 +993,14 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           scanned: links.scanned,
           linked: links.linked,
           noRef: links.noRef,
+          refNotFetched: links.refNotFetched,
           unresolved: links.unresolved,
           ambiguous: links.ambiguous,
           amountMismatch: links.amountMismatch,
           alreadyLinked: links.alreadyLinked,
         }
         console.log(
-          `[migration] Registration vouchers: ${links.linked} linked, ${links.noRef} without ref, ${links.unresolved} unresolved, `
+          `[migration] Registration vouchers: ${links.linked} linked, ${links.noRef} without ref, ${links.refNotFetched} ref not fetched, ${links.unresolved} unresolved, `
           + `${links.ambiguous} ambiguous, ${links.amountMismatch} amount mismatch, ${links.alreadyLinked} already linked (${links.scanned} scanned)`,
         )
       } catch (err) {

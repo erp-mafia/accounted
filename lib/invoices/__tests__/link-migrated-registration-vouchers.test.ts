@@ -100,6 +100,24 @@ function updateCalls(table: 'supplier_invoices' | 'invoices') {
   return mock.calls.filter((c) => c.table === table && c.method === 'update')
 }
 
+/**
+ * The filter calls chained onto the FIRST `update` on `table`, up to the next
+ * `from`. Asserting on these (not on every `.eq` the module ever made against
+ * the table) is what pins the tenancy and NULL guards to the write itself:
+ * the referencing-invoice read earlier also filters on company_id.
+ */
+function updateChain(table: 'supplier_invoices' | 'invoices') {
+  const start = mock.calls.findIndex((c) => c.table === table && c.method === 'update')
+  if (start < 0) return []
+  const chain: [string, unknown[]][] = []
+  for (let i = start + 1; i < mock.calls.length; i++) {
+    const c = mock.calls[i]
+    if (c.table !== table) break
+    chain.push([c.method, c.args])
+  }
+  return chain
+}
+
 beforeEach(() => {
   mock = createQueuedMockSupabase()
 })
@@ -108,7 +126,7 @@ describe('linkMigratedRegistrationVouchers', () => {
   it('returns zeros and reads nothing for an empty input', async () => {
     const result = await run([])
     expect(result).toEqual({
-      scanned: 0, linked: 0, noRef: 0, unresolved: 0, ambiguous: 0, amountMismatch: 0, alreadyLinked: 0, reports: [],
+      scanned: 0, linked: 0, noRef: 0, refNotFetched: 0, unresolved: 0, ambiguous: 0, amountMismatch: 0, alreadyLinked: 0, reports: [],
     })
     expect(mock.calls).toHaveLength(0)
   })
@@ -130,11 +148,13 @@ describe('linkMigratedRegistrationVouchers', () => {
 
     const [update] = updateCalls('supplier_invoices')
     expect(update.args[0]).toEqual({ registration_journal_entry_id: 'je-1' })
-    // Scoped to the company and written from NULL only.
-    expect(mock.findCalls('supplier_invoices', 'eq')).toEqual(
-      expect.arrayContaining([['company_id', COMPANY], ['id', 'si-1']]),
-    )
-    expect(mock.findCall('supplier_invoices', 'is')).toEqual(['registration_journal_entry_id', null])
+    // The write itself is scoped to the row, the company, and NULL only.
+    expect(updateChain('supplier_invoices')).toEqual(expect.arrayContaining([
+      ['eq', ['id', 'si-1']],
+      ['eq', ['company_id', COMPANY]],
+      ['is', ['registration_journal_entry_id', null]],
+      ['select', ['id']],
+    ]))
     expect(updateCalls('invoices')).toHaveLength(0)
   })
 
@@ -155,7 +175,12 @@ describe('linkMigratedRegistrationVouchers', () => {
     expect(result.linked).toBe(1)
     const [update] = updateCalls('invoices')
     expect(update.args[0]).toEqual({ journal_entry_id: 'je-2' })
-    expect(mock.findCall('invoices', 'is')).toEqual(['journal_entry_id', null])
+    expect(updateChain('invoices')).toEqual(expect.arrayContaining([
+      ['eq', ['id', 'inv-1']],
+      ['eq', ['company_id', COMPANY]],
+      ['is', ['journal_entry_id', null]],
+      ['select', ['id']],
+    ]))
     expect(updateCalls('supplier_invoices')).toHaveLength(0)
   })
 
@@ -186,6 +211,73 @@ describe('linkMigratedRegistrationVouchers', () => {
     expect(updateCalls('supplier_invoices')).toHaveLength(0)
     // Only the two index reads happened.
     expect(mock.supabase.from).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports refNotFetched (not noRef) when the provider detail payload was never fetched', async () => {
+    queue({ vouchers: [voucher({ id: 'je-1' })] })
+
+    const result = await run([input({ invoiceId: 'si-1', sourceVoucher: undefined, refNotFetched: true })])
+
+    expect(result.refNotFetched).toBe(1)
+    expect(result.noRef).toBe(0)
+    expect(result.reports[0]).toMatchObject({ outcome: 'refNotFetched' })
+    expect(result.reports[0].reason).toContain('not fetched')
+    expect(updateCalls('supplier_invoices')).toHaveLength(0)
+  })
+
+  it('does not link a December invoice to the previous year\'s same-numbered voucher (date corridor)', async () => {
+    // Fortnox restarts numbering per year. An invoice dated 2024-12-28 that the
+    // source booked in January 2025 carries FY2025's "B3"; resolving in the
+    // invoice-date year finds FY2024's B3, an unrelated January-2024 voucher
+    // from a recurring supplier with the identical amount. It must stay NULL.
+    queue({
+      vouchers: [voucher({ id: 'je-wrong-year', series: 'B', number: 3, period: 'period-2024', date: '2024-01-10' })],
+    })
+
+    const result = await run([
+      input({ invoiceId: 'si-1', sourceVoucher: { series: 'B', number: 3 }, invoiceDate: '2024-12-28', totalSek: 1000 }),
+    ])
+
+    expect(result.linked).toBe(0)
+    expect(result.unresolved).toBe(1)
+    expect(result.reports[0].reason).toMatch(/dated 2024-01-10.*before the invoice date 2024-12-28/)
+    expect(updateCalls('supplier_invoices')).toHaveLength(0)
+    // Never reached the corroboration reads.
+    expect(mock.supabase.from).toHaveBeenCalledTimes(2)
+  })
+
+  it('applies the date corridor to series-less refs too', async () => {
+    queue({
+      vouchers: [voucher({ id: 'je-far', series: 'A', number: 329, date: '2025-11-30' })],
+    })
+
+    const result = await run([
+      input({ invoiceId: 'si-1', sourceVoucher: { series: null, number: 329 }, invoiceDate: '2025-03-14' }),
+    ])
+
+    expect(result.unresolved).toBe(1)
+    expect(result.reports[0].reason).toContain('after the invoice date')
+  })
+
+  it('accepts a verifikat booked a few weeks after, or a few days before, the invoice date', async () => {
+    queue({
+      vouchers: [
+        voucher({ id: 'je-late', series: 'A', number: 329, date: '2025-04-30' }),
+        voucher({ id: 'je-early', series: 'A', number: 330, date: '2025-03-04' }),
+      ],
+      entries: [{ id: 'je-late', status: 'posted' }, { id: 'je-early', status: 'posted' }],
+      lines: [...supplierLines('je-late'), ...supplierLines('je-early')],
+      supplierRefs: [],
+      customerRefs: [],
+      updates: [{ data: [{ id: 'si-1' }] }, { data: [{ id: 'si-2' }] }],
+    })
+
+    const result = await run([
+      input({ invoiceId: 'si-1', invoiceDate: '2025-03-14' }),
+      input({ invoiceId: 'si-2', sourceVoucher: { series: 'A', number: 330 }, invoiceDate: '2025-03-14' }),
+    ])
+
+    expect(result.linked).toBe(2)
   })
 
   it('reports unresolved when no verifikat carries the ref in the invoice year', async () => {
@@ -256,6 +348,27 @@ describe('linkMigratedRegistrationVouchers', () => {
 
     expect(result.amountMismatch).toBe(1)
     expect(result.reports[0].reason).toContain('999')
+    expect(updateCalls('supplier_invoices')).toHaveLength(0)
+  })
+
+  it('explains a foreign-currency mismatch as a rate difference, and still does not link', async () => {
+    // total_sek comes from our Riksbanken index; the source booked 2440 at its
+    // own rate. The amounts differ, so the bucket is amountMismatch, but the
+    // reason must say why instead of implying a bookkeeping discrepancy.
+    queue({
+      vouchers: [voucher({ id: 'je-1' })],
+      entries: [{ id: 'je-1', status: 'posted' }],
+      lines: supplierLines('je-1', 11240),
+      supplierRefs: [],
+      customerRefs: [],
+    })
+
+    const result = await run([input({ invoiceId: 'si-1', totalSek: 11200, currencyCode: 'EUR' })])
+
+    expect(result.amountMismatch).toBe(1)
+    expect(result.linked).toBe(0)
+    expect(result.reports[0].reason).toContain('EUR')
+    expect(result.reports[0].reason).toContain('rate')
     expect(updateCalls('supplier_invoices')).toHaveLength(0)
   })
 

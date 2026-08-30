@@ -237,6 +237,7 @@ interface RegistrationLinkCounts {
   scanned: number
   linked: number
   noRef: number
+  refNotFetched: number
   unresolved: number
   ambiguous: number
   amountMismatch: number
@@ -1858,6 +1859,7 @@ function ResultStep({
           ? t('ext_arcim_registration_links_detail', {
               unlinked,
               noRef: links.noRef,
+              refNotFetched: links.refNotFetched ?? 0,
               unresolved: links.unresolved + links.ambiguous,
               amountMismatch: links.amountMismatch,
             })

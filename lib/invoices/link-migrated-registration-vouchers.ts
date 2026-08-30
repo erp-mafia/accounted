@@ -17,13 +17,30 @@
  *  - it NEVER inserts, updates or deletes a journal entry or a line; the only
  *    writes are the two invoice-side foreign keys, and only from NULL;
  *  - a link is written only when the ref resolves to exactly ONE posted
- *    verifikat in the invoice's fiscal year, the verifikat's AP (244x) or AR
- *    (151x) net corroborates the invoice's SEK total to the öre, and no other
- *    invoice already points at it;
+ *    verifikat in the invoice's fiscal year, that verifikat is dated within a
+ *    short corridor of the invoice date, its AP (244x) or AR (151x) net
+ *    corroborates the invoice's SEK total to the öre, and no other invoice
+ *    already points at it;
  *  - everything else stays NULL and is reported with its reason, so a
  *    kontantmetod invoice (the named voucher has no 244x/151x line), a split
  *    voucher, a credit note sharing its number or a duplicate ref is left for
  *    a human.
+ *
+ * The date corridor exists because source systems restart voucher numbering
+ * every fiscal year and the invoice date picks the year on our side: a
+ * December invoice that the source booked in January carries next year's
+ * number, which in the invoice-date year belongs to an unrelated voucher from
+ * the previous January. Requiring the verifikat to be dated near the invoice
+ * rejects that voucher even when a recurring amount happens to match; the
+ * cut-off invoice itself is reported `unresolved` rather than linked across
+ * the year boundary (a wrong link is räkenskapsinformation, a missing one is
+ * a worklist item).
+ *
+ * Foreign-currency invoices are corroborated on `total_sek`, which the
+ * migration derives from OUR rate index, while the source voucher was booked
+ * at the source system's rate. The two rarely agree to the öre, so such
+ * invoices normally land in `amountMismatch` with a reason that says so; the
+ * bucket is honest (the SEK amounts do differ), not a bookkeeping fault.
  *
  * Idempotent: re-running over already-linked invoices reports `alreadyLinked`
  * and writes nothing. Payment vouchers are out of scope here; they are linked
@@ -41,9 +58,11 @@ import {
   fetchSourceRefVouchers,
   periodIdForDate,
   resolveDatedRef,
+  sourceRefKey,
   voucherKey,
   type FiscalPeriodRow,
   type VoucherIndex,
+  type VoucherRow,
 } from '@/lib/documents/voucher-ref-resolver'
 import type { SourceVoucherRefDto } from '@/lib/providers/dto'
 
@@ -57,10 +76,18 @@ export interface MigratedInvoiceLinkInput {
   kind: MigratedInvoiceKind
   /** The booking voucher as the provider reported it; absent = nothing to resolve. */
   sourceVoucher: SourceVoucherRefDto | null | undefined
+  /**
+   * True when the payload that carries the ref (Fortnox's detail form) was
+   * never fetched, so an absent `sourceVoucher` means "unknown", not "none".
+   * Reported as `refNotFetched` instead of `noRef`.
+   */
+  refNotFetched?: boolean
   /** Invoice date, ISO. Picks the fiscal year the ref is resolved in. */
   invoiceDate: string
   /** The invoice's SEK total. null = no SEK conversion was established. */
   totalSek: number | null | undefined
+  /** Invoice currency; a non-SEK code explains an amount mismatch (see header). */
+  currencyCode?: string | null
   /** Display only, carried into the report. */
   invoiceNumber?: string | null
 }
@@ -68,6 +95,7 @@ export interface MigratedInvoiceLinkInput {
 export type RegistrationLinkOutcome =
   | 'linked'
   | 'noRef'
+  | 'refNotFetched'
   | 'unresolved'
   | 'ambiguous'
   | 'amountMismatch'
@@ -91,8 +119,15 @@ export interface RegistrationLinkCounts {
   /** The provider reported no booking voucher for the invoice. */
   noRef: number
   /**
-   * The ref matched no posted verifikat in the invoice's fiscal year, or the
-   * verifikat it matched carries no 244x/151x line (not a registration voucher).
+   * The provider payload that carries the ref was never fetched (detail
+   * hydration ran out of budget or failed), so whether a voucher exists is
+   * unknown. A re-run of /reconcile with more budget can still link these.
+   */
+  refNotFetched: number
+  /**
+   * The ref matched no posted verifikat in the invoice's fiscal year, the
+   * verifikat it matched is dated outside the corridor around the invoice
+   * date, or it carries no 244x/151x line (not a registration voucher).
    */
   unresolved: number
   /** More than one verifikat could be meant, or two invoices claim the same one. */
@@ -121,6 +156,24 @@ const AP_ACCOUNT_PREFIX = '244'
 const AR_ACCOUNT_PREFIX = '151'
 /** PostgREST puts `.in()` lists in the URL, so id filters are chunked. */
 const ID_CHUNK = 200
+/**
+ * How far a registration voucher may be dated from its invoice. Both Visma
+ * and Fortnox default the booking date to the invoice date; a late-booked
+ * supplier invoice lands within a few weeks, and a pre-dated one (an invoice
+ * dated the 1st, received and booked in late the month before) a few days
+ * earlier. A voucher a year away is the previous year's same-numbered one.
+ */
+const ENTRY_DATE_DAYS_BEFORE = 14
+const ENTRY_DATE_DAYS_AFTER = 90
+const MS_PER_DAY = 86_400_000
+
+/** Whole days from `from` to `to` (negative when `to` is earlier), or null for unparsable input. */
+function daysBetween(from: string, to: string): number | null {
+  const a = Date.parse(from.slice(0, 10))
+  const b = Date.parse(to.slice(0, 10))
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null
+  return Math.round((b - a) / MS_PER_DAY)
+}
 
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = []
@@ -133,6 +186,7 @@ function emptyCounts(): RegistrationLinkCounts {
     scanned: 0,
     linked: 0,
     noRef: 0,
+    refNotFetched: 0,
     unresolved: 0,
     ambiguous: 0,
     amountMismatch: 0,
@@ -142,12 +196,33 @@ function emptyCounts(): RegistrationLinkCounts {
 
 type Resolution =
   | { outcome: 'resolved'; entryId: string }
-  | { outcome: 'noRef' | 'unresolved' | 'ambiguous'; reason: string }
+  | { outcome: 'noRef' | 'refNotFetched' | 'unresolved' | 'ambiguous'; reason: string }
+
+/**
+ * The verifikat must be dated near the invoice. See the module header: a
+ * same-numbered voucher a year away is the previous year's, and the amount
+ * check alone does not reliably tell them apart.
+ */
+function checkEntryDate(row: VoucherRow, input: MigratedInvoiceLinkInput): Resolution {
+  const days = daysBetween(input.invoiceDate, row.entry_date)
+  if (days === null) {
+    return { outcome: 'unresolved', reason: `verifikat date ${row.entry_date} or invoice date ${input.invoiceDate} is unreadable` }
+  }
+  if (days < -ENTRY_DATE_DAYS_BEFORE || days > ENTRY_DATE_DAYS_AFTER) {
+    const where = days < 0 ? `${-days} days before` : `${days} days after`
+    return {
+      outcome: 'unresolved',
+      reason: `verifikat is dated ${row.entry_date}, ${where} the invoice date ${input.invoiceDate}: outside the ${ENTRY_DATE_DAYS_BEFORE}/${ENTRY_DATE_DAYS_AFTER}-day corridor, likely another year's voucher`,
+    }
+  }
+  return { outcome: 'resolved', entryId: row.id }
+}
 
 /**
  * One invoice's ref against the company's migrated verifikat, scoped to the
- * fiscal year of the invoice date. Series-less refs (a bare "329") search
- * every series in that year and are accepted only on a single hit.
+ * fiscal year of the invoice date and to the date corridor around it.
+ * Series-less refs (a bare "329") search every series in that year and are
+ * accepted only on a single hit.
  */
 function resolveInput(
   index: VoucherIndex,
@@ -156,6 +231,9 @@ function resolveInput(
 ): Resolution {
   const ref = input.sourceVoucher
   if (!ref || !Number.isInteger(ref.number) || ref.number <= 0) {
+    if (input.refNotFetched) {
+      return { outcome: 'refNotFetched', reason: 'provider detail payload not fetched (hydration budget or failure): voucher unknown' }
+    }
     return { outcome: 'noRef', reason: 'provider reported no booking voucher' }
   }
 
@@ -166,7 +244,7 @@ function resolveInput(
 
   if (ref.series === null) {
     const hits = (index.byNumber.get(ref.number) ?? []).filter((v) => v.fiscal_period_id === periodId)
-    if (hits.length === 1) return { outcome: 'resolved', entryId: hits[0].id }
+    if (hits.length === 1) return checkEntryDate(hits[0], input)
     if (hits.length === 0) {
       return { outcome: 'unresolved', reason: `no migrated verifikat carries source number ${ref.number} in that fiscal year` }
     }
@@ -174,7 +252,15 @@ function resolveInput(
   }
 
   const entryId = resolveDatedRef(index, periods, { series: ref.series, number: ref.number, date: input.invoiceDate })
-  if (entryId) return { outcome: 'resolved', entryId }
+  if (entryId) {
+    // resolveDatedRef hands back the id; the row (with its entry_date) sits
+    // in the period-agnostic index under the same source ref.
+    const row = (index.bySourceRef.get(sourceRefKey(ref.series, ref.number)) ?? []).find((v) => v.id === entryId)
+    if (!row) {
+      return { outcome: 'unresolved', reason: `source ref ${ref.series}${ref.number} resolved to an entry the index does not carry` }
+    }
+    return checkEntryDate(row, input)
+  }
 
   if (index.ambiguousPeriodKeys.has(voucherKey(periodId, ref.series, ref.number))) {
     return { outcome: 'ambiguous', reason: `source ref ${ref.series}${ref.number} is carried by more than one verifikat in that fiscal year` }
@@ -362,7 +448,14 @@ export async function linkMigratedRegistrationVouchers(
       continue
     }
     if (Math.abs(booked - expected) > ORE_TOLERANCE) {
-      report(input, 'amountMismatch', `${side} is ${booked} but the invoice total is ${expected} SEK`)
+      const currency = (input.currencyCode ?? 'SEK').toUpperCase()
+      report(
+        input,
+        'amountMismatch',
+        currency !== 'SEK'
+          ? `${side} is ${booked} but the invoice total is ${expected} SEK; the invoice is in ${currency}, its SEK total uses our rate index and the source booked at its own rate, so the amounts are not corroborated`
+          : `${side} is ${booked} but the invoice total is ${expected} SEK`,
+      )
       continue
     }
 
@@ -405,6 +498,7 @@ export async function linkMigratedRegistrationVouchers(
     scanned: counts.scanned,
     linked: counts.linked,
     noRef: counts.noRef,
+    refNotFetched: counts.refNotFetched,
     unresolved: counts.unresolved,
     ambiguous: counts.ambiguous,
     amountMismatch: counts.amountMismatch,
