@@ -1070,10 +1070,10 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   INVOICE_SEND_EMAIL_NOT_CONFIGURED: {
     httpStatus: 503,
     message_sv:
-      'E-posttjänsten är inte konfigurerad. Kontrollera att RESEND_API_KEY och RESEND_FROM_EMAIL är satta.',
+      'E-posttjänsten är inte konfigurerad. Kontrollera att RESEND_API_KEY och RESEND_FROM_EMAIL är satta (eller SMTP_HOST och SMTP_FROM_EMAIL med EMAIL_PROVIDER=smtp).',
     message_en: 'Email service is not configured.',
     remediation: {
-      description: 'Set RESEND_API_KEY and RESEND_FROM_EMAIL in the deployment environment.',
+      description: 'Set RESEND_API_KEY and RESEND_FROM_EMAIL (or SMTP_HOST and SMTP_FROM_EMAIL with EMAIL_PROVIDER=smtp) in the deployment environment.',
     },
   },
   INVOICE_SEND_NO_CUSTOMER_EMAIL: {
@@ -2286,6 +2286,20 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
 // ─────────────────────────────────────────────────────────────────
 
 const DOCUMENT: Record<string, StructuredErrorEntry> = {
+  // Signed-URL (direct-to-storage) upload: completion found no object under
+  // the reservation. The bytes never landed, or the reservation expired.
+  DOCUMENT_UPLOAD_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Den uppladdade filen hittades inte eller har gått ut. Ladda upp filen igen.',
+    message_en: 'The uploaded file was not found or the upload has expired. Upload the file again.',
+  },
+  // Signed-URL upload completed against an empty object: the PUT sent no
+  // bytes, or sent them somewhere else.
+  DOC_UPLOAD_EMPTY: {
+    httpStatus: 400,
+    message_sv: 'Filen är tom. Ladda upp filen igen.',
+    message_en: 'The uploaded file is empty. Upload the file again.',
+  },
   DOC_UPLOAD_NO_FILE: {
     httpStatus: 400,
     message_sv: 'Ingen fil bifogad.',
@@ -2393,6 +2407,13 @@ const INBOX_UPLOAD: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Uppladdningen misslyckades. Försök igen.',
     message_en: 'Upload failed.',
+  },
+  // A read-only (viewer) member: the storage policy admits the bytes on
+  // membership alone, the document_attachments insert policy does not.
+  INBOX_UPLOAD_NOT_PERMITTED: {
+    httpStatus: 403,
+    message_sv: 'Du har inte behörighet att ladda upp underlag i det här företaget. Medlemmar med läsbehörighet kan inte lägga till dokument.',
+    message_en: 'You do not have permission to upload documents to this company. Read-only members cannot add documents.',
   },
   INBOX_ATTACH_FAILED: {
     httpStatus: 500,

@@ -43,6 +43,7 @@ import {
   type BookingDuplicateExclusions,
 } from '@/lib/transactions/booking-duplicate-detection'
 import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
+import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createLogger } from '@/lib/logger'
@@ -248,11 +249,24 @@ export async function categorizeMatchedTransaction(
 ): Promise<CategorizeCoreResult> {
   const { category, vatTreatment, vatAmount, notes, allowDuplicate, dimensions, accountOverride } = opts
 
-  const { data: transaction, error: fetchError } = await supabase
-    .from('transactions').select('*').eq('id', txId).eq('company_id', companyId).single()
+  // The junction rows ride along on the same read: a row bulk-booked into a
+  // samlingsverifikat or split over several verifikat (1:N, #1553) carries
+  // journal_entry_id = NULL, and the pointer alone would let it be booked a
+  // second time. Only 'bank_line' rows count (hasBankLineJunctionRow): a
+  // residual's 'other' row left behind by a storno must stay re-bookable.
+  const { data: transactionRow, error: fetchError } = await supabase
+    .from('transactions')
+    .select('*, transaction_voucher_links(journal_entry_id, role)')
+    .eq('id', txId)
+    .eq('company_id', companyId)
+    .single()
 
-  if (fetchError || !transaction) {
+  if (fetchError || !transactionRow) {
     return { error: 'Transaction not found: it may have been deleted.', status: 404 }
+  }
+  const { transaction_voucher_links: junctionLinks, ...transaction } = transactionRow
+  if (hasBankLineJunctionRow(junctionLinks)) {
+    return { error: 'Transaction already has a journal entry: it was categorized in the meantime.', status: 409 }
   }
   // A stale pointer at a 'reversed' entry (storno/correction left it behind)
   // must not block re-categorization: the row reads as "utan koppling" in the

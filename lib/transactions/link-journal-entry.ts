@@ -19,6 +19,7 @@ import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-inv
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
+import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { createLogger } from '@/lib/logger'
 import type { Invoice, Transaction } from '@/types'
 
@@ -131,17 +132,33 @@ export async function linkTransactionToJournalEntry(
   // Data minimization (GDPR Art.5(1)(c)): pull only the columns needed for
   // validation, optimistic-lock invoice update, invoice_payments insert, and
   // the compensating-rollback path. No select('*').
-  const { data: transaction, error: fetchTxError } = await supabase
+  // transaction_voucher_links rides along on the same read: a row bulk-booked
+  // into a samlingsverifikat or split over several verifikat (1:N, #1553)
+  // carries journal_entry_id = NULL and must still refuse a second link. Only
+  // 'bank_line' rows count (hasBankLineJunctionRow): a residual's 'other' row
+  // left behind by a storno must stay re-linkable.
+  const { data: transactionRow, error: fetchTxError } = await supabase
     .from('transactions')
     .select(
-      'id, date, amount, currency, exchange_rate, journal_entry_id, invoice_id, is_business, potential_invoice_id, potential_supplier_invoice_id'
+      'id, date, amount, currency, exchange_rate, journal_entry_id, invoice_id, is_business, potential_invoice_id, potential_supplier_invoice_id, transaction_voucher_links(journal_entry_id, role)'
     )
     .eq('id', transactionId)
     .eq('company_id', companyId)
     .single()
 
-  if (fetchTxError || !transaction) {
+  if (fetchTxError || !transactionRow) {
     return { ok: false, code: 'TX_CATEGORIZE_TX_NOT_FOUND' }
+  }
+  const { transaction_voucher_links: junctionLinks, ...transaction } = transactionRow as typeof transactionRow & {
+    transaction_voucher_links?: Array<{ journal_entry_id: string; role?: string | null }> | null
+  }
+  if (hasBankLineJunctionRow(junctionLinks)) {
+    const bankLine = junctionLinks!.find((row) => (row.role ?? 'bank_line') === 'bank_line')!
+    return {
+      ok: false,
+      code: 'LINK_TX_TX_ALREADY_LINKED',
+      details: { existingJournalEntryId: bankLine.journal_entry_id },
+    }
   }
 
   // Only a LIVE (posted) pointer blocks re-linking. A pointer left behind by a

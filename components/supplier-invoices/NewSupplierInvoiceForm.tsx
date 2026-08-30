@@ -29,6 +29,8 @@ import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { exceedsHostedUploadLimit } from '@/lib/documents/upload-size'
+import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
@@ -1248,13 +1250,23 @@ export default function NewSupplierInvoiceForm({
     setExtractionPhase('idle')
     setPendingExtraction(null)
 
+    // Above the hosted request-body limit the platform refuses a multipart
+    // body before the route runs (a plain 413, nothing in the logs), so the
+    // bytes go straight to Storage through a signed URL instead. Same
+    // response shape either way.
+    const directToStorage = exceedsHostedUploadLimit(file.size)
     try {
-      const formData = new FormData()
-      formData.append('file', file)
-      const res = await fetch('/api/extensions/ext/invoice-inbox/upload', {
-        method: 'POST',
-        body: formData,
-      })
+      let res: Response
+      if (directToStorage) {
+        res = await uploadViaSignedUrl(file)
+      } else {
+        const formData = new FormData()
+        formData.append('file', file)
+        res = await fetch('/api/extensions/ext/invoice-inbox/upload', {
+          method: 'POST',
+          body: formData,
+        })
+      }
       if (res.ok) {
         const json = await res.json().catch(() => null)
         const data = json?.data as
@@ -1285,6 +1297,12 @@ export default function NewSupplierInvoiceForm({
       }
     } catch {
       // Extension unreachable: fall through to the plain upload below.
+    }
+    if (directToStorage) {
+      // The plain fallback posts a multipart body to /api/documents, which
+      // the platform would refuse the same way: nothing left to try.
+      setDocumentFiles([{ ...entry, status: 'error', error: t('underlag_upload_failed') }])
+      return
     }
     await uploadPlainDocument(entry)
   }
