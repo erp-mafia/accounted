@@ -395,6 +395,18 @@ const EMPTY_HYDRATION_REPORT: HydrationReport = {
   needed: 0, hydrated: 0, failed: 0, skippedForBudget: 0,
 };
 
+/** A register with its detail payloads merged in, plus what hydration missed. */
+export interface HydratedInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto> {
+  invoices: T[];
+  hydration: HydrationReport;
+  /**
+   * Ids (`dto.id`) of invoices that needed their detail form and did not get
+   * it. Fields that only the detail form carries are UNKNOWN for these, not
+   * absent: the migration must not report them as "the provider had none".
+   */
+  unhydratedIds: Set<string>;
+}
+
 /**
  * Default wall-clock ceiling for one hydration pass.
  *
@@ -562,6 +574,12 @@ async function mapWithConcurrency<T>(
  * Returns a NEW array in the original order; entries that were not hydrated
  * (already complete, out of budget, or the fetch failed) are the originals,
  * so the caller never ends up with fewer invoices than it passed in.
+ *
+ * `unhydratedIds` names the invoices that NEEDED a detail form and did not
+ * get one (budget, abort, or a failed fetch). A consumer that reads a field
+ * only the detail form carries (Fortnox's booking voucher, for instance) can
+ * tell "the provider reported none" from "we never asked" only through this
+ * set; the counts in the report do not say which invoices they were.
  */
 async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
   items: T[],
@@ -570,14 +588,18 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
   mapper: ((raw: Record<string, unknown>) => unknown) | null,
   label: string,
   budgetMs: number,
-): Promise<{ items: T[]; report: HydrationReport }> {
-  if (!fetchDetail || !mapper) return { items, report: { ...EMPTY_HYDRATION_REPORT } };
+): Promise<{ items: T[]; report: HydrationReport; unhydratedIds: Set<string> }> {
+  if (!fetchDetail || !mapper) {
+    return { items, report: { ...EMPTY_HYDRATION_REPORT }, unhydratedIds: new Set() };
+  }
 
   const pending = items
     .map((dto, index) => ({ dto, index }))
     .filter(({ dto }) => needsDetail(dto) && dto.id);
 
-  if (pending.length === 0) return { items, report: { ...EMPTY_HYDRATION_REPORT } };
+  if (pending.length === 0) {
+    return { items, report: { ...EMPTY_HYDRATION_REPORT }, unhydratedIds: new Set() };
+  }
 
   // Unpaid invoices are the ones a later payment match or credit note will
   // book, so they get the budget first.
@@ -585,6 +607,8 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
 
   const hydrated = [...items];
   const report: HydrationReport = { ...EMPTY_HYDRATION_REPORT, needed: pending.length };
+  // Every pending id starts out unhydrated and is removed on success.
+  const unhydratedIds = new Set<string>(pending.map(({ dto }) => dto.id));
   const deadline = Date.now() + budgetMs;
   let aborted: 'auth' | 'budget' | null = null;
 
@@ -615,6 +639,7 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
       }
       hydrated[index] = mapper(raw) as T;
       report.hydrated++;
+      unhydratedIds.delete(dto.id);
     } catch (err) {
       report.failed++;
 
@@ -653,7 +678,7 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
     + (aborted ? ` (stopped early: ${aborted})` : ''),
   );
 
-  return { items: hydrated, report };
+  return { items: hydrated, report, unhydratedIds };
 }
 
 /** Thrown when a detail fetch is still outstanding at the budget deadline. */
@@ -702,10 +727,10 @@ export async function fetchSalesInvoicesHydrated(
   accessToken: string,
   providerCompanyId?: string,
   budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
-): Promise<{ invoices: SalesInvoiceDto[]; hydration: HydrationReport }> {
+): Promise<HydratedInvoices<SalesInvoiceDto>> {
   const invoices = await fetchSalesInvoicesDirect(provider, accessToken, providerCompanyId);
 
-  const { items, report } = await hydrateInvoices<SalesInvoiceDto>(
+  const { items, report, unhydratedIds } = await hydrateInvoices<SalesInvoiceDto>(
     invoices,
     salesInvoiceNeedsDetail,
     detailFetcher(provider, ResourceType.SalesInvoices, accessToken, providerCompanyId),
@@ -714,7 +739,7 @@ export async function fetchSalesInvoicesHydrated(
     budgetMs,
   );
 
-  return { invoices: items, hydration: report };
+  return { invoices: items, hydration: report, unhydratedIds };
 }
 
 /** Supplier invoices with their detail payloads merged in where needed. */
@@ -723,10 +748,10 @@ export async function fetchSupplierInvoicesHydrated(
   accessToken: string,
   providerCompanyId?: string,
   budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
-): Promise<{ invoices: SupplierInvoiceDto[]; hydration: HydrationReport }> {
+): Promise<HydratedInvoices<SupplierInvoiceDto>> {
   const invoices = await fetchSupplierInvoicesDirect(provider, accessToken, providerCompanyId);
 
-  const { items, report } = await hydrateInvoices<SupplierInvoiceDto>(
+  const { items, report, unhydratedIds } = await hydrateInvoices<SupplierInvoiceDto>(
     invoices,
     supplierInvoiceNeedsDetail,
     detailFetcher(provider, ResourceType.SupplierInvoices, accessToken, providerCompanyId),
@@ -735,5 +760,5 @@ export async function fetchSupplierInvoicesHydrated(
     budgetMs,
   );
 
-  return { invoices: items, hydration: report };
+  return { invoices: items, hydration: report, unhydratedIds };
 }
