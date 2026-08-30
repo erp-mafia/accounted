@@ -1070,10 +1070,10 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   INVOICE_SEND_EMAIL_NOT_CONFIGURED: {
     httpStatus: 503,
     message_sv:
-      'E-posttjänsten är inte konfigurerad. Kontrollera att RESEND_API_KEY och RESEND_FROM_EMAIL är satta.',
+      'E-posttjänsten är inte konfigurerad. Kontrollera att RESEND_API_KEY och RESEND_FROM_EMAIL är satta (eller SMTP_HOST och SMTP_FROM_EMAIL med EMAIL_PROVIDER=smtp).',
     message_en: 'Email service is not configured.',
     remediation: {
-      description: 'Set RESEND_API_KEY and RESEND_FROM_EMAIL in the deployment environment.',
+      description: 'Set RESEND_API_KEY and RESEND_FROM_EMAIL (or SMTP_HOST and SMTP_FROM_EMAIL with EMAIL_PROVIDER=smtp) in the deployment environment.',
     },
   },
   INVOICE_SEND_NO_CUSTOMER_EMAIL: {
