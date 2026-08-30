@@ -222,6 +222,53 @@ async function seedVoucher(
   return id
 }
 
+/** A posted voucher with fully custom lines, for mixed-line scenarios the
+ *  two-line helper above cannot express. Lines must balance. */
+async function seedVoucherWithLines(
+  client: PoolClient,
+  params: {
+    userId: string
+    companyId: string
+    fiscalPeriodId: string
+    lines: {
+      account: string
+      debit: number
+      credit: number
+      currency?: string | null
+      amountInCurrency?: number | null
+    }[]
+  },
+): Promise<string> {
+  const id = randomUUID()
+  await client.query('SET CONSTRAINTS check_balance_on_posted_insert DEFERRED')
+  await client.query(
+    `INSERT INTO public.journal_entries
+       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+        entry_date, description, source_type, status)
+     VALUES ($1, $2, $3, $4, $5, 'A', '2026-05-05', 'Betalning', 'manual', 'posted')`,
+    [id, params.userId, params.companyId, params.fiscalPeriodId, nextSeq() % 2_000_000_000],
+  )
+  for (const [i, line] of params.lines.entries()) {
+    await client.query(
+      `INSERT INTO public.journal_entry_lines
+         (journal_entry_id, account_number, debit_amount, credit_amount, currency,
+          amount_in_currency, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        id,
+        line.account,
+        line.debit,
+        line.credit,
+        line.currency ?? 'SEK',
+        line.amountInCurrency ?? null,
+        i,
+      ],
+    )
+  }
+  await client.query('SET CONSTRAINTS check_balance_on_posted_insert IMMEDIATE')
+  return id
+}
+
 type RpcResult = {
   ok: boolean
   code?: string
@@ -517,6 +564,57 @@ describe('link_invoice_to_voucher: SEK-booked voucher settles a foreign invoice'
     })
   })
 
+  it('refuses a mixed voucher whose readable line carries amount_in_currency 0', async () => {
+    await withFxMigration(async (client) => {
+      // Skeptic counterexample: a 1510 credit labelled EUR with
+      // amount_in_currency = 0 sums to 0 on the readable side, but its 50 kr
+      // ledger credit is real and excluded from the SEK sum. A sum-based gate
+      // engaged the fallback with settled_sek = 950 against a voucher that
+      // credits 1510 by 1 000 kr, over-crediting AR by 50 kr and booking a
+      // phantom 7960 loss. The line-count gate must refuse instead.
+      const { userId, companyId, fiscalPeriodId } = await seedTenant(client)
+      const { invoiceId } = await seedCustomerInvoice(client, {
+        userId,
+        companyId,
+        currency: 'EUR',
+        total: 100,
+        totalSek: 1000,
+        exchangeRate: 10,
+      })
+      const voucherId = await seedVoucherWithLines(client, {
+        userId,
+        companyId,
+        fiscalPeriodId,
+        lines: [
+          { account: '1930', debit: 1000, credit: 0 },
+          { account: '1510', debit: 0, credit: 950, currency: null },
+          { account: '1510', debit: 0, credit: 50, currency: 'EUR', amountInCurrency: 0 },
+        ],
+      })
+
+      const result = await callLinkInvoice(client, { invoiceId, voucherId, userId, companyId })
+
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe('LINK_VOUCHER_CURRENCY_MISMATCH')
+
+      const { rows } = await client.query(
+        `SELECT status, paid_amount, remaining_amount FROM public.invoices WHERE id = $1`,
+        [invoiceId],
+      )
+      expect(rows[0].status).toBe('sent')
+      expect(Number(rows[0].paid_amount)).toBe(0)
+      expect(Number(rows[0].remaining_amount)).toBe(100)
+
+      // No residual verifikat may exist: the voucher is the only entry.
+      const { rows: entries } = await client.query(
+        `SELECT COUNT(*)::int AS n FROM public.journal_entries
+         WHERE company_id = $1 AND id <> $2`,
+        [companyId, voucherId],
+      )
+      expect(entries[0].n).toBe(0)
+    })
+  })
+
   it('refuses the SEK fallback on kontantmetoden (no receivable to true up)', async () => {
     await withFxMigration(async (client) => {
       const { userId, companyId, fiscalPeriodId } = await seedTenant(client)
@@ -780,6 +878,58 @@ describe('link_supplier_invoice_to_voucher: SEK-booked voucher settles a foreign
 
       expect(result.ok).toBe(false)
       expect(result.code).toBe('LINK_SI_VOUCHER_CURRENCY_MISMATCH')
+    })
+  })
+
+  it('refuses a mixed voucher whose readable 244x line carries amount_in_currency 0', async () => {
+    await withFxMigration(async (client) => {
+      // Supplier mirror of the skeptic counterexample: the EUR-labelled 244x
+      // debit with amount_in_currency = 0 is a readable LINE even though it
+      // sums to 0, so the fallback must stay disabled instead of settling
+      // with an understated SEK sum and a phantom 3960 gain.
+      const { userId, companyId, fiscalPeriodId } = await seedTenant(client)
+      const supplierInvoiceId = await seedSupplierInvoice(client, {
+        userId,
+        companyId,
+        currency: 'EUR',
+        total: 100,
+        exchangeRate: 10,
+      })
+      const voucherId = await seedVoucherWithLines(client, {
+        userId,
+        companyId,
+        fiscalPeriodId,
+        lines: [
+          { account: '2440', debit: 950, credit: 0, currency: null },
+          { account: '2440', debit: 50, credit: 0, currency: 'EUR', amountInCurrency: 0 },
+          { account: '1930', debit: 0, credit: 1000 },
+        ],
+      })
+
+      const result = await callLinkSupplierInvoice(client, {
+        supplierInvoiceId,
+        voucherId,
+        userId,
+        companyId,
+      })
+
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe('LINK_SI_VOUCHER_CURRENCY_MISMATCH')
+
+      const { rows } = await client.query(
+        `SELECT status, paid_amount, remaining_amount FROM public.supplier_invoices WHERE id = $1`,
+        [supplierInvoiceId],
+      )
+      expect(rows[0].status).toBe('approved')
+      expect(Number(rows[0].paid_amount)).toBe(0)
+      expect(Number(rows[0].remaining_amount)).toBe(100)
+
+      const { rows: entries } = await client.query(
+        `SELECT COUNT(*)::int AS n FROM public.journal_entries
+         WHERE company_id = $1 AND id <> $2`,
+        [companyId, voucherId],
+      )
+      expect(entries[0].n).toBe(0)
     })
   })
 })

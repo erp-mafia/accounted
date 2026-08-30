@@ -39,8 +39,12 @@
 --
 -- The fallback engages ONLY when every part of the case is unambiguous:
 --   * the invoice is foreign (resolved currency <> 'SEK');
---   * NO matched-side line carries a readable figure in the invoice currency
---     (a mixed voucher stays fail-closed: summing units would be guesswork);
+--   * NO matched-side line is readable in the invoice currency, counted by
+--     LINE, not by sum: a line labelled with the invoice's currency that
+--     carries amount_in_currency = 0 is still a readable line, and it must
+--     disable the fallback (its real SEK ledger movement is excluded from
+--     the SEK sum, so engaging anyway would understate the settlement). A
+--     mixed voucher stays fail-closed: summing units would be guesswork;
 --   * every unreadable matched-side line is genuinely SEK-booked, i.e. its
 --     label is 'SEK' or NULL. A line labelled with the invoice's currency but
 --     missing amount_in_currency is malformed metadata (buildCurrencyMetadata
@@ -109,6 +113,7 @@ DECLARE
   v_unreadable_currency text;
   -- FX residual settlement (new): a foreign invoice whose matched side is
   -- booked plain SEK. See the header comment.
+  v_readable_count integer := 0;
   v_sek_side_total numeric := 0;
   v_foreign_label_count integer := 0;
   v_booked_sek numeric;
@@ -238,7 +243,12 @@ BEGIN
     -- rows store the foreign figure negatively while the debit/credit side is
     -- authoritative, and that side is already pinned by the `> 0` predicate.
     --
-    -- Two additional aggregates (new) feed the FX residual fallback:
+    -- Three additional aggregates (new) feed the FX residual fallback:
+    --   * how many matched-side lines are readable at all: the gate below
+    --     must count LINES, not test the sum, because a readable line with
+    --     amount_in_currency = 0 sums to 0 while its SEK ledger movement is
+    --     real and excluded from the SEK sum: engaging the fallback over it
+    --     would understate the settlement and fabricate an FX residual;
     --   * the matched side's raw SEK ledger sum over SEK-booked lines
     --     (label 'SEK' or NULL);
     --   * how many unreadable lines are NOT SEK-booked (third-currency label,
@@ -257,6 +267,9 @@ BEGIN
       MIN(l.currency) FILTER (
         WHERE l.currency IS DISTINCT FROM v_invoice_currency OR l.amount_in_currency IS NULL
       ),
+      COUNT(*) FILTER (
+        WHERE l.currency = v_invoice_currency AND l.amount_in_currency IS NOT NULL
+      ),
       COALESCE(SUM(CASE WHEN v_accounting_method = 'cash' THEN l.debit_amount ELSE l.credit_amount END) FILTER (
         WHERE COALESCE(l.currency, 'SEK') = 'SEK'
       ), 0),
@@ -265,7 +278,7 @@ BEGIN
           AND COALESCE(l.currency, 'SEK') <> 'SEK'
       )
       INTO v_ar_credit_total, v_line_currency, v_unreadable_count, v_unreadable_currency,
-           v_sek_side_total, v_foreign_label_count
+           v_readable_count, v_sek_side_total, v_foreign_label_count
     FROM public.journal_entry_lines l
     WHERE l.journal_entry_id = p_journal_entry_id
       AND l.account_number LIKE v_account_prefix || '%'
@@ -274,8 +287,11 @@ BEGIN
     IF COALESCE(v_unreadable_count, 0) > 0 THEN
       -- FX residual fallback (new): the voucher settles the invoice in plain
       -- kronor. Engage only in the unambiguous case; see the header comment.
+      -- The readable gate counts LINES (see the aggregate comment): with
+      -- zero readable lines, v_sek_side_total is provably the FULL
+      -- matched-side ledger sum and v_line_currency is NULL by construction.
       IF v_accounting_method = 'accrual'
-         AND v_ar_credit_total = 0
+         AND COALESCE(v_readable_count, 0) = 0
          AND COALESCE(v_foreign_label_count, 0) = 0
          AND v_sek_side_total > 0
          AND v_invoice.exchange_rate IS NOT NULL
@@ -555,6 +571,7 @@ DECLARE
   -- FX residual settlement (new), mirroring link_invoice_to_voucher. The
   -- supplier side has no kontantmetoden branch: the matched side is always
   -- the 244x debit.
+  v_readable_count integer := 0;
   v_sek_side_total numeric := 0;
   v_foreign_label_count integer := 0;
   v_booked_sek numeric;
@@ -643,8 +660,10 @@ BEGIN
       AND account_number LIKE '244%'
       AND debit_amount > 0;
   ELSE
-    -- Foreign supplier invoice. The two extra aggregates feed the FX residual
-    -- fallback, as in link_invoice_to_voucher above.
+    -- Foreign supplier invoice. The three extra aggregates feed the FX
+    -- residual fallback, as in link_invoice_to_voucher above; the readable
+    -- gate counts LINES for the same reason (a readable line with
+    -- amount_in_currency = 0 must disable the fallback).
     SELECT
       COALESCE(SUM(ABS(l.amount_in_currency)) FILTER (
         WHERE l.currency = v_invoice_currency AND l.amount_in_currency IS NOT NULL
@@ -658,6 +677,9 @@ BEGIN
       MIN(l.currency) FILTER (
         WHERE l.currency IS DISTINCT FROM v_invoice_currency OR l.amount_in_currency IS NULL
       ),
+      COUNT(*) FILTER (
+        WHERE l.currency = v_invoice_currency AND l.amount_in_currency IS NOT NULL
+      ),
       COALESCE(SUM(l.debit_amount) FILTER (
         WHERE COALESCE(l.currency, 'SEK') = 'SEK'
       ), 0),
@@ -666,7 +688,7 @@ BEGIN
           AND COALESCE(l.currency, 'SEK') <> 'SEK'
       )
       INTO v_ap_debit_total, v_line_currency, v_unreadable_count, v_unreadable_currency,
-           v_sek_side_total, v_foreign_label_count
+           v_readable_count, v_sek_side_total, v_foreign_label_count
     FROM public.journal_entry_lines l
     WHERE l.journal_entry_id = p_journal_entry_id
       AND l.account_number LIKE '244%'
@@ -674,7 +696,7 @@ BEGIN
 
     IF COALESCE(v_unreadable_count, 0) > 0 THEN
       -- FX residual fallback (new): see link_invoice_to_voucher above.
-      IF v_ap_debit_total = 0
+      IF COALESCE(v_readable_count, 0) = 0
          AND COALESCE(v_foreign_label_count, 0) = 0
          AND v_sek_side_total > 0
          AND v_invoice.exchange_rate IS NOT NULL
