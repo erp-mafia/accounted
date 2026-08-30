@@ -2548,6 +2548,11 @@ export type PendingOperationType =
   | 'reconciliation_signoff'
   // Book the remainder of a bank selection as a fee/interest/rounding verifikat and link it.
   | 'reconciliation_residual'
+  // Book synced skattekonto rows as posted verifikat (1630 + rule-matched
+  // counter account), same helper as the HTTP bokfor-batch route. The
+  // single-row op stores { transaction_id }; the batch op stores { ids }.
+  | 'book_skattekonto_row'
+  | 'book_skattekonto_rows'
   // PR5: Skatteverket filing via MCP. Commit = "send for BankID signing"
   // (returns a signing link); the user's signature in the browser files it.
   | 'submit_vat_declaration'
