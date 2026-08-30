@@ -982,12 +982,11 @@ function mapSkatteverketError(err: unknown): Error {
 
 // ── Skattekonto row booking (stage side) ─────────────────────
 //
-// Columns the book_skattekonto_row(s) tools read at stage time: enough for
-// the reviewer preview + the same bookability gates the commit path enforces
+// Shape of the skattekonto_transactions columns the book_skattekonto_row(s)
+// tools select at stage time (both call sites keep the select string literal
+// so the no-phantom-columns scanner can resolve it): enough for the reviewer
+// preview + the same bookability gates the commit path enforces
 // (requireSettled batch booking in skatteverket/lib/skattekonto-booking.ts).
-
-const SKATTEKONTO_STAGE_COLUMNS =
-  'id, transaktionsdatum, transaktionstext, belopp_skatteverket, status, is_ignored, journal_entry_id'
 
 interface SkattekontoStageRow {
   id: string
@@ -11452,7 +11451,7 @@ export const tools: McpTool[] = [
 
       const { data: row } = await supabase
         .from('skattekonto_transactions')
-        .select(SKATTEKONTO_STAGE_COLUMNS)
+        .select('id, transaktionsdatum, transaktionstext, belopp_skatteverket, status, is_ignored, journal_entry_id')
         .eq('id', transactionId)
         .eq('company_id', companyId)
         .maybeSingle()
@@ -11489,6 +11488,10 @@ export const tools: McpTool[] = [
           skattekonto_transaction_id: tx.id,
           transaction_date: tx.transaktionsdatum,
           transaction_text: tx.transaktionstext,
+          // Mirrors the exact verifikat text bokforSkattekontoTransaction
+          // writes, so the reviewer sees what lands in the ledger (motpart
+          // Skatteverket is carried in the text + the Skatteverket-id note).
+          verifikat_description: `Skattekonto: ${tx.transaktionstext}`,
           amount: Number(tx.belopp_skatteverket),
           skattekonto_account: SKATTEKONTO_ACCOUNT,
           suggested_counter_account: enriched.booking_suggestion.account,
@@ -11554,7 +11557,7 @@ export const tools: McpTool[] = [
 
       const { data: rows } = await supabase
         .from('skattekonto_transactions')
-        .select(SKATTEKONTO_STAGE_COLUMNS)
+        .select('id, transaktionsdatum, transaktionstext, belopp_skatteverket, status, is_ignored, journal_entry_id')
         .in('id', ids)
         .eq('company_id', companyId)
       const found = (rows ?? []) as SkattekontoStageRow[]
@@ -11614,6 +11617,7 @@ export const tools: McpTool[] = [
             skattekonto_transaction_id: r.id,
             transaction_date: r.transaktionsdatum,
             transaction_text: r.transaktionstext,
+            verifikat_description: `Skattekonto: ${r.transaktionstext}`,
             amount: Number(r.belopp_skatteverket),
             suggested_counter_account: r.booking_suggestion?.account ?? null,
             rule_label: r.booking_suggestion?.label ?? null,

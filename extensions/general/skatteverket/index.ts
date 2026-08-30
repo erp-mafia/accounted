@@ -2748,12 +2748,14 @@ async function commitBookSkattekontoRows(
       rowCount: ids.length,
       error: err instanceof Error ? err.message : String(err),
     })
+    // Fixed public message: the raw exception stays in the server log above
+    // and must not flow back to API callers (it can carry DB/row details).
     return {
       ok: false,
       code: 'SKATTEKONTO_BOOKING_FAILED',
       http_status: 500,
       recoverable: false,
-      error: err instanceof Error ? err.message : 'Skattekonto-raderna kunde inte bokföras.',
+      error: 'Skattekonto-raderna kunde inte bokföras. Försök igen eller kontakta support.',
     }
   }
 }
