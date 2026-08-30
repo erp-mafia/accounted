@@ -90,7 +90,7 @@ describe('gnubok_delete_draft_invoice: staging', () => {
   })
 
   it('stages a hard delete for an unnumbered draft, requiring approval', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: draftInvoice() })
     enqueue({ data: { id: 'op-delete-1' } })
 
@@ -114,10 +114,18 @@ describe('gnubok_delete_draft_invoice: staging', () => {
       customer_name: 'Testbrand AB',
     })
     expect(String(result.preview.method)).toMatch(/hard delete/i)
+    // The staged params pin the approved outcome: null = hard delete.
+    const stagedRow = findCall('pending_operations', 'insert')?.[0] as
+      | { params?: Record<string, unknown> }
+      | undefined
+    expect(stagedRow?.params).toMatchObject({
+      invoice_id: INVOICE_ID,
+      expected_invoice_number: null,
+    })
   })
 
   it('stages a makulering for a numbered draft, retaining the F-series number', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: draftInvoice({ invoice_number: 'F-2026042' }) })
     enqueue({ data: { id: 'op-delete-2' } })
 
@@ -131,6 +139,11 @@ describe('gnubok_delete_draft_invoice: staging', () => {
     expect(result).toMatchObject({ staged: true, risk_level: 'high' })
     expect(result.preview).toMatchObject({ invoice_number: 'F-2026042' })
     expect(String(result.preview.method)).toMatch(/makulering/i)
+    // The pin records the number whose makulering was approved.
+    const stagedRow = findCall('pending_operations', 'insert')?.[0] as
+      | { params?: Record<string, unknown> }
+      | undefined
+    expect(stagedRow?.params).toMatchObject({ expected_invoice_number: 'F-2026042' })
   })
 
   it('returns a dry-run preview without staging', async () => {

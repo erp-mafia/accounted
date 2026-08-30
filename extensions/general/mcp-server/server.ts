@@ -16886,7 +16886,11 @@ export const tools: McpTool[] = [
         willHardDelete
           ? 'Ta bort fakturautkast (onumrerat)'
           : `Makulera fakturautkast ${inv.invoice_number}`,
-        { invoice_id: invoiceId },
+        // expected_invoice_number pins the APPROVED outcome: if the draft is
+        // finalized (gains a number) between staging and approval, the
+        // executor refuses instead of silently makulera what the approver saw
+        // as a hard delete.
+        { invoice_id: invoiceId, expected_invoice_number: inv.invoice_number ?? null },
         {
           invoice_id: inv.id,
           invoice_number: inv.invoice_number ?? null,

@@ -87,7 +87,8 @@ describe('commitPendingOperation: delete_draft_invoice', () => {
       supabase as never,
       'user-1',
       'company-1',
-      makePendingOp({ invoice_id: INVOICE_ID }),
+      // The pin matches the current number: the approved makulering proceeds.
+      makePendingOp({ invoice_id: INVOICE_ID, expected_invoice_number: 'F-2026042' }),
     )
 
     expect(result.status).toBe('committed')
@@ -98,6 +99,29 @@ describe('commitPendingOperation: delete_draft_invoice', () => {
     })
     // Makulering leaves its trail in the invoice row: no delete event.
     expect(emitSpy).not.toHaveBeenCalled()
+  })
+
+  it('auto-rejects (409) when an unnumbered draft was finalized after staging (outcome pin)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-delete-1' } }) // claim
+    // Still a draft, but it gained an F-number since staging: the approved
+    // outcome was a hard delete, so the executor must refuse, not makulera.
+    enqueue({ data: invoiceRow({ invoice_number: 'F-2026099' }) }) // fetch
+    enqueue({ data: null }) // pending_operations rejected status update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ invoice_id: INVOICE_ID, expected_invoice_number: null }),
+    )
+
+    expect(result.status).toBe('rejected')
+    expect(result.auto_rejected).toBe(true)
+    expect(result.http_status).toBe(409)
+    expect(result.code).toBe('INVOICE_CANCEL_RACE')
+    expect(result.error).toMatch(/F-2026099/)
+    expect(result.error).toMatch(/stage the deletion again/i)
   })
 
   it('auto-rejects (409) when the invoice left draft between staging and approval', async () => {

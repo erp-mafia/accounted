@@ -365,7 +365,7 @@ Example response `200`:
 ### `DELETE /api/v1/companies/{companyId}/invoices/{id}`
 
 **Delete a draft invoice (hard delete if unnumbered, makulering if numbered).**
-`scope:invoices:write · risk:medium · dry-run`
+`scope:invoices:write · risk:high · dry-run`
 
 Removes an invoice in draft status. An unnumbered draft (never finalized: no F-series number was consumed) is hard deleted and responds { deleted: true }; its line items cascade. A numbered draft is makulerad: the row and its number are retained, status flips to cancelled, and the response is { cancelled: true, invoice_number } so the F-series stays gap-free per ML 17 kap 24 and BFNAR 2013:2. Returns 409 INVOICE_DELETE_NOT_DRAFT for any non-draft status: sent / paid / credited invoices are immutable and must be reversed via a credit note. Requires Idempotency-Key; dry-runnable.
 

@@ -574,7 +574,9 @@ registerEndpoint({
     },
   },
   scope: 'invoices:write',
-  risk: 'medium',
+  // 'high', matching the delete_draft_invoice pending-op tier: both outcomes
+  // are irreversible (row gone, or the F-series number permanently consumed).
+  risk: 'high',
   idempotent: false,
   reversible: false,
   dryRunSupported: true,

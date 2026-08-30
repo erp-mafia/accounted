@@ -4647,7 +4647,10 @@ async function commitCreditInvoice(
  * Numbered draft: makulering (status 'cancelled', F-series number retained).
  * The service re-validates status at commit time with TOCTOU write guards,
  * so a draft that was sent between staging and approval is refused (409 ->
- * auto-reject), never cancelled.
+ * auto-reject), never cancelled. expected_invoice_number (staged alongside
+ * invoice_id) additionally pins the approved OUTCOME: an unnumbered draft
+ * that was finalized between staging and approval is refused too, instead of
+ * silently switching from the approved hard delete to a makulering.
  */
 async function commitDeleteDraftInvoice(
   supabase: SupabaseClient,
@@ -4658,7 +4661,17 @@ async function commitDeleteDraftInvoice(
   const invoiceId = params.invoice_id as string
   if (!invoiceId) return { error: 'invoice_id is required', status: 400 }
 
-  const result = await deleteDraftInvoice({ supabase, companyId, userId, invoiceId })
+  const result = await deleteDraftInvoice({
+    supabase,
+    companyId,
+    userId,
+    invoiceId,
+    // Only pin when the staging tool recorded an expectation; absent means an
+    // op staged before the pin existed, which keeps legacy semantics.
+    ...('expected_invoice_number' in params
+      ? { expectedInvoiceNumber: params.expected_invoice_number as string | null }
+      : {}),
+  })
 
   if (!result.ok) {
     switch (result.code) {
@@ -4672,7 +4685,10 @@ async function commitDeleteDraftInvoice(
         }
       case 'INVOICE_CANCEL_RACE':
         return {
-          error: 'Invoice was finalized or modified concurrently and could not be removed. Re-read it and stage again if it is still a draft.',
+          error:
+            result.currentInvoiceNumber != null
+              ? `Invoice changed after staging: the draft was finalized and now carries number ${result.currentInvoiceNumber}, so the approved hard delete no longer applies. Stage the deletion again to makulera it instead.`
+              : 'Invoice was finalized or modified concurrently and could not be removed. Re-read it and stage again if it is still a draft.',
           errorCode: 'INVOICE_CANCEL_RACE',
           status: 409,
         }

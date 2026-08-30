@@ -35,8 +35,12 @@ export type DeleteDraftInvoiceResult =
   | { ok: true; outcome: 'cancelled'; invoiceNumber: string }
   | { ok: false; code: 'INVOICE_NOT_FOUND' }
   | { ok: false; code: 'INVOICE_DELETE_NOT_DRAFT'; currentStatus: string }
-  /** Status flipped between fetch and write (concurrent send/finalize). */
-  | { ok: false; code: 'INVOICE_CANCEL_RACE' }
+  /**
+   * Status flipped between fetch and write (concurrent send/finalize), or the
+   * caller pinned expectedInvoiceNumber and the number changed since then
+   * (currentInvoiceNumber then carries what the draft holds now).
+   */
+  | { ok: false; code: 'INVOICE_CANCEL_RACE'; currentInvoiceNumber?: string | null }
   | { ok: false; code: 'INVOICE_DELETE_FAILED'; cause: { message: string; code?: string } }
 
 export interface DeleteDraftInvoiceParams {
@@ -48,13 +52,23 @@ export interface DeleteDraftInvoiceParams {
    */
   userId: string
   invoiceId: string
+  /**
+   * Outcome pin for two-phase callers (stage now, execute after approval):
+   * the invoice_number observed at staging time (null for an unnumbered
+   * draft). When provided and the draft's number has changed since (an
+   * unnumbered draft was finalized), the call refuses with
+   * INVOICE_CANCEL_RACE instead of silently switching from the approved hard
+   * delete to a makulering. Omit (undefined) for single-phase callers (web,
+   * v1): they act on the state they just read.
+   */
+  expectedInvoiceNumber?: string | null
   log?: Logger
 }
 
 export async function deleteDraftInvoice(
   params: DeleteDraftInvoiceParams,
 ): Promise<DeleteDraftInvoiceResult> {
-  const { supabase, companyId, userId, invoiceId, log } = params
+  const { supabase, companyId, userId, invoiceId, expectedInvoiceNumber, log } = params
 
   const { data: invoice, error: fetchError } = await supabase
     .from('invoices')
@@ -69,6 +83,18 @@ export async function deleteDraftInvoice(
 
   if (invoice.status !== 'draft') {
     return { ok: false, code: 'INVOICE_DELETE_NOT_DRAFT', currentStatus: invoice.status }
+  }
+
+  // Outcome pin: a two-phase caller approved a SPECIFIC outcome (hard delete
+  // for unnumbered, makulering of one number for numbered). If the number
+  // changed between staging and now (unnumbered draft finalized), the
+  // approved outcome no longer applies: refuse rather than switch paths.
+  // The unnumbered -> numbered transition is the only reachable change
+  // (numbers are never reassigned), and the write guards below still cover
+  // a flip inside this call.
+  const currentNumber = invoice.invoice_number ?? null
+  if (expectedInvoiceNumber !== undefined && currentNumber !== expectedInvoiceNumber) {
+    return { ok: false, code: 'INVOICE_CANCEL_RACE', currentInvoiceNumber: currentNumber }
   }
 
   // Unnumbered drafts (saved via "Spara som utkast", never finalized) are not
