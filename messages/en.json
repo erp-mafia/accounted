@@ -737,6 +737,8 @@
     "type_vacation_year_close": "Vacation year close",
     "type_submit_vat_declaration": "VAT declaration",
     "type_submit_agi": "Employer declaration",
+    "type_book_skattekonto_row": "Book tax account row",
+    "type_book_skattekonto_rows": "Book tax account rows",
     "origin_agent_chat": "Suggested by the AI assistant via chat",
     "origin_mcp": "Suggested by an AI assistant via {label}",
     "origin_api": "Suggested via API integration",

@@ -279,6 +279,12 @@ import { writeSkatteverketAudit } from '@/extensions/general/skatteverket/lib/au
 import { skvAuthCodeToStructured } from '@/extensions/general/skatteverket/lib/error-map'
 import { findCompanyTokenUser, hasVerifiedGrant } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/skatteverket/lib/system-auth/config'
+// Stage-time preview for book_skattekonto_row(s): same deterministic rule
+// matcher the skattekonto list page and the booking commit path use. The
+// actual booking runs in the extension's registry-resolved commit service on
+// approval; staging never books.
+import { attachBookingSuggestions } from '@/extensions/general/skatteverket/lib/skattekonto-booking'
+import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
@@ -972,6 +978,24 @@ function mapSkatteverketError(err: unknown): Error {
     return out
   }
   return err instanceof Error ? err : new Error(String(err))
+}
+
+// ── Skattekonto row booking (stage side) ─────────────────────
+//
+// Shape of the skattekonto_transactions columns the book_skattekonto_row(s)
+// tools select at stage time (both call sites keep the select string literal
+// so the no-phantom-columns scanner can resolve it): enough for the reviewer
+// preview + the same bookability gates the commit path enforces
+// (requireSettled batch booking in skatteverket/lib/skattekonto-booking.ts).
+
+interface SkattekontoStageRow {
+  id: string
+  transaktionsdatum: string
+  transaktionstext: string
+  belopp_skatteverket: number | string
+  status: string
+  is_ignored: boolean | null
+  journal_entry_id: string | null
 }
 
 /**
@@ -7559,16 +7583,19 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_supplier_invoices',
     title: 'List Supplier Invoices',
-    description: 'List supplier invoices (leverantörsfakturor), sorted by due date. Optional status filter; "to_pay" combines approved+overdue.',
+    description: 'List supplier invoices (leverantörsfakturor), sorted by due date. Filters: status (to_pay = approved+overdue), supplier_id, supplier_name (substring), date_from/date_to on invoice_date (YYYY-MM-DD).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         status: {
           type: 'string',
-          description: 'Filter: registered, approved, overdue, paid, to_pay, all (default)',
           enum: ['registered', 'approved', 'overdue', 'paid', 'to_pay', 'all'],
         },
+        supplier_id: { type: 'string' },
+        supplier_name: { type: 'string' },
+        date_from: { type: 'string' },
+        date_to: { type: 'string' },
         limit: { type: 'number', description: 'Max results 1-100 (default 50)' },
       },
     },
@@ -7578,6 +7605,8 @@ export const tools: McpTool[] = [
       properties: {
         invoices: { type: 'array', items: { type: 'object' } },
         count: { type: 'number' },
+        total_count: { type: 'number' },
+        has_more: { type: 'boolean' },
       },
       required: ['invoices', 'count'],
     },
@@ -7591,9 +7620,92 @@ export const tools: McpTool[] = [
       const limit = Math.min(Math.max(1, Number(args.limit) || 50), 100)
       const status = (args.status as string) || 'all'
 
+      // Loud validation: a mistyped filter must never silently degrade to the
+      // UNFILTERED list (the silent-drop failure class arg-guard exists for,
+      // feedback seq 261545). Hosts do not reliably enforce inputSchema types,
+      // so non-string values reach execute() and are rejected here.
+      for (const key of ['supplier_id', 'supplier_name', 'date_from', 'date_to'] as const) {
+        if (args[key] !== undefined && typeof args[key] !== 'string') {
+          throw new Error(`${key} must be a string.`)
+        }
+      }
+      const supplierId = args.supplier_id as string | undefined
+      const supplierName = (args.supplier_name as string | undefined)?.trim()
+      const dateFrom = args.date_from as string | undefined
+      const dateTo = args.date_to as string | undefined
+
+      if (supplierName === '') {
+        throw new Error('supplier_name must not be blank.')
+      }
+      // Clear message instead of a raw Postgres uuid cast error: an agent may
+      // well pass a supplier's name here; point it at supplier_name instead.
+      if (supplierId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(supplierId)) {
+        throw new Error('supplier_id must be a supplier UUID (suppliers.id). To filter by name, use supplier_name.')
+      }
+      for (const [key, value] of [['date_from', dateFrom], ['date_to', dateTo]] as const) {
+        if (value === undefined) continue
+        // Shape AND calendar validity: '2026-02-30' must fail here with a
+        // clear message, not as a raw Postgres date-cast error downstream.
+        const parsed = new Date(`${value}T00:00:00Z`)
+        if (
+          !ISO_DATE_RE.test(value) ||
+          Number.isNaN(parsed.getTime()) ||
+          parsed.toISOString().slice(0, 10) !== value
+        ) {
+          throw new Error(`${key} must be a valid ISO date (YYYY-MM-DD).`)
+        }
+      }
+      if (dateFrom && dateTo && dateFrom > dateTo) {
+        throw new Error('date_from must not be after date_to.')
+      }
+
+      // supplier_name resolves server-side to supplier ids: a LITERAL
+      // case-insensitive substring matched in JS over the company's suppliers
+      // (fetchAllRows, same shape as gnubok_list_suppliers). Not ilike:
+      // PostgREST rewrites `*` in like/ilike values to `%`, so a DB-side
+      // pattern silently broadens names containing `*` and there is no
+      // server-side escape for it. Archived suppliers are included on
+      // purpose: their invoices still exist. The match set is bounded: an
+      // unbounded id list fed to .in() below could exceed PostgREST URL
+      // limits, so past the cap the tool fails loudly with a refine hint
+      // instead of degrading.
+      const NAME_MATCH_CAP = 200
+      let nameMatchedSupplierIds: string[] | undefined
+      if (supplierName) {
+        const needle = supplierName.toLowerCase()
+        let suppliers: { id: string; name: string | null }[]
+        try {
+          suppliers = await fetchAllRows<{ id: string; name: string | null }>(({ from, to }) =>
+            supabase
+              .from('suppliers')
+              .select('id, name')
+              .eq('company_id', companyId)
+              .order('id', { ascending: true })
+              .range(from, to)
+          )
+        } catch (error) {
+          throw dbError(error)
+        }
+        const matchedIds = suppliers
+          .filter((s) => (s.name ?? '').toLowerCase().includes(needle))
+          .map((s) => s.id)
+        if (matchedIds.length === 0) {
+          return { invoices: [], count: 0, total_count: 0, has_more: false }
+        }
+        if (matchedIds.length > NAME_MATCH_CAP) {
+          throw new Error(
+            `supplier_name matches more than ${NAME_MATCH_CAP} suppliers; refine the name or use supplier_id.`,
+          )
+        }
+        nameMatchedSupplierIds = matchedIds
+      }
+
+      // count: 'exact' so truncation is SIGNALLED (total_count/has_more): the
+      // date filters invite period reconciliation, and a silently capped
+      // listing reads as complete (same contract as gnubok_list_invoices).
       let query = supabase
         .from('supplier_invoices')
-        .select('id, supplier_invoice_number, invoice_date, due_date, status, total, total_sek, currency, vat_treatment, remaining_amount, default_dimensions, supplier:suppliers(id, name)')
+        .select('id, supplier_invoice_number, invoice_date, due_date, status, total, total_sek, currency, vat_treatment, remaining_amount, default_dimensions, supplier:suppliers(id, name)', { count: 'exact' })
         .eq('company_id', companyId)
 
       if (status !== 'all') {
@@ -7604,11 +7716,30 @@ export const tools: McpTool[] = [
         }
       }
 
-      const { data, error } = await query.order('due_date', { ascending: true }).limit(limit)
+      // Same filter shapes as the v1 supplier-invoices list: eq on
+      // supplier_id, gte/lte on invoice_date.
+      if (supplierId) query = query.eq('supplier_id', supplierId)
+      if (nameMatchedSupplierIds) query = query.in('supplier_id', nameMatchedSupplierIds)
+      if (dateFrom) query = query.gte('invoice_date', dateFrom)
+      if (dateTo) query = query.lte('invoice_date', dateTo)
+
+      // Tiebreak on the unique id: due_date alone leaves which rows fall past
+      // the cap nondeterministic between identical calls.
+      const { data, error, count } = await query
+        .order('due_date', { ascending: true })
+        .order('id', { ascending: true })
+        .limit(limit)
 
       if (error) throw dbError(error)
 
-      return { invoices: data ?? [], count: data?.length ?? 0 }
+      const invoices = data ?? []
+      const totalCount = count ?? invoices.length
+      return {
+        invoices,
+        count: invoices.length,
+        total_count: totalCount,
+        has_more: totalCount > invoices.length,
+      }
     },
   },
 
@@ -11388,6 +11519,230 @@ export const tools: McpTool[] = [
         {
           dryRun: args.dry_run === true,
           idempotencyKey: args.idempotency_key as string | undefined,
+        },
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_book_skattekonto_row',
+    title: 'Book Skattekonto Row',
+    description:
+      'Book one settled skattekonto row as a posted verifikat: 1630 against the counter account matched from skattekonto rules. Refused for already-booked, ignored, upcoming or rule-less rows. Stages; booking happens at approval. dry_run previews.',
+    catalogVisibility: 'search',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        skattekonto_transaction_id: {
+          type: 'string',
+          description: 'The skattekonto_transactions row id (from the skattekonto reconciliation bridge).',
+        },
+        dry_run: { type: 'boolean' },
+        idempotency_key: { type: 'string' },
+      },
+      required: ['skattekonto_transaction_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const transactionId = args.skattekonto_transaction_id
+      if (typeof transactionId !== 'string' || transactionId.length === 0) {
+        throw new Error('skattekonto_transaction_id is required')
+      }
+
+      const { data: row } = await supabase
+        .from('skattekonto_transactions')
+        .select('id, transaktionsdatum, transaktionstext, belopp_skatteverket, status, is_ignored, journal_entry_id')
+        .eq('id', transactionId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (!row) throw new Error('Skattekonto-transaktionen hittades inte.')
+      const tx = row as SkattekontoStageRow
+
+      // Same gates the commit path enforces (requireSettled batch booking),
+      // surfaced at stage time so the reviewer never approves a doomed op.
+      if (tx.journal_entry_id) throw new Error('Transaktionen är redan bokförd.')
+      if (tx.is_ignored) {
+        throw new Error('Transaktionen är ignorerad. Återställ den innan du bokför.')
+      }
+      if (tx.status !== 'booked') {
+        throw new Error('Händelsen är inte genomförd hos Skatteverket ännu och kan inte bokföras.')
+      }
+
+      const [enriched] = await attachBookingSuggestions(supabase, companyId, [tx])
+      if (!enriched.booking_suggestion) {
+        throw new Error(
+          enriched.booking_gate === 'requires_employer'
+            ? 'Ingen motkontoregel: raden kräver arbetsgivarregistrering (troligen privat A-skatt). Bokför den manuellt.'
+            : 'Ingen motkontoregel matchade raden. Bokför den manuellt med gnubok_create_voucher.',
+        )
+      }
+
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'book_skattekonto_row',
+        `Bokför skattekontohändelse: ${tx.transaktionstext}`,
+        { transaction_id: tx.id },
+        {
+          skattekonto_transaction_id: tx.id,
+          transaction_date: tx.transaktionsdatum,
+          transaction_text: tx.transaktionstext,
+          // Mirrors the exact verifikat text bokforSkattekontoTransaction
+          // writes, so the reviewer sees what lands in the ledger (motpart
+          // Skatteverket is carried in the text + the Skatteverket-id note).
+          verifikat_description: `Skattekonto: ${tx.transaktionstext}`,
+          amount: Number(tx.belopp_skatteverket),
+          skattekonto_account: SKATTEKONTO_ACCOUNT,
+          suggested_counter_account: enriched.booking_suggestion.account,
+          suggested_counter_account_name: enriched.booking_suggestion.account_name,
+          rule_label: enriched.booking_suggestion.label,
+        },
+        actor,
+        {
+          description:
+            'After approval the row lands as a posted verifikat. Re-read the skattekonto bridge to confirm it shows as booked.',
+          tool: 'gnubok_get_reconciliation_status',
+          args: { account_key: 'skattekonto' },
+        },
+        {
+          dryRun: args.dry_run === true,
+          idempotencyKey: args.idempotency_key as string | undefined,
+          dateForPeriodCheck: tx.transaktionsdatum,
+        },
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_book_skattekonto_rows',
+    title: 'Book Skattekonto Rows (Batch)',
+    description:
+      'Book up to 200 settled skattekonto rows as posted verifikat (1630 + rule-matched counter account per row). Unbookable rows (already booked, ignored, upcoming, no rule) are skipped and listed in the preview. Stages; booking happens at approval. dry_run previews.',
+    catalogVisibility: 'search',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        skattekonto_transaction_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          maxItems: 200,
+          description: 'skattekonto_transactions row ids to book (duplicates are ignored).',
+        },
+        dry_run: { type: 'boolean' },
+        idempotency_key: { type: 'string' },
+      },
+      required: ['skattekonto_transaction_ids'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const rawIds = args.skattekonto_transaction_ids
+      if (!Array.isArray(rawIds) || rawIds.length === 0) {
+        throw new Error('skattekonto_transaction_ids is required (non-empty array)')
+      }
+      const ids = [
+        ...new Set(rawIds.filter((v): v is string => typeof v === 'string' && v.length > 0)),
+      ]
+      if (ids.length === 0 || ids.length > 200) {
+        throw new Error('skattekonto_transaction_ids must contain 1-200 row ids')
+      }
+
+      const { data: rows } = await supabase
+        .from('skattekonto_transactions')
+        .select('id, transaktionsdatum, transaktionstext, belopp_skatteverket, status, is_ignored, journal_entry_id')
+        .in('id', ids)
+        .eq('company_id', companyId)
+      const found = (rows ?? []) as SkattekontoStageRow[]
+
+      const foundIds = new Set(found.map((r) => r.id))
+      const skipped: Array<{ skattekonto_transaction_id: string; reason: string }> = []
+      for (const id of ids) {
+        if (!foundIds.has(id)) {
+          skipped.push({ skattekonto_transaction_id: id, reason: 'TRANSACTION_NOT_FOUND' })
+        }
+      }
+
+      // Same per-row gates as the single-row tool; blocked rows become
+      // skipped-with-reason preview data instead of aborting the batch.
+      const enriched = await attachBookingSuggestions(supabase, companyId, found)
+      const bookable: typeof enriched = []
+      for (const r of enriched) {
+        const reason = r.journal_entry_id
+          ? 'ALREADY_BOOKED'
+          : r.is_ignored
+            ? 'ROW_IGNORED'
+            : r.status !== 'booked'
+              ? 'NOT_SETTLED'
+              : !r.booking_suggestion
+                ? 'NO_COUNTER_ACCOUNT'
+                : null
+        if (reason) {
+          skipped.push({ skattekonto_transaction_id: r.id, reason })
+          continue
+        }
+        bookable.push(r)
+      }
+      if (bookable.length === 0) {
+        const reasons = [...new Set(skipped.map((s) => s.reason))].join(', ')
+        throw new Error(`Inga bokförbara rader: alla ${ids.length} hoppades över (${reasons}).`)
+      }
+
+      const bookableIds = bookable.map((r) => r.id)
+      // Oldest row first: lock conflicts live in the past, so the period
+      // check should probe the earliest affärshändelse date in the batch.
+      const earliestDate = bookable.map((r) => r.transaktionsdatum).sort()[0]
+      const totalAmount =
+        Math.round(bookable.reduce((sum, r) => sum + Number(r.belopp_skatteverket), 0) * 100) / 100
+
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'book_skattekonto_rows',
+        `Bokför ${bookableIds.length} skattekontohändelser`,
+        { ids: bookableIds },
+        {
+          row_count: bookableIds.length,
+          total_amount: totalAmount,
+          skattekonto_account: SKATTEKONTO_ACCOUNT,
+          rows: bookable.slice(0, 50).map((r) => ({
+            skattekonto_transaction_id: r.id,
+            transaction_date: r.transaktionsdatum,
+            transaction_text: r.transaktionstext,
+            verifikat_description: `Skattekonto: ${r.transaktionstext}`,
+            amount: Number(r.belopp_skatteverket),
+            suggested_counter_account: r.booking_suggestion?.account ?? null,
+            rule_label: r.booking_suggestion?.label ?? null,
+          })),
+          ...(bookable.length > 50 ? { rows_truncated: true } : {}),
+          ...(skipped.length > 0 ? { skipped } : {}),
+        },
+        actor,
+        {
+          description:
+            'After approval each row lands as its own posted verifikat. Re-read the skattekonto bridge to confirm.',
+          tool: 'gnubok_get_reconciliation_status',
+          args: { account_key: 'skattekonto' },
+        },
+        {
+          dryRun: args.dry_run === true,
+          idempotencyKey: args.idempotency_key as string | undefined,
+          dateForPeriodCheck: earliestDate,
         },
       )
     },
