@@ -2566,6 +2566,10 @@ export type PendingOperationType =
   // monthly_salary, draft only). The per-run column is what the engine reads;
   // the employee master's fixed salary stays untouched (variable owner pay).
   | 'set_run_salary'
+  // Draft-only salary-run header edit (payment_date / voucher_series /
+  // notes), same field set as the v1 PATCH; payment_date is the future
+  // booking entry date.
+  | 'update_salary_run'
   | 'register_absence'
   | 'create_employee'
   | 'update_employee'

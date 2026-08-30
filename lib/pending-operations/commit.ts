@@ -5510,6 +5510,49 @@ async function commitSetRunSalary(
   }
 }
 
+async function commitUpdateSalaryRun(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const salaryRunId = params.salary_run_id as string
+  const patch = params.patch as Record<string, unknown> | null | undefined
+  if (!salaryRunId || !patch || typeof patch !== 'object' || Array.isArray(patch)) {
+    return { error: 'salary_run_id and patch are required', status: 400 }
+  }
+
+  try {
+    const { updateDraftSalaryRun } = await import('@/lib/salary/update-run')
+    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
+    const result = await updateDraftSalaryRun(supabase, {
+      companyId,
+      salaryRunId,
+      patch: patch as never,
+    })
+    if (!result.ok) {
+      const entry = getErrorEntry(result.code)
+      return {
+        error: entry?.message_sv ?? `Kunde inte uppdatera lönekörningen: ${result.code}`,
+        status: entry?.httpStatus ?? 500,
+      }
+    }
+    return {
+      data: {
+        salary_run_id: result.data.salary_run_id,
+        payment_date: result.data.payment_date,
+        voucher_series: result.data.voucher_series,
+        notes: result.data.notes,
+        changes: result.data.changes,
+      },
+    }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Failed to update salary run',
+      status: 500,
+    }
+  }
+}
+
 async function commitCreateEmployee(
   supabase: SupabaseClient,
   userId: string,
@@ -6580,6 +6623,9 @@ async function commitPendingOperationInner(
         break
       case 'set_run_salary':
         result = await commitSetRunSalary(supabase, companyId, pendingOp.params)
+        break
+      case 'update_salary_run':
+        result = await commitUpdateSalaryRun(supabase, companyId, pendingOp.params)
         break
       case 'register_absence':
         result = await commitRegisterAbsence(supabase, companyId, pendingOp.params)

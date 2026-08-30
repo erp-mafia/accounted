@@ -195,6 +195,120 @@ describe('commitPendingOperation: set_run_salary', () => {
   })
 })
 
+describe('commitPendingOperation: update_salary_run', () => {
+  const RUN_ROW = {
+    id: 'run-1',
+    status: 'draft',
+    period_year: 2026,
+    period_month: 3,
+    payment_date: '2026-03-25',
+    voucher_series: 'L',
+    notes: null,
+  }
+
+  it('applies the header patch through the shared service (happy path)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: RUN_ROW }) // service draft gate + current values
+    enqueue({ data: { ...RUN_ROW, payment_date: '2026-03-23' } }) // optimistic-locked update
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'update_salary_run',
+      params: { salary_run_id: 'run-1', patch: { payment_date: '2026-03-23' } },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({
+      salary_run_id: 'run-1',
+      payment_date: '2026-03-23',
+      changes: { payment_date: '2026-03-23' },
+    })
+  })
+
+  it('fails cleanly when the run advanced between staging and approval', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { ...RUN_ROW, status: 'review' } }) // draft gate trips
+    enqueue({ data: null, error: null }) // finalize (failed)
+
+    const op = makePendingOp({
+      operation_type: 'update_salary_run',
+      params: { salary_run_id: 'run-1', patch: { payment_date: '2026-03-23' } },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toMatch(/utkast/)
+    expect(result.http_status).toBe(400)
+  })
+
+  it('fails cleanly when the optimistic lock loses the race (update matches no row)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: RUN_ROW }) // draft gate passes
+    enqueue({ data: null }) // status flipped mid-flight: locked update hits nothing
+    enqueue({ data: null, error: null }) // finalize (failed)
+
+    const op = makePendingOp({
+      operation_type: 'update_salary_run',
+      params: { salary_run_id: 'run-1', patch: { payment_date: '2026-03-23' } },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toMatch(/utkast/)
+  })
+
+  it('auto-rejects with 404 when the run does not exist for this company', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null }) // company-scoped lookup misses
+    enqueue({ data: null, error: null }) // finalize (rejected)
+
+    const op = makePendingOp({
+      operation_type: 'update_salary_run',
+      params: { salary_run_id: 'run-foreign', patch: { payment_date: '2026-03-23' } },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    // 404s are auto-rejected by the dispatcher (the run is gone; re-stage).
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(404)
+  })
+
+  it('rejects a missing patch with 400', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // finalize (failed)
+
+    const op = makePendingOp({
+      operation_type: 'update_salary_run',
+      params: { salary_run_id: 'run-1' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+  })
+
+  it('rejects an invalid voucher_series with 400 before any write', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // finalize (failed): validation trips pre-query
+
+    const op = makePendingOp({
+      operation_type: 'update_salary_run',
+      params: { salary_run_id: 'run-1', patch: { voucher_series: 'AB' } },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+  })
+})
+
 describe('commitPendingOperation: register_absence', () => {
   it('upserts the expanded range through the shared service (happy path)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()

@@ -157,6 +157,11 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // Draft-only edit of one employee's per-run base salary; no booking impact
   // until the run is calculated and booked (both separately staged).
   set_run_salary: 'medium',
+  // Draft-only header edit (payment_date / voucher_series / notes): freely
+  // re-editable while draft and changes no pay outcome, matching the v1
+  // PATCH's risk: 'low'. The booking that makes payment_date matter is
+  // separately staged at 'high'.
+  update_salary_run: 'low',
   // Absence rows drive sjuklön math and the statutory AGI Frånvarouppgift.
   // Reversible via delete, but not audit-free: medium.
   register_absence: 'medium',

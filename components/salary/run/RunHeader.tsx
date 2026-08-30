@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import {
   Dialog,
   DialogContent,
@@ -78,6 +79,10 @@ interface RunHeaderProps {
   onDownloadAgi: () => void
   onDelete: () => void
   onCorrect: () => void
+  // Draft-only: payment_date is frozen once the run leaves draft (it becomes
+  // the booking entry date), so the header only offers the editor there.
+  // Resolves false when the save failed, so the input can snap back.
+  onUpdatePaymentDate: (date: string) => Promise<boolean>
 }
 
 export function RunHeader({
@@ -95,6 +100,7 @@ export function RunHeader({
   onDownloadAgi,
   onDelete,
   onCorrect,
+  onUpdatePaymentDate,
 }: RunHeaderProps) {
   const t = useTranslations('salary_run')
   const tSalary = useTranslations('salary')
@@ -135,9 +141,47 @@ export function RunHeader({
     actionLoading === 'bulk_payslip' ||
     actionLoading === 'agi-download'
 
+  // Editable while draft: prefilled with the effective value, committed on
+  // blur/Enter so half-typed dates never fire a PATCH. The draft state resyncs
+  // whenever the server value changes (save reconcile, status transitions),
+  // via the adjust-state-during-render pattern rather than an effect.
+  const paymentDateEditable = canWrite && run.status === 'draft'
+  const [paymentDateDraft, setPaymentDateDraft] = useState(run.payment_date)
+  const [lastServerPaymentDate, setLastServerPaymentDate] = useState(run.payment_date)
+  if (run.payment_date !== lastServerPaymentDate) {
+    setLastServerPaymentDate(run.payment_date)
+    setPaymentDateDraft(run.payment_date)
+  }
+
+  async function commitPaymentDate() {
+    if (!paymentDateDraft || paymentDateDraft === run.payment_date) {
+      // Empty or unchanged: snap back to the server value instead of saving.
+      setPaymentDateDraft(run.payment_date)
+      return
+    }
+    const saved = await onUpdatePaymentDate(paymentDateDraft)
+    if (!saved) setPaymentDateDraft(run.payment_date)
+  }
+
   const metaParts: React.ReactNode[] = [
-    <span key="payment">
-      {t('payment_date_label')} <span className="tabular-nums">{formatDate(run.payment_date)}</span>
+    <span key="payment" className="inline-flex items-center gap-2">
+      {t('payment_date_label')}{' '}
+      {paymentDateEditable ? (
+        <Input
+          type="date"
+          value={paymentDateDraft}
+          onChange={(e) => setPaymentDateDraft(e.target.value)}
+          onBlur={commitPaymentDate}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+          }}
+          disabled={busy}
+          aria-label={t('payment_date_edit_aria')}
+          className="h-8 w-fit px-2 py-0 text-sm tabular-nums"
+        />
+      ) : (
+        <span className="tabular-nums">{formatDate(run.payment_date)}</span>
+      )}
     </span>,
     <span key="count">{t('header_employees', { count: employeeCount })}</span>,
   ]

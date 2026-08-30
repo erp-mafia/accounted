@@ -20,6 +20,7 @@ import { decryptPersonnummer } from '@/lib/salary/personnummer'
 
 const updatePayslipLine = tools.find((t) => t.name === 'gnubok_update_payslip_line')!
 const setRunSalary = tools.find((t) => t.name === 'gnubok_set_run_salary')!
+const updateSalaryRun = tools.find((t) => t.name === 'gnubok_update_salary_run')!
 const registerAbsence = tools.find((t) => t.name === 'gnubok_register_absence')!
 const bookSalaryRun = tools.find((t) => t.name === 'gnubok_book_salary_run')!
 const deleteAbsence = tools.find((t) => t.name === 'gnubok_delete_absence')!
@@ -194,6 +195,110 @@ describe('gnubok_set_run_salary', () => {
         'company-1', 'user-1', supabase as never, { type: 'user' },
       ),
     ).rejects.toThrow(/monthly_salary/)
+  })
+})
+
+describe('gnubok_update_salary_run', () => {
+  const RUN_ROW = {
+    id: 'run-1',
+    status: 'draft',
+    period_year: 2026,
+    period_month: 3,
+    payment_date: '2026-03-25',
+    voucher_series: 'L',
+    notes: null,
+  }
+
+  it('stages a payment_date change with old/new preview and a recalculate next-hint', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: RUN_ROW }) // service draft gate + current values (dry-run preflight)
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
+
+    const result = (await updateSalaryRun.execute(
+      { salary_run_id: 'run-1', payment_date: '2026-03-23' },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as {
+      staged: boolean
+      risk_level: string
+      message: string
+      preview: Record<string, unknown>
+      next?: { tool: string }
+    }
+
+    expect(result.staged).toBe(true)
+    expect(result.risk_level).toBe('low')
+    expect((result.preview.previous as Record<string, unknown>).payment_date).toBe('2026-03-25')
+    expect(result.preview.new_payment_date).toBe('2026-03-23')
+    expect(result.preview.salary_run_id).toBe('run-1')
+    expect(result.next?.tool).toBe('gnubok_calculate_salary_run')
+  })
+
+  it('stages a notes-only change without the recalculate next-hint', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: RUN_ROW }) // service draft gate (dry-run preflight)
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
+
+    const result = (await updateSalaryRun.execute(
+      { salary_run_id: 'run-1', notes: 'Extra utbetalning i mars' },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean; preview: Record<string, unknown>; next?: { tool: string } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.new_notes).toBe('Extra utbetalning i mars')
+    // Payment date untouched: no recalculation hint.
+    expect(result.next).toBeUndefined()
+  })
+
+  it('throws when the run has advanced past draft (preflight)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...RUN_ROW, status: 'review' } })
+
+    await expect(
+      updateSalaryRun.execute(
+        { salary_run_id: 'run-1', payment_date: '2026-03-23' },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/SALARY_RUN_PATCH_NOT_DRAFT/)
+  })
+
+  it('throws SALARY_RUN_NOT_FOUND for a foreign or unknown run', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // company_id-scoped lookup misses: another tenant's run id looks identical
+    // to a nonexistent one.
+    enqueue({ data: null })
+
+    await expect(
+      updateSalaryRun.execute(
+        { salary_run_id: 'run-foreign', payment_date: '2026-03-23' },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/SALARY_RUN_NOT_FOUND/)
+  })
+
+  it('rejects a malformed payment_date before touching the run', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    await expect(
+      updateSalaryRun.execute(
+        { salary_run_id: 'run-1', payment_date: '23/03/2026' },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/VALIDATION_ERROR/)
+  })
+
+  it('rejects a call with no updatable field', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    await expect(
+      updateSalaryRun.execute(
+        { salary_run_id: 'run-1' },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/At least one of payment_date, voucher_series, notes/)
   })
 })
 
