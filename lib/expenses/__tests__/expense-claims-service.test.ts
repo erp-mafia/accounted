@@ -165,6 +165,56 @@ describe('registerExpenseClaim', () => {
     expect(result).toEqual({ ok: false, code: 'EMPLOYEE_NOT_FOUND' })
   })
 
+  it('links an unanchored receipt document to the new verifikat', async () => {
+    enqueue({ data: { id: 'claim-1' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+    enqueue({ data: { journal_entry_id: null, user_id: 'user-1', storage_path: 'p', file_name: 'kvitto.pdf', file_size_bytes: 1, mime_type: 'application/pdf', sha256_hash: 'x', uploaded_by: 'user-1', upload_source: 'file_upload' } }) // document lookup
+    enqueue({ data: null }) // inbox item update
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'Kvitto',
+      expense_date: '2026-09-01',
+      amount: 100,
+      vat_amount: 0,
+      currency: 'SEK',
+      expense_account: '5410',
+      claimant_name: 'Joakim',
+      document_id: 'doc-1',
+      inbox_item_id: 'inbox-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(linkToJournalEntryMock).toHaveBeenCalledWith(sb, COMPANY, 'doc-1', 'je-1')
+  })
+
+  it('copies an already-anchored receipt instead of re-pointing it (BFL immutability)', async () => {
+    enqueue({ data: { id: 'claim-1' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+    enqueue({ data: { journal_entry_id: 'je-old', user_id: 'user-1', storage_path: 'receipts/plaud.pdf', file_name: 'plaud.pdf', file_size_bytes: 42, mime_type: 'application/pdf', sha256_hash: 'abc', uploaded_by: 'user-1', upload_source: 'file_upload' } }) // document lookup
+    enqueue({ data: { id: 'doc-copy' } }) // attachment copy insert
+    enqueue({ data: null }) // claim document_id update
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'Kvitto',
+      expense_date: '2026-09-01',
+      amount: 100,
+      vat_amount: 0,
+      currency: 'SEK',
+      expense_account: '5410',
+      claimant_name: 'Joakim',
+      document_id: 'doc-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(linkToJournalEntryMock).not.toHaveBeenCalled()
+    const copy = findCall('document_attachments', 'insert')
+    expect(copy?.[0]).toMatchObject({
+      storage_path: 'receipts/plaud.pdf',
+      sha256_hash: 'abc',
+      journal_entry_id: 'je-1',
+    })
+  })
+
   it('removes the claim row again when the booking throws', async () => {
     enqueue({ data: { id: 'claim-1' } }) // insert
     enqueue({ data: null }) // delete (cleanup)

@@ -26,6 +26,9 @@ import { createJournalEntry, findFiscalPeriod, reverseEntry } from '@/lib/bookke
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { roundOre, sumOre } from '@/lib/money'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('expenses/claims')
 
 export const EXPENSE_LIABILITY_ACCOUNTS = ['2893', '2820', '2018', '2890'] as const
 export type ExpenseLiabilityAccount = (typeof EXPENSE_LIABILITY_ACCOUNTS)[number]
@@ -222,9 +225,52 @@ export async function registerExpenseClaim(
   // best-effort: the booking above is the legally significant part.
   if (input.document_id) {
     try {
-      await linkToJournalEntry(supabase, companyId, input.document_id, journalEntryId)
-    } catch {
-      // The claim still references the document; linking can be redone.
+      const { data: doc } = await supabase
+        .from('document_attachments')
+        .select('journal_entry_id, user_id, storage_path, file_name, file_size_bytes, mime_type, sha256_hash, uploaded_by, upload_source')
+        .eq('id', input.document_id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      const anchoredTo = (doc?.journal_entry_id as string | null) ?? null
+      if (doc && anchoredTo === null) {
+        await linkToJournalEntry(supabase, companyId, input.document_id, journalEntryId)
+      } else if (doc && anchoredTo !== journalEntryId) {
+        // Anchored to another verifikat (typically a stornoed booking that
+        // this claim replaces). BFL 5 kap 6 § forbids re-pointing an anchored
+        // document, so reference the same stored file from a new attachment
+        // row instead of stealing the old one.
+        const { data: copy, error: copyError } = await supabase
+          .from('document_attachments')
+          .insert({
+            company_id: companyId,
+            user_id: doc.user_id,
+            storage_path: doc.storage_path,
+            file_name: doc.file_name,
+            file_size_bytes: doc.file_size_bytes,
+            mime_type: doc.mime_type,
+            sha256_hash: doc.sha256_hash,
+            uploaded_by: doc.uploaded_by,
+            upload_source: doc.upload_source,
+            journal_entry_id: journalEntryId,
+          })
+          .select('id')
+          .single()
+        if (copyError || !copy) {
+          throw new Error(copyError?.message ?? 'attachment copy insert failed')
+        }
+        await supabase
+          .from('expense_claims')
+          .update({ document_id: copy.id })
+          .eq('id', claim.id)
+          .eq('company_id', companyId)
+      }
+    } catch (err) {
+      log.warn('expense claim receipt could not be attached to the verifikat', {
+        claim_id: claim.id,
+        document_id: input.document_id,
+        journal_entry_id: journalEntryId,
+        error: err instanceof Error ? err.message : String(err),
+      })
     }
   }
   if (input.inbox_item_id) {
