@@ -1,4 +1,4 @@
--- Validate the operation type CHECK re-added in 20260830130000.
+-- Validate the operation type CHECK re-added in 20260830150000.
 -- This separate transaction avoids a full-table scan while the preceding
 -- migration holds its stronger table lock.
 
