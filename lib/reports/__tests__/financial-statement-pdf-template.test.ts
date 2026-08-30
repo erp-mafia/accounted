@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { FinancialStatementPDF } from '../financial-statement-pdf-template'
 import type { CompanySettings } from '@/types'
+import { pdfTextStrings } from '@/tests/pdf-text'
 
 function fakeCompany(): CompanySettings {
   return {
@@ -139,5 +140,41 @@ describe('FinancialStatementPDF', () => {
 
     const buffer = await renderToBuffer(doc)
     expect(buffer.slice(0, 5).toString()).toBe('%PDF-')
+  }, RENDER_TIMEOUT)
+
+  it('prints a loss with its sign in the rendered bytes (issue #1982)', async () => {
+    // sv-SE formats negatives with U+2212, which the bundled Helvetica cannot
+    // draw: Årets resultat -4 684,24 used to print as 4 684,24 in both the
+    // resultaträkning summary and the balansräkning 2099 row.
+    const doc = FinancialStatementPDF({
+      title: 'Balansräkning',
+      groups: [
+        {
+          heading: 'Eget kapital och skulder',
+          sections: [
+            {
+              title: 'Eget kapital',
+              rows: [
+                { account_number: '2081', account_name: 'Aktiekapital', amount: 25_000 },
+                { account_number: '2099', account_name: 'Årets resultat', amount: -4684.24 },
+              ],
+              subtotal: 20_315.76,
+            },
+          ],
+          totalLabel: 'Summa eget kapital och skulder',
+          total: 20_315.76,
+        },
+      ],
+      summary: [{ label: 'Årets resultat', amount: -4684.24, emphasis: true }],
+      period: { start: '2025-10-14', end: '2026-01-31' },
+      company: fakeCompany(),
+      generatedAt: '2026-08-27T10:00:00Z',
+    })
+
+    const text = pdfTextStrings(await renderToBuffer(doc)).join('\n')
+    expect(text).toContain('-4 684,24')
+    expect(text).not.toContain(String.fromCharCode(0x12))
+    expect(text).not.toContain('\u2212')
+    expect(text).toContain('20 315,76')
   }, RENDER_TIMEOUT)
 })

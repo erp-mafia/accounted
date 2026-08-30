@@ -5,6 +5,7 @@ import {
   View,
   StyleSheet,
 } from '@react-pdf/renderer'
+import { pdfNumberText } from '@/lib/pdf/number-text'
 import type {
   CompanySettings,
   LatestVoucherPerSeries,
@@ -226,15 +227,14 @@ const styles = StyleSheet.create({
 })
 
 function formatAmount(amount: number): string {
-  // Intl emits U+2212 (true minus). The bundled @react-pdf/renderer
-  // Helvetica/Courier fonts lack that glyph and silently drop it, so
-  // negatives would render as positives. Map to ASCII hyphen.
-  return new Intl.NumberFormat('sv-SE', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
-    .format(amount)
-    .replace(/\u2212/g, '-')
+  // pdfNumberText: Intl emits U+2212 (true minus), which the bundled
+  // Helvetica/Courier fonts lack, so negatives would render as positives.
+  return pdfNumberText(
+    new Intl.NumberFormat('sv-SE', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount),
+  )
 }
 
 function formatOrgNumber(orgNumber: string): string {
