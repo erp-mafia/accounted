@@ -786,19 +786,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       }
       const { data } = await res.json()
       if (docRequestRef.current !== request) return
-      const url: string | null = data?.download_url ?? null
-      // HTML mail underlag renders via the same-origin inline proxy: it
-      // serves text/html with a CSP sandbox header and guaranteed inline
-      // disposition. Other types keep the signed storage URL.
-      const effectiveUrl =
-        data?.mime_type === 'text/html' ? `/api/documents/${documentId}/inline` : url
-      if (!url) {
-        // The document row exists but no signed URL came back: still a load
-        // failure, not an absent underlag.
-        setDocState('error')
-        return
-      }
-      setDocUrl(effectiveUrl)
+      // Always preview via the same-origin inline proxy. Signed Storage URLs
+      // are served as Content-Disposition: attachment, which Chrome blocks in
+      // iframe/img with "Det här innehållet har blockerats".
+      setDocUrl(`/api/documents/${documentId}/inline`)
       setDocMime(data?.mime_type ?? null)
       setDocState('ready')
     } catch {
@@ -2326,7 +2317,7 @@ export function DocumentPreview({
       ) : (
         // PDF: iframe needs explicit height, frame fills the available pane.
         <div className="h-full w-full max-w-3xl bg-background rounded-lg border overflow-hidden">
-          <iframe src={docUrl} className="w-full h-full border-0" title="Underlag" />
+          <embed src={docUrl} type="application/pdf" className="w-full h-full border-0" title="Underlag" />
         </div>
       )}
     </div>
