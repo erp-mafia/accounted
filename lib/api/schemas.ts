@@ -2413,14 +2413,28 @@ export const PruneAccountsSchema = z
 // Bank reconciliation schemas
 // ============================================================
 
-export const BankLinkSchema = z.object({
-  transaction_id: uuid,
-  journal_entry_id: uuid,
-  // Settlement account being reconciled. The voucher must have a line on this
-  // account and the transaction must belong to it. Defaults to '1930' in the
-  // route for back-compat.
-  account_number: accountNumber.optional(),
-})
+export const BankLinkSchema = z
+  .object({
+    transaction_id: uuid,
+    // One verifikat (1:1, or N:1 when other transactions already point at it).
+    journal_entry_id: uuid.optional(),
+    // Or several verifikat settled by this one transaction (1:N, #1553): the
+    // signed slice per verifikat in the transaction's sign convention. The
+    // slices must sum to the transaction amount; the engine enforces it.
+    allocations: z
+      .array(z.object({ journal_entry_id: uuid, amount: z.number() }))
+      .min(2)
+      .max(50)
+      .optional(),
+    // Settlement account being reconciled. The voucher must have a line on this
+    // account and the transaction must belong to it. Defaults to '1930' in the
+    // route for back-compat.
+    account_number: accountNumber.optional(),
+  })
+  .refine((v) => (v.journal_entry_id ? !v.allocations : Boolean(v.allocations)), {
+    message: 'Ange journal_entry_id eller allocations, inte båda.',
+    path: ['journal_entry_id'],
+  })
 
 export const BankUnlinkSchema = z.object({
   transaction_id: uuid,
@@ -3529,7 +3543,7 @@ export const UpdateShiftPremiumRuleSchema = z
 // Upper bound on per-employee override values. 10 MSEK is well above any
 // plausible single-period gross/tax/avgifter figure for a salary run and
 // catches typos (e.g. an extra zero) before they reach the ledger or AGI.
-const SALARY_OVERRIDE_MAX = 10_000_000
+export const SALARY_OVERRIDE_MAX = 10_000_000
 
 export const SalaryEmployeeOverrideSchema = z
   .object({

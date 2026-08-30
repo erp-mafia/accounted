@@ -26,6 +26,7 @@ import {
 } from './lib/import-documents'
 import { fetchFortnoxAssetPreview } from './lib/import-assets'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
+import { relinkRegistrationVouchers } from './lib/relink-registration-vouchers'
 import type { ArcimProvider } from './types'
 import { ARCIM_PROVIDERS } from './types'
 import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
@@ -1345,6 +1346,16 @@ export const arcimMigrationExtension: Extension = {
     // auto-link settled supplier invoices to their existing vouchers. Pass
     // { dryRun: true } to preview the plan (incl. items needing manual review)
     // without writing.
+    //
+    // Pass { consentId } to ALSO re-link registration vouchers (the verifikat
+    // that BOOKED each invoice). The imported rows do not store the provider's
+    // voucher ref, so that pass re-fetches both registers from the provider
+    // through the given consent; without a consentId it is skipped and the
+    // response carries no `registrationLinks`. The consent is validated
+    // (company-scoped) BEFORE the payment reconcile writes anything, so a
+    // wrong id is a clean 404; a provider failure during the relink itself is
+    // reported beside the payment result, which was already persisted, as
+    // `registrationLinksError` rather than by discarding that result.
     {
       method: 'POST',
       path: '/reconcile',
@@ -1360,15 +1371,29 @@ export const arcimMigrationExtension: Extension = {
         const companyId = ctx?.companyId ?? user.id
 
         let dryRun = false
+        let consentId: string | null = null
         try {
-          const body = (await request.json()) as { dryRun?: boolean }
+          const body = (await request.json()) as { dryRun?: boolean; consentId?: unknown }
           dryRun = body?.dryRun === true
+          consentId = typeof body?.consentId === 'string' && body.consentId ? body.consentId : null
         } catch {
           // empty body is fine: default to a real run
         }
 
+        if (consentId) {
+          // A foreign consent throws the same ConsentNotFoundError as a
+          // nonexistent one (no cross-tenant existence oracle).
+          try {
+            await getConsent(consentId, companyId)
+          } catch (error) {
+            log.error('arcim reconcile: consent lookup failed', error as Error)
+            return migrateFailureResponse(error, consentId)
+          }
+        }
+
+        let result: Awaited<ReturnType<typeof reconcileSupplierInvoiceVouchers>>
         try {
-          const result = await reconcileSupplierInvoiceVouchers({
+          result = await reconcileSupplierInvoiceVouchers({
             supabase,
             companyId,
             userId: user.id,
@@ -1381,11 +1406,52 @@ export const arcimMigrationExtension: Extension = {
             ambiguous: result.ambiguous,
             unmatched: result.unmatched,
           })
-          return NextResponse.json({ success: true, dryRun, result })
         } catch (error) {
           log.error('arcim reconcile failed', error as Error)
           return errorResponseFromCode('PROVIDER_MIGRATE_FAILED', moduleLog, {
             details: { reason: error instanceof Error ? error.message : 'unknown' },
+          })
+        }
+
+        if (!consentId) {
+          return NextResponse.json({ success: true, dryRun, result })
+        }
+
+        try {
+          const registrationLinks = await relinkRegistrationVouchers({
+            supabase,
+            companyId,
+            consentId,
+            dryRun,
+          })
+          log.info('arcim registration relink completed', {
+            companyId,
+            dryRun,
+            providerInvoices: registrationLinks.providerInvoices,
+            matched: registrationLinks.matched,
+            linked: registrationLinks.linked,
+            refNotFetched: registrationLinks.refNotFetched,
+            ambiguous: registrationLinks.ambiguous,
+            amountMismatch: registrationLinks.amountMismatch,
+          })
+          return NextResponse.json({ success: true, dryRun, result, registrationLinks })
+        } catch (error) {
+          // resolveConsent throws plain `{ status, message }` objects for a
+          // consent that vanished or lost its tokens between the check above
+          // and here; classifyProviderError handles the provider-side ones.
+          log.error('arcim registration relink failed', error as Error)
+          const status = typeof error === 'object' && error !== null && 'status' in error
+            ? (error as { status?: unknown }).status
+            : undefined
+          const code = error instanceof ConsentNotFoundError || status === 404
+            ? 'PROVIDER_CONSENT_NOT_FOUND'
+            : classifyProviderError(error) ?? 'PROVIDER_MIGRATE_FAILED'
+          return NextResponse.json({
+            success: true,
+            dryRun,
+            result,
+            registrationLinks: null,
+            registrationLinksError: { code },
           })
         }
       },

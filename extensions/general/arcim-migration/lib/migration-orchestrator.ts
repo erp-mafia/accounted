@@ -37,6 +37,10 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createLogger } from '@/lib/logger'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import {
+  linkMigratedRegistrationVouchers,
+  type MigratedInvoiceLinkInput,
+} from '@/lib/invoices/link-migrated-registration-vouchers'
+import {
   buildCustomerMetadataEnrichment,
   type CustomerMetadataEnrichment,
   type ExistingCustomerMetadata,
@@ -161,6 +165,10 @@ function logFxUnresolved(kind: string, invoiceNumber: string, fx: FxUnresolved):
 export async function executeMigration(options: MigrationOptions): Promise<MigrationResults> {
   const { consentId, companyId, userId, supabase } = options
   const results: MigrationResults = {}
+  // Every invoice this run inserted, with the booking voucher the provider
+  // named for it. Linked to the SIE-imported registration verifikat after both
+  // invoice steps (see the registration-link step below).
+  const registrationLinkInputs: MigratedInvoiceLinkInput[] = []
 
   // Resolve consent to get access token and provider
   const resolved = await resolveConsent(companyId, consentId)
@@ -494,7 +502,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
       try {
         // Hydrated, not the bare list: the list payload omits VAT, the net
         // and the line items for most providers (see provider-data-fetcher).
-        const { invoices, hydration } = await fetchSalesInvoicesHydrated(
+        const { invoices, hydration, unhydratedIds } = await fetchSalesInvoicesHydrated(
           provider, accessToken, providerCompanyId,
         )
         console.log(`[migration] Sales invoices: ${invoices.length} total`)
@@ -681,6 +689,16 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             for (const item of mappedBatch[i].items) {
               allItems.push({ ...item, invoice_id: invoiceId })
             }
+            registrationLinkInputs.push({
+              invoiceId: String(invoiceId),
+              kind: 'customer',
+              sourceVoucher: mappedBatch[i].dto.sourceVoucher ?? null,
+              refNotFetched: unhydratedIds.has(mappedBatch[i].dto.id),
+              invoiceDate: mappedBatch[i].dto.issueDate,
+              totalSek: mappedBatch[i].invoice.total_sek as number | null,
+              currencyCode: mappedBatch[i].dto.currencyCode || 'SEK',
+              invoiceNumber: mappedBatch[i].dto.invoiceNumber || null,
+            })
             const fx = mappedBatch[i].fxUnresolved
             if (fx) {
               fxUnresolved++
@@ -717,7 +735,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
     if (options.importSupplierInvoices !== false) {
       emitProgress(options, { status: 'importing', currentStep: 'Importerar leverantörsfakturor...', progress: 80 })
       try {
-        const { invoices, hydration } = await fetchSupplierInvoicesHydrated(
+        const { invoices, hydration, unhydratedIds } = await fetchSupplierInvoicesHydrated(
           provider, accessToken, providerCompanyId,
         )
         console.log(`[migration] Supplier invoices: ${invoices.length} total`)
@@ -918,6 +936,16 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             for (const item of mappedBatch[i].items) {
               allItems.push({ ...item, supplier_invoice_id: invoiceId })
             }
+            registrationLinkInputs.push({
+              invoiceId: String(invoiceId),
+              kind: 'supplier',
+              sourceVoucher: mappedBatch[i].dto.sourceVoucher ?? null,
+              refNotFetched: unhydratedIds.has(mappedBatch[i].dto.id),
+              invoiceDate: mappedBatch[i].dto.issueDate,
+              totalSek: mappedBatch[i].invoice.total_sek as number | null,
+              currencyCode: mappedBatch[i].dto.currencyCode || 'SEK',
+              invoiceNumber: mappedBatch[i].dto.invoiceNumber || null,
+            })
             const fx = mappedBatch[i].fxUnresolved
             if (fx) {
               fxUnresolved++
@@ -950,7 +978,42 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
       }
     }
 
-    // ── Step 6: Asset register (Fortnox only) ─────────────────────
+    // ── Step 5b: Link imported invoices to their registration vouchers ──
+    // The provider named the verifikat that booked each invoice ("A329");
+    // the SIE import preserved that source ref on the entry it created. Link
+    // the two where the match is exact and amount-corroborated, so migrated
+    // invoices stop reading as unbooked. Writes only the invoice-side FK from
+    // NULL; never touches journal entries. Best-effort like step 6: the
+    // invoices are already persisted, and /reconcile can re-run this.
+    if (registrationLinkInputs.length > 0) {
+      emitProgress(options, { status: 'importing', currentStep: 'Kopplar fakturor till verifikationer...', progress: 90 })
+      try {
+        const links = await linkMigratedRegistrationVouchers({
+          supabase,
+          companyId,
+          invoices: registrationLinkInputs,
+        })
+        results.registrationLinks = {
+          scanned: links.scanned,
+          linked: links.linked,
+          noRef: links.noRef,
+          refNotFetched: links.refNotFetched,
+          unresolved: links.unresolved,
+          ambiguous: links.ambiguous,
+          amountMismatch: links.amountMismatch,
+          alreadyLinked: links.alreadyLinked,
+        }
+        console.log(
+          `[migration] Registration vouchers: ${links.linked} linked, ${links.noRef} without ref, ${links.refNotFetched} ref not fetched, ${links.unresolved} unresolved, `
+          + `${links.ambiguous} ambiguous, ${links.amountMismatch} amount mismatch, ${links.alreadyLinked} already linked (${links.scanned} scanned)`,
+        )
+      } catch (err) {
+        console.error('Failed to link registration vouchers:', err)
+        recordStepError(results, 'registrationLinks', err)
+      }
+    }
+
+    // ── Step 5c: Asset register (Fortnox only) ─────────────────────
     // Register metadata only: the bookkeeping values (12xx anskaffning and
     // ackumulerade avskrivningar) already arrived via SIE, so this step never
     // writes journal entries. A consent without the Fortnox assets scope
@@ -971,7 +1034,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
       }
     }
 
-    // ── Step 7: Reconcile supplier invoices to GL payment vouchers ────
+    // ── Step 6: Reconcile supplier invoices to GL payment vouchers ────
     // The GL (incl. the Dr 2440 / Cr 1930 bank-payment vouchers) is imported
     // separately via SIE. Supplier invoices arrive (via ?filter=unpaid) as open
     // payables with no link to those vouchers, so settled invoices would surface

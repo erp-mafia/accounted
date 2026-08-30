@@ -216,6 +216,9 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // detail endpoint is the identity drill-in.
   'GET /api/v1/companies/:companyId/salary-runs/:id/employees': 'payroll:read',
   'GET /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId': 'payroll:read',
+  // Per-run base salary edit (variable owner pay): draft-only write of
+  // salary_run_employees.monthly_salary; the employee master is untouched.
+  'PATCH /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId': 'payroll:write',
   'GET /api/v1/companies/:companyId/salary-runs/:id/payslips/:employeeId/pdf': 'payroll:read',
   // Payroll gap-closure 1.2: payslip line writes (draft runs only).
   'POST /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId/lines': 'payroll:write',

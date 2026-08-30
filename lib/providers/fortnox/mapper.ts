@@ -10,6 +10,7 @@ import type {
   AmountType, PartyDto,
 } from '../dto';
 import { readNumber, resolveVatTriple, lineVatFromPercent } from '../amounts';
+import { sourceVoucherFromParts } from '../source-voucher';
 
 /**
  * Fortnox splits its invoice payloads in two. `GET /3/invoices` answers with
@@ -187,6 +188,10 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
     note: raw['Remarks'] as string | undefined,
     buyerReference: raw['YourReference'] as string | undefined,
     orderReference: raw['YourOrderNumber'] as string | undefined,
+    // The booking voucher, present on the detail form of a booked invoice.
+    // `VoucherYear` is deliberately not read: the invoice date resolves the
+    // fiscal year on our side, and the source's year id is not ours.
+    sourceVoucher: sourceVoucherFromParts(raw['VoucherSeries'], raw['VoucherNumber']) ?? undefined,
     updatedAt: raw['@LastModified'] as string | undefined,
     _raw: raw,
   };
@@ -258,6 +263,7 @@ export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): Suppl
     legalMonetaryTotal,
     paymentStatus,
     ocrNumber: raw['OCR'] as string | undefined,
+    sourceVoucher: sourceVoucherFromParts(raw['VoucherSeries'], raw['VoucherNumber']) ?? undefined,
     updatedAt: raw['@LastModified'] as string | undefined,
     _raw: raw,
   };

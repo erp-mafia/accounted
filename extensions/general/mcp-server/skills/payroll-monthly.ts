@@ -40,7 +40,11 @@ If anything is missing, the user fixes it in the web UI before running payroll.
 - Returns the run ID + employee count
 - Idempotent on \`(company_id, period_year, period_month)\`: re-calling errors with "Salary run already exists for this period"
 
-### Step 3: Add OB-tillägg, traktamente, förmåner (if any)
+### Step 3: Set this month's salary (if it differs from the fixed pay)
+
+\`gnubok_set_run_salary({ salary_run_id, employee_id, monthly_salary })\`: sets THIS run's base salary for one employee (draft only; 0 = nollkörning). This is the per-run value the engine reads at calculation: the employee's fixed salary is untouched. Common for owners taking salary by need and capacity. Do NOT edit the \`monthly_salary\` payslip line instead: recalculation rebuilds base salary lines from the per-run value.
+
+### Step 3b: Add OB-tillägg, traktamente, förmåner (if any)
 
 Variable lines (overtime, weekend supplement, milage, traktamente, förmåner) are added in the web UI per-employee. There's no MCP tool yet for these: guide the user there.
 

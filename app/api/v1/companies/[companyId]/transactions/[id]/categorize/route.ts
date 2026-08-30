@@ -41,6 +41,7 @@ import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-ent
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { guardCounterLegs } from '@/lib/cash-accounts/service'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
@@ -313,6 +314,28 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // counterparty-template bag; omitted = the learned bag (if any) applies.
     if (body.dimensions && Object.keys(body.dimensions).length > 0) {
       mappingResult.dimensions = body.dimensions
+    }
+
+    // Issue #1643 problem 4: same guard as the dashboard route. A learned
+    // counterparty template or an account_override must never book the
+    // COUNTER leg onto an orphaned cash-account ledger or a twin ledger of the
+    // transaction's own bank account; the agent doors have no human looking
+    // at a running-balance preview, so the refusal has to live here too.
+    {
+      const guarded = await guardCounterLegs(
+        ctx.supabase,
+        ctx.companyId!,
+        mappingResult,
+        settlementAccount,
+        transaction.cash_account_id,
+      )
+      if (guarded.refusedLedger) {
+        return v1ErrorResponseFromCode('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT', txLog, {
+          requestId: ctx.requestId,
+          details: { accountNumber: guarded.refusedLedger },
+        })
+      }
+      mappingResult = guarded.mappingResult
     }
 
     if (!mappingResult.debit_account || !mappingResult.credit_account) {

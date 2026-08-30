@@ -5465,6 +5465,51 @@ async function commitUpdatePayslipLine(
   }
 }
 
+async function commitSetRunSalary(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const salaryRunId = params.salary_run_id as string
+  const employeeId = params.employee_id as string
+  const monthlySalary = params.monthly_salary as number
+  if (!salaryRunId || !employeeId || typeof monthlySalary !== 'number') {
+    return { error: 'salary_run_id, employee_id and monthly_salary are required', status: 400 }
+  }
+
+  try {
+    const { setRunEmployeeSalary } = await import('@/lib/salary/run-employees')
+    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId,
+      salaryRunId,
+      employeeId,
+      monthlySalary,
+    })
+    if (!result.ok) {
+      const entry = getErrorEntry(result.code)
+      return {
+        error: entry?.message_sv ?? `Kunde inte sätta månadens lön: ${result.code}`,
+        status: entry?.httpStatus ?? 500,
+      }
+    }
+    return {
+      data: {
+        salary_run_id: salaryRunId,
+        salary_run_employee_id: result.data.salary_run_employee_id,
+        employee_id: result.data.employee_id,
+        previous_monthly_salary: result.data.previous_monthly_salary,
+        monthly_salary: result.data.monthly_salary,
+      },
+    }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Failed to set run salary',
+      status: 500,
+    }
+  }
+}
+
 async function commitCreateEmployee(
   supabase: SupabaseClient,
   userId: string,
@@ -6063,7 +6108,9 @@ async function commitBulkBookInboxItems(
  * same service the page and the v1 API use. Every pair is re-validated at
  * commit time (row still open, entry still posted and unlinked, amounts
  * close); partial success is reported in data.applied / data.skipped rather
- * than failing the whole operation, because the pairs are independent.
+ * than failing the whole operation, because the pairs are independent. A
+ * bank 1:N pair (one row, several verifikat, allocations) is staged as one
+ * pair and re-validated as one all-or-nothing split.
  */
 async function commitReconciliationMatch(
   supabase: SupabaseClient,
@@ -6072,7 +6119,13 @@ async function commitReconciliationMatch(
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
   const accountKey = params.account_key as string | undefined
-  const pairs = params.pairs as Array<{ external_ids: string[]; journal_entry_ids: string[] }> | undefined
+  const pairs = params.pairs as
+    | Array<{
+        external_ids: string[]
+        journal_entry_ids: string[]
+        allocations?: Array<{ journal_entry_id: string; amount: number }>
+      }>
+    | undefined
   if (!accountKey || !Array.isArray(pairs) || pairs.length === 0) {
     return { error: 'account_key and pairs are required', status: 400 }
   }
@@ -6524,6 +6577,9 @@ async function commitPendingOperationInner(
         break
       case 'update_payslip_line':
         result = await commitUpdatePayslipLine(supabase, companyId, pendingOp.params)
+        break
+      case 'set_run_salary':
+        result = await commitSetRunSalary(supabase, companyId, pendingOp.params)
         break
       case 'register_absence':
         result = await commitRegisterAbsence(supabase, companyId, pendingOp.params)
