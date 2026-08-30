@@ -199,7 +199,7 @@ export function LoginClient({
         options: { redirectTo: `${window.location.origin}/auth/callback?flow=oauth&next=${encodeURIComponent(nextPath)}` },
       })
       if (error) {
-        setFormError({ kind: 'oauth', message: error.message })
+        setFormError({ kind: 'oauth', message: getErrorMessage(error, { context: 'auth', locale: errorLocale }) })
       }
     } catch (error) {
       setFormError({
