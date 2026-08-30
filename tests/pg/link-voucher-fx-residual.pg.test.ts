@@ -1,6 +1,6 @@
 /**
  * pg-real tests for migration
- * 20260830100000_link_voucher_rpcs_fx_residual_settlement.sql: a foreign
+ * 20260830120000_link_voucher_rpcs_fx_residual_settlement.sql: a foreign
  * invoice whose receivable/payable was booked in plain SEK can be settled by
  * a SEK payment voucher, with the FX residual booked to 7960/3960 as its own
  * balanced verifikat (the linked voucher is posted and immutable), mirroring
@@ -26,7 +26,7 @@ import { getClient } from '@/tests/pg/setup'
 const MIGRATION_SQL = readFileSync(
   path.join(
     process.cwd(),
-    'supabase/migrations/20260830100000_link_voucher_rpcs_fx_residual_settlement.sql',
+    'supabase/migrations/20260830120000_link_voucher_rpcs_fx_residual_settlement.sql',
   ),
   'utf8',
 )
