@@ -133,6 +133,11 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   create_supplier_invoice_from_inbox: 'medium',
   credit_invoice: 'high',
   convert_invoice: 'medium',
+  // Removes a DRAFT (never a posted invoice): no booking impact, but both
+  // outcomes are irreversible: an unnumbered draft is hard-deleted (row gone)
+  // and a numbered draft is makulerad, permanently consuming its F-series
+  // number. 'high' so a destructive delete is never auto-committed.
+  delete_draft_invoice: 'high',
 
   // ── Phase 4: arbitrary-line bookkeeping primitives ─────────────────
   // Both accept caller-supplied account/amount/period: unlike
