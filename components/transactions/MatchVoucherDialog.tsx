@@ -250,6 +250,13 @@ export function MatchVoucherDialog({
             </>
           )}
 
+          {/* One verifikat per dialog, by design: the 1:N split (one bank
+              row over several verifikat) needs the sum arithmetic of the
+              worksheet, so this stays a single pick and points there. */}
+          <p className="text-xs text-muted-foreground">
+            Ska händelsen delas på flera verifikat? Använd Bankavstämning → Matcha manuellt.
+          </p>
+
           {/* Discovery affordances: widen the date window, and surface vouchers
               already matched so another transaction can be attached (N:1).
               Quiet links, not switches: these are list filters, and the switch

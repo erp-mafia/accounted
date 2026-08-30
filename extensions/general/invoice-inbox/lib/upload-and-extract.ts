@@ -213,6 +213,28 @@ function sanitiseCaption(raw: string | null | undefined): string | null {
 
 // ── Shared helper: upload + extract + create inbox item ──────
 
+export interface ArchivedDocumentProcessingOptions {
+  skipExtraction?: boolean
+  channelMeta?: ChannelMeta
+  /** Overrides the system actor id on the DocumentIngested history event.
+   *  Omitted = today's behavior (resend-inbound for email, user otherwise). */
+  actorId?: string
+  /**
+   * Staged upload (web route only). When true AND extraction would actually
+   * call Bedrock, the inbox row is inserted first (status 'processing',
+   * extracted_data NULL), the function returns immediately, and extraction
+   * runs after the response via a deferred worker that CAS-flips the row to
+   * 'received'. Verdicts that never reach Bedrock (no AI entitlement,
+   * sandbox, client opt-out) stay on the synchronous path: they are quick
+   * and their response contract (empty skeleton + skip_reason) is
+   * unchanged. skipExtraction in particular MUST stay synchronous: a
+   * BYO-extraction agent PUTs its fields right after upload, and a deferred
+   * flip would overwrite them. Default false = today's synchronous behavior
+   * (email and WhatsApp callers are untouched).
+   */
+  deferExtraction?: boolean
+}
+
 export async function uploadAndExtract(
   supabase: import('@supabase/supabase-js').SupabaseClient,
   userId: string,
@@ -225,30 +247,8 @@ export async function uploadAndExtract(
   // VerifyAndBookOverlay opened from a transaction row's paperclip or from
   // a transaction-anchored chat). Skipped silently if missing.
   matchedTransactionId?: string | null,
-  opts: {
-    skipExtraction?: boolean
-    channelMeta?: ChannelMeta
-    /** Overrides the system actor id on the DocumentIngested history event.
-     *  Omitted = today's behavior (resend-inbound for email, user otherwise). */
-    actorId?: string
-    /**
-     * Staged upload (web route only). When true AND extraction would actually
-     * call Bedrock, the inbox row is inserted first (status 'processing',
-     * extracted_data NULL), the function returns immediately, and extraction
-     * runs after the response via a deferred worker that CAS-flips the row to
-     * 'received'. Verdicts that never reach Bedrock (no AI entitlement,
-     * sandbox, client opt-out) stay on the synchronous path: they are quick
-     * and their response contract (empty skeleton + skip_reason) is
-     * unchanged. skipExtraction in particular MUST stay synchronous: a
-     * BYO-extraction agent PUTs its fields right after upload, and a deferred
-     * flip would overwrite them. Default false = today's synchronous behavior
-     * (email and WhatsApp callers are untouched).
-     */
-    deferExtraction?: boolean
-  } = {},
+  opts: ArchivedDocumentProcessingOptions = {},
 ) {
-  const correlationId = crypto.randomUUID()
-
   const doc = await uploadDocument(supabase, userId, companyId, {
     name: file.name,
     buffer: file.buffer,
@@ -263,6 +263,46 @@ export async function uploadAndExtract(
     // the document row; the document-extraction extension must not race it.
     extractionOwner: 'invoice-inbox',
   })
+
+  return processArchivedDocument(
+    supabase,
+    userId,
+    companyId,
+    doc,
+    file,
+    source,
+    emailMeta,
+    matchedTransactionId,
+    opts,
+  )
+}
+
+/**
+ * Everything the inbox does with a document once it sits in the archive:
+ * adopt an existing inbox item for deduplicated content, record the
+ * DocumentIngested history, apply the page-count gate, decide the
+ * entitlement/sandbox/opt-out verdict, extract (synchronously or deferred)
+ * and insert the inbox row. Split out of uploadAndExtract so the
+ * direct-to-storage route (signed upload URL, bytes never in a function
+ * body) can archive through completePendingDocumentUpload and then join the
+ * exact same pipeline as the multipart route.
+ *
+ * `doc` is the archived document (or the existing one it deduplicated to),
+ * `file` carries the same bytes the archive holds: the pipeline reads them
+ * for page counting and extraction.
+ */
+export async function processArchivedDocument(
+  supabase: import('@supabase/supabase-js').SupabaseClient,
+  userId: string,
+  companyId: string,
+  doc: { id: string; deduplicated?: boolean },
+  file: { name: string; buffer: ArrayBuffer; type: string },
+  source: 'upload' | 'email' | 'whatsapp',
+  emailMeta?: EmailMeta,
+  matchedTransactionId?: string | null,
+  opts: ArchivedDocumentProcessingOptions = {},
+) {
+  const correlationId = crypto.randomUUID()
 
   if (doc.deduplicated) {
     // The company already archived this exact content. If an inbox item
