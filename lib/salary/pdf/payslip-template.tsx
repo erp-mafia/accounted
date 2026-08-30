@@ -1,4 +1,5 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
+import { pdfNumberText, pdfText } from '@/lib/pdf/number-text'
 import { getBranding } from '@/lib/branding/service'
 
 /**
@@ -247,7 +248,14 @@ export interface PayslipLineItem {
 }
 
 function fmt(amount: number): string {
-  return new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount)
+  // pdfNumberText: Intl's U+2212 has no glyph in the bundled Helvetica, so a
+  // negative line (deduction, absence) would print as an addition (issue
+  // #1982). The two other U+2212 sources on this page are handled at their
+  // render sites: the Preliminär skatt prefix (an ASCII hyphen) and the
+  // breakdown formula strings from the calculation engine (pdfText).
+  return pdfNumberText(
+    new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount),
+  )
 }
 
 const MONTH_NAMES = [
@@ -327,7 +335,7 @@ export function PayslipPDF({ data }: { data: PayslipData }) {
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Preliminär skatt ({data.taxReference})</Text>
-            <Text style={styles.summaryValue}>−{fmt(data.taxWithheld)}</Text>
+            <Text style={styles.summaryValue}>-{fmt(data.taxWithheld)}</Text>
           </View>
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>Nettolön (utbetalas)</Text>
@@ -380,7 +388,7 @@ export function PayslipPDF({ data }: { data: PayslipData }) {
             {data.breakdownSteps.map((step, i) => (
               <View key={i} style={styles.breakdownRow}>
                 <Text style={styles.breakdownLabel}>{step.label}</Text>
-                <Text style={styles.breakdownFormula}>{step.formula}</Text>
+                <Text style={styles.breakdownFormula}>{pdfText(step.formula)}</Text>
                 <Text style={styles.breakdownValue}>{fmt(step.output)}</Text>
               </View>
             ))}
