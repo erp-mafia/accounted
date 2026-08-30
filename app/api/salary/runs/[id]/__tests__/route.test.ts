@@ -135,12 +135,20 @@ describe('PATCH /api/salary/runs/[id]', () => {
     })
   }
 
+  const DRAFT_RUN = {
+    id: 'run-1',
+    status: 'draft',
+    payment_date: '2026-07-25',
+    period_year: 2026,
+    period_month: 7,
+  }
+
   it('returns 400 when the run is not a draft', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     authorize(supabase)
 
     enqueueMany([
-      { data: { id: 'run-1', status: 'review', payment_date: '2026-07-25' } }, // lookup
+      { data: { ...DRAFT_RUN, status: 'review' } }, // lookup
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1', {
@@ -159,8 +167,8 @@ describe('PATCH /api/salary/runs/[id]', () => {
     authorize(supabase)
 
     enqueueMany([
-      { data: { id: 'run-1', status: 'draft', payment_date: '2026-07-25' } }, // lookup
-      { data: { id: 'run-1', status: 'draft', payment_date: '2026-07-23' } }, // update
+      { data: DRAFT_RUN }, // lookup
+      { data: { ...DRAFT_RUN, payment_date: '2026-07-23' } }, // update
       { data: null }, // roster calculation_breakdown clear
     ])
 
@@ -186,8 +194,8 @@ describe('PATCH /api/salary/runs/[id]', () => {
     authorize(supabase)
 
     enqueueMany([
-      { data: { id: 'run-1', status: 'draft', payment_date: '2026-07-25' } }, // lookup
-      { data: { id: 'run-1', status: 'draft', payment_date: '2026-07-25', notes: 'Julbonus' } }, // update
+      { data: DRAFT_RUN }, // lookup
+      { data: { ...DRAFT_RUN, notes: 'Julbonus' } }, // update
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1', {
@@ -198,6 +206,49 @@ describe('PATCH /api/salary/runs/[id]', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
+    expect(findCall('salary_run_employees', 'update')).toBeUndefined()
+  })
+
+  it('rejects a payment_date outside the run period month (kontantprincipen)', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    authorize(supabase)
+
+    enqueueMany([
+      { data: DRAFT_RUN }, // lookup: period 2026-07
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1', {
+      method: 'PATCH',
+      body: { payment_date: '2026-08-01' },
+    })
+    const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain('period')
+    // Refused before any write.
+    expect(findCall('salary_runs', 'update')).toBeUndefined()
+  })
+
+  it('returns 400 when the run advances past draft between fetch and update (race)', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    authorize(supabase)
+
+    enqueueMany([
+      { data: DRAFT_RUN }, // lookup still sees draft
+      { data: null }, // status-locked update matches no row
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1', {
+      method: 'PATCH',
+      body: { payment_date: '2026-07-23' },
+    })
+    const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain('utkast')
+    // The clear must not run when the locked update matched nothing.
     expect(findCall('salary_run_employees', 'update')).toBeUndefined()
   })
 })

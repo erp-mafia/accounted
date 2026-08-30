@@ -228,6 +228,43 @@ describe('commitPendingOperation: update_salary_run', () => {
     })
   })
 
+  it('re-clears breakdowns when retried with the already-applied date (partial-failure retry)', async () => {
+    // After a partial failure (header committed, clear failed) a retry sees
+    // the new date as current. The clear must run anyway: it is gated on the
+    // date being SUPPLIED, never on it differing from the stored value.
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { ...RUN_ROW, payment_date: '2026-03-23' } }) // run already carries the new date
+    enqueue({ data: { ...RUN_ROW, payment_date: '2026-03-23' } }) // header update no-ops successfully
+    enqueue({ data: null, error: null }) // roster calculation_breakdown clear
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'update_salary_run',
+      params: { salary_run_id: 'run-1', patch: { payment_date: '2026-03-23' } },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(findCall('salary_run_employees', 'update')).toEqual([{ calculation_breakdown: null }])
+  })
+
+  it('rejects a payment_date outside the run period month with 400', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: RUN_ROW }) // draft gate passes; period is 2026-03
+    enqueue({ data: null, error: null }) // finalize (rejected)
+
+    const op = makePendingOp({
+      operation_type: 'update_salary_run',
+      params: { salary_run_id: 'run-1', patch: { payment_date: '2026-04-05' } },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).not.toBe('committed')
+    expect(result.http_status).toBe(400)
+  })
+
   it('fails when the calculation-invalidation clear errors (guard is not best-effort)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim

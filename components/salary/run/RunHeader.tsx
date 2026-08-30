@@ -163,6 +163,13 @@ export function RunHeader({
     if (!saved) setPaymentDateDraft(run.payment_date)
   }
 
+  // The payment date must stay within the run's period month: the AGI is
+  // declared per payment month (kontantprincipen), so the API refuses dates
+  // outside it. min/max keeps the native picker inside the month; typed
+  // values outside it still get the server's 400 toast.
+  const periodMonthPrefix = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
+  const periodMonthLastDay = new Date(run.period_year, run.period_month, 0).getDate()
+
   const metaParts: React.ReactNode[] = [
     <span key="payment" className="inline-flex items-center gap-2">
       {t('payment_date_label')}{' '}
@@ -170,6 +177,8 @@ export function RunHeader({
         <Input
           type="date"
           value={paymentDateDraft}
+          min={`${periodMonthPrefix}-01`}
+          max={`${periodMonthPrefix}-${String(periodMonthLastDay).padStart(2, '0')}`}
           onChange={(e) => setPaymentDateDraft(e.target.value)}
           onBlur={commitPaymentDate}
           onKeyDown={(e) => {

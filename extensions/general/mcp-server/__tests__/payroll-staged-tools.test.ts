@@ -267,6 +267,18 @@ describe('gnubok_update_salary_run', () => {
     ).rejects.toThrow(/SALARY_RUN_PATCH_NOT_DRAFT/)
   })
 
+  it('rejects a payment_date outside the run period month (kontantprincipen)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: RUN_ROW }) // draft gate passes; period is 2026-03
+
+    await expect(
+      updateSalaryRun.execute(
+        { salary_run_id: 'run-1', payment_date: '2026-04-05' },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD/)
+  })
+
   it('throws SALARY_RUN_NOT_FOUND for a foreign or unknown run', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     // company_id-scoped lookup misses: another tenant's run id looks identical

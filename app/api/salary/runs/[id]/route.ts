@@ -175,7 +175,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Only allow updates on draft runs
     const { data: run, error: fetchError } = await supabase
       .from('salary_runs')
-      .select('id, status, payment_date')
+      .select('id, status, payment_date, period_year, period_month')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -197,25 +197,53 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       }
     }
 
+    // Kontantprincipen guard (SFL 26 kap): the AGI derives its
+    // redovisningsperiod from period_year/period_month while the verifikat
+    // books on payment_date, so a payment date outside the run's period month
+    // would post the entries in one month and declare them in another. Same
+    // rule as lib/salary/update-run.ts and the v1 PATCH.
+    if (updates.payment_date !== undefined) {
+      const periodPrefix = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
+      if (typeof updates.payment_date !== 'string' || !updates.payment_date.startsWith(periodPrefix)) {
+        return NextResponse.json(
+          {
+            error:
+              'Utbetalningsdagen måste ligga i lönekörningens period: AGI redovisas per utbetalningsmånad.',
+          },
+          { status: 400 },
+        )
+      }
+    }
+
+    // Optimistic lock on status='draft': a concurrent step advancing the run
+    // (Beräkna → Till granskning in another tab) between the fetch above and
+    // this write must fail the write, not slip a frozen-field edit through
+    // (same guard as the v1 PATCH and lib/salary/update-run.ts).
     const { data: updated, error } = await supabase
       .from('salary_runs')
       .update(updates)
       .eq('id', id)
       .eq('company_id', companyId)
+      .eq('status', 'draft')
       .select()
-      .single()
+      .maybeSingle()
 
     if (error) {
       return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
+    if (!updated) {
+      // Race: the run advanced past draft between fetch and update.
+      return NextResponse.json({ error: 'Kan bara redigera utkast' }, { status: 400 })
+    }
 
-    // A payment_date change invalidates any existing calculation: skatteavdrag
-    // and the AGI redovisningsperiod follow the payment month, so clearing
-    // calculation_breakdown makes both book preflights refuse the roster until
-    // a recalculation has run against the new date (same invariant as
-    // setRunEmployeeSalary in lib/salary/run-employees.ts and the MCP path in
-    // lib/salary/update-run.ts).
-    if (updates.payment_date !== undefined && updates.payment_date !== run.payment_date) {
+    // A supplied payment_date invalidates any existing calculation:
+    // skatteavdrag follows the payment date, so clearing calculation_breakdown
+    // makes both book preflights refuse the roster until a recalculation has
+    // run against the new date (same invariant as setRunEmployeeSalary in
+    // lib/salary/run-employees.ts and lib/salary/update-run.ts). Gated on
+    // SUPPLIED, not on changed, so a retry after a partial failure re-clears
+    // instead of comparing against the already-updated date and skipping.
+    if (updates.payment_date !== undefined) {
       const { error: clearError } = await supabase
         .from('salary_run_employees')
         .update({ calculation_breakdown: null })

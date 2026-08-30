@@ -149,6 +149,8 @@ registerEndpoint({
   pitfalls: [
     'Returns 400 SALARY_RUN_PATCH_NOT_DRAFT if status !== "draft".',
     'period_year + period_month are immutable post-create.',
+    'payment_date must stay within the run\'s period month (400 SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD otherwise): the AGI is declared per payment month.',
+    'Supplying payment_date clears every roster row\'s calculation_breakdown, so an already-calculated run must be recalculated before :approve/:book.',
   ],
   example: {
     request: { payment_date: '2026-05-23' },
@@ -248,6 +250,22 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       return ok(existing, { requestId: ctx.requestId })
     }
 
+    // Kontantprincipen guard (SFL 26 kap): the AGI derives its
+    // redovisningsperiod from period_year/period_month while the verifikat
+    // books on payment_date, so a payment date outside the run's period month
+    // would post the entries in one month and declare them in another. Same
+    // rule as lib/salary/update-run.ts and the internal dashboard PATCH.
+    if (typeof updates.payment_date === 'string') {
+      const ex = existing as { period_year: number; period_month: number }
+      const periodPrefix = `${ex.period_year}-${String(ex.period_month).padStart(2, '0')}`
+      if (!updates.payment_date.startsWith(periodPrefix)) {
+        return v1ErrorResponseFromCode('SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD', ctx.log, {
+          requestId: ctx.requestId,
+          details: { period: periodPrefix, payment_date: updates.payment_date },
+        })
+      }
+    }
+
     if (ctx.dryRun) {
       const merged = { ...(existing as object), ...updates }
       return dryRunPreview(merged, { requestId: ctx.requestId, log: ctx.log })
@@ -274,6 +292,24 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         requestId: ctx.requestId,
         details: { reason: 'race' },
       })
+    }
+
+    // A supplied payment_date invalidates any existing calculation:
+    // skatteavdrag follows the payment date, so clearing calculation_breakdown
+    // makes both book preflights refuse the roster until a recalculation has
+    // run against the new date (same invariant as setRunEmployeeSalary in
+    // lib/salary/run-employees.ts and lib/salary/update-run.ts). Gated on
+    // SUPPLIED, not on changed, so a retry after a partial failure re-clears
+    // instead of comparing against the already-updated date and skipping.
+    if (updates.payment_date !== undefined) {
+      const { error: clearError } = await ctx.supabase
+        .from('salary_run_employees')
+        .update({ calculation_breakdown: null })
+        .eq('salary_run_id', idParse.data)
+        .eq('company_id', ctx.companyId!)
+      if (clearError) {
+        return v1ErrorResponse(clearError, ctx.log, { requestId: ctx.requestId })
+      }
     }
 
     return ok(data, { requestId: ctx.requestId })

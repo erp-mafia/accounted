@@ -357,15 +357,15 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
 })
 
 describe('PATCH /api/v1/companies/:companyId/salary-runs/:id', () => {
-  it('updates a draft salary run', async () => {
+  it('updates a draft salary run and clears roster calculation_breakdown', async () => {
     const updated = { ...SAMPLE_RUN, payment_date: '2026-05-23' }
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
-        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        salary_runs: [{ data: SAMPLE_RUN, error: null }, { data: updated, error: null }],
-        idempotency_keys: { data: null, error: null },
-      }),
-    )
+    const flex = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      salary_runs: [{ data: SAMPLE_RUN, error: null }, { data: updated, error: null }],
+      salary_run_employees: { data: null, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(flex)
 
     const res = await updateSalaryRun(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}`, {
@@ -378,6 +378,33 @@ describe('PATCH /api/v1/companies/:companyId/salary-runs/:id', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.payment_date).toBe('2026-05-23')
+    // A supplied payment_date invalidates any existing calculation so the
+    // book preflights force a recalculation against the new date.
+    expect(flex.from).toHaveBeenCalledWith('salary_run_employees')
+  })
+
+  it('returns 400 SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD for a cross-month payment_date', async () => {
+    // Period 2026-05: moving the payment into June would book the verifikat
+    // in June while the AGI still declares 202605 (kontantprincipen).
+    const flex = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      salary_runs: { data: SAMPLE_RUN, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(flex)
+
+    const res = await updateSalaryRun(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ payment_date: '2026-06-05' }),
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD')
+    expect(flex.from).not.toHaveBeenCalledWith('salary_run_employees')
   })
 
   it('returns 400 SALARY_RUN_PATCH_NOT_DRAFT for non-draft status', async () => {

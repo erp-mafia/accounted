@@ -141,6 +141,23 @@ export async function updateDraftSalaryRun(
     }
   }
 
+  // Kontantprincipen guard (SFL 26 kap): the AGI derives its
+  // redovisningsperiod from period_year/period_month while the verifikat
+  // books on payment_date. A payment date outside the run's period month
+  // would post the entries in one month and declare them in another, so it
+  // is refused; a payment truly landing in another month belongs to a run
+  // for that period.
+  if (changes.payment_date !== undefined) {
+    const periodPrefix = `${row.period_year}-${String(row.period_month).padStart(2, '0')}`
+    if (!changes.payment_date.startsWith(periodPrefix)) {
+      return {
+        ok: false,
+        code: 'SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD',
+        details: { period: periodPrefix, payment_date: changes.payment_date },
+      }
+    }
+  }
+
   const previous: SalaryRunHeaderValues = {
     payment_date: row.payment_date,
     voucher_series: row.voucher_series,
@@ -187,15 +204,18 @@ export async function updateDraftSalaryRun(
     }
   }
 
-  // A payment_date change invalidates any existing calculation: skatteavdrag
-  // and the AGI redovisningsperiod follow the payment month, so clearing
-  // calculation_breakdown makes both book preflights refuse the roster until
-  // a recalculation has run against the new date (same invariant as
-  // setRunEmployeeSalary in lib/salary/run-employees.ts). Unlike the
-  // display-line refresh there, this clear IS the compliance guard, so a
-  // failure surfaces as an error; the header write above has committed and
-  // a retry of the whole operation is idempotent.
-  if (changes.payment_date !== undefined && changes.payment_date !== previous.payment_date) {
+  // A supplied payment_date invalidates any existing calculation:
+  // skatteavdrag follows the payment date, so clearing calculation_breakdown
+  // makes both book preflights refuse the roster until a recalculation has
+  // run against the new date (same invariant as setRunEmployeeSalary in
+  // lib/salary/run-employees.ts). Unlike the display-line refresh there,
+  // this clear IS the compliance guard, so a failure surfaces as an error.
+  // Gated on SUPPLIED, not on changed: after a partial failure (header
+  // committed, clear failed) a retry re-reads the run and sees the new date
+  // as current, so a changed-only gate would skip the clear forever and
+  // leave a stale calculation bookable. Clearing on an equal date merely
+  // forces a redundant recalculation, which is the safe direction.
+  if (changes.payment_date !== undefined) {
     const { error: clearError } = await supabase
       .from('salary_run_employees')
       .update({ calculation_breakdown: null })
