@@ -73,6 +73,7 @@ describe('scoreUnderlagCandidates', () => {
     expect(out).toHaveLength(1)
     expect(out[0].inbox_item_id).toBe('item-1')
     expect(out[0].confidence).toBeGreaterThanOrEqual(CANDIDATE_MIN_CONFIDENCE)
+    expect(out[0].amountSource).toBe('total')
     // and it brings the captured answers along with it
     expect(out[0].channelContext?.representation?.purpose).toBe('kundmöte')
   })
@@ -173,6 +174,8 @@ describe('scoreUnderlagCandidates', () => {
     expect(out[0].confidence).toBeGreaterThanOrEqual(CANDIDATE_MIN_CONFIDENCE)
     // ...but never as certainty: a printed figure is not an invoice total.
     expect(out[0].confidence).toBeLessThan(1)
+    // Tagged so low-scrutiny consumers (the nightly hunt) can exclude it.
+    expect(out[0].amountSource).toBe('prominent')
     // The reason names WHICH figure matched, since total_amount stays null.
     expect(out[0].total_amount).toBeNull()
     // toLocaleString('sv-SE') groups with a non-breaking space (U+00A0).

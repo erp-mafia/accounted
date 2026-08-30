@@ -65,6 +65,13 @@ export interface UnderlagCandidate {
   currency: string | null
   /** 0-1 from the shared receipt matcher. */
   confidence: number
+  /**
+   * Where the amount signal came from: an invoice-style total, or the
+   * prominent-amounts fallback for non-invoice documents (bankintyg, avtal).
+   * Consumers that act with less human scrutiny (the nightly receipt hunt)
+   * must treat 'prominent' as weaker evidence or exclude it.
+   */
+  amountSource: 'total' | 'prominent'
   /** Swedish reasons the match scored, for display. */
   matchReasons: string[]
   /** Answers already captured for this item, so they travel with it. */
@@ -223,6 +230,7 @@ export function scoreUnderlagCandidates(
       vat_amount: sig.vat,
       currency: sig.currency,
       confidence,
+      amountSource: fallbackMatch ? 'prominent' : 'total',
       matchReasons,
       channelContext: item.channel_context ?? null,
     })
