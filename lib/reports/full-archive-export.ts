@@ -1090,6 +1090,8 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Körjournal: trip log underlag for milersättning verifikat (BFL 7-year
   // retention per Skatteverket's körjournal documentation requirement).
   { name: 'mileage_trips', file: 'mileage_trips.json', orderBy: 'trip_date' },
+  { name: 'expense_claims', file: 'expense_claims.json', orderBy: 'expense_date' },
+  { name: 'expense_payout_batches', file: 'expense_payout_batches.json', orderBy: 'payout_date' },
   // Assets and accruals
   { name: 'assets', file: 'assets.json', orderBy: 'created_at' },
   { name: 'depreciation_schedules', file: 'depreciation_schedules.json', orderBy: 'created_at' },

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
@@ -398,6 +399,7 @@ const WorkspaceSkeleton = InvoiceInboxSkeleton
 
 export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const { toast } = useToast()
+  const router = useRouter()
   const t = useTranslations('inbox_workspace')
   const tStart = useTranslations('start_cards')
   const dismissKeyCompanyId = useCompanyOptional()?.company?.id ?? null
@@ -2022,6 +2024,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               onDelete={() => handleDelete(selected.id)}
               onBookDirect={() => setBookDirectOpen(true)}
               onCreateSupplierInvoice={() => setCreateSupplierInvoiceOpen(true)}
+              onRegisterExpense={() => router.push(`/expenses?new=1&inbox_item=${selected.id}`)}
               onMatchTransaction={() => setMatchPickerOpen(true)}
               onUnmatchTransaction={async () => {
                 const targetId = selected.id
@@ -2856,6 +2859,7 @@ function FieldsRail({
   onDelete,
   onBookDirect,
   onCreateSupplierInvoice,
+  onRegisterExpense,
   onMatchTransaction,
   onUnmatchTransaction,
   onAskAssistant,
@@ -2870,6 +2874,7 @@ function FieldsRail({
   onDelete: () => void
   onBookDirect: () => void
   onCreateSupplierInvoice: () => void
+  onRegisterExpense: () => void
   onMatchTransaction: () => void
   onUnmatchTransaction: () => Promise<void>
   onAskAssistant?: (transactionId: string) => void
@@ -3418,6 +3423,15 @@ function FieldsRail({
                   <span>Skapa leverantörsfaktura</span>
                   <span className="text-xs text-muted-foreground">
                     För leverantörsskulder du vill följa (periodisering).
+                  </span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={onRegisterExpense}
+                  className="flex flex-col items-start gap-1"
+                >
+                  <span>Registrera som utlägg</span>
+                  <span className="text-xs text-muted-foreground">
+                    För köp du eller en anställd betalat privat.
                   </span>
                 </DropdownMenuItem>
                 <DropdownMenuItem

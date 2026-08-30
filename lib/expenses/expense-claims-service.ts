@@ -1,0 +1,457 @@
+/**
+ * Expense claims (utlägg): out-of-pocket purchases booked against an
+ * owner/employee liability, reimbursed later in payout batches.
+ *
+ * Registering a claim posts a verifikat immediately:
+ *
+ *   Debit  expense account        (gross − VAT)
+ *   Debit  2641 Ingående moms     (VAT, when > 0)
+ *   Credit liability              (gross)  2893 owner / 2820 employee / 2018 EF
+ *
+ * A payout batch reimburses N registered claims for ONE claimant in one bank
+ * transfer:
+ *
+ *   Debit  liability              (batch total)
+ *   Credit 19xx cash account      (batch total)
+ *
+ * Amounts are converted to SEK before booking; the original currency and
+ * rate are stored on the claim as provenance (BFL: bokföring i redovisnings-
+ * valutan). All rounding through roundOre.
+ */
+
+import type { SupabaseClient } from '@supabase/supabase-js'
+import type { Currency } from '@/types'
+import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/types'
+import { createJournalEntry, findFiscalPeriod, reverseEntry } from '@/lib/bookkeeping/engine'
+import { linkToJournalEntry } from '@/lib/core/documents/document-service'
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
+import { roundOre, sumOre } from '@/lib/money'
+
+export const EXPENSE_LIABILITY_ACCOUNTS = ['2893', '2820', '2018', '2890'] as const
+export type ExpenseLiabilityAccount = (typeof EXPENSE_LIABILITY_ACCOUNTS)[number]
+
+export interface ExpenseClaimRow {
+  id: string
+  company_id: string
+  employee_id: string | null
+  claimant_name: string
+  description: string
+  expense_date: string
+  amount_sek: number
+  vat_sek: number
+  currency: string
+  amount_in_currency: number | null
+  exchange_rate: number | null
+  expense_account: string
+  liability_account: string
+  document_id: string | null
+  status: 'registered' | 'paid'
+  journal_entry_id: string | null
+  payout_batch_id: string | null
+  created_at: string
+}
+
+export interface RegisterExpenseClaimInput {
+  description: string
+  expense_date: string
+  /** Gross amount incl VAT, in `currency`. */
+  amount: number
+  /** Deductible VAT part of `amount`, in `currency`. */
+  vat_amount: number
+  currency: Currency
+  /** Optional explicit rate; omitted → Riksbanken (cached) for expense_date. */
+  exchange_rate?: number
+  expense_account: string
+  /** Defaults per claimant kind: employee → 2820, otherwise → 2893. */
+  liability_account?: ExpenseLiabilityAccount
+  employee_id?: string
+  /** Required when employee_id is absent (e.g. the owner's name). */
+  claimant_name?: string
+  document_id?: string
+  inbox_item_id?: string
+}
+
+export type RegisterExpenseClaimResult =
+  | { ok: true; claim: ExpenseClaimRow }
+  | {
+      ok: false
+      code:
+        | 'EMPLOYEE_NOT_FOUND'
+        | 'CLAIMANT_REQUIRED'
+        | 'RATE_UNAVAILABLE'
+        | 'VAT_EXCEEDS_AMOUNT'
+        | 'FISCAL_PERIOD_NOT_FOUND'
+        | 'CLAIM_INSERT_FAILED'
+      detail?: string
+    }
+
+export async function registerExpenseClaim(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: RegisterExpenseClaimInput,
+): Promise<RegisterExpenseClaimResult> {
+  // Resolve claimant + default liability account
+  let claimantName = input.claimant_name?.trim() ?? ''
+  let employeeId: string | null = null
+  let liability: string = input.liability_account ?? '2893'
+  if (input.employee_id) {
+    const { data: emp } = await supabase
+      .from('employees')
+      .select('id, first_name, last_name')
+      .eq('id', input.employee_id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (!emp) return { ok: false, code: 'EMPLOYEE_NOT_FOUND' }
+    employeeId = emp.id
+    claimantName = claimantName || `${emp.first_name} ${emp.last_name}`
+    liability = input.liability_account ?? '2820'
+  }
+  if (!claimantName) return { ok: false, code: 'CLAIMANT_REQUIRED' }
+
+  if (input.vat_amount < 0 || input.vat_amount >= input.amount) {
+    return { ok: false, code: 'VAT_EXCEEDS_AMOUNT' }
+  }
+
+  // Convert to SEK. The claim total is gross; VAT converts at the same rate
+  // so the split stays internally consistent to the öre.
+  let rate = 1
+  if (input.currency !== 'SEK') {
+    if (input.exchange_rate && input.exchange_rate > 0) {
+      rate = input.exchange_rate
+    } else {
+      const fetched = await fetchExchangeRate(
+        input.currency,
+        new Date(input.expense_date),
+        supabase,
+      )
+      if (!fetched) return { ok: false, code: 'RATE_UNAVAILABLE' }
+      rate = fetched.rate
+    }
+  }
+  const amountSek = roundOre(input.amount * rate)
+  const vatSek = roundOre(input.vat_amount * rate)
+  const netSek = roundOre(amountSek - vatSek)
+
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, input.expense_date)
+  if (!fiscalPeriodId) return { ok: false, code: 'FISCAL_PERIOD_NOT_FOUND' }
+
+  // Claim row first, then the verifikat with source_id pointing back at it;
+  // a failed booking removes the orphan row again.
+  const { data: claim, error: insertError } = await supabase
+    .from('expense_claims')
+    .insert({
+      company_id: companyId,
+      user_id: userId,
+      employee_id: employeeId,
+      claimant_name: claimantName,
+      description: input.description,
+      expense_date: input.expense_date,
+      amount_sek: amountSek,
+      vat_sek: vatSek,
+      currency: input.currency,
+      amount_in_currency: input.currency === 'SEK' ? null : roundOre(input.amount),
+      exchange_rate: input.currency === 'SEK' ? null : rate,
+      expense_account: input.expense_account,
+      liability_account: liability,
+      document_id: input.document_id ?? null,
+      status: 'registered',
+    })
+    .select('*')
+    .single()
+  if (insertError || !claim) {
+    return { ok: false, code: 'CLAIM_INSERT_FAILED', detail: insertError?.message }
+  }
+
+  const desc = `Utlägg: ${input.description} (${claimantName})`
+  const lines: CreateJournalEntryLineInput[] = [
+    {
+      account_number: input.expense_account,
+      debit_amount: netSek,
+      credit_amount: 0,
+      line_description: desc,
+      ...(input.currency !== 'SEK'
+        ? {
+            currency: input.currency,
+            amount_in_currency: roundOre(input.amount - input.vat_amount),
+            exchange_rate: rate,
+          }
+        : {}),
+    },
+  ]
+  if (vatSek > 0) {
+    lines.push({
+      account_number: '2641',
+      debit_amount: vatSek,
+      credit_amount: 0,
+      line_description: `Ingående moms, ${desc}`,
+    })
+  }
+  lines.push({
+    account_number: liability,
+    debit_amount: 0,
+    credit_amount: amountSek,
+    line_description: desc,
+  })
+
+  const entryInput: CreateJournalEntryInput = {
+    fiscal_period_id: fiscalPeriodId,
+    entry_date: input.expense_date,
+    description: desc,
+    source_type: 'expense_claim',
+    source_id: claim.id,
+    lines,
+  }
+
+  let journalEntryId: string
+  try {
+    const entry = await createJournalEntry(supabase, companyId, userId, entryInput)
+    journalEntryId = entry.id
+  } catch (err) {
+    await supabase.from('expense_claims').delete().eq('id', claim.id).eq('company_id', companyId)
+    throw err
+  }
+
+  await supabase
+    .from('expense_claims')
+    .update({ journal_entry_id: journalEntryId })
+    .eq('id', claim.id)
+    .eq('company_id', companyId)
+
+  // Attach the receipt to the verifikat and settle the inbox item, both
+  // best-effort: the booking above is the legally significant part.
+  if (input.document_id) {
+    try {
+      await linkToJournalEntry(supabase, companyId, input.document_id, journalEntryId)
+    } catch {
+      // The claim still references the document; linking can be redone.
+    }
+  }
+  if (input.inbox_item_id) {
+    // "Processed" is derived from created_journal_entry_id; the status column
+    // only tracks the extraction pipeline (received/processing/error).
+    await supabase
+      .from('invoice_inbox_items')
+      .update({ created_journal_entry_id: journalEntryId })
+      .eq('id', input.inbox_item_id)
+      .eq('company_id', companyId)
+  }
+
+  return {
+    ok: true,
+    claim: { ...(claim as ExpenseClaimRow), journal_entry_id: journalEntryId },
+  }
+}
+
+export interface ListExpenseClaimsOptions {
+  status?: 'registered' | 'paid'
+}
+
+export async function listExpenseClaims(
+  supabase: SupabaseClient,
+  companyId: string,
+  options: ListExpenseClaimsOptions = {},
+): Promise<ExpenseClaimRow[]> {
+  let query = supabase
+    .from('expense_claims')
+    .select('*, document:document_attachments(id, file_name), batch:expense_payout_batches(id, payout_date, journal_entry_id)')
+    .eq('company_id', companyId)
+    .order('expense_date', { ascending: false })
+    .order('created_at', { ascending: false })
+  if (options.status) query = query.eq('status', options.status)
+  const { data, error } = await query
+  if (error) throw new Error(`Failed to list expense claims: ${error.message}`)
+  return (data ?? []) as ExpenseClaimRow[]
+}
+
+export type DeleteExpenseClaimResult =
+  | { ok: true; reversal_entry_id: string | null }
+  | { ok: false; code: 'NOT_FOUND' | 'ALREADY_PAID' | 'DELETE_FAILED'; detail?: string }
+
+/**
+ * Remove a registered claim. The booked verifikat is never deleted: it is
+ * reversed with a storno entry (BFL 5 kap 5 §), then the register row goes.
+ * The receipt stays linked to the original entry, so the 7-year archive is
+ * untouched. Paid claims are refused: undo the payout first.
+ */
+export async function deleteExpenseClaim(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  claimId: string,
+): Promise<DeleteExpenseClaimResult> {
+  const { data: claim, error } = await supabase
+    .from('expense_claims')
+    .select('id, status, journal_entry_id')
+    .eq('id', claimId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) return { ok: false, code: 'DELETE_FAILED', detail: error.message }
+  if (!claim) return { ok: false, code: 'NOT_FOUND' }
+  if (claim.status === 'paid') return { ok: false, code: 'ALREADY_PAID' }
+
+  let reversalEntryId: string | null = null
+  if (claim.journal_entry_id) {
+    const reversal = await reverseEntry(supabase, companyId, userId, claim.journal_entry_id)
+    reversalEntryId = reversal.id
+  }
+
+  const { error: deleteError } = await supabase
+    .from('expense_claims')
+    .delete()
+    .eq('id', claimId)
+    .eq('company_id', companyId)
+  if (deleteError) {
+    // The storno is already posted; report the register desync loudly rather
+    // than pretending nothing happened.
+    return { ok: false, code: 'DELETE_FAILED', detail: deleteError.message }
+  }
+
+  return { ok: true, reversal_entry_id: reversalEntryId }
+}
+
+export interface CreatePayoutBatchInput {
+  claim_ids: string[]
+  payout_date: string
+  cash_account: string
+  notes?: string
+}
+
+export type CreatePayoutBatchResult =
+  | { ok: true; batch_id: string; journal_entry_id: string; total_sek: number; claim_count: number }
+  | {
+      ok: false
+      code:
+        | 'NO_CLAIMS'
+        | 'CLAIMS_NOT_FOUND'
+        | 'ALREADY_PAID'
+        | 'MIXED_CLAIMANTS'
+        | 'MIXED_LIABILITY'
+        | 'FISCAL_PERIOD_NOT_FOUND'
+        | 'BATCH_INSERT_FAILED'
+      detail?: string
+    }
+
+export async function createPayoutBatch(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: CreatePayoutBatchInput,
+): Promise<CreatePayoutBatchResult> {
+  if (input.claim_ids.length === 0) return { ok: false, code: 'NO_CLAIMS' }
+
+  const { data: claims, error } = await supabase
+    .from('expense_claims')
+    .select('*')
+    .eq('company_id', companyId)
+    .in('id', input.claim_ids)
+  if (error) return { ok: false, code: 'CLAIMS_NOT_FOUND', detail: error.message }
+  const rows = (claims ?? []) as ExpenseClaimRow[]
+  if (rows.length !== input.claim_ids.length) return { ok: false, code: 'CLAIMS_NOT_FOUND' }
+  if (rows.some((c) => c.status !== 'registered')) return { ok: false, code: 'ALREADY_PAID' }
+
+  // One batch = one transfer to one person against one liability account.
+  const claimantKey = (c: ExpenseClaimRow) => `${c.employee_id ?? 'owner'}`
+  if (new Set(rows.map(claimantKey)).size > 1) return { ok: false, code: 'MIXED_CLAIMANTS' }
+  if (new Set(rows.map((c) => c.liability_account)).size > 1) {
+    return { ok: false, code: 'MIXED_LIABILITY' }
+  }
+
+  const total = roundOre(sumOre(rows.map((c) => c.amount_sek)))
+  const first = rows[0]
+
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, input.payout_date)
+  if (!fiscalPeriodId) return { ok: false, code: 'FISCAL_PERIOD_NOT_FOUND' }
+
+  const { data: batch, error: batchError } = await supabase
+    .from('expense_payout_batches')
+    .insert({
+      company_id: companyId,
+      user_id: userId,
+      employee_id: first.employee_id,
+      claimant_name: first.claimant_name,
+      payout_date: input.payout_date,
+      cash_account: input.cash_account,
+      liability_account: first.liability_account,
+      total_sek: total,
+      notes: input.notes ?? null,
+    })
+    .select('id')
+    .single()
+  if (batchError || !batch) {
+    return { ok: false, code: 'BATCH_INSERT_FAILED', detail: batchError?.message }
+  }
+
+  const desc = `Utbetalning utlägg: ${first.claimant_name} (${rows.length} st)`
+  const entryInput: CreateJournalEntryInput = {
+    fiscal_period_id: fiscalPeriodId,
+    entry_date: input.payout_date,
+    description: desc,
+    source_type: 'expense_payout',
+    source_id: batch.id,
+    lines: [
+      {
+        account_number: first.liability_account,
+        debit_amount: total,
+        credit_amount: 0,
+        line_description: desc,
+      },
+      {
+        account_number: input.cash_account,
+        debit_amount: 0,
+        credit_amount: total,
+        line_description: desc,
+      },
+    ],
+  }
+
+  let journalEntryId: string
+  try {
+    const entry = await createJournalEntry(supabase, companyId, userId, entryInput)
+    journalEntryId = entry.id
+  } catch (err) {
+    await supabase
+      .from('expense_payout_batches')
+      .delete()
+      .eq('id', batch.id)
+      .eq('company_id', companyId)
+    throw err
+  }
+
+  await supabase
+    .from('expense_payout_batches')
+    .update({ journal_entry_id: journalEntryId })
+    .eq('id', batch.id)
+    .eq('company_id', companyId)
+
+  const { error: markError } = await supabase
+    .from('expense_claims')
+    .update({ status: 'paid', payout_batch_id: batch.id })
+    .eq('company_id', companyId)
+    .in('id', input.claim_ids)
+  if (markError) {
+    // The payout verifikat exists; surface the sync failure rather than hide it.
+    return { ok: false, code: 'BATCH_INSERT_FAILED', detail: markError.message }
+  }
+
+  return {
+    ok: true,
+    batch_id: batch.id,
+    journal_entry_id: journalEntryId,
+    total_sek: total,
+    claim_count: rows.length,
+  }
+}
+
+export async function listPayoutBatches(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<Record<string, unknown>[]> {
+  const { data, error } = await supabase
+    .from('expense_payout_batches')
+    .select('*')
+    .eq('company_id', companyId)
+    .order('payout_date', { ascending: false })
+  if (error) throw new Error(`Failed to list payout batches: ${error.message}`)
+  return data ?? []
+}

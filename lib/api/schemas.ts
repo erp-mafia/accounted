@@ -284,6 +284,8 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'vat_settlement',
   'stripe_payout',
   'webshop_order',
+  'expense_claim',
+  'expense_payout',
 ])
 
 /** Query params for GET /api/bookkeeping/voucher-sequences/next. */
@@ -3548,6 +3550,52 @@ export const ByraBrandUpdateSchema = z.object({
 // ============================================================
 // Körjournal (mileage trips)
 // ============================================================
+
+// ============ Expense claims (utlägg) ============
+
+const expenseLiabilityAccount = z.enum(['2893', '2820', '2018', '2890'])
+const expenseCurrency = z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'])
+
+export const CreateExpenseClaimSchema = z
+  .object({
+    description: z.string().trim().min(1).max(300),
+    expense_date: saneIsoDate,
+    /** Gross incl VAT, in `currency`. */
+    amount: z.number().positive(),
+    /** Deductible VAT part of `amount`, in `currency`. */
+    vat_amount: z.number().nonnegative().default(0),
+    currency: expenseCurrency.default('SEK'),
+    exchange_rate: z.number().positive().optional(),
+    expense_account: accountNumberSchema,
+    liability_account: expenseLiabilityAccount.optional(),
+    employee_id: uuid.optional().nullable(),
+    claimant_name: z.string().trim().max(200).optional(),
+    document_id: uuid.optional().nullable(),
+    inbox_item_id: uuid.optional().nullable(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.vat_amount >= data.amount) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Momsen måste vara mindre än totalbeloppet.',
+        path: ['vat_amount'],
+      })
+    }
+    if (!data.employee_id && !data.claimant_name?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Ange vem utlägget avser: välj anställd eller skriv ett namn.',
+        path: ['claimant_name'],
+      })
+    }
+  })
+
+export const CreateExpensePayoutSchema = z.object({
+  claim_ids: z.array(uuid).min(1).max(200),
+  payout_date: saneIsoDate,
+  cash_account: z.string().regex(/^19\d{2}$/, 'Ange ett likvidkonto i 19xx-serien'),
+  notes: z.string().trim().max(1000).optional(),
+})
 
 const mileageVehicleType = z.enum(['own_car', 'company_car_fossil', 'company_car_electric'])
 
