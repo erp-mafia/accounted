@@ -76,7 +76,7 @@ export interface SkipReasons {
  * failure classifies, otherwise a generic sentence with the provider's reply).
  */
 export interface MigrationStepError {
-  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'reconciliation'
+  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'registrationLinks' | 'reconciliation'
   /** Structured code when the failure classifies (e.g. PROVIDER_API_MODULE_INACTIVE), else null. */
   code: string | null
   message: string
@@ -117,6 +117,24 @@ export interface MigrationResults {
   suppliers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
   salesInvoices?: InvoiceStepResult
   supplierInvoices?: InvoiceStepResult
+  /**
+   * Imported invoices linked to the SIE-imported verifikat that BOOKED them
+   * (the registration voucher the provider named on the invoice). Only exact,
+   * amount-corroborated matches are written; the other buckets stay unlinked
+   * and explain why. `refNotFetched` counts invoices whose provider detail
+   * payload (where Fortnox carries the ref) was never fetched, so nothing is
+   * known either way. See lib/invoices/link-migrated-registration-vouchers.ts.
+   */
+  registrationLinks?: {
+    scanned: number
+    linked: number
+    noRef: number
+    refNotFetched: number
+    unresolved: number
+    ambiguous: number
+    amountMismatch: number
+    alreadyLinked: number
+  }
   /**
    * Auto-reconciliation of imported supplier invoices to the GL payment
    * vouchers that the separate SIE import already posted. `autoLinked` invoices
