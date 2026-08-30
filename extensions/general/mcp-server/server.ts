@@ -15191,7 +15191,7 @@ export const tools: McpTool[] = [
         .eq('id', transactionId)
         .eq('company_id', companyId)
         .maybeSingle()
-      if (txError) throw new Error(`Database error: ${txError.message}`)
+      if (txError) throw dbError(txError)
       if (!tx) throw new Error('Transaction not found')
 
       // Preflight through the shared core in dry run (issue #1661): the booked

@@ -21,6 +21,7 @@
  * those rows be ignored while a verifikat still carries them.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { dbError } from '@/lib/errors/db-error'
 import { isTransactionBooked } from '@/lib/transactions/is-booked'
 
 export type TransactionIgnoreRefusalCode = 'TX_CATEGORIZE_TX_NOT_FOUND' | 'TX_IGNORE_ALREADY_BOOKED'
@@ -45,15 +46,6 @@ interface TransactionIgnoreRow {
   id: string
   journal_entry_id: string | null
   is_ignored: boolean | null
-}
-
-/** Re-throw a PostgREST error as an Error that keeps its SQLSTATE for getErrorMessage. */
-function toThrowable(error: { message: string; code?: string; details?: string; hint?: string }): Error {
-  return Object.assign(new Error(error.message), {
-    code: error.code,
-    details: error.details,
-    hint: error.hint,
-  })
 }
 
 /**
@@ -81,7 +73,7 @@ export async function setTransactionIgnored(
     .eq('id', transactionId)
     .eq('company_id', companyId)
     .maybeSingle<TransactionIgnoreRow>()
-  if (fetchError) throw toThrowable(fetchError)
+  if (fetchError) throw dbError(fetchError, null)
   if (!tx) return { ok: false, code: 'TX_CATEGORIZE_TX_NOT_FOUND', status: 404 }
 
   if (ignored) {
@@ -101,9 +93,9 @@ export async function setTransactionIgnored(
           .eq('transaction_id', tx.id)
           .limit(1),
       ])
-      if (voucherLinks.error) throw toThrowable(voucherLinks.error)
-      if (invoicePayments.error) throw toThrowable(invoicePayments.error)
-      if (supplierPayments.error) throw toThrowable(supplierPayments.error)
+      if (voucherLinks.error) throw dbError(voucherLinks.error, null)
+      if (invoicePayments.error) throw dbError(invoicePayments.error, null)
+      if (supplierPayments.error) throw dbError(supplierPayments.error, null)
       booked = isTransactionBooked(
         tx,
         [...(invoicePayments.data ?? []), ...(supplierPayments.data ?? [])],
@@ -129,7 +121,7 @@ export async function setTransactionIgnored(
     .update({ is_ignored: ignored })
     .eq('id', transactionId)
     .eq('company_id', companyId)
-  if (updateError) throw toThrowable(updateError)
+  if (updateError) throw dbError(updateError, null)
 
   return { ok: true, transaction_id: tx.id, is_ignored: ignored, changed: true, dry_run: false }
 }
