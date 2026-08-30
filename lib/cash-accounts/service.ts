@@ -3,6 +3,7 @@ import type { CashAccount, CashAccountSource, MappingResult } from '@/types'
 import { createLogger } from '@/lib/logger'
 import { syncMappedAccounts } from '@/lib/import/account-sync'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 const log = createLogger('cash-accounts')
 
@@ -989,6 +990,104 @@ export async function resolvePsd2LedgerAccount(
   return { ledgerAccount: allocated, reuseCashAccountId: null, source: 'allocated' }
 }
 
+/** Max transaction ids per `.in()` filter when rebinding: keeps the request URL short. */
+const REBIND_ID_CHUNK_SIZE = 100
+
+function chunkIds(ids: readonly string[], size: number): string[][] {
+  const out: string[][] = []
+  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size))
+  return out
+}
+
+/**
+ * Rebind the MOVABLE transactions of one cash_accounts row onto another.
+ *
+ * Movable mirrors PATCH /api/transactions/[id]/cash-account (#1570): NOT
+ * booked (journal_entry_id), NOT confirmed-matched (invoice_id /
+ * supplier_invoice_id) and NOT anchored to a verifikat through
+ * transaction_voucher_links or an invoice/supplier-invoice payment row (both
+ * anchor without setting journal_entry_id on the transaction; see
+ * lib/transactions/is-booked.ts). An anchored row's voucher carries the 19xx
+ * line that records which ledger the money moved on, so its binding stays.
+ *
+ * The anchor tables cannot be expressed as a NOT EXISTS in a PostgREST update
+ * filter, so they are consulted in a pre-check; the column gate is re-asserted
+ * on the UPDATE itself against a concurrent book or auto-match.
+ *
+ * Runs before the target row is promoted and none of rebind / demote-or-delete
+ * / promote is transactional (PostgREST calls). Safe because the two rows share
+ * (bank_connection_id, external_uid), so their transactions already carry the
+ * currency the promote is about to write onto the target.
+ *
+ * @returns the number of rows rebound
+ */
+async function rebindMovableTransactions(
+  supabase: SupabaseClient,
+  companyId: string,
+  fromCashAccountId: string,
+  toCashAccountId: string,
+): Promise<number> {
+  const candidates = await fetchAllRows<{ id: string }>(({ from, to }) =>
+    supabase
+      .from('transactions')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('cash_account_id', fromCashAccountId)
+      .is('journal_entry_id', null)
+      .is('invoice_id', null)
+      .is('supplier_invoice_id', null)
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+  if (candidates.length === 0) return 0
+
+  const candidateIds = candidates.map((row) => row.id)
+  const anchored = new Set<string>()
+  for (const chunk of chunkIds(candidateIds, REBIND_ID_CHUNK_SIZE)) {
+    const anchorRows = await Promise.all([
+      supabase
+        .from('transaction_voucher_links')
+        .select('transaction_id')
+        .eq('company_id', companyId)
+        .in('transaction_id', chunk),
+      supabase
+        .from('invoice_payments')
+        .select('transaction_id')
+        .eq('company_id', companyId)
+        .in('transaction_id', chunk),
+      supabase
+        .from('supplier_invoice_payments')
+        .select('transaction_id')
+        .eq('company_id', companyId)
+        .in('transaction_id', chunk),
+    ])
+    for (const { data, error } of anchorRows) {
+      if (error) throw new Error(error.message)
+      for (const row of (data ?? []) as Array<{ transaction_id: string | null }>) {
+        if (row.transaction_id) anchored.add(row.transaction_id)
+      }
+    }
+  }
+
+  const movableIds = candidateIds.filter((id) => !anchored.has(id))
+  let moved = 0
+  for (const chunk of chunkIds(movableIds, REBIND_ID_CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from('transactions')
+      .update({ cash_account_id: toCashAccountId })
+      .eq('company_id', companyId)
+      .eq('cash_account_id', fromCashAccountId)
+      .in('id', chunk)
+      .is('journal_entry_id', null)
+      .is('invoice_id', null)
+      .is('supplier_invoice_id', null)
+      .select('id')
+    if (error) throw new Error(error.message)
+    moved += (data ?? []).length
+  }
+  return moved
+}
+
 /**
  * Upsert a PSD2-sourced cash account during connection callback / sync. Keyed on
  * (company_id, bank_connection_id, external_uid). When the row exists, balance
@@ -1100,10 +1199,47 @@ export async function upsertFromPsd2(
     const typedOwn = ownRow as { id: string; is_primary: boolean } | null
     let transferPrimary = false
     if (typedOwn) {
-      // With linked transactions the duplicate is demoted to a plain manual
-      // row (deleting it would SET NULL those transactions' cash_account_id
-      // links). Without any, it is a leftover mirror from the broken reconnect
-      // and is deleted outright so its overflow slot frees up.
+      // The duplicate is the overflow mirror (e.g. 1931) a broken reconnect
+      // left behind; the promoted holder (e.g. 1930) is the ledger the user
+      // mapped. Movable transactions (unbooked, unmatched, not anchored to a
+      // verifikat) rebind onto the promoted row so categorize/booking proposes
+      // that ledger. Booked or anchored rows keep their binding: their
+      // vouchers carry the old 19xx line.
+      let movedCount = 0
+      try {
+        movedCount = await rebindMovableTransactions(
+          supabase,
+          companyId,
+          typedOwn.id,
+          promotableRowId,
+        )
+      } catch (rebindError) {
+        const message = rebindError instanceof Error ? rebindError.message : String(rebindError)
+        log.error('upsertFromPsd2 duplicate transaction rebind failed', {
+          companyId,
+          bankConnectionId: input.bank_connection_id,
+          externalUid: input.external_uid,
+          error: message,
+        })
+        throw new Error(`cash_accounts upsert failed: ${message}`)
+      }
+      if (movedCount > 0) {
+        // Behandlingshistorik (BFNAR 2013:2 kap 8): light-touch for a
+        // pre-verifikat staging binding, the same weight as the single-row
+        // move in PATCH /api/transactions/[id]/cash-account.
+        log.info('upsertFromPsd2 rebound movable transactions to promoted cash account', {
+          companyId,
+          fromCashAccountId: typedOwn.id,
+          toCashAccountId: promotableRowId,
+          movedCount,
+        })
+      }
+
+      // Rows still bound after the rebind are booked or anchored: the
+      // duplicate then survives as a demoted manual row (deleting it would SET
+      // NULL those transactions' cash_account_id links; the #1643 orphan
+      // guards handle the released twin). With nothing bound it is a leftover
+      // mirror and is deleted outright so its overflow slot frees up.
       const { data: linkedTx, error: linkedTxError } = await supabase
         .from('transactions')
         .select('id')
@@ -1180,6 +1316,9 @@ export async function upsertFromPsd2(
       return
     }
     // Holder row vanished between SELECT and UPDATE: fall through to upsert.
+    // Any rows the rebind above already moved onto it were SET NULL by the
+    // transactions.cash_account_id FK when it went; the next sync re-ingests
+    // them under the fresh row (the same self-heal as a deleted twin).
   }
 
   const { error } = await supabase
