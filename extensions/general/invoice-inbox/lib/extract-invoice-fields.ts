@@ -159,6 +159,20 @@ export const ExtractionSchema = z.object({
       amount: z.number(),
     })
   ),
+  // Amounts visible on non-invoice documents (bankintyg, avtal, contracts)
+  // that carry no invoice-style total. Matching hint only; never booked.
+  // .catch([]) so a hallucinated shape degrades to "no amounts" instead of
+  // failing the whole document parse; optional so cached raw outputs from
+  // before the field existed still validate.
+  prominentAmounts: z
+    .array(
+      z.object({
+        amount: z.number(),
+        label: z.string().nullable(),
+      })
+    )
+    .catch([])
+    .optional(),
 })
 
 // Agent-supplied extraction: accountSuggestion is preserved instead of forced
@@ -222,6 +236,9 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
   },
   "vatBreakdown": [
     { "rate": number, "base": number, "amount": number }   // rate as percent integer, e.g. 25 for 25%
+  ],
+  "prominentAmounts": [
+    { "amount": number, "label": string | null }   // non-invoice documents only, see rules
   ]
 }
 
@@ -245,7 +262,8 @@ Rules:
 - Numbers: parse with the document's locale (Swedish "1 234,56" = 1234.56; English "$1,234.56" = 1234.56). Output as plain JSON numbers.
 - If a field is missing or unreadable, set it to null. Never invent values.
 - lineItems: include every line. Empty array is fine if the document has no itemised lines.
-- vatBreakdown: include one entry per distinct VAT rate. Empty array is fine.`
+- vatBreakdown: include one entry per distinct VAT rate. Empty array is fine.
+- prominentAmounts: ONLY for documents that are NOT invoices or receipts (documentKind "other" or "government_letter") AND where totals.total is null, when the document still displays clear monetary amounts (a price, fee, deposit or paid-in sum: "Engångspris", "Anslutningspris", "Insatt belopp", "Månadspris", "Pris", "Belopp"). Typical sources: bankintyg, bank/account agreements, contracts, statements. One entry per distinct amount, label = the document's own label for it. NEVER include account numbers, org numbers, phone numbers, OCR/reference numbers, dates, percentages, or zero amounts. ALWAYS an empty array for invoices and receipts, including ones whose total is unreadable: never move an invoice total here.`
 
 export function emptyResult(): InvoiceExtractionResult {
   return {
@@ -274,6 +292,7 @@ export function emptyResult(): InvoiceExtractionResult {
     lineItems: [],
     totals: { subtotal: null, vatAmount: null, total: null, roundingAmount: null },
     vatBreakdown: [],
+    prominentAmounts: [],
     confidence: 0,
   }
 }
@@ -484,6 +503,15 @@ const EXTRACTION_JSON_SCHEMA: Record<string, unknown> = {
         required: ['rate', 'base', 'amount'],
       },
     },
+    prominentAmounts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { amount: { type: 'number' }, label: nullable('string') },
+        required: ['amount', 'label'],
+      },
+    },
   },
   required: [
     'documentKind',
@@ -496,6 +524,7 @@ const EXTRACTION_JSON_SCHEMA: Record<string, unknown> = {
     'lineItems',
     'totals',
     'vatBreakdown',
+    'prominentAmounts',
   ],
 }
 
