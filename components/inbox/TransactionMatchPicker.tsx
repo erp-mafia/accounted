@@ -24,6 +24,7 @@ import {
   calculateMerchantSimilarity,
 } from '@/lib/documents/core-receipt-matcher'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { roundOre } from '@/lib/money'
 import type { InvoiceExtractionResult } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -304,7 +305,7 @@ export default function TransactionMatchPicker({
       )
       const matchReasons = scoredMatch.matchReasons
       const confidence = fallbackMatch
-        ? Math.round(scoredMatch.confidence * FALLBACK_CONFIDENCE_FACTOR * 100) / 100
+        ? roundOre(scoredMatch.confidence * FALLBACK_CONFIDENCE_FACTOR)
         : scoredMatch.confidence
 
       return {

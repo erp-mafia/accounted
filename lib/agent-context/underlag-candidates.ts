@@ -32,6 +32,7 @@ import {
   calculateMerchantSimilarity,
 } from '@/lib/documents/core-receipt-matcher'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { roundOre } from '@/lib/money'
 import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 
 /**
@@ -208,7 +209,7 @@ export function scoreUnderlagCandidates(
     let confidence = scoredMatch.confidence
     let matchReasons = scoredMatch.matchReasons
     if (fallbackMatch) {
-      confidence = Math.round(confidence * FALLBACK_CONFIDENCE_FACTOR * 100) / 100
+      confidence = roundOre(confidence * FALLBACK_CONFIDENCE_FACTOR)
       // Name the figure that matched. A bare "Exakt belopp" would reach the
       // agent while total_amount stays null: certainty without a number the
       // agent or the user could check against the document.

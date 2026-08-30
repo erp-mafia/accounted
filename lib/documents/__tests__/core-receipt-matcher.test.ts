@@ -9,6 +9,7 @@ import {
   amountVarianceForMatch,
   bestProminentAmountVariance,
 } from '../core-receipt-matcher'
+import { roundOre } from '@/lib/money'
 
 describe('levenshteinDistance', () => {
   it('returns 0 for identical strings', () => {
@@ -199,7 +200,7 @@ describe('bestProminentAmountVariance', () => {
     // match must not present that as certainty (this exact geometry scored
     // "100% säkerhet" on a wrong same-day transaction before the factor).
     const { confidence } = calculateMatchConfidence(0, 0, 0)
-    const discounted = Math.round(confidence * FALLBACK_CONFIDENCE_FACTOR * 100) / 100
+    const discounted = roundOre(confidence * FALLBACK_CONFIDENCE_FACTOR)
     expect(confidence).toBe(1)
     expect(discounted).toBeLessThan(1)
   })
@@ -209,9 +210,7 @@ describe('bestProminentAmountVariance', () => {
     // invoice total (0.67 vs 0.60 with exact date + merchant); the factor
     // approach scores both at full weight and then discounts the fallback.
     const asTotal = calculateMatchConfidence(0, 1.4, 0.9).confidence
-    const asFallback =
-      Math.round(calculateMatchConfidence(0, 1.4, 0.9).confidence * FALLBACK_CONFIDENCE_FACTOR * 100) /
-      100
+    const asFallback = roundOre(asTotal * FALLBACK_CONFIDENCE_FACTOR)
     expect(asFallback).toBeLessThanOrEqual(asTotal)
     expect(asFallback).toBeLessThan(0.6)
   })
