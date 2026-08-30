@@ -59,7 +59,7 @@ function buildCtx(supabase: unknown): ExtensionContext {
     storage: { from: vi.fn() } as unknown as ExtensionContext['storage'],
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as ExtensionContext['log'],
     services: {},
-  } as ExtensionContext
+  } as unknown as ExtensionContext
 }
 
 function createBody(overrides: Record<string, unknown> = {}) {
