@@ -6,6 +6,7 @@ import { InvoicePaymentLinkSettings } from '@/components/settings/InvoicePayment
 import { PeppolReceiveSettings } from '@/components/settings/PeppolReceiveSettings'
 import { InvoicePaymentAccountsSettings } from '@/components/settings/InvoicePaymentAccountsSettings'
 import { InvoiceEmailTextsSettings } from '@/components/settings/InvoiceEmailTextsSettings'
+import { ReminderEmailTextsSettings } from '@/components/settings/ReminderEmailTextsSettings'
 import { InvoiceEmailRecipientsSettings } from '@/components/settings/InvoiceEmailRecipientsSettings'
 import { InvoiceSenderDomainSettings } from '@/components/settings/InvoiceSenderDomainSettings'
 import { InvoicePreviewCard } from '@/components/settings/InvoicePreviewCard'
@@ -80,6 +81,9 @@ export function InvoicingSettingsContent() {
 
       {/* Invoice email texts: autosaves on blur */}
       <InvoiceEmailTextsSettings settings={settings} onUpdate={updateSettings} />
+
+      {/* Reminder email texts per level: autosaves on blur */}
+      <ReminderEmailTextsSettings settings={settings} onUpdate={updateSettings} />
     </div>
   )
 }

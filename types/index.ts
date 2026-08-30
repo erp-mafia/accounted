@@ -366,6 +366,24 @@ export interface InvoiceEmailTexts {
   en?: InvoiceEmailTextOverrides
 }
 
+// Editable reminder email texts per reminder level (Swedish only, matching
+// the reminder templates). Missing / whitespace-only fields fall back to the
+// defaults in lib/email/reminder-templates.ts (REMINDER_EMAIL_DEFAULT_TEXTS).
+// Supports the fixed placeholder set {fakturanummer} {kundnamn} {förnamn}
+// {företag} {fakturadatum} {förfallodatum} {belopp} {dagar}. TEXT only:
+// reminder fee and interest math are unaffected (Lag 1981:739 caps the
+// påminnelseavgift at 60 kr; the 450 kr förseningsersättning is out of scope).
+export interface ReminderTextOverride {
+  subject?: string
+  body?: string
+}
+
+export interface ReminderTextOverrides {
+  level_1?: ReminderTextOverride
+  level_2?: ReminderTextOverride
+  level_3?: ReminderTextOverride
+}
+
 export type InvoiceFontFamily =
   | 'Helvetica'
   | 'Times-Roman'
@@ -544,6 +562,8 @@ export interface CompanySettings {
   reminder_days_level_1: number
   reminder_days_level_2: number
   reminder_days_level_3: number
+  // Editable reminder email texts per level. null = all defaults.
+  reminder_text_overrides: ReminderTextOverrides | null
 
   // Reminder surcharges (dröjsmålsränta + lagstadgad påminnelseavgift)
   reminder_fee_enabled: boolean
@@ -2548,6 +2568,11 @@ export type PendingOperationType =
   | 'reconciliation_signoff'
   // Book the remainder of a bank selection as a fee/interest/rounding verifikat and link it.
   | 'reconciliation_residual'
+  // Book synced skattekonto rows as posted verifikat (1630 + rule-matched
+  // counter account), same helper as the HTTP bokfor-batch route. The
+  // single-row op stores { transaction_id }; the batch op stores { ids }.
+  | 'book_skattekonto_row'
+  | 'book_skattekonto_rows'
   // PR5: Skatteverket filing via MCP. Commit = "send for BankID signing"
   // (returns a signing link); the user's signature in the browser files it.
   | 'submit_vat_declaration'

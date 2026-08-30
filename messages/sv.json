@@ -739,6 +739,8 @@
     "type_vacation_year_close": "Semesterårsavslut",
     "type_submit_vat_declaration": "Momsdeklaration",
     "type_submit_agi": "Arbetsgivardeklaration",
+    "type_book_skattekonto_row": "Bokför skattekontohändelse",
+    "type_book_skattekonto_rows": "Bokför skattekontohändelser",
     "origin_agent_chat": "Föreslaget av AI-assistenten via chatt",
     "origin_mcp": "Föreslaget av AI-assistent via {label}",
     "origin_api": "Föreslaget via API-integration",
@@ -2371,6 +2373,20 @@
     "signoff_label": "Avslutning",
     "placeholders_help": "Tillgängliga platshållare (okända lämnas kvar som text):",
     "firstname_note": "Platshållaren förnamn använder första ordet i kundens namn.",
+    "toast_save_failed": "Kunde inte spara"
+  },
+  "settings_reminder_texts": {
+    "heading": "Påminnelsetexter",
+    "description": "Texterna i påminnelsemejlen, per påminnelsenivå. Ändra fritt: bara dina ändringar sparas.",
+    "reset_label": "Återställ till standard",
+    "tab_level_1": "Påminnelse 1",
+    "tab_level_2": "Påminnelse 2",
+    "tab_level_3": "Slutlig påminnelse",
+    "level_3_hint": "Den slutliga påminnelsen är en inkassovarning: sista meddelandet innan fordran kan lämnas till inkasso.",
+    "subject_label": "Ämnesrad",
+    "body_label": "Brödtext",
+    "placeholders_help": "Tillgängliga platshållare (okända lämnas kvar som text):",
+    "amounts_note": "Belopp, dröjsmålsränta och påminnelseavgift beräknas alltid automatiskt och styrs inte av texterna.",
     "toast_save_failed": "Kunde inte spara"
   },
   "settings_invoice_email_recipients": {
