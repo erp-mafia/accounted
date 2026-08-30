@@ -2901,6 +2901,16 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Endast utkast (draft) kan uppdateras.',
     message_en: 'Only draft salary runs can be patched.',
   },
+  // Kontantprincipen guard: AGI derives its redovisningsperiod from the run's
+  // period_year/period_month while the verifikat books on payment_date, so a
+  // payment date outside the period month would declare the salary in the
+  // wrong period (SFL 26 kap). For a payment that truly lands in another
+  // month, the run itself belongs in that period.
+  SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD: {
+    httpStatus: 400,
+    message_sv: 'Utbetalningsdagen måste ligga i lönekörningens period: AGI redovisas per utbetalningsmånad. Skapa en lönekörning för rätt period i stället.',
+    message_en: 'The payment date must fall within the salary run\'s period month: the AGI is declared per payment month. Create a salary run for the correct period instead.',
+  },
   SALARY_RUN_DELETE_NOT_DRAFT: {
     httpStatus: 400,
     message_sv: 'Endast utkast (draft) kan raderas.',

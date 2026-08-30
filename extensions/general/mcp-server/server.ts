@@ -14746,6 +14746,101 @@ export const tools: McpTool[] = [
     },
   },
   {
+    name: 'gnubok_update_salary_run',
+    title: 'Update Salary Run',
+    description: 'Stage an update of a DRAFT salary run\'s payment_date, voucher_series or notes; frozen past draft (payment_date becomes the booking entry date). Commit via gnubok_approve_pending_operation; recalculate a calculated run after a payment_date change.',
+    // Search-only: tools/list budget is at zero headroom (see the ledger in
+    // payload-size.bench.test.ts) and the payroll_month loadout plus
+    // gnubok_get_salary_run's status field route agents here when needed.
+    catalogVisibility: 'search',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        salary_run_id: { type: 'string', description: 'UUID of the salary run (must be draft)' },
+        payment_date: { type: 'string', description: 'New payment date (YYYY-MM-DD); the date the salary verifikat will be booked on. Must stay within the run\'s period month (AGI is declared per payment month); supplying it clears the run\'s calculation.' },
+        voucher_series: { type: 'string', description: 'Voucher series letter (single A-Z)' },
+        notes: { type: ['string', 'null'], description: 'Free-text note on the run (max 2000 chars); null clears it' },
+      },
+      required: ['salary_run_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const { salary_run_id, payment_date, voucher_series, notes } = args as {
+        salary_run_id: string; payment_date?: string; voucher_series?: string; notes?: string | null
+      }
+      if (!salary_run_id) {
+        throw new Error('salary_run_id is required')
+      }
+      const patch: Record<string, unknown> = {}
+      if (payment_date !== undefined) patch.payment_date = payment_date
+      if (voucher_series !== undefined) patch.voucher_series = voucher_series
+      if (notes !== undefined) patch.notes = notes
+      if (Object.keys(patch).length === 0) {
+        throw new Error('At least one of payment_date, voucher_series, notes is required')
+      }
+
+      // Preflight via the shared service in dry-run: verifies draft status
+      // (exactly as the v1 PATCH does) and yields old/new values for the
+      // preview. No writes here: the commit path re-runs the service for real.
+      const { updateDraftSalaryRun } = await import('@/lib/salary/update-run')
+      const preflight = await updateDraftSalaryRun(supabase, {
+        companyId,
+        salaryRunId: salary_run_id,
+        patch: patch as never,
+        dryRun: true,
+      })
+      if (!preflight.ok) {
+        throw new Error(`Cannot update salary run: ${preflight.code}`)
+      }
+      const d = preflight.data
+
+      const changeParts: string[] = []
+      if (d.changes.payment_date !== undefined) {
+        changeParts.push(`utbetalningsdag ${d.previous.payment_date} → ${d.payment_date}`)
+      }
+      if (d.changes.voucher_series !== undefined) {
+        changeParts.push(`serie ${d.previous.voucher_series} → ${d.voucher_series}`)
+      }
+      if (d.changes.notes !== undefined) {
+        changeParts.push('anteckning uppdaterad')
+      }
+      const periodLabel = `${d.period_year}-${String(d.period_month).padStart(2, '0')}`
+
+      return stagePendingOperation(
+        supabase, companyId, userId, 'update_salary_run',
+        `Uppdatera lönekörning ${periodLabel}: ${changeParts.join(', ')}`,
+        { salary_run_id, patch },
+        {
+          salary_run_id,
+          period_year: d.period_year,
+          period_month: d.period_month,
+          previous: d.previous,
+          new_payment_date: d.payment_date,
+          new_voucher_series: d.voucher_series,
+          new_notes: d.notes,
+          changes: d.changes,
+          // A payment_date change clears every roster row's
+          // calculation_breakdown at commit (skatteavdrag and the AGI
+          // redovisningsperiod follow the payment month), so booking is
+          // refused until a recalculation has run against the new date.
+          invalidates_calculation: d.changes.payment_date !== undefined,
+        },
+        actor,
+        d.changes.payment_date !== undefined
+          ? {
+              description: 'Approval clears the run\'s calculation (tax follows the payment month): re-run gnubok_calculate_salary_run before booking.',
+              tool: 'gnubok_calculate_salary_run',
+            }
+          : undefined,
+        // Period gate on the date the verifikat would land on: the new
+        // payment_date when it changes, else the current one.
+        { dateForPeriodCheck: d.payment_date },
+      )
+    },
+  },
+  {
     name: 'gnubok_register_absence',
     keywords: ['frånvaro', 'sjukanmälan', 'semester', 'vab'],
     title: 'Register Absence (Frånvaro)',
