@@ -224,6 +224,37 @@ describe('v1 reconciliation accounts', () => {
     expect(matchMock).toHaveBeenLastCalledWith(expect.anything(), COMPANY_ID, 'user-1', 'skattekonto', expect.anything(), { dryRun: true })
   })
 
+  it('POST links accepts a bank 1:N pair with allocations and echoes allocated_amount on the applied links (#1553)', async () => {
+    authOk(['reconciliation:write'])
+    const cash = '55555555-5555-4555-8555-555555555555'
+    const entry2 = '44444444-4444-4444-8444-444444444444'
+    const pair = {
+      external_ids: [ROW],
+      journal_entry_ids: [ENTRY, entry2],
+      allocations: [
+        { journal_entry_id: ENTRY, amount: -500 },
+        { journal_entry_id: entry2, amount: -300 },
+      ],
+    }
+    matchMock.mockResolvedValueOnce({
+      dry_run: false,
+      considered: 1,
+      applied: [
+        { external_id: ROW, journal_entry_id: ENTRY, allocated_amount: -500 },
+        { external_id: ROW, journal_entry_id: entry2, allocated_amount: -300 },
+      ],
+      skipped: [],
+    })
+    const res = await linksPOST(
+      req(`${BASE}/bank:${cash}/links`, { method: 'POST', body: { pairs: [pair] } }),
+      params({ accountKey: `bank:${cash}` }),
+    )
+    expect(res.status).toBe(200)
+    expect(matchMock).toHaveBeenLastCalledWith(expect.anything(), COMPANY_ID, 'user-1', `bank:${cash}`, expect.objectContaining({ pairs: [pair] }), { dryRun: false })
+    const body = (await res.json()) as { data: { applied: Array<{ allocated_amount?: number }> } }
+    expect(body.data.applied.map((a) => a.allocated_amount)).toEqual([-500, -300])
+  })
+
   it('DELETE link unmatches and 404s a non-uuid link id', async () => {
     authOk(['reconciliation:write'])
     const ok = await linkDELETE(req(`${BASE}/skattekonto/links/${ROW}`, { method: 'DELETE' }), params({ accountKey: 'skattekonto', linkId: ROW }))

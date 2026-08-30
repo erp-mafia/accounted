@@ -41,6 +41,31 @@ describe('fetchAllRows', () => {
     ).rejects.toThrow('boom')
   })
 
+  it('propagates the driver SQLSTATE so a timeout stays dispatchable', async () => {
+    // This is the highest-traffic error strip point in the codebase: every
+    // paginated read goes through it. It used to throw `new Error(msg)`, which
+    // dropped `code`, so a statement timeout (57014) reached the structured
+    // error layer anonymous and resolved to UNKNOWN_ERROR instead of the
+    // retryable TRANSIENT_ERROR. gnubok_query_journal failed this way 164
+    // times in 60 days at a p50 of 8 110 ms.
+    const failure = fetchAllRows<Row>(() =>
+      Promise.resolve({
+        data: null,
+        error: { message: 'canceling statement due to statement timeout', code: '57014' },
+      }),
+    )
+    await expect(failure).rejects.toMatchObject({ code: '57014' })
+    // And the message stays verbatim: query_journal's sanitizeDbError matches
+    // on the existing text.
+    await expect(failure).rejects.toThrow('canceling statement due to statement timeout')
+  })
+
+  it('does not render "undefined" when the driver sends no message', async () => {
+    await expect(
+      fetchAllRows<Row>(() => Promise.resolve({ data: null, error: { code: '08006' } as never })),
+    ).rejects.toThrow(/^(?!.*undefined).*$/)
+  })
+
   it('returns [] when the first page is empty', async () => {
     const out = await fetchAllRows<Row>(pagedQuery({ 0: [] }))
     expect(out).toEqual([])

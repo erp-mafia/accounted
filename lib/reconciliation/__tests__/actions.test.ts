@@ -6,6 +6,8 @@ const linkGroupMock = vi.fn()
 const unlinkMock = vi.fn()
 const setIgnoredMock = vi.fn()
 const manualLinkMock = vi.fn()
+const linkToVouchersMock = vi.fn()
+const junctionLinkedMock = vi.fn()
 const unlinkReconciliationMock = vi.fn()
 const skvStatusMock = vi.fn()
 const emitMock = vi.fn()
@@ -22,6 +24,8 @@ vi.mock('@/lib/skatteverket/skattekonto-link', async (importOriginal) => {
 })
 vi.mock('../bank-reconciliation', () => ({
   manualLink: (...args: unknown[]) => manualLinkMock(...args),
+  linkTransactionToVouchers: (...args: unknown[]) => linkToVouchersMock(...args),
+  fetchJunctionLinkedTxIds: (...args: unknown[]) => junctionLinkedMock(...args),
   unlinkReconciliation: (...args: unknown[]) => unlinkReconciliationMock(...args),
 }))
 vi.mock('../skattekonto-reconciliation', () => ({
@@ -46,6 +50,7 @@ describe('matchPairs', () => {
     linkMock.mockReset()
     linkGroupMock.mockReset()
     manualLinkMock.mockReset()
+    linkToVouchersMock.mockReset()
     skvStatusMock.mockReset()
     emitMock.mockResolvedValue(undefined)
   })
@@ -72,7 +77,7 @@ describe('matchPairs', () => {
         { external_ids: [R1], journal_entry_ids: [E1] },
         { external_ids: [R2], journal_entry_ids: [E1] },
         { external_ids: [R1, R2], journal_entry_ids: [E2] },
-        // 1:M stays refused until the residual link table exists.
+        // 1:N is a bank-only shape (#1553): a skattekonto row never splits.
         { external_ids: [R1], journal_entry_ids: [E1, E2] },
       ],
     })
@@ -84,6 +89,8 @@ describe('matchPairs', () => {
       { external_id: R2, journal_entry_id: E2, via: 'entry_total' },
     ])
     expect(result?.skipped.map((s) => s.code)).toEqual(['ALREADY_LINKED', 'UNSUPPORTED_PAIR_SHAPE'])
+    expect(result?.skipped[1].message).toMatch(/skattekontot/)
+    expect(linkToVouchersMock).not.toHaveBeenCalled()
     expect(linkGroupMock).toHaveBeenCalledWith(supabase, COMPANY, [R1, R2], E2)
     expect(emitMock).toHaveBeenCalledTimes(3)
     expect(emitMock.mock.calls[0][0]).toMatchObject({
@@ -154,6 +161,125 @@ describe('matchPairs', () => {
     expect(result?.applied).toHaveLength(1)
   })
 
+  it('splits ONE bank transaction over SEVERAL verifikat through linkTransactionToVouchers (1:N, #1553)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ledger_account: '1930' } }) // cash_accounts lookup, resolved once
+    linkToVouchersMock.mockResolvedValue({
+      success: true,
+      allocations: [
+        { journal_entry_id: E1, amount: -500 },
+        { journal_entry_id: E2, amount: -300 },
+      ],
+    })
+
+    const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, {
+      pairs: [{ external_ids: [R1], journal_entry_ids: [E1, E2] }],
+    })
+
+    // No allocations given: every slice is left undefined for the engine to
+    // default to the voucher's bank line and enforce the sum.
+    expect(linkToVouchersMock).toHaveBeenCalledWith(
+      supabase,
+      COMPANY,
+      R1,
+      [
+        { journal_entry_id: E1, amount: undefined },
+        { journal_entry_id: E2, amount: undefined },
+      ],
+      USER,
+      '1930',
+      { dryRun: false },
+    )
+    expect(manualLinkMock).not.toHaveBeenCalled()
+    expect(result?.applied).toEqual([
+      { external_id: R1, journal_entry_id: E1, allocated_amount: -500 },
+      { external_id: R1, journal_entry_id: E2, allocated_amount: -300 },
+    ])
+    expect(result?.skipped).toEqual([])
+    expect(emitMock).toHaveBeenCalledTimes(2)
+    expect(emitMock.mock.calls[1][0]).toMatchObject({
+      type: 'reconciliation.matched',
+      payload: { accountKey: `bank:${CASH}`, externalId: R1, journalEntryId: E2 },
+    })
+  })
+
+  it('forwards explicit allocations, refuses a set that does not name exactly the pair\'s verifikat, and never writes on dry run', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ledger_account: '1931' } })
+    linkToVouchersMock.mockResolvedValue({
+      success: true,
+      allocations: [
+        { journal_entry_id: E1, amount: -450 },
+        { journal_entry_id: E2, amount: -350 },
+      ],
+    })
+
+    const result = await matchPairs(
+      supabase as never,
+      COMPANY,
+      USER,
+      `bank:${CASH}`,
+      {
+        pairs: [
+          {
+            external_ids: [R1],
+            journal_entry_ids: [E1, E2],
+            allocations: [
+              { journal_entry_id: E1, amount: -450 },
+              { journal_entry_id: E2, amount: -350 },
+            ],
+          },
+          // Names a verifikat outside the pair: refused before the engine.
+          { external_ids: [R2], journal_entry_ids: [E1, E2], allocations: [{ journal_entry_id: E1, amount: -800 }] },
+          // N:M has no engine shape on either account kind.
+          { external_ids: [R1, R2], journal_entry_ids: [E1, E2] },
+        ],
+      },
+      { dryRun: true },
+    )
+
+    expect(linkToVouchersMock).toHaveBeenCalledTimes(1)
+    expect(linkToVouchersMock).toHaveBeenCalledWith(
+      supabase,
+      COMPANY,
+      R1,
+      [
+        { journal_entry_id: E1, amount: -450 },
+        { journal_entry_id: E2, amount: -350 },
+      ],
+      USER,
+      '1931',
+      { dryRun: true },
+    )
+    expect(result?.applied).toHaveLength(2)
+    expect(result?.skipped.map((s) => s.code)).toEqual(['UNSUPPORTED_PAIR_SHAPE', 'UNSUPPORTED_PAIR_SHAPE'])
+    expect(result?.skipped[0].message).toMatch(/allocations/)
+    expect(emitMock).not.toHaveBeenCalled()
+  })
+
+  it('a refused split is one PAIR_NOT_CLOSED skip for the whole pair (all or nothing)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ledger_account: '1930' } })
+    linkToVouchersMock.mockResolvedValue({
+      success: false,
+      error: 'Fördelningen (-700) stämmer inte med transaktionens belopp (-800).',
+    })
+
+    const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, {
+      pairs: [{ external_ids: [R1], journal_entry_ids: [E1, E2] }],
+    })
+
+    expect(result?.applied).toEqual([])
+    expect(result?.skipped).toEqual([
+      {
+        pair: { external_ids: [R1], journal_entry_ids: [E1, E2] },
+        code: 'PAIR_NOT_CLOSED',
+        message: 'Fördelningen (-700) stämmer inte med transaktionens belopp (-800).',
+      },
+    ])
+    expect(emitMock).not.toHaveBeenCalled()
+  })
+
   it('a failed bank link is a PAIR_NOT_CLOSED skip, not a throw', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { ledger_account: '1930' } })
@@ -172,6 +298,8 @@ describe('unmatchLink / setItemIgnored', () => {
     unlinkMock.mockReset()
     unlinkReconciliationMock.mockReset()
     setIgnoredMock.mockReset()
+    junctionLinkedMock.mockReset()
+    junctionLinkedMock.mockResolvedValue(new Set<string>())
     emitMock.mockResolvedValue(undefined)
   })
 
@@ -190,6 +318,29 @@ describe('unmatchLink / setItemIgnored', () => {
     const result = await unmatchLink(supabase as never, COMPANY, USER, `bank:${CASH}`, R1)
     expect(unlinkReconciliationMock).toHaveBeenCalledWith(supabase, COMPANY, R1, USER)
     expect(result).toEqual({ external_id: R1, previous_journal_entry_id: E1 })
+  })
+
+  it('reports the first junction verifikat as previous_journal_entry_id when a split row (no pointer) is unmatched', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { journal_entry_id: null } })
+    unlinkReconciliationMock.mockResolvedValue({ success: true, previousJournalEntryIds: [E1, E2] })
+    const result = await unmatchLink(supabase as never, COMPANY, USER, `bank:${CASH}`, R1)
+    expect(result).toEqual({ external_id: R1, previous_journal_entry_id: E1 })
+    expect(emitMock.mock.calls[0][0]).toMatchObject({
+      type: 'reconciliation.unmatched',
+      payload: { externalId: R1, previousJournalEntryId: E1 },
+    })
+  })
+
+  it('refuses to ignore a bank transaction anchored only through transaction_voucher_links (1:N split, bulk-book)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: R1, journal_entry_id: null, is_ignored: false } })
+    junctionLinkedMock.mockResolvedValue(new Set([R1]))
+    await expect(setItemIgnored(supabase as never, COMPANY, `bank:${CASH}`, R1, true)).rejects.toMatchObject({
+      code: 'ALREADY_BOOKED',
+    })
+    expect(junctionLinkedMock).toHaveBeenCalledWith(supabase, COMPANY, [R1])
+    expect(findCalls('transactions', 'update')).toEqual([])
   })
 
   it('ignores a skattekonto row via the core helper', async () => {
