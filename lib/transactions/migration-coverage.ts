@@ -26,10 +26,19 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  * for any import with skipped vouchers. Excluding by description rather
  * than by its 'M' voucher series keeps genuine series-M vouchers from the
  * source file in the max (prod has companies whose files use series M for
- * ordinary vouchers, e.g. moms). Known residual gap: bank movement covered
- * only by the omföring (skipped vouchers dated after the last cleanly
- * imported one) falls outside the cutoff; the duplicate-booking soft guard
- * remains the backstop there.
+ * ordinary vouchers, e.g. moms). Two accepted residuals: (1) bank movement
+ * covered only by the omföring (skipped vouchers dated after the last
+ * cleanly imported one) falls outside the cutoff and is mostly unmitigated:
+ * the ledger duplicate guard only catches a single skipped movement within
+ * 7 days of the omföring's fiscal-year-end date, never the mid-year or
+ * aggregated-skip variants. Accepted because it needs a conjunction of
+ * rare conditions, against the systematic all-year over-marking it
+ * replaces. Exact closure needs skipped-voucher dates persisted at import
+ * (skippedDetails in sie-import.ts has them; candidate follow-up: a
+ * coverage_end column on sie_imports). (2) The exclusion keys on
+ * description, which inline rättelse can edit: renaming the omföring
+ * re-admits its fiscal-year-end date and degrades that one company to the
+ * pre-fix over-marking, nothing worse.
  *
  * Undo/replace of an import deletes or recreates these entries, so the
  * cutoff self-corrects with no stored state to maintain. Returns null when
