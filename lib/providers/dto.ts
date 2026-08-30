@@ -101,6 +101,18 @@ export interface PaginatedResponse<T> {
   hasMore: boolean;
 }
 
+/**
+ * The verifikat that booked the invoice in the SOURCE system, as the provider
+ * reports it ("A329"). Optional: only providers that expose it (Visma
+ * eAccounting, Fortnox) set it, and only on booked invoices. The migration
+ * uses it to link the imported invoice to the SIE-imported registration
+ * voucher; see lib/providers/source-voucher.ts for the parsing rules.
+ */
+export interface SourceVoucherRefDto {
+  series: string | null;
+  number: number;
+}
+
 // ============================================
 // Sales Invoice
 // ============================================
@@ -169,6 +181,7 @@ export interface SalesInvoiceDto {
   buyerReference?: string;
   orderReference?: string;
   financialDimensions?: FinancialDimensionRef[];
+  sourceVoucher?: SourceVoucherRefDto;
   createdAt?: string;
   updatedAt?: string;
   _raw?: Record<string, unknown>;
@@ -213,6 +226,7 @@ export interface SupplierInvoiceDto {
   note?: string;
   ocrNumber?: string;
   financialDimensions?: FinancialDimensionRef[];
+  sourceVoucher?: SourceVoucherRefDto;
   createdAt?: string;
   updatedAt?: string;
   _raw?: Record<string, unknown>;
