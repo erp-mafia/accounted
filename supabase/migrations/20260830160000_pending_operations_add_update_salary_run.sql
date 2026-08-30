@@ -13,12 +13,12 @@
 --
 -- NOTE on the value list: this constraint is re-created wholesale (the
 -- established pattern here), so the list below is every value of the
--- constraint as left by 20260830130000 (which added book_skattekonto_row /
--- book_skattekonto_rows on top of 20260828160000) PLUS the new value.
--- Dropping any existing value here would silently revoke it.
+-- constraint as left by 20260830150000 (delete_draft_invoice, which built on
+-- 20260830130000's book_skattekonto_row / book_skattekonto_rows) PLUS the
+-- new value. Dropping any existing value here would silently revoke it.
 --
 -- NOT VALID + separate VALIDATE migration (paired file, same pattern as
--- 20260828160000 / 20260828160001).
+-- 20260830150000 / 20260830150001).
 --
 -- pg-test: tests/pg/pending-operations-op-type-audit.pg.test.ts asserts every
 -- op type staged in server.ts or tiered in risk-tiers.ts is accepted here.
@@ -49,6 +49,7 @@ ALTER TABLE public.pending_operations
     'credit_supplier_invoice',
     'credit_invoice',
     'convert_invoice',
+    'delete_draft_invoice',
     'create_transaction',
     'attach_document_to_transaction',
     'create_voucher',
