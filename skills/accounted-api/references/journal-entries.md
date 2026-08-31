@@ -270,6 +270,7 @@ Atomically advances the voucher series and flips the draft to posted. The vouche
 - Idempotency-Key is mandatory.
 - Posted entries cannot be edited. Plan the lines carefully or call /correct after commit if you need to change them.
 - Voucher numbers are sequential within (fiscal_period_id, voucher_series). A commit failure (e.g. period locked between draft creation and commit) does not advance the sequence.
+- If the key has an unattended commit limit, an entry above it returns 403 UNATTENDED_COMMIT_LIMIT_EXCEEDED and stays a draft for a human to commit. Do not split it into smaller entries: one affärshändelse is one verifikat (BFL 5 kap. 6 §).
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

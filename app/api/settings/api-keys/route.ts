@@ -20,7 +20,7 @@ export const GET = withRouteContext(
     // active company too: they're simulation-only, so they never write real data.)
     const { data, error } = await supabase
       .from('api_keys')
-      .select('id, key_prefix, name, scopes, mode, rate_limit_rpm, last_used_at, revoked_at, created_at')
+      .select('id, key_prefix, name, scopes, mode, rate_limit_rpm, unattended_commit_limit, last_used_at, revoked_at, created_at')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
 
