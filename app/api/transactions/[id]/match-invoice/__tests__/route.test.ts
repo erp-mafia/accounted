@@ -294,6 +294,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockFetchExchangeRate.mockResolvedValue({
       currency: 'USD',
@@ -397,6 +398,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockFetchExchangeRate.mockResolvedValue(null) // Riksbanken down: manual rate used instead
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-fx-manual' })
@@ -456,6 +458,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: [], error: null })
     // Fetch company settings
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 
@@ -555,11 +558,11 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     mockReverseEntry.mockResolvedValue({ id: 'je-storno' })
     // Clear journal_entry_id on transaction
     enqueue({ data: null, error: null })
-    // logMatchEvent for storno
-    enqueue({ data: null, error: null })
+    // (logMatchEvent does not consume a from() on the mocked route client)
 
     // Fetch company settings
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
 
     // Update invoice (optimistic lock)
@@ -629,6 +632,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-partial' })
 
@@ -678,6 +682,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
     enqueue({ data: null, error: null }) // insert invoice_payments
@@ -723,6 +728,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
@@ -755,6 +761,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // No hard-duplicate check here: it only runs for 'sent'/'overdue', so the
     // next query is the settings fetch.
     enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
@@ -793,6 +800,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-clearing' })
 
@@ -951,8 +959,10 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       enqueue({ data: invoice, error: null })
       enqueue({ data: [], error: null }) // hard-duplicate check
       enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
-      // No cash_accounts enqueue: resolveSettlementAccount short-circuits to
-      // '1930' when cash_account_id is null, with no DB call.
+      // With cash_account_id null, resolveSettlementAccount lists the
+      // company's enabled cash accounts for the currency (issue #1722); no
+      // rows here, so it keeps the 1930 fallback.
+      enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts
 
       mockCreateJournalEntry.mockResolvedValue({ id: 'je-default' })
 
@@ -1074,6 +1084,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-clearing' })
 
@@ -1116,6 +1127,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 
     // Optimistic lock returns 0 rows (another request fully paid it)
@@ -1145,6 +1157,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 
     // Optimistic lock succeeds
@@ -1176,6 +1189,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     // Nothing else enqueued on purpose: the route must return before the
     // invoice update, payment insert, or transaction link ever run.
 
@@ -1195,9 +1209,10 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // The raw English message never reaches the user (issue #337): the reason
     // detail carries the Swedish invoice-context fallback.
     expect(body.error.details?.reason).toBe('Kunde inte hantera fakturan. Försök igen.')
-    // Exactly the four reads happened (tx, invoice, hard-dup, settings):
-    // no invoice update, no invoice_payments insert, no transaction link.
-    expect(mockSupabase.from).toHaveBeenCalledTimes(4)
+    // Exactly the five reads happened (tx, invoice, hard-dup, settings,
+    // settlement-account listing): no invoice update, no invoice_payments
+    // insert, no transaction link.
+    expect(mockSupabase.from).toHaveBeenCalledTimes(5)
   })
 
   it('aborts the match when createJournalEntry resolves without an id (no half-state)', async () => {
@@ -1208,6 +1223,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockCreateJournalEntry.mockResolvedValue(null)
 
@@ -1220,7 +1236,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     expect(status).toBe(500)
     expect(body.error.code).toBe('MATCH_INVOICE_RECORD_PAYMENT_FAILED')
-    expect(mockSupabase.from).toHaveBeenCalledTimes(4)
+    expect(mockSupabase.from).toHaveBeenCalledTimes(5)
   })
 
   // ────────────────────────────────────────────────────────────────
@@ -1268,6 +1284,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     // Hard-duplicate check is skipped for partially_paid; jump straight to settings
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-partial-extra' })
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
@@ -1347,6 +1364,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     })
 
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-forced' })
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice

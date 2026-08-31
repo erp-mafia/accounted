@@ -46,6 +46,14 @@ const BillingSettingsContent = dynamic(() =>
   import('./BillingSettingsContent').then((module) => ({ default: module.BillingSettingsContent })),
   { loading: SettingsLoadingSkeleton },
 )
+const TeamSettingsContent = dynamic(() =>
+  import('../TeamPanel').then((module) => ({ default: module.TeamPanel })),
+  { loading: SettingsLoadingSkeleton },
+)
+const BrandSettingsContent = dynamic(() =>
+  import('./BrandSettingsContent').then((module) => ({ default: module.BrandSettingsContent })),
+  { loading: SettingsLoadingSkeleton },
+)
 const WhatsAppSettingsContent = dynamic(() =>
   import('./WhatsAppSettingsContent').then((module) => ({ default: module.WhatsAppSettingsContent })),
   { loading: SettingsLoadingSkeleton },
@@ -74,6 +82,8 @@ export const SETTINGS_SECTIONS: Record<string, ComponentType> = {
   assistant: AssistantSettingsContent,
   api: ApiSettingsContent,
   billing: BillingSettingsContent,
+  team: TeamSettingsContent,
+  brand: BrandSettingsContent,
   whatsapp: WhatsAppSettingsContent,
   mail: MailSettingsContent,
 }

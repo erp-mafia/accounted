@@ -28,6 +28,14 @@ export interface SearchableAccount {
   description?: string | null
 }
 
+/**
+ * A chart row as served by /api/bookkeeping/accounts: a SearchableAccount
+ * that may also carry the chart's is_active flag.
+ */
+export interface ChartAccountLike extends SearchableAccount {
+  is_active?: boolean | null
+}
+
 /** A single result row the combobox renders. */
 export interface AccountSearchItem {
   account_number: string
@@ -89,6 +97,17 @@ export function buildAccountIndex(opts: {
   for (const a of opts.active) add(a, true)
   for (const c of opts.catalog ?? []) add(c, false)
   return entries
+}
+
+/**
+ * Index over the company's ACTIVE chart only. Rows explicitly marked inactive
+ * are dropped; rows without the flag count as active (the accounts API already
+ * filters server-side, this keeps the index honest if a caller feeds it an
+ * unfiltered list). Used by the booking dialog's template picker, where
+ * deactivated accounts must not surface as bookable search results.
+ */
+export function buildActiveAccountIndex(rows: ChartAccountLike[]): AccountIndexEntry[] {
+  return buildAccountIndex({ active: rows.filter((r) => r.is_active !== false) })
 }
 
 /**

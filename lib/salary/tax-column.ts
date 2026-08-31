@@ -1,4 +1,4 @@
-import { extractBirthDate } from './personnummer'
+import { extractBirthDate } from './personnummer-format'
 
 /**
  * Skattetabell columns (1-6) per Skatteverket. The numbering matches the

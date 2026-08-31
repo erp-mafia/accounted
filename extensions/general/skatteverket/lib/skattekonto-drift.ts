@@ -3,7 +3,7 @@ import type { ExtensionContext } from '@/lib/extensions/types'
 import type { SkattekontoBalanceSnapshot } from '../types'
 import { SKATTEKONTO_BALANCE_SNAPSHOT_KEY } from './skattekonto-sync'
 import { createLogger } from '@/lib/logger'
-import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { sumAccountBalance } from '@/lib/reconciliation/gl-balance'
 
 const log = createLogger('skattekonto-drift')
 
@@ -152,42 +152,19 @@ export async function maybeAlertDrift(
  * the read fails: 0 is a real balance claim ("nothing booked on 1630"), and
  * substituting it for a failed read turns every transient DB blip into a
  * full-saldo drift alert.
+ *
+ * Delegates to the core ledger-balance helper so the drift uses the SAME
+ * status predicate as the trial balance and the bank reconciliation
+ * (posted + reversed). Summing 'posted' alone excluded a stornoed original
+ * while counting its reversal, which misstated 1630 by the reversed amount
+ * for every company with a storno on the account (fixed 2026-08-23).
  */
 async function sumGl1630(
   supabase: SupabaseClient,
   companyId: string,
   cutoffDate: string,
 ): Promise<number | null> {
-  // Driven from the journal_entries side (lib/bookkeeping/entry-lines.ts):
-  // the scope filters used to sit on a `journal_entries!inner` embed, which
-  // PostgREST compiles into a correlated LATERAL join that walks the ENTIRE
-  // journal_entry_lines table across all tenants. Both steps paginate, so a
-  // company with more than 1000 skattekonto lines is no longer silently
-  // truncated (which would have under-reported the drift).
-  let data: Array<{ debit_amount: number | string; credit_amount: number | string }>
-  try {
-    data = await fetchEntryLines({
-      supabase,
-      lineColumns: 'debit_amount, credit_amount',
-      filterEntries: (q: EntryLinesQuery) =>
-        q.eq('company_id', companyId).eq('status', 'posted').lte('entry_date', cutoffDate),
-      filterLines: (q: EntryLinesQuery) => q.eq('account_number', SKATTEKONTO_BAS_ACCOUNT),
-      attachEntriesAs: null,
-    })
-  } catch (err) {
-    log.warn('sumGl1630 failed', {
-      companyId,
-      cutoffDate,
-      error: err instanceof Error ? err.message : String(err),
-    })
-    return null
-  }
-
-  let sum = 0
-  for (const row of data) {
-    sum += Number(row.debit_amount || 0) - Number(row.credit_amount || 0)
-  }
-  return Math.round(sum * 100) / 100
+  return sumAccountBalance(supabase, companyId, SKATTEKONTO_BAS_ACCOUNT, { cutoffDate })
 }
 
 async function listUnbookedRows(

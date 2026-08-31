@@ -20,6 +20,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { SettingsGroup, SettingsInput, SettingsRow } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { useBranding } from '@/lib/branding/brand-context'
 
 interface OpeningBalancesData {
   cutover_date: string
@@ -70,6 +71,7 @@ function fingerprint(v: PanelValues): string {
 
 export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: string; canWrite: boolean }) {
   const t = useTranslations('salary_employee')
+  const { appName } = useBranding()
   const { toast } = useToast()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -234,7 +236,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
     >
       <DetailSection
         kicker={t('opening_balances_title')}
-        help={<HelpPopover>{t('opening_balances_description')}</HelpPopover>}
+        help={<HelpPopover>{t('opening_balances_description', { appName })}</HelpPopover>}
         aside={
           <Button
             type="button"
@@ -263,7 +265,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
         <SettingsRow
           label={t('opening_balances_cutover_date')}
           htmlFor="ob-cutover"
-          help={t('opening_balances_cutover_hint')}
+          help={t('opening_balances_cutover_hint', { appName })}
           align="baseline"
         >
           <SettingsInput

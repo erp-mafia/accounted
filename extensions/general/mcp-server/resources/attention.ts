@@ -1,5 +1,12 @@
 import type { McpResource } from './types'
 import { ACTION_NEEDED_THRESHOLD_DAYS } from '@/lib/deadlines/status-engine'
+import {
+  fetchUnlinkedDocuments,
+  UNLINKED_DOCUMENT_SCAN_CAP,
+} from '@/lib/documents/unlinked-documents'
+import { countReconciliationDue } from '@/lib/worklist/categories'
+import { fetchJunctionLinkedTxIds } from '@/lib/reconciliation/bank-reconciliation'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 type Severity = 'critical' | 'warning' | 'info'
 
@@ -28,7 +35,7 @@ export const attentionResource: McpResource = {
   uri: 'Accounted://attention',
   name: 'What Needs Attention',
   description:
-    'One-shot summary of outstanding work for the active company: unbooked transactions, overdue invoices, pending approvals, voucher gaps, upcoming deadlines, bank consent expiry, and period-lock alerts. Each category includes a count, up to 5 sample rows, and a suggested next tool call. Use this at session start to orient before chaining read tools.',
+    'One-shot summary of outstanding work for the active company: unbooked transactions, overdue invoices, pending approvals, documents linked to no verifikat, voucher gaps, upcoming deadlines, bank consent expiry, and period-lock alerts. Each category includes a count, up to 5 sample rows, and a suggested next tool call. Use this at session start to orient before chaining read tools.',
   mimeType: 'application/json',
   read: async ({ supabase, companyId }) => {
     const now = new Date()
@@ -37,7 +44,7 @@ export const attentionResource: McpResource = {
     const horizon = horizonDate.toISOString().slice(0, 10)
 
     const [
-      unbookedHead,
+      unbookedIds,
       unbookedSamples,
       overdueRows,
       pendingSupplierHead,
@@ -51,13 +58,22 @@ export const attentionResource: McpResource = {
       bankConnRows,
       activePeriodRow,
       companySettingsRow,
+      unlinkedDocuments,
     ] = await Promise.all([
-      supabase
-        .from('transactions')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .is('journal_entry_id', null)
-        .eq('is_business', true),
+      // Ids, not a head count: journal_entry_id IS NULL is only the first of
+      // the "booked" anchors (lib/transactions/is-booked.ts). Rows bulk-booked
+      // into a samlingsverifikat or split over several verifikat (1:N) are
+      // anchored through transaction_voucher_links and are subtracted below.
+      fetchAllRows<{ id: string }>(({ from, to }) =>
+        supabase
+          .from('transactions')
+          .select('id')
+          .eq('company_id', companyId)
+          .is('journal_entry_id', null)
+          .eq('is_business', true)
+          .order('id')
+          .range(from, to),
+      ).catch(() => [] as Array<{ id: string }>),
       supabase
         .from('transactions')
         .select('id, date, amount, currency, description, merchant_name')
@@ -65,7 +81,7 @@ export const attentionResource: McpResource = {
         .is('journal_entry_id', null)
         .eq('is_business', true)
         .order('date', { ascending: true })
-        .limit(SAMPLE_LIMIT),
+        .limit(SAMPLE_LIMIT * 4),
       supabase
         .from('invoices')
         .select('id, invoice_number, customer_id, due_date, total, currency, status')
@@ -142,21 +158,30 @@ export const attentionResource: McpResource = {
         .select('bookkeeping_locked_through, auto_lock_period_days')
         .eq('company_id', companyId)
         .maybeSingle(),
+      fetchUnlinkedDocuments(supabase, companyId),
     ])
 
     const categories: AttentionCategory[] = []
 
     // ── Unbooked business transactions ──────────────────────────────
-    const unbookedCount = unbookedHead.count ?? 0
+    const pointerUnbookedIds = unbookedIds.map((row) => row.id)
+    const junctionLinked =
+      pointerUnbookedIds.length > 0
+        ? await fetchJunctionLinkedTxIds(supabase, companyId, pointerUnbookedIds)
+        : new Set<string>()
+    const unbookedCount = pointerUnbookedIds.filter((id) => !junctionLinked.has(id)).length
+    const samples = (unbookedSamples.data ?? [])
+      .filter((row) => !junctionLinked.has(row.id as string))
+      .slice(0, SAMPLE_LIMIT)
     if (unbookedCount > 0) {
-      const oldest = unbookedSamples.data?.[0]
+      const oldest = samples[0]
       const oldestAgeDays = oldest?.date ? daysBetween(oldest.date, today) : 0
       categories.push({
         key: 'unbooked_transactions',
         label_sv: 'Obokförda affärstransaktioner',
         severity: oldestAgeDays > 30 ? 'critical' : 'warning',
         count: unbookedCount,
-        samples: unbookedSamples.data ?? [],
+        samples,
         next: {
           description: 'Kategorisera den äldsta obokförda transaktionen.',
           tool: 'gnubok_categorize_transaction',
@@ -237,6 +262,37 @@ export const attentionResource: McpResource = {
           description: 'Försök matcha kvitto mot bankhändelse.',
           tool: 'gnubok_receipt_matcher',
           args: oldest ? { receipt_id: oldest.id } : undefined,
+        },
+      })
+    }
+
+    // ── Documents attached to nothing ──────────────────────────────
+    //
+    // Underlag-shaped files only: the same query without a mime allow-list
+    // returns 11 309 archived PSD2 bank-API responses on production, which are
+    // unlinked by design and must never be presented as work. See
+    // lib/documents/unlinked-documents.ts.
+    if (unlinkedDocuments.count > 0) {
+      const oldest = unlinkedDocuments.documents[unlinkedDocuments.documents.length - 1]
+      categories.push({
+        key: 'unlinked_documents',
+        label_sv: 'Dokument utan koppling till verifikat eller transaktion',
+        severity: 'warning',
+        count: unlinkedDocuments.count,
+        samples: unlinkedDocuments.documents.slice(0, SAMPLE_LIMIT),
+        next: {
+          // Two legitimate destinations, and the tool pointer can only name
+          // one. A document that arrived after the fact is linked to the
+          // posted verifikat; one whose affärshändelse was never booked
+          // belongs to a new verifikat as its underlag (BFL 5 kap. 6 §), which
+          // is what gnubok_link_document_to_voucher's own description says to
+          // prefer. The prose carries the choice, the pointer carries the
+          // common case, and journal_entry_id is the agent's to resolve.
+          description: unlinkedDocuments.capped
+            ? `Koppla dokumentet till rätt verifikat, eller bokför affärshändelsen med dokumentet som underlag om den inte är bokförd än. Minst ${unlinkedDocuments.count} dokument saknar koppling (avsökningen stannade vid ${UNLINKED_DOCUMENT_SCAN_CAP} kandidater).`
+            : 'Koppla dokumentet till rätt verifikat, eller bokför affärshändelsen med dokumentet som underlag om den inte är bokförd än.',
+          tool: 'gnubok_link_document_to_voucher',
+          args: oldest ? { document_id: oldest.id } : undefined,
         },
       })
     }
@@ -337,6 +393,25 @@ export const attentionResource: McpResource = {
         })),
         next: {
           description: 'Be användaren förnya bank-samtycket innan det löper ut.',
+        },
+      })
+    }
+
+    // ── Accounts not signed off through the previous month end ──────
+    // Cheap by construction (lib/worklist countReconciliationDue: no bridge
+    // computation) and zero until the company has signed anything off.
+    const reconciliationDue = await countReconciliationDue(supabase, companyId, now)
+    if (reconciliationDue > 0) {
+      categories.push({
+        key: 'reconciliation_due',
+        label_sv: 'Konton som inte är avstämda t.o.m. förra månadsskiftet',
+        severity: 'warning',
+        count: reconciliationDue,
+        samples: [],
+        next: {
+          description:
+            'Läs Accounted://reconciliation/summary för bryggan per konto; koppla föreslagna par, bokför det som saknas och signera med gnubok_reconcile_signoff när oförklarat är 0.',
+          resource: 'Accounted://reconciliation/summary',
         },
       })
     }

@@ -1,0 +1,331 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`invite mail (template class: invite) > branded: brand sender, brand-domain link, no Accounted leakage 1`] = `
+"
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Inbjudan till Kund AB</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f5f5f5;">
+  <div style="max-width: 520px; margin: 0 auto; padding: 40px 20px;">
+    <div style="background: #ffffff; border-radius: 12px; padding: 40px 32px; border: 1px solid #e5e5e5;">
+      <!-- Header -->
+      <div style="margin-bottom: 28px;">
+        <p style="margin: 0 0 4px 0; font-size: 13px; color: #888; letter-spacing: 0.05em;">SIFFRA</p>
+        <h1 style="margin: 0 0 8px 0; font-size: 22px; font-weight: 600; color: #111;">
+          Du har blivit inbjuden
+        </h1>
+        <p style="margin: 0; color: #666; font-size: 15px;">
+          <strong>sara@siffra.se</strong> har bjudit in dig till <strong>Kund AB</strong> på siffra.
+        </p>
+      </div>
+
+      <!-- CTA -->
+      <div style="margin: 28px 0;">
+        <a href="https://app.siffra.se/invite/tok-1" style="display: inline-block; background: #111; color: #fff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-size: 14px; font-weight: 500;">
+          Acceptera inbjudan
+        </a>
+      </div>
+
+      <!-- Info -->
+      <p style="margin: 0; color: #999; font-size: 13px;">
+        Länken är giltig i 7 dagar. Om du inte förväntade dig denna inbjudan kan du ignorera detta meddelande.
+      </p>
+    </div>
+  </div>
+</body>
+</html>"
+`;
+
+exports[`invite mail (template class: invite) > unbranded: byte-identical to the un-overridden template on the canonical URL 1`] = `
+"
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Inbjudan till Kund AB</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f5f5f5;">
+  <div style="max-width: 520px; margin: 0 auto; padding: 40px 20px;">
+    <div style="background: #ffffff; border-radius: 12px; padding: 40px 32px; border: 1px solid #e5e5e5;">
+      <!-- Header -->
+      <div style="margin-bottom: 28px;">
+        <p style="margin: 0 0 4px 0; font-size: 13px; color: #888; letter-spacing: 0.05em;">ACCOUNTED</p>
+        <h1 style="margin: 0 0 8px 0; font-size: 22px; font-weight: 600; color: #111;">
+          Du har blivit inbjuden
+        </h1>
+        <p style="margin: 0; color: #666; font-size: 15px;">
+          <strong>sara@siffra.se</strong> har bjudit in dig till <strong>Kund AB</strong> på accounted.
+        </p>
+      </div>
+
+      <!-- CTA -->
+      <div style="margin: 28px 0;">
+        <a href="https://app.gnubok.se/invite/tok-1" style="display: inline-block; background: #111; color: #fff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-size: 14px; font-weight: 500;">
+          Acceptera inbjudan
+        </a>
+      </div>
+
+      <!-- Info -->
+      <p style="margin: 0; color: #999; font-size: 13px;">
+        Länken är giltig i 7 dagar. Om du inte förväntade dig denna inbjudan kan du ignorera detta meddelande.
+      </p>
+    </div>
+  </div>
+</body>
+</html>"
+`;
+
+exports[`invoice mail (template class: invoice) > unbranded: template output unchanged and platform-free 1`] = `
+"
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Faktura F-1001</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
+  <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+    <!-- Header -->
+    <div style="margin-bottom: 30px; border-bottom: 2px solid #1a1a1a; padding-bottom: 16px;">
+      <h1 style="margin: 0 0 10px 0; font-size: 24px; font-weight: 600; color: #1a1a1a;">
+        Faktura från Kund AB
+      </h1>
+      <p style="margin: 0; color: #666; font-size: 14px;">
+        Fakturanummer: F-1001
+      </p>
+    </div>
+
+    <!-- Greeting -->
+    <div style="margin-bottom: 30px;">
+      <p style="margin: 0 0 15px 0;">
+        Hej Erik,
+      </p>
+      <p style="margin: 0;">
+        Tack för ditt förtroende! Bifogat hittar du din faktura.
+      </p>
+    </div>
+
+    <!-- Summary Box -->
+    <div style="background: #f8f9fa; border-radius: 8px; padding: 25px; margin-bottom: 30px;">
+      <table style="width: 100%; border-collapse: collapse;">
+        <tr>
+          <td style="padding: 8px 0; color: #666; font-size: 14px;">Fakturanummer:</td>
+          <td style="padding: 8px 0; text-align: right; font-weight: 500;">F-1001</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; color: #666; font-size: 14px;">Fakturadatum:</td>
+          <td style="padding: 8px 0; text-align: right;">2026-07-01</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; color: #666; font-size: 14px;">Förfallodatum:</td>
+          <td style="padding: 8px 0; text-align: right; font-weight: 500; color: #e11d48;">
+            2026-07-31
+          </td>
+        </tr>
+        <tr>
+          <td colspan="2" style="padding: 15px 0 8px 0; border-top: 1px solid #e5e7eb;"></td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; font-size: 18px; font-weight: 600;">Att betala:</td>
+          <td style="padding: 8px 0; text-align: right; font-size: 18px; font-weight: 600; color: #1a1a1a;">
+            1 250,00 SEK
+          </td>
+        </tr>
+      </table>
+    </div>
+
+    <!-- Pay-online button: only when the user pasted a payment link on this
+         invoice. The URL is schema-validated (https-only) but still escaped
+         for the attribute context: a URL may legally contain quotes. -->
+    
+
+    <!-- Payment Details -->
+    
+    <div style="margin-bottom: 30px;">
+      <h2 style="margin: 0 0 15px 0; font-size: 16px; font-weight: 600; color: #1a1a1a;">
+        Betalningsinformation
+      </h2>
+      <table style="width: 100%; border-collapse: collapse;">
+        
+        
+        
+        
+        <tr>
+          <td style="padding: 6px 0; color: #666; font-size: 14px;">Meddelande:</td>
+          <td style="padding: 6px 0; font-weight: 500;">F-1001</td>
+        </tr>
+      </table>
+    </div>
+    
+
+    <!-- Footer -->
+    <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
+      <p style="margin: 0 0 10px 0; color: #666; font-size: 14px;">
+        Har du frågor om fakturan? Svara direkt på detta mejl så hjälper vi dig.
+      </p>
+      <p style="margin: 0; color: #666; font-size: 14px;">
+        Med vänliga hälsningar,<br>
+        <strong style="color: #1a1a1a;">Kund AB</strong>
+      </p>
+      
+      <p style="margin: 10px 0 0 0; color: #999; font-size: 12px;">
+        Org.nr: 556000-0000
+        
+         | Innehar F-skattsedel
+      </p>
+      
+    </div>
+  </div>
+</body>
+</html>
+"
+`;
+
+exports[`payslip mail (template class: payslip) > branded: brand sender and brand-domain link 1`] = `
+"<p>Hej Anna,</p>
+<p>Din lönespecifikation för juni 2026 finns att hämta via länken nedan.</p>
+<p><a href="https://app.siffra.se/payslip/tok-1">Visa lönespecifikation</a></p>
+<p>Utbetalningsdag: 2026-06-25<br>
+Länken är personlig och giltig i 90 dagar.</p>
+<p>Med vänliga hälsningar,<br>Kund AB</p>"
+`;
+
+exports[`payslip mail (template class: payslip) > unbranded: canonical link, platform sender, unchanged body 1`] = `
+"<p>Hej Anna,</p>
+<p>Din lönespecifikation för juni 2026 finns att hämta via länken nedan.</p>
+<p><a href="https://app.gnubok.se/payslip/tok-1">Visa lönespecifikation</a></p>
+<p>Utbetalningsdag: 2026-06-25<br>
+Länken är personlig och giltig i 90 dagar.</p>
+<p>Med vänliga hälsningar,<br>Kund AB</p>"
+`;
+
+exports[`reminder mail (template class: reminder) > unbranded: canonical action link and unchanged output 1`] = `
+"
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vänlig påminnelse - Faktura F-1001</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f9fafb;">
+  <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+    <div style="background: white; border-radius: 12px; padding: 40px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+      <!-- Header -->
+      <div style="text-align: center; margin-bottom: 30px;">
+        <div style="display: inline-block; background: #2563eb15; color: #2563eb; padding: 8px 16px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">
+          Vänlig påminnelse
+        </div>
+      </div>
+
+      <!-- Title -->
+      <h1 style="margin: 0 0 20px 0; font-size: 22px; font-weight: 600; color: #111; text-align: center;">
+        Faktura F-1001 förföll för 20 dagar sedan
+      </h1>
+
+      <!-- Greeting and Message -->
+      <div style="margin-bottom: 30px;">
+        <p style="margin: 0 0 15px 0;">
+          Hej Erik,
+        </p>
+
+        <p style="margin: 0 0 15px 0;">Vi vill påminna dig om att faktura F-1001 förföll till betalning den 2026-06-01. Om du redan har betalat kan du bortse från denna påminnelse.</p>
+      </div>
+
+      <!-- Invoice Summary Box -->
+      <div style="background: #f8f9fa; border-radius: 8px; padding: 25px; margin-bottom: 30px; border-left: 4px solid #2563eb;">
+        <table style="width: 100%; border-collapse: collapse;">
+          <tr>
+            <td style="padding: 8px 0; color: #666; font-size: 14px;">Fakturanummer:</td>
+            <td style="padding: 8px 0; text-align: right; font-weight: 500;">F-1001</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; color: #666; font-size: 14px;">Fakturadatum:</td>
+            <td style="padding: 8px 0; text-align: right;">2026-05-01</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; color: #666; font-size: 14px;">Förfallodatum:</td>
+            <td style="padding: 8px 0; text-align: right; color: #dc2626; font-weight: 500;">
+              2026-06-01
+            </td>
+          </tr>
+          <tr>
+            <td colspan="2" style="padding: 15px 0 8px 0; border-top: 1px solid #e5e7eb;"></td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; color: #666; font-size: 14px;">Ursprungligt belopp:</td>
+            <td style="padding: 8px 0; text-align: right; font-weight: 500;">1 250 kr</td>
+          </tr>
+          
+          
+          
+          <tr>
+            <td style="padding: 8px 0; font-size: 18px; font-weight: 600;">Att betala:</td>
+            <td style="padding: 8px 0; text-align: right; font-size: 18px; font-weight: 600; color: #2563eb;">
+              1 250 kr
+            </td>
+          </tr>
+          
+        </table>
+      </div>
+
+      <!-- Payment Details -->
+      <div style="margin-bottom: 30px;">
+        <h2 style="margin: 0 0 15px 0; font-size: 16px; font-weight: 600; color: #111;">
+          Betalningsinformation
+        </h2>
+        <table style="width: 100%; border-collapse: collapse;">
+          
+          
+          
+          
+          <tr>
+            <td style="padding: 6px 0; color: #666; font-size: 14px;">Meddelande:</td>
+            <td style="padding: 6px 0; font-weight: 500;">F-1001</td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- Action Buttons -->
+      <div style="text-align: center; margin-bottom: 30px;">
+        <p style="margin: 0 0 20px 0; color: #666; font-size: 14px;">
+          Har du redan betalat eller har frågor om fakturan?
+        </p>
+        <a href="https://app.gnubok.se/invoice-action/tok-1" style="display: inline-block; background: #2563eb; color: white; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: 500; font-size: 14px;">
+          Hantera faktura
+        </a>
+      </div>
+
+      <!-- Footer -->
+      <div style="padding-top: 20px; border-top: 1px solid #e5e7eb;">
+        <p style="margin: 0 0 10px 0; color: #666; font-size: 14px;">
+          Har du frågor? Svara direkt på detta mejl så hjälper vi dig.
+        </p>
+        <p style="margin: 0; color: #666; font-size: 14px;">
+          Med vänliga hälsningar,<br>
+          <strong>Kund AB</strong>
+        </p>
+        
+        <p style="margin: 10px 0 0 0; color: #999; font-size: 12px;">
+          Org.nr: 199001011234
+          
+        </p>
+        
+      </div>
+    </div>
+
+    <!-- Unsubscribe note -->
+    <p style="text-align: center; margin-top: 20px; color: #999; font-size: 12px;">
+      Detta är ett automatiskt meddelande angående en obetald faktura.
+    </p>
+  </div>
+</body>
+</html>
+"
+`;

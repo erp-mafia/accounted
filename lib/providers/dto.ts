@@ -101,6 +101,18 @@ export interface PaginatedResponse<T> {
   hasMore: boolean;
 }
 
+/**
+ * The verifikat that booked the invoice in the SOURCE system, as the provider
+ * reports it ("A329"). Optional: only providers that expose it (Visma
+ * eAccounting, Fortnox) set it, and only on booked invoices. The migration
+ * uses it to link the imported invoice to the SIE-imported registration
+ * voucher; see lib/providers/source-voucher.ts for the parsing rules.
+ */
+export interface SourceVoucherRefDto {
+  series: string | null;
+  number: number;
+}
+
 // ============================================
 // Sales Invoice
 // ============================================
@@ -108,7 +120,17 @@ export interface PaginatedResponse<T> {
 export type InvoiceStatusCode = 'draft' | 'sent' | 'booked' | 'paid' | 'overdue' | 'cancelled' | 'credited';
 
 export interface LegalMonetaryTotalDto {
-  lineExtensionAmount: AmountType;
+  /**
+   * Sum of the line amounts, excluding VAT.
+   *
+   * Optional because several providers omit it from their list payloads
+   * (Fortnox `Net`, Briox `net_amount`) and one never exposes it at all.
+   * Absent means "the net was not established", NOT "the net equals the
+   * gross": mappers must leave it undefined rather than fall back to
+   * `payableAmount`, which silently turns every such invoice into a 0 kr VAT
+   * record that still balances and so goes unnoticed.
+   */
+  lineExtensionAmount?: AmountType;
   taxExclusiveAmount?: AmountType;
   taxInclusiveAmount?: AmountType;
   allowanceTotalAmount?: AmountType;
@@ -159,6 +181,7 @@ export interface SalesInvoiceDto {
   buyerReference?: string;
   orderReference?: string;
   financialDimensions?: FinancialDimensionRef[];
+  sourceVoucher?: SourceVoucherRefDto;
   createdAt?: string;
   updatedAt?: string;
   _raw?: Record<string, unknown>;
@@ -203,6 +226,7 @@ export interface SupplierInvoiceDto {
   note?: string;
   ocrNumber?: string;
   financialDimensions?: FinancialDimensionRef[];
+  sourceVoucher?: SourceVoucherRefDto;
   createdAt?: string;
   updatedAt?: string;
   _raw?: Record<string, unknown>;

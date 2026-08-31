@@ -19,6 +19,10 @@ import {
 } from '@/lib/agent-panel/geometry'
 import { persistUiState } from '@/lib/ui-state/client'
 import {
+  clearAgentSheetSession,
+  readAgentSheetSession,
+} from '@/lib/agent-panel/session-restore'
+import {
   INITIAL_AGENT_STATUS,
   reduceAgentStatus,
   type AgentStatus,
@@ -143,6 +147,11 @@ export interface OpenAgentSheetArgs {
   // promptTemplate and sends this verbatim instead. Used by /chat empty-state
   // suggestion chips to give the user a one-click starting prompt.
   seedUserMessage?: string
+  // Reopen an existing thread instead of starting one. Set by the provider
+  // itself when it restores the panel after a page reload (see
+  // lib/agent-panel/session-restore); the sheet loads the thread on mount
+  // exactly as if it had been picked from "Tidigare konversationer".
+  resumeConversationId?: string
 }
 
 interface AgentSheetContextValue {
@@ -265,17 +274,47 @@ export function AgentSheetProvider({
   // beside the answer. Written as a CSS variable rather than a class on <main>
   // because the frame layout is a server component; globals.css seeds the
   // default so the first paint is not a jump.
+  // --agent-sheet-w is the docked-only sibling: unlike --agent-dock-w it has
+  // NO stylesheet default (globals.css seeds dock-w at the 10px frame gutter),
+  // so consumers that must be a no-op when the sheet is closed (dialog
+  // centering and width caps in ui/dialog.tsx and the wide booking/review
+  // dialogs) read this one and get their 0px fallback.
   useEffect(() => {
     const root = document.documentElement
     if (dockWidth === null) {
       root.style.removeProperty('--agent-dock-w')
+      root.style.removeProperty('--agent-sheet-w')
       return
     }
     root.style.setProperty('--agent-dock-w', `${dockWidth}px`)
+    root.style.setProperty('--agent-sheet-w', `${dockWidth}px`)
     return () => {
       root.style.removeProperty('--agent-dock-w')
+      root.style.removeProperty('--agent-sheet-w')
     }
   }, [dockWidth])
+
+  // Bring back the thread this tab had open before a full page reload. The
+  // panel's state is React-only, so the deploy prompt's "Ladda om" (or any
+  // refresh) used to close it and drop the thread from view; the user then
+  // had to find it again under "Tidigare konversationer". The sheet records
+  // the open thread per tab (sessionStorage), and this reopens it on mount.
+  // Only on mount: client-side navigation keeps the provider, and a session
+  // the user closed has already been cleared from storage.
+  useEffect(() => {
+    const stored = readAgentSheetSession()
+    if (!stored) return
+    // sessionStorage is client-only: reading it in the state initializer would
+    // render the panel on the client but not on the server (hydration
+    // mismatch), so it has to be an effect that sets state once.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setActiveArgs({
+      intentId: stored.intentId,
+      contextRef: stored.contextRef ?? undefined,
+      resumeConversationId: stored.conversationId,
+    })
+    setCollapsed(stored.collapsed)
+  }, [])
 
   const openAgentSheet = useCallback((args: OpenAgentSheetArgs) => {
     setActiveArgs(args)
@@ -286,12 +325,22 @@ export function AgentSheetProvider({
     setActiveArgs(null)
     setCollapsed(false)
     setDockWidth(null)
+    // Close ends the session: a reload after this must not bring it back.
+    clearAgentSheetSession()
     publishAgentStatus({ type: 'reset' })
   }, [])
 
   const collapseAgentSheet = useCallback(() => setCollapsed(true), [])
   const expandAgentSheet = useCallback(() => setCollapsed(false), [])
   const restartAgentSheet = useCallback(() => {
+    // Discarding the thread: forget it for reload purposes too, so the old
+    // one does not reappear while the new one has no id yet, and drop any
+    // restore id from the args, or the remount would reopen that thread
+    // instead of starting a fresh one.
+    clearAgentSheetSession()
+    setActiveArgs((args) =>
+      args?.resumeConversationId ? { ...args, resumeConversationId: undefined } : args,
+    )
     setRestartNonce((n) => n + 1)
     setCollapsed(false)
   }, [])
@@ -337,11 +386,12 @@ export function AgentSheetProvider({
       {children}
       {activeArgs && (
         <AgentSheet
-          key={`${activeArgs.intentId}:${activeArgs.contextRef ?? ''}:${stableArgsKey(activeArgs.intentArgs)}:${activeArgs.seedUserMessage ?? ''}:${restartNonce}`}
+          key={`${activeArgs.intentId}:${activeArgs.contextRef ?? ''}:${stableArgsKey(activeArgs.intentArgs)}:${activeArgs.seedUserMessage ?? ''}:${activeArgs.resumeConversationId ?? ''}:${restartNonce}`}
           intentId={activeArgs.intentId}
           intentArgs={activeArgs.intentArgs}
           contextRef={activeArgs.contextRef}
           seedUserMessage={activeArgs.seedUserMessage}
+          resumeConversationId={activeArgs.resumeConversationId}
           collapsed={collapsed}
           onStatus={publishAgentStatus}
           onDockWidthChange={setDockWidth}

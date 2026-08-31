@@ -18,6 +18,7 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { InitialSetupPath, InitialSetupState } from '@/types'
+import { useBranding } from '@/lib/branding/brand-context'
 
 interface NewUserChecklistProps {
   initialState: InitialSetupState
@@ -78,6 +79,7 @@ export default function NewUserChecklist({
   sieSweep = null,
 }: NewUserChecklistProps) {
   const t = useTranslations('initial_setup')
+  const { appName } = useBranding()
   const router = useRouter()
   const showError = useErrorToast()
   const { formatDateLong } = useFormat()
@@ -90,6 +92,10 @@ export default function NewUserChecklist({
   // step (companies whose completedAt arrives from the server never see it).
   const [retiring, setRetiring] = useState<'verdict' | 'closing' | 'done' | null>(null)
   const retireStartedRef = useRef(false)
+  // The ChatGPT side door on the Claude step: collapsed by default so the
+  // one-click Claude path stays the visual primary.
+  const [chatGptOpen, setChatGptOpen] = useState(false)
+  const [serverUrlCopied, setServerUrlCopied] = useState(false)
 
   const hasMigration = ENABLED_EXTENSION_IDS.has('arcim-migration')
   const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking')
@@ -217,9 +223,35 @@ export default function NewUserChecklist({
     captureSetup('onboarding_setup_step_started', { step: 'receipts' })
     router.push(hasAi ? '/e/general/invoice-inbox' : '/settings/billing')
   }
-  const goAssistant = () => {
-    captureSetup('onboarding_setup_step_started', { step: 'assistant' })
-    router.push(hasAi ? '/onboarding/agent' : '/settings/billing')
+  // Founder call 2026-08-27: the closing CTA is "Anslut till Claude", not the
+  // in-app assistant calibration (still reachable from the assistant page).
+  // A user who finishes the hosted onboarding lands in Claude with everything
+  // already connected, where the MCP onboarding skill opens with findings and
+  // the Att göra-list instead of setup. The connector URL is built from the
+  // page origin so self-hosted and white-label domains link to themselves.
+  const goClaude = () => {
+    captureSetup('onboarding_setup_step_started', { step: 'claude' })
+    const serverUrl = `${window.location.origin}/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted`
+    const link = `https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=${encodeURIComponent(appName)}&connectorUrl=${encodeURIComponent(serverUrl)}`
+    window.open(link, '_blank', 'noopener')
+  }
+  // ChatGPT has no add-connector deep link (the user pastes the server URL
+  // into Developer mode manually), so the side door copies the URL instead.
+  const toggleChatGpt = () => {
+    setChatGptOpen((open) => {
+      if (!open) captureSetup('onboarding_setup_step_started', { step: 'chatgpt' })
+      return !open
+    })
+  }
+  const copyServerUrl = async () => {
+    const serverUrl = `${window.location.origin}/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted`
+    try {
+      await navigator.clipboard.writeText(serverUrl)
+      setServerUrlCopied(true)
+      window.setTimeout(() => setServerUrlCopied(false), 2000)
+    } catch {
+      // Clipboard access can be denied; the button simply stays on "Kopiera".
+    }
   }
   const dismiss = () =>
     void persist({ dismissed: true }, 'dismiss').then((updated) => {
@@ -387,16 +419,39 @@ export default function NewUserChecklist({
           number={numbers.assistant}
           done={step5Done}
           active={activeStep === 5}
-          title={t('step_assistant_title')}
-          badge={t('step_assistant_beta')}
+          title={t('step_claude_title')}
           last
           action={(variant) => (
-            <Button size="sm" variant={variant} onClick={goAssistant}>
-              {t('step_assistant_action')}
+            <Button size="sm" variant={variant} onClick={goClaude}>
+              {t('step_claude_action')}
             </Button>
           )}
+          footnote={
+            <div className="mt-2">
+              <button
+                type="button"
+                onClick={toggleChatGpt}
+                aria-expanded={chatGptOpen}
+                className="text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+              >
+                {t('step_claude_chatgpt_link')}
+              </button>
+              {chatGptOpen && (
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+                  <p className="max-w-prose text-xs leading-5 text-muted-foreground">
+                    {t('step_claude_chatgpt_steps', { appName })}
+                  </p>
+                  <Button size="sm" variant="outline" onClick={() => void copyServerUrl()}>
+                    {serverUrlCopied
+                      ? t('step_claude_chatgpt_copied')
+                      : t('step_claude_chatgpt_copy')}
+                  </Button>
+                </div>
+              )}
+            </div>
+          }
         >
-          {t('step_assistant_description')}
+          {t('step_claude_description')}
         </Step>
       </ol>
     </section>
@@ -422,6 +477,7 @@ function Step({
   action,
   marks,
   doneNote,
+  footnote,
   last = false,
   children,
 }: {
@@ -436,6 +492,10 @@ function Step({
    *  exception to "done steps collapse to their title" (e.g. the bank step's
    *  sweep outcome, which is the payoff the migrator is waiting for). */
   doneNote?: React.ReactNode
+  /** Block content below the pitch while the step is open. Unlike `children`
+   *  (which lives inside a <p>), this may hold nested block elements, e.g.
+   *  the Claude step's ChatGPT side door. */
+  footnote?: React.ReactNode
   last?: boolean
   children: React.ReactNode
 }) {
@@ -493,6 +553,7 @@ function Step({
             {marks && <span className="flex items-center gap-2">{marks}</span>}
           </div>
         )}
+        {open && footnote}
       </div>
     </li>
   )

@@ -29,6 +29,29 @@ describe('assertNoPlaintextPersonnummer', () => {
     ).toThrow(/preview_data contains plaintext PII key "ssn"/)
   })
 
+  it('throws on the customers personal_number key (create_customer must stage the encrypted form)', () => {
+    expect(() =>
+      assertNoPlaintextPersonnummer(
+        { name: 'Anna Andersson', customer_type: 'individual', personal_number: '19900101-1234' },
+        'params',
+      ),
+    ).toThrow(/params contains plaintext PII key "personal_number"/)
+  })
+
+  it('allows the encrypted/masked derivatives that create_customer stages', () => {
+    expect(() =>
+      assertNoPlaintextPersonnummer(
+        {
+          name: 'Anna Andersson',
+          customer_type: 'individual',
+          personal_number_encrypted: 'ab'.repeat(40),
+          personal_number_masked: '********-1234',
+        },
+        'params',
+      ),
+    ).not.toThrow()
+  })
+
   it('allows the encrypted/masked derivatives that create_employee stages', () => {
     expect(() =>
       assertNoPlaintextPersonnummer(

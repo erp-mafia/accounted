@@ -11,8 +11,11 @@
  *   1. raw-route-auth : an `app/api/**\/route.ts` that calls
  *      `supabase.auth.getUser()` directly instead of going through
  *      `requireAuth()` / `withRouteContext()` (the only guards that enforce
- *      MFA AAL2 on hosted). Tracked as a file-set so a NEW offending route
- *      fails CI even if an old one was fixed in the same PR.
+ *      MFA AAL2 on hosted). Judged per exported handler, not per file: a
+ *      wrapped PATCH next to a hand-rolled DELETE in the same file is still
+ *      a violation (that exact shape hid two MFA bypasses until 2026-08-26).
+ *      Tracked as a file-set so a NEW offending route fails CI even if an
+ *      old one was fixed in the same PR.
  *   2. naive-ore-round: `Math.round(x * 100) / 100`, which is subtly wrong on
  *      exact-half values (see lib/money.ts `roundOre`). Tracked as a count.
  *      The canonical rounding modules are excluded.
@@ -102,6 +105,13 @@
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
+ *  11. direct-ai-client: a file outside lib/ai that imports createAiClient,
+ *      calls `.messages.create/stream(` on an Anthropic client, or imports
+ *      the Vercel AI SDK. Every model call goes through getAiService() so the
+ *      backend (Bedrock on hosted, a Swedish OpenAI-compatible endpoint on a
+ *      sovereign self-host) stays an environment decision. Allowlist of the
+ *      pre-abstraction call sites in this file, may only shrink.
+ *
  *   node scripts/checks/no-new-antipatterns.mjs --update   # re-baseline after a migration ratchets the count down
  *
  * Exit code 1 if either check regressed past its baseline.
@@ -111,6 +121,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { findSekLabelledFxAmounts } from './format-currency-sek-label.mjs'
+import { findRawReferenceFetches } from './raw-reference-fetch.mjs'
+import { findClientNodeBuiltins } from './client-node-builtin.mjs'
 import {
   findExtensionRouteFindings,
   UNGATED_EXTENSION_ROUTES,
@@ -129,6 +141,10 @@ const RAW_AUTH_RE = /\.auth\.getUser\(/
 // flagged. withRouteContext is usually called with a generic (`withRouteContext<…>(`),
 // so accept either `<` or `(` after the name.
 const GUARD_RE = /requireAuth\(|withRouteContext[<(]/
+// Each top-level `export` starts a new segment, so every handler (and the
+// preamble of shared helpers above the first export) is judged on its own.
+// Without this split, one wrapped handler exempted the whole file.
+const TOP_LEVEL_EXPORT_RE = /^(?=export\s)/m
 const NAIVE_ROUND_RE = /Math\.round\([^\n]*\*\s*100\s*\)\s*\/\s*100/
 
 // 8. hand-rolled-invariant. Shared format contracts live in lib/invariants/
@@ -171,14 +187,18 @@ function walk(dir, exts, out = []) {
 
 const rel = (p) => path.relative(ROOT, p).split(path.sep).join('/')
 
+/** True when any handler segment calls getUser() without an MFA-enforcing guard. */
+function handRollsRouteAuth(src) {
+  return src
+    .split(TOP_LEVEL_EXPORT_RE)
+    .some((segment) => RAW_AUTH_RE.test(segment) && !GUARD_RE.test(segment))
+}
+
 /** Route files that hand-roll auth instead of the MFA-enforcing guard. */
 function findRawRouteAuth() {
   const apiDir = path.join(ROOT, 'app', 'api')
   return walk(apiDir, ['route.ts'])
-    .filter((f) => {
-      const src = fs.readFileSync(f, 'utf8')
-      return RAW_AUTH_RE.test(src) && !GUARD_RE.test(src)
-    })
+    .filter((f) => handRollsRouteAuth(fs.readFileSync(f, 'utf8')))
     .map(rel)
     .sort()
 }
@@ -516,6 +536,51 @@ function findFoldedPublicFlags() {
 // - MockDataImportDialog: CSV preview built on the Table primitive, which
 //   self-wraps in overflow-auto (components/ui/table.tsx).
 // - PaymentFileDialog: payment-line table wrapped in an overflow-x-auto div.
+// 11. direct-ai-client. Every model call goes through the job-shaped service
+// in lib/ai (getAiService): that is what lets hosted stay on Bedrock while a
+// sovereign self-host points at an OpenAI-compatible Swedish endpoint, and
+// what stops new AI surfaces from hard-wiring one SDK. Outside lib/ai/, a
+// file may not import createAiClient, call `.messages.create/stream(` on an
+// Anthropic client, or import the Vercel AI SDK (`ai`, `@ai-sdk/*`). The
+// allowlist is the pre-abstraction call sites that still speak the Anthropic
+// SDK directly (chat loop, composer, receipt hunt, WhatsApp interpreter, the
+// legacy smoke script); it may only shrink as they migrate or are deleted.
+const DIRECT_AI_CLIENT_ALLOWED = new Set([
+  'lib/agent/chat/run-turn.ts',
+  'lib/agent/composer/atom-selection.ts',
+  'lib/agent/composer/client.ts',
+  'lib/agent/composer/narrative.ts',
+  'lib/agent/composer/prewarm.ts',
+  'lib/receipt-hunt/adjudicate.ts',
+  'lib/receipt-hunt/mail-intelligence.ts',
+  'extensions/general/whatsapp-inbox/lib/interpret-answer.ts',
+  'scripts/smoke-ai.ts',
+  // Out-of-tree CI reviewer with its own pinned SDK install (see the
+  // compliance workflow); deliberately not part of the app's AI layer.
+  'scripts/swedish-compliance-review.mjs',
+])
+const DIRECT_AI_CLIENT_RES = [
+  { rule: 'createAiClient-import', re: /import[^;]*\bcreateAiClient\b[^;]*from\s+['"]@\/lib\/ai\/provider['"]/ },
+  { rule: 'anthropic-messages-call', re: /\.messages\.(create|stream)\(/ },
+  { rule: 'ai-sdk-import', re: /from\s+['"](ai|ai\/[\w-]+|@ai-sdk\/[\w-]+)['"]/ },
+]
+
+function findDirectAiClients() {
+  const out = []
+  for (const dir of ['lib', 'app', 'extensions', 'components', 'scripts']) {
+    for (const file of walk(path.join(ROOT, dir), ['.ts', '.tsx', '.mjs'])) {
+      const r = rel(file)
+      if (r.startsWith('lib/ai/')) continue
+      if (r.includes('/__tests__/') || r.endsWith('.test.ts') || r.endsWith('.test.tsx')) continue
+      const src = fs.readFileSync(file, 'utf8')
+      for (const { rule, re } of DIRECT_AI_CLIENT_RES) {
+        if (re.test(src)) out.push({ file: r, rule })
+      }
+    }
+  }
+  return out
+}
+
 const DIALOG_NOWRAP_ALLOWED = new Set([
   'components/extensions/shared/MockDataImportDialog.tsx',
   'components/supplier-invoices/PaymentFileDialog.tsx',
@@ -599,6 +664,34 @@ const PINNED_DEPS = [
       '0.32.0 (grouped dependabot bump #884) broke Bedrock streaming in prod: empty stream, ' +
       '"request ended without sending any chunks", taking down the AI assistant + invoice OCR. ' +
       'Keep 0.29.1 until 0.32.x streaming is verified against Bedrock.',
+  },
+  {
+    name: '@anthropic-ai/sdk',
+    version: '0.95.0',
+    reason:
+      'Declared explicitly at the version bedrock-sdk 0.29.1 pulls in transitively (#1406 Tier 1), so ' +
+      'the lockfile dedupes to one copy; a drift here is a second SDK copy and an untested wire surface.',
+  },
+  {
+    name: 'ai',
+    version: '6.0.259',
+    reason:
+      'Vercel AI SDK backs lib/ai/services/openai-compatible.ts (Tier 2 BYO endpoints). Major versions ' +
+      'rename core APIs; upgrades are deliberate PRs with the provider test suite, never a silent bump.',
+  },
+  {
+    name: '@ai-sdk/openai-compatible',
+    version: '2.0.69',
+    reason:
+      'Paired with ai 6.x; the provider package follows its own major cadence and must move together with ' +
+      'the core pin in one reviewed change.',
+  },
+  {
+    name: 'nodemailer',
+    version: '9.0.5',
+    reason:
+      'SMTP mailer for self-hosts (extensions/general/email/lib/smtp-service.ts). Zero-dependency MIT-0 ' +
+      'package on the outbound-mail path; bumps are deliberate, reviewed PRs (audit surface), never silent.',
   },
 ]
 
@@ -931,6 +1024,9 @@ const current = {
   offLadderRadii: findOffLadderRadii(),
   foldedPublicFlags: findFoldedPublicFlags(),
   dialogOverflowRisk: findDialogOverflowRisks(),
+  directAiClients: findDirectAiClients(),
+  rawReferenceFetch: findRawReferenceFetches(ROOT),
+  clientNodeBuiltins: findClientNodeBuiltins(ROOT),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
@@ -951,6 +1047,10 @@ if (isUpdate) {
     dialogOverflowRisk: {
       count: dialogOverflowFiles.length,
       files: dialogOverflowFiles,
+    },
+    rawReferenceFetch: {
+      count: current.rawReferenceFetch.length,
+      files: current.rawReferenceFetch,
     },
   }
   fs.writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2) + '\n')
@@ -995,6 +1095,26 @@ if (current.directJelInsert.length) {
     '  → route line writes through lib/bookkeeping/engine.ts, or derive cost_center/project via\n' +
       '    lineDimensionColumns() (lib/bookkeeping/dimension-resolver.ts) and add the file to\n' +
       '    JEL_INSERT_SANCTIONED in this script with a justification.',
+  )
+}
+
+// 1b3. client-node-builtin: a 'use client' module whose static import closure
+// reaches a Node builtin ships the browser polyfill chunk (~327 KB) with every
+// route that renders it. No baseline: 0 today, any reacher is a hard failure.
+if (current.clientNodeBuiltins.length) {
+  failed = true
+  console.error(
+    `\n✗ client-node-builtin: ${current.clientNodeBuiltins.length} client module(s) reach a Node builtin ` +
+      `through their static imports (this ships crypto-browserify/Buffer/vm polyfills to the browser):`,
+  )
+  current.clientNodeBuiltins.forEach((f) =>
+    console.error(`    ${f.file} -> ${f.builtin}\n        ${f.chain.join('\n        > ')}`),
+  )
+  console.error(
+    '  → move the pure part the client needs into a sibling module without the Node import\n' +
+      '    (see lib/auth/bankid-flags.ts, lib/import/bank-file/formats.ts, lib/salary/personnummer-format.ts,\n' +
+      '    lib/auth/api-key-scopes.ts) and import that from the client. scripts/perf/client-import-closure.mjs\n' +
+      '    prints the full chain for any module.',
   )
 }
 
@@ -1093,6 +1213,25 @@ if (current.foldedPublicFlags.length) {
   )
 }
 
+// 1e1c. direct-ai-client: allowlist in this file, may only shrink. A file
+// outside the allowlist that talks to a model SDK directly is a NEW
+// violation; allowlisted files that no longer do are reported as progress.
+const newDirectAi = current.directAiClients.filter((f) => !DIRECT_AI_CLIENT_ALLOWED.has(f.file))
+const directAiFilesNow = new Set(current.directAiClients.map((f) => f.file))
+const migratedDirectAi = [...DIRECT_AI_CLIENT_ALLOWED].filter((f) => !directAiFilesNow.has(f))
+if (newDirectAi.length) {
+  failed = true
+  console.error(
+    `\n✗ direct-ai-client: ${newDirectAi.length} file(s) outside lib/ai talk to a model SDK directly:`,
+  )
+  newDirectAi.forEach((f) => console.error(`    ${f.file}  (${f.rule})`))
+  console.error(
+    '  → use getAiService() from @/lib/ai (generateText / generateStructured / extractFromDocument).\n' +
+      '    Hosted and self-host resolve the backend from the environment there; a direct SDK call\n' +
+      '    hard-wires one provider and breaks the sovereign self-host path.',
+  )
+}
+
 // 1e2. hand-rolled-invariant: counted, may only go down.
 if (current.handRolledInvariants > (baseline.handRolledInvariants?.count ?? Infinity)) {
   failed = true
@@ -1171,6 +1310,31 @@ if (newLedgerScans.length) {
   )
 }
 
+// 1d. raw-reference-fetch: per-file ratchet. A file outside the baseline set
+// that fetches reference data raw (see raw-reference-fetch.mjs) is a NEW
+// violation; grandfathered files stay until they move to the hooks. Once the
+// baseline reaches 0, delete the entry so any new site is a hard failure.
+const rawRefBaseline = new Set(baseline.rawReferenceFetch?.files ?? [])
+const newRawRefs = current.rawReferenceFetch.filter((f) => !rawRefBaseline.has(f))
+const fixedRawRefs = (baseline.rawReferenceFetch?.files ?? []).filter(
+  (f) => !current.rawReferenceFetch.includes(f),
+)
+if (newRawRefs.length) {
+  failed = true
+  console.error(
+    `\n✗ raw-reference-fetch: ${newRawRefs.length} file(s) fetch reference data raw ` +
+      `(fiscal periods, settings, accounts, cash accounts, dimensions, templates, customers, suppliers, articles):`,
+  )
+  newRawRefs.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → read it through the hooks in lib/reference-data/hooks.ts (useFiscalPeriods, useAccounts,\n' +
+      '    useCashAccounts, useCompanySettings, useDimensions, useBookingTemplates, useCustomers,\n' +
+      '    useSuppliers, useArticles) and call invalidateReferenceData() after writes. Those hooks\n' +
+      '    share one session cache and are seeded by the dashboard layout, so the fields render\n' +
+      '    on first paint instead of after another round trip.',
+  )
+}
+
 // 1e3. dialog-overflow-risk: per-file ratchet, a finding in a file outside
 // the baseline set is a NEW violation. Grandfathered files stay until fixed.
 const dialogOverflowBaseline = new Set(baseline.dialogOverflowRisk?.files ?? [])
@@ -1211,6 +1375,7 @@ if (
   fixedAuthFiles.length ||
   fixedLedgerScans.length ||
   fixedDialogOverflow.length ||
+  fixedRawRefs.length ||
   current.naiveOreRound < baseline.naiveOreRound.count
 ) {
   console.log('\n✓ Progress since baseline:')
@@ -1219,9 +1384,18 @@ if (
     console.log(`    ledger-scanning-report: -${fixedLedgerScans.length} file(s)`)
   if (fixedDialogOverflow.length)
     console.log(`    dialog-overflow-risk: -${fixedDialogOverflow.length} file(s)`)
+  if (fixedRawRefs.length)
+    console.log(`    raw-reference-fetch: -${fixedRawRefs.length} file(s)`)
   if (current.naiveOreRound < baseline.naiveOreRound.count)
     console.log(`    naive-ore-round: -${baseline.naiveOreRound.count - current.naiveOreRound} occurrence(s)`)
   console.log('    Run with --update to ratchet the baseline down and lock in the gains.')
+}
+if (migratedDirectAi.length) {
+  console.log(
+    `\n✓ direct-ai-client progress: ${migratedDirectAi.length} allowlisted file(s) no longer call a model SDK directly.` +
+      ' Remove them from DIRECT_AI_CLIENT_ALLOWED in this script to lock it in:',
+  )
+  migratedDirectAi.forEach((f) => console.log(`    ${f}`))
 }
 if (gatedSinceBaseline.length) {
   console.log(
@@ -1236,5 +1410,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s)).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
 )

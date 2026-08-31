@@ -29,6 +29,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
   const [isDragging, setIsDragging] = useState(false)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [loadingPhase, setLoadingPhase] = useState(0)
+  const [fileTypeError, setFileTypeError] = useState<string | null>(null)
 
   // Cycle through loading phases on timers
   useEffect(() => {
@@ -56,27 +57,43 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
     setIsDragging(false)
   }, [])
 
+  // No `accept` attribute on the input and no silent rejection here: Safari
+  // maps accept extensions to system file types, and unregistered extensions
+  // like .sie/.se grey out perfectly valid files in the picker. All filtering
+  // happens after selection, with a visible error instead of a dead drop.
+  const trySelectFile = useCallback((file: File) => {
+    const name = file.name.toLowerCase()
+    if (name.endsWith('.sie') || name.endsWith('.se')) {
+      setFileTypeError(null)
+      setSelectedFile(file)
+      onFileSelect(file)
+      return
+    }
+    if (name.endsWith('.zip')) {
+      setFileTypeError(`Filen "${file.name}" är en zip-fil. Packa upp den först och välj SIE-filen inuti (slutar på .sie eller .se).`)
+    } else {
+      setFileTypeError(`Filen "${file.name}" stöds inte. Välj en SIE-fil som slutar på .sie eller .se.`)
+    }
+  }, [onFileSelect])
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
 
     const files = e.dataTransfer.files
     if (files.length > 0) {
-      const file = files[0]
-      if (file.name.toLowerCase().endsWith('.sie') || file.name.toLowerCase().endsWith('.se')) {
-        setSelectedFile(file)
-        onFileSelect(file)
-      }
+      trySelectFile(files[0])
     }
-  }, [onFileSelect])
+  }, [trySelectFile])
 
   const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (files && files.length > 0) {
-      setSelectedFile(files[0])
-      onFileSelect(files[0])
+      trySelectFile(files[0])
     }
-  }, [onFileSelect])
+    // Allow re-picking the same file after a rejection
+    e.target.value = ''
+  }, [trySelectFile])
 
   const phase = LOADING_PHASES[loadingPhase]
 
@@ -124,7 +141,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
             className={`
               relative border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer hover:border-primary/50
               ${isDragging ? 'border-primary bg-primary/5' : 'border-muted-foreground/25'}
-              ${error ? 'border-destructive bg-destructive/5' : ''}
+              ${error || fileTypeError ? 'border-destructive bg-destructive/5' : ''}
             `}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
@@ -134,7 +151,6 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
             <input
               id="file-input"
               type="file"
-              accept=".sie,.se"
               className="hidden"
               onChange={handleFileInput}
               disabled={isLoading}
@@ -162,6 +178,17 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
               </div>
             )}
           </div>
+
+          {/* Rejected file type (client-side, before upload) */}
+          {fileTypeError && (
+            <div className="mt-4 p-4 rounded-lg flex gap-3 bg-destructive/10 border border-destructive/20">
+              <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5 text-destructive" />
+              <div className="space-y-1.5 min-w-0">
+                <p className="font-medium text-destructive">Filen kan inte användas</p>
+                <p className="text-sm text-muted-foreground">{fileTypeError}</p>
+              </div>
+            </div>
+          )}
 
           {/* Error display */}
           {error && (

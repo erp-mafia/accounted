@@ -7,8 +7,15 @@ import {
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 
+// The route goes through withRouteContext: requireAuth (MFA on hosted) plus
+// active-company resolution. The document is still authorized against its
+// own company's membership inside the handler.
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: vi.fn(),
+}))
+
+vi.mock('@/lib/company/context', () => ({
+  getActiveCompanyId: vi.fn().mockResolvedValue('33333333-3333-4333-a333-333333333333'),
 }))
 
 // The storage download goes through the service-role client: the storage
@@ -61,6 +68,14 @@ describe('GET /api/documents/[id]/integrity', () => {
     const res = await GET(req(), createMockRouteParams({ id: validDocId }))
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(401)
+    expect(serviceStorageFromMock).not.toHaveBeenCalled()
+  })
+
+  it('resolves the session through requireAuth, never a hand-rolled getUser()', async () => {
+    enqueue({ data: null, error: null })
+    await GET(req(), createMockRouteParams({ id: validDocId }))
+    expect(requireAuth).toHaveBeenCalledTimes(1)
+    expect(mockSupabase.auth.getUser).not.toHaveBeenCalled()
   })
 
   it('returns 400 when id is not a UUID', async () => {

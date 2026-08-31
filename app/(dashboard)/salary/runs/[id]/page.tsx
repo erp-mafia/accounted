@@ -1,6 +1,8 @@
 'use client'
 
 import { use, useEffect, useRef, useState } from 'react'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { usePathname, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
@@ -73,6 +75,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   const [taxPayment, setTaxPayment] = useState<{
     total_tax: number
     total_avgifter: number
+    tax_payment_file_format: string | null
     tax_payment_file_generated_at: string | null
     tax_paid_at: string | null
   } | null>(null)
@@ -109,20 +112,21 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     }
   }
 
-  async function loadSettings() {
-    const settingsRes = await fetch('/api/settings')
-    if (!settingsRes.ok) return
-    const { data } = await settingsRes.json()
-    if (data?.preferred_payment_format === 'pain001' || data?.preferred_payment_format === 'bg_lb') {
-      setPreferredPaymentFormat(data.preferred_payment_format)
-    }
-    setDefaultBank(typeof data?.salary_default_bank === 'string' ? data.salary_default_bank : null)
+  // Company settings from the session cache (lib/reference-data): applied
+  // whenever the cached row (re)loads, no request of its own.
+  const { settings: companySettings } = useCompanySettings()
+  useEffect(() => {
+    const data = companySettings as unknown as Record<string, unknown> | null
+    if (!data) return
+    const format = data.preferred_payment_format
+    if (format === 'pain001' || format === 'bg_lb') setPreferredPaymentFormat(format)
+    setDefaultBank(typeof data.salary_default_bank === 'string' ? data.salary_default_bank : null)
     setSenderBankgiro(
-      typeof data?.bankgiro === 'string' && data.bankgiro.trim() ? data.bankgiro : null,
+      typeof data.bankgiro === 'string' && data.bankgiro.trim() ? data.bankgiro : null,
     )
-    setSenderIban(typeof data?.iban === 'string' && data.iban.trim() ? data.iban : null)
-    setDimensionsEnabled(data?.dimensions_enabled === true)
-  }
+    setSenderIban(typeof data.iban === 'string' && data.iban.trim() ? data.iban : null)
+    setDimensionsEnabled(data.dimensions_enabled === true)
+  }, [companySettings])
 
   useEffect(() => {
     async function load() {
@@ -131,7 +135,6 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       const [, empRes] = await Promise.all([
         loadRun(),
         fetch('/api/salary/employees'),
-        loadSettings(),
       ])
       if (empRes.ok) {
         const { data } = await empRes.json()
@@ -153,7 +156,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       pathnameSeen.current = true
       return
     }
-    if (pathname === `/salary/runs/${id}`) loadSettings()
+    if (pathname === `/salary/runs/${id}`) void invalidateReferenceData('company_settings')
   }, [pathname, id])
 
   // Refetch when the tab regains focus. AGI can be generated out-of-band (via
@@ -230,6 +233,46 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
         variant: 'destructive',
       })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  // Draft-only payment-date edit from the header meta line, via the same
+  // internal PATCH the run has always supported. Returns success so the
+  // header can snap its input back to the server value on failure.
+  async function handleUpdatePaymentDate(date: string): Promise<boolean> {
+    setActionLoading('payment_date')
+    try {
+      const res = await fetch(`/api/salary/runs/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payment_date: date }),
+      })
+      if (res.ok) {
+        // Optimistic: the PATCH returns the updated run row.
+        const payload = await res.json().catch(() => null)
+        if (payload?.data) {
+          setRun(prev => (prev ? { ...prev, ...payload.data } : prev))
+        }
+        toast({ title: t('toast_payment_date_updated') })
+        loadRun() // background reconcile - not awaited
+        return true
+      }
+      const result = await res.json().catch(() => ({}))
+      toast({
+        title: t('toast_status_failed'),
+        description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+        variant: 'destructive',
+      })
+      return false
+    } catch (err) {
+      toast({
+        title: t('toast_status_failed'),
+        description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
+        variant: 'destructive',
+      })
+      return false
     } finally {
       setActionLoading(null)
     }
@@ -787,6 +830,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         onDownloadAgi={handleDownloadAgi}
         onDelete={handleDelete}
         onCorrect={handleCorrect}
+        onUpdatePaymentDate={handleUpdatePaymentDate}
       />
 
       {/* The one attention sentence on the page: an empty declaration will be
@@ -868,8 +912,12 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
             // the pre-AGI fallback and get truncated inside the panel.
             totalTax={taxPayment?.total_tax ?? run.total_tax}
             totalAvgifter={taxPayment?.total_avgifter ?? run.total_avgifter}
+            paymentFileFormat={taxPayment?.tax_payment_file_format ?? null}
             paymentFileGeneratedAt={taxPayment?.tax_payment_file_generated_at ?? null}
             taxPaidAt={taxPayment?.tax_paid_at ?? null}
+            defaultFormat={preferredPaymentFormat}
+            senderBankgiro={senderBankgiro}
+            senderIban={senderIban}
             readOnly={!canWrite}
             onChange={loadRun}
           />

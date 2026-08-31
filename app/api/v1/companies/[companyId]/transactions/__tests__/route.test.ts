@@ -48,13 +48,17 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
             resolve(next)
           }
         }
-        return (..._args: unknown[]) => buildChain(table)
+        return (...args: unknown[]) => {
+          calls.push({ table, method: String(prop), args })
+          return buildChain(table)
+        }
       },
     }
     return new Proxy({}, handler)
   }
   return { from: vi.fn((table: string) => buildChain(table)) }
 }
+const calls: Array<{ table: string; method: string; args: unknown[] }> = []
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const TX_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -69,6 +73,7 @@ function makeRequest(url: string): Request {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  calls.length = 0
   mockValidate.mockResolvedValue({
     userId: USER_ID,
     companyId: COMPANY_ID,
@@ -102,6 +107,47 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
     // No next page → omitted (paginated() helper drops the key entirely
     // when nextCursor is undefined).
     expect(body.meta.next_cursor).toBeUndefined()
+  })
+
+  it('passes cash_account_id through as a filter and returns it on each row', async () => {
+    const CASH_ACCOUNT_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: {
+        data: [
+          {
+            id: TX_ID, date: '2026-05-12', amount: -100, currency: 'SEK', description: 'ICA',
+            cash_account_id: CASH_ACCOUNT_ID, created_at: '2026-05-12T10:00:00Z',
+          },
+        ],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await listTransactions(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions?cash_account_id=${CASH_ACCOUNT_ID}`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data[0].cash_account_id).toBe(CASH_ACCOUNT_ID)
+    const eqCalls = calls.filter((c) => c.table === 'transactions' && c.method === 'eq' && c.args[0] === 'cash_account_id')
+    expect(eqCalls.map((c) => c.args[1])).toEqual([CASH_ACCOUNT_ID])
+  })
+
+  it('rejects a non-UUID cash_account_id filter with 400', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: { data: [], error: null },
+      }),
+    )
+    const res = await listTransactions(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions?cash_account_id=1930`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    expect(res.status).toBe(400)
   })
 
   it('rejects invalid status filter with 400', async () => {

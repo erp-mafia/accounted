@@ -228,6 +228,47 @@ processing_activities:
       - bankid_signing_required_for_filing
       - immutable_audit_log
 
+  - id: moms.declaration_status_read
+    name: Avläsning av inlämnad momsdeklaration och beslut från Skatteverket
+    purpose: >-
+      Läsa tillbaka en redan inlämnad momsdeklaration (inlamnat) och
+      Skatteverkets beslut (beslutat) för en period, på begäran av en
+      medlem i företaget via v1 REST-API:t eller MCP, så att bokföringen
+      kan stämmas av mot faktiskt inlämnade uppgifter. Läsning sker live
+      mot Skatteverket; deklarationsinnehållet lagras inte hos oss, endast
+      en audit-rad om att anropet gjordes.
+    lawful_basis: art_6_1_b   # service provision: read-back requested by the customer
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: anthropic-na
+    data_subjects:
+      - business_owner
+    data_categories:
+      - user.government_id          # orgnummer (juridiska personer) eller pnr
+      - user.financial.tax          # rutor 05-62 i det inlämnade underlaget/beslutet
+    recipients:
+      - name: Skatteverket
+        country: SE
+        role: legal_recipient
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: Sweden-to-Sweden flow; no third-country transfer.
+    retention:
+      # Response bodies are returned to the caller and never persisted.
+      # Only the outbound call metadata lands in the audit log.
+      duration: 7y
+      basis: bfl_7_kap
+      stored_in:
+        - skatteverket_api_audit_log
+    security_measures:
+      - rls_company_scoped
+      - rbac_company_member_role_check
+      - tls_1_3_to_skatteverket
+      - immutable_audit_log
+      - no_payload_body_persisted
+      - upstream_error_bodies_logged_server_side_only
+
   - id: psd2.cash_account_mirror
     name: PSD2-konton speglas till cash_accounts
     purpose: >-
@@ -774,3 +815,82 @@ processing_activities:
       - opt_out_stop_keyword_honored
       - muted_senders_no_content_persistence
       - account_deletion_revokes_and_shreds_whatsapp_link
+
+  - id: notifications.bookkeeping_digest
+    name: Daglig e-postsammanfattning "nytt att bokföra"
+    purpose: >-
+      Skicka ett dagligt opt-in-mejl till företagsmedlemmar när nya
+      banktransaktioner eller inkorgsunderlag har kommit in och väntar på
+      bokföring. Mejlet innehåller endast antal per kategori och en länk till
+      appen: aldrig belopp, motparter eller transaktionsinnehåll.
+    lawful_basis: art_6_1_a
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: supabase_and_resend
+    data_subjects:
+      - company_member
+    data_categories:
+      - user.contact.email
+      - user.financial_activity_counts
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+      - name: Resend
+        country: US
+        role: processor
+    international_transfers:
+      applicable: true
+      mechanism: scc_2021_c2p
+      note: Resend processes the outbound delivery under SCC Module 2.
+    retention:
+      duration: notification_log_row_retained_with_table
+      basis: gdpr_storage_limitation
+      stored_in:
+        - notification_log
+        - notification_settings
+    security_measures:
+      - opt_in_default_false_user_toggle_only
+      - counts_only_no_amounts_or_counterparties_in_body
+      - recipient_restricted_to_active_company_members
+      - claim_based_once_per_day_dedup
+      - company_name_header_injection_sanitized
+      - cron_secret_authenticated_trigger
+
+  - id: documents.own_company_supplier_guard
+    name: Egenbolagskontroll vid dokumentextraktion
+    purpose: >-
+      Jämföra AI-extraherade leverantörsfält mot det egna bolagets namn och
+      organisationsnummer (för enskild firma ett personnummer) så att
+      användarens eget bolag aldrig föreslås som leverantör när modellen läst
+      dokumentets kundblock. Jämförelsen sker i applikationskoden efter
+      extraktionen; identiteten skickas aldrig till AI-modellen och skrivs
+      inte till någon ny lagringsyta.
+    lawful_basis: art_6_1_f
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: supabase
+    data_subjects:
+      - business_owner
+    data_categories:
+      - user.name             # companies.name
+      - user.government_id    # companies.org_number, personnummer för enskild firma
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: >-
+        Transient jämförelse i applikationsprocessen; datat lämnar aldrig
+        befintlig lagring (companies-tabellen) och skickas inte till Bedrock.
+    retention:
+      duration: none
+      basis: transient_in_memory_comparison
+      stored_in: []
+    security_measures:
+      - rls_company_scoped
+      - not_sent_to_model
+      - transient_comparison_no_new_storage
+      - fail_open_to_nulls_on_lookup_error

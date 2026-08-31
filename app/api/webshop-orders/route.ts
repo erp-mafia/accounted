@@ -36,8 +36,15 @@ export const GET = withRouteContext(
     if (status) query = query.eq('status', status)
     if (row_type) query = query.eq('row_type', row_type)
     if (paid) query = query.eq('is_paid', paid === 'paid')
-    if (booked === 'booked') query = query.not('journal_entry_id', 'is', null)
-    if (booked === 'unbooked') query = query.is('journal_entry_id', null)
+    // "Booked" counts every closed exit: booked via the integration OR
+    // marked as manually booked outside it; "unbooked" is the open set the
+    // Att bokfora tab shows, so a manual mark removes the row from it.
+    if (booked === 'booked') {
+      query = query.or('journal_entry_id.not.is.null,manually_booked_at.not.is.null')
+    }
+    if (booked === 'unbooked') {
+      query = query.is('journal_entry_id', null).is('manually_booked_at', null)
+    }
 
     const { data, error, count } = await query
     if (error) {

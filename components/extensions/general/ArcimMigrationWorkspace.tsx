@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useCallback, useEffect, useReducer, useRef } from 'react'
+import { useAccounts } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
@@ -35,7 +37,9 @@ import {
   arcimDocumentImportReducer,
   documentOAuthProblemFromReason,
   parseArcimDocumentOAuthResume,
+  PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
   requestArcimDocumentImport,
+  runArcimDocumentImportToCompletion,
   resolveArcimDocumentFollowUpProvider,
   watchArcimOAuthPopup,
   type ArcimDocumentImportProblem,
@@ -215,27 +219,15 @@ function apiErrorCode(data: unknown): string | null {
   return null
 }
 
-interface SkipReasons {
-  duplicate?: number
-  inactive?: number
-  failed?: number
-  noMatch?: number
-}
-
-interface MigrationStepError {
-  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'reconciliation'
-  code: string | null
-  message: string
-}
-
-interface MigrationResults {
-  companyInfo?: { imported: boolean }
-  customers?: { total: number; imported: number; updated?: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
-  suppliers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
-  salesInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
-  supplierInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
-  stepErrors?: MigrationStepError[]
-}
+// The migration result contract is owned by the extension: a second
+// hand-written copy here would drift from the API. Type-only import, same
+// pattern as the other extension workspaces.
+import type {
+  MigrationResults,
+  MigrationStepError,
+  SkipReasons,
+  AssetSkipReasons,
+} from '@/extensions/general/arcim-migration/types'
 import AccountMappingStep from '@/components/import/AccountMappingStep'
 import ArcimMigrationTheater from '@/components/extensions/general/ArcimMigrationTheater'
 import TheaterCanvas from '@/components/import/TheaterCanvas'
@@ -273,6 +265,7 @@ interface MigrationOptions {
   importSuppliers: boolean
   importSalesInvoices: boolean
   importSupplierInvoices: boolean
+  importAssets: boolean
   voucherSeries: string
 }
 
@@ -283,6 +276,7 @@ const DEFAULT_OPTIONS: MigrationOptions = {
   importSuppliers: true,
   importSalesInvoices: true,
   importSupplierInvoices: true,
+  importAssets: true,
   voucherSeries: 'B',
 }
 
@@ -309,6 +303,10 @@ interface PreviewData {
     accountCount: number
     transactionCount: number
     fiscalYears: number[]
+  } | null
+  assetStats: {
+    total: number
+    importable: number
   } | null
   hasSieData: boolean
 }
@@ -907,19 +905,33 @@ function PreviewStep({
           </div>
         )}
 
-        {/* SIE stats: one quiet statline, the same grammar as the import
-            reveal, instead of a boxed summary. */}
-        {preview?.sieAvailable && preview.sieStats && (
-          <p className="animate-fade-in mt-3 text-[13px] text-muted-foreground tabular-nums">
-            {preview.sieStats.accountCount.toLocaleString('sv-SE')} konton
-            {' · '}
-            {preview.sieStats.transactionCount.toLocaleString('sv-SE')} verifikationer
-            {' · '}
-            {preview.sieStats.fiscalYears.length === 1
-              ? `räkenskapsåret ${preview.sieStats.fiscalYears[0]}`
-              : `${preview.sieStats.fiscalYears.length} räkenskapsår: ${preview.sieStats.fiscalYears.join(', ')}`}
-          </p>
-        )}
+        {/* SIE + asset stats: one quiet statline, the same grammar as the
+            import reveal, instead of a boxed summary. The asset count renders
+            on its own when the SIE fetch failed: the preview endpoint sets
+            them independently. */}
+        {(() => {
+          const sieStats = preview?.sieAvailable ? preview.sieStats : null
+          const assetCount = preview?.assetStats?.importable ?? 0
+          if (!sieStats && assetCount === 0) return null
+          const parts: string[] = []
+          if (sieStats) {
+            parts.push(`${sieStats.accountCount.toLocaleString('sv-SE')} konton`)
+            parts.push(`${sieStats.transactionCount.toLocaleString('sv-SE')} verifikationer`)
+            parts.push(
+              sieStats.fiscalYears.length === 1
+                ? `räkenskapsåret ${sieStats.fiscalYears[0]}`
+                : `${sieStats.fiscalYears.length} räkenskapsår: ${sieStats.fiscalYears.join(', ')}`,
+            )
+          }
+          if (assetCount > 0) {
+            parts.push(`${assetCount.toLocaleString('sv-SE')} anläggningstillgångar`)
+          }
+          return (
+            <p className="animate-fade-in mt-3 text-[13px] text-muted-foreground tabular-nums">
+              {parts.join(' · ')}
+            </p>
+          )
+        })()}
 
         {preview && !preview.sieAvailable && !isLoading && preview.hasSieData && (
           <p className="animate-fade-in mt-3 text-[13px] text-muted-foreground">
@@ -1056,6 +1068,7 @@ function OptionsStep({
   options,
   sieAvailable,
   sieData,
+  hasSieData,
   provider,
   onChange,
   onStart,
@@ -1064,6 +1077,8 @@ function OptionsStep({
   options: MigrationOptions
   sieAvailable: boolean
   sieData: SIEData | null
+  /** The company already has a completed SIE import (any origin). */
+  hasSieData: boolean
   provider: ArcimProvider | null
   onChange: (options: MigrationOptions) => void
   onStart: () => void
@@ -1091,6 +1106,19 @@ function OptionsStep({
   if (options.importSuppliers) selectedItems.push('Leverantörer')
   if (options.importSalesInvoices) selectedItems.push('Kundfakturor')
   if (options.importSupplierInvoices) selectedItems.push('Leverantörsfakturor')
+  if (provider === 'fortnox' && options.importAssets) selectedItems.push('Anläggningstillgångar')
+
+  // Entities without the SIE-derived ledger leave an incomplete bokföring:
+  // POST /migrate refuses with PROVIDER_SIE_IMPORT_REQUIRED unless a completed
+  // SIE import exists. Say so here, before the run, when the user has
+  // unchecked SIE for a company that has never imported it (#2000).
+  // Company info (name, org number, VAT number) writes no ledger data and is
+  // not gated, matching the route.
+  const hasApiImport = options.importCustomers ||
+    options.importSuppliers ||
+    options.importSalesInvoices ||
+    options.importSupplierInvoices
+  const sieRequiredButUnchecked = sieAvailable && !options.importSIEData && !hasSieData && hasApiImport
 
   return (
     <div className="stagger-enter space-y-8">
@@ -1100,8 +1128,10 @@ function OptionsStep({
       />
 
       {/* Years whose provider export failed: must be visible before the user
-          proceeds, otherwise an IB/UB gap slips through. One ochre sentence. */}
-      {sieAvailable && failedYears.length > 0 && (
+          proceeds, otherwise an IB/UB gap slips through. One ochre sentence.
+          Yields to the SIE-required line below: with SIE unchecked no year is
+          imported, and the page carries at most one attn line. */}
+      {sieAvailable && failedYears.length > 0 && !sieRequiredButUnchecked && (
         <AttnLine>
           {failedYears.length === 1
             ? `Räkenskapsår ${failedYears[0].year} kunde inte hämtas från källsystemet: om du fortsätter importeras övriga år, men ingående och utgående balanser kan sakna kontinuitet. Försök igen senare eller ladda upp en SIE-fil för det saknade året manuellt.`
@@ -1196,14 +1226,26 @@ function OptionsStep({
           checked={options.importSupplierInvoices}
           onChange={() => toggleOption('importSupplierInvoices')}
         />
+        {provider === 'fortnox' && (
+          <OptionRow
+            label="Anläggningstillgångar"
+            description="Anläggningsregistret med avskrivningsplaner. Bokförda värden kommer via SIE; registret gör att avskrivningarna fortsätter automatiskt."
+            checked={options.importAssets}
+            onChange={() => toggleOption('importAssets')}
+          />
+        )}
       </div>
+
+      {sieRequiredButUnchecked && (
+        <AttnLine>{t('ext_arcim_option_sie_required_hint')}</AttnLine>
+      )}
 
       <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
         <Button variant="outline" className="min-h-11" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
-        <Button className="min-h-11" onClick={() => setShowConfirm(true)} disabled={selectedItems.length === 0}>
+        <Button className="min-h-11" onClick={() => setShowConfirm(true)} disabled={selectedItems.length === 0 || sieRequiredButUnchecked}>
           Starta migrering
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
@@ -1476,10 +1518,26 @@ function DocumentImportFollowUp({
           ? t('ext_arcim_documents_importing')
           : t('ext_arcim_documents_reconnecting')
 
+    // Running totals arrive after each server slice of a real import; the
+    // dry-run result that sits in state while the first slice runs is not
+    // progress, so it stays silent.
+    const progress =
+      state.phase === 'importing' && state.result && !state.result.dryRun && state.result.total > 0
+        ? state.result
+        : null
+
     return (
       <section className="space-y-3" aria-live="polite">
         {title}
         <SpinnerLine>{label}</SpinnerLine>
+        {progress && (
+          <p className="text-sm tabular-nums text-muted-foreground">
+            {t('ext_arcim_documents_import_progress', {
+              done: progress.scanned,
+              total: progress.total,
+            })}
+          </p>
+        )}
       </section>
     )
   }
@@ -1586,11 +1644,17 @@ function DocumentImportFollowUp({
 
   const reconnectRequired = state.problem?.reconnectRequired === true
   const discoveryFailed = state.phase === 'discovery-error'
+  // Fortnox has not granted the file permissions to the integration itself, so
+  // neither reconnecting nor retrying can succeed: state it and offer nothing.
+  const scopesUnavailable =
+    state.problem?.code === PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE
   return (
     <section className="space-y-3" aria-live="polite">
       {title}
       <p className="text-sm text-destructive">
-        {state.problem?.message
+        {scopesUnavailable
+          ? t('ext_arcim_documents_scope_unavailable')
+          : state.problem?.message
           ? state.problem.message
           : reconnectRequired
           ? t('ext_arcim_documents_scope_error')
@@ -1612,21 +1676,23 @@ function DocumentImportFollowUp({
           })}
         </p>
       )}
-      <Button
-        className="min-h-11"
-        onClick={reconnectRequired ? onReconnect : discoveryFailed ? onDiscover : onImport}
-      >
-        {reconnectRequired ? (
-          <RefreshCw className="mr-2 h-4 w-4" />
-        ) : (
-          <RotateCcw className="mr-2 h-4 w-4" />
-        )}
-        {reconnectRequired
-          ? t('ext_arcim_documents_reconnect_action')
-          : discoveryFailed
-            ? t('ext_arcim_documents_retry_discovery')
-            : t('ext_arcim_documents_retry_import')}
-      </Button>
+      {!scopesUnavailable && (
+        <Button
+          className="min-h-11"
+          onClick={reconnectRequired ? onReconnect : discoveryFailed ? onDiscover : onImport}
+        >
+          {reconnectRequired ? (
+            <RefreshCw className="mr-2 h-4 w-4" />
+          ) : (
+            <RotateCcw className="mr-2 h-4 w-4" />
+          )}
+          {reconnectRequired
+            ? t('ext_arcim_documents_reconnect_action')
+            : discoveryFailed
+              ? t('ext_arcim_documents_retry_discovery')
+              : t('ext_arcim_documents_retry_import')}
+        </Button>
+      )}
     </section>
   )
 }
@@ -1662,6 +1728,7 @@ function ResultStep({
   onDismissDocuments: () => void
   onReconnectDocuments: () => void
 }) {
+  const t = useTranslations('extensions')
   if (error) {
     return (
       <div className="stagger-enter space-y-8">
@@ -1701,7 +1768,8 @@ function ResultStep({
     (results.customers && (results.customers.imported > 0 || (results.customers.updated ?? 0) > 0 || results.customers.skipped > 0)) ||
     (results.suppliers && (results.suppliers.imported > 0 || results.suppliers.skipped > 0)) ||
     (results.salesInvoices && (results.salesInvoices.imported > 0 || results.salesInvoices.skipped > 0)) ||
-    (results.supplierInvoices && (results.supplierInvoices.imported > 0 || results.supplierInvoices.skipped > 0))
+    (results.supplierInvoices && (results.supplierInvoices.imported > 0 || results.supplierInvoices.skipped > 0)) ||
+    (results.assets && (results.assets.imported > 0 || results.assets.skipped > 0 || results.assets.scopesMissing))
   )
 
   // Steps that failed against the provider API. An empty sync with failed
@@ -1721,7 +1789,7 @@ function ResultStep({
         ? fyCount === 1
           ? `${totalJournalEntries.toLocaleString('sv-SE')} verifikationer är på plats.`
           : `${totalJournalEntries.toLocaleString('sv-SE')} verifikationer över ${fyCount} räkenskapsår är på plats.`
-        : !allSieSucceeded || totalErrors > 0
+        : (sieResults.length > 0 && !allSieSucceeded) || totalErrors > 0
           ? 'Migreringen är klar, med anmärkningar.'
           : 'Migreringen är klar.'
 
@@ -1784,6 +1852,37 @@ function ResultStep({
           ? formatSkipReasons(results.supplierInvoices.skipReasons, 'invoice', results.supplierInvoices.errorSample) ?? `${results.supplierInvoices.skipped} hoppades över`
           : undefined,
         failed: entityRowStatus(results.supplierInvoices.imported, results.supplierInvoices.skipReasons) === 'error',
+      })
+    }
+    if (results.registrationLinks && results.registrationLinks.scanned > 0) {
+      const links = results.registrationLinks
+      const unlinked = links.scanned - links.linked - links.alreadyLinked
+      entityLines.push({
+        label: t('ext_arcim_registration_links_label'),
+        value: t('ext_arcim_registration_links_value', { linked: links.linked, scanned: links.scanned }),
+        detail: unlinked > 0
+          ? t('ext_arcim_registration_links_detail', {
+              unlinked,
+              noRef: links.noRef,
+              refNotFetched: links.refNotFetched ?? 0,
+              unresolved: links.unresolved + links.ambiguous,
+              amountMismatch: links.amountMismatch,
+            })
+          : undefined,
+        failed: false,
+      })
+    }
+    if (results.assets && (results.assets.imported > 0 || results.assets.skipped > 0 || results.assets.scopesMissing)) {
+      entityLines.push({
+        label: 'Anläggningstillgångar',
+        value: results.assets.scopesMissing ? 'Hoppades över' : `${results.assets.imported} importerade`,
+        detail: results.assets.scopesMissing
+          ? 'Fortnox-anslutningen saknar behörighet till anläggningsregistret (assets-scope). Bokförda värden är ändå med via SIE.'
+          : results.assets.skipped > 0
+            ? formatSkipReasons(results.assets.skipReasons, 'asset', results.assets.errorSample) ?? `${results.assets.skipped} hoppades över`
+            : undefined,
+        failed: !results.assets.scopesMissing &&
+          entityRowStatus(results.assets.imported, results.assets.skipReasons) === 'error',
       })
     }
   }
@@ -1925,6 +2024,8 @@ const STEP_ERROR_LABELS: Record<MigrationStepError['step'], string> = {
   suppliers: 'Leverantörer',
   salesInvoices: 'Kundfakturor',
   supplierInvoices: 'Leverantörsfakturor',
+  assets: 'Anläggningstillgångar',
+  registrationLinks: 'Koppling till verifikationer',
   reconciliation: 'Avstämning av betalningar',
 }
 
@@ -1943,14 +2044,21 @@ function groupStepErrors(errors: MigrationStepError[]): { message: string; steps
 }
 
 function formatSkipReasons(
-  reasons?: SkipReasons,
-  entityType?: 'customer' | 'supplier' | 'invoice',
+  reasons?: AssetSkipReasons,
+  entityType?: 'customer' | 'supplier' | 'invoice' | 'asset',
   errorSample?: string,
 ): string | undefined {
   if (!reasons) return undefined
   const parts: string[] = []
   if (reasons.duplicate) parts.push(`${reasons.duplicate} fanns redan`)
-  if (reasons.inactive) parts.push(`${reasons.inactive} inaktiv${reasons.inactive > 1 ? 'a' : ''}`)
+  if (reasons.inactive) {
+    parts.push(
+      entityType === 'asset'
+        ? `${reasons.inactive} avyttrad${reasons.inactive > 1 ? 'e' : ''} eller annullerad${reasons.inactive > 1 ? 'e' : ''}`
+        : `${reasons.inactive} inaktiv${reasons.inactive > 1 ? 'a' : ''}`,
+    )
+  }
+  if (reasons.unsupported) parts.push(`${reasons.unsupported} kunde inte tolkas`)
   if (reasons.noMatch) {
     const matchLabel = entityType === 'invoice' ? 'utan matchning' : 'utan matchning'
     parts.push(`${reasons.noMatch} ${matchLabel}`)
@@ -2013,6 +2121,10 @@ export default function ArcimMigrationWorkspace({
   // SIE data state (held between mapping and execution steps)
   const [sieData, setSieData] = useState<SIEData | null>(null)
   const companyAccountsForVatRef = useRef<BASAccount[]>([])
+  // Chart of accounts incl. inactive, from the session cache
+  // (lib/reference-data). Re-read when the mapping step opens because the
+  // preview may have created accounts; the SIE import invalidates it too.
+  const { refresh: refreshCompanyAccounts } = useAccounts(false)
 
   // Options state
   const [migrationOptions, setMigrationOptions] = useState<MigrationOptions>(DEFAULT_OPTIONS)
@@ -2192,7 +2304,7 @@ export default function ArcimMigrationWorkspace({
   const handleReconnect = useCallback(async (
     provider: ArcimProvider,
     existingConsentId: string,
-    options?: { onFailure?: () => void },
+    options?: { onFailure?: () => void; documentScopes?: boolean },
   ) => {
     setError(null)
     setAuthExpired(false)
@@ -2215,7 +2327,11 @@ export default function ArcimMigrationWorkspace({
       const res = await fetch('/api/extensions/ext/arcim-migration/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider, reconnect: true }),
+        body: JSON.stringify({
+          provider,
+          reconnect: true,
+          documentScopes: options?.documentScopes === true,
+        }),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
@@ -2303,7 +2419,12 @@ export default function ArcimMigrationWorkspace({
   const runDocumentImport = useCallback(async (currentConsentId: string) => {
     dispatchDocumentImport({ type: 'import-started' })
     try {
-      const result = await requestArcimDocumentImport(currentConsentId, false)
+      // One route call per time-budgeted slice; the helper loops until the
+      // server reports the end and feeds running totals back for the UI.
+      const result = await runArcimDocumentImportToCompletion(currentConsentId, {
+        onProgress: (progress) =>
+          dispatchDocumentImport({ type: 'import-progress', result: progress }),
+      })
       dispatchDocumentImport({ type: 'import-succeeded', result })
     } catch (documentError) {
       dispatchDocumentImport({
@@ -2328,6 +2449,9 @@ export default function ArcimMigrationWorkspace({
     storeDocumentOAuthResume(reconnectAction)
     dispatchDocumentImport({ type: 'reconnect-started' })
     void handleReconnect('fortnox', consentId, {
+      // The whole point of this reconnect is the attachment permissions, so
+      // this is the one path that asks Fortnox for them.
+      documentScopes: true,
       onFailure: () => {
         dispatchDocumentImport(
           reconnectAction === 'discover'
@@ -2581,16 +2705,10 @@ export default function ArcimMigrationWorkspace({
       }
 
       const data = await res.json() as SIEData
-      const accountsRes = await fetch('/api/bookkeeping/accounts?active=false')
-      const accountsBody = await accountsRes.json().catch(() => ({})) as {
-        data?: BASAccount[]
-        error?: unknown
-      }
-      if (!accountsRes.ok) {
-        throw apiError(accountsBody, `HTTP ${accountsRes.status}`)
-      }
-      companyAccountsForVatRef.current = accountsBody.data ?? []
-      const enrichedMappings = enrichAccountMappingsWithVat(data.mappings, accountsBody.data ?? [])
+      // Bound SWR mutate resolves with the revalidated list.
+      const companyAccounts = ((await refreshCompanyAccounts()) ?? []) as BASAccount[]
+      companyAccountsForVatRef.current = companyAccounts
+      const enrichedMappings = enrichAccountMappingsWithVat(data.mappings, companyAccounts)
       setSieData({ ...data, mappings: enrichedMappings })
 
       // If all SIE files are already imported, disable SIE import by default
@@ -2610,7 +2728,7 @@ export default function ArcimMigrationWorkspace({
     } finally {
       setIsLoading(false)
     }
-  }, [consentId])
+  }, [consentId, refreshCompanyAccounts])
 
   const handlePreviewContinue = useCallback(() => {
     if (preview?.sieAvailable) {
@@ -2711,6 +2829,13 @@ export default function ArcimMigrationWorkspace({
           setMigrationProgress(progress)
           setMigrationStep(`Importerar bokföringsdata (SIE): fil ${i + 1} av ${filesToImport.length}...`)
 
+          // Name the year in every per-file failure: a multi-year re-sync
+          // that dies on ONE year must say which, or the user cannot act on
+          // it (issue #1667: the current year re-imported, the prior year
+          // refused, and the error never said so).
+          const fiscalYear = filesToImport[i].status?.fiscalYear
+          const yearLabel = fiscalYear ? `Räkenskapsår ${fiscalYear}: ` : ''
+
           const res = await fetch('/api/extensions/ext/arcim-migration/import-sie', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2728,11 +2853,17 @@ export default function ArcimMigrationWorkspace({
 
           if (!res.ok) {
             const data = await res.json().catch(() => ({}))
-            throw apiError(data, `SIE import HTTP ${res.status}`)
+            const err = apiError(data, `SIE import HTTP ${res.status}`)
+            throw err instanceof UserFacingError
+              ? new UserFacingError(`${yearLabel}${err.message}`)
+              : err
           }
 
           const result = await res.json() as ImportResult
           setSieImportResults(prev => [...prev, result])
+          // The import creates accounts and a räkenskapsår: every cached
+          // picker must see them.
+          void invalidateReferenceData(['ref:accounts', 'ref:fiscal-periods'])
 
           // The endpoint returns HTTP 200 with success:false when the import
           // itself failed (e.g. räkenskapsår mismatch). Stop here: continuing
@@ -2740,18 +2871,26 @@ export default function ArcimMigrationWorkspace({
           // först" message masks the real error.
           if (!result.success) {
             throw new UserFacingError(result.errors.length > 0
-              ? result.errors.join('\n')
-              : 'SIE-importen misslyckades utan felmeddelande.')
+              ? `${yearLabel}${result.errors.join('\n')}`
+              : `${yearLabel}SIE-importen misslyckades utan felmeddelande.`)
           }
         }
       }
 
       // ── Phase 2: API import (customers, suppliers, invoices) ──
+      // The asset toggle is only rendered for Fortnox (the one provider with
+      // an asset register API), but its DEFAULT_OPTIONS value stays true for
+      // everyone. Gate it on the provider here too, so a hidden option can
+      // never be the reason /migrate starts for a user who deselected every
+      // visible API import.
+      const effectiveImportAssets =
+        selectedProvider === 'fortnox' && migrationOptions.importAssets
       const hasApiImport = migrationOptions.importCompanyInfo ||
         migrationOptions.importCustomers ||
         migrationOptions.importSuppliers ||
         migrationOptions.importSalesInvoices ||
-        migrationOptions.importSupplierInvoices
+        migrationOptions.importSupplierInvoices ||
+        effectiveImportAssets
 
       let hadStepErrors = false
       if (hasApiImport) {
@@ -2768,6 +2907,7 @@ export default function ArcimMigrationWorkspace({
             importSuppliers: migrationOptions.importSuppliers,
             importSalesInvoices: migrationOptions.importSalesInvoices,
             importSupplierInvoices: migrationOptions.importSupplierInvoices,
+            importAssets: effectiveImportAssets,
           }),
         })
 
@@ -2924,6 +3064,7 @@ export default function ArcimMigrationWorkspace({
           options={migrationOptions}
           sieAvailable={preview?.sieAvailable ?? false}
           sieData={sieData}
+          hasSieData={(preview?.hasSieData ?? false) || sieImportResults.some(r => r.success)}
           provider={preview?.consent.provider ?? null}
           onChange={setMigrationOptions}
           onStart={handleStartMigration}

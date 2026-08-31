@@ -5,12 +5,46 @@ import type { Company, CompanyRole, Team } from '@/types'
 import type { CapabilityKey } from '@/lib/entitlements/keys'
 import type { EntitlementState } from '@/lib/entitlements/has-capability'
 
+/** The user's byrå team membership (teams.kind = 'byra'), when any (WL-08). */
+export interface ByraTeamRef {
+  id: string
+  name: string
+  role: 'owner' | 'admin' | 'member'
+  /**
+   * Where "Tillbaka till klienter" points: '/clients' when the current host
+   * is the byrå cockpit's home domain, else an absolute URL to that home
+   * (resolveCockpitHref). Optional: the no-company layout branch renders
+   * before brands resolve and leaves it unset; consumers fall back to
+   * '/clients', which on that branch's cockpit/settings surfaces matches the
+   * pre-cockpitHref behavior exactly.
+   */
+  cockpitHref?: string
+}
+
+/**
+ * A membership company homed on ANOTHER host (the home-domain rule, WL-01):
+ * shown as a non-clickable "Hanteras via <domain>" signpost entry.
+ */
+export interface ForeignCompanyEntry {
+  id: string
+  name: string
+  domain: string
+}
+
 interface CompanyContextValue {
   company: Company | null
   role: CompanyRole | null
+  /**
+   * Memberships homed on the CURRENT host (home-domain rule): the switcher
+   * offers only these. Companies homed elsewhere are in foreignCompanies.
+   */
   companies: { company: Company; role: CompanyRole }[]
   isTeamMember: boolean
   team: Team | null
+  /** Byrå team membership; null for everyone outside a byrå (cockpit gate). */
+  byraTeam?: ByraTeamRef | null
+  /** Companies homed on another domain, for the "Hanteras via" section. */
+  foreignCompanies?: ForeignCompanyEntry[]
   isSandbox: boolean
   /** PAID capability keys the active company currently holds (entitled + enabled). */
   capabilities: CapabilityKey[]

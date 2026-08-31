@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import type { PoolClient } from 'pg'
 import { describe, expect, it } from 'vitest'
-import { getPool, withUserContext } from './setup'
+import { getClient, getPool, withUserContext } from './setup'
 import { seedCompany, insertAuthUser } from './fixtures'
 
 // pg-real coverage for 20260810160748_supplier_payment_batches.sql: RLS
@@ -8,6 +9,11 @@ import { seedCompany, insertAuthUser } from './fixtures'
 // a payment instruction undeletable, the payee_fields_match CHECK, the
 // per-batch invoice uniqueness, item immutability (no UPDATE/DELETE policies),
 // and the updated_at trigger.
+//
+// Also covers 20260827100000_create_supplier_payment_batch_rpc.sql (#1503):
+// the atomic create RPC (happy path, in-transaction active-batch recheck,
+// header + items rolling back together, FOR UPDATE serialization of two
+// concurrent creates, tenant guard and actor pinning, EXECUTE privileges).
 
 async function insertSupplier(companyId: string, userId: string): Promise<string> {
   const id = randomUUID()
@@ -344,5 +350,336 @@ describe('supplier_payment_batches constraints', () => {
     expect(new Date(after.rows[0].updated_at).getTime()).toBeGreaterThan(
       new Date(before.rows[0].updated_at).getTime(),
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// create_supplier_payment_batch RPC (#1503)
+// ---------------------------------------------------------------------------
+
+type RpcResult =
+  | { ok: true; batch: Record<string, unknown> }
+  | { ok: false; code: string; details?: unknown }
+
+function itemsPayload(invoiceId: string, overrides: Record<string, unknown> = {}) {
+  return [
+    {
+      supplier_invoice_id: invoiceId,
+      amount: 737.5,
+      payment_date: '2099-08-20',
+      payee_type: 'bankgiro',
+      payee_bankgiro: '50501055',
+      payee_plusgiro: null,
+      payee_clearing: null,
+      payee_account: null,
+      payee_name: 'Derome Bygg AB',
+      payee_city: null,
+      reference_type: 'invoice_number',
+      reference: 'CD3014794407',
+      ...overrides,
+    },
+  ]
+}
+
+const DEBTOR = {
+  name: 'Test AB',
+  org_number: '556677-8899',
+  iban: 'SE3550000000054910000003',
+  bic: 'ESSESESS',
+  bankgiro: null,
+  city: null,
+}
+
+async function callRpc(
+  client: PoolClient,
+  params: {
+    companyId: string
+    batchId: string
+    items: unknown[]
+    confirm?: boolean
+    userId?: string | null
+  },
+): Promise<RpcResult> {
+  const { rows } = await client.query<{ result: RpcResult }>(
+    `SELECT public.create_supplier_payment_batch(
+       $1, $2, 'pain001', $3, $4::jsonb, $5::jsonb, $6, $7
+     ) AS result`,
+    [
+      params.companyId,
+      params.batchId,
+      `ACCOUNTED-5566778899-B${params.batchId.replace(/-/g, '').slice(0, 8).toUpperCase()}`,
+      JSON.stringify(DEBTOR),
+      JSON.stringify(params.items),
+      params.confirm ?? false,
+      params.userId ?? null,
+    ],
+  )
+  return rows[0].result
+}
+
+async function seedInvoiceOnly() {
+  const ctx = await seedCompany()
+  const supplierId = await insertSupplier(ctx.companyId, ctx.userId)
+  const invoiceId = await insertSupplierInvoice(ctx.companyId, ctx.userId, supplierId)
+  return { ...ctx, supplierId, invoiceId }
+}
+
+async function countBatches(client: PoolClient | null, batchId: string): Promise<number> {
+  const runner = client ?? getPool()
+  const { rows } = await runner.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM public.supplier_payment_batches WHERE id = $1`,
+    [batchId],
+  )
+  return Number(rows[0].n)
+}
+
+async function countItems(client: PoolClient | null, batchId: string): Promise<number> {
+  const runner = client ?? getPool()
+  const { rows } = await runner.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM public.supplier_payment_batch_items WHERE batch_id = $1`,
+    [batchId],
+  )
+  return Number(rows[0].n)
+}
+
+describe('create_supplier_payment_batch RPC', () => {
+  it('creates header + items for an authenticated member and returns the batch row', async () => {
+    const ctx = await seedInvoiceOnly()
+    const batchId = randomUUID()
+
+    const { result, items } = await withUserContext(ctx.userId, async (client) => {
+      const result = await callRpc(client, {
+        companyId: ctx.companyId,
+        batchId,
+        items: itemsPayload(ctx.invoiceId),
+      })
+      // withUserContext rolls back, so the row count is asserted inside.
+      const items = await countItems(client, batchId)
+      return { result, items }
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('unreachable')
+    expect(result.batch.id).toBe(batchId)
+    expect(result.batch.company_id).toBe(ctx.companyId)
+    expect(result.batch.user_id).toBe(ctx.userId)
+    expect(result.batch.status).toBe('created')
+    expect(result.batch.format).toBe('pain001')
+    expect(result.batch.currency).toBe('SEK')
+    expect(result.batch.item_count).toBe(1)
+    expect(Number(result.batch.total_amount)).toBe(737.5)
+    expect(result.batch.msg_id).toBe(
+      `ACCOUNTED-5566778899-B${batchId.replace(/-/g, '').slice(0, 8).toUpperCase()}`,
+    )
+    expect(result.batch.debtor_snapshot).toEqual(DEBTOR)
+    expect(typeof result.batch.created_at).toBe('string')
+    expect(items).toBe(1)
+  })
+
+  it('rechecks active batches inside the transaction and honors the confirmation', async () => {
+    // seedBatchWithItem leaves an active ('created') batch on invoiceId.
+    const ctx = await seedBatchWithItem()
+    const batchId = randomUUID()
+
+    const refused = await withUserContext(ctx.userId, (client) =>
+      callRpc(client, { companyId: ctx.companyId, batchId, items: itemsPayload(ctx.invoiceId) }),
+    )
+    expect(refused).toEqual({
+      ok: false,
+      code: 'already_batched',
+      details: [{ id: ctx.invoiceId, batch_id: ctx.batchId }],
+    })
+    expect(await countBatches(null, batchId)).toBe(0)
+
+    const confirmed = await withUserContext(ctx.userId, (client) =>
+      callRpc(client, {
+        companyId: ctx.companyId,
+        batchId,
+        items: itemsPayload(ctx.invoiceId),
+        confirm: true,
+      }),
+    )
+    expect(confirmed.ok).toBe(true)
+  })
+
+  it('refuses under the lock when the invoice is no longer payable or the amount exceeds remaining', async () => {
+    const ctx = await seedInvoiceOnly()
+
+    await getPool().query(`UPDATE public.supplier_invoices SET status = 'paid' WHERE id = $1`, [
+      ctx.invoiceId,
+    ])
+    const notPayable = await withUserContext(ctx.userId, (client) =>
+      callRpc(client, {
+        companyId: ctx.companyId,
+        batchId: randomUUID(),
+        items: itemsPayload(ctx.invoiceId),
+      }),
+    )
+    expect(notPayable).toEqual({
+      ok: false,
+      code: 'ineligible',
+      details: [{ id: ctx.invoiceId, reason: 'not_payable' }],
+    })
+
+    await getPool().query(
+      `UPDATE public.supplier_invoices SET status = 'approved', remaining_amount = 100 WHERE id = $1`,
+      [ctx.invoiceId],
+    )
+    const excessive = await withUserContext(ctx.userId, (client) =>
+      callRpc(client, {
+        companyId: ctx.companyId,
+        batchId: randomUUID(),
+        items: itemsPayload(ctx.invoiceId),
+      }),
+    )
+    expect(excessive).toEqual({
+      ok: false,
+      code: 'amount_exceeds_remaining',
+      details: [{ id: ctx.invoiceId }],
+    })
+
+    const ghost = await withUserContext(ctx.userId, (client) =>
+      callRpc(client, {
+        companyId: ctx.companyId,
+        batchId: randomUUID(),
+        items: itemsPayload(randomUUID()),
+      }),
+    )
+    expect(ghost.ok).toBe(false)
+    if (ghost.ok) throw new Error('unreachable')
+    expect(ghost.code).toBe('ineligible')
+    expect(ghost.details).toEqual([expect.objectContaining({ reason: 'not_found' })])
+  })
+
+  it('rolls the header back with the items on a constraint violation (no empty created batch)', async () => {
+    const ctx = await seedInvoiceOnly()
+    const batchId = randomUUID()
+
+    // Plain pool: superuser, no JWT claims, so the guard is bypassed and
+    // p_user_id supplies the actor. The item violates payee_fields_match.
+    await expect(
+      callRpc(getPool() as unknown as PoolClient, {
+        companyId: ctx.companyId,
+        batchId,
+        items: itemsPayload(ctx.invoiceId, { payee_bankgiro: null }),
+        userId: ctx.userId,
+      }),
+    ).rejects.toThrow(/payee_fields_match/)
+
+    expect(await countBatches(null, batchId)).toBe(0)
+    expect(await countItems(null, batchId)).toBe(0)
+  })
+
+  it('serializes two concurrent creates on the same invoice: the loser gets already_batched', async () => {
+    const ctx = await seedInvoiceOnly()
+    const batchIdA = randomUUID()
+    const batchIdB = randomUUID()
+    const clientA = await getClient()
+    const clientB = await getClient()
+    try {
+      await clientA.query('BEGIN')
+      const resultA = await callRpc(clientA, {
+        companyId: ctx.companyId,
+        batchId: batchIdA,
+        items: itemsPayload(ctx.invoiceId),
+        userId: ctx.userId,
+      })
+      expect(resultA.ok).toBe(true)
+
+      // B starts while A holds the FOR UPDATE lock on the invoice: it must
+      // block rather than pass the app-side-style check and land a second
+      // active batch.
+      await clientB.query('BEGIN')
+      const pendingB = callRpc(clientB, {
+        companyId: ctx.companyId,
+        batchId: batchIdB,
+        items: itemsPayload(ctx.invoiceId),
+        userId: ctx.userId,
+      })
+      let settled = false
+      void pendingB.then(
+        () => {
+          settled = true
+        },
+        () => {
+          settled = true
+        },
+      )
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      expect(settled).toBe(false)
+
+      await clientA.query('COMMIT')
+
+      const resultB = await pendingB
+      expect(resultB).toEqual({
+        ok: false,
+        code: 'already_batched',
+        details: [{ id: ctx.invoiceId, batch_id: batchIdA }],
+      })
+      await clientB.query('ROLLBACK')
+      expect(await countBatches(null, batchIdB)).toBe(0)
+
+      // With explicit consent a second active batch is allowed.
+      const confirmed = await callRpc(getPool() as unknown as PoolClient, {
+        companyId: ctx.companyId,
+        batchId: randomUUID(),
+        items: itemsPayload(ctx.invoiceId),
+        confirm: true,
+        userId: ctx.userId,
+      })
+      expect(confirmed.ok).toBe(true)
+    } finally {
+      await clientA.query('ROLLBACK').catch(() => {})
+      await clientB.query('ROLLBACK').catch(() => {})
+      clientA.release()
+      clientB.release()
+    }
+  })
+
+  it('raises 42501 for a non-member and pins the actor to auth.uid() for JWT callers', async () => {
+    const ctx = await seedInvoiceOnly()
+    const stranger = await insertAuthUser()
+
+    let guardError: { code?: string } | null = null
+    try {
+      await withUserContext(stranger, (client) =>
+        callRpc(client, {
+          companyId: ctx.companyId,
+          batchId: randomUUID(),
+          items: itemsPayload(ctx.invoiceId),
+        }),
+      )
+    } catch (err) {
+      guardError = err as { code?: string }
+    }
+    expect(guardError?.code).toBe('42501')
+
+    // An authenticated owner passing p_user_id = stranger still owns the batch.
+    const spoofed = await withUserContext(ctx.userId, (client) =>
+      callRpc(client, {
+        companyId: ctx.companyId,
+        batchId: randomUUID(),
+        items: itemsPayload(ctx.invoiceId),
+        userId: stranger,
+      }),
+    )
+    expect(spoofed.ok).toBe(true)
+    if (!spoofed.ok) throw new Error('unreachable')
+    expect(spoofed.batch.user_id).toBe(ctx.userId)
+  })
+
+  it('is executable by authenticated and service_role but not anon', async () => {
+    const sig = 'public.create_supplier_payment_batch(uuid,uuid,text,text,jsonb,jsonb,boolean,uuid)'
+    const { rows } = await getPool().query<{
+      anon_can: boolean
+      authenticated_can: boolean
+      service_role_can: boolean
+    }>(
+      `SELECT has_function_privilege('anon', $1, 'EXECUTE') AS anon_can,
+              has_function_privilege('authenticated', $1, 'EXECUTE') AS authenticated_can,
+              has_function_privilege('service_role', $1, 'EXECUTE') AS service_role_can`,
+      [sig],
+    )
+    expect(rows[0]).toEqual({ anon_can: false, authenticated_can: true, service_role_can: true })
   })
 })

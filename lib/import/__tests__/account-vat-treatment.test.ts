@@ -34,6 +34,29 @@ describe('enrichAccountMappingsWithVat', () => {
     })
   })
 
+  it('suggests oss from an OSS label and leaves the BAS 3106 label for review', () => {
+    const [oss, b2c] = enrichAccountMappingsWithVat(
+      [
+        mapping('3111', 'Försäljning enl. OSS (Spanien 21%)'),
+        mapping('3106', 'Försäljning varor till annat EU-land, momspliktig'),
+      ],
+      [],
+    )
+    expect(oss).toMatchObject({
+      defaultVatTreatment: 'oss',
+      defaultVatRate: null,
+      vatTreatmentSuggested: true,
+      vatTreatmentReviewed: false,
+      requiresVatTreatmentReview: true,
+    })
+    expect(b2c).toMatchObject({
+      defaultVatTreatment: null,
+      vatTreatmentSuggested: false,
+      vatTreatmentReviewed: false,
+      requiresVatTreatmentReview: true,
+    })
+  })
+
   it('keeps an existing account treatment without asking again', () => {
     const [result] = enrichAccountMappingsWithVat(
       [mapping('3041', 'Försäljning tjänst 25% sv')],

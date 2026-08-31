@@ -4,14 +4,16 @@ import { getAuthorizationHeader } from '@/lib/connect/upstreams/enable-banking-j
 import { reserveUpstream } from '@/lib/connect/hosted/upstream-budget'
 import {
   activateByPendingState,
-  countActiveConnections,
+  countHeldConnections,
   createPendingConnection,
+  deletePendingConnectionById,
   findByAccountUid,
   findByHandle,
+  findPendingByState,
   revokeByHandle,
   touchConnection,
 } from '@/lib/connect/hosted/ledger'
-import { signConnectorState } from '@/lib/connect/hosted/state'
+import { signConnectorState, verifyConnectorState } from '@/lib/connect/hosted/state'
 
 /**
  * Enable Banking proxy for self-hosted instances (WS3 PR5).
@@ -33,10 +35,25 @@ import { signConnectorState } from '@/lib/connect/hosted/state'
  * new redirect URI has to be registered at Enable Banking per instance.
  */
 
-const EB_BASE_URL =
-  process.env.ENABLE_BANKING_API_URL_PRODUCTION ||
-  process.env.ENABLE_BANKING_API_URL ||
-  'https://api.enablebanking.com'
+/**
+ * The EB base URL must be https (http only for loopback dev): forwardToEb
+ * sends Arcim's EB JWT in Authorization, so a plaintext override would ship
+ * the credential unencrypted. Resolved lazily so a bad env fails the request
+ * (500 via the wrapper), never the build.
+ */
+function ebBaseUrl(): string {
+  const raw = (
+    process.env.ENABLE_BANKING_API_URL_PRODUCTION ||
+    process.env.ENABLE_BANKING_API_URL ||
+    'https://api.enablebanking.com'
+  ).replace(/\/+$/, '')
+  const url = new URL(raw)
+  const loopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
+    throw new Error('ENABLE_BANKING_API_URL must be https: the EB JWT is sent in Authorization')
+  }
+  return raw
+}
 
 const COMPANY_HEADER = 'x-connector-company'
 const FETCH_TIMEOUT_MS = 30_000
@@ -63,14 +80,32 @@ async function budgetOr429(ctx: ConnectorContext): Promise<NextResponse | null> 
   )
 }
 
-/** Forward a request to Enable Banking with Arcim's JWT. */
-async function forwardToEb(method: string, path: string, body?: unknown): Promise<Response> {
+// Statuses that must carry no body (RFC 9110). new Response(text, {status:204})
+// throws in undici, so pass a null body through for these.
+const NULL_BODY_STATUS = new Set([204, 205, 304])
+
+interface EbResult {
+  status: number
+  ok: boolean
+  /** null for the RFC 9110 bodyless statuses. */
+  text: string | null
+  contentType: string | null
+}
+
+/**
+ * Forward a request to Enable Banking with Arcim's JWT and read the body
+ * INSIDE the timeout window: clearing the timer at headers-received left an
+ * upstream that stalls mid-body holding the request open forever.
+ */
+async function forwardToEb(method: string, path: string, body?: unknown): Promise<EbResult> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
   try {
-    return await fetch(`${EB_BASE_URL}${path}`, {
+    const res = await fetch(`${ebBaseUrl()}${path}`, {
       method,
       signal: controller.signal,
+      // A followed redirect would resend the EB JWT to the redirect target.
+      redirect: 'error',
       headers: {
         Authorization: getAuthorizationHeader(),
         'Content-Type': 'application/json',
@@ -78,23 +113,20 @@ async function forwardToEb(method: string, path: string, body?: unknown): Promis
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     })
+    const text = NULL_BODY_STATUS.has(res.status) ? null : await res.text()
+    return { status: res.status, ok: res.ok, text, contentType: res.headers.get('content-type') }
   } finally {
     clearTimeout(timeout)
   }
 }
 
-// Statuses that must carry no body (RFC 9110). new Response(text, {status:204})
-// throws in undici, so pass a null body through for these.
-const NULL_BODY_STATUS = new Set([204, 205, 304])
-
-async function passthrough(res: Response): Promise<NextResponse> {
-  if (NULL_BODY_STATUS.has(res.status)) {
+function passthrough(res: EbResult): NextResponse {
+  if (res.text === null) {
     return new NextResponse(null, { status: res.status })
   }
-  const text = await res.text()
-  return new NextResponse(text, {
+  return new NextResponse(res.text, {
     status: res.status,
-    headers: { 'Content-Type': res.headers.get('content-type') ?? 'application/json' },
+    headers: { 'Content-Type': res.contentType ?? 'application/json' },
   })
 }
 
@@ -172,10 +204,13 @@ export const POST = withConnectorAuth('connect.bank', async (request, ctx) => {
         { status: 400 },
       )
     }
-    // Per-company connection quota (the sold package).
-    const active = await countActiveConnections(ctx.supabase, ctx.key.id, 'bank', cref)
-    if (active >= ctx.key.limits.bank_connections_per_company) {
-      return NextResponse.json(
+    // Per-company connection quota (the sold package). Counting alone is a
+    // TOCTOU race under concurrent /auth calls, so the pending row doubles as
+    // a reservation: fast-reject on the pre-count, insert, then RE-count and
+    // roll the own row back when over the limit. Fresh pending rows reserve
+    // quota for the 15-minute consent window (see countHeldConnections).
+    const quotaExceeded = () =>
+      NextResponse.json(
         {
           error: 'Bank connection quota reached for this company',
           code: 'CONNECTOR_QUOTA_EXCEEDED',
@@ -183,7 +218,8 @@ export const POST = withConnectorAuth('connect.bank', async (request, ctx) => {
         },
         { status: 403 },
       )
-    }
+    const held = await countHeldConnections(ctx.supabase, ctx.key.id, 'bank', cref)
+    if (held >= ctx.key.limits.bank_connections_per_company) return quotaExceeded()
     const blocked = await budgetOr429(ctx)
     if (blocked) return blocked
 
@@ -192,13 +228,18 @@ export const POST = withConnectorAuth('connect.bank', async (request, ctx) => {
     const provider = typeof (payload.aspsp as { name?: string } | undefined)?.name === 'string'
       ? String((payload.aspsp as { name: string }).name)
       : null
-    await createPendingConnection(ctx.supabase, {
+    const pendingId = await createPendingConnection(ctx.supabase, {
       keyId: ctx.key.id,
       service: 'bank',
       companyRef: cref,
       provider,
       pendingState: signedState,
     })
+    const heldAfter = await countHeldConnections(ctx.supabase, ctx.key.id, 'bank', cref)
+    if (heldAfter > ctx.key.limits.bank_connections_per_company) {
+      await deletePendingConnectionById(ctx.supabase, pendingId)
+      return quotaExceeded()
+    }
     // Rewrite the redirect to OUR registered callback and swap in the signed state.
     const ebBody = { ...payload, redirect_url: HOSTED_EB_CALLBACK(), state: signedState }
     return passthrough(await forwardToEb('POST', '/auth', ebBody))
@@ -212,39 +253,56 @@ export const POST = withConnectorAuth('connect.bank', async (request, ctx) => {
     } catch {
       return NextResponse.json({ error: 'Invalid JSON', code: 'BAD_REQUEST' }, { status: 400 })
     }
-    // The instance sends back the signed connector state it received, so we can
-    // find the pending row it belongs to.
+    // The instance sends back the signed connector state it received. The
+    // code is only exchanged AGAINST that state's own pending row: verified
+    // signature, this key, bank service, and the row still pending. Without
+    // the binding, a code could be exchanged under a foreign or consumed
+    // state, minting an upstream session the ledger never records.
     const pendingState = typeof payload.connector_state === 'string' ? payload.connector_state : null
     if (!pendingState) {
       return NextResponse.json({ error: 'Missing connector_state', code: 'BAD_REQUEST' }, { status: 400 })
     }
+    const verified = verifyConnectorState(pendingState)
+    if (!verified.ok) {
+      return NextResponse.json({ error: 'Invalid connector state', code: 'CONNECTOR_STATE_INVALID' }, { status: 400 })
+    }
+    if (verified.payload.kid !== ctx.key.id || verified.payload.svc !== 'bank') {
+      return NextResponse.json({ error: 'State does not belong to this key', code: 'CONNECTOR_STATE_INVALID' }, { status: 403 })
+    }
+    const pendingRow = await findPendingByState(ctx.supabase, { keyId: ctx.key.id, pendingState })
+    if (!pendingRow) return notOwned()
     const blocked = await budgetOr429(ctx)
     if (blocked) return blocked
     const ebRes = await forwardToEb('POST', '/sessions', { code: payload.code })
-    const text = await ebRes.text()
-    if (ebRes.ok) {
+    if (ebRes.ok && ebRes.text !== null) {
       try {
-        const session = JSON.parse(text) as { session_id?: string; accounts?: Array<{ uid?: string }> }
+        const session = JSON.parse(ebRes.text) as { session_id?: string; accounts?: Array<{ uid?: string }> }
         if (session.session_id) {
           const accountUids = (session.accounts ?? [])
             .map((a) => a.uid)
             .filter((u): u is string => typeof u === 'string')
-          await activateByPendingState(ctx.supabase, {
+          const activated = await activateByPendingState(ctx.supabase, {
             keyId: ctx.key.id,
             pendingState,
             handle: session.session_id,
             accountUids,
           })
+          if (!activated) {
+            // The pending row was consumed between the precheck and now (a
+            // concurrent replay of the same state). An unrecorded upstream
+            // session must not be handed out: close it and refuse.
+            await forwardToEb('DELETE', `/sessions/${encodeURIComponent(session.session_id)}`)
+            return NextResponse.json(
+              { error: 'Connector state already consumed', code: 'CONNECTOR_STATE_CONSUMED' },
+              { status: 409 },
+            )
+          }
         }
       } catch (err) {
         ctx.log.warn('could not record session in ledger', { err: err instanceof Error ? err.message : String(err) })
       }
     }
-    if (NULL_BODY_STATUS.has(ebRes.status)) return new NextResponse(null, { status: ebRes.status })
-    return new NextResponse(text, {
-      status: ebRes.status,
-      headers: { 'Content-Type': ebRes.headers.get('content-type') ?? 'application/json' },
-    })
+    return passthrough(ebRes)
   }
 
   return notAllowed()
@@ -262,7 +320,12 @@ export const DELETE = withConnectorAuth('connect.bank', async (request, ctx) => 
   const blocked = await budgetOr429(ctx)
   if (blocked) return blocked
   const res = await forwardToEb('DELETE', `/sessions/${encodeURIComponent(sessionId)}`)
-  await revokeByHandle(ctx.supabase, { keyId: ctx.key.id, service: 'bank', handle: sessionId })
+  // Revoke the ledger row only when the upstream delete actually took (or the
+  // session is already gone upstream): revoking on a transient EB error would
+  // leave the remote session alive but permanently unreachable via the proxy.
+  if (res.ok || res.status === 404) {
+    await revokeByHandle(ctx.supabase, { keyId: ctx.key.id, service: 'bank', handle: sessionId })
+  }
   return passthrough(res)
 })
 

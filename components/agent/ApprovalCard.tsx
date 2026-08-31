@@ -11,7 +11,8 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { PendingOperationRejectionCategory } from '@/types'
 import { cn } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import { OperationPreview } from '@/components/pending-operations/OperationPreview'
+import { OperationPreview, AccountNamesContext } from '@/components/pending-operations/OperationPreview'
+import { useAccountNamesSource } from '@/components/pending-operations/use-account-names'
 import { REJECTION_CATEGORY_LABELS } from '@/components/pending-operations/vocabulary'
 import { operationTypeFromToolName } from '@/lib/pending-operations/tool-name'
 
@@ -97,6 +98,8 @@ export default function ApprovalCard({
   // What's paid is feeding a rejection back so the agent generates a *new*
   // proposal (an LLM call): that's suppressed when the company lacks `ai`.
   const hasAi = useCapability(CAPABILITY.ai)
+  // Chart names for the preview lines (same source as /pending).
+  const accountNames = useAccountNamesSource()
   const [state, setState] = useState<State>('pending')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [confirmText, setConfirmText] = useState('')
@@ -353,13 +356,15 @@ export default function ApprovalCard({
 
       {preview != null && typeof preview === 'object' && (
         <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
-          <OperationPreview
-            op={{
-              operation_type: previewOperationType,
-              preview_data: preview as Record<string, unknown>,
-              params,
-            }}
-          />
+          <AccountNamesContext.Provider value={accountNames}>
+            <OperationPreview
+              op={{
+                operation_type: previewOperationType,
+                preview_data: preview as Record<string, unknown>,
+                params,
+              }}
+            />
+          </AccountNamesContext.Provider>
         </div>
       )}
 

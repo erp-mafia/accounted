@@ -3,7 +3,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { getPool, withUserContext } from './setup'
 import { insertAuthUser } from './fixtures'
 
-// pg-real coverage for migration 20260820123000 (connector_keys,
+// pg-real coverage for migration 20260831190000 (connector_keys,
 // connector_usage_events, validate_and_increment_connector_key): the atomic
 // validate + rate-limit path, the suspended/revoked answers, and the
 // service-role-only exposure (no RLS policy, RPC not executable by anon or

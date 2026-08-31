@@ -36,7 +36,7 @@ describe('WINT mappers', () => {
       expect(dto.dueDate).toBe('2026-03-31');
       expect(dto.status).toBe('sent');
       expect(dto.legalMonetaryTotal.payableAmount.value).toBe(1250);
-      expect(dto.legalMonetaryTotal.lineExtensionAmount.value).toBe(1000);
+      expect(dto.legalMonetaryTotal.lineExtensionAmount?.value).toBe(1000);
       expect(dto.taxTotal?.taxAmount.value).toBe(250);
       expect(dto.customer.name).toBe('Kund AB');
       expect(dto.customer.identifications[0]?.id).toBe('556677-8899');

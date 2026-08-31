@@ -1,10 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SuggestedMatch } from './types'
 import type { WorklistCounts } from './types'
 import {
   countDeadlinesNeedingAction,
   countInboxDocuments,
   countOverdueInvoices,
   countPendingOperations,
+  countReconciliationDue,
   countSuggestedMatches,
   countSupplierInvoicesAwaitingApproval,
   countUnbookedTransactions,
@@ -21,9 +23,20 @@ import {
  * fast path over transactions already counted in book_transaction, so it is
  * excluded to avoid double-counting (see lib/worklist/types.ts).
  */
+export interface GetWorklistCountsOptions {
+  /**
+   * Suggested matches the caller is already fetching (Hem renders them in
+   * the Att göra pane): the count is taken from this list instead of a
+   * second scan of the same rows. A promise is accepted so it can run in
+   * parallel with the other counts.
+   */
+  suggestedMatches?: SuggestedMatch[] | Promise<SuggestedMatch[]>
+}
+
 export async function getWorklistCounts(
   supabase: SupabaseClient,
   companyId: string,
+  options: GetWorklistCountsOptions = {},
 ): Promise<WorklistCounts> {
   const [
     bookTransaction,
@@ -34,15 +47,19 @@ export async function getWorklistCounts(
     overdueInvoice,
     deadlineAction,
     pendingOperations,
+    reconciliationDue,
   ] = await Promise.all([
     countUnbookedTransactions(supabase, companyId),
     countInboxDocuments(supabase, companyId),
-    countSuggestedMatches(supabase, companyId),
+    options.suggestedMatches
+      ? Promise.resolve(options.suggestedMatches).then((m) => m.length)
+      : countSuggestedMatches(supabase, companyId),
     countSupplierInvoicesAwaitingApproval(supabase, companyId),
     countVerifikatMissingDocument(supabase, companyId),
     countOverdueInvoices(supabase, companyId),
     countDeadlinesNeedingAction(supabase, companyId),
     countPendingOperations(supabase, companyId),
+    countReconciliationDue(supabase, companyId),
   ])
 
   return {
@@ -55,6 +72,7 @@ export async function getWorklistCounts(
       overdue_invoice: overdueInvoice,
       deadline_action: deadlineAction,
       pending_operations: pendingOperations,
+      reconciliation_due: reconciliationDue,
     },
     total:
       bookTransaction +
@@ -63,6 +81,7 @@ export async function getWorklistCounts(
       verifikatMissingDocument +
       overdueInvoice +
       deadlineAction +
-      pendingOperations,
+      pendingOperations +
+      reconciliationDue,
   }
 }

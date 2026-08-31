@@ -5,6 +5,7 @@ import { ChevronRight, ExternalLink } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
+import { useBranding } from '@/lib/branding/brand-context'
 import type { InvoiceDelivery, InvoiceDeliveryProviderStatus } from '@/types'
 
 export type InvoiceDeliveryView = Pick<
@@ -68,6 +69,7 @@ export function InvoiceDeliveryHistory({
 }: InvoiceDeliveryHistoryProps) {
   const t = useTranslations('invoice_detail')
   const format = useFormatter()
+  const { appName } = useBranding()
 
   if (deliveries.length === 0 && !showLegacyEmptyState) return null
 
@@ -133,7 +135,7 @@ export function InvoiceDeliveryHistory({
                 <div className="pb-4 pl-6 pt-1">
                   {isManual ? (
                     <p className="text-sm text-muted-foreground">
-                      {t('delivery_manual_unknown_details')}
+                      {t('delivery_manual_unknown_details', { appName })}
                     </p>
                   ) : (
                     <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-[8rem_minmax(0,1fr)]">

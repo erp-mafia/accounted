@@ -1,4 +1,5 @@
 import type { McpResource } from './types'
+import { fetchJunctionLinkedTxIds } from '@/lib/reconciliation/bank-reconciliation'
 
 export const recentActivityResource: McpResource = {
   uri: 'Accounted://recent-activity',
@@ -41,14 +42,27 @@ export const recentActivityResource: McpResource = {
       throw new Error(`Failed to read recent transactions: ${transactions.error.message}`)
     }
 
+    // A NULL pointer is not "unbooked" on its own: rows bulk-booked into a
+    // samlingsverifikat or split over several verifikat (1:N) are anchored
+    // through transaction_voucher_links (lib/transactions/is-booked.ts).
+    const recentTx = transactions.data ?? []
+    const pointerUnbooked = recentTx.filter((t) => !t.journal_entry_id)
+    const junctionLinked =
+      pointerUnbooked.length > 0
+        ? await fetchJunctionLinkedTxIds(
+            supabase,
+            companyId,
+            pointerUnbooked.map((t) => t.id as string),
+          )
+        : new Set<string>()
+
     return {
       limit,
       journal_entries: journalEntries.data ?? [],
       invoices: invoices.data ?? [],
-      transactions: transactions.data ?? [],
-      uncategorized_transaction_count: (transactions.data ?? []).filter(
-        (t) => !t.journal_entry_id
-      ).length,
+      transactions: recentTx,
+      uncategorized_transaction_count: pointerUnbooked.filter((t) => !junctionLinked.has(t.id as string))
+        .length,
     }
   },
 }

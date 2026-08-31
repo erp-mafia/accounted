@@ -49,6 +49,10 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
       // verifikat: links without creating new bookkeeping. Categorizing such a
       // transaction would double-book it.
       'gnubok_link_transaction_to_journal_entry',
+      // Rows that are not business events (PSD2 ghost rows, duplicates):
+      // ignore writes no verifikat and is allowed in a locked period, the
+      // answer to TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED (issue #1661).
+      'gnubok_ignore_transaction',
       // Tagging: check the registry before writing dimensions bags on
       // categorize calls (resolve-don't-select needs real codes/names).
       'gnubok_list_dimensions',
@@ -63,10 +67,41 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
     tools: [
       'gnubok_list_fiscal_periods',
       'gnubok_list_uncategorized_transactions',
+      // Clears non-business rows out of the period without a verifikat; the
+      // lock guard counts untriaged rows, ignored ones no longer block it.
+      'gnubok_ignore_transaction',
       'gnubok_get_reconciliation_status',
+      // Account-keyed reconciliation: the rows behind the bridge and the
+      // staged link (bank accounts and skattekonto alike).
+      'gnubok_list_reconciliation_items',
+      'gnubok_reconcile_match',
+      'gnubok_reconcile_residual',
+      'gnubok_reconcile_signoff',
       'gnubok_list_voucher_gaps',
       'gnubok_explain_voucher_gap',
       'gnubok_lock_period',
+      'gnubok_approve_pending_operation',
+    ],
+  },
+  {
+    workflow: 'reconcile_month',
+    description: 'Reconcile every account with an outside truth (bank accounts, skattekonto) for a month and sign it off.',
+    skill: 'reconcile-month',
+    tools: [
+      'gnubok_get_reconciliation_status',
+      'gnubok_list_reconciliation_items',
+      'gnubok_reconcile_match',
+      'gnubok_reconcile_unmatch',
+      // Near-miss on a bank account (fee, interest, rounding): link and book
+      // the difference in one staged step.
+      'gnubok_reconcile_residual',
+      // Rows with no counterpart: book them (bank side) or link to the
+      // verifikat that already holds the affärshändelse.
+      'gnubok_categorize_transaction',
+      'gnubok_link_transaction_to_journal_entry',
+      // A row that will never be booked (duplicate, noise line): ignore it.
+      'gnubok_ignore_transaction',
+      'gnubok_reconcile_signoff',
       'gnubok_approve_pending_operation',
     ],
   },
@@ -108,6 +143,7 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
     tools: [
       'gnubok_list_employees',
       'gnubok_create_salary_run',
+      'gnubok_set_run_salary',
       'gnubok_calculate_salary_run',
       'gnubok_get_salary_run',
       'gnubok_book_salary_run',

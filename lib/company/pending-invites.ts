@@ -49,7 +49,12 @@ export async function acceptPendingInviteByToken(
       new Date(invite.expires_at) < new Date() ||
       user.email.toLowerCase() !== invite.email.toLowerCase()
     ) {
-      return false
+      // Not a (valid) company invite for this token: it may be a byrå-team
+      // invite. Trying the team path here is what lets /onboarding and
+      // /select-company heal a byrå invitee who reached them without
+      // membership, instead of funneling them into creating a company.
+      const teamOutcome = await acceptPendingTeamInviteByToken(user, token)
+      return teamOutcome.status === 'accepted' || teamOutcome.status === 'already_member'
     }
 
     const { error: memberError } = await serviceClient.from('company_members').insert({
@@ -89,24 +94,184 @@ export async function acceptPendingInviteByToken(
 }
 
 /**
- * True when a pending, unexpired invitation exists for this email.
- * Invitation emails are lowercased at creation (invite route Zod schema),
- * so the lowercase equality match is exact. Used to tell an invitee who
- * arrived without the invite token ("go open the link in the email")
- * apart from a genuine first-time user. Never throws.
+ * Outcome of a byrå-team invite acceptance attempt. The route maps each to an
+ * HTTP status; the callback and the onboarding recovery treat `accepted` and
+ * `already_member` as success (the user is in the team either way).
  */
-export async function hasPendingInviteForEmail(email: string): Promise<boolean> {
+export type TeamInviteAcceptOutcome =
+  | { status: 'accepted'; teamId: string; teamName: string | null }
+  | { status: 'already_member' }
+  | { status: 'invalid' }
+  | { status: 'expired' }
+  | { status: 'wrong_email' }
+  | { status: 'error' }
+
+/**
+ * Accept a pending byrå-team invitation from a raw `gnubok-invite-token`.
+ *
+ * The single server-side implementation of team-invite acceptance, shared by
+ * POST /api/team/accept, the auth callback, and the onboarding/select-company
+ * recovery nets. Before this existed, only the route understood
+ * `team_invitations`, so a byrå staffer who signed up with email+password
+ * (hosted requires email confirmation, so the register page never gets a
+ * session to run its client-side accept) had their invite accepted by no
+ * server path before the dashboard, and landed on /onboarding as an apparent
+ * first-timer.
+ *
+ * Mirrors the company-invite acceptance above: requires a pending, unexpired
+ * invitation on a team whose `kind='byra'`, whose email matches the
+ * authenticated user. Inserts `team_members` with the capped role (invites
+ * never mint owners), points a company-less user at the team's first
+ * non-archived company, and marks the invite accepted. Never throws.
+ */
+export async function acceptPendingTeamInviteByToken(
+  user: AuthUserLike,
+  token: string,
+): Promise<TeamInviteAcceptOutcome> {
+  if (!user.email) return { status: 'invalid' }
+
   try {
     const serviceClient = createServiceClient()
-    const { data } = await serviceClient
+    const tokenHash = hashInviteToken(token)
+
+    const { data: inviteRaw } = await serviceClient
+      .from('team_invitations')
+      .select('id, team_id, email, role, status, expires_at, teams:team_id(name, kind)')
+      .eq('token_hash', tokenHash)
+      .single()
+
+    const invite = inviteRaw as unknown as {
+      id: string
+      team_id: string
+      email: string
+      role: string
+      status: string
+      expires_at: string
+      teams: { name: string; kind: string } | null
+    } | null
+
+    // Kind gate mirrors the route: invitations exist for byrå teams only. A
+    // personal-team token (or a team reverted after issue) is indistinguishable
+    // from an invalid token on purpose.
+    if (!invite || invite.teams?.kind !== 'byra' || invite.status !== 'pending') {
+      return { status: 'invalid' }
+    }
+
+    if (new Date(invite.expires_at) < new Date()) {
+      await serviceClient
+        .from('team_invitations')
+        .update({ status: 'expired' })
+        .eq('id', invite.id)
+      return { status: 'expired' }
+    }
+
+    if (user.email.toLowerCase() !== invite.email.toLowerCase()) {
+      return { status: 'wrong_email' }
+    }
+
+    // Invitations never mint team owners (the invite route's schema forbids it;
+    // re-checked here against hand-edited rows).
+    const memberRole = invite.role === 'admin' ? 'admin' : 'member'
+
+    const { error: memberError } = await serviceClient.from('team_members').insert({
+      team_id: invite.team_id,
+      user_id: user.id,
+      role: memberRole,
+    })
+
+    if (memberError) {
+      // 23505 = already a member. Left unsettled to preserve the route's
+      // long-standing 409 contract; the caller still treats it as success
+      // because the membership exists.
+      if (memberError.code === '23505') return { status: 'already_member' }
+      console.error('[pending-invites] team membership insert failed', memberError)
+      return { status: 'error' }
+    }
+
+    // Point a company-less user at one of the team's companies so their first
+    // dashboard load resolves. A consultant with their own firma keeps their
+    // active company untouched: joining a byrå must never hijack the context.
+    const { data: prefs } = await serviceClient
+      .from('user_preferences')
+      .select('active_company_id')
+      .eq('user_id', user.id)
+      .maybeSingle()
+
+    if (!(prefs as { active_company_id: string | null } | null)?.active_company_id) {
+      const { data: firstCompany } = await serviceClient
+        .from('companies')
+        .select('id')
+        .eq('team_id', invite.team_id)
+        .is('archived_at', null)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle()
+
+      if (firstCompany) {
+        const { error: prefError } = await serviceClient
+          .from('user_preferences')
+          .upsert(
+            { user_id: user.id, active_company_id: (firstCompany as { id: string }).id },
+            { onConflict: 'user_id' },
+          )
+        if (prefError) {
+          console.error('[pending-invites] failed to set active company', prefError)
+        }
+      }
+    }
+
+    await serviceClient
+      .from('team_invitations')
+      .update({ status: 'accepted' })
+      .eq('id', invite.id)
+
+    return {
+      status: 'accepted',
+      teamId: invite.team_id,
+      teamName: invite.teams?.name ?? null,
+    }
+  } catch (err) {
+    console.error('[pending-invites] team acceptance retry failed', err)
+    return { status: 'error' }
+  }
+}
+
+/**
+ * True when a pending, unexpired invitation exists for this email, in EITHER
+ * the company or the byrå-team invite table. Invitation emails are lowercased
+ * at creation (invite route Zod schema), so the lowercase equality match is
+ * exact. Used to tell an invitee who arrived without the invite token ("go
+ * open the link in the email") apart from a genuine first-time user. Never
+ * throws.
+ */
+export async function hasPendingInviteForEmail(email: string): Promise<boolean> {
+  const normalized = email.trim().toLowerCase()
+  const nowIso = new Date().toISOString()
+  try {
+    const serviceClient = createServiceClient()
+
+    const { data: companyInvites } = await serviceClient
       .from('company_invitations')
       .select('id')
-      .eq('email', email.trim().toLowerCase())
+      .eq('email', normalized)
       .eq('status', 'pending')
-      .gt('expires_at', new Date().toISOString())
+      .gt('expires_at', nowIso)
       .limit(1)
 
-    return (data ?? []).length > 0
+    if ((companyInvites ?? []).length > 0) return true
+
+    // Byrå-team invites are the other kind an invitee can arrive on: without
+    // this a tokenless byrå invitee is misread as a first-timer and funneled
+    // into creating a company.
+    const { data: teamInvites } = await serviceClient
+      .from('team_invitations')
+      .select('id')
+      .eq('email', normalized)
+      .eq('status', 'pending')
+      .gt('expires_at', nowIso)
+      .limit(1)
+
+    return (teamInvites ?? []).length > 0
   } catch (err) {
     console.error('[pending-invites] pending lookup failed', err)
     return false

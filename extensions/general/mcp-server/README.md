@@ -17,18 +17,23 @@ Enforced by tests in `__tests__/`: these are not style preferences, they're guar
 
 Tool definitions (name, description, inputSchema, outputSchema, annotations) are declared as static object literals at module load: no timestamps, no UUIDs, no Date/Math.random in the definition layer. This makes the `tools/list` JSON payload byte-stable across requests, which lets agent-side prompt caches stay warm. **Do not introduce per-request non-determinism into the definitions block.** Anything time-bound or random belongs inside `execute()`.
 
-For internal Anthropic API usage (today only `extensions/general/invoice-inbox/lib/extract-invoice-fields.ts`): annotate stable prefixes with `cache_control: { type: 'ephemeral' }` and log `usage.cache_read_input_tokens` for hit-ratio observability. The 1h TTL from the agent-native API plan (item 10) requires the direct Anthropic API; Accounted's Bedrock path defaults to a shorter TTL.
+For internal Anthropic API usage (the SDK is called from `lib/ai/provider.ts` and `lib/ai/services/anthropic-family.ts`; features such as `extensions/general/invoice-inbox/lib/extract-invoice-fields.ts` go through `getAiService()` in `lib/ai` rather than the SDK directly): annotate stable prefixes with `cache_control: { type: 'ephemeral' }` and log `usage.cache_read_input_tokens` for hit-ratio observability. The 1h TTL from the agent-native API plan (item 10) requires the direct Anthropic API; Accounted's Bedrock path defaults to a shorter TTL.
 
 ## Payload-size watchdog
 
-`payload-size.bench.test.ts` enforces a `tools/list` JSON payload ceiling. If the test fires, the right answer is rarely "raise the ceiling". Instead, trim descriptions or set specialized wide tools to `catalogVisibility: 'search'`. Those tools remain discoverable with full schemas through `gnubok_search_tools` and callable through `tools/call` without bloating the default catalog.
+`payload-size.bench.test.ts` enforces a `tools/list` JSON payload ceiling. If the test fires, the right answer is rarely "raise the ceiling". Instead, trim descriptions or set specialized wide tools to `catalogVisibility: 'search'`. Those tools remain discoverable with full schemas through `gnubok_search_tools` and callable through `tools/call` on the wire without bloating the default catalog. Claude.ai only calls tools present in `tools/list`, so a tool that a user or a skill must call directly stays in the default catalog.
 
 ## Where things live
 
 - `server.ts`: the tools array + JSON-RPC dispatcher
 - `tool-result.ts`: `withNext()`, `toToolError()` response helpers
-- `resources/`: read-only `Accounted://` URIs (active company, period, recent activity, capabilities, attention items, voucher gaps, chart of accounts, VAT treatments)
-- `widgets/`: inline HTML widgets (receipt-matcher, vat-review)
+- `resources/`: read-only `Accounted://` URIs, registered in `resources/index.ts`: `company/current`, `period/active`, `recent-activity`, `capabilities`, `attention`, `chart-of-accounts`, `settings/vat-treatments`, `booking-templates`, `ledger/context`, `reconciliation/summary`
+- `widgets/`: inline HTML widgets (receipt-matcher, vat-review, pending-operations)
 - `prompts/`: slash-command-style prompts
 - `skills/`: domain-knowledge skill bodies served via `gnubok_load_skill`
+- `public-tools.ts`: lazy authentication (issue #1814). `ANONYMOUS_METHODS` (initialize, ping, tools/prompts/resources listing) and the three `PUBLIC_TOOLS` (`gnubok_search_tools`, `gnubok_list_skills`, `gnubok_load_skill`) answer without credentials, rate-limited per truncated IP; every other `tools/call` gets a transport-level 401 + `WWW-Authenticate` from `handleMcpRequest` in `server.ts`, which is the challenge clients turn into their Connect prompt
+- `tasks.ts`: MCP Tasks extension (`io.modelcontextprotocol/tasks`): durable handles for long-running tool calls, rows in `mcp_tasks` (service-role writes only)
+- `origin-guard.ts`: Origin-header validation on the Streamable HTTP endpoint (DNS-rebinding defence required by the MCP spec)
+- `staging-pii-guard.ts`: refuses a plaintext personnummer in staged `pending_operations` params/preview, so every staging tool inherits the encrypt-at-staging rule
+- `tool-namespace.ts`: `?tool_namespace=accounted` handling (`accounted_*` aliases for the canonical `gnubok_*` ids)
 - `__tests__/`: strictness guards + per-tool coverage

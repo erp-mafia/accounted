@@ -128,24 +128,31 @@ describe('production error regressions', () => {
       ],
     })
 
+    // p_ruta_accounts / p_net_accounts are the settlement-shape detectors the
+    // drill-down gained in 20260828172003 so it drops the same entries as the
+    // filed figure. Neither fixture here is settlement-shaped, so paging is
+    // unaffected; the equality itself is covered by
+    // tests/pg/vat-ruta-drilldown-reconcile.pg.test.ts.
     const first = await getPool().query(
       `SELECT * FROM public.get_vat_ruta_source_lines(
-         $1, $2, $3, $4, NULL, NULL, NULL, NULL, 1
+         $1, $2, $3, $4, $5, $6, NULL, NULL, NULL, NULL, 1
        )`,
-      [ctx.companyId, '2026-03-01', '2026-03-31', ['2611']],
+      [ctx.companyId, '2026-03-01', '2026-03-31', ['2611'], ['2611'], ['2650', '1650']],
     )
     expect(first.rows).toHaveLength(1)
     expect(first.rows[0].voucher_number).toBe(1)
 
     const second = await getPool().query(
       `SELECT * FROM public.get_vat_ruta_source_lines(
-         $1, $2, $3, $4, $5, $6, $7, $8, 1
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1
        )`,
       [
         ctx.companyId,
         '2026-03-01',
         '2026-03-31',
         ['2611'],
+        ['2611'],
+        ['2650', '1650'],
         first.rows[0].entry_date,
         first.rows[0].voucher_number,
         first.rows[0].journal_entry_id,

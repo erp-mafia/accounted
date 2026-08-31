@@ -4,7 +4,7 @@ import { validateBody } from '@/lib/api/validate'
 import { withConnectorAuth, type ConnectorContext } from '@/lib/connect/hosted/with-connector-auth'
 import { buildSkvAuthorizeUrl, skvDefaultScopes } from '@/lib/connect/upstreams/skatteverket-oauth'
 import { reserveUpstream } from '@/lib/connect/hosted/upstream-budget'
-import { countActiveConnections, createPendingConnection } from '@/lib/connect/hosted/ledger'
+import { countHeldConnections, createPendingConnection, deletePendingConnectionById } from '@/lib/connect/hosted/ledger'
 import { signConnectorState } from '@/lib/connect/hosted/state'
 
 /**
@@ -59,13 +59,16 @@ export const POST = withConnectorAuth('connect.skv', async (request, ctx) => {
   if (!isOnInstance(return_url, ctx.key.instanceUrl)) {
     return NextResponse.json({ error: 'return_url must be on the connector key\'s instance', code: 'CONNECTOR_REDIRECT_INVALID' }, { status: 400 })
   }
-  const active = await countActiveConnections(ctx.supabase, ctx.key.id, 'skatteverket', cref)
-  if (active >= ctx.key.limits.skv_connections_per_company) {
-    return NextResponse.json(
+  // Quota with a reservation re-count (same TOCTOU fix as the bank /auth):
+  // pre-count fast-rejects, the pending row reserves, the post-insert
+  // re-count rolls the own row back when concurrent authorizes overshoot.
+  const quotaExceeded = () =>
+    NextResponse.json(
       { error: 'Skatteverket connection quota reached for this company', code: 'CONNECTOR_QUOTA_EXCEEDED', limit: ctx.key.limits.skv_connections_per_company },
       { status: 403 },
     )
-  }
+  const held = await countHeldConnections(ctx.supabase, ctx.key.id, 'skatteverket', cref)
+  if (held >= ctx.key.limits.skv_connections_per_company) return quotaExceeded()
   const budget = await reserveUpstream(ctx.supabase, 'skatteverket')
   if (!budget.ok) {
     return NextResponse.json({ error: 'Skatteverket connector is busy', code: 'CONNECTOR_RATE_LIMITED' }, { status: 429, headers: { 'Retry-After': String(budget.retryAfterSec) } })
@@ -73,7 +76,12 @@ export const POST = withConnectorAuth('connect.skv', async (request, ctx) => {
 
   const signedState = signConnectorState({ kid: ctx.key.id, svc: 'skv', ret: return_url, st: state, cref })
   const redirectUri = hostedRedirectUri()
-  await createPendingConnection(ctx.supabase, { keyId: ctx.key.id, service: 'skatteverket', companyRef: cref, provider: 'skatteverket', pendingState: signedState })
+  const pendingId = await createPendingConnection(ctx.supabase, { keyId: ctx.key.id, service: 'skatteverket', companyRef: cref, provider: 'skatteverket', pendingState: signedState })
+  const heldAfter = await countHeldConnections(ctx.supabase, ctx.key.id, 'skatteverket', cref)
+  if (heldAfter > ctx.key.limits.skv_connections_per_company) {
+    await deletePendingConnectionById(ctx.supabase, pendingId)
+    return quotaExceeded()
+  }
 
   const authorizeUrl = buildSkvAuthorizeUrl(redirectUri, signedState, { scope: scope || skvDefaultScopes(), codeChallenge: code_challenge })
   return NextResponse.json({ data: { authorize_url: authorizeUrl, redirect_uri: redirectUri, connector_state: signedState } })

@@ -26,8 +26,11 @@ import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { SupplierInvoiceReviewContent } from '@/components/suppliers/SupplierInvoiceReviewContent'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
+import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { exceedsHostedUploadLimit } from '@/lib/documents/upload-size'
+import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
@@ -162,6 +165,9 @@ export default function NewSupplierInvoiceForm({
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
   const t = useTranslations('supplier_invoice_editor')
+  // Loads the BAS chart chunk after mount and re-renders once names and
+  // descriptions for non-hardcoded accounts are available.
+  useBasReference()
   const ta = useTranslations('accruals')
 
   // When opened from an invoice-inbox item, every redirect should land the
@@ -186,7 +192,7 @@ export default function NewSupplierInvoiceForm({
 
   const {
     suppliers,
-    setSuppliers,
+    refreshSuppliers,
     suppliersLoaded,
     accounts,
     entityType,
@@ -1117,7 +1123,9 @@ export default function NewSupplierInvoiceForm({
       toast({ title: t('create_supplier_failed_title'), description: getErrorMessage(result, { context: 'supplier' }), variant: 'destructive' })
     } else {
       const created = result.data as Supplier
-      setSuppliers((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)))
+      // The shared supplier list feeds every picker: refresh it (awaited, so
+      // the pending selection below finds the new row).
+      await refreshSuppliers()
       setPendingSupplierSelect(created.id)
       setHasMatchedSupplier(true)
       setShowNewSupplier(false)
@@ -1242,13 +1250,23 @@ export default function NewSupplierInvoiceForm({
     setExtractionPhase('idle')
     setPendingExtraction(null)
 
+    // Above the hosted request-body limit the platform refuses a multipart
+    // body before the route runs (a plain 413, nothing in the logs), so the
+    // bytes go straight to Storage through a signed URL instead. Same
+    // response shape either way.
+    const directToStorage = exceedsHostedUploadLimit(file.size)
     try {
-      const formData = new FormData()
-      formData.append('file', file)
-      const res = await fetch('/api/extensions/ext/invoice-inbox/upload', {
-        method: 'POST',
-        body: formData,
-      })
+      let res: Response
+      if (directToStorage) {
+        res = await uploadViaSignedUrl(file)
+      } else {
+        const formData = new FormData()
+        formData.append('file', file)
+        res = await fetch('/api/extensions/ext/invoice-inbox/upload', {
+          method: 'POST',
+          body: formData,
+        })
+      }
       if (res.ok) {
         const json = await res.json().catch(() => null)
         const data = json?.data as
@@ -1279,6 +1297,12 @@ export default function NewSupplierInvoiceForm({
       }
     } catch {
       // Extension unreachable: fall through to the plain upload below.
+    }
+    if (directToStorage) {
+      // The plain fallback posts a multipart body to /api/documents, which
+      // the platform would refuse the same way: nothing left to try.
+      setDocumentFiles([{ ...entry, status: 'error', error: t('underlag_upload_failed') }])
+      return
     }
     await uploadPlainDocument(entry)
   }

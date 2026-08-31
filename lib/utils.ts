@@ -198,3 +198,23 @@ export function generateInvoiceNumber(): string {
 export function isValidExchangeRate(rate: number | null | undefined): rate is number {
   return rate != null && rate > 0 && rate < 100000
 }
+
+// Run a promise against a wall-clock budget. The underlying work continues to
+// completion on the server when the budget elapses: we just stop waiting for
+// it. For Anthropic calls that's fine: a slow Opus turn finishing later still
+// warms its own cache.
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timeout after ${ms}ms`)), ms)
+    promise.then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      (e) => {
+        clearTimeout(timer)
+        reject(e)
+      },
+    )
+  })
+}

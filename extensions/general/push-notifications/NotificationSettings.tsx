@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/components/ui/use-toast'
 import { createClient } from '@/lib/supabase/client'
-import { Bell, BellOff, Loader2, Moon } from 'lucide-react'
+import { Bell, BellOff, Loader2, Mail, Moon } from 'lucide-react'
 import type { NotificationSettings as NotificationSettingsType } from '@/types'
 
 interface NotificationSettingsProps {
@@ -295,6 +295,37 @@ export function NotificationSettings({ onSettingsChange }: NotificationSettingsP
             />
           </div>
 
+        </CardContent>
+      </Card>
+
+      {/* Email digest */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Mail className="h-5 w-5" />
+            E-post
+          </CardTitle>
+          <CardDescription>
+            Sammanfattningar via e-post
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor="email-digest">Nytt att bokföra</Label>
+              <p className="text-sm text-muted-foreground">
+                Dagligt mejl när nya banktransaktioner eller underlag har kommit in
+              </p>
+            </div>
+            <Switch
+              id="email-digest"
+              checked={settings.email_digest_enabled}
+              onCheckedChange={(checked) =>
+                updateSetting('email_digest_enabled', checked)
+              }
+              disabled={isSaving}
+            />
+          </div>
         </CardContent>
       </Card>
 

@@ -9,13 +9,17 @@ paths:
 
 Accounted exposes its bookkeeping engine as an MCP server for Claude Desktop/Code.
 
-**MCP extension** (`extensions/general/mcp-server/`): 90+ tools covering transactions, categorization, customers/suppliers, invoices, accounts, fiscal periods, reports (trial balance, GL, BS, IS, AR/supplier ledger, VAT, KPI), reconciliation, salary runs, AGI, year-end, document upload, and loadable skills. JSON-RPC 2.0. Endpoint: `/api/extensions/ext/mcp-server/mcp`.
+**MCP extension** (`extensions/general/mcp-server/`): 150+ tools (count `name: 'gnubok_` in `server.ts`; docs say "150+", never an exact number, because it drifts) covering transactions, categorization, customers/suppliers, invoices, accounts, fiscal periods, reports (trial balance, GL, BS, IS, AR/supplier ledger, VAT, KPI), reconciliation, salary runs, AGI, year-end, document upload, and loadable skills. JSON-RPC 2.0. Endpoint: `/api/extensions/ext/mcp-server/mcp`.
 
 **OAuth 2.1** for Claude and ChatGPT connectors: `.well-known/oauth-protected-resource` + `.well-known/oauth-authorization-server` discovery; `/api/mcp-oauth/authorize`, `/token` (PKCE), `/register`. Stateless AES-256-GCM auth codes (`lib/auth/oauth-codes.ts`). Single-use via `oauth_used_codes`. Allowlist: `claude.ai/api/*`, `claude.com/api/*`, `chatgpt.com/connector/oauth/*`, `chatgpt.com/connector_platform_oauth_redirect`, `localhost`.
 
 **npm packages**: `packages/accounted-mcp` is the Accounted stdio-to-HTTP bridge for new installs. `packages/gnubok-mcp` is the permanent compatibility package for existing configurations.
 
 **Tool namespaces**: internal tool ids and authorization maps remain canonical `gnubok_*`. The Accounted MCP surface is explicitly selected with `?tool_namespace=accounted`; it advertises `accounted_*` and accepts both aliases. Requests without the selector must retain the legacy server identity, catalog, and behavior.
+
+**Lazy auth** (issue #1814, `public-tools.ts`): a client with no token may `initialize`, `ping`, list tools/prompts/resources and call the three public documentation tools (`gnubok_search_tools`, `gnubok_list_skills`, `gnubok_load_skill`), rate-limited per truncated IP. Every other request, i.e. the first company-scoped `tools/call`, answers a transport-level `401` + `WWW-Authenticate: Bearer resource_metadata="..."` from `handleMcpRequest` in `server.ts` (around line 18620). That challenge is what Claude.ai turns into its Connect card and Claude Code into `/mcp` login, and the account can be created inside it, so never answer a tokenless call with a 200 + `isError`. A public tool must read no tenant data, need no scope (absent from `TOOL_SCOPE_MAP`) and be company-independent.
+
+**Feedback + tasks**: `gnubok_feedback` lets an agent report a missing tool, a misleading description, a wrong result or a positive signal; it emits an `agent.feedback` row to `event_log` (rate-limited 1 per 60 s per actor) and is read by the feedback-triage loop. Long-running tool calls use the MCP Tasks extension (`io.modelcontextprotocol/tasks`, `tasks.ts`): a task-capable client gets a task handle immediately and polls `tasks/get`; rows live in `mcp_tasks` (service-role writes only) so handles survive serverless instance turnover.
 
 ## Tool authoring conventions (enforced by tests)
 

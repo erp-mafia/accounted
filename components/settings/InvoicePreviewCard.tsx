@@ -56,6 +56,7 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
           .from('customers')
           .select('id')
           .eq('company_id', companyId)
+          .is('archived_at', null)
           .limit(1)
           .maybeSingle()
 

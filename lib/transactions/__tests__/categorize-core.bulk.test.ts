@@ -231,6 +231,7 @@ describe('bulkBookMatchedInboxItems: booking', () => {
       { data: { id: 'tx-1', date: '2026-06-01', amount: -700.28, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
       // 3. company_settings
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
+      { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
       // 4. ensureFiscalPeriod → existing period
       { data: [{ id: 'fp-1' }] },
       // 5. transactions update (mark booked)
@@ -273,7 +274,7 @@ describe('bulkBookMatchedInboxItems: booking', () => {
         },
       },
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
-      { data: { ledger_account: '1931' } },
+      { data: { ledger_account: '1931' } }, // resolveSettlementAccount: explicit cash_account_id lookup
       { data: [{ id: 'fp-1' }] },
       { data: [{ id: 'tx-1' }], error: null },
       { data: [] },
@@ -314,6 +315,7 @@ describe('bulkBookMatchedInboxItems: booking', () => {
       { data: { id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null } },
       { data: { id: 'tx-1', date: '2026-06-01', amount: -700, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
+      { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
       { data: [{ id: 'fp-1' }] },
       { data: [{ id: 'tx-1' }], error: null },
       { data: [] },
@@ -345,6 +347,7 @@ describe('bulkBookMatchedInboxItems: booking', () => {
       { data: { id: 'i2', matched_transaction_id: 'tx-2', created_journal_entry_id: null, created_supplier_invoice_id: null } },
       { data: { id: 'tx-2', date: '2026-06-02', amount: -25, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
+      { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
       { data: [{ id: 'fp-1' }] },
       { data: [{ id: 'tx-2' }], error: null },
       { data: [] },
@@ -381,6 +384,7 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
     { data: { id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null, channel_context: WA_CONTEXT } },
     { data: { id: 'tx-1', date: '2026-06-01', amount: -700, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
     { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
+    { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
     { data: [{ id: 'fp-1' }] },
     { data: [{ id: 'tx-1' }], error: null },
     { data: [] },
@@ -447,6 +451,7 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
       },
       { data: { id: 'tx-1', date: '2026-06-01', amount: -700, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
+      { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
       { data: [{ id: 'fp-1' }] },
       { error: null },
       { data: [] },
@@ -483,6 +488,7 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
       },
       { data: { id: 'tx-1', date: '2026-06-01', amount: -700, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
+      { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
       { data: [{ id: 'fp-1' }] },
       { error: null },
       { data: [] },
@@ -508,6 +514,7 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
       { data: { id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null, channel_context: null } },
       { data: { id: 'tx-1', date: '2026-06-01', amount: -700, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
+      { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
       { data: [{ id: 'fp-1' }] },
       { error: null },
       { data: [] },
@@ -536,6 +543,7 @@ describe('bulkBookMatchedInboxItems: intra-batch duplicate handling', () => {
     { data: { id: itemId, matched_transaction_id: txId, created_journal_entry_id: null, created_supplier_invoice_id: null } },
     { data: { id: txId, date: '2026-06-01', amount, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
     { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
+    { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
     { data: [{ id: 'fp-1' }] },
     { data: [{ id: txId }], error: null },
     { data: { document_id: null } }, // propagation: tx pin lookup

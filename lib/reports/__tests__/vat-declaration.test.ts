@@ -1181,6 +1181,34 @@ describe('calculateVatDeclaration: company-specific ruta 05 accounts', () => {
     expect(result.breakdown.invoices.base25).toBe(2000)
   })
 
+  it('keeps accounts with the oss treatment out of every ruta, static 3001 included', async () => {
+    // Unionsordningen: the sale is declared in the quarterly OSS declaration
+    // and must not appear in the Swedish momsdeklaration at all. The explicit
+    // treatment also overrides the static BAS mapping of a 3001-style number.
+    chartAccounts = [
+      { account_number: '3001', default_vat_rate: null, default_vat_treatment: 'oss' },
+      {
+        account_number: '3106',
+        account_name: 'Försäljning enl. OSS (Tyskland 19%)',
+        default_vat_rate: null,
+        default_vat_treatment: 'oss',
+      },
+    ]
+    seedLedger([
+      { account_number: '3001', debit_amount: 0, credit_amount: 7000 },
+      { account_number: '3106', debit_amount: 0, credit_amount: 2000 },
+      { account_number: '2670', debit_amount: 0, credit_amount: 1710 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta05).toBe(0)
+    expect(result.rutor.ruta10).toBe(0)
+    expect(result.rutor.ruta35).toBe(0)
+    expect(result.rutor.ruta42).toBe(0)
+    expect(result.breakdown.invoices.base25).toBe(0)
+  })
+
   it('ignores missing rates without matching evidence and keeps explicit 0 % authoritative', async () => {
     // A number or a free-text label alone is not enough, and an explicit
     // "Ingen moms" always wins over the fallback convention.
