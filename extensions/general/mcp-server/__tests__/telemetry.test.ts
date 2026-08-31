@@ -7,6 +7,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
+import type { EventPayload } from '@/lib/events/types'
 
 // ── Mocks (mirrors receipt-matcher.test.ts setup) ────────────
 
@@ -109,30 +110,16 @@ function mcpRequest(
   })
 }
 
-interface ToolCalledPayload {
-  tool: string
-  requiredScope: string | null
-  actorType: string
-  actorId: string | null
-  actorLabel: string | null
-  latencyMs: number
-  success: boolean
-  isError: boolean
-  errorCode: string | null
-  errorKind:
-    | 'execution'
-    | 'scope_denied'
-    | 'company_access_denied'
-    | 'invalid_arguments'
-    | 'unknown_tool'
-    | null
-  errorMessage: string | null
-  errorDetail: string | null
-  requestId: string | number | null
-  userId: string
-  companyId: string
-  client: string | null
-}
+/**
+ * The shared event contract, not a local copy.
+ *
+ * This used to be a hand-maintained duplicate interface, which silently
+ * omitted sessionId and half the errorKind union. A new field added to
+ * lib/events/types.ts and to the emitter then type-checked here against the
+ * stale local shape, so the tests passed while the payload type was wrong.
+ * Deriving it removes the drift entirely.
+ */
+type ToolCalledPayload = EventPayload<'mcp.tool_called'>
 
 interface ToolsListCalledPayload {
   toolCount: number
@@ -294,11 +281,9 @@ describe('mcp.tool_called telemetry', () => {
     expect(event.errorDetail).toContain('gnubok_get_trial_balance')
   })
 
-  it('leaves errorDetail null when it would only repeat errorMessage', async () => {
+  it('carries both languages on a scope denial, without duplicating either', async () => {
     const eventPromise = captureNextToolCalledEvent()
 
-    // Scope denial: message_sv is already the specific text, so the detail
-    // field adds nothing and must not duplicate the row.
     await handleMcpRequest(
       mcpRequest('tools/call', {
         name: 'gnubok_create_invoice',
@@ -308,9 +293,24 @@ describe('mcp.tool_called telemetry', () => {
 
     const event = await eventPromise
     expect(event.errorKind).toBe('scope_denied')
-    if (event.errorDetail !== null && event.errorDetail !== undefined) {
-      expect(event.errorDetail).not.toBe(event.errorMessage)
-    }
+    // Asserted directly rather than behind an `if`: a conditional assertion
+    // would also pass on a wrong-but-present value, which is no assertion.
+    expect(typeof event.errorDetail).toBe('string')
+    expect(event.errorDetail).not.toBe(event.errorMessage)
+  })
+
+  it('stores null when the call site supplies no diagnostic', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    // The unknown-tool exit passes errorMessage only. Nothing may be
+    // invented to fill errorDetail.
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_not_a_real_tool', arguments: {} })
+    )
+
+    const event = await eventPromise
+    expect(event.errorKind).toBe('unknown_tool')
+    expect(event.errorDetail).toBeNull()
   })
 
   it('applies the canonical scope gate to an Accounted alias', async () => {
