@@ -54,6 +54,7 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { buildTransactionEntryLines, createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
+import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
 import { eventBus } from '@/lib/events/bus'
 import { getVatRules, getPermittedVatRates, getArticleVatRateAdoptionSet } from '@/lib/invoices/vat-rules'
@@ -15765,6 +15766,93 @@ export const tools: McpTool[] = [
           description: 'After approval the transaction is uncategorized again: book it with the correct category via gnubok_categorize_transaction.',
           tool: 'gnubok_categorize_transaction',
           args: { transaction_id: transactionId },
+        }
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_ignore_transaction',
+    title: 'Ignore Transaction (Ignorera)',
+    description: 'Stage ignoring an unbooked bank transaction that is no business event (PSD2 ghost row, duplicate). No verifikat is written, so a locked period does not block it: the answer to TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED. restore: true un-ignores; booked rows are refused.',
+    // Default catalog: gnubok_call_tool only bridges READ tools, so a
+    // search-only WRITE is uncallable on Claude.ai, and the
+    // TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED remediation instructs agents to call
+    // this tool. Budget accounted for in payload-size.bench.test.ts (#1661).
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        transaction_id: { type: 'string', description: 'UUID of the unbooked bank transaction' },
+        restore: { type: 'boolean', description: 'true = clear the ignore flag instead (default false)' },
+        dry_run: { type: 'boolean', description: 'Validate and preview without staging.' },
+        idempotency_key: { type: 'string', description: 'Per-operation UUID for safe retries (24h TTL).' },
+      },
+      required: ['transaction_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const transactionId = String(args.transaction_id ?? '').trim()
+      if (!transactionId) throw new Error('transaction_id is required')
+      const restore = args.restore === true
+
+      const { data: tx, error: txError } = await supabase
+        .from('transactions')
+        .select('id, description, merchant_name, amount, currency, date, is_ignored')
+        .eq('id', transactionId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (txError) throw dbError(txError)
+      if (!tx) throw new Error('Transaction not found')
+
+      // Preflight through the shared core in dry run (issue #1661): the booked
+      // check covers all three anchors (journal_entry_id, payment allocations,
+      // voucher links) and `changed` tells the preview whether approval would
+      // be a no-op. Nothing is written here; the commit path re-runs the core.
+      const preflight = await setTransactionIgnored(supabase, companyId, transactionId, !restore, {
+        dryRun: true,
+      })
+      if (!preflight.ok) {
+        const entry = getErrorEntry(preflight.code)
+        throw new Error(
+          `Cannot ${restore ? 'restore' : 'ignore'} transaction: ${preflight.code}. ${entry?.message_en ?? ''}`.trim()
+        )
+      }
+
+      const label = tx.merchant_name || tx.description || transactionId
+      return stagePendingOperation(supabase, companyId, userId, 'ignore_transaction',
+        restore ? `Återställ ignorerad transaktion: ${label}` : `Ignorera transaktion: ${label}`,
+        { transaction_id: transactionId, ignored: !restore },
+        {
+          transaction_id: transactionId,
+          transaction_description: label,
+          amount: tx.amount,
+          currency: tx.currency,
+          date: tx.date,
+          currently_ignored: Boolean(tx.is_ignored),
+          will_be_ignored: !restore,
+          already_in_state: !preflight.changed,
+          // No verifikat is written, so period_status is informational only:
+          // a locked or closed period does not block this operation.
+          writes_verifikat: false,
+          period_lock_applies: false,
+        },
+        actor,
+        restore
+          ? {
+              description: 'After approval the row is back in the "to book" list: book it via gnubok_categorize_transaction.',
+              tool: 'gnubok_categorize_transaction',
+              args: { transaction_id: transactionId },
+            }
+          : {
+              description: 'After approval the row leaves the "to book" list. Continue with gnubok_list_uncategorized_transactions.',
+              tool: 'gnubok_list_uncategorized_transactions',
+            },
+        {
+          dryRun: Boolean(args.dry_run),
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+          dateForPeriodCheck: tx.date,
         }
       )
     },

@@ -2540,6 +2540,10 @@ export type PendingOperationType =
   // Notes-only annotation on a verifikat: the immutability trigger's carve-out
   // (migration 20260608120000) makes this legal even on posted entries.
   | 'set_voucher_note'
+  // Ignore / restore a bank transaction that is not an affärshändelse (PSD2
+  // ghost row, duplicate, never-executed transfer). Writes no verifikat, so a
+  // locked or closed period does not block it (issue #1661).
+  | 'ignore_transaction'
   // Bokslut: planenlig avskrivning (one journal entry per asset)
   | 'post_annual_depreciation'
   // Payroll: salary run creation + AGI declaration
