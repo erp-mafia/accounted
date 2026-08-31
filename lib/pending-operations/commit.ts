@@ -114,6 +114,7 @@ import { getEmailService } from '@/lib/email/service'
 import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
 import { hasCapability, CAPABILITY_BLOCKED_MESSAGE_SV } from '@/lib/entitlements/has-capability'
 import { PAID_OPERATION_CAPABILITY_MAP } from '@/lib/entitlements/keys'
+import { exceedsUnattendedLimit } from './unattended-limit'
 import {
   generateInvoiceEmailHtml,
   generateInvoiceEmailText,
@@ -215,6 +216,11 @@ export interface CommitResult {
   // callers that do not recognize the code fall back to `error`.
   code?: string
   account_numbers?: string[]
+  // The two numbers UNATTENDED_COMMIT_LIMIT_EXCEEDED's remediation refers to,
+  // in SEK. Present only on that code. Without them the agent knows it was
+  // over the ceiling but not by how much, and cannot tell a human what to
+  // raise the limit to.
+  unattended_limit?: { attempted: number; limit: number }
   // Where the pending_operations row landed, independent of `status`:
   // 'pending' means the op was NOT consumed and can be approved again
   // (recoverable refusal: capability, chart accounts, Skatteverket, or an
@@ -6623,6 +6629,41 @@ async function commitPendingOperationInner(
       http_status: 403,
       code: 'capability_blocked',
       operation_status: 'pending',
+    }
+  }
+
+  // ── Approval-authority ceiling: what this API key may finish unattended.
+  //
+  //    Checked HERE, before the atomic claim, for the same reason the
+  //    capability gate above is: a refused op must stay 'pending' so a human
+  //    can still approve it in /pending. Inside the claim it would fall into
+  //    the generic catch below, which marks the op terminal 'rejected' with no
+  //    code and consumes the staged verifikat, which is unrecoverable: the
+  //    agent must rebuild the whole booking to try again.
+  //
+  //    Cannot fire for a human: exceedsUnattendedLimit requires
+  //    actor.type === 'api_key' AND a positive limit on that key. In-app
+  //    approvals pass {type:'user'}, cron passes 'cron', and the
+  //    cookie-session routes commit with no actor at all.
+  const unattended = exceedsUnattendedLimit({
+    actorType: opts.actor?.type,
+    limit: opts.actor?.unattendedCommitLimit,
+    operationType: pendingOp.operation_type,
+    previewData: pendingOp.preview_data,
+  })
+  if (unattended.exceeded) {
+    return {
+      status: 'failed',
+      error:
+        getErrorEntry('UNATTENDED_COMMIT_LIMIT_EXCEEDED')?.message_sv ??
+        'Beloppet \u00f6verstiger vad den h\u00e4r API-nyckeln f\u00e5r bokf\u00f6ra utan m\u00e4nskligt godk\u00e4nnande.',
+      http_status: 403,
+      code: 'UNATTENDED_COMMIT_LIMIT_EXCEEDED',
+      operation_status: 'pending',
+      unattended_limit: {
+        attempted: unattended.attempted as number,
+        limit: unattended.limit as number,
+      },
     }
   }
 
