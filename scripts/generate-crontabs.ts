@@ -111,6 +111,37 @@ export const SCHEDULE_OVERRIDES: Readonly<
   'self-hosted': {},
 }
 
+/**
+ * Jobs that exist in ONE variant only and therefore have no vercel.json entry
+ * (vercel.json is the hosted schedule). Each carries its reason, the same
+ * discipline as EXCLUDED_PATHS: a self-hosted-only endpoint that silently
+ * lacked a schedule would be dead code that looks alive.
+ *
+ * Rendered after the vercel.json jobs under their own comment line. The
+ * crontab drift test checks both halves: the vercel.json mirror AND that
+ * every EXTRA_JOBS path is a real cron route that vercel.json does NOT
+ * schedule (the moment it does, the entry must go).
+ */
+export interface ExtraJob {
+  path: string
+  schedule: string
+  reason: string
+}
+
+export const EXTRA_JOBS: Readonly<Record<CrontabVariant, readonly ExtraJob[]>> = {
+  hosted: [],
+  'self-hosted': [
+    {
+      path: '/api/connector/sync/cron',
+      schedule: '17 * * * *',
+      reason:
+        'Self-hosted only: refreshes the source=connector capability grants from the instance\'s ' +
+        'GNUBOK_CONNECTOR_KEY (hourly; grants carry a 72h offline grace). Hosted has no connector ' +
+        'key, so the route is not in vercel.json; an instance without a key answers not_configured.',
+    },
+  ],
+}
+
 /** Read and shape-check the `crons` array. */
 export function readVercelCrons(vercelJson: string): VercelCron[] {
   const parsed = JSON.parse(vercelJson) as { crons?: VercelCron[] }
@@ -178,6 +209,7 @@ export function buildCrontab(
   options: {
     excluded?: Readonly<Record<string, string>>
     overrides?: Readonly<Record<CrontabVariant, Readonly<Record<string, string>>>>
+    extraJobs?: Readonly<Record<CrontabVariant, readonly ExtraJob[]>>
   } = {},
 ): string {
   const excluded = options.excluded ?? EXCLUDED_PATHS
@@ -190,13 +222,22 @@ export function buildCrontab(
       schedule: overrides[variant][cron.path] ?? cron.schedule,
     }))
 
+  const extraJobs = (options.extraJobs ?? EXTRA_JOBS)[variant]
+
   // Align the commands: pad to the widest schedule plus two spaces, the same
   // column convention the hand-written files used.
-  const width = jobs.reduce((max, job) => Math.max(max, job.schedule.length), 0) + 2
+  const width = [...jobs, ...extraJobs].reduce((max, job) => Math.max(max, job.schedule.length), 0) + 2
 
   const lines = [
     ...buildHeader(variant),
     ...jobs.map((job) => `${job.schedule.padEnd(width)}${CURL_PREFIX}${job.path}`),
+    ...(extraJobs.length > 0
+      ? [
+          '',
+          `# ${variant}-only jobs, not in vercel.json: see EXTRA_JOBS in scripts/generate-crontabs.ts`,
+          ...extraJobs.map((job) => `${job.schedule.padEnd(width)}${CURL_PREFIX}${job.path}`),
+        ]
+      : []),
   ]
 
   return `${lines.join('\n')}\n`
@@ -221,9 +262,19 @@ function main(): void {
   }
 
   for (const variant of VARIANTS) {
+    for (const job of EXTRA_JOBS[variant]) {
+      if (crons.some((cron) => cron.path === job.path)) {
+        throw new Error(
+          `EXTRA_JOBS.${variant} lists ${job.path}, which vercel.json now schedules. Remove the extra entry.`,
+        )
+      }
+    }
+  }
+
+  for (const variant of VARIANTS) {
     const target = join(DOCKER_DIR, `crontab.${variant}`)
     writeFileSync(target, buildCrontab(crons, variant), 'utf8')
-    const emitted = crons.filter((cron) => !(cron.path in EXCLUDED_PATHS)).length
+    const emitted = crons.filter((cron) => !(cron.path in EXCLUDED_PATHS)).length + EXTRA_JOBS[variant].length
     const overridden = Object.keys(SCHEDULE_OVERRIDES[variant]).length
     console.log(
       `Wrote docker/crontab.${variant}: ${emitted} jobs` +
