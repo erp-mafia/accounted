@@ -54,7 +54,7 @@ The migrations automatically enable these extensions:
 | Extension | Migration | Purpose |
 |-----------|-----------|---------|
 | `uuid-ossp` | 001 | UUID generation |
-| `vector` (pgvector) | 033 | AI embedding storage (for AI extensions) |
+| `vector` (pgvector) | 033 | Created by an early migration; no current code path stores embeddings, the extension only needs to exist for the migration to apply |
 | `btree_gist` | 042 | Fiscal period overlap prevention |
 | `pg_cron` | 048 | In-database scheduled jobs |
 
@@ -186,14 +186,14 @@ To bring in more users, invite them from **Settings > Company > Members** (compa
 
 ## Scheduled Jobs
 
-The cron sidecar runs these jobs automatically:
+The cron sidecar runs the schedule in [`docker/crontab.self-hosted`](../docker/crontab.self-hosted). That file is generated from the `crons` array in `vercel.json` (the single source of truth, shared with the hosted service) by `npm run crontabs:generate`, and a test fails CI if it drifts, so this guide does not repeat the table: open the file for the exact jobs and times. They fall into these groups:
 
-| Schedule (UTC) | Endpoint | Purpose |
-|----------------|----------|---------|
-| Daily 06:00 | `/api/deadlines/status/cron` | Update deadline statuses |
-| Daily 08:00 | `/api/invoices/reminders/cron` | Send overdue invoice reminders |
-| Yearly Jan 2 | `/api/tax-deadlines/cron` | Generate tax deadlines for the new year |
-| Sundays 03:00 | `/api/documents/verify/cron` | SHA-256 integrity check on document archive |
+- **Every minute / every few minutes**: webhook dispatch, WhatsApp and invoice-inbox sweeps (crash recovery for staged uploads).
+- **Hourly**: recurring invoices, cloud-backup auto-sync, idempotency-key cleanup.
+- **Nightly (UTC)**: deadline statuses, tax deadlines, document-archive SHA-256 verification, event and pending-operation cleanup, sandbox cleanup, booking-template sync, bank sync, skattekonto sync, accrual posting, receipt hunt, WhatsApp retention.
+- **Skatteverket receipts**: AGI every 15 minutes, VAT every two hours.
+
+Extension endpoints are listed unconditionally: one whose extension is not enabled answers a cheap no-op, so enabling it later needs no crontab change.
 
 All cron endpoints are authenticated with `Authorization: Bearer <CRON_SECRET>`. The cron container calls the app over the internal Docker network (`http://app:3000`), so these endpoints are not exposed publicly.
 
@@ -213,7 +213,7 @@ The stock self-hosted image includes both extraction extensions, so these creden
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-**Option 2: AWS Bedrock.** Requires an AWS account with Bedrock model access to Claude. This is what the hosted service runs, because it keeps inference inside eu-north-1: choose it if you need the AI calls to stay in the EU, which the direct API does not guarantee.
+**Option 2: AWS Bedrock.** Requires an AWS account with Bedrock model access to Claude. This is what the hosted service runs, because it keeps inference inside the EU (the `eu.` cross-region inference profile; `AWS_REGION` is the API endpoint, not a pin to one region): choose it if you need the AI calls to stay in the EU, which the direct API does not guarantee.
 
 ```bash
 AWS_ACCESS_KEY_ID=...
@@ -267,7 +267,7 @@ AI_PROVIDER=bedrock|anthropic|openai-compatible   # force the backend (see below
 
 The pre-existing names `BEDROCK_MODEL_ID`, `BEDROCK_OPUS_MODEL_ID`, `BEDROCK_SONNET_MODEL_ID` and `BEDROCK_MAX_TOKENS` keep working as the same overrides (extraction, heavy, standard, extraction cap) on every backend; the `AI_*` names take precedence when both are set. Claude deployments default every tier to `claude-sonnet-5`.
 
-When several credential sets are present, Bedrock wins, then the direct Anthropic API, then the OpenAI-compatible endpoint, so that adding a key for an experiment cannot silently move production inference out of eu-north-1. Set `AI_PROVIDER` to say which you mean. A model id written without a provider prefix is adapted to whichever backend is active; an id that already carries one (`eu.anthropic.…`) is used as-is.
+When several credential sets are present, Bedrock wins, then the direct Anthropic API, then the OpenAI-compatible endpoint, so that adding a key for an experiment cannot silently move production inference out of the EU. Set `AI_PROVIDER` to say which you mean. A model id written without a provider prefix is adapted to whichever backend is active; an id that already carries one (`eu.anthropic.…`) is used as-is.
 
 Without working credentials the rest of the app runs normally: uploads are stored but not auto-interpreted (the upload UI sees that immediately rather than waiting for a timeout), and the AI assistant answers `503 ai_unconfigured`.
 
@@ -327,7 +327,7 @@ SMTP_FROM_EMAIL=faktura@your-domain.se
 
 Without either, invoices can still be generated as PDFs but cannot be emailed.
 
-**Invitations do not require Resend.** When no mail provider is configured, the invite is still created and the accept link is returned to the inviter in the app (a copy button under the pending invitations list, plus a warn-level log record whose msg is `email service not configured: invite email skipped`; the Docker image logs JSON, so grep for the message text, not a `WARN` prefix; the token is never logged). Share the link manually; it is valid until the invitation expires. Resend (or plain SMTP once [#1746](https://github.com/erp-mafia/accounted/pull/1746) lands) is only needed if you want the invitation mailed automatically. There is no re-send for company invitations: revoke and invite again for a new link.
+**Invitations do not require Resend.** When no mail provider is configured, the invite is still created and the accept link is returned to the inviter in the app (a copy button under the pending invitations list, plus a warn-level log record whose msg is `email service not configured: invite email skipped`; the Docker image logs JSON, so grep for the message text, not a `WARN` prefix; the token is never logged). Share the link manually; it is valid until the invitation expires. A mail provider (Resend, or your own relay with `EMAIL_PROVIDER=smtp`, both above) is only needed if you want the invitation mailed automatically. There is no re-send for company invitations: revoke and invite again for a new link.
 
 Note the two separate mail paths: this variable drives the app's own mail (invoices, invitations, reminders); account mail from GoTrue (signup confirmation, password reset, and the account-provisioning invite when `AUTH_SIGNUPS_DISABLED=true`) goes through the Supabase **Authentication > SMTP Settings** described in [Configure Authentication](#2-configure-supabase-auth) and [Troubleshooting](#troubleshooting).
 
@@ -395,7 +395,7 @@ The Next.js app is stateless: all data lives in Supabase. The Docker entrypoint 
 
 ## Fully Self-Hosted (No Supabase Cloud)
 
-The setup above relies on a Supabase project at supabase.com. If you also want to host the database, auth, and storage yourself (to keep all data on-premises, avoid the SaaS dependency, or run air-gapped) you can pair Accounted with [Supabase's official Docker self-hosting stack](https://supabase.com/docs/guides/self-hosting/docker) instead.
+The setup above relies on a Supabase project at supabase.com. If you also want to host the database, auth, and storage yourself (to keep all data on-premises, avoid the SaaS dependency, or run air-gapped) you can pair Accounted with [Supabase's official Docker self-hosting stack](https://supabase.com/docs/guides/self-hosting/docker) instead. For the fully Swedish variant of this (Swedish hosting, Swedish object storage with retention locks for the 7-year archive, AI on Swedish GPUs, backup/restore runbook) see [SOVEREIGN.md](SOVEREIGN.md); the mechanics below apply there too.
 
 This is a more involved path. You take responsibility for backups, TLS certificates, image upgrades, and Postgres operations. It is intended for operators already running Docker services who are comfortable with PostgreSQL.
 
@@ -436,7 +436,7 @@ flowchart LR
 
 ### Setup outline
 
-1. **Bring up Supabase** following [supabase.com/docs/guides/self-hosting/docker](https://supabase.com/docs/guides/self-hosting/docker). Generate your own `JWT_SECRET`, `ANON_KEY`, and `SERVICE_ROLE_KEY` (Supabase ships `sh utils/generate-keys.sh`). Pick a hostname for the API gateway (e.g. `supabase.example.com`) and point `SUPABASE_PUBLIC_URL` / `API_EXTERNAL_URL` at it.
+1. **Bring up Supabase** following [supabase.com/docs/guides/self-hosting/docker](https://supabase.com/docs/guides/self-hosting/docker). Generate your own `JWT_SECRET`, `ANON_KEY`, and `SERVICE_ROLE_KEY` (Supabase ships `sh utils/generate-keys.sh`). Pick a hostname for the API gateway (e.g. `supabase.example.com`) and point `SUPABASE_PUBLIC_URL` at it and `API_EXTERNAL_URL` at it **including the `/auth/v1` path** (upstream docker 0.7.0, July 2026, changed this). The API gateway depends on the upstream release you check out: `self-hosted/v0.7.x` runs Kong by default and offers Envoy through the `docker-compose.envoy.yml` overlay; `self-hosted/v0.8.0` and later run Envoy by default and keep Kong available through `docker-compose.kong.yml`. The diagram above says `kong`; the role is the same, the container name follows your release and overlays.
 
 2. **Apply the Accounted migrations** directly via `psql`: the Supabase CLI (`db push`) assumes a cloud project, so run the SQL files against the self-hosted database container:
 
@@ -574,7 +574,7 @@ portable base file alone.
 
 ### What you give up vs. cloud Supabase
 
-- **Backups** are entirely your responsibility: set up `pg_dump` (or a tool like restic) to off-host storage. As a portable, vendor-neutral *logical* backup on top of the raw dump, you can also export each fiscal period as a standard **SIE4** file via the API and archive it: any Swedish bookkeeping system can re-import it:
+- **Backups** are entirely your responsibility. The repo ships `scripts/self-host/backup.sh` / `restore.sh` (`pg_dump` custom format with ACLs kept, ACL manifest, storage tar, optional db-config volume, to any S3-compatible bucket with Object Lock; see [SOVEREIGN.md, section 5](SOVEREIGN.md#5-backup-and-restore-ship-it-do-not-improvise-it)); scheduling and monitoring them is still on you. As a portable, vendor-neutral *logical* backup on top of the raw dump, you can also export each fiscal period as a standard **SIE4** file via the API and archive it: any Swedish bookkeeping system can re-import it:
 
   ```bash
   curl -fsS -H "Authorization: Bearer <reports:read API key>" \
