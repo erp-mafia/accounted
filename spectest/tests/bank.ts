@@ -85,7 +85,19 @@ export const connectBank = env.test(
     // matters is checked against the database after saving, below.
     const picker = b.getByRole("dialog");
     await expect(picker).toContainText("1930 Företagskonto / checkkonto");
-    await expect(picker).toContainText("1932 Valutakonto EUR");
+
+    // The chart account carries a BAS-style name, not the bank's. 1932 is a
+    // free-use sub-account with no BAS reference, so it is named "Bankkonto
+    // EUR" rather than after what the bank calls the account. That is
+    // deliberate (#1643): ASPSPs report the account HOLDER as the account
+    // name, so every failed reconnect used to persist another 19xx chart
+    // account named after the company. The bank's own name still shows on the
+    // row above the picker, which is the line below.
+    await expect(picker).toContainText("1932 Bankkonto EUR");
+    await expect(
+      picker,
+      "the bank's name for the account is still shown, next to the chart account it maps to",
+    ).toContainText("Valutakonto EUR");
 
     await b.getByRole("button", { name: "Spara val", exact: true }).click();
 

@@ -135,11 +135,20 @@ export const lockedPeriodRefusesBooking = env.test(
 
     // The user is told, in Swedish, what happened and why. A silent failure
     // here would leave them believing the transaction was booked.
+    //
+    // The route fails closed since #1947 (f0af4ad4e): it returns 409
+    // TX_CATEGORIZE_JOURNAL_ENTRY_FAILED rather than a 200 carrying a
+    // journal_entry_error, so the transaction is never half-marked. The toast
+    // moved with it, from "Delvis bokförd" to this one.
+    await expect(b.getByText("Kategorisering misslyckades")).toBeVisible({
+      timeout: 20000,
+    });
+    // And it names the reason rather than saying "try again", which would be
+    // wrong advice: retrying a locked period never works.
     await expect(
-      b.getByText(
-        "Verifikation kunde inte skapas: Perioden är låst. Verifikationen kan inte skapas i en stängd eller låst period.",
-      ),
-    ).toBeVisible({ timeout: 20000 });
+      b.getByText(/Perioden är låst/),
+      "the refusal names the locked period rather than offering a retry",
+    ).toBeVisible();
 
     // The trigger held: still the invoice and the one bank booking, no more.
     const entries = await ctx.svc.supabase.sql<{ n: number }>`

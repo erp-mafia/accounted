@@ -92,46 +92,47 @@ reasons that have nothing to do with the code. Use a fresh shell for
   a description. Skips itself unless `NEXT_PUBLIC_SUPABASE_URL` points at
   localhost, so `npm test` and CI stay green without the stack.
 
-## Five tests are red on purpose
+## Three tests are red on purpose
 
 None is flaky and none is broken. Each pins a filed bug, and each fails with
 the bug stated in its assertion message.
 
 | Test | Issue |
 |---|---|
-| `booking.ts` → a partially booked transaction is still work to do | [#1947](https://github.com/erp-mafia/accounted/issues/1947) |
-| `storno.ts` → storno puts the bank transaction back on the worklist | [#1950](https://github.com/erp-mafia/accounted/issues/1950) |
 | `kontantmetod.ts` → the payment is recorded in the reskontra, not only in the ledger | [#2019](https://github.com/erp-mafia/accounted/issues/2019) |
 | `reverse-charge.ts` → an EU customer cannot be saved with Sweden as its country | [#2025](https://github.com/erp-mafia/accounted/issues/2025) |
 | `reverse-charge.ts` → the periodiska sammanställningen files an ISO country code | [#2028](https://github.com/erp-mafia/accounted/issues/2028) |
 
-The first two come from the same root: `is_business` is written as if it meant
-"booked" while the canonical worklist predicate in `lib/worklist/types.ts`
-treats it as "dealt with". A transaction whose verifikat was refused, or whose
-verifikat was later stornoed, therefore leaves "Att bokföra" while still being
-unbooked.
+The first is a money bug. `settleInvoicePayment` books the entry and flips the
+status but never inserts into `invoice_payments`, so a manually registered
+payment exists as a verifikat and nowhere else. The year-end cut-off under
+kontantmetoden reads the payment DATE from that table, by design, and treats a
+fully paid invoice as outstanding when the row is missing: a kundfordran plus
+vilande moms for revenue already booked.
 
-The third is a money bug rather than a worklist one. `settleInvoicePayment`
-books the entry and flips the status but never inserts into `invoice_payments`,
-so a manually registered payment exists as a verifikat and nowhere else. The
-year-end cut-off under kontantmetoden reads the payment DATE from that table,
-by design, and treats a fully paid invoice as outstanding when the row is
-missing: a kundfordran plus vilande moms for revenue already booked.
-
-The last two share a root of their own: `customers.country` is free text with
-no defined format, defaulting to the English word "Sweden", while the reports
-read it as an ISO code. One consequence is that an "EU-företag" in Sweden saves
-without complaint and unlocks a 0 % invoice; the other is that the SKV 5740
-file carries `GERMANY811234567` where the buyer's VAT number belongs. Fixing
-the format fixes both.
+The other two share a root: `customers.country` is free text with no defined
+format, defaulting to the English word "Sweden", while the reports read it as
+an ISO code. One consequence is that an "EU-företag" in Sweden saves without
+complaint and unlocks a 0 % invoice; the other is that the SKV 5740 file
+carries `GERMANY811234567` where the buyer's VAT number belongs. Fixing the
+format fixes both.
 
 Fix the bugs or park the tests before wiring this into a merge gate. Do not
 "fix" them by weakening the assertions.
 
-Two of them read the DB after a UI action. Both use `ctx.poll` to wait for the
-write to land: reading straight after the click made #2025's test pass for the
-wrong reason, because the row it was asserting the absence of had simply not
-been written yet.
+Two red tests became green when the branch caught up with `main` on
+2026-08-31: `booking.ts` → a partially booked transaction is still work to do
+([#1947](https://github.com/erp-mafia/accounted/issues/1947), fixed by
+`f0af4ad4e`) and `storno.ts` → storno puts the bank transaction back on the
+worklist ([#1950](https://github.com/erp-mafia/accounted/issues/1950), fixed by
+`cb9ae15d4`). They are ordinary regression tests now. That is what these are
+for: the tests were written against the bug and kept the shape of the fix
+honest without anyone re-deriving it.
+
+Tests that read the DB after a UI action go through `ctx.poll`, including the
+negative ones. Reading straight after the click made #2025's test pass for the
+wrong reason: the row it was asserting the absence of had merely not been
+written yet.
 
 ## The VIES fake
 
