@@ -2912,7 +2912,8 @@ function FieldsRail({
       {(data?.documentKind ||
         data?.payment?.method ||
         data?.pages ||
-        (data?.totals?.total == null && (data?.prominentAmounts?.length ?? 0) > 0)) && (
+        (data?.totals?.total == null &&
+          (data?.prominentAmounts ?? []).some((a) => Number.isFinite(a.amount) && a.amount !== 0))) && (
         <div className="border-b px-4 py-3 text-xs space-y-1">
           {data?.documentKind && (
             <div className="flex gap-2">
@@ -2930,14 +2931,21 @@ function FieldsRail({
               </span>
             </div>
           )}
-          {/* Amounts read off a non-invoice document (bankintyg, avtal):
-              without this row the empty "Totalt" field reads as if extraction
-              missed them. */}
-          {data?.totals?.total == null && (data?.prominentAmounts?.length ?? 0) > 0 && (
+          {/* Amounts read off a multi-amount non-invoice document (an AGI
+              besked listing lön/skatt/avgifter): no single figure is "the"
+              total, so they show here as context while TOTALT stays empty for
+              the user to settle. Single-amount documents don't render this:
+              their amount is promoted into the editable TOTALT field
+              (promoteSingleProminentAmount), which also hides this row via
+              the totals.total == null condition. Zero amounts are noise
+              ("Totalt månadspris: 0 kr"), same filter as matching applies. */}
+          {data?.totals?.total == null &&
+            (data?.prominentAmounts ?? []).some((a) => Number.isFinite(a.amount) && a.amount !== 0) && (
             <div className="flex gap-2">
               <span className="text-muted-foreground w-14 shrink-0">{t('prominent_amounts_label')}</span>
               <span className="tabular-nums">
                 {(data?.prominentAmounts ?? [])
+                  .filter((a) => Number.isFinite(a.amount) && a.amount !== 0)
                   .map((a) =>
                     a.label
                       ? `${a.label}: ${formatCurrency(a.amount, data?.invoice?.currency ?? 'SEK')}`

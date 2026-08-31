@@ -144,6 +144,37 @@ describe('PATCH /items/:id/fields', () => {
     expect(merged.supplier?.name).toBe('Restaurang Riddaren AB')
   })
 
+  it('clears totalSource when the user edits TOTALT', async () => {
+    // A promoted prominent amount (totalSource 'prominent') is fallback-grade
+    // in matching; the moment a human sets the total it is a verified figure.
+    const before = { ...fullExtraction(), totalSource: 'prominent' as const }
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: { id: 'item-1', extracted_data: before, created_supplier_invoice_id: null } })
+    mock.enqueue({ data: { id: 'item-1', extracted_data: {} } })
+
+    const ctx = buildCtx(mock.supabase)
+    await fieldsRoute.handler(makeReq({ totals: { total: 2500 } }), ctx)
+
+    const update = mock.calls.find((c) => c.method === 'update')
+    const merged = (update?.args?.[0] as { extracted_data: InvoiceExtractionResult }).extracted_data
+    expect(merged.totals?.total).toBe(2500)
+    expect(merged.totalSource).toBeNull()
+  })
+
+  it('keeps totalSource when the edit touches another field', async () => {
+    const before = { ...fullExtraction(), totalSource: 'prominent' as const }
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: { id: 'item-1', extracted_data: before, created_supplier_invoice_id: null } })
+    mock.enqueue({ data: { id: 'item-1', extracted_data: {} } })
+
+    const ctx = buildCtx(mock.supabase)
+    await fieldsRoute.handler(makeReq({ supplier: { name: 'SEB' } }), ctx)
+
+    const update = mock.calls.find((c) => c.method === 'update')
+    const merged = (update?.args?.[0] as { extracted_data: InvoiceExtractionResult }).extracted_data
+    expect(merged.totalSource).toBe('prominent')
+  })
+
   it('refuses once the item became a supplier invoice', async () => {
     const mock = createQueuedMockSupabase()
     mock.enqueue({

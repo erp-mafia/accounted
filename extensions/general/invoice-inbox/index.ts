@@ -836,6 +836,12 @@ export const invoiceInboxExtension: Extension = {
           vatBreakdown: current.vatBreakdown ?? [],
           confidence: current.confidence ?? 0,
         }
+        // A human touching TOTALT settles it: the value stops being a
+        // promoted prominent amount (totalSource 'prominent', fallback-grade
+        // in matching) and becomes a user-verified total at full weight.
+        if (body.totals && 'total' in body.totals) {
+          merged.totalSource = null
+        }
 
         const { data: updated, error: updateError } = await ctx.supabase
           .from('invoice_inbox_items')
