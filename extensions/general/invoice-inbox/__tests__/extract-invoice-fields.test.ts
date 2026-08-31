@@ -726,11 +726,15 @@ describe('stripOwnCompanyAsSupplier', () => {
   })
 
   it('matches the derived Swedish VAT number (SE<orgnr>01)', () => {
-    const result = stripOwnCompanyAsSupplier(
-      withSupplier({ name: 'Något AB', vatNumber: 'SE556677889901' }),
-      own
-    )
-    expect(result.supplier).toEqual(strippedSupplier)
+    // Both the full prefixed form and a bare digits form denote the same
+    // registration: digitsOf strips the SE prefix before comparing.
+    for (const vat of ['SE556677889901', '556677889901', 'SE 556677-8899 01']) {
+      const result = stripOwnCompanyAsSupplier(
+        withSupplier({ name: 'Något AB', vatNumber: vat }),
+        own
+      )
+      expect(result.supplier, `vatNumber ${vat}`).toEqual(strippedSupplier)
+    }
   })
 
   it('matches the exact company name case-insensitively', () => {

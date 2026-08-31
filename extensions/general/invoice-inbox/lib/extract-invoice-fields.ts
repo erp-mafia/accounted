@@ -313,7 +313,13 @@ export async function fetchOwnCompanyIdentity(
       orgNumber: (data?.org_number as string | null) ?? null,
       name: (data?.name as string | null) ?? null,
     }
-  } catch {
+  } catch (err) {
+    // Fail open, but visibly: a persistent lookup failure (RLS misconfig,
+    // DB outage) silently disables the guard, and only this log reveals it.
+    log.warn('own_company_identity_lookup_failed', {
+      company_id: companyId,
+      error: err instanceof Error ? err.message : String(err),
+    })
     return { orgNumber: null, name: null }
   }
 }
