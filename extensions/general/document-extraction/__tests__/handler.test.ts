@@ -10,6 +10,7 @@ vi.mock('@/lib/supabase/server', () => ({
 const extractMock = vi.fn()
 vi.mock('@/extensions/general/invoice-inbox/lib/extract-invoice-fields', () => ({
   extractInvoiceFields: (...args: unknown[]) => extractMock(...args),
+  fetchOwnCompanyIdentity: vi.fn().mockResolvedValue({ orgNumber: null, name: null }),
 }))
 
 const hasCapabilityMock = vi.fn()
