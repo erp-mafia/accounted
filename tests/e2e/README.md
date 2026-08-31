@@ -241,10 +241,15 @@ re-walking a wizard.
   gracefully ("Kunde inte hämta skattekontot"), so the page is honest, but
   nothing beyond that is testable. Skatteverket reads six base URLs from env,
   so the fake is cheap when someone wants it.
-- **Import VAT and reverse charge on the purchase side.** The sales side is
-  covered (`reverse-charge.ts`); 2614/2645 and rutorna 20-24 and 30 are not.
-- **Bank reconciliation 1:N** (#1553), one bank event against several
-  verifikationer. New, and the largest untested surface left.
+- **Import VAT** (2615, rutorna 50 and 60) and **domestic reverse charge**
+  (byggtjänster, 2647). The EU cases are covered on both sides now
+  (`reverse-charge.ts`, `purchase-reverse-charge.ts`).
+- **Representation**, where the VAT deduction is capped at a 300 kr base per
+  person. The template carries the rule as a note and is flagged HIGH risk, but
+  nothing asserts the user ever sees it. Needs a restaurant row in the bank
+  fixture, which busts the env cache, so it was left out rather than bodged.
+- **N:1 reconciliation**, several bank rows settling one verifikat. The 1:N
+  direction is covered (`reconcile-one-to-many.ts`).
 - **Closing a year for real**, and filing. Readiness is covered; what is not is
   resolving the reminders and locking the period, which needs the subledgers
   reconstructed after the migration.
