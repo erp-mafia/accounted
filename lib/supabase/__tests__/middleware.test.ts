@@ -10,7 +10,11 @@ import { NextRequest } from 'next/server'
  */
 
 const state = vi.hoisted(() => ({
-  user: null as null | { id: string; app_metadata?: Record<string, unknown> },
+  user: null as null | {
+    id: string
+    email?: string
+    app_metadata?: Record<string, unknown>
+  },
   sessionId: 'session-1' as string | null,
   authError: null as unknown,
   aal: null as null | { currentLevel: string; nextLevel: string },
@@ -40,7 +44,9 @@ const state = vi.hoisted(() => ({
   clientMemberships: [] as Array<Record<string, unknown>>,
   clientMembershipsError: null as unknown,
   // What the mocked resolveBrandByHost returns for the request host.
-  hostBrand: null as null | { teamId: string },
+  hostBrand: null as null | { teamId: string; id?: string },
+  // What the mocked isEmailOnBrandAllowlist returns (Rule 2 exemption).
+  allowlisted: false,
   signOut: vi.fn(async () => ({ error: null })),
   // Row returned for user_preferences reads (the auto_logout mint lookup).
   userPreferences: null as null | { auto_logout: boolean },
@@ -119,8 +125,15 @@ vi.mock('@/lib/logger', () => {
 vi.mock('@/lib/branding/resolve', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/branding/resolve')>()),
   resolveBrandByHost: vi.fn(async () =>
-    state.hostBrand ? { teamId: state.hostBrand.teamId } : null,
+    state.hostBrand
+      ? { id: state.hostBrand.id ?? 'brand-host', teamId: state.hostBrand.teamId }
+      : null,
   ),
+}))
+
+vi.mock('@/lib/auth/brand-signup-gate', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth/brand-signup-gate')>()),
+  isEmailOnBrandAllowlist: vi.fn(async () => state.allowlisted),
 }))
 
 import { updateSession } from '../middleware'
@@ -173,6 +186,7 @@ describe('updateSession redirect destinations', () => {
     state.clientMemberships = []
     state.clientMembershipsError = null
     state.hostBrand = null
+    state.allowlisted = false
     state.userPreferences = null
     state.userPreferencesError = null
     delete process.env.NEXT_PUBLIC_REQUIRE_MFA
@@ -832,6 +846,48 @@ describe('updateSession redirect destinations', () => {
       const response = await runAt(ARBORE, '/')
 
       expect(locationOf(response)).toBe('https://app.gnubok.se/')
+    })
+
+    it('keeps an allowlisted email on the brand domain before any membership exists', async () => {
+      // The partner owner between allowlisted signup and team provisioning:
+      // no team_members row, no company, only a brand_signup_allowlist entry.
+      const { isEmailOnBrandAllowlist } = await import('@/lib/auth/brand-signup-gate')
+      state.user = { ...SIGNED_IN, email: 'owner@partner.example' }
+      state.hostBrand = { teamId: 'team-arbore', id: 'brand-arbore' }
+      state.allowlisted = true
+
+      const response = await runAt(ARBORE, '/')
+
+      expect(response.status).toBe(200)
+      expect(locationOf(response)).toBeNull()
+      expect(response.headers.get('set-cookie')).toContain(
+        'gnubok-home-ok=arbore.accounted.se',
+      )
+      expect(isEmailOnBrandAllowlist).toHaveBeenCalledWith(
+        'brand-arbore',
+        'owner@partner.example',
+      )
+    })
+
+    it('still redirects a non-allowlisted email off the brand domain', async () => {
+      state.user = { ...SIGNED_IN, email: 'stranger@example.com' }
+      state.hostBrand = { teamId: 'team-arbore', id: 'brand-arbore' }
+      state.allowlisted = false
+
+      const response = await runAt(ARBORE, '/')
+
+      expect(locationOf(response)).toBe('https://app.gnubok.se/')
+    })
+
+    it('skips the allowlist lookup for a user without an email', async () => {
+      const { isEmailOnBrandAllowlist } = await import('@/lib/auth/brand-signup-gate')
+      state.hostBrand = { teamId: 'team-arbore' }
+      state.allowlisted = true
+
+      const response = await runAt(ARBORE, '/')
+
+      expect(locationOf(response)).toBe('https://app.gnubok.se/')
+      expect(isEmailOnBrandAllowlist).not.toHaveBeenCalled()
     })
 
     it('keeps a byrå client user on the byrå domain their company lives under', async () => {

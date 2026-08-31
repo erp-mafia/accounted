@@ -87,6 +87,24 @@ describe('selectProposals', () => {
     expect(selectProposals([tx()], [bankintyg], noSuppression)).toEqual([])
   })
 
+  it('never proposes on a PROMOTED total either (totalSource prominent)', () => {
+    // promoteSingleProminentAmount copies a single prominent amount into
+    // totals.total for the editable TOTALT field. That must not smuggle the
+    // document past the hunt's fallback exclusion: the provenance stamp
+    // demotes it back to fallback-grade in the shared scorer.
+    const promoted = item(
+      { id: 'item-promoted', document_id: 'doc-promoted' },
+      {
+        supplier: { name: null },
+        totals: { total: 438.75, vatAmount: null },
+        totalSource: 'prominent',
+        documentKind: 'other',
+        prominentAmounts: [{ amount: 438.75, label: 'Insatt belopp' }],
+      },
+    )
+    expect(selectProposals([tx()], [promoted], noSuppression)).toEqual([])
+  })
+
   it('skips a transaction that already has a live proposal', () => {
     const result = selectProposals([tx()], [item()], {
       claimedTransactionIds: new Set(['tx-1']),
