@@ -201,21 +201,28 @@ are still worth knowing:
 the locators resolve against. It is a few kilobytes of text and it answers in
 one command what DOM probing answers in five.
 
-## Two company branches
+## Three company branches
 
-The suite forks two companies from the same sign-up, so both are paid for once:
+The suite forks three companies from the same sign-up, so all three are paid
+for once:
 
 - **Aktiebolag**, faktureringsmetoden, quarterly VAT, broken into the invoice,
-  bank, payroll, supplier and SIE-migration chains. This is most of the suite.
+  bank, payroll, supplier, credit-note, reverse-charge, rättelse and
+  SIE-migration chains. This is most of the suite.
 - **Enskild firma**, kontantmetoden, yearly VAT, calendar year forced by law
-  (`enskild-firma.ts`, `kontantmetod.ts`). Three dimensions the aktiebolag path
-  never touches, and they change what the app does rather than only what it
-  says: the wizard asks different questions, the NE-bilaga replaces INK2, and
-  an invoice books on payment instead of on issue.
+  (`enskild-firma.ts`, `kontantmetod.ts`). The wizard asks different questions,
+  the NE-bilaga replaces INK2, and an invoice books on payment instead of on
+  issue.
+- **Not momsregistrerad**, an aktiebolag under the omsättningsgräns
+  (`no-vat.ts`). The wizard stops asking about reporting periods, the invoice
+  editor drops the Moms column rather than zeroing it, revenue books to 3004
+  instead of 3001, no 26xx line is ever written, and the momsdeklaration says
+  why it is empty instead of rendering zeros that look like something to file.
 
-`enterTheAppAsEnskildFirma` is the signed-in sole trader everything in that
-branch forks from. Put new sole-trader tests there rather than re-walking the
-wizard.
+Each branch changes what the app does, not only what it says. Put new
+sole-trader tests under `enterTheAppAsEnskildFirma` and new
+non-registered tests under `onboardWithoutVatRegistration` rather than
+re-walking a wizard.
 
 ## Still missing
 
@@ -234,10 +241,10 @@ wizard.
   gracefully ("Kunde inte hämta skattekontot"), so the page is honest, but
   nothing beyond that is testable. Skatteverket reads six base URLs from env,
   so the fake is cheap when someone wants it.
-- **A company that is not VAT registered**, and the 12 % / 6 % rates. Each
-  changes the VAT treatment and the rutor the momsdeklaration fills, which is
-  where the expensive mistakes live. Kreditfaktura and EU reverse charge are
-  now covered (`credit-note.ts`, `reverse-charge.ts`).
+- **The 12 % and 6 % rates.** Each fills a different ruta, which is where the
+  expensive mistakes live. Kreditfaktura, EU reverse charge and the
+  non-registered company are covered now (`credit-note.ts`,
+  `reverse-charge.ts`, `no-vat.ts`).
 - **Closing a year for real**, and filing. Readiness is covered; what is not is
   resolving the reminders and locking the period, which needs the subledgers
   reconstructed after the migration.
