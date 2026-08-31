@@ -80,8 +80,10 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
  * On a self-host every other capability is always on, and exactly these fall
  * through to the grant lookup: the hourly connector sync writes
  * `source = 'connector'` grants for them from the instance's connector key
- * (lib/connect/instance, arriving with the connector-keys stack PR #1748;
- * until it lands, a self-host holds none of these). Deliberately NOT part of
+ * (lib/connect/instance, arriving with the connector-keys stack PR #1748).
+ * A self-host serving an upstream from its OWN credentials holds that
+ * capability outright (see own-credentials.ts): only keyless-and-credential-
+ * less connector capabilities are withheld. Deliberately NOT part of
  * PAID_CAPABILITIES and NOT seeded by the trial trigger: hosted companies
  * never receive connector grants.
  */

@@ -667,3 +667,145 @@ describe('self-hosted connector capabilities', () => {
     expect(mixed.entitlementState).toBe('paid')
   })
 })
+
+/**
+ * Own-credentials seam: a self-host that serves an upstream from its OWN
+ * credentials (its own Enable Banking registration, its own Skatteverket
+ * client) is never connector-gated for it. Without this, upgrading an
+ * own-credentials self-host would silently kill working bank/SKV integrations
+ * (the 2026-08-17 folded-flag incident, recreated). Hosted never reaches the
+ * seam: isBypassedFor checks isSelfHosted() first.
+ */
+describe('self-hosted own-credentials seam', () => {
+  const COMPANY = '11111111-1111-4111-8111-111111111111'
+  const CRED_VARS = [
+    'ENABLE_BANKING_APP_ID',
+    'ENABLE_BANKING_APP_ID_PRODUCTION',
+    'ENABLE_BANKING_PRIVATE_KEY',
+    'ENABLE_BANKING_PRIVATE_KEY_PRODUCTION',
+    'SKATTEVERKET_OAUTH2_CLIENT_ID',
+    'SKATTEVERKET_APIGW_CLIENT_ID',
+  ] as const
+  const stubNoOwnCredentials = () => {
+    for (const v of CRED_VARS) vi.stubEnv(v, '')
+  }
+
+  it('own EB credentials keep bank_sync all-on without touching the DB (FORCE_PAYWALL included)', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    vi.stubEnv('FORCE_PAYWALL', 'true')
+    stubNoOwnCredentials()
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    const supabase = makeSupabase({}) // would resolve null/false if queried
+    expect(await hasCapability(supabase, COMPANY, CAPABILITY.bank_sync)).toBe(true)
+    // skatteverket has no own credentials here: still gated.
+    expect(
+      await hasCapability(
+        makeSupabase({ companies: { data: { team_id: null } }, capability_grants: { data: [] } }),
+        COMPANY,
+        CAPABILITY.skatteverket,
+      ),
+    ).toBe(false)
+  })
+
+  it('own SKV credentials keep skatteverket all-on (either client id variant)', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    stubNoOwnCredentials()
+    vi.stubEnv('SKATTEVERKET_APIGW_CLIENT_ID', 'own-client')
+    expect(await hasCapability(makeSupabase({}), COMPANY, CAPABILITY.skatteverket)).toBe(true)
+    vi.stubEnv('SKATTEVERKET_APIGW_CLIENT_ID', '')
+    vi.stubEnv('SKATTEVERKET_OAUTH2_CLIENT_ID', 'own-oauth-client')
+    expect(await hasCapability(makeSupabase({}), COMPANY, CAPABILITY.skatteverket)).toBe(true)
+  })
+
+  it('own credentials never unlock org_lookup or migration (no own-credentials form exists)', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    stubNoOwnCredentials()
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    vi.stubEnv('SKATTEVERKET_APIGW_CLIENT_ID', 'own-client')
+    const noGrant = makeSupabase({ companies: { data: { team_id: null } }, capability_grants: { data: [] } })
+    expect(await hasCapability(noGrant, COMPANY, CAPABILITY.org_lookup)).toBe(false)
+    expect(await hasCapability(noGrant, COMPANY, CAPABILITY.migration)).toBe(false)
+  })
+
+  it('hosted behaviour is unchanged by credential env vars (gate still runs)', async () => {
+    stubNoOwnCredentials()
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'hosted-always-has-these')
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: { data: [{ expires_at: iso(-60_000) }] }, // expired
+    })
+    expect(await hasCapability(supabase, COMPANY, CAPABILITY.bank_sync)).toBe(false)
+  })
+
+  it('bulk resolution honours the seam', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    stubNoOwnCredentials()
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    const supabase = makeSupabase({
+      companies: { data: [{ id: COMPANY, team_id: null }] },
+      company_capability_config: { data: [] },
+      capability_grants: { data: [] },
+    })
+    expect(await getCompanyIdsWithCapability(supabase, [COMPANY], CAPABILITY.bank_sync)).toEqual(new Set([COMPANY]))
+    expect(await getCompanyIdsWithCapability(supabase, [COMPANY], CAPABILITY.skatteverket)).toEqual(new Set())
+  })
+
+  it('getCompanyEntitlements counts own-credential keys as local paid and narrows the grants read', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    stubNoOwnCredentials()
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    const calls: RecordedCall[] = []
+    const result = await getCompanyEntitlements(
+      makeRecordingSupabase(
+        {
+          companies: { data: { team_id: null } },
+          capability_grants: { data: [] },
+          company_capability_config: { data: [] },
+          company_subscriptions: { data: null },
+        },
+        calls,
+      ),
+      COMPANY,
+    )
+    expect(result.capabilities).toContain(CAPABILITY.bank_sync)
+    expect(result.capabilities).not.toContain(CAPABILITY.skatteverket)
+    expect(result.entitlementState).toBe('none') // no connector grant; touchpoint renders nothing
+    const grantKeyFilters = calls.filter(
+      (c) => c.table === 'capability_grants' && c.method === 'in' && c.args[0] === 'capability_key',
+    )
+    expect(grantKeyFilters).toHaveLength(1)
+    expect(grantKeyFilters[0].args[1]).toEqual([CAPABILITY.skatteverket])
+  })
+
+  it('getCompanyEntitlements skips the grants read entirely when every connector upstream has own credentials', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    stubNoOwnCredentials()
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    vi.stubEnv('SKATTEVERKET_APIGW_CLIENT_ID', 'own-client')
+    const calls: RecordedCall[] = []
+    const result = await getCompanyEntitlements(
+      makeRecordingSupabase(
+        {
+          companies: { data: { team_id: null } },
+          company_capability_config: { data: [] },
+          company_subscriptions: { data: null },
+        },
+        calls,
+      ),
+      COMPANY,
+      { teamId: null },
+    )
+    expect(result.capabilities).toEqual([...PAID_CAPABILITIES])
+    expect(calls.filter((c) => c.table === 'capability_grants')).toHaveLength(0)
+  })
+
+  it('self-host block copy names the connector key, hosted copy keeps the subscription upsell', async () => {
+    stubNoOwnCredentials()
+    const hosted = await capabilityBlockedResponse(CAPABILITY.bank_sync).json()
+    expect(hosted.error).toContain('prenumeration')
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const selfHost = await capabilityBlockedResponse(CAPABILITY.bank_sync).json()
+    expect(selfHost.error).toContain('GNUBOK_CONNECTOR_KEY')
+    expect(selfHost.error_en).toContain('GNUBOK_CONNECTOR_KEY')
+  })
+})

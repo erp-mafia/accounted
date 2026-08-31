@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { isSelfHosted } from '@/lib/env/public-flags'
 import { PAID_CAPABILITIES, isConnectorCapability, type CapabilityKey } from './keys'
+import { hasOwnCredentialsFor } from './own-credentials'
 
 /**
  * Entitlement gate: the single primitive behind the paywall ("non-payer loses
@@ -60,11 +61,14 @@ function isDevBypass(): boolean {
  *   hosted          : dev / DISABLE_PAYWALL bypass, FORCE_PAYWALL wins (unchanged).
  *   self-hosted     : local capabilities are always on (FORCE_PAYWALL included:
  *                     an AGPL operator's own instance is never gated on what it
- *                     runs itself); connector capabilities behave like hosted
+ *                     runs itself); connector capabilities served from the
+ *                     instance's OWN credentials count as local (the operator
+ *                     runs that upstream themselves; see own-credentials.ts);
+ *                     the remaining connector capabilities behave like hosted
  *                     (dev bypass, FORCE_PAYWALL, otherwise the grant lookup).
  */
 function isBypassedFor(key: CapabilityKey): boolean {
-  if (isSelfHosted() && !isConnectorCapability(key)) return true
+  if (isSelfHosted() && (!isConnectorCapability(key) || hasOwnCredentialsFor(key))) return true
   return isDevBypass()
 }
 
@@ -266,14 +270,31 @@ export const CAPABILITY_BLOCKED_MESSAGE_EN =
   'This feature requires a paid subscription. Upgrade to keep using external services.'
 
 /**
+ * Self-host variant: the remedy there is a connector key (or the instance's
+ * own upstream credentials), never a hosted subscription, so the hosted
+ * upsell copy would mislead the operator.
+ */
+export const CAPABILITY_BLOCKED_MESSAGE_SELF_HOSTED_SV =
+  'Den här funktionen kräver en connector-nyckel från Accounted (GNUBOK_CONNECTOR_KEY) eller instansens egna API-uppgifter för tjänsten.'
+export const CAPABILITY_BLOCKED_MESSAGE_SELF_HOSTED_EN =
+  'This feature requires an Accounted connector key (GNUBOK_CONNECTOR_KEY) or the instance\'s own API credentials for the service.'
+
+function blockedMessageSv(): string {
+  return isSelfHosted() ? CAPABILITY_BLOCKED_MESSAGE_SELF_HOSTED_SV : CAPABILITY_BLOCKED_MESSAGE_SV
+}
+function blockedMessageEn(): string {
+  return isSelfHosted() ? CAPABILITY_BLOCKED_MESSAGE_SELF_HOSTED_EN : CAPABILITY_BLOCKED_MESSAGE_EN
+}
+
+/**
  * Standard bilingual 403 for a capability-blocked endpoint. Matches the
  * sandbox/guard envelope so the UI surfaces the upsell consistently.
  */
 export function capabilityBlockedResponse(key: CapabilityKey): NextResponse {
   return NextResponse.json(
     {
-      error: CAPABILITY_BLOCKED_MESSAGE_SV,
-      error_en: CAPABILITY_BLOCKED_MESSAGE_EN,
+      error: blockedMessageSv(),
+      error_en: blockedMessageEn(),
       capability_blocked: true,
       capability: key,
     },
@@ -300,8 +321,8 @@ export function capabilityBlockedError(key: CapabilityKey): CapabilityBlockedErr
     code: 'capability_blocked',
     capability_blocked: true,
     capability: key,
-    message_sv: CAPABILITY_BLOCKED_MESSAGE_SV,
-    message_en: CAPABILITY_BLOCKED_MESSAGE_EN,
+    message_sv: blockedMessageSv(),
+    message_en: blockedMessageEn(),
   }
 }
 
@@ -431,8 +452,12 @@ export async function getCompanyEntitlements(
   // `source = 'connector'` by the instance's connector sync). Same query
   // below, narrowed to those keys.
   const selfHosted = isSelfHosted()
-  const localPaid = selfHosted ? PAID_CAPABILITIES.filter((k) => !isConnectorCapability(k)) : []
-  const queriedKeys = selfHosted ? PAID_CAPABILITIES.filter((k) => isConnectorCapability(k)) : PAID_CAPABILITIES
+  // Own-credentials connector keys count as local: the operator runs that
+  // upstream themselves (see own-credentials.ts), so they are held outright
+  // and never read from grants.
+  const selfHostLocal = (k: CapabilityKey) => !isConnectorCapability(k) || hasOwnCredentialsFor(k)
+  const localPaid = selfHosted ? PAID_CAPABILITIES.filter(selfHostLocal) : []
+  const queriedKeys = selfHosted ? PAID_CAPABILITIES.filter((k) => !selfHostLocal(k)) : PAID_CAPABILITIES
 
   // The disabled-config subtraction and the subscription-status read only
   // need companyId, so they run in parallel with the team lookup: this
@@ -456,14 +481,21 @@ export async function getCompanyEntitlements(
       .select('status')
       .eq('company_id', companyId)
       .maybeSingle(),
-    // With the team known up front the grants read joins this wave.
-    knownTeam
+    // With the team known up front the grants read joins this wave. A
+    // self-host serving every connector upstream from its own credentials has
+    // nothing to read from grants: skip the query (`in.()` on an empty list
+    // is not a valid PostgREST filter).
+    knownTeam && queriedKeys.length > 0
       ? readGrants(supabase, companyId, normalizeTeamId(options.teamId), queriedKeys)
       : Promise.resolve(null),
   ])
   const teamId = normalizeTeamId((company as { team_id: string | null } | null)?.team_id ?? null)
 
-  const { data: grants } = earlyGrants ?? (await readGrants(supabase, companyId, teamId, queriedKeys))
+  const { data: grants } =
+    earlyGrants ??
+    (queriedKeys.length > 0
+      ? await readGrants(supabase, companyId, teamId, queriedKeys)
+      : { data: [] })
 
   const now = Date.now()
   const entitled = new Set<string>(localPaid)

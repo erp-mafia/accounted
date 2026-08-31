@@ -21159,8 +21159,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 
       // Enforce the capability paywall: the MCP/agent path is a paid chokepoint
       // just like the HTTP routes (send_invoice → email_send, the two SKV
-      // submissions → skatteverket). Fail-closed; self-hosted short-circuits to
-      // all-on inside hasCapability. Blocks before any pending op is staged.
+      // submissions → skatteverket). Fail-closed; self-hosted is all-on inside
+      // hasCapability except connector capabilities without own credentials
+      // (see lib/entitlements). Blocks before any pending op is staged.
       const requiredCapability = MCP_TOOL_CAPABILITY_MAP[toolName]
       if (requiredCapability && !(await hasCapability(supabase, tenantId, requiredCapability))) {
         const capError = { error: capabilityBlockedError(requiredCapability) }

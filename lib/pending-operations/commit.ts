@@ -6637,7 +6637,8 @@ async function commitPendingOperationInner(
   //    the trial then approved AFTER the grant expired, regardless of caller
   //    (MCP approve tool or the UI approval path). Checked BEFORE the atomic
   //    claim so a blocked op stays 'pending' and is re-approvable once the
-  //    company subscribes. Self-hosted short-circuits to all-on in hasCapability.
+  //    company subscribes. Self-hosted is all-on in hasCapability except the
+  //    connector capabilities without own credentials (see lib/entitlements).
   const requiredCapability = PAID_OPERATION_CAPABILITY_MAP[pendingOp.operation_type]
   if (requiredCapability && !(await hasCapability(supabase, companyId, requiredCapability))) {
     return {
