@@ -109,6 +109,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     //    Runs before the dry-run branch on purpose. A dry run that reports
     //    "would post voucher 143" for a commit the key is not allowed to make
     //    is a lie the agent will act on.
+    //
+    //    Known and accepted: the line sum is read here and the entry is
+    //    committed below, so a concurrent write to the draft's lines between
+    //    the two can post more than the ceiling. Closing that window means
+    //    enforcing inside commit_journal_entry, where a RAISE is swallowed
+    //    into a retryable 500 and, on the MCP path, destroys the staged
+    //    operation. The trade is deliberate and consistent with what this
+    //    control claims to be: a blast-radius cap on a looping or
+    //    prompt-injected agent, NOT a security boundary. A per-entry ceiling
+    //    is already defeated by splitting one entry into several, which needs
+    //    no race at all. The primitive that actually bounds exposure is a
+    //    cumulative rolling-window limit, tracked separately.
     if (ctx.unattendedCommitLimit !== null) {
       const lines = await fetchAllRows<{ id: string; debit_amount: number | null }>(
         ({ from, to }) =>
