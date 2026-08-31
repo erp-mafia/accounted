@@ -232,7 +232,10 @@ async function resolveLockedJournalEntryIds(
   if (entryIds.length === 0) return locked
   const { data, error } = await supabase
     .from('journal_entries')
-    .select('id, fiscal_period:fiscal_periods(is_closed, locked_at)')
+    // fiscal_periods also points back at journal_entries (closing_entry_id,
+    // opening_balance_entry_id), so PostgREST refuses the bare embed as
+    // ambiguous; name the FK explicitly.
+    .select('id, fiscal_period:fiscal_periods!journal_entries_fiscal_period_id_fkey(is_closed, locked_at)')
     .in('id', entryIds)
     .eq('company_id', companyId)
   if (error) {

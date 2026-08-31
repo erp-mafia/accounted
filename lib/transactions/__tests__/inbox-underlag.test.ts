@@ -428,6 +428,12 @@ describe('resolveUnderlagAnchoring', () => {
     // Already anchored: the lock does not matter and it is not looked up.
     expect(map.get('i-d')?.status).toBe('anchored')
     expect(findCalls('journal_entries', 'in')).toEqual([['id', [JE1, JE2, 'je-open']]])
+    // The bare `fiscal_periods(...)` embed is ambiguous on prod (fiscal_periods
+    // has closing_entry_id and opening_balance_entry_id back to journal_entries)
+    // and made every lock-state read fail on the first cron run (2026-08-29).
+    expect(findCalls('journal_entries', 'select')).toEqual([
+      ['id, fiscal_period:fiscal_periods!journal_entries_fiscal_period_id_fkey(is_closed, locked_at)'],
+    ])
   })
 
   it('keeps an unlinked item unlinked (retryable) when the lock-state read fails', async () => {
