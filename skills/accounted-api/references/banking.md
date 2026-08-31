@@ -509,13 +509,13 @@ Example response `200`:
 **Link outside rows to existing verifikat (pairs or proposals).**
 `scope:reconciliation:write · risk:medium · dry-run · reversible`
 
-Body: { pairs: [{ external_ids: [id], journal_entry_ids: [id] }] } and/or { use_proposals: true, confidence_threshold? }. Each pair is validated as the single-link paths validate (row open and not ignored, entry posted and not reversed, the entry's account lines settle the amount, entry not already linked) and applied independently: the response lists applied[] and skipped[{pair, code, message}] so partial success is explicit. Codes: UNSUPPORTED_PAIR_SHAPE, ALREADY_LINKED, ENTRY_NOT_FOUND, PAIR_NOT_CLOSED, ROW_IGNORED, NOT_FOUND, LINK_RACE. ?dry_run=true returns the pairs that would be attempted without writing.
+Body: { pairs: [{ external_ids: [id], journal_entry_ids: [id], allocations? }] } and/or { use_proposals: true, confidence_threshold? }. Each pair is validated as the single-link paths validate (row open and not ignored, entry posted and not reversed, the entry's account lines settle the amount, entry not already linked) and applied independently: the response lists applied[] and skipped[{pair, code, message}] so partial success is explicit. On a bank account a pair may also be ONE transaction against SEVERAL verifikat (1:N): allocations[{journal_entry_id, amount}] gives the signed slice per verifikat (omitted: each slice defaults to the voucher's line on the account); the slices must sum to the transaction amount, and each applied link then carries allocated_amount. Codes: UNSUPPORTED_PAIR_SHAPE, ALREADY_LINKED, ENTRY_NOT_FOUND, PAIR_NOT_CLOSED, ROW_IGNORED, NOT_FOUND, LINK_RACE. ?dry_run=true returns the pairs that would be attempted without writing (a 1:N dry run resolves the slices).
 
 **Use when:** An agent or integration has decided which rows explain each other, or wants to apply the proposals the sync already computed.
 **Do not use for:** Booking new verifikat for rows that have no counterpart (use the transactions or skattekonto booking endpoints); reconciling across accounts.
 
 **Pitfalls:**
-- A pair is one OR MANY outside rows against exactly one verifikat (bank: independent links per transaction; skattekonto: all-or-nothing, the rows must sum to what the verifikat settles). One row against several verifikat is UNSUPPORTED_PAIR_SHAPE until residual booking lands, never silently reduced.
+- A pair is one OR MANY outside rows against exactly one verifikat (bank: independent links per transaction; skattekonto: all-or-nothing, the rows must sum to what the verifikat settles), or, on a bank account only, ONE transaction against SEVERAL verifikat (all-or-nothing, the slices must sum to the transaction). Several rows against several verifikat, and a skattekonto row against several verifikat, are UNSUPPORTED_PAIR_SHAPE, never silently reduced.
 - A pair must close to the row's amount on the expected side (a single matching line, or the entry's lines on the account netting to it); a fee or rounding difference is PAIR_NOT_CLOSED here and needs a residual booking first.
 - Links never touch the ledger, so they succeed in locked periods; unlink with DELETE .../links/{linkId} (linkId = the outside row id).
 - Idempotency-Key is required; repeating the same key replays the first response.
@@ -528,7 +528,7 @@ Body: { pairs: [{ external_ids: [id], journal_entry_ids: [id] }] } and/or { use_
 Request body:
 ```ts
 {
-  pairs?: { external_ids: string[], journal_entry_ids: string[] }[],
+  pairs?: { external_ids: string[], journal_entry_ids: string[], allocations?: { journal_entry_id: string, amount: number }[] }[],
   use_proposals?: boolean,
   confidence_threshold?: number
 }
@@ -548,8 +548,8 @@ Response `200`:
   data: {
     dry_run: boolean,
     considered: number,
-    applied: { external_id: string, journal_entry_id: string, via?: "line" | "entry_total" }[],
-    skipped: { pair: { external_ids: string[], journal_entry_ids: string[] }, code: string, message: string }[]
+    applied: { external_id: string, journal_entry_id: string, via?: "line" | "entry_total", allocated_amount?: number }[],
+    skipped: { pair: { external_ids: string[], journal_entry_ids: string[], allocations?: { journal_entry_id: {...}, amount: {...} }[] }, code: string, message: string }[]
   },
   meta: {
     request_id: string,
@@ -1319,6 +1319,108 @@ Example response `200`:
     "journal_entry_created": true,
     "journal_entry_id": "je_…",
     "category": "expense_office"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/transactions/{id}/ignore`
+
+**Ignore a bank transaction (no verifikat, allowed in locked periods).**
+`scope:transactions:write · risk:low · idempotent · dry-run · reversible`
+
+Marks an unbooked bank transaction as ignored so it leaves the "to book" funnels and the reconciliation unmatched totals without creating a verifikat. Nothing is deleted and the flag is reversible with DELETE on the same path. Because no booking is written, a locked or closed fiscal period does not block it: this is the path for clearing rows that are not business events out of a closed period. A booked transaction (directly, via a payment allocation, or via a voucher link) is refused with 409 TX_IGNORE_ALREADY_BOOKED. Idempotent: ignoring an already-ignored row returns already_ignored: true. Dry-runnable.
+
+**Use when:** The row is not an affärshändelse: a PSD2 ghost row, a duplicate from a bank reconnect, a transfer that never executed, rounding noise. Also the answer to TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED from /categorize when the row should not be booked at all.
+**Do not use for:** Real purchases, payments or owner withdrawals: those must be booked (categorize, match-invoice, or is_business: false in an open period). Ignoring is triage, not bookkeeping.
+
+**Pitfalls:**
+- Idempotency-Key is mandatory.
+- A booked row cannot be ignored: reverse it first (POST /transactions/{id}/uncategorize) or unlink the payment/voucher.
+- Ignored rows still exist and are listed on the reconciliation bridge's ignored line; they never disappear silently.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: { success: boolean, transaction_id: string, is_ignored: true, already_ignored: boolean },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "success": true,
+    "transaction_id": "tx_…",
+    "is_ignored": true,
+    "already_ignored": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/transactions/{id}/ignore`
+
+**Restore an ignored bank transaction to the "to book" list.**
+`scope:transactions:write · risk:low · idempotent · dry-run · reversible`
+
+Clears the ignore flag set by POST on the same path. The row comes back into the unbooked list and the reconciliation unmatched totals; no verifikat was ever written, so there is nothing to reverse. Idempotent: restoring a row that is not ignored returns was_ignored: false. Dry-runnable.
+
+**Use when:** A row was ignored by mistake and should be booked after all.
+**Do not use for:** Undoing a booking: that is a storno via POST /transactions/{id}/uncategorize.
+
+**Pitfalls:**
+- Idempotency-Key is mandatory.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: { success: boolean, transaction_id: string, is_ignored: false, was_ignored: boolean },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "success": true,
+    "transaction_id": "tx_…",
+    "is_ignored": false,
+    "was_ignored": true
   },
   "meta": {
     "request_id": "req_…",

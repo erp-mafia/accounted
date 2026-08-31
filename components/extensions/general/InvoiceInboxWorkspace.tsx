@@ -77,8 +77,13 @@ import {
   getResponseErrorMessage,
 } from '@/lib/errors/get-error-message'
 import { notifySessionExpired } from '@/lib/auth/session-timeout-shared'
-import { exceedsHostedUploadLimit, tooLargeMessage } from '@/lib/documents/upload-size'
+import {
+  exceedsHostedUploadLimit,
+  exceedsInboxUploadLimit,
+  inboxTooLargeMessage,
+} from '@/lib/documents/upload-size'
 import { shrinkImageForUpload } from '@/lib/documents/shrink-image'
+import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
 
 type AccountingMethod = 'accrual' | 'cash'
 
@@ -237,7 +242,19 @@ function timeAgo(iso: string): string {
 }
 
 function pickAmount(item: InboxItem): number | null {
-  return item.extracted_data?.totals?.total ?? null
+  const total = item.extracted_data?.totals?.total
+  if (total != null) return total
+  // Non-invoice documents (bankintyg, avtal) have no total; when exactly one
+  // distinct amount was read off the document, that is the amount to show.
+  // Two or more stay ambiguous and render as no amount.
+  const distinct = [
+    ...new Set(
+      (item.extracted_data?.prominentAmounts ?? [])
+        .map((a) => a.amount)
+        .filter((a) => Number.isFinite(a) && a !== 0),
+    ),
+  ]
+  return distinct.length === 1 ? distinct[0] : null
 }
 
 function pickCurrency(item: InboxItem): string {
@@ -266,14 +283,18 @@ function hasAnyExtractedField(data: InvoiceExtractionResult | null): boolean {
     s?.name || s?.orgNumber || s?.vatNumber || s?.bankgiro || s?.plusgiro ||
     inv?.invoiceNumber || inv?.invoiceDate || inv?.dueDate || inv?.paymentReference ||
     t?.subtotal != null || t?.vatAmount != null || t?.total != null ||
-    (data.lineItems?.length ?? 0) > 0 || (data.vatBreakdown?.length ?? 0) > 0
+    (data.lineItems?.length ?? 0) > 0 || (data.vatBreakdown?.length ?? 0) > 0 ||
+    (data.prominentAmounts?.length ?? 0) > 0
   )
 }
 
 /**
  * The fields the extraction is scored against, in the order a person reads
- * them. Deliberately the same list hasAnyExtractedField checks, so the summary
- * cannot claim a field the "is anything here at all" test does not count.
+ * them. A subset of what hasAnyExtractedField checks (that test also counts
+ * lineItems, vatBreakdown and prominentAmounts), so the "fält ifyllda" counter
+ * never claims a field the "is anything here at all" test does not count: the
+ * reverse can differ, e.g. a bankintyg with only prominentAmounts has fields
+ * but counts 0 here.
  */
 const EXTRACTED_FIELD_ACCESSORS: ((d: InvoiceExtractionResult) => unknown)[] = [
   (d) => d.supplier?.name,
@@ -786,19 +807,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       }
       const { data } = await res.json()
       if (docRequestRef.current !== request) return
-      const url: string | null = data?.download_url ?? null
-      // HTML mail underlag renders via the same-origin inline proxy: it
-      // serves text/html with a CSP sandbox header and guaranteed inline
-      // disposition. Other types keep the signed storage URL.
-      const effectiveUrl =
-        data?.mime_type === 'text/html' ? `/api/documents/${documentId}/inline` : url
-      if (!url) {
-        // The document row exists but no signed URL came back: still a load
-        // failure, not an absent underlag.
-        setDocState('error')
-        return
-      }
-      setDocUrl(effectiveUrl)
+      // Always preview via the same-origin inline proxy. Signed Storage URLs
+      // are served as Content-Disposition: attachment, which Chrome blocks in
+      // iframe/img with "Det här innehållet har blockerats".
+      setDocUrl(`/api/documents/${documentId}/inline`)
       setDocMime(data?.mime_type ?? null)
       setDocState('ready')
     } catch {
@@ -888,25 +900,28 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   ) => {
     // A phone photo is routinely larger than the request body the platform
     // will carry, and it rejects the upload itself, before the route can say
-    // anything useful about it. Shrink what can be shrunk, and refuse the rest
-    // here, where we can name the size instead of letting the transfer fail.
+    // anything useful about it. Shrink what can be shrunk; what cannot be (a
+    // scanned PDF) goes straight to Storage through a signed URL instead of a
+    // multipart body. Only the inbox's own ceiling refuses anything now, here,
+    // where we can name the size instead of letting the transfer fail.
     const file = exceedsHostedUploadLimit(original.size)
       ? await shrinkImageForUpload(original)
       : original
-    if (exceedsHostedUploadLimit(file.size)) {
+    if (exceedsInboxUploadLimit(file.size)) {
       reportUploadFailure({
         status: 0,
         size: file.size,
         type: file.type || 'unknown',
-        reason: 'over hosted body limit, refused client-side',
+        reason: 'over inbox ceiling, refused client-side',
       })
       toast({
         title: 'Uppladdning misslyckades',
-        description: tooLargeMessage(file.size),
+        description: inboxTooLargeMessage(file.size),
         variant: 'destructive',
       })
       return undefined
     }
+    const directToStorage = exceedsHostedUploadLimit(file.size)
 
     // Optimistic placeholder: gives the user an immediate visual response
     // for the 3-8s while extraction runs. Removed once the real row arrives.
@@ -938,12 +953,17 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     }
     setIsUploading(true)
     try {
-      const fd = new FormData()
-      fd.append('file', file)
-      const res = await fetch('/api/extensions/ext/invoice-inbox/upload', {
-        method: 'POST',
-        body: fd,
-      })
+      let res: Response
+      if (directToStorage) {
+        res = await uploadViaSignedUrl(file)
+      } else {
+        const fd = new FormData()
+        fd.append('file', file)
+        res = await fetch('/api/extensions/ext/invoice-inbox/upload', {
+          method: 'POST',
+          body: fd,
+        })
+      }
       if (!res.ok) throw await resolveFailure(res)
       const json = await res.json()
       if (json.data?.extraction_skipped) {
@@ -2326,7 +2346,7 @@ export function DocumentPreview({
       ) : (
         // PDF: iframe needs explicit height, frame fills the available pane.
         <div className="h-full w-full max-w-3xl bg-background rounded-lg border overflow-hidden">
-          <iframe src={docUrl} className="w-full h-full border-0" title="Underlag" />
+          <embed src={docUrl} type="application/pdf" className="w-full h-full border-0" title="Underlag" />
         </div>
       )}
     </div>
@@ -2889,7 +2909,10 @@ function FieldsRail({
       {/* AI classification: what kind of document this is and how it was
           paid. Read-only context above the editable fields; absent for
           extractions from before the fields existed. */}
-      {(data?.documentKind || data?.payment?.method || data?.pages) && (
+      {(data?.documentKind ||
+        data?.payment?.method ||
+        data?.pages ||
+        (data?.totals?.total == null && (data?.prominentAmounts?.length ?? 0) > 0)) && (
         <div className="border-b px-4 py-3 text-xs space-y-1">
           {data?.documentKind && (
             <div className="flex gap-2">
@@ -2904,6 +2927,23 @@ function FieldsRail({
                 {t(`payment_${data.payment.method}`)}
                 {data.payment.cardLast4 ? ` •• ${data.payment.cardLast4}` : ''}
                 {data.purchaseTime ? ` · ${data.purchaseTime}` : ''}
+              </span>
+            </div>
+          )}
+          {/* Amounts read off a non-invoice document (bankintyg, avtal):
+              without this row the empty "Totalt" field reads as if extraction
+              missed them. */}
+          {data?.totals?.total == null && (data?.prominentAmounts?.length ?? 0) > 0 && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground w-14 shrink-0">{t('prominent_amounts_label')}</span>
+              <span className="tabular-nums">
+                {(data?.prominentAmounts ?? [])
+                  .map((a) =>
+                    a.label
+                      ? `${a.label}: ${formatCurrency(a.amount, data?.invoice?.currency ?? 'SEK')}`
+                      : formatCurrency(a.amount, data?.invoice?.currency ?? 'SEK'),
+                  )
+                  .join(' · ')}
               </span>
             </div>
           )}

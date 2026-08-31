@@ -45,6 +45,12 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // notes-only diff on committed entries and rejects anything more, so the
   // op cannot touch booking data even if tampered with.
   set_voucher_note: 'low',
+  // Ignoring a bank transaction flips transactions.is_ignored and nothing
+  // else: no verifikat, no ledger impact, reversible with the same op
+  // (ignored: false). The DB CHECK transactions_is_ignored_no_journal_entry
+  // and the executor's isTransactionBooked() refusal keep it off booked rows,
+  // so the op cannot hide a booking even if tampered with (issue #1661).
+  ignore_transaction: 'low',
 
   // ── Medium: reversible booking ─────────────────────────────────────
   categorize_transaction: 'medium',
@@ -133,6 +139,11 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   create_supplier_invoice_from_inbox: 'medium',
   credit_invoice: 'high',
   convert_invoice: 'medium',
+  // Removes a DRAFT (never a posted invoice): no booking impact, but both
+  // outcomes are irreversible: an unnumbered draft is hard-deleted (row gone)
+  // and a numbered draft is makulerad, permanently consuming its F-series
+  // number. 'high' so a destructive delete is never auto-committed.
+  delete_draft_invoice: 'high',
 
   // ── Phase 4: arbitrary-line bookkeeping primitives ─────────────────
   // Both accept caller-supplied account/amount/period: unlike
@@ -157,6 +168,12 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // Draft-only edit of one employee's per-run base salary; no booking impact
   // until the run is calculated and booked (both separately staged).
   set_run_salary: 'medium',
+  // Draft-only header edit (payment_date / voucher_series / notes): freely
+  // re-editable while draft and changes no pay outcome, matching the v1
+  // PATCH's risk: 'low'. A payment_date change clears the roster's
+  // calculation_breakdown so a stale calculation cannot be booked, and the
+  // booking that makes payment_date matter is separately staged at 'high'.
+  update_salary_run: 'low',
   // Absence rows drive sjuklön math and the statutory AGI Frånvarouppgift.
   // Reversible via delete, but not audit-free: medium.
   register_absence: 'medium',
@@ -218,6 +235,13 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // links the selection: a typed, bounded booking like categorize_transaction,
   // undone by storno + unmatch, so 'medium' rather than create_voucher's 'high'.
   reconciliation_residual: 'medium',
+  // Book synced skattekonto rows as posted verifikat: 1630 against the
+  // skattekonto_rules-matched counter account, amounts straight from the
+  // synced Skatteverket data. No caller-supplied lines (the agent passes only
+  // row ids), reversible via storno: same bounded-booking tier as
+  // book_mileage_period, not create_voucher's arbitrary-line 'high'.
+  book_skattekonto_row: 'medium',
+  book_skattekonto_rows: 'medium',
 
   // ── Körjournal (mileage) ───────────────────────────────────────────
   // A trip row is pure travel documentation: no booking impact until a

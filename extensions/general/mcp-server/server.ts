@@ -47,12 +47,14 @@ import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { dbError } from '@/lib/errors/db-error'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { buildTransactionEntryLines, createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
+import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
 import { eventBus } from '@/lib/events/bus'
 import { getVatRules, getPermittedVatRates, getArticleVatRateAdoptionSet } from '@/lib/invoices/vat-rules'
@@ -278,6 +280,12 @@ import { writeSkatteverketAudit } from '@/extensions/general/skatteverket/lib/au
 import { skvAuthCodeToStructured } from '@/extensions/general/skatteverket/lib/error-map'
 import { findCompanyTokenUser, hasVerifiedGrant } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/skatteverket/lib/system-auth/config'
+// Stage-time preview for book_skattekonto_row(s): same deterministic rule
+// matcher the skattekonto list page and the booking commit path use. The
+// actual booking runs in the extension's registry-resolved commit service on
+// approval; staging never books.
+import { attachBookingSuggestions } from '@/extensions/general/skatteverket/lib/skattekonto-booking'
+import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
@@ -461,6 +469,12 @@ interface McpTool {
   annotations: McpToolAnnotations
   /** Wide or specialized tools discoverable through gnubok_search_tools only. */
   catalogVisibility?: 'default' | 'search'
+  // Matcher-side search synonyms (mainly Swedish domain terms like
+  // "verifikat", "kundfaktura", "avstämning") folded into gnubok_search_tools
+  // matching only. NEVER serialized: keywords must not appear in tools/list
+  // or search_tools output; the tools/list payload budget has zero headroom.
+  // Store lowercase.
+  keywords?: string[]
   _meta?: { ui: { resourceUri: string } }
   // Result-level UI hint: when set, a call passing render_ui=true gets a
   // _meta.ui.resourceUri on the RESULT, so the host renders the widget only when
@@ -973,6 +987,24 @@ function mapSkatteverketError(err: unknown): Error {
   return err instanceof Error ? err : new Error(String(err))
 }
 
+// ── Skattekonto row booking (stage side) ─────────────────────
+//
+// Shape of the skattekonto_transactions columns the book_skattekonto_row(s)
+// tools select at stage time (both call sites keep the select string literal
+// so the no-phantom-columns scanner can resolve it): enough for the reviewer
+// preview + the same bookability gates the commit path enforces
+// (requireSettled batch booking in skatteverket/lib/skattekonto-booking.ts).
+
+interface SkattekontoStageRow {
+  id: string
+  transaktionsdatum: string
+  transaktionstext: string
+  belopp_skatteverket: number | string
+  status: string
+  is_ignored: boolean | null
+  journal_entry_id: string | null
+}
+
 /**
  * Count ERROR-level findings in a /kontrollera response body.
  *
@@ -1055,7 +1087,7 @@ async function resolveJournalEntryRef(
     .order('entry_date', { ascending: false })
 
   if (error) {
-    throw new Error(`Database error resolving voucher "${series}-${number}": ${error.message}`)
+    throw dbError(error, `Database error resolving voucher "${series}-${number}"`)
   }
 
   const matches = (data ?? []) as Array<{ id: string; entry_date: string; description: string }>
@@ -3020,24 +3052,31 @@ export const tools: McpTool[] = [
       })
 
       if (query) {
-        // Match: every whitespace-separated term must appear in name or description
-        // (for a single-word query this is identical to a literal substring match).
-        // Rank by relevance so the most on-point tool comes first instead of
-        // whichever happens to be defined earliest: exact-ish name match > full
-        // query as a name substring > per-term name hits > description hits. Ties
+        // Match: every whitespace-separated term must appear in name, description
+        // or keywords (for a single-word query this is identical to a literal
+        // substring match). Keywords are matcher-side synonyms (mainly Swedish
+        // domain terms) declared on the tool definition; they are searchable but
+        // never serialized into any payload. Rank by relevance so the most
+        // on-point tool comes first instead of whichever happens to be defined
+        // earliest: exact-ish name match > full query as a name substring or
+        // exact keyword > per-term name/keyword hits > description hits. Ties
         // fall back to definition order (stable).
         const terms = query.split(/\s+/).filter(Boolean)
         const ranked = candidates
           .map((t, idx) => {
             const name = t.name.toLowerCase()
             const desc = t.description.toLowerCase()
-            const hay = `${name} ${desc}`
+            const kw = (t.keywords ?? []).map((k) => k.toLowerCase())
+            const kwText = kw.join(' ')
+            const hay = `${name} ${desc} ${kwText}`
             if (!terms.every((term) => hay.includes(term))) return null
             let score = 0
             if (name === query || name === `gnubok_${query}` || name.endsWith(`_${query}`)) score += 100
             if (name.includes(query)) score += 40
+            if (kw.includes(query)) score += 40
             for (const term of terms) {
               if (name.includes(term)) score += 10
+              if (kwText.includes(term)) score += 10
               if (desc.includes(term)) score += 1
             }
             return { t, score, idx }
@@ -3095,6 +3134,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_companies',
+    keywords: ['företag', 'bolag', 'mina företag'],
     title: 'List Companies',
     description: 'List every non-archived company this API-key user can access. Use company_id from this result on other tools; omit it there to use the API key default.',
     inputSchema: {
@@ -3198,6 +3238,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_lookup_company',
+    keywords: ['organisationsnummer', 'företag', 'bolag'],
     title: 'Look Up Company',
     description:
       'Look up a Swedish company by organisationsnummer in the public registry (name, address, F-skatt, VAT, legal form, fiscal year). Call FIRST in onboarding: the user confirms facts instead of answering questions. Feeds gnubok_create_company; works before any company exists.',
@@ -3385,6 +3426,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_company',
+    keywords: ['företag', 'bolag', 'nytt företag'],
     title: 'Create Company',
     description:
       'Create a NEW company, set up for bookkeeping (chart, settings, first fiscal period, tax deadlines; 30-day trial). Ask ONLY orgnr + moms period: gnubok_lookup_company prefills the rest, accounting_method defaults by form. Preview (no confirm), read back, then confirm=true.',
@@ -3527,6 +3569,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_connect_bank',
+    keywords: ['bankkoppling', 'koppla bank', 'banksynk'],
     title: 'Connect Bank',
     description:
       'Bank connection status plus the browser connect link (PSD2, BankID; user must be logged in to Accounted). When the user has NAMED their bank, pass it as bank on the FIRST call (a bare call renders a redundant generic card): the link then starts that bank\'s consent directly.',
@@ -3595,6 +3638,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_connect_skatteverket',
+    keywords: ['skatteverket', 'koppla skatteverket', 'deklarationsombud'],
     title: 'Connect Skatteverket',
     description:
       'Skatteverket connection status plus the browser link where the user authorises Accounted (BankID as firmatecknare; logged in to Accounted there). Enables skattekonto sync and filing of moms/AGI. Use after gnubok_create_company or when a filing tool reports no connection.',
@@ -3650,6 +3694,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_connect_migration',
+    keywords: ['migrering', 'byta system', 'flytta bokföring'],
     title: 'Connect Previous System',
     description:
       'Connect card into the migration wizard for a NAMED previous system. API systems (fortnox/bjornlunden/briox/wint) fetch all fiscal years plus invoices, customers and documents; visma/bokio complement AFTER a SIE import. Same one-click feel as the bank/Skatteverket cards.',
@@ -3716,6 +3761,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_company_settings',
+    keywords: ['inställningar', 'företagsinställningar', 'momsperiod'],
     title: 'Get Company Settings',
     description: 'Get invoice payment details, company contact details and the custom invoice email texts. Use before creating invoices or staging a settings update.',
     inputSchema: {
@@ -3799,7 +3845,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!data) throw new Error('Company settings not found.')
 
       return {
@@ -3823,6 +3869,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_update_company_settings',
+    keywords: ['inställningar', 'företagsinställningar'],
     title: 'Update Company Settings',
     description: 'Stage changes to invoice payment details, company contact details or the custom invoice email texts. Requires approval before company settings are updated.',
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -3916,7 +3963,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!current) throw new Error('Company settings not found.')
 
       const currentPreview = {
@@ -4862,6 +4909,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_transactions',
+    keywords: ['banktransaktion', 'kontohändelse', 'kontoutdrag'],
     title: 'Create Bank Transactions',
     description: 'Stage bank/cash-account transactions; each becomes a pending operation. For external rows (Airtable, CSV); max 10. A transaction models a cash-account movement: for cashless events (privat utlägg) use gnubok_create_voucher.',
     outputSchema: {
@@ -4983,6 +5031,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_uncategorized_transactions',
+    keywords: ['okategoriserade', 'banktransaktioner', 'kontohändelser', 'att bokföra'],
     title: 'List Uncategorized Transactions',
     description: 'List bank transactions with no journal entry yet, newest first. Paginated. cash_account_id narrows to one bank account.',
     inputSchema: {
@@ -5041,7 +5090,7 @@ export const tools: McpTool[] = [
       if (cashAccountId) countQuery = countQuery.eq('cash_account_id', cashAccountId)
       const { count: totalCount, error: countError } = await countQuery
 
-      if (countError) throw new Error(`Database error: ${countError.message}`)
+      if (countError) throw dbError(countError)
 
       let listQuery = supabase
         .from('transactions')
@@ -5055,7 +5104,7 @@ export const tools: McpTool[] = [
         .order('date', { ascending: false })
         .range(offset, offset + limit - 1)
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       // Resolve the bank account's BAS ledger for the rows on this page so a
       // per-account reconciliation can be driven from outside (customer
@@ -5070,7 +5119,7 @@ export const tools: McpTool[] = [
           .select('id, ledger_account')
           .eq('company_id', companyId)
           .in('id', cashAccountIds)
-        if (cashError) throw new Error(`Database error: ${cashError.message}`)
+        if (cashError) throw dbError(cashError)
         for (const c of (cashRows ?? []) as Array<{ id: string; ledger_account: string }>) {
           ledgerByCashAccount.set(c.id, c.ledger_account)
         }
@@ -5097,6 +5146,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_transactions_without_documents',
+    keywords: ['underlag', 'kvitto', 'saknar underlag'],
     title: 'List Transactions Missing Receipts',
     description: 'List booked bank transactions whose verifikat lacks an underlag. Strict subset of gnubok_list_verifikat_without_documents (same document truth, waivers respected): use that tool for full coverage incl. imported/manual verifikat.',
     inputSchema: {
@@ -5150,7 +5200,7 @@ export const tools: McpTool[] = [
         p_limit: limit,
         p_offset: offset,
       })
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       const result = data as {
         ok: boolean
@@ -5177,6 +5227,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_verifikat_without_documents',
+    keywords: ['verifikat', 'verifikation', 'saknar underlag'],
     title: 'List Verifikat Missing Documents',
     description: 'List posted verifikat that genuinely lack an underlag: needs-doc source types only, current document versions, user waivers respected. Superset of gnubok_list_transactions_without_documents (covers imported/manual too). Newest first, paginated.',
     inputSchema: {
@@ -5228,7 +5279,7 @@ export const tools: McpTool[] = [
         p_limit: limit,
         p_offset: offset,
       })
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       const result = data as {
         ok: boolean
@@ -5255,6 +5306,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_categorize_transaction',
+    keywords: ['bokför', 'kontera', 'kategorisera', 'banktransaktion'],
     title: 'Categorize Bank Transaction',
     description: 'Categorize a bank transaction. Stages the verifikat: cost line NET of moms, bank line gross (always the tx\'s cash account). account_override books the business side on any active account. Cashless events (privat utlägg): gnubok_create_voucher.',
     inputSchema: {
@@ -5451,6 +5503,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_receipt_matcher',
+    keywords: ['kvitto', 'underlag', 'matcha kvitton'],
     title: 'Receipt Matcher Widget',
     description: 'Open an interactive widget for drag-and-drop receipt-to-transaction matching. Renders inline in compatible clients.',
     inputSchema: {
@@ -5490,7 +5543,7 @@ export const tools: McpTool[] = [
         .order('date', { ascending: false })
         .limit(limit)
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       return {
         transactions: data ?? [],
@@ -5504,6 +5557,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_customers',
+    keywords: ['kund', 'kunder', 'kundregister'],
     title: 'List Customers',
     description: 'List active customers. Use to look up customer_id for invoice creation. include_archived=true adds archived rows.',
     inputSchema: {
@@ -5551,7 +5605,7 @@ export const tools: McpTool[] = [
             .range(from, to)
         })
       } catch (error) {
-        throw new Error(`Database error: ${error instanceof Error ? error.message : 'unknown error'}`)
+        throw dbError(error)
       }
       rows.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
 
@@ -5580,6 +5634,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_customer',
+    keywords: ['kund', 'ny kund'],
     title: 'Create Customer',
     description: 'Stage a new customer. Stages for user approval: NOT created until approved in the web app. EU VAT numbers trigger VIES validation.',
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -5734,6 +5789,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_update_customer',
+    keywords: ['kund', 'ändra kund'],
     title: 'Update Customer',
     description: 'Stage a partial update to an existing customer. Find customer_id with gnubok_list_customers. Requires approval before customer data is changed.',
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -5843,7 +5899,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!current) throw new Error('Customer not found.')
 
       // Same guard as gnubok_create_customer and the REST PATCH route: only
@@ -5923,6 +5979,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_articles',
+    keywords: ['artikel', 'artiklar', 'produkter', 'artikelregister'],
     title: 'List Articles',
     description: "List the active company's catalog articles (artikelregister). Use to look up an article to add to an invoice line. Active articles only by default.",
     inputSchema: {
@@ -5971,7 +6028,7 @@ export const tools: McpTool[] = [
           return q.order('id', { ascending: true }).range(from, to)
         })
       } catch (error) {
-        throw new Error(`Database error: ${error instanceof Error ? error.message : 'unknown error'}`)
+        throw dbError(error)
       }
       articles.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
 
@@ -5981,6 +6038,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_article',
+    keywords: ['artikel', 'produkt', 'ny artikel'],
     title: 'Create Article',
     description: 'Stage a new catalog article (artikelregister). Stages for approval: not created until approved. Article number auto-assigned. Reuse on invoice lines via gnubok_create_invoice.',
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -6054,6 +6112,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_update_article',
+    keywords: ['artikel', 'produkt'],
     title: 'Update Article',
     description: 'Stage an edit to a catalog article (price, name, account, etc.) or deactivate it via active:false. Stages for approval. Find article_id with gnubok_list_articles.',
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -6116,6 +6175,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_invoices',
+    keywords: ['faktura', 'kundfaktura', 'fakturor', 'obetalda', 'förfallna', 'påminnelse'],
     title: 'List Customer Invoices',
     description: 'List invoices for the active company, newest first. Optional status filter.',
     inputSchema: {
@@ -6157,7 +6217,7 @@ export const tools: McpTool[] = [
         .order('id', { ascending: false })
         .range(offset, offset + limit)
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       const rows = data ?? []
       const invoices = rows.slice(0, limit).map((inv: Record<string, unknown>) => ({
@@ -6190,6 +6250,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_invoice',
+    keywords: ['faktura', 'kundfaktura'],
     title: 'Get Invoice',
     description: 'One invoice: header plus every line with article_id, revenue_account, vat_rate and dimensions. Read it before gnubok_update_invoice (items are a FULL REPLACE) so each line goes back with its article linkage. editable_draft tells whether an edit is possible.',
     inputSchema: {
@@ -6285,7 +6346,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!invoice) throw new Error('Invoice not found. Use gnubok_list_invoices to find valid IDs.')
 
       type InvoiceLineRow = {
@@ -6372,6 +6433,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_invoice',
+    keywords: ['faktura', 'kundfaktura', 'fakturera', 'ny faktura'],
     title: 'Create Customer Invoice',
     description: 'Stage a new invoice. Validates inputs, calculates VAT preview. Items accept dims bags. Approval creates a draft; the invoice number is assigned on send or mark-as-sent.',
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -6609,6 +6671,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_trial_balance',
+    keywords: ['råbalans', 'saldobalans'],
     title: 'Trial Balance (Råbalans)',
     description: 'Trial balance (huvudbok) for a fiscal period: all account balances with debit/credit totals. Defaults to most recent period. Optional dimensions filter scopes to tagged lines (kostnadsställe/projekt).',
     inputSchema: {
@@ -6724,6 +6787,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_vat_report',
+    keywords: ['moms', 'momsrapport', 'momsdeklaration', 'momsredovisning'],
     title: 'VAT Declaration (Momsdeklaration)',
     description: 'VAT declaration (momsdeklaration, SKV 4700) for a period. Returns all rutor; ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to also open the review widget (claude.ai / Desktop).',
     outputSchema: VAT_REPORT_OUTPUT_SCHEMA,
@@ -6762,6 +6826,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_vat_review_widget',
+    keywords: ['moms', 'momsgranskning'],
     title: 'VAT Review Widget',
     description: 'Open the interactive VAT review widget for a period. Equivalent to gnubok_get_vat_report(render_ui=true); kept as an alias for clients pinned to this tool name.',
     inputSchema: {
@@ -6789,6 +6854,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_vat_close_check',
+    keywords: ['moms', 'momsavstämning', 'momskontroll'],
     title: 'VAT Close Check (Momsdeklaration)',
     description: "Answer 'can I close VAT?' in one call. Returns SKV 4700 rutor, bookkeeping blockers (including unavailable deadlines), and declaration_checks from the same momsdeklaration completeness gate used by the web filing UI. ready_to_close covers both.",
     inputSchema: {
@@ -6845,6 +6911,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_kpi_report',
+    keywords: ['nyckeltal'],
     title: 'Business KPI Report',
     description: 'Business KPIs for a fiscal period: gross margin, net result, cash position, receivables, expense ratio, payment days, VAT liability, monthly trend.',
     inputSchema: {
@@ -6940,6 +7007,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_income_statement',
+    keywords: ['resultaträkning', 'resultatrapport'],
     title: 'Income Statement (Resultaträkning)',
     description: 'Income statement (resultaträkning) for a fiscal period or a from_date/to_date range inside it: revenue, expenses, net result. Optional dimensions filter (kostnadsställe/projekt).',
     inputSchema: {
@@ -7021,6 +7089,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_mark_invoice_as_paid',
+    keywords: ['faktura betald', 'betalning', 'kundfaktura'],
     title: 'Mark Invoice as Paid',
     description: 'Mark an invoice as paid and create the payment journal entry. Stages for approval. Status must be sent or overdue.',
     inputSchema: {
@@ -7112,6 +7181,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_send_invoice',
+    keywords: ['skicka faktura', 'kundfaktura', 'e-faktura', 'mejla faktura'],
     title: 'Send Invoice by Email',
     description: 'Send invoice via email with PDF attachment. Stages for approval. Requires customer email + email service configured.',
     inputSchema: {
@@ -7135,7 +7205,7 @@ export const tools: McpTool[] = [
 
       const emailService = getEmailService()
       if (!emailService.isConfigured()) {
-        throw new Error('Email service not configured. Ensure RESEND_API_KEY and RESEND_FROM_EMAIL are set.')
+        throw new Error('Email service not configured. Ensure RESEND_API_KEY and RESEND_FROM_EMAIL are set (or SMTP_HOST and SMTP_FROM_EMAIL with EMAIL_PROVIDER=smtp).')
       }
 
       const { data: invoice, error: invoiceError } = await supabase
@@ -7172,6 +7242,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_invoice_deliveries',
+    keywords: ['fakturaleverans', 'studs', 'kundfaktura'],
     title: 'Get Invoice Delivery History',
     description: 'Email delivery attempts for one invoice with the provider outcome (delivered, bounced, complained, delayed, suppressed). Call before chasing an unpaid invoice: a bounce means the customer never received it. Recipients are masked, message content is never returned.',
     inputSchema: {
@@ -7258,7 +7329,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (invoiceError) throw new Error(`Database error: ${invoiceError.message}`)
+      if (invoiceError) throw dbError(invoiceError)
       if (!invoice) throw new Error('Invoice not found')
 
       // Never read invoice_deliveries directly: the row carries the exact
@@ -7270,7 +7341,7 @@ export const tools: McpTool[] = [
         'list_invoice_delivery_summaries_for_service',
         { p_company_id: companyId, p_user_id: userId, p_invoice_id: invoiceId },
       )
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       // Mirrors the RETURNS TABLE of the RPC. body_html, body_text and
       // bcc_addresses are absent by construction, not filtered here.
@@ -7317,6 +7388,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_mark_invoice_as_sent',
+    keywords: ['faktura skickad', 'kundfaktura'],
     title: 'Mark Invoice as Sent',
     description: 'Mark a draft invoice as sent without sending email (when delivered manually). Stages for approval. Status must be draft.',
     inputSchema: {
@@ -7371,6 +7443,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_suppliers',
+    keywords: ['leverantör', 'leverantörer', 'leverantörsregister'],
     title: 'List Suppliers (Leverantörer)',
     description: 'List active suppliers (leverantörer) with contact and payment details, sorted by name. include_archived=true adds archived rows.',
     inputSchema: {
@@ -7411,7 +7484,7 @@ export const tools: McpTool[] = [
             .range(from, to)
         })
       } catch (error) {
-        throw new Error(`Database error: ${error instanceof Error ? error.message : 'unknown error'}`)
+        throw dbError(error)
       }
       suppliers.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
 
@@ -7421,6 +7494,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_supplier',
+    keywords: ['leverantör', 'ny leverantör'],
     title: 'Create Supplier (Leverantör)',
     description: 'Stage a new supplier (leverantör). Stages for user approval: NOT created until approved in the web app. Use to add a vendor before booking a supplier invoice or matching expenses.',
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -7557,17 +7631,21 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_supplier_invoices',
+    keywords: ['leverantörsfaktura', 'leverantörsfakturor', 'inköpsfaktura'],
     title: 'List Supplier Invoices',
-    description: 'List supplier invoices (leverantörsfakturor), sorted by due date. Optional status filter; "to_pay" combines approved+overdue.',
+    description: 'List supplier invoices (leverantörsfakturor), sorted by due date. Filters: status (to_pay = approved+overdue), supplier_id, supplier_name (substring), date_from/date_to on invoice_date (YYYY-MM-DD).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         status: {
           type: 'string',
-          description: 'Filter: registered, approved, overdue, paid, to_pay, all (default)',
           enum: ['registered', 'approved', 'overdue', 'paid', 'to_pay', 'all'],
         },
+        supplier_id: { type: 'string' },
+        supplier_name: { type: 'string' },
+        date_from: { type: 'string' },
+        date_to: { type: 'string' },
         limit: { type: 'number', description: 'Max results 1-100 (default 50)' },
       },
     },
@@ -7577,6 +7655,8 @@ export const tools: McpTool[] = [
       properties: {
         invoices: { type: 'array', items: { type: 'object' } },
         count: { type: 'number' },
+        total_count: { type: 'number' },
+        has_more: { type: 'boolean' },
       },
       required: ['invoices', 'count'],
     },
@@ -7590,9 +7670,92 @@ export const tools: McpTool[] = [
       const limit = Math.min(Math.max(1, Number(args.limit) || 50), 100)
       const status = (args.status as string) || 'all'
 
+      // Loud validation: a mistyped filter must never silently degrade to the
+      // UNFILTERED list (the silent-drop failure class arg-guard exists for,
+      // feedback seq 261545). Hosts do not reliably enforce inputSchema types,
+      // so non-string values reach execute() and are rejected here.
+      for (const key of ['supplier_id', 'supplier_name', 'date_from', 'date_to'] as const) {
+        if (args[key] !== undefined && typeof args[key] !== 'string') {
+          throw new Error(`${key} must be a string.`)
+        }
+      }
+      const supplierId = args.supplier_id as string | undefined
+      const supplierName = (args.supplier_name as string | undefined)?.trim()
+      const dateFrom = args.date_from as string | undefined
+      const dateTo = args.date_to as string | undefined
+
+      if (supplierName === '') {
+        throw new Error('supplier_name must not be blank.')
+      }
+      // Clear message instead of a raw Postgres uuid cast error: an agent may
+      // well pass a supplier's name here; point it at supplier_name instead.
+      if (supplierId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(supplierId)) {
+        throw new Error('supplier_id must be a supplier UUID (suppliers.id). To filter by name, use supplier_name.')
+      }
+      for (const [key, value] of [['date_from', dateFrom], ['date_to', dateTo]] as const) {
+        if (value === undefined) continue
+        // Shape AND calendar validity: '2026-02-30' must fail here with a
+        // clear message, not as a raw Postgres date-cast error downstream.
+        const parsed = new Date(`${value}T00:00:00Z`)
+        if (
+          !ISO_DATE_RE.test(value) ||
+          Number.isNaN(parsed.getTime()) ||
+          parsed.toISOString().slice(0, 10) !== value
+        ) {
+          throw new Error(`${key} must be a valid ISO date (YYYY-MM-DD).`)
+        }
+      }
+      if (dateFrom && dateTo && dateFrom > dateTo) {
+        throw new Error('date_from must not be after date_to.')
+      }
+
+      // supplier_name resolves server-side to supplier ids: a LITERAL
+      // case-insensitive substring matched in JS over the company's suppliers
+      // (fetchAllRows, same shape as gnubok_list_suppliers). Not ilike:
+      // PostgREST rewrites `*` in like/ilike values to `%`, so a DB-side
+      // pattern silently broadens names containing `*` and there is no
+      // server-side escape for it. Archived suppliers are included on
+      // purpose: their invoices still exist. The match set is bounded: an
+      // unbounded id list fed to .in() below could exceed PostgREST URL
+      // limits, so past the cap the tool fails loudly with a refine hint
+      // instead of degrading.
+      const NAME_MATCH_CAP = 200
+      let nameMatchedSupplierIds: string[] | undefined
+      if (supplierName) {
+        const needle = supplierName.toLowerCase()
+        let suppliers: { id: string; name: string | null }[]
+        try {
+          suppliers = await fetchAllRows<{ id: string; name: string | null }>(({ from, to }) =>
+            supabase
+              .from('suppliers')
+              .select('id, name')
+              .eq('company_id', companyId)
+              .order('id', { ascending: true })
+              .range(from, to)
+          )
+        } catch (error) {
+          throw dbError(error)
+        }
+        const matchedIds = suppliers
+          .filter((s) => (s.name ?? '').toLowerCase().includes(needle))
+          .map((s) => s.id)
+        if (matchedIds.length === 0) {
+          return { invoices: [], count: 0, total_count: 0, has_more: false }
+        }
+        if (matchedIds.length > NAME_MATCH_CAP) {
+          throw new Error(
+            `supplier_name matches more than ${NAME_MATCH_CAP} suppliers; refine the name or use supplier_id.`,
+          )
+        }
+        nameMatchedSupplierIds = matchedIds
+      }
+
+      // count: 'exact' so truncation is SIGNALLED (total_count/has_more): the
+      // date filters invite period reconciliation, and a silently capped
+      // listing reads as complete (same contract as gnubok_list_invoices).
       let query = supabase
         .from('supplier_invoices')
-        .select('id, supplier_invoice_number, invoice_date, due_date, status, total, total_sek, currency, vat_treatment, remaining_amount, default_dimensions, supplier:suppliers(id, name)')
+        .select('id, supplier_invoice_number, invoice_date, due_date, status, total, total_sek, currency, vat_treatment, remaining_amount, default_dimensions, supplier:suppliers(id, name)', { count: 'exact' })
         .eq('company_id', companyId)
 
       if (status !== 'all') {
@@ -7603,11 +7766,30 @@ export const tools: McpTool[] = [
         }
       }
 
-      const { data, error } = await query.order('due_date', { ascending: true }).limit(limit)
+      // Same filter shapes as the v1 supplier-invoices list: eq on
+      // supplier_id, gte/lte on invoice_date.
+      if (supplierId) query = query.eq('supplier_id', supplierId)
+      if (nameMatchedSupplierIds) query = query.in('supplier_id', nameMatchedSupplierIds)
+      if (dateFrom) query = query.gte('invoice_date', dateFrom)
+      if (dateTo) query = query.lte('invoice_date', dateTo)
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      // Tiebreak on the unique id: due_date alone leaves which rows fall past
+      // the cap nondeterministic between identical calls.
+      const { data, error, count } = await query
+        .order('due_date', { ascending: true })
+        .order('id', { ascending: true })
+        .limit(limit)
 
-      return { invoices: data ?? [], count: data?.length ?? 0 }
+      if (error) throw dbError(error)
+
+      const invoices = data ?? []
+      const totalCount = count ?? invoices.length
+      return {
+        invoices,
+        count: invoices.length,
+        total_count: totalCount,
+        has_more: totalCount > invoices.length,
+      }
     },
   },
 
@@ -7615,6 +7797,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_counterparty_templates',
+    keywords: ['motpart', 'konteringsmall', 'mallar'],
     title: 'List Counterparty Templates',
     description: 'List active counterparty categorization templates: learned patterns from prior categorizations used for auto-matching new transactions.',
     inputSchema: {
@@ -7650,7 +7833,7 @@ export const tools: McpTool[] = [
         .order('occurrence_count', { ascending: false })
         .limit(limit)
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       return {
         templates: (data ?? []).map((t) => ({
@@ -7664,6 +7847,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_suggest_categories',
+    keywords: ['konteringsförslag', 'kontering', 'kategorisera'],
     title: 'Suggest Transaction Categories',
     description: 'Suggest categories for uncategorized transactions using mapping rules, patterns, counterparty history and templates. Up to 20 per call. no_signal_transaction_ids = nothing matched; investigate via gnubok_query_journal instead of guessing.',
     inputSchema: {
@@ -7710,7 +7894,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .in('id', limitedIds)
 
-      if (txError) throw new Error(`Database error: ${txError.message}`)
+      if (txError) throw dbError(txError)
       if (!transactions || transactions.length === 0) throw new Error('No transactions found')
 
       // Fetch mapping rules
@@ -7789,6 +7973,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_accounts',
+    keywords: ['kontoplan', 'konton', 'baskonton'],
     title: 'List Chart of Accounts (Kontoplan)',
     description: 'List chart of accounts (kontoplan). account_class: 1=assets, 2=liabilities, 3=revenue, 4-7=expenses, 8=financial.',
     inputSchema: {
@@ -7846,7 +8031,7 @@ export const tools: McpTool[] = [
           return query.order('account_number', { ascending: true }).range(from, to)
         })
       } catch (error) {
-        throw new Error(`Database error: ${error instanceof Error ? error.message : 'unknown error'}`)
+        throw dbError(error)
       }
 
       // Postgres ordered by sort_order ascending with nulls last; keep that
@@ -7864,6 +8049,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_account',
+    keywords: ['kontoplan', 'nytt konto', 'baskonto'],
     title: 'Create Account (Kontoplan)',
     description: 'Stage a new kontoplan account. BAS 2026 numbers prefill name/type/SRU (overrides win); custom numbers need account_name, account_type, normal_balance. Inactive existing account? Use gnubok_update_account instead.',
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -7917,7 +8103,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .eq('account_number', accountNumber)
         .maybeSingle()
-      if (existingErr) throw new Error(`Database error: ${existingErr.message}`)
+      if (existingErr) throw dbError(existingErr)
       if (existing) {
         throw new Error(
           existing.is_active
@@ -7996,6 +8182,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_update_account',
+    keywords: ['kontoplan', 'ändra konto', 'baskonto'],
     title: 'Update Account (Kontoplan)',
     description: 'Stage an edit to a kontoplan account: rename, description, default VAT, SRU code, or activate/deactivate via is_active. Stages for approval. Find accounts with gnubok_list_accounts.',
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -8038,7 +8225,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .eq('account_number', accountNumber)
         .maybeSingle()
-      if (fetchErr) throw new Error(`Database error: ${fetchErr.message}`)
+      if (fetchErr) throw dbError(fetchErr)
       if (!current) {
         throw new Error(`Konto ${accountNumber} finns inte i kontoplanen. Skapa det med gnubok_create_account.`)
       }
@@ -8091,6 +8278,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_dimensions',
+    keywords: ['dimensioner', 'kostnadsställe', 'projekt', 'resultatenhet'],
     title: 'List Dimensions (Kostnadsställe/Projekt)',
     description: 'List the dimension registry with values: 1 = kostnadsställe, 6 = projekt, plus custom dims. Call before tagging voucher lines via the dimensions bag on gnubok_create_voucher. System dims are seeded on first call.',
     inputSchema: {
@@ -8165,6 +8353,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_dimension_values',
+    keywords: ['dimensionsvärden', 'kostnadsställe', 'projekt'],
     title: 'List Dimension Values',
     description: 'List values (SIE #OBJEKT codes) for one dimension, optionally fuzzy-matched by query. Use to find the right kostnadsställe/projekt code before tagging lines. sie_dim_no: 1 = kostnadsställe, 6 = projekt.',
     inputSchema: {
@@ -8240,7 +8429,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .eq('sie_dim_no', sieDimNo)
         .maybeSingle()
-      if (dimError) throw new Error(`Database error: ${dimError.message}`)
+      if (dimError) throw dbError(dimError)
       if (!dimension) {
         throw new Error(
           `Dimension ${sieDimNo} finns inte i registret. Anropa gnubok_list_dimensions för att se registrerade dimensioner.`,
@@ -8256,7 +8445,7 @@ export const tools: McpTool[] = [
       if (!includeInactive) valuesQuery = valuesQuery.eq('is_active', true)
 
       const { data: rows, error: valuesError } = await valuesQuery
-      if (valuesError) throw new Error(`Database error: ${valuesError.message}`)
+      if (valuesError) throw dbError(valuesError)
       const all = (rows ?? []) as Array<{
         id: string
         code: string
@@ -8290,6 +8479,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_dimension_value',
+    keywords: ['kostnadsställe', 'projekt', 'dimensionsvärde'],
     title: 'Create Dimension Value',
     description: 'Stage a new dimension value (kostnadsställe/projekt object code, SIE #OBJEKT) for user approval: agents never silently mint reporting values. Use when a dims-bag value has no registry match. sie_dim_no: 1 = kostnadsställe, 6 = projekt.',
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -8350,7 +8540,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .eq('sie_dim_no', params.sie_dim_no)
         .maybeSingle()
-      if (dimError) throw new Error(`Database error: ${dimError.message}`)
+      if (dimError) throw dbError(dimError)
       if (!dimension) {
         throw new Error(
           `Okänd dimension ${params.sie_dim_no}. Endast registrerade dimensioner kan få nya värden: ` +
@@ -8370,7 +8560,7 @@ export const tools: McpTool[] = [
         .eq('dimension_id', dimension.id)
         .eq('code', params.code)
         .maybeSingle()
-      if (existingError) throw new Error(`Database error: ${existingError.message}`)
+      if (existingError) throw dbError(existingError)
       if (existing?.is_active) {
         throw new Error(
           `Värdet "${params.code}" (${existing.name}) finns redan i ${dimension.name}: använd koden direkt i dimensions-baggen.`,
@@ -8410,6 +8600,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_tag_journal_lines',
+    keywords: ['kostnadsställe', 'projekt', 'tagga', 'dimension'],
     title: 'Tag Journal Lines (Bulk Retag)',
     description: "Bulk-tag POSTED journal lines with dimensions (kostnadsställe/projekt) selected by a filter block, e.g. all 4010 lines with 'Bygg AB' in 2024 → P01. Stages for approval; max 500 lines. Retags internal reporting only: the verifikat stays immutable, every change logged.",
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -8732,6 +8923,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_dimension_pnl',
+    keywords: ['projektresultat', 'kostnadsställe', 'resultat per projekt'],
     title: 'P&L per Dimension (Resultat per projekt)',
     description: 'Resultat per projekt/kostnadsställe: P&L matrix over one SIE dimension: each value with activity becomes a column plus an untagged bucket, and the Totalt column reconciles exactly with the resultatrapport. sie_dim_no: 1 = kostnadsställe, 6 = projekt.',
     inputSchema: {
@@ -8843,6 +9035,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_balance_sheet',
+    keywords: ['balansräkning', 'balansrapport'],
     title: 'Balance Sheet (Balansräkning)',
     description: 'Balance sheet (balansräkning) for a fiscal period or as of as_of_date: assets, equity, liabilities with totals + balance check.',
     inputSchema: {
@@ -8903,6 +9096,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_general_ledger',
+    keywords: ['huvudbok', 'huvudboken'],
     title: 'General Ledger (Huvudbok)',
     description: 'General ledger (huvudbok) for a fiscal period: per-account opening, entries, closing balances. Optional account range + dimensions filters. For ad-hoc cross-account/amount/free-text queries use gnubok_query_journal.',
     inputSchema: {
@@ -8964,6 +9158,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_query_journal',
+    keywords: ['verifikat', 'verifikation', 'verifikationer', 'grundbok', 'sök verifikat'],
     title: 'Query Journal Lines',
     description: 'Flexible journal-line query for ad-hoc questions. Filters: account, date, amount, voucher, source, status, dimensions, free-text. group_by/group_by_dimension aggregation; include_dimensions returns line bags. Lines + totals over the full match set.',
     inputSchema: {
@@ -9480,6 +9675,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_ar_ledger',
+    keywords: ['kundreskontra', 'kundfordringar'],
     title: 'AR Ledger (Kundreskontra)',
     description: 'Accounts receivable ledger (kundreskontra): outstanding customer invoices with aging.',
     inputSchema: {
@@ -9504,6 +9700,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_supplier_ledger',
+    keywords: ['leverantörsreskontra', 'leverantörsskulder', 'leverantörsfaktura'],
     title: 'AP Ledger (Leverantörsreskontra)',
     description: 'Accounts payable ledger (leverantörsreskontra): outstanding supplier invoices with aging.',
     inputSchema: {
@@ -9530,6 +9727,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_match_transaction_to_invoice',
+    keywords: ['matcha betalning', 'kundfaktura', 'inbetalning'],
     title: 'Match Transaction to Invoice',
     description: 'Match a bank transaction (income, amount>0) to a customer invoice. Confirm tx date/amount and invoice number/customer before staging. Supports partial payments and auto-storno of prior categorization.',
     inputSchema: {
@@ -9607,6 +9805,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_match_batch_allocate',
+    keywords: ['klumpbetalning', 'fördela betalning', 'matcha betalningar'],
     title: 'Batch-Allocate Payment',
     description: 'Allocate 1 bank tx across N customer OR N supplier invoices (samlingsbetalning, BFL 5 kap 6§). Use when one receipt covers many invoices or one transfer pays many bills. Stages.',
     inputSchema: {
@@ -9796,6 +9995,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_link_transaction_to_journal_entry',
+    keywords: ['koppla transaktion', 'verifikat'],
     title: 'Link Transaction to Verifikat',
     // Search-only since the account-keyed gnubok_reconcile_match covers the
     // same link (one pair) for bank AND skattekonto; kept callable for clients
@@ -9957,6 +10157,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_bulk_book_transactions',
+    keywords: ['bokför', 'kontera', 'massbokföring', 'banktransaktioner'],
     title: 'Bulk-Book Transactions',
     description: 'Bulk-book N bank txs (same date, same direction) into 1 samlingsverifikat (BFL 5 kap 6§). Link txs to an existing posted verifikat, or create one from caller lines. Each tx posts its cash-account line. Stages.',
     inputSchema: {
@@ -10250,6 +10451,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_bulk_book_inbox_items',
+    keywords: ['bokför', 'inkorg', 'kvitton', 'underlag'],
     title: 'Bulk-Book Underlag',
     description: 'Bulk-book N selected Underlag (Dokumentinkorgen) against their matched bank transactions with one shared category + VAT treatment. Set reverse_charge for foreign SaaS. Unmatched/booked items are skipped. Stages one approval.',
     inputSchema: {
@@ -10403,6 +10605,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_find_voucher_candidates_for_invoice',
+    keywords: ['verifikat', 'kundfaktura', 'koppla faktura'],
     title: 'Find Voucher Candidates (Invoice)',
     description: "List posted verifikat that could be this invoice's payment (faktureringsmetoden: credit 1510; kontantmetoden: debit 19xx). Call before gnubok_link_invoice_to_voucher to mark the faktura paid (no new bokföring).",
     inputSchema: {
@@ -10469,6 +10672,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_link_invoice_to_voucher',
+    keywords: ['koppla faktura', 'verifikat', 'kundfaktura'],
     title: 'Link Invoice to Voucher',
     description: 'Markera en faktura som betald via länk till en befintlig verifikation (faktureringsmetoden: krediterar 1510; kontantmetoden: debiterar 19xx). Kör gnubok_find_voucher_candidates_for_invoice först. Stages for approval.',
     inputSchema: {
@@ -10556,6 +10760,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_find_voucher_candidates_for_supplier_invoice',
+    keywords: ['verifikat', 'koppla'],
     title: 'Find Voucher Candidates (Supplier Invoice)',
     description: 'List posted verifikat that debit leverantörsskuld (2440) and could be this supplier invoice\'s payment. Call before gnubok_link_supplier_invoice_to_voucher to mark the leverantörsfaktura paid (no new bokföring).',
     inputSchema: {
@@ -10622,6 +10827,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_link_supplier_invoice_to_voucher',
+    keywords: ['koppla leverantörsfaktura', 'verifikat'],
     title: 'Link Supplier Invoice to Voucher',
     description: 'Markera en leverantörsfaktura som betald via länk till en befintlig verifikation som debiterar leverantörsskuld (2440). Skapar ingen ny verifikation. Kör gnubok_find_voucher_candidates_for_supplier_invoice först. Stages.',
     inputSchema: {
@@ -10709,6 +10915,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_auto_match_period',
+    keywords: ['automatchning', 'matcha period', 'stäm av månaden'],
     title: 'Auto-Match Period Income',
     description: "Bulk reconciliation: scan unmatched income in a date range and propose invoice matches with confidence + reasoning. dry_run=true (default) previews; dry_run=false stages matches above confidence_threshold.",
     inputSchema: {
@@ -10900,6 +11107,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_fiscal_periods',
+    keywords: ['räkenskapsår', 'bokföringsår', 'perioder'],
     title: 'List Fiscal Periods',
     description: 'List all fiscal periods (räkenskapsperioder) with status: active (open), locked (no new entries), or closed (year-end completed).',
     inputSchema: { type: 'object', additionalProperties: false, properties: {} },
@@ -10925,7 +11133,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .order('period_start', { ascending: false })
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       const periods = (data ?? []).map((p) => ({
         id: p.id,
@@ -10944,6 +11152,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_reconciliation_status',
+    keywords: ['avstämning', 'skattekonto', 'bankavstämning', 'stäm av'],
     title: 'Reconciliation Status',
     description: 'Reconciliation bridge. account_key: "skattekonto", "bank:<cash_account_id>" or "manual:<BAS>" (any other balance account, see its manual block). Without it: legacy bank status for account_number. Judge on unexplained_difference.',
     inputSchema: {
@@ -10952,13 +11161,13 @@ export const tools: McpTool[] = [
       properties: {
         account_key: {
           type: 'string',
-          description: '"skattekonto", "bank:<cash_account_id>" or "manual:<BAS>". Returns the account-keyed status (bridge[], counts, kind block); for manual keys date_to is the balansdag.',
+          description: '"skattekonto", "bank:<cash_account_id>" or "manual:<BAS>"; for manual keys date_to is the balansdag.',
         },
         date_from: { type: 'string', description: 'Start date YYYY-MM-DD' },
         date_to: { type: 'string', description: 'End date YYYY-MM-DD' },
         account_number: {
           type: 'string',
-          description: 'Legacy: cash-account BAS code to reconcile, e.g. "1940". Defaults to "1930". Ignored when account_key is set.',
+          description: 'Legacy: BAS code, default "1930". Ignored when account_key is set.',
         },
       },
     },
@@ -11006,8 +11215,9 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_reconciliation_items',
+    keywords: ['avstämning', 'skattekonto', 'avstämningsposter'],
     title: 'Reconciliation Items',
-    description: 'Rows behind one account\'s reconciliation bridge, bucketed (proposed, unmatched_external, unmatched_ledger, matched, ignored, upcoming): side, qualified id, amount, proposal with confidence + reasons, allowed actions. Link via gnubok_reconcile_match.',
+    description: 'Rows behind one account\'s reconciliation bridge, by bucket: side, qualified id, amount, proposal with confidence + reasons, allowed actions. Link via gnubok_reconcile_match.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -11058,6 +11268,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_reconcile_match',
+    keywords: ['avstämning', 'skattekonto', 'matcha'],
     title: 'Reconcile: Link Pairs',
     description: 'Link outside rows (bank or skattekonto) to existing verifikat on one account; no new bokföring. Pass pairs, or use_proposals to apply the persisted proposals. Stages. dry_run previews.',
     // Default catalog since E2E #12: the onboarding efterkontroll instructs
@@ -11072,13 +11283,23 @@ export const tools: McpTool[] = [
         account_key: { type: 'string', description: '"skattekonto" or "bank:<cash_account_id>"' },
         pairs: {
           type: 'array',
-          description: 'One outside row id + one journal_entry_id per pair',
+          description: 'Rows against one verifikat, or (bank) one row against several',
           items: {
             type: 'object',
             additionalProperties: false,
             properties: {
               external_ids: { type: 'array', items: { type: 'string' } },
               journal_entry_ids: { type: 'array', items: { type: 'string' } },
+              allocations: {
+                type: 'array',
+                description: 'Bank 1:N: signed slice per verifikat, summing to the row',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: { journal_entry_id: { type: 'string' }, amount: { type: 'number' } },
+                  required: ['journal_entry_id', 'amount'],
+                },
+              },
             },
             required: ['external_ids', 'journal_entry_ids'],
           },
@@ -11099,7 +11320,14 @@ export const tools: McpTool[] = [
     },
     async execute(args, companyId, userId, supabase, actor) {
       const accountKey = args.account_key as string
-      const pairs = (args.pairs as Array<{ external_ids: string[]; journal_entry_ids: string[] }> | undefined) ?? []
+      const pairs =
+        (args.pairs as
+          | Array<{
+              external_ids: string[]
+              journal_entry_ids: string[]
+              allocations?: Array<{ journal_entry_id: string; amount: number }>
+            }>
+          | undefined) ?? []
       const useProposals = args.use_proposals === true
       if (pairs.length === 0 && !useProposals) {
         throw new Error('Pass pairs, or use_proposals: true')
@@ -11118,10 +11346,32 @@ export const tools: McpTool[] = [
         { dryRun: true },
       )
       if (!preview) throw new Error(`Unknown account_key "${accountKey}" for this company`)
-      const resolvedPairs = preview.applied.map((a) => ({
-        external_ids: [a.external_id],
-        journal_entry_ids: [a.journal_entry_id],
-      }))
+      // Rebuild the staged pairs from the preview: 1:1 links stay one pair
+      // each; the links of a bank 1:N split (they carry allocated_amount, all
+      // on the same row) fold back into ONE pair with explicit allocations, so
+      // the executor re-validates the exact slices the reviewer approved.
+      const resolvedPairs: Array<{
+        external_ids: string[]
+        journal_entry_ids: string[]
+        allocations?: Array<{ journal_entry_id: string; amount: number }>
+      }> = []
+      const splitByRow = new Map<string, Array<{ journal_entry_id: string; amount: number }>>()
+      for (const a of preview.applied) {
+        if (typeof a.allocated_amount === 'number') {
+          const slices = splitByRow.get(a.external_id) ?? []
+          slices.push({ journal_entry_id: a.journal_entry_id, amount: a.allocated_amount })
+          splitByRow.set(a.external_id, slices)
+          continue
+        }
+        resolvedPairs.push({ external_ids: [a.external_id], journal_entry_ids: [a.journal_entry_id] })
+      }
+      for (const [externalId, slices] of splitByRow) {
+        resolvedPairs.push({
+          external_ids: [externalId],
+          journal_entry_ids: slices.map((s) => s.journal_entry_id),
+          allocations: slices,
+        })
+      }
       if (resolvedPairs.length === 0) {
         throw new Error('No linkable pairs: nothing to stage')
       }
@@ -11156,6 +11406,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_reconcile_unmatch',
+    keywords: ['avstämning', 'ta bort koppling', 'skattekonto'],
     title: 'Reconcile: Unlink',
     description: 'Remove the link between one outside row (bank transaction or skattekonto row) and its verifikat on an account. The verifikat is untouched. Stages (low risk).',
     catalogVisibility: 'search',
@@ -11206,6 +11457,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_reconcile_signoff',
+    keywords: ['avstämning', 'avstämt', 'signera avstämning'],
     title: 'Reconcile: Sign off',
     description: 'Mark one account (skattekonto, bank:<id> or manual:<BAS>) as reconciled through a date ("avstämt t.o.m."). Refused unless unexplained_difference is 0, or force + note. Manual accounts without a specification take external_balance (underlag, ledger sign). Stages; dry_run previews.',
     catalogVisibility: 'search',
@@ -11283,6 +11535,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_reconcile_residual',
+    keywords: ['avstämning', 'bankavgift', 'ränta', 'öresavrundning', 'restpost'],
     title: 'Reconcile: Book Residual and Link',
     description: 'Close a near-match on a bank account in one step: link 1..50 bank tx to one verifikat and book the small difference as bank fee (6570), interest (8410/8310) or rounding (3740). Bank only; refused at 0, above the cap, or wrong direction. Stages; dry_run previews.',
     catalogVisibility: 'search',
@@ -11354,7 +11607,232 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_book_skattekonto_row',
+    title: 'Book Skattekonto Row',
+    description:
+      'Book one settled skattekonto row as a posted verifikat: 1630 against the counter account matched from skattekonto rules. Refused for already-booked, ignored, upcoming or rule-less rows. Stages; booking happens at approval. dry_run previews.',
+    catalogVisibility: 'search',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        skattekonto_transaction_id: {
+          type: 'string',
+          description: 'The skattekonto_transactions row id (from the skattekonto reconciliation bridge).',
+        },
+        dry_run: { type: 'boolean' },
+        idempotency_key: { type: 'string' },
+      },
+      required: ['skattekonto_transaction_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const transactionId = args.skattekonto_transaction_id
+      if (typeof transactionId !== 'string' || transactionId.length === 0) {
+        throw new Error('skattekonto_transaction_id is required')
+      }
+
+      const { data: row } = await supabase
+        .from('skattekonto_transactions')
+        .select('id, transaktionsdatum, transaktionstext, belopp_skatteverket, status, is_ignored, journal_entry_id')
+        .eq('id', transactionId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (!row) throw new Error('Skattekonto-transaktionen hittades inte.')
+      const tx = row as SkattekontoStageRow
+
+      // Same gates the commit path enforces (requireSettled batch booking),
+      // surfaced at stage time so the reviewer never approves a doomed op.
+      if (tx.journal_entry_id) throw new Error('Transaktionen är redan bokförd.')
+      if (tx.is_ignored) {
+        throw new Error('Transaktionen är ignorerad. Återställ den innan du bokför.')
+      }
+      if (tx.status !== 'booked') {
+        throw new Error('Händelsen är inte genomförd hos Skatteverket ännu och kan inte bokföras.')
+      }
+
+      const [enriched] = await attachBookingSuggestions(supabase, companyId, [tx])
+      if (!enriched.booking_suggestion) {
+        throw new Error(
+          enriched.booking_gate === 'requires_employer'
+            ? 'Ingen motkontoregel: raden kräver arbetsgivarregistrering (troligen privat A-skatt). Bokför den manuellt.'
+            : 'Ingen motkontoregel matchade raden. Bokför den manuellt med gnubok_create_voucher.',
+        )
+      }
+
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'book_skattekonto_row',
+        `Bokför skattekontohändelse: ${tx.transaktionstext}`,
+        { transaction_id: tx.id },
+        {
+          skattekonto_transaction_id: tx.id,
+          transaction_date: tx.transaktionsdatum,
+          transaction_text: tx.transaktionstext,
+          // Mirrors the exact verifikat text bokforSkattekontoTransaction
+          // writes, so the reviewer sees what lands in the ledger (motpart
+          // Skatteverket is carried in the text + the Skatteverket-id note).
+          verifikat_description: `Skattekonto: ${tx.transaktionstext}`,
+          amount: Number(tx.belopp_skatteverket),
+          skattekonto_account: SKATTEKONTO_ACCOUNT,
+          suggested_counter_account: enriched.booking_suggestion.account,
+          suggested_counter_account_name: enriched.booking_suggestion.account_name,
+          rule_label: enriched.booking_suggestion.label,
+        },
+        actor,
+        {
+          description:
+            'After approval the row lands as a posted verifikat. Re-read the skattekonto bridge to confirm it shows as booked.',
+          tool: 'gnubok_get_reconciliation_status',
+          args: { account_key: 'skattekonto' },
+        },
+        {
+          dryRun: args.dry_run === true,
+          idempotencyKey: args.idempotency_key as string | undefined,
+          dateForPeriodCheck: tx.transaktionsdatum,
+        },
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_book_skattekonto_rows',
+    title: 'Book Skattekonto Rows (Batch)',
+    description:
+      'Book up to 200 settled skattekonto rows as posted verifikat (1630 + rule-matched counter account per row). Unbookable rows (already booked, ignored, upcoming, no rule) are skipped and listed in the preview. Stages; booking happens at approval. dry_run previews.',
+    catalogVisibility: 'search',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        skattekonto_transaction_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          maxItems: 200,
+          description: 'skattekonto_transactions row ids to book (duplicates are ignored).',
+        },
+        dry_run: { type: 'boolean' },
+        idempotency_key: { type: 'string' },
+      },
+      required: ['skattekonto_transaction_ids'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const rawIds = args.skattekonto_transaction_ids
+      if (!Array.isArray(rawIds) || rawIds.length === 0) {
+        throw new Error('skattekonto_transaction_ids is required (non-empty array)')
+      }
+      const ids = [
+        ...new Set(rawIds.filter((v): v is string => typeof v === 'string' && v.length > 0)),
+      ]
+      if (ids.length === 0 || ids.length > 200) {
+        throw new Error('skattekonto_transaction_ids must contain 1-200 row ids')
+      }
+
+      const { data: rows } = await supabase
+        .from('skattekonto_transactions')
+        .select('id, transaktionsdatum, transaktionstext, belopp_skatteverket, status, is_ignored, journal_entry_id')
+        .in('id', ids)
+        .eq('company_id', companyId)
+      const found = (rows ?? []) as SkattekontoStageRow[]
+
+      const foundIds = new Set(found.map((r) => r.id))
+      const skipped: Array<{ skattekonto_transaction_id: string; reason: string }> = []
+      for (const id of ids) {
+        if (!foundIds.has(id)) {
+          skipped.push({ skattekonto_transaction_id: id, reason: 'TRANSACTION_NOT_FOUND' })
+        }
+      }
+
+      // Same per-row gates as the single-row tool; blocked rows become
+      // skipped-with-reason preview data instead of aborting the batch.
+      const enriched = await attachBookingSuggestions(supabase, companyId, found)
+      const bookable: typeof enriched = []
+      for (const r of enriched) {
+        const reason = r.journal_entry_id
+          ? 'ALREADY_BOOKED'
+          : r.is_ignored
+            ? 'ROW_IGNORED'
+            : r.status !== 'booked'
+              ? 'NOT_SETTLED'
+              : !r.booking_suggestion
+                ? 'NO_COUNTER_ACCOUNT'
+                : null
+        if (reason) {
+          skipped.push({ skattekonto_transaction_id: r.id, reason })
+          continue
+        }
+        bookable.push(r)
+      }
+      if (bookable.length === 0) {
+        const reasons = [...new Set(skipped.map((s) => s.reason))].join(', ')
+        throw new Error(`Inga bokförbara rader: alla ${ids.length} hoppades över (${reasons}).`)
+      }
+
+      const bookableIds = bookable.map((r) => r.id)
+      // Oldest row first: lock conflicts live in the past, so the period
+      // check should probe the earliest affärshändelse date in the batch.
+      const earliestDate = bookable.map((r) => r.transaktionsdatum).sort()[0]
+      const totalAmount =
+        Math.round(bookable.reduce((sum, r) => sum + Number(r.belopp_skatteverket), 0) * 100) / 100
+
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'book_skattekonto_rows',
+        `Bokför ${bookableIds.length} skattekontohändelser`,
+        { ids: bookableIds },
+        {
+          row_count: bookableIds.length,
+          total_amount: totalAmount,
+          skattekonto_account: SKATTEKONTO_ACCOUNT,
+          rows: bookable.slice(0, 50).map((r) => ({
+            skattekonto_transaction_id: r.id,
+            transaction_date: r.transaktionsdatum,
+            transaction_text: r.transaktionstext,
+            verifikat_description: `Skattekonto: ${r.transaktionstext}`,
+            amount: Number(r.belopp_skatteverket),
+            suggested_counter_account: r.booking_suggestion?.account ?? null,
+            rule_label: r.booking_suggestion?.label ?? null,
+          })),
+          ...(bookable.length > 50 ? { rows_truncated: true } : {}),
+          ...(skipped.length > 0 ? { skipped } : {}),
+        },
+        actor,
+        {
+          description:
+            'After approval each row lands as its own posted verifikat. Re-read the skattekonto bridge to confirm.',
+          tool: 'gnubok_get_reconciliation_status',
+          args: { account_key: 'skattekonto' },
+        },
+        {
+          dryRun: args.dry_run === true,
+          idempotencyKey: args.idempotency_key as string | undefined,
+          dateForPeriodCheck: earliestDate,
+        },
+      )
+    },
+  },
+
+  {
     name: 'gnubok_list_cash_accounts',
+    keywords: ['bankkonto', 'kassakonto', 'bankkonton', 'likvidkonton', 'kassa'],
     title: 'List Cash Accounts',
     description: 'List the company bank/cash accounts (cash_accounts): BAS ledger, currency, IBAN, primary flag. Use cash_account_id to filter transaction listings and account_number (ledger_account) for gnubok_get_reconciliation_status.',
     inputSchema: {
@@ -11421,6 +11899,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_document_upload',
+    keywords: ['ladda upp', 'underlag', 'kvitto', 'dokument'],
     title: 'Create Document Upload',
     description: 'Create a short-lived URL for a model-free document upload. PUT the raw file bytes (max 10 MB) to upload_url, then call gnubok_complete_document_upload with the same upload_id and file_name.',
     inputSchema: {
@@ -11482,6 +11961,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_complete_document_upload',
+    keywords: ['ladda upp', 'underlag', 'dokument'],
     title: 'Complete Document Upload',
     description: 'Validate and archive bytes sent to the URL from gnubok_create_document_upload, run AI extraction and create the inbox item. Idempotent: safe to retry with the same upload_id.',
     inputSchema: {
@@ -11563,6 +12043,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_upload_document',
+    keywords: ['ladda upp', 'kvitto', 'underlag', 'dokument', 'bifoga'],
     title: 'Upload Document to Inbox',
     description: 'Legacy inline-base64 upload for small files (max 10 MB). Prefer gnubok_create_document_upload so raw bytes bypass the model. Runs AI field extraction: requires the AI capability.',
     inputSchema: {
@@ -11622,6 +12103,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_inbox_items',
+    keywords: ['inkorg', 'kvitto', 'kvitton', 'underlag'],
     title: 'List Inbox Items',
     description: 'List document inbox items, including each original file_name. `processed` covers all terminal links (transaction, supplier invoice, journal entry); booked receipts count as done. unprocessed_only=true returns docs still needing handling.',
     inputSchema: {
@@ -11719,7 +12201,7 @@ export const tools: McpTool[] = [
       }
 
       const { data, error } = await query
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       const mapped = (data || []).map((item) => {
         const extracted = item.extracted_data as Record<string, unknown> | null
@@ -11792,6 +12274,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_inbox_item',
+    keywords: ['inkorg', 'kvitto', 'underlag'],
     title: 'Get Inbox Item',
     description: 'Get a single inbox item with complete extracted data, supplier match, email metadata, and timestamps.',
     inputSchema: {
@@ -11819,7 +12302,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .single()
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!data) throw new Error('Inbox item not found')
 
       return data
@@ -11828,6 +12311,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_supplier_invoice_from_inbox',
+    keywords: ['leverantörsfaktura', 'inkorg', 'underlag'],
     title: 'Create Supplier Invoice from Inbox',
     description: "Atomic: turn an OCR'd inbox item into a staged supplier invoice. Resolves supplier, builds lines from extracted_data, applies VAT + FX + dimension tags, attaches the document. Stages for human review; honors dry_run. Unresolved supplier → staged:false + candidates + next.",
     inputSchema: {
@@ -12204,6 +12688,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_unmatched_documents',
+    keywords: ['omatchade underlag', 'kvitto', 'kvitton', 'dokument'],
     title: 'List Unmatched Documents',
     description: 'List inbox documents not yet attached to any bank transaction, supplier invoice, or journal entry. Returns vendor/amount/currency/date hints. Amount is in the invoice currency; FX-normalise before comparing to transactions.amount.',
     inputSchema: {
@@ -12275,7 +12760,7 @@ export const tools: McpTool[] = [
       }
 
       const { data: inboxRows, error: inboxError } = await inboxQuery
-      if (inboxError) throw new Error(`Database error: ${inboxError.message}`)
+      if (inboxError) throw dbError(inboxError)
       if (!inboxRows || inboxRows.length === 0) {
         return { items: [], count: 0 }
       }
@@ -12287,7 +12772,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .in('document_id', docIds)
 
-      if (txError) throw new Error(`Database error: ${txError.message}`)
+      if (txError) throw dbError(txError)
       const matchedDocIds = new Set((txMatches || []).map((t) => t.document_id))
 
       const unmatched = inboxRows
@@ -12362,6 +12847,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_document_content',
+    keywords: ['dokument', 'underlag', 'kvitto', 'läs underlag'],
     title: 'Get Document Content',
     description: 'Get a 5-minute signed download URL for a document so the agent can read its contents (e.g. with vision). Use after gnubok_list_unmatched_documents to inspect a specific PDF before deciding which transaction it matches.',
     inputSchema: {
@@ -12402,7 +12888,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (docError) throw new Error(`Database error: ${docError.message}`)
+      if (docError) throw dbError(docError)
       if (!doc) throw new Error('Document not found')
 
       const ttlSeconds = 300
@@ -12429,6 +12915,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_attach_document_to_transaction',
+    keywords: ['bifoga underlag', 'kvitto', 'koppla underlag'],
     title: 'Attach Document to Transaction',
     description: 'Stage attaching a document to a bank transaction. Verify tx (date, amount, counterparty) and document (filename, vendor, amount) match first: the reviewer\'s preview mirrors what you pass here. Stages for approval.',
     inputSchema: {
@@ -12558,6 +13045,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_link_document_to_voucher',
+    keywords: ['koppla underlag', 'verifikat', 'kvitto'],
     title: 'Link Document to Voucher',
     description: 'Stage linking a document to an already-POSTED verifikation (no bank-tx row). For an unbooked handling prefer gnubok_create_voucher with inbox_item_id (BFL 5 kap 6§). Call gnubok_list_verifikat_without_documents for targets.',
     inputSchema: {
@@ -12647,6 +13135,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_link_documents_to_vouchers',
+    keywords: ['koppla underlag', 'verifikat', 'kvitton'],
     title: 'Bulk-Link Documents to Vouchers',
     description: 'Bulk receipt migration: stage up to 300 document-to-verifikat links as ONE approval, addressed by voucher_series/voucher_number/fiscal_year (server resolves the UUID). Returns per-row hit/miss, so a wrong fiscal_year shows before approval. Only resolved rows are staged.',
     inputSchema: {
@@ -12717,7 +13206,7 @@ export const tools: McpTool[] = [
         .from('fiscal_periods')
         .select('id, period_start, period_end')
         .eq('company_id', companyId)
-      if (periodsError) throw new Error(`Database error: ${periodsError.message}`)
+      if (periodsError) throw dbError(periodsError)
 
       const periodsByYear = new Map<number, Array<{ id: string; period_start: string; period_end: string }>>()
       for (const p of periods ?? []) {
@@ -12734,7 +13223,7 @@ export const tools: McpTool[] = [
         .select('id, file_name, mime_type, journal_entry_id')
         .in('id', documentIds)
         .eq('company_id', companyId)
-      if (docsError) throw new Error(`Database error: ${docsError.message}`)
+      if (docsError) throw dbError(docsError)
       const docsById = new Map((docs ?? []).map((d) => [d.id as string, d as {
         id: string; file_name: string; mime_type: string; journal_entry_id: string | null
       }]))
@@ -12820,7 +13309,7 @@ export const tools: McpTool[] = [
           .select('id, status')
           .eq('company_id', companyId)
           .in('id', existingJeIds)
-        if (existingErr) throw new Error(`Database error: ${existingErr.message}`)
+        if (existingErr) throw dbError(existingErr)
         for (const je of existingJes ?? []) {
           if ((je as { status: string }).status === 'posted') postedExistingJeIds.add(je.id as string)
         }
@@ -12915,6 +13404,7 @@ export const tools: McpTool[] = [
   // ── Payroll (Lönehantering) ──────────────────────────────────
   {
     name: 'gnubok_list_mileage_trips',
+    keywords: ['körjournal', 'milersättning', 'tjänsteresor'],
     title: 'List Mileage Trips (Körjournal)',
     catalogVisibility: 'search',
     description: 'List körjournal trips for the active company. Filter by date range, status (draft = not yet booked, booked) or employee. Use before gnubok_book_mileage_period to see what would be booked.',
@@ -12979,6 +13469,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_log_mileage_trip',
+    keywords: ['körjournal', 'milersättning', 'tjänsteresa'],
     title: 'Log Mileage Trip (Körjournal)',
     catalogVisibility: 'search',
     description: 'Stage a körjournal trip (date, route, km, purpose per Skatteverket requirements). Approve via gnubok_approve_pending_operation. The trip stays a draft until booked via gnubok_book_mileage_period.',
@@ -13072,6 +13563,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_book_mileage_period',
+    keywords: ['körjournal', 'milersättning', 'bokför resor'],
     title: 'Book Mileage Period (Milersättning)',
     catalogVisibility: 'search',
     description: 'Stage booking of all draft körjournal trips in a date range as one milersättning verifikat: debit 7331 at the tax-free schablon rate, credit 2820/2893/1930. Approve via gnubok_approve_pending_operation. Call gnubok_list_mileage_trips first.',
@@ -13155,6 +13647,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_list_employees',
+    keywords: ['anställd', 'anställda', 'personal'],
     title: 'List Employees',
     description: 'List employees for the active company. Personnummer is returned masked as personnummer_masked (YYYYMMDD-XXXX).',
     inputSchema: {
@@ -13185,7 +13678,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
       if (activeOnly) query = query.eq('is_active', true)
       const { data, error } = await query.order('last_name')
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       // Shared masking helper: strips personnummer (ciphertext) AND
       // personnummer_last4, exposing only personnummer_masked: same shape as
       // the app routes and the other MCP payroll tools.
@@ -13195,6 +13688,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_get_salary_run',
+    keywords: ['lön', 'lönekörning', 'löner'],
     title: 'Get Salary Run',
     description: 'Get salary run with status, totals, per-employee breakdown (gross, tax, net, avgifter, vacation accrual) and step-by-step calculation breakdown.',
     inputSchema: {
@@ -13227,6 +13721,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_get_salary_journal',
+    keywords: ['lönejournal', 'lön', 'bokföringsunderlag lön'],
     title: 'Salary Journal (Lönejournal)',
     description: 'Salary journal (lönejournal) for a year: per-employee per-month rows + yearly totals.',
     inputSchema: {
@@ -13246,6 +13741,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_create_salary_run',
+    keywords: ['lön', 'lönekörning', 'ny lönekörning', 'löner'],
     title: 'Create Salary Run',
     description: 'Stage creation of a draft salary run for a period + base lines for all active employees. Commit via gnubok_approve_pending_operation; then run gnubok_calculate_salary_run and book via gnubok_book_salary_run.',
     inputSchema: {
@@ -13302,6 +13798,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_calculate_salary_run',
+    keywords: ['lön', 'lönekörning', 'beräkna lön'],
     title: 'Calculate Salary Run',
     description: 'Calculate a draft salary run: tax, avgifter, vacation accrual, totals. Run must be in draft status.',
     inputSchema: {
@@ -13348,6 +13845,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_book_salary_run',
+    keywords: ['lön', 'lönekörning', 'bokför lön'],
     title: 'Book Salary Run',
     description: 'Stage booking of a calculated salary run: advances godkänd/utbetald and posts the immutable lön verifikat. High-risk (BFL 5 kap). Commit via gnubok_approve_pending_operation (confirmed=true); then gnubok_generate_agi.',
     inputSchema: {
@@ -13370,7 +13868,7 @@ export const tools: McpTool[] = [
         .eq('id', id)
         .eq('company_id', companyId)
         .maybeSingle()
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!run) throw new Error('Salary run not found')
       if (run.status === 'booked') throw new Error('Salary run is already booked')
       if (!['draft', 'review', 'approved', 'paid'].includes(run.status as string)) {
@@ -13383,7 +13881,7 @@ export const tools: McpTool[] = [
         .from('salary_run_employees')
         .select('id, calculation_breakdown')
         .eq('salary_run_id', id)
-      if (rosterError) throw new Error(`Database error: ${rosterError.message}`)
+      if (rosterError) throw dbError(rosterError)
       const rosterRows = roster ?? []
       const uncalculated = rosterRows.filter((r) => !r.calculation_breakdown).length
       if (uncalculated > 0) {
@@ -13418,6 +13916,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_generate_agi',
+    keywords: ['arbetsgivardeklaration', 'lön', 'arbetsgivaravgift'],
     title: 'Generate AGI Declaration',
     description: 'Stage AGI XML generation (Arbetsgivardeklaration) for a salary run. High-risk: produces statutory Skatteverket underlag (BFL 7-year retention). Commit via gnubok_approve_pending_operation.',
     inputSchema: {
@@ -13472,6 +13971,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_vat_declaration_validate',
+    keywords: ['momsdeklaration', 'moms', 'granska momsdeklaration'],
     title: 'Validate VAT Declaration (Momsdeklaration)',
     description: 'Pre-flight the period momsdeklaration: Skatteverket /kontrollera (read-only, saves nothing) PLUS the local completeness checks. Read arithmetic_ok and completeness_ok separately: Skatteverket only checks that the payload adds up, never that the underlag is complete.',
     inputSchema: {
@@ -13561,6 +14061,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_vat_declaration_submit',
+    keywords: ['momsdeklaration', 'moms', 'lämna in moms', 'skatteverket'],
     title: 'Submit VAT Declaration (Momsdeklaration)',
     description: 'Stage the period momsdeklaration for filing with Skatteverket. High-risk: approval sends it for BankID signing (returns a signing link); it is not filed until you sign. Always staged.',
     inputSchema: {
@@ -13628,6 +14129,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_vat_declaration_status',
+    keywords: ['momsdeklaration', 'moms'],
     title: 'VAT Declaration Status (Momsdeklaration)',
     description: 'Fetch the filing status of a momsdeklaration from Skatteverket: inlämnat (submitted) and/or beslutat (decided). Sections are null when nothing is on file yet.',
     inputSchema: {
@@ -13692,6 +14194,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_agi_submit',
+    keywords: ['arbetsgivardeklaration', 'lämna in agi'],
     title: 'Submit AGI Declaration (Arbetsgivardeklaration)',
     description: "Stage filing of a salary run's arbetsgivardeklaration (AGI) with Skatteverket. High-risk: approval posts the XML underlag and returns a BankID signing link; it is not filed until you sign. Always staged.",
     inputSchema: {
@@ -13753,6 +14256,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_agi_status',
+    keywords: ['arbetsgivardeklaration'],
     title: 'AGI Declaration Status (Arbetsgivardeklaration)',
     description: "Fetch AGI filing status for a salary run: run-scoped filing_state and kvittensnummer (a correction run never inherits the superseded original's receipt), plus live Skatteverket kvittenser.",
     inputSchema: {
@@ -13839,6 +14343,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_get_employee',
+    keywords: ['anställd', 'personal'],
     title: 'Get Employee',
     description: 'Get one employee\'s full payroll config: salary, tax table/column, jamkning, F-skatt, vacation rule, vaxa-stod, bank details, dimensions. Personnummer masked. Use after gnubok_list_employees to drill into one employee before payroll work.',
     inputSchema: {
@@ -13880,7 +14385,7 @@ export const tools: McpTool[] = [
         .eq('id', employeeId)
         .eq('company_id', companyId)
         .maybeSingle()
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!e) throw new Error('Employee not found')
       // LLM context is a leak surface: personnummer is ALWAYS masked on MCP,
       // there is no full-value drill-in on this surface.
@@ -13935,6 +14440,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_get_payslip',
+    keywords: ['lönebesked', 'lönespecifikation', 'lönespec', 'lön'],
     title: 'Get Payslip (Lönebesked)',
     description: 'Get one employee\'s payslip in a salary run: gross, tax, avgifter, net, every line item and the step-by-step calculation breakdown. Personnummer masked. Use after gnubok_get_salary_run to verify how one employee\'s pay was computed.',
     inputSchema: {
@@ -13977,7 +14483,7 @@ export const tools: McpTool[] = [
         .eq('employee_id', employeeId)
         .eq('company_id', companyId)
         .maybeSingle()
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!sre) throw new Error('Employee not found in this salary run')
       const emp = sre.employee as { first_name: string; last_name: string; personnummer: string } | null
       const lineItems = ((sre.line_items ?? []) as Array<Record<string, unknown>>)
@@ -14027,6 +14533,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_list_absence',
+    keywords: ['frånvaro', 'sjukfrånvaro', 'semester', 'vab'],
     title: 'List Absence (Frånvaro)',
     description: 'List an employee\'s registered absence days (sick, vab, parental, ...) in a date range, max 92 days. These per-day rows drive karensavdrag and sjuklön at calculation time. Use before gnubok_register_absence to see what is already registered.',
     inputSchema: {
@@ -14074,6 +14581,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_update_payslip_line',
+    keywords: ['lönebesked', 'lönespecifikation', 'lönerad'],
     title: 'Update Payslip Line',
     description: 'Stage an edit to one payslip line (amount, description, quantity, unit price) in a DRAFT salary run. Commit via gnubok_approve_pending_operation, then re-run gnubok_calculate_salary_run. NOTE: recalc rebuilds base salary lines: use gnubok_set_run_salary for this month\'s pay.',
     inputSchema: {
@@ -14154,6 +14662,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_set_run_salary',
+    keywords: ['lön', 'lönekörning', 'månadslön', 'ändra lön'],
     title: 'Set This Month\'s Salary',
     description: 'Stage this run\'s base salary for one employee in a DRAFT salary run (per-run value; the employee\'s fixed salary is untouched). For variable pay, e.g. owner salary; 0 = nollkörning. Commit via gnubok_approve_pending_operation, then gnubok_calculate_salary_run.',
     // Default catalog: gnubok_call_tool only bridges READ tools, so a
@@ -14238,7 +14747,103 @@ export const tools: McpTool[] = [
     },
   },
   {
+    name: 'gnubok_update_salary_run',
+    title: 'Update Salary Run',
+    description: 'Stage an update of a DRAFT salary run\'s payment_date, voucher_series or notes; frozen past draft (payment_date becomes the booking entry date). Commit via gnubok_approve_pending_operation; recalculate a calculated run after a payment_date change.',
+    // Search-only: tools/list budget is at zero headroom (see the ledger in
+    // payload-size.bench.test.ts) and the payroll_month loadout plus
+    // gnubok_get_salary_run's status field route agents here when needed.
+    catalogVisibility: 'search',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        salary_run_id: { type: 'string', description: 'UUID of the salary run (must be draft)' },
+        payment_date: { type: 'string', description: 'New payment date (YYYY-MM-DD); the date the salary verifikat will be booked on. Must stay within the run\'s period month (AGI is declared per payment month); supplying it clears the run\'s calculation.' },
+        voucher_series: { type: 'string', description: 'Voucher series letter (single A-Z)' },
+        notes: { type: ['string', 'null'], description: 'Free-text note on the run (max 2000 chars); null clears it' },
+      },
+      required: ['salary_run_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const { salary_run_id, payment_date, voucher_series, notes } = args as {
+        salary_run_id: string; payment_date?: string; voucher_series?: string; notes?: string | null
+      }
+      if (!salary_run_id) {
+        throw new Error('salary_run_id is required')
+      }
+      const patch: Record<string, unknown> = {}
+      if (payment_date !== undefined) patch.payment_date = payment_date
+      if (voucher_series !== undefined) patch.voucher_series = voucher_series
+      if (notes !== undefined) patch.notes = notes
+      if (Object.keys(patch).length === 0) {
+        throw new Error('At least one of payment_date, voucher_series, notes is required')
+      }
+
+      // Preflight via the shared service in dry-run: verifies draft status
+      // (exactly as the v1 PATCH does) and yields old/new values for the
+      // preview. No writes here: the commit path re-runs the service for real.
+      const { updateDraftSalaryRun } = await import('@/lib/salary/update-run')
+      const preflight = await updateDraftSalaryRun(supabase, {
+        companyId,
+        salaryRunId: salary_run_id,
+        patch: patch as never,
+        dryRun: true,
+      })
+      if (!preflight.ok) {
+        throw new Error(`Cannot update salary run: ${preflight.code}`)
+      }
+      const d = preflight.data
+
+      const changeParts: string[] = []
+      if (d.changes.payment_date !== undefined) {
+        changeParts.push(`utbetalningsdag ${d.previous.payment_date} → ${d.payment_date}`)
+      }
+      if (d.changes.voucher_series !== undefined) {
+        changeParts.push(`serie ${d.previous.voucher_series} → ${d.voucher_series}`)
+      }
+      if (d.changes.notes !== undefined) {
+        changeParts.push('anteckning uppdaterad')
+      }
+      const periodLabel = `${d.period_year}-${String(d.period_month).padStart(2, '0')}`
+
+      return stagePendingOperation(
+        supabase, companyId, userId, 'update_salary_run',
+        `Uppdatera lönekörning ${periodLabel}: ${changeParts.join(', ')}`,
+        { salary_run_id, patch },
+        {
+          salary_run_id,
+          period_year: d.period_year,
+          period_month: d.period_month,
+          previous: d.previous,
+          new_payment_date: d.payment_date,
+          new_voucher_series: d.voucher_series,
+          new_notes: d.notes,
+          changes: d.changes,
+          // A payment_date change clears every roster row's
+          // calculation_breakdown at commit (skatteavdrag and the AGI
+          // redovisningsperiod follow the payment month), so booking is
+          // refused until a recalculation has run against the new date.
+          invalidates_calculation: d.changes.payment_date !== undefined,
+        },
+        actor,
+        d.changes.payment_date !== undefined
+          ? {
+              description: 'Approval clears the run\'s calculation (tax follows the payment month): re-run gnubok_calculate_salary_run before booking.',
+              tool: 'gnubok_calculate_salary_run',
+            }
+          : undefined,
+        // Period gate on the date the verifikat would land on: the new
+        // payment_date when it changes, else the current one.
+        { dateForPeriodCheck: d.payment_date },
+      )
+    },
+  },
+  {
     name: 'gnubok_register_absence',
+    keywords: ['frånvaro', 'sjukanmälan', 'semester', 'vab'],
     title: 'Register Absence (Frånvaro)',
     description: 'Stage absence registration (sick, vab, parental, ...) for an employee over a date range, max 92 days, weekends skipped unless included. Commit via gnubok_approve_pending_operation; recalculate any open salary run afterwards.',
     inputSchema: {
@@ -14324,6 +14929,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_delete_absence',
+    keywords: ['frånvaro', 'ta bort frånvaro'],
     title: 'Delete Absence (Frånvaro)',
     description: 'Stage removal of registered absence days in a date range, optionally one type only. Inverse of gnubok_register_absence. Commit via gnubok_approve_pending_operation; recalculate any draft salary run afterwards.',
     inputSchema: {
@@ -14403,6 +15009,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_create_employee',
+    keywords: ['anställd', 'ny anställd', 'personal'],
     title: 'Create Employee',
     description: 'Stage creation of a new employee: salary, tax table, bank details, vacation rule. Personnummer is encrypted at staging and never stored in plaintext. Commit via gnubok_approve_pending_operation; then attach to a salary run.',
     inputSchema: {
@@ -14515,6 +15122,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_update_employee',
+    keywords: ['anställd', 'ändra anställd', 'personal'],
     title: 'Update Employee',
     description: 'Stage an update to an employee\'s payroll config: salary, tax, bank details, vacation rule, jamkning, vaxa-stod. Personnummer cannot be changed. Call gnubok_get_employee first to see current values; commit via gnubok_approve_pending_operation.',
     inputSchema: {
@@ -14593,7 +15201,7 @@ export const tools: McpTool[] = [
         .eq('id', employee_id)
         .eq('company_id', companyId)
         .maybeSingle()
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!existing) throw new Error('Employee not found')
 
       const changes = Object.entries(patch).map(([field, to]) => ({
@@ -14621,6 +15229,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_set_employee_opening_balances',
+    keywords: ['anställd', 'ingående saldo', 'semesterdagar'],
     title: 'Set Employee Opening Balances (Cutover)',
     description: 'Stage payroll cutover state per employee: YTD gross/tax/net, vacation days remaining and taken this year, sparade dagar by origin year, opening semesterlöneskuld SEK, karens adjustment. An omitted field keeps its stored value; send 0 to clear it. Locked after a booked run.',
     inputSchema: {
@@ -14714,7 +15323,7 @@ export const tools: McpTool[] = [
         .select(`employee_id, ${MERGEABLE_FIELDS.join(', ')}`)
         .eq('company_id', companyId)
         .in('employee_id', employeeIds)
-      if (storedErr) throw new Error(`Database error: ${storedErr.message}`)
+      if (storedErr) throw dbError(storedErr)
       const storedByEmployee = new Map(
         ((storedRows ?? []) as unknown as Array<Record<string, unknown>>).map((r) => [
           r.employee_id as string,
@@ -14797,6 +15406,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_get_vacation_balance',
+    keywords: ['semester', 'semestersaldo', 'semesterdagar'],
     title: 'Get Vacation Balance (Semestersaldo)',
     description: 'Get one employee\'s open vacation balance: entitled/taken/remaining days, sparade dagar per origin year, forced payouts and estimated semesterlöneskuld in SEK. Use before gnubok_close_vacation_year.',
     inputSchema: {
@@ -14837,7 +15447,7 @@ export const tools: McpTool[] = [
         .order('vacation_year_start', { ascending: false })
         .limit(1)
         .maybeSingle()
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!balance) throw new Error('No vacation balance exists for the employee yet (the ledger seeds on first booking)')
       const { id, ...rest } = balance as { id: string } & Record<string, unknown>
       const entitled = (rest.entitled_days as number) ?? 0
@@ -14855,7 +15465,7 @@ export const tools: McpTool[] = [
         .eq('id', employeeId)
         .eq('company_id', companyId)
         .maybeSingle()
-      if (empErr) throw new Error(`Database error: ${empErr.message}`)
+      if (empErr) throw dbError(empErr)
       if (!employee) throw new Error(`Employee ${employeeId} not found for this company`)
       const savedTotal = Object.values((rest.saved_days as Record<string, number> | null) ?? {})
         .reduce((s, d) => s + (Number(d) || 0), 0)
@@ -14872,6 +15482,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_close_vacation_year',
+    keywords: ['semesterår', 'semesterårsskifte', 'semester'],
     title: 'Close Vacation Year (Semesterårsavslut)',
     description: 'Stage the vacation year close: rolls balances into the next year (min-20 floor, 5-year expiry to forced payout) and books a 2920/2940 drift adjustment when needed. High risk: review the preview report, then commit via gnubok_approve_pending_operation.',
     inputSchema: {
@@ -14937,6 +15548,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_close_period',
+    keywords: ['stäng period', 'periodstängning', 'månadsavslut', 'månadsbokslut'],
     title: 'Close Fiscal Period',
     description: 'Stage period close (irreversible per BFL). Requires period locked + year-end closing entry posted. High-risk: always staged, never auto-committed.',
     inputSchema: {
@@ -14993,6 +15605,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_lock_period',
+    keywords: ['lås period', 'låsa bokföringen'],
     title: 'Lock Fiscal Period',
     description: 'Stage period lock: blocks new entries. Requires zero untriaged or unbooked business transactions in the period. High-risk, always staged.',
     inputSchema: {
@@ -15093,6 +15706,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_uncategorize_transaction',
+    keywords: ['ångra bokföring', 'avkategorisera'],
     title: 'Uncategorize Transaction',
     description: 'Stage uncategorize: reverses linked journal entry via storno (never deletes) and clears the category. Stages for approval.',
     inputSchema: {
@@ -15158,7 +15772,95 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_ignore_transaction',
+    title: 'Ignore Transaction (Ignorera)',
+    description: 'Stage ignoring an unbooked bank transaction that is no business event (PSD2 ghost row, duplicate). No verifikat is written, so a locked period does not block it: the answer to TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED. restore: true un-ignores; booked rows are refused.',
+    // Default catalog: gnubok_call_tool only bridges READ tools, so a
+    // search-only WRITE is uncallable on Claude.ai, and the
+    // TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED remediation instructs agents to call
+    // this tool. Budget accounted for in payload-size.bench.test.ts (#1661).
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        transaction_id: { type: 'string', description: 'UUID of the unbooked bank transaction' },
+        restore: { type: 'boolean', description: 'true = clear the ignore flag instead (default false)' },
+        dry_run: { type: 'boolean', description: 'Validate and preview without staging.' },
+        idempotency_key: { type: 'string', description: 'Per-operation UUID for safe retries (24h TTL).' },
+      },
+      required: ['transaction_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const transactionId = String(args.transaction_id ?? '').trim()
+      if (!transactionId) throw new Error('transaction_id is required')
+      const restore = args.restore === true
+
+      const { data: tx, error: txError } = await supabase
+        .from('transactions')
+        .select('id, description, merchant_name, amount, currency, date, is_ignored')
+        .eq('id', transactionId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (txError) throw dbError(txError)
+      if (!tx) throw new Error('Transaction not found')
+
+      // Preflight through the shared core in dry run (issue #1661): the booked
+      // check covers all three anchors (journal_entry_id, payment allocations,
+      // voucher links) and `changed` tells the preview whether approval would
+      // be a no-op. Nothing is written here; the commit path re-runs the core.
+      const preflight = await setTransactionIgnored(supabase, companyId, transactionId, !restore, {
+        dryRun: true,
+      })
+      if (!preflight.ok) {
+        const entry = getErrorEntry(preflight.code)
+        throw new Error(
+          `Cannot ${restore ? 'restore' : 'ignore'} transaction: ${preflight.code}. ${entry?.message_en ?? ''}`.trim()
+        )
+      }
+
+      const label = tx.merchant_name || tx.description || transactionId
+      return stagePendingOperation(supabase, companyId, userId, 'ignore_transaction',
+        restore ? `Återställ ignorerad transaktion: ${label}` : `Ignorera transaktion: ${label}`,
+        { transaction_id: transactionId, ignored: !restore },
+        {
+          transaction_id: transactionId,
+          transaction_description: label,
+          amount: tx.amount,
+          currency: tx.currency,
+          date: tx.date,
+          currently_ignored: Boolean(tx.is_ignored),
+          will_be_ignored: !restore,
+          already_in_state: !preflight.changed,
+          // No verifikat is written, so period_status is informational only:
+          // a locked or closed period does not block this operation.
+          writes_verifikat: false,
+          period_lock_applies: false,
+        },
+        actor,
+        restore
+          ? {
+              description: 'After approval the row is back in the "to book" list: book it via gnubok_categorize_transaction.',
+              tool: 'gnubok_categorize_transaction',
+              args: { transaction_id: transactionId },
+            }
+          : {
+              description: 'After approval the row leaves the "to book" list. Continue with gnubok_list_uncategorized_transactions.',
+              tool: 'gnubok_list_uncategorized_transactions',
+            },
+        {
+          dryRun: Boolean(args.dry_run),
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+          dateForPeriodCheck: tx.date,
+        }
+      )
+    },
+  },
+
+  {
     name: 'gnubok_export_sie',
+    keywords: ['sie', 'sie-fil', 'exportera bokföring'],
     title: 'Export SIE File',
     description: 'Generate SIE-4 file for a fiscal period (standard Swedish bookkeeping interchange format). Returns SIE text content.',
     inputSchema: {
@@ -15218,6 +15920,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_generate_rot_rut_file',
+    keywords: ['rotavdrag', 'rutavdrag', 'husarbete', 'utbetalningsfil'],
     title: 'Generate Rot/Rut Payout File',
     description:
       'Begäran om utbetalning for rot/rut (Skatteverket husavdrag): XML file from paid deduction invoices, uploaded manually on skatteverket.se (no API exists). Call with list_only=true first to see eligible invoices and blockers. Generating records an active begäran per invoice.',
@@ -15347,6 +16050,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_import_rot_rut_beslut',
+    keywords: ['rotavdrag', 'rutavdrag', 'beslutsfil', 'skatteverket'],
     title: 'Import Rot/Rut Decision File',
     description:
       'Import Skatteverkets beslutsfil (decision JSON from the rot/rut e-tjänst) and record godkänt belopp on the matching begäran. Exact matching only; per-beslut outcomes in results. Book the payout afterwards via the settle endpoint hint in next.',
@@ -15423,6 +16127,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_audit_package',
+    keywords: ['revision', 'revisor', 'bokslutsunderlag'],
     title: 'Generate Audit Package',
     description: "Single-call audit package for a fiscal period: SIE-4 + reports (trial balance, income statement, balance sheet, general ledger, journal, VAT) + receipts + audit log + voucher gaps, zipped.",
     inputSchema: {
@@ -15568,6 +16273,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_year_end_readiness',
+    keywords: ['bokslut', 'årsbokslut', 'årsavslut', 'redo för bokslut'],
     title: 'Year-End Readiness Check',
     // Budget: 280 chars (output-schema.test.ts). Spend it on the blockers an
     // agent can act on BEFORE calling, in likelihood order. The four
@@ -15682,6 +16388,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_post_kontantmetod_cutoff',
+    keywords: ['kontantmetoden', 'bokslutsmetod', 'brytdag'],
     title: 'Post Cash-Method Year-End Cut-Off',
     description: 'Stage the exact year-end receivable/payable cut-off and next-period reversals required for kontantmetoden. Review all proposed lines, then approve with confirmed=true.',
     inputSchema: {
@@ -15876,6 +16583,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_run_year_end',
+    keywords: ['bokslut', 'årsbokslut', 'årsavslut', 'stäng året'],
     title: 'Run Year-End Closing (Bokslut)',
     description: 'Stage year-end closing: zero result accounts (class 3-8) into 2099, lock period, create next period, seed opening balances. High-risk, always staged.',
     inputSchema: {
@@ -15921,6 +16629,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_set_opening_balances',
+    keywords: ['ingående balans', 'öppningsbalans', 'ingående saldon'],
     title: 'Set Opening Balances (Ingående Balans)',
     description: 'Stage opening-balance entry: copy class 1-2 closing balances from a closed period into the next period.',
     inputSchema: {
@@ -15971,6 +16680,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_run_currency_revaluation',
+    keywords: ['valutaomvärdering', 'valutakurs', 'kursvinst'],
     title: 'Run Currency Revaluation',
     description: 'Stage currency revaluation: revalue open FX receivables/payables to closing-date rate (posts 3960/7960). One per period max.',
     inputSchema: {
@@ -16005,6 +16715,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_voucher_gaps',
+    keywords: ['nummerlucka', 'verifikationsnummer', 'verifikat', 'luckor'],
     title: 'List Voucher Gaps',
     description: 'List voucher number gaps in a fiscal period (BFNAR 2013:2 audit requirement). Each gap shows whether it has an explanation.',
     inputSchema: {
@@ -16078,6 +16789,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_set_voucher_note',
+    keywords: ['verifikat', 'anteckning', 'notering'],
     title: 'Set Voucher Note (Anteckning)',
     description: 'Stage setting, replacing or clearing the internal note (anteckning) on a verifikat. Notes are annotation metadata, editable even on posted entries: bookkeeping fields stay immutable. Read them via gnubok_query_journal (entry_notes).',
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -16121,7 +16833,7 @@ export const tools: McpTool[] = [
         .eq('id', journalEntryId)
         .eq('company_id', companyId)
         .maybeSingle()
-      if (fetchErr) throw new Error(`Database error: ${fetchErr.message}`)
+      if (fetchErr) throw dbError(fetchErr)
       if (!entry) throw new Error('Verifikationen hittades inte.')
 
       const voucherLabel = entry.voucher_number
@@ -16154,6 +16866,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_explain_voucher_gap',
+    keywords: ['nummerlucka', 'verifikationsnummer', 'förklara lucka'],
     title: 'Explain Voucher Gap',
     description: 'Stage explanation for a voucher gap (BFNAR 2013:2 compliance, every gap needs a documented reason).',
     inputSchema: {
@@ -16201,6 +16914,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_approve_supplier_invoice',
+    keywords: ['leverantörsfaktura', 'attestera', 'godkänn faktura'],
     title: 'Approve Supplier Invoice',
     description: 'Stage approval of a supplier invoice that has not been attested yet (registered or overdue). An invoice that is still past its due date keeps the overdue label after approval. High-risk, always staged.',
     inputSchema: {
@@ -16248,6 +16962,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_credit_supplier_invoice',
+    keywords: ['leverantörsfaktura', 'kreditfaktura', 'kreditera'],
     title: 'Credit Supplier Invoice (Kreditfaktura)',
     description: 'Stage credit-note (kreditfaktura) for a supplier invoice: mirror invoice with negative effect + reverses registration JE (accrual).',
     inputSchema: {
@@ -16290,6 +17005,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_convert_invoice',
+    keywords: ['proforma', 'kundfaktura', 'omvandla'],
     title: 'Convert Proforma to Invoice',
     description: 'Stage conversion of a proforma invoice to a real invoice. Allocates F-series number, copies items, marks proforma cancelled.',
     inputSchema: {
@@ -16333,6 +17049,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_unlock_period',
+    keywords: ['lås upp period', 'öppna period'],
     title: 'Unlock Fiscal Period',
     description: 'Stage period unlock: clears locked_at so entries can be posted again. Cannot unlock a closed period. High-risk, always staged.',
     inputSchema: {
@@ -16382,6 +17099,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_credit_invoice',
+    keywords: ['kreditfaktura', 'kreditera', 'kundfaktura'],
     title: 'Credit Customer Invoice (Kreditfaktura)',
     description: 'Stage credit note (kreditfaktura) for a customer invoice: KR- prefixed mirror invoice + reverses original JE (accrual). Original must be sent/paid/overdue and not already credited.',
     inputSchema: {
@@ -16436,6 +17154,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_update_invoice',
+    keywords: ['ändra faktura', 'kundfaktura', 'faktura'],
     title: 'Update Draft Invoice',
     description: 'Stage an edit to a DRAFT invoice: header fields (incl. default_dimensions) and/or items (FULL REPLACE: read current lines with gnubok_get_invoice first; lines accept article_id). Drafts only, no verifikat, not self-billed, not a credit note; otherwise use gnubok_credit_invoice.',
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -16555,7 +17274,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!invoice) throw new Error('Invoice not found. Use gnubok_list_invoices to find valid IDs.')
 
       // Editable drafts only: the shared predicate the web PATCH route gates
@@ -16700,7 +17419,7 @@ export const tools: McpTool[] = [
           .select('line_type, description, quantity, unit, unit_price, line_total, vat_rate, revenue_account, article_id, deduction_type, accrual_period_start, accrual_period_end')
           .eq('invoice_id', invoice.id)
           .order('sort_order', { ascending: true })
-        if (currentError) throw new Error(`Database error: ${currentError.message}`)
+        if (currentError) throw dbError(currentError)
         currentItems = (currentRows ?? []).map((row: Record<string, unknown>) => ({
           line_type: row.line_type ?? 'product',
           description: row.description,
@@ -16801,7 +17520,82 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_delete_draft_invoice',
+    title: 'Delete Draft Invoice',
+    description:
+      'Stage removal of a DRAFT invoice for approval. Drafts only: an unnumbered draft is hard deleted; a numbered draft is makulerad (status cancelled, number kept so the F-series stays gap-free). Sent/paid/credited invoices are refused: use gnubok_credit_invoice instead.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        invoice_id: { type: 'string', description: 'UUID of the draft invoice, from gnubok_list_invoices.' },
+        dry_run: { type: 'boolean', description: 'Validate and preview without staging or changing data.' },
+        idempotency_key: { type: 'string', description: 'Random per-operation UUID. Reusing it with the same payload returns the original staged response.' },
+      },
+      required: ['invoice_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    catalogVisibility: 'search',
+    async execute(args, companyId, userId, supabase, actor) {
+      const invoiceId = args.invoice_id as string
+      if (!invoiceId) throw new Error('invoice_id is required. Use gnubok_list_invoices to find IDs.')
+
+      const { data: inv } = await supabase
+        .from('invoices')
+        .select('id, invoice_number, status, total, currency, customer:customers(name)')
+        .eq('id', invoiceId).eq('company_id', companyId).single()
+
+      if (!inv) throw new Error('Invoice not found')
+      if (inv.status !== 'draft') {
+        throw new Error(
+          `Only draft invoices can be deleted (status: ${inv.status}). ` +
+          'Issued invoices are immutable per BFL: use gnubok_credit_invoice instead.'
+        )
+      }
+
+      // Unnumbered draft = hard delete (no F-series number was consumed, so
+      // no gap arises); numbered draft = makulering (number retained so the
+      // F-series stays gap-free). The commit executor re-validates status
+      // with TOCTOU write guards, so a draft sent between staging and
+      // approval is refused, never cancelled.
+      const willHardDelete = !inv.invoice_number
+
+      return stagePendingOperation(supabase, companyId, userId, 'delete_draft_invoice',
+        willHardDelete
+          ? 'Ta bort fakturautkast (onumrerat)'
+          : `Makulera fakturautkast ${inv.invoice_number}`,
+        // expected_invoice_number pins the APPROVED outcome: if the draft is
+        // finalized (gains a number) between staging and approval, the
+        // executor refuses instead of silently makulera what the approver saw
+        // as a hard delete.
+        { invoice_id: invoiceId, expected_invoice_number: inv.invoice_number ?? null },
+        {
+          invoice_id: inv.id,
+          invoice_number: inv.invoice_number ?? null,
+          customer_name: (inv.customer as { name?: string } | null)?.name ?? null,
+          total: inv.total,
+          currency: inv.currency,
+          method: willHardDelete
+            ? 'hard delete: the unnumbered draft and its lines are removed; no F-series number was consumed, so no gap arises'
+            : 'makulering: status flips to cancelled and the invoice number is retained, keeping the F-series gap-free',
+        },
+        actor,
+        {
+          description: 'After approval the draft is removed (unnumbered) or makulerad (numbered). Both outcomes are permanent.',
+          tool: 'gnubok_list_invoices',
+        },
+        {
+          dryRun: Boolean(args.dry_run),
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+        },
+      )
+    },
+  },
+
+  {
     name: 'gnubok_create_sie_upload',
+    keywords: ['sie', 'sie-fil', 'importera bokföring'],
     title: 'Create SIE Upload',
     description:
       'The SIE-file intake: on claude.ai/Desktop this renders a DRAG-AND-DROP card that reads exact bytes, preflights and imports: call it as soon as an SIE import is next. Elsewhere: PUT raw bytes (max 50 MB) to upload_url, then pass upload_id + sha256 to preflight/import.',
@@ -16865,6 +17659,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_sie_preflight',
+    keywords: ['sie', 'sie-fil', 'kontrollera sie'],
     title: 'SIE Preflight Scan',
     description:
       'Scan a SIE file BEFORE import: parse, validate (balances, IB, encoding), duplicates, orgnr match, suggested mappings. Read-only. Call gnubok_create_sie_upload FIRST: its card/URL carries exact bytes; NEVER retype a large file. Mappings feed gnubok_import_sie.',
@@ -17032,6 +17827,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_import_sie',
+    keywords: ['sie', 'sie-fil', 'importera bokföring', 'byta system'],
     title: 'Import SIE File',
     description: 'Stage SIE-file import (types 1-4, CP437/UTF-8/Latin-1). On commit creates fiscal period, opening balances, and journal entries. Always staged. Run gnubok_sie_preflight first; large files arrive byte-exact via gnubok_create_sie_upload (card/URL), NEVER retyped inline.',
     inputSchema: {
@@ -17174,6 +17970,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_undo_sie_import',
+    keywords: ['sie', 'ångra import'],
     title: 'Undo SIE Import',
     description: 'Stage undo of a completed SIE import: hard-deletes its entries, detaches docs, resets voucher_sequences, marks the import \'undone\' for re-import. Use after a botched import. Period must be open. HIGH risk.',
     inputSchema: {
@@ -17275,6 +18072,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_voucher',
+    keywords: ['verifikat', 'verifikation', 'manuell bokföring', 'bokföringsorder', 'manuellt verifikat'],
     title: 'Create Manual Voucher (Verifikation)',
     description: 'Stage a manual verifikation with balanced lines: capitalization, accruals, FX, rättelser, IB. For a received handling pass inbox_item_id: the document becomes the verifikation (BFL 5 kap 6§); a filename in notes is not underlag. HIGH risk.',
     inputSchema: {
@@ -17581,6 +18379,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_correct_entry',
+    keywords: ['rättelse', 'rätta verifikat', 'verifikation', 'ändra verifikat'],
     title: 'Correct Posted Entry (Rättelse)',
     description: 'Stage a rättelse for a posted verifikation per BFL 5 kap 5§: storno + corrected entry in the original period (never in-place edit). Use for partial fixes like 2641 → 2614/2645; lines accept dimensions bags. Account drives ruta. HIGH risk.',
     inputSchema: {
@@ -17715,7 +18514,7 @@ export const tools: McpTool[] = [
       const original = data as OriginalRow | null
 
       if (origErr) {
-        throw new Error(`Database error looking up journal entry ${entryId}: ${origErr.message}`)
+        throw dbError(origErr, `Database error looking up journal entry ${entryId}`)
       }
       if (!original) {
         throw new Error(
@@ -17808,6 +18607,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_reverse_journal_entry',
+    keywords: ['storno', 'återför', 'makulera', 'verifikat'],
     title: 'Reverse Journal Entry (Storno)',
     description: 'Stage a storno: inverts debits/credits, original stays visible (BFL 5 kap). Only when it should never have been booked (duplicate, ghost, test). Booked wrong → gnubok_correct_entry; refund → gnubok_credit_invoice. HIGH risk.',
     inputSchema: {
@@ -17883,7 +18683,7 @@ export const tools: McpTool[] = [
       const original = data as OriginalRow | null
 
       if (origErr) {
-        throw new Error(`Database error looking up journal entry ${entryId}: ${origErr.message}`)
+        throw dbError(origErr, `Database error looking up journal entry ${entryId}`)
       }
       if (!original) {
         throw new Error(
@@ -17979,6 +18779,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_propose_dispositioner',
+    keywords: ['bokslutsdispositioner', 'periodiseringsfond', 'skatteberäkning'],
     title: 'Propose Year-End Dispositioner',
     description:
       'Read-only proposal of bokslutsdispositioner for a fiscal period: periodiseringsfond (avsättning + obligatorisk återföring), överavskrivningar, SLP, bolagsskatt. No dedicated MCP poster: stage entries via gnubok_create_voucher (web bokslut UI) before gnubok_run_year_end.',
@@ -18005,6 +18806,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_propose_accruals',
+    keywords: ['periodisering', 'upplupna kostnader', 'förutbetalda intäkter'],
     title: 'Propose Accruals (Periodiseringar)',
     description:
       'Read-only proposal of periodiseringar (förutbetalda/upplupna kostnader); currently surfaces the vacation-liability change. No dedicated MCP poster: stage accrual entries via gnubok_create_voucher (or the web accruals form).',
@@ -18028,6 +18830,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_accrual_schedules',
+    keywords: ['periodisering', 'periodiseringar'],
     title: 'List Periodiseringar',
     description:
       'Löpande periodiseringar (17xx/29xx): monthly installments, dissolved and remaining amounts.',
@@ -18078,6 +18881,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_propose_annual_depreciation',
+    keywords: ['avskrivning', 'avskrivningar', 'inventarier'],
     title: 'Propose Annual Depreciation (Avskrivning)',
     description:
       'Read-only per-asset planenlig avskrivning proposal for a fiscal period. Reads the asset register and existing depreciation schedules. Call before staging the post.',
@@ -18101,6 +18905,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_post_annual_depreciation',
+    keywords: ['avskrivning', 'avskrivningar', 'bokför avskrivningar'],
     title: 'Post Annual Depreciation (Avskrivning)',
     description:
       'Stage planenlig avskrivning posts: one journal entry per asset for independent reversibility. Mid-risk, always staged.',
@@ -18172,6 +18977,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_preview_arsredovisning',
+    keywords: ['årsredovisning', 'förhandsgranska årsredovisning'],
     title: 'Preview Annual Report (Årsredovisning)',
     description:
       'Read-only annual report preview from the canonical model. Returns report content, eligibility, compliance blockers, and capabilities. PDF and immutable versions are available in the UI.',
@@ -18214,6 +19020,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_validate_arsredovisning',
+    keywords: ['årsredovisning', 'granska årsredovisning'],
     title: 'Validate Annual Report (Årsredovisning)',
     description:
       'Read-only compliance validation for an annual report. Use draft while editing, signing before locking a version, and filing before a Bolagsverket submission.',
@@ -18253,6 +19060,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_arsredovisning_versions',
+    keywords: ['årsredovisning', 'versioner'],
     title: 'List Annual Report Versions',
     description:
       'Read-only list of immutable annual report versions with content hashes, taxonomy versions, and signing or filing status.',
@@ -18279,6 +19087,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_arsredovisning_filing_status',
+    keywords: ['årsredovisning', 'bolagsverket', 'inlämning'],
     title: 'Get Annual Report Filing Status',
     description:
       'Read-only filing history for a fiscal period, including uncertain upload states that must be reconciled before retrying.',
@@ -18331,6 +19140,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_preview_ef_declaration',
+    keywords: ['ne-bilaga', 'enskild firma', 'inkomstdeklaration'],
     title: 'Preview EF Declaration (NE-bilaga)',
     description:
       'Read-only EF declaration preview: egenavgifter schablonavdrag, räntefördelning, periodiseringsfond, expansionsfond. All declaration-only, never booked. Pass kapitalunderlag and prior-year amounts as inputs.',
@@ -18375,6 +19185,7 @@ export const tools: McpTool[] = [
   // Mirrors the /pending web UI for agents that self-review before committing.
   {
     name: 'gnubok_list_pending_operations',
+    keywords: ['väntande åtgärder', 'att godkänna', 'godkännanden'],
     title: 'List Pending Operations',
     description: 'List staged pending_operations. Approve via gnubok_approve_pending_operation, reject via gnubok_reject_pending_operation; without pending_operations:approve use /pending. render_ui=true opens the approval widget.',
     inputSchema: {
@@ -18441,6 +19252,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_approve_pending_operation',
+    keywords: ['godkänn', 'bekräfta'],
     title: 'Approve Pending Operation',
     description: "Commit a staged pending_operation the user has explicitly authorised. risk_level=high requires confirmed=true: surface the BFL 5 kap 5§ irreversibility and any preview compliance_warning first. The /pending web UI is an equivalent commit path.",
     inputSchema: {
@@ -18586,6 +19398,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_reject_pending_operation',
+    keywords: ['avvisa', 'neka'],
     title: 'Reject Pending Operation',
     description: 'Reject a staged pending_operation without executing it. Status flips to rejected; no journal entries, invoices, or other side-effects created. Idempotent on already-resolved ops (returns 409).',
     inputSchema: {
@@ -18701,6 +19514,7 @@ export const tools: McpTool[] = [
   // ── Bring-your-own-extraction for inbox items ────────────────
   {
     name: 'gnubok_set_inbox_extracted_data',
+    keywords: ['inkorg', 'underlag', 'tolka kvitto'],
     title: 'Set Inbox Extracted Data',
     description: 'Replace extracted_data on an inbox item with agent-supplied fields. Use when your pipeline parses the document better than Accounted\'s OCR. Follow with gnubok_create_supplier_invoice_from_inbox to stage.',
     inputSchema: {
@@ -18813,6 +19627,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_recurring_schedules',
+    keywords: ['återkommande fakturor', 'stående faktura', 'abonnemang'],
     title: 'List Recurring Invoice Schedules',
     description: "List the company's recurring invoice schedules: auto-create customer invoices on day_of_month (clamps to the last day in shorter months) every interval_months months (any 1-12; presets 1/3/6/12) at send_hour, Europe/Stockholm. Shows status, auto_send and next_run_date.",
     inputSchema: {
@@ -18897,7 +19712,7 @@ export const tools: McpTool[] = [
         .order('id', { ascending: false })
         .range(offset, offset + limit)
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
 
       const rows = data ?? []
       const schedules = rows.slice(0, limit).map((row: Record<string, unknown>) => {
@@ -18954,6 +19769,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_recurring_schedule',
+    keywords: ['återkommande faktura', 'stående faktura', 'abonnemang'],
     title: 'Create Recurring Invoice Schedule',
     description: 'Stage a new recurring invoice schedule: creates a customer invoice on day_of_month (clamps to the last day in shorter months) every interval_months months (default 1) at send_hour, Europe/Stockholm. auto_send defaults false; true emails each invoice without new approval.',
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -19095,7 +19911,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!customer) throw new Error('Customer not found. Use gnubok_list_customers to find IDs.')
       if (params.auto_send && !customer.email) {
         throw new Error('Customer has no email address: auto_send requires one. Stage with auto_send=false or add an email first.')
@@ -19147,6 +19963,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_update_recurring_schedule',
+    keywords: ['återkommande faktura', 'stående faktura'],
     title: 'Update Recurring Invoice Schedule',
     description: 'Stage an update to a recurring invoice schedule (schedule_id from gnubok_list_recurring_schedules). Pause/resume via status. items replace all lines; omit to keep them. day_of_month clamps to the last day in shorter months; send_hour is a whole hour in Europe/Stockholm.',
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -19290,7 +20107,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
 
-      if (error) throw new Error(`Database error: ${error.message}`)
+      if (error) throw dbError(error)
       if (!current) throw new Error('Recurring schedule not found. Use gnubok_list_recurring_schedules to find IDs.')
 
       // Turning auto_send on, or moving the schedule to another customer,
@@ -19305,7 +20122,7 @@ export const tools: McpTool[] = [
           .eq('id', parsedChanges.customer_id)
           .eq('company_id', companyId)
           .maybeSingle()
-        if (targetError) throw new Error(`Database error: ${targetError.message}`)
+        if (targetError) throw dbError(targetError)
         if (!target) throw new Error('Customer not found. Use gnubok_list_customers to find IDs.')
         if (effectiveAutoSend && !target.email) {
           throw new Error('Customer has no email address: auto_send requires one.')

@@ -5,6 +5,8 @@ import {
   UNLINKED_DOCUMENT_SCAN_CAP,
 } from '@/lib/documents/unlinked-documents'
 import { countReconciliationDue } from '@/lib/worklist/categories'
+import { fetchJunctionLinkedTxIds } from '@/lib/reconciliation/bank-reconciliation'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 type Severity = 'critical' | 'warning' | 'info'
 
@@ -42,7 +44,7 @@ export const attentionResource: McpResource = {
     const horizon = horizonDate.toISOString().slice(0, 10)
 
     const [
-      unbookedHead,
+      unbookedIds,
       unbookedSamples,
       overdueRows,
       pendingSupplierHead,
@@ -58,12 +60,20 @@ export const attentionResource: McpResource = {
       companySettingsRow,
       unlinkedDocuments,
     ] = await Promise.all([
-      supabase
-        .from('transactions')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .is('journal_entry_id', null)
-        .eq('is_business', true),
+      // Ids, not a head count: journal_entry_id IS NULL is only the first of
+      // the "booked" anchors (lib/transactions/is-booked.ts). Rows bulk-booked
+      // into a samlingsverifikat or split over several verifikat (1:N) are
+      // anchored through transaction_voucher_links and are subtracted below.
+      fetchAllRows<{ id: string }>(({ from, to }) =>
+        supabase
+          .from('transactions')
+          .select('id')
+          .eq('company_id', companyId)
+          .is('journal_entry_id', null)
+          .eq('is_business', true)
+          .order('id')
+          .range(from, to),
+      ).catch(() => [] as Array<{ id: string }>),
       supabase
         .from('transactions')
         .select('id, date, amount, currency, description, merchant_name')
@@ -71,7 +81,7 @@ export const attentionResource: McpResource = {
         .is('journal_entry_id', null)
         .eq('is_business', true)
         .order('date', { ascending: true })
-        .limit(SAMPLE_LIMIT),
+        .limit(SAMPLE_LIMIT * 4),
       supabase
         .from('invoices')
         .select('id, invoice_number, customer_id, due_date, total, currency, status')
@@ -154,16 +164,24 @@ export const attentionResource: McpResource = {
     const categories: AttentionCategory[] = []
 
     // ── Unbooked business transactions ──────────────────────────────
-    const unbookedCount = unbookedHead.count ?? 0
+    const pointerUnbookedIds = unbookedIds.map((row) => row.id)
+    const junctionLinked =
+      pointerUnbookedIds.length > 0
+        ? await fetchJunctionLinkedTxIds(supabase, companyId, pointerUnbookedIds)
+        : new Set<string>()
+    const unbookedCount = pointerUnbookedIds.filter((id) => !junctionLinked.has(id)).length
+    const samples = (unbookedSamples.data ?? [])
+      .filter((row) => !junctionLinked.has(row.id as string))
+      .slice(0, SAMPLE_LIMIT)
     if (unbookedCount > 0) {
-      const oldest = unbookedSamples.data?.[0]
+      const oldest = samples[0]
       const oldestAgeDays = oldest?.date ? daysBetween(oldest.date, today) : 0
       categories.push({
         key: 'unbooked_transactions',
         label_sv: 'Obokförda affärstransaktioner',
         severity: oldestAgeDays > 30 ? 'critical' : 'warning',
         count: unbookedCount,
-        samples: unbookedSamples.data ?? [],
+        samples,
         next: {
           description: 'Kategorisera den äldsta obokförda transaktionen.',
           tool: 'gnubok_categorize_transaction',

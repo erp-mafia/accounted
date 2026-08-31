@@ -2028,6 +2028,21 @@ export const InvoiceEmailTextsSchema = z.object({
   en: InvoiceEmailTextsLangSchema.optional(),
 })
 
+// Editable reminder email texts per reminder level. Same conventions as
+// InvoiceEmailTextsSchema: empty strings pass and are treated as unset by
+// the template resolver; the UI prunes empties and stores only diffs from
+// the defaults. Subject is a mail header: CR/LF are stripped at render time.
+const ReminderTextOverrideLevelSchema = z.object({
+  subject: z.string().max(200, 'Ämnesraden får vara max 200 tecken').optional(),
+  body: z.string().max(2000, 'Brödtexten får vara max 2000 tecken').optional(),
+})
+
+export const ReminderTextOverridesSchema = z.object({
+  level_1: ReminderTextOverrideLevelSchema.optional(),
+  level_2: ReminderTextOverrideLevelSchema.optional(),
+  level_3: ReminderTextOverrideLevelSchema.optional(),
+})
+
 const InvoiceIbanSchema = z.string()
   .transform((value) => value.replace(/\s/g, '').toUpperCase())
   .pipe(z.string().regex(/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/, 'Ogiltigt IBAN'))
@@ -2225,6 +2240,10 @@ export const UpdateSettingsSchema = z.object({
   reminder_days_level_1: z.number().int().min(1).max(365).optional(),
   reminder_days_level_2: z.number().int().min(1).max(365).optional(),
   reminder_days_level_3: z.number().int().min(1).max(365).optional(),
+  // Editable reminder email texts: { level_1?: {...}, ... }; null clears all
+  // overrides. Text only: fee and interest math are computed by the reminder
+  // processor and never configurable here (Lag 1981:739 caps the fee at 60 kr).
+  reminder_text_overrides: ReminderTextOverridesSchema.nullable().optional(),
   // Reminder surcharges (dröjsmålsränta + lagstadgad påminnelseavgift)
   reminder_fee_enabled: z.boolean().optional(),
   reminder_fee_amount: z
@@ -2413,14 +2432,28 @@ export const PruneAccountsSchema = z
 // Bank reconciliation schemas
 // ============================================================
 
-export const BankLinkSchema = z.object({
-  transaction_id: uuid,
-  journal_entry_id: uuid,
-  // Settlement account being reconciled. The voucher must have a line on this
-  // account and the transaction must belong to it. Defaults to '1930' in the
-  // route for back-compat.
-  account_number: accountNumber.optional(),
-})
+export const BankLinkSchema = z
+  .object({
+    transaction_id: uuid,
+    // One verifikat (1:1, or N:1 when other transactions already point at it).
+    journal_entry_id: uuid.optional(),
+    // Or several verifikat settled by this one transaction (1:N, #1553): the
+    // signed slice per verifikat in the transaction's sign convention. The
+    // slices must sum to the transaction amount; the engine enforces it.
+    allocations: z
+      .array(z.object({ journal_entry_id: uuid, amount: z.number() }))
+      .min(2)
+      .max(50)
+      .optional(),
+    // Settlement account being reconciled. The voucher must have a line on this
+    // account and the transaction must belong to it. Defaults to '1930' in the
+    // route for back-compat.
+    account_number: accountNumber.optional(),
+  })
+  .refine((v) => (v.journal_entry_id ? !v.allocations : Boolean(v.allocations)), {
+    message: 'Ange journal_entry_id eller allocations, inte båda.',
+    path: ['journal_entry_id'],
+  })
 
 export const BankUnlinkSchema = z.object({
   transaction_id: uuid,

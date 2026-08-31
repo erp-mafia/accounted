@@ -128,8 +128,12 @@ export function AccountSettingsContent() {
         return
       }
       setPendingEmail(trimmed)
+      const resent = (json as { data?: { resent?: boolean } } | null)?.data?.resent
       toast({
-        title: tSettings('email_change_requested'),
+        title:
+          resent === false
+            ? tSettings('email_change_already_pending')
+            : tSettings('email_change_requested'),
         description: tSettings('email_change_requested_help'),
       })
     } catch (err) {
@@ -242,11 +246,14 @@ export function AccountSettingsContent() {
                 !currentEmail ||
                 savingEmail ||
                 !email.trim() ||
-                email.trim().toLowerCase() === currentEmail.toLowerCase() ||
-                email.trim().toLowerCase() === pendingEmail
+                email.trim().toLowerCase() === currentEmail.toLowerCase()
               }
             >
-              {savingEmail ? tCommon('saving') : tCommon('save')}
+              {savingEmail
+                ? tCommon('saving')
+                : email.trim().toLowerCase() === pendingEmail
+                  ? tSettings('email_resend')
+                  : tCommon('save')}
             </Button>
           </SettingsRowEnd>
         </SettingsRow>

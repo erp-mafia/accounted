@@ -327,7 +327,7 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     message_en: 'Period is locked or closed; entries cannot be added.',
     remediation: {
       description:
-        'Either unlock the period via gnubok_unlock_period (if status is "locked", not "closed") or change the entry date to fall inside an open period.',
+        'Either unlock the period via gnubok_unlock_period (if status is "locked", not "closed") or change the entry date to fall inside an open period. A bank transaction that is not a business event (duplicate, never executed) needs no verifikat: ignore it instead (POST /transactions/{id}/ignore, gnubok_ignore_transaction).',
       tool: 'gnubok_unlock_period',
     },
   },
@@ -495,6 +495,38 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
       'The transaction is still marked as ignored and cannot be linked to a journal entry.',
     remediation: {
       description: 'Reload and retry categorization. Report the conflict if it persists.',
+    },
+  },
+  // Issue #1661: a private (is_business=false) marking is a real booking
+  // (eget uttag/insättning on 2013/2018, or 2893 for an AB), so a locked or
+  // closed period blocks it exactly like any other verifikat. The row the
+  // caller usually wants to clear (a PSD2 ghost row, a duplicate, a never
+  // executed transfer) is not an affärshändelse at all: ignoring it writes no
+  // verifikat and is therefore allowed in a locked period. Returned instead
+  // of PERIOD_LOCKED so the remediation names that path. The wording must not
+  // contain "Bokföringen är låst" (inferCode maps that phrase to PERIOD_LOCKED).
+  TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED: {
+    httpStatus: 400,
+    message_sv:
+      'Perioden är låst. En privat markering bokförs som eget uttag eller insättning i perioden. Är raden ingen affärshändelse (dubblett, aldrig genomförd)? Ignorera den i stället. Annars: lås upp perioden.',
+    message_en:
+      'The period is locked. A private marking is booked as an owner withdrawal or deposit inside the period. If the row is not a business event (a duplicate, never executed), ignore it instead; otherwise unlock the period.',
+    remediation: {
+      description:
+        'If the row is not a business event, ignore it: POST /api/v1/companies/{companyId}/transactions/{id}/ignore, the Ignorera action on the Transaktioner page, or gnubok_ignore_transaction. Ignoring writes no verifikat, so it is allowed in a locked or closed period. Otherwise unlock the period via gnubok_unlock_period (status "locked", not "closed") and categorize again.',
+      tool: 'gnubok_ignore_transaction',
+    },
+  },
+  TX_IGNORE_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen är redan bokförd: använd Avmatcha eller backa verifikationen för att ändra status.',
+    message_en:
+      'The transaction is already booked (directly, via a payment allocation, or via a voucher link). Unlink it or reverse the verifikat (storno) before ignoring it.',
+    remediation: {
+      description:
+        'A booked bank row cannot be ignored: the booking IS its status. Reverse it with gnubok_uncategorize_transaction (storno) or unlink the payment/voucher first, then ignore.',
+      tool: 'gnubok_uncategorize_transaction',
     },
   },
   TX_CATEGORIZE_SUGGEST_SI_MATCH: {
@@ -1070,10 +1102,10 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   INVOICE_SEND_EMAIL_NOT_CONFIGURED: {
     httpStatus: 503,
     message_sv:
-      'E-posttjänsten är inte konfigurerad. Kontrollera att RESEND_API_KEY och RESEND_FROM_EMAIL är satta.',
+      'E-posttjänsten är inte konfigurerad. Kontrollera att RESEND_API_KEY och RESEND_FROM_EMAIL är satta (eller SMTP_HOST och SMTP_FROM_EMAIL med EMAIL_PROVIDER=smtp).',
     message_en: 'Email service is not configured.',
     remediation: {
-      description: 'Set RESEND_API_KEY and RESEND_FROM_EMAIL in the deployment environment.',
+      description: 'Set RESEND_API_KEY and RESEND_FROM_EMAIL (or SMTP_HOST and SMTP_FROM_EMAIL with EMAIL_PROVIDER=smtp) in the deployment environment.',
     },
   },
   INVOICE_SEND_NO_CUSTOMER_EMAIL: {
@@ -2209,9 +2241,9 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
   PROVIDER_SIE_IMPORT_REQUIRED: {
     httpStatus: 409,
     message_sv:
-      'Bokföringsdata (SIE) måste importeras först. Ladda upp en SIE-fil med kontoplan, ingående balanser och verifikationer innan du hämtar kunder, leverantörer och fakturor från den här leverantören.',
+      'Bokföringsdata (SIE) måste importeras först. Ladda upp en SIE-fil med kontoplan, ingående balanser och verifikationer innan du hämtar kunder, leverantörer, fakturor och anläggningstillgångar från den här leverantören.',
     message_en:
-      'A completed SIE import is required first. Import the SIE file (chart of accounts, opening balances and verifications) before importing customers, suppliers and invoices from this provider.',
+      'A completed SIE import is required first. Import the SIE file (chart of accounts, opening balances and verifications) before importing customers, suppliers, invoices and fixed assets from this provider.',
   },
   PROVIDER_MIGRATE_FAILED: {
     httpStatus: 500,
@@ -2286,6 +2318,20 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
 // ─────────────────────────────────────────────────────────────────
 
 const DOCUMENT: Record<string, StructuredErrorEntry> = {
+  // Signed-URL (direct-to-storage) upload: completion found no object under
+  // the reservation. The bytes never landed, or the reservation expired.
+  DOCUMENT_UPLOAD_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Den uppladdade filen hittades inte eller har gått ut. Ladda upp filen igen.',
+    message_en: 'The uploaded file was not found or the upload has expired. Upload the file again.',
+  },
+  // Signed-URL upload completed against an empty object: the PUT sent no
+  // bytes, or sent them somewhere else.
+  DOC_UPLOAD_EMPTY: {
+    httpStatus: 400,
+    message_sv: 'Filen är tom. Ladda upp filen igen.',
+    message_en: 'The uploaded file is empty. Upload the file again.',
+  },
   DOC_UPLOAD_NO_FILE: {
     httpStatus: 400,
     message_sv: 'Ingen fil bifogad.',
@@ -2393,6 +2439,13 @@ const INBOX_UPLOAD: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Uppladdningen misslyckades. Försök igen.',
     message_en: 'Upload failed.',
+  },
+  // A read-only (viewer) member: the storage policy admits the bytes on
+  // membership alone, the document_attachments insert policy does not.
+  INBOX_UPLOAD_NOT_PERMITTED: {
+    httpStatus: 403,
+    message_sv: 'Du har inte behörighet att ladda upp underlag i det här företaget. Medlemmar med läsbehörighet kan inte lägga till dokument.',
+    message_en: 'You do not have permission to upload documents to this company. Read-only members cannot add documents.',
   },
   INBOX_ATTACH_FAILED: {
     httpStatus: 500,
@@ -2879,6 +2932,16 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Endast utkast (draft) kan uppdateras.',
     message_en: 'Only draft salary runs can be patched.',
+  },
+  // Kontantprincipen guard: AGI derives its redovisningsperiod from the run's
+  // period_year/period_month while the verifikat books on payment_date, so a
+  // payment date outside the period month would declare the salary in the
+  // wrong period (SFL 26 kap). For a payment that truly lands in another
+  // month, the run itself belongs in that period.
+  SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD: {
+    httpStatus: 400,
+    message_sv: 'Utbetalningsdagen måste ligga i lönekörningens period: AGI redovisas per utbetalningsmånad. Skapa en lönekörning för rätt period i stället.',
+    message_en: 'The payment date must fall within the salary run\'s period month: the AGI is declared per payment month. Create a salary run for the correct period instead.',
   },
   SALARY_RUN_DELETE_NOT_DRAFT: {
     httpStatus: 400,

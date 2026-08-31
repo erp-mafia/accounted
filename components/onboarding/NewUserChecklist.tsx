@@ -92,6 +92,10 @@ export default function NewUserChecklist({
   // step (companies whose completedAt arrives from the server never see it).
   const [retiring, setRetiring] = useState<'verdict' | 'closing' | 'done' | null>(null)
   const retireStartedRef = useRef(false)
+  // The ChatGPT side door on the Claude step: collapsed by default so the
+  // one-click Claude path stays the visual primary.
+  const [chatGptOpen, setChatGptOpen] = useState(false)
+  const [serverUrlCopied, setServerUrlCopied] = useState(false)
 
   const hasMigration = ENABLED_EXTENSION_IDS.has('arcim-migration')
   const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking')
@@ -230,6 +234,24 @@ export default function NewUserChecklist({
     const serverUrl = `${window.location.origin}/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted`
     const link = `https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=${encodeURIComponent(appName)}&connectorUrl=${encodeURIComponent(serverUrl)}`
     window.open(link, '_blank', 'noopener')
+  }
+  // ChatGPT has no add-connector deep link (the user pastes the server URL
+  // into Developer mode manually), so the side door copies the URL instead.
+  const toggleChatGpt = () => {
+    setChatGptOpen((open) => {
+      if (!open) captureSetup('onboarding_setup_step_started', { step: 'chatgpt' })
+      return !open
+    })
+  }
+  const copyServerUrl = async () => {
+    const serverUrl = `${window.location.origin}/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted`
+    try {
+      await navigator.clipboard.writeText(serverUrl)
+      setServerUrlCopied(true)
+      window.setTimeout(() => setServerUrlCopied(false), 2000)
+    } catch {
+      // Clipboard access can be denied; the button simply stays on "Kopiera".
+    }
   }
   const dismiss = () =>
     void persist({ dismissed: true }, 'dismiss').then((updated) => {
@@ -404,6 +426,30 @@ export default function NewUserChecklist({
               {t('step_claude_action')}
             </Button>
           )}
+          footnote={
+            <div className="mt-2">
+              <button
+                type="button"
+                onClick={toggleChatGpt}
+                aria-expanded={chatGptOpen}
+                className="text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+              >
+                {t('step_claude_chatgpt_link')}
+              </button>
+              {chatGptOpen && (
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+                  <p className="max-w-prose text-xs leading-5 text-muted-foreground">
+                    {t('step_claude_chatgpt_steps', { appName })}
+                  </p>
+                  <Button size="sm" variant="outline" onClick={() => void copyServerUrl()}>
+                    {serverUrlCopied
+                      ? t('step_claude_chatgpt_copied')
+                      : t('step_claude_chatgpt_copy')}
+                  </Button>
+                </div>
+              )}
+            </div>
+          }
         >
           {t('step_claude_description')}
         </Step>
@@ -431,6 +477,7 @@ function Step({
   action,
   marks,
   doneNote,
+  footnote,
   last = false,
   children,
 }: {
@@ -445,6 +492,10 @@ function Step({
    *  exception to "done steps collapse to their title" (e.g. the bank step's
    *  sweep outcome, which is the payoff the migrator is waiting for). */
   doneNote?: React.ReactNode
+  /** Block content below the pitch while the step is open. Unlike `children`
+   *  (which lives inside a <p>), this may hold nested block elements, e.g.
+   *  the Claude step's ChatGPT side door. */
+  footnote?: React.ReactNode
   last?: boolean
   children: React.ReactNode
 }) {
@@ -502,6 +553,7 @@ function Step({
             {marks && <span className="flex items-center gap-2">{marks}</span>}
           </div>
         )}
+        {open && footnote}
       </div>
     </li>
   )

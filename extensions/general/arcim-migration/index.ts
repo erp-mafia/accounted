@@ -24,7 +24,9 @@ import {
   FortnoxDocumentScopesRequiredError,
   importProviderDocuments,
 } from './lib/import-documents'
+import { fetchFortnoxAssetPreview } from './lib/import-assets'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
+import { relinkRegistrationVouchers } from './lib/relink-registration-vouchers'
 import type { ArcimProvider } from './types'
 import { ARCIM_PROVIDERS } from './types'
 import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
@@ -757,6 +759,18 @@ export const arcimMigrationExtension: Extension = {
             }
           }
 
+          // Asset register stats (Fortnox only). Soft: a consent without the
+          // assets scope (or licence) just omits the line; anything else is
+          // logged and omitted rather than failing an otherwise good preview.
+          let assetStats: { total: number; importable: number } | null = null
+          if (provider === 'fortnox') {
+            try {
+              assetStats = await fetchFortnoxAssetPreview(resolved.accessToken)
+            } catch (err) {
+              log.info('Asset preview failed:', err instanceof Error ? err.message : String(err))
+            }
+          }
+
           // Check if the company already has completed SIE imports (from manual upload)
           const { count: sieImportCount } = await supabase
             .from('sie_imports')
@@ -774,6 +788,7 @@ export const arcimMigrationExtension: Extension = {
             companyInfo: mapped,
             sieAvailable,
             sieStats,
+            assetStats,
             hasSieData: (sieImportCount ?? 0) > 0,
           })
         } catch (error) {
@@ -1146,6 +1161,11 @@ export const arcimMigrationExtension: Extension = {
           importSuppliers = true,
           importSalesInvoices = true,
           importSupplierInvoices = true,
+          // New option: an omitted field must behave exactly as it did before
+          // this option existed, so it defaults OFF. An older client that omits
+          // it neither imports assets nor trips the SIE guard below; the wizard
+          // always sends it explicitly.
+          importAssets = false,
           reconcileVouchers = true,
         } = await request.json() as {
           consentId: string
@@ -1154,6 +1174,7 @@ export const arcimMigrationExtension: Extension = {
           importSuppliers?: boolean
           importSalesInvoices?: boolean
           importSupplierInvoices?: boolean
+          importAssets?: boolean
           reconcileVouchers?: boolean
         }
 
@@ -1194,10 +1215,14 @@ export const arcimMigrationExtension: Extension = {
           // Company info (name, org number, VAT number) writes no accounts,
           // balances or subledger rows, so a run that imports only that is
           // not gated.
+          // The asset register counts as entity data for this gate: its rows
+          // carry BAS account triples and depreciation plans that only mean
+          // something against an imported chart of accounts.
           const importsEntities = importCustomers ||
             importSuppliers ||
             importSalesInvoices ||
-            importSupplierInvoices
+            importSupplierInvoices ||
+            importAssets
           const { count: completedSieImports } = importsEntities
             ? await supabase
                 .from('sie_imports')
@@ -1219,9 +1244,9 @@ export const arcimMigrationExtension: Extension = {
               ...(sieViaApi
                 ? {
                     messageSv:
-                      'Bokföringsdata (SIE) måste importeras först. Kryssa i "Bokföringsdata (SIE)" i guiden så att kontoplan, ingående balanser och verifikationer hämtas innan kunder, leverantörer och fakturor importeras.',
+                      'Bokföringsdata (SIE) måste importeras först. Kryssa i "Bokföringsdata (SIE)" i guiden så att kontoplan, ingående balanser och verifikationer hämtas innan kunder, leverantörer, fakturor och anläggningstillgångar importeras.',
                     messageEn:
-                      'A completed SIE import is required first. Tick "Bokföringsdata (SIE)" in the wizard so the chart of accounts, opening balances and verifications are fetched before customers, suppliers and invoices are imported.',
+                      'A completed SIE import is required first. Tick "Bokföringsdata (SIE)" in the wizard so the chart of accounts, opening balances and verifications are fetched before customers, suppliers, invoices and fixed assets are imported.',
                   }
                 : {}),
             })
@@ -1239,6 +1264,7 @@ export const arcimMigrationExtension: Extension = {
             importSuppliers,
             importSalesInvoices,
             importSupplierInvoices,
+            importAssets,
             reconcileVouchers,
           }
 
@@ -1320,6 +1346,16 @@ export const arcimMigrationExtension: Extension = {
     // auto-link settled supplier invoices to their existing vouchers. Pass
     // { dryRun: true } to preview the plan (incl. items needing manual review)
     // without writing.
+    //
+    // Pass { consentId } to ALSO re-link registration vouchers (the verifikat
+    // that BOOKED each invoice). The imported rows do not store the provider's
+    // voucher ref, so that pass re-fetches both registers from the provider
+    // through the given consent; without a consentId it is skipped and the
+    // response carries no `registrationLinks`. The consent is validated
+    // (company-scoped) BEFORE the payment reconcile writes anything, so a
+    // wrong id is a clean 404; a provider failure during the relink itself is
+    // reported beside the payment result, which was already persisted, as
+    // `registrationLinksError` rather than by discarding that result.
     {
       method: 'POST',
       path: '/reconcile',
@@ -1335,15 +1371,29 @@ export const arcimMigrationExtension: Extension = {
         const companyId = ctx?.companyId ?? user.id
 
         let dryRun = false
+        let consentId: string | null = null
         try {
-          const body = (await request.json()) as { dryRun?: boolean }
+          const body = (await request.json()) as { dryRun?: boolean; consentId?: unknown }
           dryRun = body?.dryRun === true
+          consentId = typeof body?.consentId === 'string' && body.consentId ? body.consentId : null
         } catch {
           // empty body is fine: default to a real run
         }
 
+        if (consentId) {
+          // A foreign consent throws the same ConsentNotFoundError as a
+          // nonexistent one (no cross-tenant existence oracle).
+          try {
+            await getConsent(consentId, companyId)
+          } catch (error) {
+            log.error('arcim reconcile: consent lookup failed', error as Error)
+            return migrateFailureResponse(error, consentId)
+          }
+        }
+
+        let result: Awaited<ReturnType<typeof reconcileSupplierInvoiceVouchers>>
         try {
-          const result = await reconcileSupplierInvoiceVouchers({
+          result = await reconcileSupplierInvoiceVouchers({
             supabase,
             companyId,
             userId: user.id,
@@ -1356,11 +1406,52 @@ export const arcimMigrationExtension: Extension = {
             ambiguous: result.ambiguous,
             unmatched: result.unmatched,
           })
-          return NextResponse.json({ success: true, dryRun, result })
         } catch (error) {
           log.error('arcim reconcile failed', error as Error)
           return errorResponseFromCode('PROVIDER_MIGRATE_FAILED', moduleLog, {
             details: { reason: error instanceof Error ? error.message : 'unknown' },
+          })
+        }
+
+        if (!consentId) {
+          return NextResponse.json({ success: true, dryRun, result })
+        }
+
+        try {
+          const registrationLinks = await relinkRegistrationVouchers({
+            supabase,
+            companyId,
+            consentId,
+            dryRun,
+          })
+          log.info('arcim registration relink completed', {
+            companyId,
+            dryRun,
+            providerInvoices: registrationLinks.providerInvoices,
+            matched: registrationLinks.matched,
+            linked: registrationLinks.linked,
+            refNotFetched: registrationLinks.refNotFetched,
+            ambiguous: registrationLinks.ambiguous,
+            amountMismatch: registrationLinks.amountMismatch,
+          })
+          return NextResponse.json({ success: true, dryRun, result, registrationLinks })
+        } catch (error) {
+          // resolveConsent throws plain `{ status, message }` objects for a
+          // consent that vanished or lost its tokens between the check above
+          // and here; classifyProviderError handles the provider-side ones.
+          log.error('arcim registration relink failed', error as Error)
+          const status = typeof error === 'object' && error !== null && 'status' in error
+            ? (error as { status?: unknown }).status
+            : undefined
+          const code = error instanceof ConsentNotFoundError || status === 404
+            ? 'PROVIDER_CONSENT_NOT_FOUND'
+            : classifyProviderError(error) ?? 'PROVIDER_MIGRATE_FAILED'
+          return NextResponse.json({
+            success: true,
+            dryRun,
+            result,
+            registrationLinks: null,
+            registrationLinksError: { code },
           })
         }
       },

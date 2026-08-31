@@ -146,3 +146,54 @@ describe('categorizeMatchedTransaction: null engine return fails closed (issue #
     expect(mockUpsertTemplate).not.toHaveBeenCalled()
   })
 })
+
+describe('categorizeMatchedTransaction: private marking in a locked period (issue #1661)', () => {
+  it('refuses with TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED before the engine runs and writes nothing', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueUpToEngine(enqueue)
+    mockCheckPeriodLock.mockResolvedValue({
+      locked: true,
+      reason: 'period_locked_at_set',
+      fiscal_period_id: 'fp-2024',
+    })
+
+    const result = await categorizeMatchedTransaction(
+      supabase as never,
+      'user-1',
+      'company-1',
+      TX_ID,
+      { category: 'private' },
+    )
+
+    expect(result.status).toBe(400)
+    expect(result.errorCode).toBe('TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED')
+    expect(result.error).toContain('Ignorera')
+    expect(result.data).toBeUndefined()
+    // A private marking is a real booking, so the lock applies; the pre-check
+    // answers with the ignore-steering code instead of letting the engine run.
+    expect(mockCreateJE).not.toHaveBeenCalled()
+    expect(findCalls('transactions', 'update')).toEqual([])
+    expect(mockUpsertTemplate).not.toHaveBeenCalled()
+  })
+
+  it('keeps PERIOD_LOCKED for a business categorization in the same period', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueUpToEngine(enqueue)
+    mockCheckPeriodLock.mockResolvedValue({
+      locked: true,
+      reason: 'period_locked_at_set',
+      fiscal_period_id: 'fp-2024',
+    })
+
+    const result = await categorizeMatchedTransaction(
+      supabase as never,
+      'user-1',
+      'company-1',
+      TX_ID,
+      { category: 'expense_software' },
+    )
+
+    expect(result.status).toBe(400)
+    expect(result.errorCode).toBe('PERIOD_LOCKED')
+  })
+})

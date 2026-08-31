@@ -29,7 +29,7 @@ Read \`Accounted://reconciliation/summary\` (optionally \`?date_from&date_to\`).
 \`gnubok_list_reconciliation_items({ account_key, bucket })\`:
 
 1. **proposed**: outside rows with a proposed verifikat (exact twin on amount/date). Link them in one staged call: \`gnubok_reconcile_match({ account_key, use_proposals: true, dry_run: true })\`, then without dry_run. The response lists \`applied[]\` and \`skipped[{code}]\`: a skip is information, not an error (ALREADY_LINKED, PAIR_NOT_CLOSED, ENTRY_NOT_FOUND).
-2. **unmatched_external**: outside rows with no counterpart. Bank rows: book them (\`gnubok_categorize_transaction\`, or \`gnubok_link_transaction_to_journal_entry\` when the affärshändelse is already on a verifikat). Skattekonto rows: the user books them from /skattekonto or /reconciliation (the rule-based booking lives there); tell the user which rows and amounts. A row that will never be booked (a duplicate, a noise line) is ignored from the page, not by you.
+2. **unmatched_external**: outside rows with no counterpart. Bank rows: book them (\`gnubok_categorize_transaction\`, or \`gnubok_link_transaction_to_journal_entry\` when the affärshändelse is already on a verifikat). Skattekonto rows: the user books them from /skattekonto or /reconciliation (the rule-based booking lives there); tell the user which rows and amounts. A row that will never be booked (a duplicate, a PSD2 ghost row, a noise line) is ignored with \`gnubok_ignore_transaction({ transaction_id, dry_run: true })\`, then without dry_run: it writes no verifikat, so a locked period does not block it, and the user approves it like any staged write.
 3. **unmatched_ledger**: verifikat lines on the account with nothing outside. Within 5 days of the snapshot they may simply be waiting for the outside side (\`awaiting_external\`). Older ones are usually a wrong account or a missing outside row: show them to the user with voucher numbers; do not reverse anything on your own.
 4. **matched** and **ignored** explain the bridge and need no work.
 
@@ -46,7 +46,7 @@ Per account: outside vs ledger, what was linked, what the user still has to book
 ## Rules
 
 - Links and sign-offs never touch the ledger; booking does, and always stages.
-- One or more outside rows link to one verifikat; other shapes come back as UNSUPPORTED_PAIR_SHAPE. A small fee, interest or rounding difference on a bank account is closed with \`gnubok_reconcile_residual({ account_key, external_ids, journal_entry_id, kind, dry_run: true })\`, then without dry_run: it links the rows and books the difference (6570 / 8410 / 8310 / 3740) in one staged step. Anything larger than the cap is a missing booking, not a fee.
+- One or more outside rows link to one verifikat. On a bank account one row may also settle several verifikat (a lump payout over utlägg booked per receipt, a Bankgirot deposit over two customer payments): pass \`journal_entry_ids\` with several ids, optionally \`allocations: [{ journal_entry_id, amount }]\` (signed, the row's sign convention; omitted = each voucher's bank line); the slices must sum to the row. Other shapes come back as UNSUPPORTED_PAIR_SHAPE. A small fee, interest or rounding difference on a bank account is closed with \`gnubok_reconcile_residual({ account_key, external_ids, journal_entry_id, kind, dry_run: true })\`, then without dry_run: it links the rows and books the difference (6570 / 8410 / 8310 / 3740) in one staged step. Anything larger than the cap is a missing booking, not a fee.
 - Never judge on \`difference\`; the bridge explains it. Judge on \`unexplained_difference\`.
 - A skattekonto sign-off date cannot pass the saldo snapshot; ask for a fetch.
 
@@ -55,6 +55,7 @@ Per account: outside vs ledger, what was linked, what the user still has to book
 - \`gnubok_get_reconciliation_status\`, \`gnubok_list_reconciliation_items\` (read)
 - \`gnubok_reconcile_match\`, \`gnubok_reconcile_unmatch\`, \`gnubok_reconcile_residual\`, \`gnubok_reconcile_signoff\` (staged writes)
 - \`gnubok_categorize_transaction\`, \`gnubok_link_transaction_to_journal_entry\` (bank-side booking)
+- \`gnubok_ignore_transaction\` (bank rows that are not business events; no verifikat)
 - \`gnubok_approve_pending_operation\` (when the user approves in chat)
 - Resource: \`Accounted://reconciliation/summary\`
 `

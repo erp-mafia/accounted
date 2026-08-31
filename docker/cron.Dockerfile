@@ -11,7 +11,11 @@ ARG SUPERCRONIC_SHA256_AMD64=feefa310da569c81b99e1027b86b27b51e6ee9ab647747b4909
 ARG SUPERCRONIC_SHA256_ARM64=f1f8585c66de020fef494dd636058f99949d108f569fef00016a1c8b9eb145b3
 
 # curl stays in the image: the crontab uses it at runtime to call the app.
-RUN apk add --no-cache curl \
+# `apk upgrade` first: it patches OS packages (e.g. libssl3/libcrypto3) that
+# have fixes published after the pinned base digest was built, same rationale
+# as the main Dockerfile. The digest stays pinned; only security patches float.
+RUN apk upgrade --no-cache \
+    && apk add --no-cache curl \
     && case ${TARGETARCH} in \
          amd64) ARCH=linux-amd64; SHA=${SUPERCRONIC_SHA256_AMD64} ;; \
          arm64) ARCH=linux-arm64; SHA=${SUPERCRONIC_SHA256_ARM64} ;; \

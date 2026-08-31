@@ -157,6 +157,52 @@ describe('POST /migrate: SIE-import-required guard', () => {
         importSuppliers: false,
         importSalesInvoices: false,
         importSupplierInvoices: false,
+        importAssets: false,
+      }),
+      buildCtx(0),
+    )
+
+    expect(res.status).toBe(200)
+    expect(executeMigration).toHaveBeenCalledTimes(1)
+  })
+
+  // The asset register is entity data too: its rows carry BAS account triples
+  // and depreciation plans that only mean something against an imported chart
+  // of accounts, so an assets-only run is gated like any other entity import.
+  it('blocks an assets-only run with no SIE import', async () => {
+    ;(getConsent as Mock).mockResolvedValue({ id: 'consent-1', status: 1, provider: 'fortnox' })
+
+    const res = await handler(
+      migrateRequest({
+        consentId: 'consent-1',
+        importCompanyInfo: false,
+        importCustomers: false,
+        importSuppliers: false,
+        importSalesInvoices: false,
+        importSupplierInvoices: false,
+        importAssets: true,
+      }),
+      buildCtx(0),
+    )
+
+    expect(res.status).toBe(409)
+    expect(executeMigration).not.toHaveBeenCalled()
+  })
+
+  // Backward compatibility: a client written before the asset option existed
+  // omits the field entirely. That request must behave as it did then, so the
+  // omitted option neither imports assets nor trips this guard.
+  it('allows a company-info-only run that omits importAssets entirely', async () => {
+    ;(getConsent as Mock).mockResolvedValue({ id: 'consent-1', status: 1, provider: 'fortnox' })
+
+    const res = await handler(
+      migrateRequest({
+        consentId: 'consent-1',
+        importCompanyInfo: true,
+        importCustomers: false,
+        importSuppliers: false,
+        importSalesInvoices: false,
+        importSupplierInvoices: false,
       }),
       buildCtx(0),
     )

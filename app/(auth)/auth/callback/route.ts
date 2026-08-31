@@ -63,10 +63,31 @@ export async function GET(request: NextRequest) {
   }
   // Handle token hash flow (email verification / magic link)
   else if (token_hash && type) {
-    const { error } = await supabase.auth.verifyOtp({
+    const { data, error } = await supabase.auth.verifyOtp({
       token_hash,
       type: type as 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email_change' | 'email',
     })
+
+    // Email change never lands silently: with secure email change enabled the
+    // user must confirm from BOTH addresses, and dropping them on the
+    // dashboard (or login) with no message is exactly how a half-completed
+    // change reads as "det funkar inte". The status page tells them whether
+    // one click remains, the change is complete, or the link was dead.
+    // Completing the second confirmation returns a session; the first (or a
+    // click from a logged-out mailbox) does not, which is what separates
+    // 'done' from 'partial'. Cookies are forwarded so a minted session
+    // survives the redirect.
+    if (type === 'email_change') {
+      const status = error ? 'failed' : data?.session ? 'done' : 'partial'
+      const response = NextResponse.redirect(
+        new URL(`/auth/email-change?status=${status}`, origin),
+      )
+      for (const { name, value, options } of pendingCookies) {
+        response.cookies.set({ name, value, ...options })
+      }
+      return response
+    }
+
     authenticated = !error
   }
 
@@ -309,9 +330,9 @@ export async function GET(request: NextRequest) {
   // confirmation must not be framed as a failed password reset. On the PKCE
   // (?code=) path there is no `type`, so recovery is identified by the
   // next=/reset-password marker that resetPasswordForEmail sets, and OAuth
-  // by the flow=oauth marker that GoogleAuthButton puts in redirectTo
-  // (provider denials arrive here with ?error and no code); everything
-  // else defaults to the signup/confirmation framing.
+  // by the flow=oauth marker that OAuthButton puts in redirectTo 
+  // (provider denials arrive here with ?error and no code); everything else 
+  // defaults to the signup/confirmation framing.
   const failedFlow =
     searchParams.get('flow') === 'oauth'
       ? 'oauth'

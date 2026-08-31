@@ -106,6 +106,7 @@ import { extensionRegistry } from '@/lib/extensions/registry'
 import {
   SkatteverketRecoverableError,
   type SkatteverketCommitServices,
+  type SkattekontoBookingCommitService,
   type SkvSubmitResult,
 } from '@/lib/pending-operations/skatteverket-commit'
 import { PartialCommitError } from '@/lib/pending-operations/errors'
@@ -147,6 +148,8 @@ import { RetagLineDimensionsParamsSchema } from '@/lib/pending-operations/schema
 import { CreateAccountParamsSchema, UpdateAccountParamsSchema } from '@/lib/pending-operations/schemas/account'
 import { defaultRateForVatTreatment } from '@/lib/vat/account-vat-treatment'
 import { SetVoucherNoteParamsSchema } from '@/lib/pending-operations/schemas/voucher-note'
+import { IgnoreTransactionParamsSchema } from '@/lib/pending-operations/schemas/ignore-transaction'
+import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { UpdateCompanySettingsParamsSchema } from '@/lib/pending-operations/schemas/company-settings'
 import { UpdateCustomerParamsSchema } from '@/lib/pending-operations/schemas/customer'
 import {
@@ -165,6 +168,7 @@ import {
   type InvoiceWriteInput,
   type InvoiceWriteItemInput,
 } from '@/lib/invoices/build-invoice-write'
+import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import { applyRecurringScheduleUpdate } from '@/lib/invoices/apply-recurring-schedule-update'
@@ -1188,6 +1192,51 @@ async function commitSetVoucherNote(
       voucher_series: data.voucher_series,
       voucher_number: data.voucher_number,
       notes: validated.notes,
+    },
+  }
+}
+
+async function commitIgnoreTransaction(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  let validated
+  try {
+    validated = IgnoreTransactionParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
+    }
+    throw err
+  }
+
+  // Issue #1661: the same core the dashboard and v1 routes use, so the three
+  // doors cannot drift. It refuses a booked row through all three anchors
+  // (journal_entry_id, payment allocations, voucher links), is idempotent,
+  // and writes no verifikat: a locked or closed period does not block it.
+  const outcome = await setTransactionIgnored(
+    supabase,
+    companyId,
+    validated.transaction_id,
+    validated.ignored,
+  )
+  if (!outcome.ok) {
+    const entry = getErrorEntry(outcome.code)
+    return {
+      error: entry?.message_sv ?? 'Transaktionen kunde inte ignoreras.',
+      errorCode: outcome.code,
+      status: outcome.status,
+    }
+  }
+
+  return {
+    data: {
+      transaction_id: outcome.transaction_id,
+      is_ignored: outcome.is_ignored,
+      // false when the row was already in the requested state.
+      changed: outcome.changed,
     },
   }
 }
@@ -4639,6 +4688,75 @@ async function commitCreditInvoice(
   return { data: { credit_note_id: creditNote.id, journal_entry_id: journalEntryId } }
 }
 
+/**
+ * delete_draft_invoice: remove a DRAFT customer invoice via the shared
+ * deleteDraftInvoice service (also behind the cookie and v1 DELETE routes).
+ * Unnumbered draft: hard delete + invoice.draft_deleted audit event.
+ * Numbered draft: makulering (status 'cancelled', F-series number retained).
+ * The service re-validates status at commit time with TOCTOU write guards,
+ * so a draft that was sent between staging and approval is refused (409 ->
+ * auto-reject), never cancelled. expected_invoice_number (staged alongside
+ * invoice_id) additionally pins the approved OUTCOME: an unnumbered draft
+ * that was finalized between staging and approval is refused too, instead of
+ * silently switching from the approved hard delete to a makulering.
+ */
+async function commitDeleteDraftInvoice(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const invoiceId = params.invoice_id as string
+  if (!invoiceId) return { error: 'invoice_id is required', status: 400 }
+
+  const result = await deleteDraftInvoice({
+    supabase,
+    companyId,
+    userId,
+    invoiceId,
+    // Only pin when the staging tool recorded an expectation; absent means an
+    // op staged before the pin existed, which keeps legacy semantics.
+    ...('expected_invoice_number' in params
+      ? { expectedInvoiceNumber: params.expected_invoice_number as string | null }
+      : {}),
+  })
+
+  if (!result.ok) {
+    switch (result.code) {
+      case 'INVOICE_NOT_FOUND':
+        return { error: 'Invoice not found', errorCode: 'INVOICE_NOT_FOUND', status: 404 }
+      case 'INVOICE_DELETE_NOT_DRAFT':
+        return {
+          error: `Only draft invoices can be deleted (status: ${result.currentStatus}). Issued invoices are immutable: use gnubok_credit_invoice instead.`,
+          errorCode: 'INVOICE_DELETE_NOT_DRAFT',
+          status: 409,
+        }
+      case 'INVOICE_CANCEL_RACE':
+        return {
+          error:
+            result.currentInvoiceNumber != null
+              ? `Invoice changed after staging: the draft was finalized and now carries number ${result.currentInvoiceNumber}, so the approved hard delete no longer applies. Stage the deletion again to makulera it instead.`
+              : 'Invoice was finalized or modified concurrently and could not be removed. Re-read it and stage again if it is still a draft.',
+          errorCode: 'INVOICE_CANCEL_RACE',
+          status: 409,
+        }
+      case 'INVOICE_DELETE_FAILED':
+        return {
+          error: `Failed to remove draft invoice: ${result.cause.message}`,
+          errorCode: 'INVOICE_DELETE_FAILED',
+          status: 500,
+        }
+    }
+  }
+
+  return {
+    data:
+      result.outcome === 'deleted'
+        ? { invoice_id: invoiceId, deleted: true }
+        : { invoice_id: invoiceId, cancelled: true, invoice_number: result.invoiceNumber },
+  }
+}
+
 async function commitConvertInvoice(
   supabase: SupabaseClient,
   userId: string,
@@ -5510,6 +5628,49 @@ async function commitSetRunSalary(
   }
 }
 
+async function commitUpdateSalaryRun(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const salaryRunId = params.salary_run_id as string
+  const patch = params.patch as Record<string, unknown> | null | undefined
+  if (!salaryRunId || !patch || typeof patch !== 'object' || Array.isArray(patch)) {
+    return { error: 'salary_run_id and patch are required', status: 400 }
+  }
+
+  try {
+    const { updateDraftSalaryRun } = await import('@/lib/salary/update-run')
+    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
+    const result = await updateDraftSalaryRun(supabase, {
+      companyId,
+      salaryRunId,
+      patch: patch as never,
+    })
+    if (!result.ok) {
+      const entry = getErrorEntry(result.code)
+      return {
+        error: entry?.message_sv ?? `Kunde inte uppdatera lönekörningen: ${result.code}`,
+        status: entry?.httpStatus ?? 500,
+      }
+    }
+    return {
+      data: {
+        salary_run_id: result.data.salary_run_id,
+        payment_date: result.data.payment_date,
+        voucher_series: result.data.voucher_series,
+        notes: result.data.notes,
+        changes: result.data.changes,
+      },
+    }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Failed to update salary run',
+      status: 500,
+    }
+  }
+}
+
 async function commitCreateEmployee(
   supabase: SupabaseClient,
   userId: string,
@@ -5899,6 +6060,80 @@ async function commitSubmitAgi(
   return handleSkvSubmitResult(result)
 }
 
+// ── Skattekonto row booking commit handler ────────────────────────
+//
+// Commit side of the staged book_skattekonto_row / book_skattekonto_rows MCP
+// ops. The booking logic lives in the skatteverket extension
+// (lib/skattekonto-booking.ts, same helper the HTTP bokfor-batch route uses),
+// so this reaches it through the registry-resolved `services` channel exactly
+// like the filing handlers above. Separate getter: the booking service must
+// work (or fail recoverable) independently of the SKV filing services.
+
+function getSkattekontoBookingService(): SkattekontoBookingCommitService {
+  const services = extensionRegistry.get('skatteverket')?.services as
+    | Partial<SkattekontoBookingCommitService>
+    | undefined
+  if (!services?.commitBookSkattekontoRows) {
+    // Extension absent or not wired. Recoverable: leave the op pending so a
+    // re-enable + re-approve works without re-staging.
+    throw new SkatteverketRecoverableError(
+      'Skatteverket-integrationen är inte tillgänglig.',
+      'EXTENSION_DISABLED',
+      503,
+    )
+  }
+  return services as SkattekontoBookingCommitService
+}
+
+async function commitBookSkattekontoRows(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>,
+): Promise<ExecutorResult> {
+  // Accept both staged shapes: the single-row op stores { transaction_id },
+  // the batch op stores { ids }. Normalised to one id list for the service.
+  const ids = Array.isArray(params.ids)
+    ? params.ids.filter((v): v is string => typeof v === 'string' && v.length > 0)
+    : typeof params.transaction_id === 'string' && params.transaction_id.length > 0
+      ? [params.transaction_id]
+      : []
+  if (ids.length === 0) {
+    return { error: 'ids (eller transaction_id) krävs', status: 400 }
+  }
+
+  const services = getSkattekontoBookingService()
+  const result = await services.commitBookSkattekontoRows(supabase, userId, companyId, { ids })
+  if (!result.ok) {
+    if (result.recoverable) {
+      throw new SkatteverketRecoverableError(result.error, result.code, result.http_status)
+    }
+    return { error: result.error, status: result.http_status, errorCode: result.code }
+  }
+
+  if (result.summary.succeeded === 0) {
+    // Nothing was booked: reject (consume) the op with the per-row reasons in
+    // result_data so the user fixes the rows (unignore, unlock period, add a
+    // rule) and re-stages. 409: the dominant causes are state conflicts
+    // (already booked / ignored / unsettled).
+    const firstError = result.results.find((r) => !r.ok)
+    return {
+      error: firstError?.error_message ?? 'Ingen skattekontorad kunde bokföras.',
+      status: 409,
+      data: { results: result.results, summary: result.summary },
+    }
+  }
+
+  log.info('book_skattekonto_rows committed', {
+    companyId,
+    operationType: 'book_skattekonto_rows',
+    total: result.summary.total,
+    succeeded: result.summary.succeeded,
+    failed: result.summary.failed,
+  })
+  return { data: { results: result.results, summary: result.summary } }
+}
+
 // ── Multi-tx commit handlers (PRs #603/#606/#608/#610) ────────────
 //
 // Both wrap their SQL RPC. The RPCs do all the heavy lifting (locking,
@@ -6108,7 +6343,9 @@ async function commitBulkBookInboxItems(
  * same service the page and the v1 API use. Every pair is re-validated at
  * commit time (row still open, entry still posted and unlinked, amounts
  * close); partial success is reported in data.applied / data.skipped rather
- * than failing the whole operation, because the pairs are independent.
+ * than failing the whole operation, because the pairs are independent. A
+ * bank 1:N pair (one row, several verifikat, allocations) is staged as one
+ * pair and re-validated as one all-or-nothing split.
  */
 async function commitReconciliationMatch(
   supabase: SupabaseClient,
@@ -6117,7 +6354,13 @@ async function commitReconciliationMatch(
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
   const accountKey = params.account_key as string | undefined
-  const pairs = params.pairs as Array<{ external_ids: string[]; journal_entry_ids: string[] }> | undefined
+  const pairs = params.pairs as
+    | Array<{
+        external_ids: string[]
+        journal_entry_ids: string[]
+        allocations?: Array<{ journal_entry_id: string; amount: number }>
+      }>
+    | undefined
   if (!accountKey || !Array.isArray(pairs) || pairs.length === 0) {
     return { error: 'account_key and pairs are required', status: 400 }
   }
@@ -6451,6 +6694,9 @@ async function commitPendingOperationInner(
       case 'set_voucher_note':
         result = await commitSetVoucherNote(supabase, companyId, pendingOp.params)
         break
+      case 'ignore_transaction':
+        result = await commitIgnoreTransaction(supabase, companyId, pendingOp.params)
+        break
       case 'create_dimension_value':
         result = await commitCreateDimensionValue(supabase, userId, companyId, pendingOp.params)
         break
@@ -6537,6 +6783,9 @@ async function commitPendingOperationInner(
       case 'credit_invoice':
         result = await commitCreditInvoice(supabase, userId, companyId, pendingOp.params)
         break
+      case 'delete_draft_invoice':
+        result = await commitDeleteDraftInvoice(supabase, userId, companyId, pendingOp.params)
+        break
       case 'import_sie':
         result = await commitImportSie(supabase, userId, companyId, pendingOp.params)
         break
@@ -6572,6 +6821,9 @@ async function commitPendingOperationInner(
         break
       case 'set_run_salary':
         result = await commitSetRunSalary(supabase, companyId, pendingOp.params)
+        break
+      case 'update_salary_run':
+        result = await commitUpdateSalaryRun(supabase, companyId, pendingOp.params)
         break
       case 'register_absence':
         result = await commitRegisterAbsence(supabase, companyId, pendingOp.params)
@@ -6617,6 +6869,10 @@ async function commitPendingOperationInner(
         break
       case 'reconciliation_residual':
         result = await commitReconciliationResidual(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'book_skattekonto_row':
+      case 'book_skattekonto_rows':
+        result = await commitBookSkattekontoRows(supabase, userId, companyId, pendingOp.params)
         break
       case 'submit_vat_declaration':
         result = await commitSubmitVatDeclaration(supabase, userId, companyId, pendingOp.params)
