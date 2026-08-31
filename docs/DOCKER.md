@@ -198,6 +198,8 @@ RESEND_FROM_EMAIL=faktura@your-domain.com
 RESEND_DELIVERY_WEBHOOK_SECRET=whsec_...
 ```
 
+Invitations do not need Resend: the accept link is returned to the inviter in the app. See [SELF-HOSTING.md](./SELF-HOSTING.md#email-invoice-sending-invitations-and-reminders).
+
 ### Push Notifications
 
 ```env

@@ -33,7 +33,13 @@ export const maxDuration = 60
 
 const log = createLogger('api/storage-proxy')
 
-/** Above every caller's own cap (MCP upload 10 MB, document max 20 MB). */
+/**
+ * Above every caller's own cap (MCP upload 10 MB, document max 10 MB). The
+ * browser inbox path does not come through here at all: this handler buffers
+ * the PUT body inside a function, so on hosted it sits under the same 4.5 MB
+ * platform ceiling, and the browser PUTs to the raw signed Storage URL
+ * instead (lib/documents/direct-upload.ts).
+ */
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 const REQUEST_HEADERS_FORWARDED = [

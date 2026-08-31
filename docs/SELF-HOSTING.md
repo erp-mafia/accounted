@@ -54,7 +54,7 @@ The migrations automatically enable these extensions:
 | Extension | Migration | Purpose |
 |-----------|-----------|---------|
 | `uuid-ossp` | 001 | UUID generation |
-| `vector` (pgvector) | 033 | AI embedding storage (for AI extensions) |
+| `vector` (pgvector) | 033 | Created by an early migration; no current code path stores embeddings, the extension only needs to exist for the migration to apply |
 | `btree_gist` | 042 | Fiscal period overlap prevention |
 | `pg_cron` | 048 | In-database scheduled jobs |
 
@@ -180,18 +180,20 @@ PORT=8080 docker compose up -d
    - **Step 4**: Preliminary tax amount (optional, skip if unsure)
    - **Step 5**: Bank details for invoices (optional)
 
-There is no admin account or invite system: any email address can sign up. You can also use the magic link option on the login page if preferred.
+There is no admin account: any email address can sign up (unless you turn public signup off, see the `AUTH_SIGNUPS_DISABLED` note under [Email](#email-invoice-sending-invitations-and-reminders)). You can also use the magic link option on the login page if preferred.
+
+To bring in more users, invite them from **Settings > Company > Members** (company-scoped) or **Settings > Team** (consultant teams). Invitations work without a mail provider: the accept link is returned to the inviter right after the invite is created (shown under the pending list with a copy button), so it can be shared over any channel. Configuring Resend only adds automatic delivery. The link is shown once and cannot be re-sent for company invites: revoke the invitation and invite again to get a fresh link.
 
 ## Scheduled Jobs
 
-The cron sidecar runs these jobs automatically:
+The cron sidecar runs the schedule in [`docker/crontab.self-hosted`](../docker/crontab.self-hosted). That file is generated from the `crons` array in `vercel.json` (the single source of truth, shared with the hosted service) by `npm run crontabs:generate`, and a test fails CI if it drifts, so this guide does not repeat the table: open the file for the exact jobs and times. They fall into these groups:
 
-| Schedule (UTC) | Endpoint | Purpose |
-|----------------|----------|---------|
-| Daily 06:00 | `/api/deadlines/status/cron` | Update deadline statuses |
-| Daily 08:00 | `/api/invoices/reminders/cron` | Send overdue invoice reminders |
-| Yearly Jan 2 | `/api/tax-deadlines/cron` | Generate tax deadlines for the new year |
-| Sundays 03:00 | `/api/documents/verify/cron` | SHA-256 integrity check on document archive |
+- **Every minute / every few minutes**: webhook dispatch, WhatsApp and invoice-inbox sweeps (crash recovery for staged uploads).
+- **Hourly**: recurring invoices, cloud-backup auto-sync, idempotency-key cleanup.
+- **Nightly (UTC)**: deadline statuses, tax deadlines, document-archive SHA-256 verification, event and pending-operation cleanup, sandbox cleanup, booking-template sync, bank sync, skattekonto sync, accrual posting, receipt hunt, WhatsApp retention.
+- **Skatteverket receipts**: AGI every 15 minutes, VAT every two hours.
+
+Extension endpoints are listed unconditionally: one whose extension is not enabled answers a cheap no-op, so enabling it later needs no crontab change.
 
 All cron endpoints are authenticated with `Authorization: Bearer <CRON_SECRET>`. The cron container calls the app over the internal Docker network (`http://app:3000`), so these endpoints are not exposed publicly.
 
@@ -211,7 +213,7 @@ The stock self-hosted image includes both extraction extensions, so these creden
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-**Option 2: AWS Bedrock.** Requires an AWS account with Bedrock model access to Claude. This is what the hosted service runs, because it keeps inference inside eu-north-1: choose it if you need the AI calls to stay in the EU, which the direct API does not guarantee.
+**Option 2: AWS Bedrock.** Requires an AWS account with Bedrock model access to Claude. This is what the hosted service runs, because it keeps inference inside the EU (the `eu.` cross-region inference profile; `AWS_REGION` is the API endpoint, not a pin to one region): choose it if you need the AI calls to stay in the EU, which the direct API does not guarantee.
 
 ```bash
 AWS_ACCESS_KEY_ID=...
@@ -265,7 +267,7 @@ AI_PROVIDER=bedrock|anthropic|openai-compatible   # force the backend (see below
 
 The pre-existing names `BEDROCK_MODEL_ID`, `BEDROCK_OPUS_MODEL_ID`, `BEDROCK_SONNET_MODEL_ID` and `BEDROCK_MAX_TOKENS` keep working as the same overrides (extraction, heavy, standard, extraction cap) on every backend; the `AI_*` names take precedence when both are set. Claude deployments default every tier to `claude-sonnet-5`.
 
-When several credential sets are present, Bedrock wins, then the direct Anthropic API, then the OpenAI-compatible endpoint, so that adding a key for an experiment cannot silently move production inference out of eu-north-1. Set `AI_PROVIDER` to say which you mean. A model id written without a provider prefix is adapted to whichever backend is active; an id that already carries one (`eu.anthropic.…`) is used as-is.
+When several credential sets are present, Bedrock wins, then the direct Anthropic API, then the OpenAI-compatible endpoint, so that adding a key for an experiment cannot silently move production inference out of the EU. Set `AI_PROVIDER` to say which you mean. A model id written without a provider prefix is adapted to whichever backend is active; an id that already carries one (`eu.anthropic.…`) is used as-is.
 
 Without working credentials the rest of the app runs normally: uploads are stored but not auto-interpreted (the upload UI sees that immediately rather than waiting for a timeout), and the AI assistant answers `503 ai_unconfigured`.
 
@@ -294,14 +296,46 @@ npx tsx scripts/smoke-ai.ts ./receipt.pdf    # also runs document extraction
 
 > **Note:** `OPENAI_API_KEY` from earlier versions is not read by any code path. To use OpenAI itself, point Option 3 at `https://api.openai.com/v1`; the app has no provider-specific OpenAI integration, only the OpenAI-compatible one. Background: [#1406](https://github.com/erp-mafia/accounted/issues/1406).
 
-### Email (Invoice Sending and Reminders)
+### Email (Invoice Sending, Invitations and Reminders)
+
+Outbound mail (invoices, reminders, payslips) goes through one of two providers. Auth/account mail is sent by Supabase Auth and is not affected.
+
+**Option 1: Resend** (what hosted runs):
 
 ```bash
 RESEND_API_KEY=re_...
 RESEND_FROM_EMAIL=noreply@your-domain.com
 ```
 
-Requires a [Resend](https://resend.com) account with a verified sender domain. Without this, invoices can still be generated as PDFs but cannot be emailed.
+Requires a [Resend](https://resend.com) account with a verified sender domain.
+
+**Option 2: your own SMTP relay** (a Swedish mail provider, a Microsoft 365 / Google Workspace relay, Postfix on the host):
+
+```bash
+EMAIL_PROVIDER=smtp
+SMTP_HOST=smtp.example.se
+SMTP_PORT=587                         # default 587; 465 with SMTP_SECURE=true
+SMTP_SECURE=false                     # true = implicit TLS, false = STARTTLS required (set SMTP_REQUIRE_TLS=false only for a plaintext LAN relay)
+SMTP_USER=...                         # optional for an internal relay
+SMTP_PASS=...
+SMTP_FROM_EMAIL=faktura@your-domain.se
+# SMTP_REQUIRE_TLS=false              # only for a plaintext relay on a trusted LAN: without it a relay that cannot STARTTLS fails the send instead of leaking credentials and invoice PDFs in cleartext
+# SMTP_TLS_REJECT_UNAUTHORIZED=false  # only for a LAN relay with a self-signed certificate
+```
+
+`EMAIL_PROVIDER` is optional: with a `RESEND_API_KEY` present Resend is used, otherwise `SMTP_HOST` selects SMTP, so adding SMTP variables next to an existing Resend key never moves mail by accident. Set it explicitly when both are configured. The From header is built identically on both providers (the company or brand name as display name, the platform address from `RESEND_FROM_EMAIL` or `SMTP_FROM_EMAIL` unless the company has a verified sending domain); the delivery-status webhook is Resend-only.
+
+Without either, invoices can still be generated as PDFs but cannot be emailed.
+
+**Invitations do not require Resend.** When no mail provider is configured, the invite is still created and the accept link is returned to the inviter in the app (a copy button under the pending invitations list, plus a warn-level log record whose msg is `email service not configured: invite email skipped`; the Docker image logs JSON, so grep for the message text, not a `WARN` prefix; the token is never logged). Share the link manually; it is valid until the invitation expires. A mail provider (Resend, or your own relay with `EMAIL_PROVIDER=smtp`, both above) is only needed if you want the invitation mailed automatically. There is no re-send for company invitations: revoke and invite again for a new link.
+
+Note the two separate mail paths: this variable drives the app's own mail (invoices, invitations, reminders); account mail from GoTrue (signup confirmation, password reset, and the account-provisioning invite when `AUTH_SIGNUPS_DISABLED=true`) goes through the Supabase **Authentication > SMTP Settings** described in [Configure Authentication](#2-configure-supabase-auth) and [Troubleshooting](#troubleshooting).
+
+```bash
+AUTH_SIGNUPS_DISABLED=true
+```
+
+Set this when you have turned public signup off in GoTrue (`disable_signup`). The invite route then provisions the invitee's account through the auth admin API before writing the invitation, and GoTrue mails its own set-password link via the Supabase SMTP settings; the in-app accept link is still returned to the inviter.
 
 ### Push Notifications
 
@@ -361,7 +395,7 @@ The Next.js app is stateless: all data lives in Supabase. The Docker entrypoint 
 
 ## Fully Self-Hosted (No Supabase Cloud)
 
-The setup above relies on a Supabase project at supabase.com. If you also want to host the database, auth, and storage yourself (to keep all data on-premises, avoid the SaaS dependency, or run air-gapped) you can pair Accounted with [Supabase's official Docker self-hosting stack](https://supabase.com/docs/guides/self-hosting/docker) instead.
+The setup above relies on a Supabase project at supabase.com. If you also want to host the database, auth, and storage yourself (to keep all data on-premises, avoid the SaaS dependency, or run air-gapped) you can pair Accounted with [Supabase's official Docker self-hosting stack](https://supabase.com/docs/guides/self-hosting/docker) instead. For the fully Swedish variant of this (Swedish hosting, Swedish object storage with retention locks for the 7-year archive, AI on Swedish GPUs, backup/restore runbook) see [SOVEREIGN.md](SOVEREIGN.md); the mechanics below apply there too.
 
 This is a more involved path. You take responsibility for backups, TLS certificates, image upgrades, and Postgres operations. It is intended for operators already running Docker services who are comfortable with PostgreSQL.
 
@@ -402,7 +436,7 @@ flowchart LR
 
 ### Setup outline
 
-1. **Bring up Supabase** following [supabase.com/docs/guides/self-hosting/docker](https://supabase.com/docs/guides/self-hosting/docker). Generate your own `JWT_SECRET`, `ANON_KEY`, and `SERVICE_ROLE_KEY` (Supabase ships `sh utils/generate-keys.sh`). Pick a hostname for the API gateway (e.g. `supabase.example.com`) and point `SUPABASE_PUBLIC_URL` / `API_EXTERNAL_URL` at it.
+1. **Bring up Supabase** following [supabase.com/docs/guides/self-hosting/docker](https://supabase.com/docs/guides/self-hosting/docker). Generate your own `JWT_SECRET`, `ANON_KEY`, and `SERVICE_ROLE_KEY` (Supabase ships `sh utils/generate-keys.sh`). Pick a hostname for the API gateway (e.g. `supabase.example.com`) and point `SUPABASE_PUBLIC_URL` at it and `API_EXTERNAL_URL` at it **including the `/auth/v1` path** (upstream docker 0.7.0, July 2026, changed this). The API gateway depends on the upstream release you check out: `self-hosted/v0.7.x` runs Kong by default and offers Envoy through the `docker-compose.envoy.yml` overlay; `self-hosted/v0.8.0` and later run Envoy by default and keep Kong available through `docker-compose.kong.yml`. The diagram above says `kong`; the role is the same, the container name follows your release and overlays.
 
 2. **Apply the Accounted migrations** directly via `psql`: the Supabase CLI (`db push`) assumes a cloud project, so run the SQL files against the self-hosted database container:
 
@@ -540,7 +574,7 @@ portable base file alone.
 
 ### What you give up vs. cloud Supabase
 
-- **Backups** are entirely your responsibility: set up `pg_dump` (or a tool like restic) to off-host storage. As a portable, vendor-neutral *logical* backup on top of the raw dump, you can also export each fiscal period as a standard **SIE4** file via the API and archive it: any Swedish bookkeeping system can re-import it:
+- **Backups** are entirely your responsibility. The repo ships `scripts/self-host/backup.sh` / `restore.sh` (`pg_dump` custom format with ACLs kept, ACL manifest, storage tar, optional db-config volume, to any S3-compatible bucket with Object Lock; see [SOVEREIGN.md, section 5](SOVEREIGN.md#5-backup-and-restore-ship-it-do-not-improvise-it)); scheduling and monitoring them is still on you. As a portable, vendor-neutral *logical* backup on top of the raw dump, you can also export each fiscal period as a standard **SIE4** file via the API and archive it: any Swedish bookkeeping system can re-import it:
 
   ```bash
   curl -fsS -H "Authorization: Bearer <reports:read API key>" \
@@ -548,7 +582,7 @@ portable base file alone.
     -o "export_<periodId>.se"
   ```
 - **Storage**: the included `storage-api` defaults to the local-filesystem backend. For production durability, use the `docker-compose.s3.yml` overlay and point it at S3 / MinIO.
-- **SMTP**: no built-in mailer. Either set `ENABLE_EMAIL_AUTOCONFIRM=true` for dev/staging, or wire `SMTP_*` env vars in the Supabase stack to a provider (Resend, Postmark, etc.).
+- **SMTP**: no built-in mailer for auth mail. Either set `ENABLE_EMAIL_AUTOCONFIRM=true` for dev/staging, or wire `SMTP_*` env vars in the Supabase stack to a provider (Resend, Postmark, etc.), the self-hosted equivalent of the **Authentication > SMTP Settings** step in [Configure Authentication](#2-configure-supabase-auth) and [Troubleshooting](#troubleshooting). If you also disable public signup in GoTrue, set `AUTH_SIGNUPS_DISABLED=true` on the app so invites provision accounts through the admin API (see [Email](#email-invoice-sending-invitations-and-reminders)). Inviting users never depends on this: the accept link is always returned in-band to the inviter.
 - **Upgrades**: you sync the `supabase/postgres` image yourself; your data lives in the DB volume, so a Postgres image bump needs no migration re-run. When you pull a newer Accounted release, apply only the **new** migration files added since your last deploy (the SQL is not idempotent, so re-running already-applied migrations will error). Track which migrations you've applied, e.g. with a checksum/version table.
 
 ### Notes

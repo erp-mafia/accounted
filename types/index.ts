@@ -366,6 +366,24 @@ export interface InvoiceEmailTexts {
   en?: InvoiceEmailTextOverrides
 }
 
+// Editable reminder email texts per reminder level (Swedish only, matching
+// the reminder templates). Missing / whitespace-only fields fall back to the
+// defaults in lib/email/reminder-templates.ts (REMINDER_EMAIL_DEFAULT_TEXTS).
+// Supports the fixed placeholder set {fakturanummer} {kundnamn} {förnamn}
+// {företag} {fakturadatum} {förfallodatum} {belopp} {dagar}. TEXT only:
+// reminder fee and interest math are unaffected (Lag 1981:739 caps the
+// påminnelseavgift at 60 kr; the 450 kr förseningsersättning is out of scope).
+export interface ReminderTextOverride {
+  subject?: string
+  body?: string
+}
+
+export interface ReminderTextOverrides {
+  level_1?: ReminderTextOverride
+  level_2?: ReminderTextOverride
+  level_3?: ReminderTextOverride
+}
+
 export type InvoiceFontFamily =
   | 'Helvetica'
   | 'Times-Roman'
@@ -544,6 +562,8 @@ export interface CompanySettings {
   reminder_days_level_1: number
   reminder_days_level_2: number
   reminder_days_level_3: number
+  // Editable reminder email texts per level. null = all defaults.
+  reminder_text_overrides: ReminderTextOverrides | null
 
   // Reminder surcharges (dröjsmålsränta + lagstadgad påminnelseavgift)
   reminder_fee_enabled: boolean
@@ -2502,6 +2522,9 @@ export type PendingOperationType =
   // Stream 1 Phase 1: invoice operations beyond simple create/send
   | 'credit_invoice'
   | 'convert_invoice'
+  // Draft-only invoice removal: unnumbered drafts hard delete, numbered
+  // drafts are makulerade (number retained). Non-drafts are refused.
+  | 'delete_draft_invoice'
   // Draft-only invoice edit (items full-replace); sent/booked stays immutable,
   // correction is a kreditfaktura.
   | 'update_invoice'
@@ -2517,6 +2540,10 @@ export type PendingOperationType =
   // Notes-only annotation on a verifikat: the immutability trigger's carve-out
   // (migration 20260608120000) makes this legal even on posted entries.
   | 'set_voucher_note'
+  // Ignore / restore a bank transaction that is not an affärshändelse (PSD2
+  // ghost row, duplicate, never-executed transfer). Writes no verifikat, so a
+  // locked or closed period does not block it (issue #1661).
+  | 'ignore_transaction'
   // Bokslut: planenlig avskrivning (one journal entry per asset)
   | 'post_annual_depreciation'
   // Payroll: salary run creation + AGI declaration
@@ -2548,6 +2575,11 @@ export type PendingOperationType =
   | 'reconciliation_signoff'
   // Book the remainder of a bank selection as a fee/interest/rounding verifikat and link it.
   | 'reconciliation_residual'
+  // Book synced skattekonto rows as posted verifikat (1630 + rule-matched
+  // counter account), same helper as the HTTP bokfor-batch route. The
+  // single-row op stores { transaction_id }; the batch op stores { ids }.
+  | 'book_skattekonto_row'
+  | 'book_skattekonto_rows'
   // PR5: Skatteverket filing via MCP. Commit = "send for BankID signing"
   // (returns a signing link); the user's signature in the browser files it.
   | 'submit_vat_declaration'
@@ -2566,6 +2598,10 @@ export type PendingOperationType =
   // monthly_salary, draft only). The per-run column is what the engine reads;
   // the employee master's fixed salary stays untouched (variable owner pay).
   | 'set_run_salary'
+  // Draft-only salary-run header edit (payment_date / voucher_series /
+  // notes), same field set as the v1 PATCH; payment_date is the future
+  // booking entry date.
+  | 'update_salary_run'
   | 'register_absence'
   | 'create_employee'
   | 'update_employee'
@@ -4358,6 +4394,10 @@ export interface InvoiceExtractionResult {
     roundingAmount?: number | null
   }
   vatBreakdown: VatBreakdownItem[]
+  // Amounts visible on non-invoice documents (bankintyg, avtal, contracts)
+  // with no invoice-style total. Matching hint only, never booked. Optional:
+  // extractions from before the field existed lack it.
+  prominentAmounts?: ProminentAmount[]
   confidence: number
   suggestedTemplateId?: string
   // Set by the caller (not the model) when a long PDF was sliced before
@@ -4380,6 +4420,12 @@ export interface VatBreakdownItem {
   rate: number
   base: number
   amount: number
+}
+
+/** One amount printed on a non-invoice document, with the document's own label. */
+export interface ProminentAmount {
+  amount: number
+  label: string | null
 }
 
 // KPI Report

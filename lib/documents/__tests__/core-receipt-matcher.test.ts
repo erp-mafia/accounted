@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import {
+  FALLBACK_CONFIDENCE_FACTOR,
   levenshteinDistance,
   normalizeMerchantName,
   normalizeForMatch,
   calculateMerchantSimilarity,
   calculateMatchConfidence,
   amountVarianceForMatch,
+  bestProminentAmountVariance,
 } from '../core-receipt-matcher'
+import { roundOre } from '@/lib/money'
 
 describe('levenshteinDistance', () => {
   it('returns 0 for identical strings', () => {
@@ -160,6 +163,56 @@ describe('amountVarianceForMatch', () => {
 
   it('treats currency codes case-insensitively', () => {
     expect(amountVarianceForMatch(100, 'eur', null, -100, 'EUR', -1150)).toBe(0)
+  })
+})
+
+describe('bestProminentAmountVariance', () => {
+  it('picks the closest of several printed amounts and names it', () => {
+    // An agreement listing both a monthly price and a one-off price: the
+    // one-off 2500 matches the -2500 AVGIFT charge exactly.
+    const best = bestProminentAmountVariance(
+      [
+        { amount: 49, label: 'Månadspris' },
+        { amount: 2500, label: 'Engångspris' },
+      ],
+      'SEK',
+      -2500,
+      'SEK',
+      -2500,
+    )
+    expect(best).toEqual({ variance: 0, amount: 2500, label: 'Engångspris' })
+  })
+
+  it('returns null when nothing is comparable', () => {
+    expect(bestProminentAmountVariance([], 'SEK', -2500, 'SEK', -2500)).toBeNull()
+    // Cross-currency without a rate stays incomparable, like a total would.
+    expect(
+      bestProminentAmountVariance([{ amount: 2500, label: null }], 'EUR', -2500, 'SEK', -2500),
+    ).toBeNull()
+    // Zero amounts carry no signal (amountVarianceForMatch drops them).
+    expect(
+      bestProminentAmountVariance([{ amount: 0, label: null }], 'SEK', -2500, 'SEK', -2500),
+    ).toBeNull()
+  })
+
+  it('the discount factor keeps fallback agreement below certainty', () => {
+    // Exact date + exact amount + no merchant normalises to 1.0; a fallback
+    // match must not present that as certainty (this exact geometry scored
+    // "100% säkerhet" on a wrong same-day transaction before the factor).
+    const { confidence } = calculateMatchConfidence(0, 0, 0)
+    const discounted = roundOre(confidence * FALLBACK_CONFIDENCE_FACTOR)
+    expect(confidence).toBe(1)
+    expect(discounted).toBeLessThan(1)
+  })
+
+  it('a disagreeing fallback amount scores no better than a disagreeing total', () => {
+    // Renormalized weights made a wrong fallback amount OUTSCORE a wrong
+    // invoice total (0.67 vs 0.60 with exact date + merchant); the factor
+    // approach scores both at full weight and then discounts the fallback.
+    const asTotal = calculateMatchConfidence(0, 1.4, 0.9).confidence
+    const asFallback = roundOre(asTotal * FALLBACK_CONFIDENCE_FACTOR)
+    expect(asFallback).toBeLessThanOrEqual(asTotal)
+    expect(asFallback).toBeLessThan(0.6)
   })
 })
 

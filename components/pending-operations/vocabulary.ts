@@ -38,6 +38,7 @@ export const OPERATION_LABEL_KEYS: Record<string, string> = {
   // Invoices
   credit_invoice: 'type_credit_invoice',
   convert_invoice: 'type_convert_invoice',
+  delete_draft_invoice: 'type_delete_draft_invoice',
   // Documents & links
   attach_document_to_transaction: 'type_attach_document_to_transaction',
   link_document_to_voucher: 'type_link_document_to_voucher',
@@ -46,12 +47,16 @@ export const OPERATION_LABEL_KEYS: Record<string, string> = {
   link_supplier_invoice_voucher: 'type_link_supplier_invoice_voucher',
   link_transaction_journal_entry: 'type_link_transaction_journal_entry',
   uncategorize_transaction: 'type_uncategorize_transaction',
+  ignore_transaction: 'type_ignore_transaction',
   retag_line_dimensions: 'type_retag_line_dimensions',
   set_voucher_note: 'type_set_voucher_note',
   // Bulk booking / allocation
   match_batch_allocate: 'type_match_batch_allocate',
   bulk_book_transactions: 'type_bulk_book_transactions',
   bulk_book_inbox_items: 'type_bulk_book_inbox_items',
+  // Skattekonto row booking
+  book_skattekonto_row: 'type_book_skattekonto_row',
+  book_skattekonto_rows: 'type_book_skattekonto_rows',
   // Periods, year-end, depreciation
   close_period: 'type_close_period',
   lock_period: 'type_lock_period',
@@ -122,6 +127,7 @@ export const singleActionWarnings: Record<string, string> = {
   correct_entry: 'Genom att klicka godkänn så stornas originalverifikationen och en rättelse bokförs (BFL 5 kap 5§).',
   reverse_entry: 'Genom att klicka godkänn så stornas verifikationen: originalet behålls synligt (BFL 5 kap).',
   credit_invoice: 'Genom att klicka godkänn så skapas en kreditfaktura och originalverifikationen stornas.',
+  delete_draft_invoice: 'Genom att klicka godkänn så tas utkastet bort: onumrerade utkast raderas permanent, numrerade makuleras med bevarat fakturanummer.',
   credit_supplier_invoice: 'Genom att klicka godkänn så krediteras leverantörsfakturan och registreringsverifikationen stornas.',
   approve_supplier_invoice: 'Genom att klicka godkänn så attesteras leverantörsfakturan och blir betalningsbar.',
   convert_invoice: 'Genom att klicka godkänn så konverteras proformafakturan till en riktig faktura med F-nummer.',

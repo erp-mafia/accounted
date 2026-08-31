@@ -32,13 +32,13 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
     },
     {
           "slug": "email",
-          "name": "E-post (Resend)",
+          "name": "E-post",
           "sector": "general",
           "category": "operations",
           "icon": "Mail",
           "dataPattern": "core",
           "description": "Skicka fakturor och påminnelser via e-post",
-          "longDescription": "Aktiverar e-postfunktioner: skicka fakturor till kunder, automatiska betalningspåminnelser enligt valt schema, och e-postmeddelanden. Kräver ett Resend-konto med verifierad domän.",
+          "longDescription": "Aktiverar e-postfunktioner: skicka fakturor till kunder, automatiska betalningspåminnelser enligt valt schema, och e-postmeddelanden. Kräver ett Resend-konto med verifierad domän eller en egen SMTP-server (EMAIL_PROVIDER=smtp).",
           "readsCoreTables": [
                 "invoices",
                 "customers",

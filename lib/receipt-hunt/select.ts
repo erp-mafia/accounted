@@ -172,6 +172,15 @@ export function selectProposals(
     const scored = scoreUnderlagCandidates(tx, pool as never[]).filter(
       (candidate) =>
         candidate.document_id != null &&
+        // Never propose on the prominent-amounts fallback (non-invoice
+        // documents: bankintyg, avtal). The hunt's thresholds were calibrated
+        // for invoice-style totals; a fallback pair can reach 0.85 on date +
+        // printed-figure alone, which clears CERTAIN_CONFIDENCE and skips
+        // adjudication, and its preview would show document_amount null. The
+        // hunt also scans outflows only, so an inflow-labeled figure
+        // ("Insatt belopp") is guaranteed to pair with the wrong row. Those
+        // documents stay reachable through the picker and agent candidates.
+        candidate.amountSource !== 'prominent' &&
         !spentDocumentIds.has(candidate.document_id) &&
         !suppression.claimedDocumentIds.has(candidate.document_id) &&
         !suppression.rejectedPairs.has(pairKey(tx.id, candidate.document_id)),

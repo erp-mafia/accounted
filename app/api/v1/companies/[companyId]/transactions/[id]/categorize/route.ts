@@ -397,14 +397,23 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       transaction.date,
     )
     if (periodLock.locked) {
-      return v1ErrorResponseFromCode('PERIOD_LOCKED', txLog, {
-        requestId: ctx.requestId,
-        details: {
-          transaction_date: transaction.date,
-          reason: periodLock.reason,
-          fiscal_period_id: periodLock.fiscal_period_id,
+      // Issue #1661: a private marking is a real booking (eget uttag /
+      // insättning), so the lock applies, but a row that is not a business
+      // event should be ignored, not booked: answer with the code whose
+      // remediation names the ignore verb instead of unlock.
+      return v1ErrorResponseFromCode(
+        is_business ? 'PERIOD_LOCKED' : 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED',
+        txLog,
+        {
+          requestId: ctx.requestId,
+          details: {
+            transaction_date: transaction.date,
+            reason: periodLock.reason,
+            fiscal_period_id: periodLock.fiscal_period_id,
+            ...(is_business ? {} : { suggested_action: 'ignore' }),
+          },
         },
-      })
+      )
     }
 
     // Live path: create the journal entry. The internal route runs a

@@ -30,7 +30,10 @@ import { currentSkvEnvironment, resolveReadAuth } from './lib/resolve-auth'
 import { probeCompanyGrants } from './lib/grant-probe'
 import { formatRedovisare } from '@/lib/skatteverket/format'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
-import type { SkvSubmitResult } from '@/lib/pending-operations/skatteverket-commit'
+import type {
+  SkvSubmitResult,
+  SkattekontoBookCommitResult,
+} from '@/lib/pending-operations/skatteverket-commit'
 import {
   agiPostUnderlag,
   agiGetKontrollresultat,
@@ -2503,6 +2506,9 @@ export const skatteverketExtension: Extension = {
   services: {
     commitSubmitVatDeclaration,
     commitSubmitAgi,
+    // Commit side of the staged book_skattekonto_row(s) MCP ops: books
+    // already-synced skattekonto rows through the bookkeeping engine.
+    commitBookSkattekontoRows,
     // Read service for the v1 REST endpoint (issue #1663): filed
     // momsdeklarationer (inlamnat) and beslut (beslutat). Contract in
     // lib/skatteverket/declaration-status.ts.
@@ -2692,6 +2698,66 @@ const EXTENSION_DISABLED_RESULT: Extract<SkvSubmitResult, { ok: false }> = {
   http_status: 503,
   recoverable: true,
   error: 'Skatteverket-integrationen är inte aktiverad i denna miljö.',
+}
+
+/**
+ * Commit service for the staged book_skattekonto_row / book_skattekonto_rows
+ * MCP operations. Registry-resolved by lib/pending-operations/commit.ts on
+ * approval. Books already-synced skattekonto_transactions rows as posted
+ * verifikat through the SAME batch helper the HTTP bokfor-batch route uses
+ * (draft + commit per row via the bookkeeping engine, requireSettled): no
+ * SKV API call is involved. Row failures come back as per-row data, never as
+ * a thrown error, so a partial batch commits with the failures listed.
+ *
+ * Gated on SKATTEVERKET_ENABLED for parity with the HTTP surface: the
+ * dispatcher blocks the whole extension route family behind that flag, so a
+ * direct lib call must not book where the web app could not. Recoverable:
+ * the op stays reviewable and a re-approve works once the env is enabled.
+ */
+async function commitBookSkattekontoRows(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>,
+): Promise<SkattekontoBookCommitResult> {
+  if (!skatteverketEnabled()) return EXTENSION_DISABLED_RESULT
+
+  const raw = params.ids
+  const ids = Array.isArray(raw)
+    ? [...new Set(raw.filter((v): v is string => typeof v === 'string' && v.length > 0))]
+    : []
+  if (ids.length === 0 || ids.length > 200) {
+    return {
+      ok: false,
+      code: 'INVALID_PARAMS',
+      http_status: 400,
+      recoverable: false,
+      error: 'ids måste vara en lista med 1-200 transaktions-id.',
+    }
+  }
+
+  try {
+    const result = await bokforSkattekontoTransactionsBatch(supabase, companyId, userId, ids)
+    return { ok: true, ...result }
+  } catch (err) {
+    // bokforSkattekontoTransactionsBatch catches per-row errors itself; a
+    // throw here is a batch-level failure (e.g. rule-context load): internal,
+    // non-recoverable, the user re-stages after the underlying issue is fixed.
+    log.error('commitBookSkattekontoRows failed', {
+      companyId,
+      rowCount: ids.length,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    // Fixed public message: the raw exception stays in the server log above
+    // and must not flow back to API callers (it can carry DB/row details).
+    return {
+      ok: false,
+      code: 'SKATTEKONTO_BOOKING_FAILED',
+      http_status: 500,
+      recoverable: false,
+      error: 'Skattekonto-raderna kunde inte bokföras. Försök igen eller kontakta support.',
+    }
+  }
 }
 
 /**

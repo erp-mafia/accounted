@@ -19,12 +19,16 @@ import type { ResidualKind } from '@/lib/reconciliation/residual'
 /**
  * "Matcha manuellt": the two-pane worksheet from the approved design. Left:
  * outside rows with no verifikat (bank transactions or skattekonto rows),
- * multi-select. Right: verifikat on the account with no outside row,
- * single-select. The footer sums both sides; Koppla is enabled only when the
- * selection nets to zero, because the engine links N rows to ONE verifikat
- * and (for the skattekonto) refuses a group whose sum the verifikat does not
- * settle. A non-zero difference is shown, not hidden: booking the residual
- * in the same gesture is the next step (6c), until then it says so.
+ * multi-select. Right: verifikat on the account with no outside row. The
+ * right pane follows the left: with exactly ONE bank row picked it is
+ * multi-select (one row settling several verifikat, the 1:N split of #1553);
+ * with several rows picked it is single-select (N rows settling one
+ * verifikat). The footer sums both sides; Koppla is enabled only when the
+ * selection nets to zero, because the engine links N rows to ONE verifikat,
+ * ONE row to N verifikat with slices summing to the row, and (for the
+ * skattekonto) refuses a group whose sum the verifikat does not settle. A
+ * non-zero difference is shown, not hidden: for the N:1 shape the residual
+ * can be booked in the same gesture; a split must close exactly.
  */
 
 interface ManualMatchModeProps {
@@ -42,7 +46,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
   const [ledger, setLedger] = useState<ReconciliationItem[] | null>(null)
   const [loadError, setLoadError] = useState(false)
   const [pickedExternal, setPickedExternal] = useState<Set<string>>(new Set())
-  const [pickedEntry, setPickedEntry] = useState<string | null>(null)
+  const [pickedEntries, setPickedEntries] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [residualKind, setResidualKind] = useState<ResidualKind | ''>('')
 
@@ -79,13 +83,41 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
     () => roundOre((external ?? []).filter((i) => pickedExternal.has(i.item_id)).reduce((s, i) => s + i.amount, 0)),
     [external, pickedExternal],
   )
-  const entry = useMemo(() => (ledger ?? []).find((i) => i.item_id === pickedEntry) ?? null, [ledger, pickedEntry])
-  const ledgerSum = entry ? roundOre(entry.amount) : 0
+  const entries = useMemo(
+    () => (ledger ?? []).filter((i) => pickedEntries.has(i.item_id)),
+    [ledger, pickedEntries],
+  )
+  const entry = entries.length === 1 ? entries[0] : null
+  const ledgerSum = roundOre(entries.reduce((s, i) => s + i.amount, 0))
   const difference = roundOre(externalSum - ledgerSum)
-  const canLink = pickedExternal.size > 0 && entry !== null && Math.abs(difference) < 0.005 && !busy
+  // One bank row may settle several verifikat; several rows settle one.
+  // N:M has no engine shape and the right pane never lets it be built.
+  const splitMode = !isSkv && pickedExternal.size === 1
+  const isSplit = entries.length > 1
+  const canLink =
+    pickedExternal.size > 0 &&
+    entries.length > 0 &&
+    !(pickedExternal.size > 1 && isSplit) &&
+    Math.abs(difference) < 0.005 &&
+    !busy
 
   function toggleExternal(id: string) {
     setPickedExternal((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      // Leaving the one-row shape with several verifikat picked would build
+      // an N:M selection: drop the verifikat side, the user re-picks one.
+      if (next.size !== 1) {
+        setPickedEntries((picked) => (picked.size > 1 ? new Set() : picked))
+      }
+      return next
+    })
+  }
+
+  function toggleEntry(id: string) {
+    setPickedEntries((prev) => {
+      if (!splitMode) return prev.has(id) ? new Set() : new Set([id])
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
@@ -94,14 +126,17 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
   }
 
   async function link() {
-    if (!entry || pickedExternal.size === 0) return
+    if (entries.length === 0 || pickedExternal.size === 0) return
     setBusy(true)
     try {
+      // The split sends no allocations: each slice defaults to the voucher's
+      // bank line and the engine refuses the set unless the slices sum to
+      // the row, which is exactly the difference-is-zero gate above.
       const res = await fetch(`${base}/links`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          pairs: [{ external_ids: [...pickedExternal], journal_entry_ids: [entry.item_id] }],
+          pairs: [{ external_ids: [...pickedExternal], journal_entry_ids: entries.map((e) => e.item_id) }],
         }),
       })
       const json = await res.json().catch(() => ({}))
@@ -113,13 +148,15 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
       const skipped = (json.data?.skipped as Array<{ message: string }> | undefined) ?? []
       if (applied === 0 && skipped.length > 0) {
         toast({ title: t('toast_failed'), description: skipped[0].message, variant: 'destructive' })
+      } else if (isSplit) {
+        toast({ title: t('toast_split_matched', { count: applied }) })
       } else {
         toast({
           title: skipped.length > 0 ? t('toast_matched_skipped', { applied, skipped: skipped.length }) : t('toast_matched', { applied }),
         })
       }
       setPickedExternal(new Set())
-      setPickedEntry(null)
+      setPickedEntries(new Set())
       await load()
       onChanged()
     } finally {
@@ -143,7 +180,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
       }
       toast({ title: t('toast_residual_booked', { amount: formatCurrency(Math.abs(Number(json.data?.residual_amount ?? 0)), currency) }) })
       setPickedExternal(new Set())
-      setPickedEntry(null)
+      setPickedEntries(new Set())
       setResidualKind('')
       await load()
       onChanged()
@@ -219,12 +256,16 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
           )}
         </section>
 
-        {/* Right: verifikat without an outside row, single-select. */}
+        {/* Right: verifikat without an outside row. Single-select for N:1,
+            multi-select while exactly one bank row is picked (1:N). */}
         <section aria-label={t(isSkv ? 'bucket_unmatched_ledger_skv' : 'bucket_unmatched_ledger_bank')}>
           <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
             {t(isSkv ? 'bucket_unmatched_ledger_skv' : 'bucket_unmatched_ledger_bank')}
             <span className="ml-1.5 font-normal tabular-nums text-muted-foreground/70">{ledger.length}</span>
           </h2>
+          {splitMode && ledger.length > 0 && (
+            <p className="mb-2 text-[12.5px] text-muted-foreground">{t('match_pick_vouchers')}</p>
+          )}
           {ledger.length === 0 ? (
             <p className="text-[13px] text-muted-foreground">{t('match_empty_right')}</p>
           ) : (
@@ -240,23 +281,32 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
               </thead>
               <tbody className="stagger-enter">
                 {ledger.map((item) => {
-                  const picked = pickedEntry === item.item_id
+                  const picked = pickedEntries.has(item.item_id)
                   return (
                     <tr
                       key={item.item_id}
-                      onClick={() => setPickedEntry(picked ? null : item.item_id)}
+                      onClick={() => toggleEntry(item.item_id)}
                       className={cn('cursor-pointer', picked ? 'bg-secondary/60' : 'hover:bg-muted/40')}
                     >
                       <td className={cn(TD_CLASS, 'px-2')}>
-                        <input
-                          type="radio"
-                          name="manual-match-entry"
-                          checked={picked}
-                          onChange={() => setPickedEntry(item.item_id)}
-                          onClick={(e) => e.stopPropagation()}
-                          aria-label={item.description}
-                          className="h-3.5 w-3.5 accent-foreground"
-                        />
+                        {splitMode ? (
+                          <Checkbox
+                            checked={picked}
+                            onCheckedChange={() => toggleEntry(item.item_id)}
+                            onClick={(e) => e.stopPropagation()}
+                            aria-label={item.description}
+                          />
+                        ) : (
+                          <input
+                            type="radio"
+                            name="manual-match-entry"
+                            checked={picked}
+                            onChange={() => toggleEntry(item.item_id)}
+                            onClick={(e) => e.stopPropagation()}
+                            aria-label={item.description}
+                            className="h-3.5 w-3.5 accent-foreground"
+                          />
+                        )}
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>{formatDate(item.date)}</td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')} data-ph-mask>
@@ -285,16 +335,24 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
           {t('match_selected_external', { count: pickedExternal.size, amount: formatCurrency(externalSum, currency) })}
         </span>
         <span className="tabular-nums" data-ph-mask>
-          {entry
-            ? t('match_selected_entry', { amount: formatCurrency(ledgerSum, currency) })
-            : t('match_no_entry')}
+          {isSplit
+            ? t('match_selected_entries', { count: entries.length, amount: formatCurrency(ledgerSum, currency) })
+            : entry
+              ? t('match_selected_entry', { amount: formatCurrency(ledgerSum, currency) })
+              : t('match_no_entry')}
         </span>
         <span
-          className={cn('tabular-nums', Math.abs(difference) >= 0.005 && pickedExternal.size > 0 && entry ? 'text-warning' : 'text-muted-foreground')}
+          className={cn('tabular-nums', Math.abs(difference) >= 0.005 && pickedExternal.size > 0 && entries.length > 0 ? 'text-warning' : 'text-muted-foreground')}
           data-ph-mask
         >
           {t('match_difference', { amount: formatCurrency(difference, currency) })}
         </span>
+        {/* A split has no residual: the slices must sum to the row exactly
+            (the engine refuses anything else), so the footer says so instead
+            of offering a fee/interest booking against several verifikat. */}
+        {Math.abs(difference) >= 0.005 && pickedExternal.size > 0 && isSplit && (
+          <span className="text-[12.5px] text-muted-foreground">{t('match_hint_split')}</span>
+        )}
         {Math.abs(difference) >= 0.005 && pickedExternal.size > 0 && entry && (
           isSkv ? (
             <span className="text-[12.5px] text-muted-foreground">{t('match_hint_residual_skv')}</span>
@@ -320,7 +378,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
         )}
         <span className="ml-auto">
           <Button size="sm" onClick={() => void link()} disabled={!canLink} aria-busy={busy}>
-            {t('match_apply', { count: pickedExternal.size })}
+            {isSplit ? t('match_apply_split', { count: entries.length }) : t('match_apply', { count: pickedExternal.size })}
           </Button>
         </span>
       </div>

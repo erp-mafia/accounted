@@ -566,9 +566,17 @@ export async function validateVoucherForInvoiceLink(
   let arCreditTotal = 0
   let lineCurrency: string | null = null
   // A matched-side line on the right account that carries no amount in the
-  // invoice's currency. Fail CLOSED on it: summing only the convertible lines
-  // would silently understate a voucher that settles more than we can see.
+  // invoice's currency. Fail CLOSED on it, UNLESS the whole matched side is
+  // genuinely SEK-booked: then the fallback below mirrors the RPC's FX
+  // residual settlement gate (migration 20260830140000).
   let unconvertibleLineCurrency: string | null | undefined
+  // Fallback classification, counted per LINE exactly as the RPC does: a line
+  // labelled with the invoice's currency whose amount_in_currency is 0 is
+  // still a readable LINE and must keep the fallback disabled, because its
+  // real SEK ledger movement is excluded from sekSideTotal.
+  let readableCount = 0
+  let sekSideTotal = 0
+  let foreignLabelCount = 0
   for (const raw of lines) {
     const line = raw as {
       account_number: string
@@ -578,11 +586,20 @@ export async function validateVoucherForInvoiceLink(
       amount_in_currency: number | string | null
     }
     if (!line.account_number?.startsWith(accountPrefix)) continue
+    // Only a line that actually moves on the matched side counts as evidence
+    // of a settlement; the opposite leg is irrelevant.
+    const rawSide = Number(isCash ? line.debit_amount : line.credit_amount) || 0
+    if (invoiceCurrency !== 'SEK' && rawSide > 0) {
+      if (line.currency === invoiceCurrency && line.amount_in_currency != null) {
+        readableCount += 1
+      } else if ((line.currency ?? 'SEK') === 'SEK') {
+        sekSideTotal += rawSide
+      } else {
+        foreignLabelCount += 1
+      }
+    }
     const matched = ledgerLineSideAmountIn(line, invoiceCurrency, matchedSide)
     if (matched === null) {
-      // Only a line that actually moves on the matched side counts as evidence
-      // of a settlement we cannot read; the opposite leg is irrelevant.
-      const rawSide = Number(isCash ? line.debit_amount : line.credit_amount) || 0
       if (rawSide > 0 && unconvertibleLineCurrency === undefined) {
         unconvertibleLineCurrency = line.currency
       }
@@ -595,14 +612,51 @@ export async function validateVoucherForInvoiceLink(
   arCreditTotal = round2(arCreditTotal)
 
   if (unconvertibleLineCurrency !== undefined) {
-    return {
-      ok: false,
-      code: 'LINK_VOUCHER_CURRENCY_MISMATCH',
-      details: {
-        invoice_currency: invoice.currency,
-        line_currency: unconvertibleLineCurrency,
-      },
+    // SEK-booked settlement fallback, mirroring the RPC gate byte-for-byte:
+    // accrual only, zero readable lines, every unreadable line SEK-booked, a
+    // sane invoice exchange_rate, and the voucher's SEK total within 10% of
+    // remaining * rate. The RPC then settles the FULL remaining and books the
+    // FX residual to 7960/3960 as its own verifikat; here the validation
+    // outcome only has to agree, so the staging path stops refusing what the
+    // commit RPC accepts.
+    const exchangeRate = Number(invoice.exchange_rate)
+    const fallbackEligible =
+      !isCash &&
+      readableCount === 0 &&
+      foreignLabelCount === 0 &&
+      sekSideTotal > 0 &&
+      Number.isFinite(exchangeRate) &&
+      exchangeRate > 0 &&
+      exchangeRate < 100000
+    if (!fallbackEligible) {
+      return {
+        ok: false,
+        code: 'LINK_VOUCHER_CURRENCY_MISMATCH',
+        details: {
+          invoice_currency: invoice.currency,
+          line_currency: unconvertibleLineCurrency,
+        },
+      }
     }
+    const sekTotal = round2(sekSideTotal)
+    const bookedSek = round2(remainingAmount * exchangeRate)
+    if (Math.abs(sekTotal - bookedSek) > bookedSek * 0.1) {
+      return {
+        ok: false,
+        code: 'LINK_VOUCHER_CURRENCY_MISMATCH',
+        details: {
+          invoice_currency: invoice.currency,
+          line_currency: unconvertibleLineCurrency,
+          reason: 'fx_deviation_too_large',
+          expected_sek: bookedSek,
+          voucher_sek: sekTotal,
+        },
+      }
+    }
+    // Full-remaining settlement, exactly as the RPC computes it. lineCurrency
+    // is null here (no readable line), so the label guard below passes and the
+    // exceeds-remaining guard sees an equal amount.
+    arCreditTotal = round2(remainingAmount)
   }
 
   if (arCreditTotal <= 0) {
