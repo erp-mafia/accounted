@@ -173,7 +173,50 @@ export const ExtractionSchema = z.object({
     )
     .catch([])
     .optional(),
+  // Set by promoteSingleProminentAmount (code, never the model): 'prominent'
+  // means totals.total was copied from the document's single prominent amount
+  // so the user gets one editable TOTALT field. Matching treats such a total
+  // as fallback-grade (discounted, date-guarded, hunt-excluded); a user edit
+  // of totals.total clears it. In the schema so re-validation paths
+  // (PUT /extracted-data, MCP set) don't silently strip the provenance and
+  // launder a printed figure into a full-weight invoice total.
+  totalSource: z.enum(['prominent']).nullable().catch(null).optional(),
 })
+
+/**
+ * Give non-invoice documents one editable amount field.
+ *
+ * A bankintyg or avtal has no "Att betala" total, so the extractor leaves
+ * totals.total null; but when the document shows exactly one distinct amount
+ * there is nothing ambiguous about which figure the user means, and leaving
+ * TOTALT empty while the amount hides in a read-only row read as "extraction
+ * failed" (and made a misread amount uncorrectable). Promote that single
+ * amount into totals.total, stamped totalSource: 'prominent' so matching
+ * keeps treating it as fallback-grade evidence and the fields-PATCH route can
+ * clear the stamp when a human edits the value.
+ *
+ * Multi-amount documents are left alone: picking one silently would invent a
+ * total the document does not have.
+ */
+export function promoteSingleProminentAmount(
+  data: InvoiceExtractionResult
+): InvoiceExtractionResult {
+  if (data.documentKind !== 'other' && data.documentKind !== 'government_letter') return data
+  if (data.totals.total != null) return data
+  const distinct = [
+    ...new Set(
+      (data.prominentAmounts ?? [])
+        .map((a) => a.amount)
+        .filter((a) => Number.isFinite(a) && a !== 0)
+    ),
+  ]
+  if (distinct.length !== 1) return data
+  return {
+    ...data,
+    totals: { ...data.totals, total: distinct[0] },
+    totalSource: 'prominent',
+  }
+}
 
 // Agent-supplied extraction: accountSuggestion is preserved instead of forced
 // to null. Agents (unlike AI extractors) can reliably assign a BAS expense
@@ -631,7 +674,7 @@ export async function extractInvoiceFields(
     return {
       // accountSuggestion is null at this point, enforced by the schema's
       // .transform, so no post-validation coercion is needed.
-      data: { ...validated, confidence: 1 },
+      data: promoteSingleProminentAmount({ ...validated, confidence: 1 }),
       rawText,
       model,
     }

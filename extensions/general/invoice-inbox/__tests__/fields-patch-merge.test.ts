@@ -144,6 +144,60 @@ describe('PATCH /items/:id/fields', () => {
     expect(merged.supplier?.name).toBe('Restaurang Riddaren AB')
   })
 
+  it('clears totalSource when the user edits TOTALT', async () => {
+    // A promoted prominent amount (totalSource 'prominent') is fallback-grade
+    // in matching; the moment a human sets the total it is a verified figure.
+    const before = { ...fullExtraction(), totalSource: 'prominent' as const }
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: { id: 'item-1', extracted_data: before, created_supplier_invoice_id: null } })
+    mock.enqueue({ data: { id: 'item-1', extracted_data: {} } })
+
+    const ctx = buildCtx(mock.supabase)
+    await fieldsRoute.handler(makeReq({ totals: { total: 2500 } }), ctx)
+
+    const update = mock.calls.find((c) => c.method === 'update')
+    const merged = (update?.args?.[0] as { extracted_data: InvoiceExtractionResult }).extracted_data
+    expect(merged.totals?.total).toBe(2500)
+    expect(merged.totalSource).toBeNull()
+  })
+
+  it('keeps totalSource when the edit touches another field', async () => {
+    const before = { ...fullExtraction(), totalSource: 'prominent' as const }
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: { id: 'item-1', extracted_data: before, created_supplier_invoice_id: null } })
+    mock.enqueue({ data: { id: 'item-1', extracted_data: {} } })
+
+    const ctx = buildCtx(mock.supabase)
+    await fieldsRoute.handler(makeReq({ supplier: { name: 'SEB' } }), ctx)
+
+    const update = mock.calls.find((c) => c.method === 'update')
+    const merged = (update?.args?.[0] as { extracted_data: InvoiceExtractionResult }).extracted_data
+    expect(merged.totalSource).toBe('prominent')
+  })
+
+  it('returns 409 when the row changed under the edit (optimistic concurrency)', async () => {
+    // The handler is read-merge-write over the whole jsonb blob; a racing
+    // autosave would otherwise restore stale fields (including a
+    // totalSource stamp a concurrent TOTALT edit had cleared). The update is
+    // conditional on updated_at; zero rows matched surfaces as a 409.
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({
+      data: {
+        id: 'item-1',
+        extracted_data: fullExtraction(),
+        created_supplier_invoice_id: null,
+        updated_at: '2026-08-31T09:00:00Z',
+      },
+    })
+    mock.enqueue({ data: null })
+
+    const ctx = buildCtx(mock.supabase)
+    const res = await fieldsRoute.handler(makeReq({ totals: { total: 2500 } }), ctx)
+    expect(res.status).toBe(409)
+    const { body } = await parseJsonResponse<{ error: string }>(res)
+    expect(body.error).toContain('samtidigt')
+  })
+
   it('refuses once the item became a supplier invoice', async () => {
     const mock = createQueuedMockSupabase()
     mock.enqueue({

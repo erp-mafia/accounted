@@ -132,7 +132,12 @@ export default function TransactionMatchPicker({
     const parsed = new Date(rawInvoiceDate)
     return Number.isNaN(parsed.getTime()) ? new Date() : parsed
   }, [rawInvoiceDate])
-  const total = extractedData?.totals?.total ?? null
+  // A total promoted from the document's single prominent amount (totalSource
+  // 'prominent') is fallback-grade evidence, not an invoice total: demote it
+  // here so it is scored through the discounted fallback path below. A
+  // user-edited total has the stamp cleared and counts at full weight.
+  const total =
+    extractedData?.totalSource === 'prominent' ? null : (extractedData?.totals?.total ?? null)
   const receiptCurrency = (extractedData?.invoice?.currency ?? 'SEK').toUpperCase()
   const supplier = extractedData?.supplier?.name ?? null
   // Non-invoice documents (bankintyg, avtal) have no total but often show the
