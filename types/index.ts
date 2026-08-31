@@ -4398,6 +4398,11 @@ export interface InvoiceExtractionResult {
   // with no invoice-style total. Matching hint only, never booked. Optional:
   // extractions from before the field existed lack it.
   prominentAmounts?: ProminentAmount[]
+  // 'prominent' = totals.total was promoted from the document's single
+  // prominent amount (promoteSingleProminentAmount), not read off an invoice.
+  // Matching treats such a total as fallback-grade; cleared when a user edits
+  // totals.total.
+  totalSource?: 'prominent' | null
   confidence: number
   suggestedTemplateId?: string
   // Set by the caller (not the model) when a long PDF was sliced before
