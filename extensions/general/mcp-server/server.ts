@@ -47,6 +47,7 @@ import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { dbError } from '@/lib/errors/db-error'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
@@ -18294,9 +18295,23 @@ export const tools: McpTool[] = [
         if (inactiveAccounts.length > 0) {
           parts.push(`inaktiva: ${inactiveAccounts.join(', ')}`)
         }
-        throw new Error(
-          `Kan inte skapa verifikation. Konton ${parts.join('; ')}. ` +
-          'Skapa kontot med gnubok_create_account, aktivera det med gnubok_update_account, eller välj andra konton.'
+        // Carry the stable code, not just the prose. The message here is the
+        // better one (it names the accounts AND the two tools that fix it),
+        // but a bare Error resolves to UNKNOWN_ERROR, so an agent branching on
+        // `code` sees "unknown" for a failure that has a documented remedy.
+        // ACCOUNTS_NOT_IN_CHART already exists in the registry with a
+        // remediation pointing at Accounted://chart-of-accounts, and
+        // storno-service already throws it; this path just never did.
+        // On production this was 40 of the create_voucher failures in 60 days.
+        throw Object.assign(
+          new Error(
+            `Kan inte skapa verifikation. Konton ${parts.join('; ')}. ` +
+            'Skapa kontot med gnubok_create_account, aktivera det med gnubok_update_account, eller välj andra konton.'
+          ),
+          {
+            code: ACCOUNTS_NOT_IN_CHART,
+            accountNumbers: [...unseedableAccounts, ...inactiveAccounts],
+          },
         )
       }
 
