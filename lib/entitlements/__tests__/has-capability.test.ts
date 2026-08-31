@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   hasCapability,
@@ -68,6 +68,10 @@ const sourceFilters = (calls: RecordedCall[]) =>
   calls.filter((c) => c.table === 'capability_grants' && c.method === 'eq' && c.args[0] === 'source')
 
 const iso = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString()
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
 
 afterEach(() => {
   vi.unstubAllEnvs()

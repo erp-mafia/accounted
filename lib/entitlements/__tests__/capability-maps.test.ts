@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   MCP_TOOL_CAPABILITY_MAP,
   PAID_OPERATION_CAPABILITY_MAP,
@@ -12,6 +12,10 @@ import {
  * external-service tool silently bypassing the paywall: mirrors the
  * TOOL_SCOPE_MAP assertions in the mcp-server tests.
  */
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
 /**
  * MCP tools that invoke a paid capability directly (no stage→commit round-trip),
  * so they are gated at DISPATCH only and have no commit-time (operation-map)
