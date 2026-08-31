@@ -24,6 +24,7 @@ import {
   FortnoxDocumentScopesRequiredError,
   importProviderDocuments,
 } from './lib/import-documents'
+import { fetchFortnoxAssetPreview } from './lib/import-assets'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import { relinkRegistrationVouchers } from './lib/relink-registration-vouchers'
 import type { ArcimProvider } from './types'
@@ -758,6 +759,18 @@ export const arcimMigrationExtension: Extension = {
             }
           }
 
+          // Asset register stats (Fortnox only). Soft: a consent without the
+          // assets scope (or licence) just omits the line; anything else is
+          // logged and omitted rather than failing an otherwise good preview.
+          let assetStats: { total: number; importable: number } | null = null
+          if (provider === 'fortnox') {
+            try {
+              assetStats = await fetchFortnoxAssetPreview(resolved.accessToken)
+            } catch (err) {
+              log.info('Asset preview failed:', err instanceof Error ? err.message : String(err))
+            }
+          }
+
           // Check if the company already has completed SIE imports (from manual upload)
           const { count: sieImportCount } = await supabase
             .from('sie_imports')
@@ -775,6 +788,7 @@ export const arcimMigrationExtension: Extension = {
             companyInfo: mapped,
             sieAvailable,
             sieStats,
+            assetStats,
             hasSieData: (sieImportCount ?? 0) > 0,
           })
         } catch (error) {
@@ -1147,6 +1161,11 @@ export const arcimMigrationExtension: Extension = {
           importSuppliers = true,
           importSalesInvoices = true,
           importSupplierInvoices = true,
+          // New option: an omitted field must behave exactly as it did before
+          // this option existed, so it defaults OFF. An older client that omits
+          // it neither imports assets nor trips the SIE guard below; the wizard
+          // always sends it explicitly.
+          importAssets = false,
           reconcileVouchers = true,
         } = await request.json() as {
           consentId: string
@@ -1155,6 +1174,7 @@ export const arcimMigrationExtension: Extension = {
           importSuppliers?: boolean
           importSalesInvoices?: boolean
           importSupplierInvoices?: boolean
+          importAssets?: boolean
           reconcileVouchers?: boolean
         }
 
@@ -1195,10 +1215,14 @@ export const arcimMigrationExtension: Extension = {
           // Company info (name, org number, VAT number) writes no accounts,
           // balances or subledger rows, so a run that imports only that is
           // not gated.
+          // The asset register counts as entity data for this gate: its rows
+          // carry BAS account triples and depreciation plans that only mean
+          // something against an imported chart of accounts.
           const importsEntities = importCustomers ||
             importSuppliers ||
             importSalesInvoices ||
-            importSupplierInvoices
+            importSupplierInvoices ||
+            importAssets
           const { count: completedSieImports } = importsEntities
             ? await supabase
                 .from('sie_imports')
@@ -1220,9 +1244,9 @@ export const arcimMigrationExtension: Extension = {
               ...(sieViaApi
                 ? {
                     messageSv:
-                      'Bokföringsdata (SIE) måste importeras först. Kryssa i "Bokföringsdata (SIE)" i guiden så att kontoplan, ingående balanser och verifikationer hämtas innan kunder, leverantörer och fakturor importeras.',
+                      'Bokföringsdata (SIE) måste importeras först. Kryssa i "Bokföringsdata (SIE)" i guiden så att kontoplan, ingående balanser och verifikationer hämtas innan kunder, leverantörer, fakturor och anläggningstillgångar importeras.',
                     messageEn:
-                      'A completed SIE import is required first. Tick "Bokföringsdata (SIE)" in the wizard so the chart of accounts, opening balances and verifications are fetched before customers, suppliers and invoices are imported.',
+                      'A completed SIE import is required first. Tick "Bokföringsdata (SIE)" in the wizard so the chart of accounts, opening balances and verifications are fetched before customers, suppliers, invoices and fixed assets are imported.',
                   }
                 : {}),
             })
@@ -1240,6 +1264,7 @@ export const arcimMigrationExtension: Extension = {
             importSuppliers,
             importSalesInvoices,
             importSupplierInvoices,
+            importAssets,
             reconcileVouchers,
           }
 

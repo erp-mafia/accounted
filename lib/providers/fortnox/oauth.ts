@@ -19,21 +19,66 @@ const BASE_SCOPES = [
 export const FORTNOX_DOCUMENT_SCOPES = ['archive', 'connectfile'];
 
 /**
- * Whether the registered Fortnox app has Arkivplats and Koppla filer enabled in
- * the Fortnox Developer Portal (integration 39254). True since 2026-08-21, when
- * the portal registration was confirmed to carry both.
+ * Scope-approval flags describe the FORTNOX APP REGISTRATION, not the code:
+ * whether the app in the Fortnox Developer Portal carries a given scope.
+ * Requesting a scope the registration lacks makes the authorize endpoint
+ * reject with invalid_scope BEFORE login (prod incident 2026-08-13, when the
+ * ordinary connect carried unapproved scopes and every Fortnox connection
+ * died), and claiming a scope the connect never asks for sends users into a
+ * reconnect loop that cannot succeed (support case Klura AB, 2026-08-20).
  *
- * Requesting a scope the app lacks makes the authorize endpoint reject with
- * invalid_scope BEFORE login, so set this back to false the moment the portal
+ * The defaults below describe the hosted deployment's registration
+ * (integration 39254). A self-hosted deployment runs its OWN Fortnox app
+ * (FORTNOX_CLIENT_ID in .env), whose registration will differ, so each flag
+ * can be overridden with an env var of the same name: "true" or "false",
+ * unset means the hosted default. Without the override, self-hosters whose
+ * registration differs from hosted's would have to patch this file.
+ */
+export function fortnoxScopeFlag(
+  envValue: string | undefined,
+  hostedDefault: boolean,
+): boolean {
+  // Trimmed: a stray space in a hand-edited .env line must not silently
+  // flip a scope off and read as a missing feature.
+  const value = envValue?.trim();
+  if (value === undefined || value === '') return hostedDefault;
+  return value === 'true';
+}
+
+/**
+ * Whether the registered Fortnox app has Arkivplats and Koppla filer enabled.
+ * Hosted default true since 2026-08-21, when the portal registration was
+ * confirmed to carry both; set the env var to false the moment a registration
  * loses them, rather than leaving the underlag reconnect pointed at a scope
- * Fortnox will refuse (prod incident 2026-08-13, when the ordinary connect
- * still carried these scopes and every Fortnox connection died).
+ * Fortnox will refuse.
  *
  * It gates the opt-in document consent below and the document-import error
  * message, never the ordinary connect: a user is never told to reconnect for a
- * permission we don't ask for (support case Klura AB, 2026-08-20).
+ * permission we don't ask for.
  */
-export const FORTNOX_DOCUMENT_SCOPES_APPROVED: boolean = true;
+export const FORTNOX_DOCUMENT_SCOPES_APPROVED: boolean = fortnoxScopeFlag(
+  process.env.FORTNOX_DOCUMENT_SCOPES_APPROVED,
+  true,
+);
+
+/** The asset register (anläggningsregistret): what the asset import reads. */
+export const FORTNOX_ASSET_SCOPES = ['assets'];
+
+/**
+ * Whether the registered Fortnox app has the Assets scope (Anläggningsregister)
+ * enabled. Hosted default false until the portal registration is confirmed to
+ * carry it.
+ *
+ * When true, the ordinary connect requests the scope. Unlike Arkivplats and
+ * Koppla filer, the asset register carries no separate Fortnox customer
+ * licence, so no per-user opt-in is needed. A consent minted without the
+ * scope degrades gracefully: the migration reports assets as skipped instead
+ * of failing (see arcim-migration import-assets).
+ */
+export const FORTNOX_ASSET_SCOPES_APPROVED: boolean = fortnoxScopeFlag(
+  process.env.FORTNOX_ASSET_SCOPES_APPROVED,
+  false,
+);
 
 /**
  * The scopes a Fortnox consent is minted with. The document scopes are opt-in
@@ -48,9 +93,14 @@ export const FORTNOX_DOCUMENT_SCOPES_APPROVED: boolean = true;
 export function fortnoxConsentScopes(options?: { documents?: boolean }): string[] {
   const withDocuments =
     options?.documents === true && FORTNOX_DOCUMENT_SCOPES_APPROVED;
-  return withDocuments
+  const scopes = withDocuments
     ? [...BASE_SCOPES, ...FORTNOX_DOCUMENT_SCOPES]
     : [...BASE_SCOPES];
+  // The asset register rides along on every consent once the portal
+  // registration carries the scope: it needs no extra customer licence, so
+  // there is nothing to opt in to.
+  if (FORTNOX_ASSET_SCOPES_APPROVED) scopes.push(...FORTNOX_ASSET_SCOPES);
+  return scopes;
 }
 
 export function buildFortnoxAuthUrl(

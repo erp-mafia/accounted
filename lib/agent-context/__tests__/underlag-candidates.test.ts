@@ -16,6 +16,7 @@ function extraction(partial: {
   vat?: number | null
   currency?: string
   prominentAmounts?: { amount: number; label: string | null }[]
+  totalSource?: 'prominent' | null
 }): InvoiceExtractionResult {
   return {
     supplier: {
@@ -30,6 +31,7 @@ function extraction(partial: {
     totals: { subtotal: null, vatAmount: partial.vat ?? null, total: partial.total ?? null },
     vatBreakdown: [],
     prominentAmounts: partial.prominentAmounts,
+    totalSource: partial.totalSource,
     confidence: 0.9,
   } as InvoiceExtractionResult
 }
@@ -181,6 +183,57 @@ describe('scoreUnderlagCandidates', () => {
     // toLocaleString('sv-SE') groups with a non-breaking space (U+00A0).
     expect(out[0].matchReasons.join(' ')).toContain(`2${' '}500`)
     expect(out[0].matchReasons.join(' ')).toContain('Anslutnings-/Engångspris')
+  })
+
+  it('scores a promoted total (totalSource prominent) as fallback-grade, not invoice-grade', () => {
+    // promoteSingleProminentAmount fills TOTALT for the UI, but matching must
+    // not mistake that for an invoice total: same discount, same tagging.
+    const out = scoreUnderlagCandidates(
+      { ...tx, description: 'AVGIFT', merchant_name: null, amount: -2500, date: '2026-08-26' },
+      [
+        {
+          id: 'item-promoted',
+          document_id: 'doc-promoted',
+          extracted_data: extraction({
+            supplier: 'SEB',
+            date: '2026-08-26',
+            total: 2500,
+            totalSource: 'prominent',
+            prominentAmounts: [{ amount: 2500, label: 'Anslutnings-/Engångspris' }],
+          }),
+          channel_context: null,
+        },
+      ],
+    )
+    expect(out).toHaveLength(1)
+    expect(out[0].confidence).toBeLessThan(1)
+    expect(out[0].amountSource).toBe('prominent')
+  })
+
+  it('scores a user-corrected total at full weight', () => {
+    // The fields-PATCH route clears totalSource when a human edits TOTALT:
+    // from then on the amount is a verified total, no discount.
+    const out = scoreUnderlagCandidates(
+      { ...tx, description: 'AVGIFT', merchant_name: null, amount: -2500, date: '2026-08-26' },
+      [
+        {
+          id: 'item-corrected',
+          document_id: 'doc-corrected',
+          extracted_data: extraction({
+            supplier: 'SEB',
+            date: '2026-08-26',
+            total: 2500,
+            totalSource: null,
+            prominentAmounts: [{ amount: 9999, label: 'Fel belopp' }],
+          }),
+          channel_context: null,
+        },
+      ],
+    )
+    expect(out).toHaveLength(1)
+    expect(out[0].confidence).toBe(1)
+    expect(out[0].amountSource).toBe('total')
+    expect(out[0].total_amount).toBe(2500)
   })
 
   it('does not let a prominent amount alone carry a dateless document over the floor', () => {

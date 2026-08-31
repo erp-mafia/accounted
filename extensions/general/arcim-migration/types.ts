@@ -70,13 +70,22 @@ export interface SkipReasons {
 }
 
 /**
+ * Asset-step skip reasons: `unsupported` counts source assets the mapping
+ * cannot represent (no positive acquisition value, no acquisition date).
+ * One shared contract for the migration producer and the wizard consumer.
+ */
+export interface AssetSkipReasons extends SkipReasons {
+  unsupported?: number
+}
+
+/**
  * A migration step that failed against the provider API, surfaced to the user
  * instead of being swallowed into a "successful" empty sync. `message` is the
  * user-facing Swedish text (mapped from the structured error registry when the
  * failure classifies, otherwise a generic sentence with the provider's reply).
  */
 export interface MigrationStepError {
-  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'registrationLinks' | 'reconciliation'
+  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'assets' | 'registrationLinks' | 'reconciliation'
   /** Structured code when the failure classifies (e.g. PROVIDER_API_MODULE_INACTIVE), else null. */
   code: string | null
   message: string
@@ -117,6 +126,21 @@ export interface MigrationResults {
   suppliers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
   salesInvoices?: InvoiceStepResult
   supplierInvoices?: InvoiceStepResult
+  /**
+   * Fortnox anläggningsregister → local asset register. Creates register
+   * rows only, never journal entries (the values arrived via SIE).
+   * `scopesMissing` marks the whole step as skipped because the consent
+   * lacks the Fortnox assets scope (or the licence behind it).
+   */
+  assets?: {
+    total: number
+    imported: number
+    skipped: number
+    skipReasons?: AssetSkipReasons
+    errorSample?: string
+    scopesMissing?: boolean
+  }
+
   /**
    * Imported invoices linked to the SIE-imported verifikat that BOOKED them
    * (the registration voucher the provider named on the invoice). Only exact,

@@ -14,6 +14,7 @@
 
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { InvoiceExtractionResult } from '@/types'
 import { getAiService, readAiConfig, extractJsonObject } from '@/lib/ai'
 import type { AiDocumentInput, AiImageMediaType, ExtractionSkipReason } from '@/lib/ai'
@@ -47,6 +48,19 @@ export interface ExtractionInput {
   buffer: Buffer
   mimeType: string
   fileName: string
+  /**
+   * The receiving company's own identity. When set, an extracted supplier
+   * that turns out to BE this company (the model read the Kund/Kunduppgifter
+   * block instead of the issuer) is stripped to all-null before the result is
+   * returned, so the own company is never supplier-matched or offered for
+   * creation. Optional: callers without company context lose only this guard.
+   */
+  ownCompany?: OwnCompanyIdentity
+}
+
+export interface OwnCompanyIdentity {
+  orgNumber: string | null
+  name: string | null
 }
 
 export type ExtractionSkipped = ExtractionSkipReason | 'unsupported_media'
@@ -173,7 +187,145 @@ export const ExtractionSchema = z.object({
     )
     .catch([])
     .optional(),
+  // Set by promoteSingleProminentAmount (code, never the model): 'prominent'
+  // means totals.total was copied from the document's single prominent amount
+  // so the user gets one editable TOTALT field. Matching treats such a total
+  // as fallback-grade (discounted, date-guarded, hunt-excluded); a user edit
+  // of totals.total clears it. In the schema so re-validation paths
+  // (PUT /extracted-data, MCP set) don't silently strip the provenance and
+  // launder a printed figure into a full-weight invoice total.
+  totalSource: z.enum(['prominent']).nullable().catch(null).optional(),
 })
+
+/**
+ * Give non-invoice documents one editable amount field.
+ *
+ * A bankintyg or avtal has no "Att betala" total, so the extractor leaves
+ * totals.total null; but when the document shows exactly one distinct amount
+ * there is nothing ambiguous about which figure the user means, and leaving
+ * TOTALT empty while the amount hides in a read-only row read as "extraction
+ * failed" (and made a misread amount uncorrectable). Promote that single
+ * amount into totals.total, stamped totalSource: 'prominent' so matching
+ * keeps treating it as fallback-grade evidence and the fields-PATCH route can
+ * clear the stamp when a human edits the value.
+ *
+ * Multi-amount documents are left alone: picking one silently would invent a
+ * total the document does not have.
+ */
+export function promoteSingleProminentAmount(
+  data: InvoiceExtractionResult
+): InvoiceExtractionResult {
+  if (data.documentKind !== 'other' && data.documentKind !== 'government_letter') return data
+  if (data.totals.total != null) return data
+  const distinct = [
+    ...new Set(
+      (data.prominentAmounts ?? [])
+        .map((a) => a.amount)
+        .filter((a) => Number.isFinite(a) && a !== 0)
+    ),
+  ]
+  if (distinct.length !== 1) return data
+  return {
+    ...data,
+    totals: { ...data.totals, total: distinct[0] },
+    totalSource: 'prominent',
+  }
+}
+
+/** Digits only; the comparable core of an org/VAT number. */
+const digitsOf = (value: string | null | undefined): string => (value ?? '').replace(/\D/g, '')
+
+/**
+ * Canonical 10-digit form of a Swedish organisation number, or '' when the
+ * input is not one. The 12-digit century-prefixed forms denote the same
+ * identity: "16" for organisations, "19"/"20" for personnummer-form numbers
+ * (enskild firma stores the owner's personnummer as org number). Junk that is
+ * not 10 digits after trimming never matches anything.
+ */
+function toOrg10(digits: string): string {
+  const trimmed =
+    digits.length === 12 && /^(16|19|20)/.test(digits) ? digits.slice(2) : digits
+  return trimmed.length === 10 ? trimmed : ''
+}
+
+/**
+ * Never present the receiving company as its own supplier.
+ *
+ * Documents like bank agreements and bankintyg print the CUSTOMER's company
+ * in a prominent Kund/Kunduppgifter block while the issuer (the bank) sits in
+ * a logo. The model sometimes extracts that block as the supplier, and the
+ * inbox then offers to create the user's own company as a leverantör. The
+ * prompt tells the model not to; this guard makes it deterministic: when the
+ * extracted supplier's org number, VAT number (SE<orgnr>01), or exact name
+ * equals the receiving company's own, the whole supplier block is nulled.
+ * A false positive costs an empty LEVERANTÖR field the user fills in by
+ * hand; wrong data is never written.
+ */
+export function stripOwnCompanyAsSupplier(
+  data: InvoiceExtractionResult,
+  own: OwnCompanyIdentity | undefined
+): InvoiceExtractionResult {
+  if (!own) return data
+  const ownOrg10 = toOrg10(digitsOf(own.orgNumber))
+  const extractedOrg10 = toOrg10(digitsOf(data.supplier.orgNumber))
+  const extractedVat = digitsOf(data.supplier.vatNumber)
+  const orgHit = ownOrg10 !== '' && extractedOrg10 !== '' && extractedOrg10 === ownOrg10
+  const vatHit = ownOrg10 !== '' && extractedVat === `${ownOrg10}01`
+  // A name coincidence must not outvote a real, provably different org
+  // number: a same-named foreign or unrelated entity stays a valid supplier.
+  const orgProvenDifferent =
+    ownOrg10 !== '' && extractedOrg10 !== '' && extractedOrg10 !== ownOrg10
+  const ownName = own.name?.trim().toLowerCase() ?? ''
+  const nameHit =
+    !orgProvenDifferent &&
+    ownName !== '' &&
+    data.supplier.name?.trim().toLowerCase() === ownName
+  if (!orgHit && !vatHit && !nameHit) return data
+  return {
+    ...data,
+    supplier: {
+      name: null,
+      orgNumber: null,
+      vatNumber: null,
+      address: null,
+      bankgiro: null,
+      plusgiro: null,
+    },
+  }
+}
+
+/**
+ * Best-effort lookup of the company's own name and org number for the
+ * ownCompany guard above. Never throws: on any failure the guard simply does
+ * not fire, which is the pre-guard behavior.
+ */
+export async function fetchOwnCompanyIdentity(
+  supabase: SupabaseClient,
+  companyId: string
+): Promise<OwnCompanyIdentity> {
+  try {
+    const { data, error } = await supabase
+      .from('companies')
+      .select('name, org_number')
+      .eq('id', companyId)
+      .maybeSingle()
+    // maybeSingle() reports query/RLS failures in `error` without throwing;
+    // route them through the catch so they are logged, not silently nulled.
+    if (error) throw error
+    return {
+      orgNumber: (data?.org_number as string | null) ?? null,
+      name: (data?.name as string | null) ?? null,
+    }
+  } catch (err) {
+    // Fail open, but visibly: a persistent lookup failure (RLS misconfig,
+    // DB outage) silently disables the guard, and only this log reveals it.
+    log.warn('own_company_identity_lookup_failed', {
+      company_id: companyId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return { orgNumber: null, name: null }
+  }
+}
 
 // Agent-supplied extraction: accountSuggestion is preserved instead of forced
 // to null. Agents (unlike AI extractors) can reliably assign a BAS expense
@@ -247,6 +399,7 @@ VAT rate convention: BOTH lineItems[].vatRate AND vatBreakdown[].rate use the sa
 Rules:
 - Output JSON only. The first character must be '{' and the last must be '}'.
 - documentKind: "receipt" = point-of-sale proof of a COMPLETED payment (kassakvitto, kortkvitto, taxi/parking slip, webshop order confirmation marked paid). "supplier_invoice" = a request for payment (has due date, OCR/payment reference, bankgiro, "Att betala senast"). "government_letter" = correspondence from a myndighet (Skatteverket, Bolagsverket, Försäkringskassan...). "other" = contracts, statements, reports. null only when truly indeterminate.
+- supplier: ALWAYS the party that ISSUED the document and charges or receives the money (the seller, the bank, the myndighet). NEVER the customer or recipient: blocks labeled "Kund", "Kunduppgifter", "Fakturamottagare", "Mottagare", "Kundens ex", "Er referens" or a delivery/billing address describe the RECEIVING company, and none of their fields (name, org number, address) may be used for supplier. On bank documents (avtal, bankintyg, kontoutdrag) the bank is the supplier even when the customer's company details are printed more prominently than the bank's. If only the customer's identity is readable, leave every supplier field null.
 - merchantCategory: judge from the merchant name and line items (a receipt from "Prinsen" listing food and wine is "restaurant" even without the word). Use "other" when unsure. null for non-receipts.
 - legibility: "good" = all key amounts and the merchant are readable. "partial" = some key fields are cut off, blurry, or unreadable. "unreadable" = the document is mostly illegible (too blurry/dark/small). Judge the IMAGE quality, not whether fields exist on the document.
 - payment: only for documents that show how payment was made. "card" for kort/VISA/Mastercard; cardLast4 only when a masked card number like ****1234 is printed. "invoice" means the document says it will be billed separately.
@@ -334,7 +487,9 @@ async function normalizeImageForExtraction(
       })
       .jpeg({ quality: 80 })
       .toBuffer()
-    return { buffer: converted, mimeType: 'image/jpeg', fileName: input.fileName }
+    // Spread first: normalization must not shed fields like ownCompany, or
+    // the own-company supplier guard silently dies for photographed documents.
+    return { ...input, buffer: converted, mimeType: 'image/jpeg' }
   } catch (err) {
     // HEIC without libheif lands here → caller hits the unsupported-type
     // guard, same net behavior as before this step existed. For oversized
@@ -631,7 +786,10 @@ export async function extractInvoiceFields(
     return {
       // accountSuggestion is null at this point, enforced by the schema's
       // .transform, so no post-validation coercion is needed.
-      data: { ...validated, confidence: 1 },
+      data: stripOwnCompanyAsSupplier(
+        promoteSingleProminentAmount({ ...validated, confidence: 1 }),
+        input.ownCompany
+      ),
       rawText,
       model,
     }

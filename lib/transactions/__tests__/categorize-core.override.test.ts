@@ -73,6 +73,10 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'fp-1' }] })
+    // Issue #1661: a private marking runs checkPeriodLock before the engine
+    // (company lock date, then the covering fiscal period). Open here.
+    enqueue({ data: { bookkeeping_locked_through: null } })
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null } })
     enqueue({
       data: [txRow({
         is_business: false,

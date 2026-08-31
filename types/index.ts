@@ -1267,6 +1267,11 @@ export interface Invoice {
   // Reference
   your_reference: string | null
   our_reference: string | null
+  // Fakturamärkning: buyer-required marking (cost center, project, PO label),
+  // separate from your_reference (Er referens = contact person). Printed on
+  // the PDF and mapped to Peppol BT-10 BuyerReference when set. Optional in
+  // TS for pre-migration fixtures.
+  invoice_marking?: string | null
 
   // Optional online payment link (pasted by the user, e.g. a Stripe Payment
   // Link). Rendered as a "Betala online" button in the invoice email and as a
@@ -1431,7 +1436,12 @@ export interface InvoiceItem {
   // Price
   unit_price: number
 
-  // Calculated
+  // Percentage discount on the line (0-100). line_total and vat_amount are
+  // stored NET of this discount (lib/invoices/line-amounts.ts). Optional in
+  // TS for pre-migration fixtures; treat undefined the same as 0.
+  discount_percent?: number
+
+  // Calculated (net of discount_percent)
   line_total: number
 
   // Per-line VAT
@@ -1708,6 +1718,8 @@ export interface CreateInvoiceInput {
   document_type?: InvoiceDocumentType
   your_reference?: string
   our_reference?: string
+  /** Fakturamärkning: buyer-required marking, separate from your_reference. */
+  invoice_marking?: string
   notes?: string
   /** Optional https link where the customer can pay online (e.g. a Stripe Payment Link). */
   payment_link_url?: string
@@ -1731,6 +1743,8 @@ export interface CreateInvoiceItemInput {
   quantity: number
   unit: string
   unit_price: number
+  /** Percentage discount on the line (0-100). Omitted/null = 0. */
+  discount_percent?: number | null
   vat_rate?: number
   /** Source article (optional). Free-text lines omit it. */
   article_id?: string | null
@@ -2540,6 +2554,10 @@ export type PendingOperationType =
   // Notes-only annotation on a verifikat: the immutability trigger's carve-out
   // (migration 20260608120000) makes this legal even on posted entries.
   | 'set_voucher_note'
+  // Ignore / restore a bank transaction that is not an affärshändelse (PSD2
+  // ghost row, duplicate, never-executed transfer). Writes no verifikat, so a
+  // locked or closed period does not block it (issue #1661).
+  | 'ignore_transaction'
   // Bokslut: planenlig avskrivning (one journal entry per asset)
   | 'post_annual_depreciation'
   // Payroll: salary run creation + AGI declaration
@@ -2877,6 +2895,7 @@ export interface NotificationSettings {
   receipt_extracted_enabled: boolean
   receipt_matched_enabled: boolean
   missing_underlag_enabled: boolean
+  email_digest_enabled: boolean
   created_at: string
   updated_at: string
 }
@@ -2894,6 +2913,7 @@ export type NotificationType =
   | 'missing_underlag'
   | 'skv_kvittens'
   | 'skv_connection_expired'
+  | 'bookkeeping_digest'
 
 // Notification log entry
 export interface NotificationLog {
@@ -2904,7 +2924,7 @@ export interface NotificationLog {
   reference_id: string
   days_before: number
   sent_at: string
-  delivery_status: 'sent' | 'delivered' | 'failed'
+  delivery_status: 'pending' | 'sent' | 'delivered' | 'failed'
 }
 
 // ============================================================
@@ -4394,6 +4414,11 @@ export interface InvoiceExtractionResult {
   // with no invoice-style total. Matching hint only, never booked. Optional:
   // extractions from before the field existed lack it.
   prominentAmounts?: ProminentAmount[]
+  // 'prominent' = totals.total was promoted from the document's single
+  // prominent amount (promoteSingleProminentAmount), not read off an invoice.
+  // Matching treats such a total as fallback-grade; cleared when a user edits
+  // totals.total.
+  totalSource?: 'prominent' | null
   confidence: number
   suggestedTemplateId?: string
   // Set by the caller (not the model) when a long PDF was sliced before

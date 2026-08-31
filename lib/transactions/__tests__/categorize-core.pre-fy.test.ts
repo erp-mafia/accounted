@@ -137,6 +137,10 @@ describe('categorizeMatchedTransaction: pre-FY transaction gets a journal entry'
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } }) // settings
     enqueue({ data: [] }) // ensureFiscalPeriod: no covering open period
     enqueue({ data: [{ period_start: '2026-05-12' }] }) // ensureFiscalPeriod: earliest
+    // Issue #1661: a private marking runs checkPeriodLock before the engine.
+    // A pre-FY date has no covering period, which is not a lock.
+    enqueue({ data: { bookkeeping_locked_through: null } })
+    enqueue({ data: null })
     // createTransactionJournalEntry clamp: earliest full row (open, unlocked)
     enqueue({
       data: [{ id: 'period-first', period_start: '2026-05-12', is_closed: false, locked_at: null }],

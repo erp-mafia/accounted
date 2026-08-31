@@ -237,6 +237,58 @@ describe('POST batch-categorize', () => {
     )
   })
 
+  it('answers a private marking in a locked period with TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED, a business one with PERIOD_LOCKED (issue #1661)', async () => {
+    const { supabase, updates } = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: {
+        data: {
+          id: TX_A,
+          company_id: COMPANY_ID,
+          date: '2025-11-12',
+          amount: -349.5,
+          currency: 'SEK',
+          merchant_name: 'SWISH DUBBLETT',
+          journal_entry_id: null,
+        },
+        error: null,
+      },
+      company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: { data: { id: 'period-2025', is_closed: true, locked_at: null }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        {
+          items: [
+            { transaction_id: TX_A, categorization: { is_business: false } },
+            { transaction_id: TX_B, categorization: { is_business: true, category: 'expense_office' } },
+          ],
+        },
+      ),
+      batchParams(),
+    )
+
+    const body = await res.json()
+    expect(body.data.results[0].ok).toBe(false)
+    expect(body.data.results[0].error.code).toBe('TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED')
+    expect(body.data.results[0].error.message).toContain('Ignorera')
+    expect(body.data.results[0].error.details).toMatchObject({
+      transaction_date: '2025-11-12',
+      reason: 'period_is_closed',
+      fiscal_period_id: 'period-2025',
+      suggested_action: 'ignore',
+    })
+    expect(body.data.results[1].ok).toBe(false)
+    expect(body.data.results[1].error.code).toBe('PERIOD_LOCKED')
+    expect(body.data.results[1].error.details.suggested_action).toBeUndefined()
+    expect(body.data.summary).toEqual({ total: 2, succeeded: 0, failed: 2 })
+    // Neither item reached the engine or the CAS write.
+    expect(createTxJE).not.toHaveBeenCalled()
+    expect(updates.transactions).toBeUndefined()
+  })
+
   it('returns a per-item NO_OPEN_PERIOD_FOR_DATE and writes nothing when the engine finds no covering period', async () => {
     const { supabase, updates } = makeFlexibleSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },

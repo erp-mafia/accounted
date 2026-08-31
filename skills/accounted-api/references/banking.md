@@ -1329,6 +1329,108 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/transactions/{id}/ignore`
+
+**Ignore a bank transaction (no verifikat, allowed in locked periods).**
+`scope:transactions:write · risk:low · idempotent · dry-run · reversible`
+
+Marks an unbooked bank transaction as ignored so it leaves the "to book" funnels and the reconciliation unmatched totals without creating a verifikat. Nothing is deleted and the flag is reversible with DELETE on the same path. Because no booking is written, a locked or closed fiscal period does not block it: this is the path for clearing rows that are not business events out of a closed period. A booked transaction (directly, via a payment allocation, or via a voucher link) is refused with 409 TX_IGNORE_ALREADY_BOOKED. Idempotent: ignoring an already-ignored row returns already_ignored: true. Dry-runnable.
+
+**Use when:** The row is not an affärshändelse: a PSD2 ghost row, a duplicate from a bank reconnect, a transfer that never executed, rounding noise. Also the answer to TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED from /categorize when the row should not be booked at all.
+**Do not use for:** Real purchases, payments or owner withdrawals: those must be booked (categorize, match-invoice, or is_business: false in an open period). Ignoring is triage, not bookkeeping.
+
+**Pitfalls:**
+- Idempotency-Key is mandatory.
+- A booked row cannot be ignored: reverse it first (POST /transactions/{id}/uncategorize) or unlink the payment/voucher.
+- Ignored rows still exist and are listed on the reconciliation bridge's ignored line; they never disappear silently.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: { success: boolean, transaction_id: string, is_ignored: true, already_ignored: boolean },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "success": true,
+    "transaction_id": "tx_…",
+    "is_ignored": true,
+    "already_ignored": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/transactions/{id}/ignore`
+
+**Restore an ignored bank transaction to the "to book" list.**
+`scope:transactions:write · risk:low · idempotent · dry-run · reversible`
+
+Clears the ignore flag set by POST on the same path. The row comes back into the unbooked list and the reconciliation unmatched totals; no verifikat was ever written, so there is nothing to reverse. Idempotent: restoring a row that is not ignored returns was_ignored: false. Dry-runnable.
+
+**Use when:** A row was ignored by mistake and should be booked after all.
+**Do not use for:** Undoing a booking: that is a storno via POST /transactions/{id}/uncategorize.
+
+**Pitfalls:**
+- Idempotency-Key is mandatory.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: { success: boolean, transaction_id: string, is_ignored: false, was_ignored: boolean },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "success": true,
+    "transaction_id": "tx_…",
+    "is_ignored": false,
+    "was_ignored": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/transactions/{id}/match-invoice`
 
 **Match a positive bank transaction to a customer invoice.**

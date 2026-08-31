@@ -9,6 +9,10 @@ export function buildCreditNoteItem(invoiceId: string, item: InvoiceItem) {
     quantity: -Math.abs(item.quantity),
     unit: item.unit,
     unit_price: item.unit_price,
+    // Carried so the kreditfaktura's face arithmetic still multiplies out
+    // (antal x a-pris - rabatt = summa) and the PDF shows the same Rabatt
+    // column the original did (ML 17 kap 24 §: prisnedsattningen ska framga).
+    discount_percent: item.discount_percent ?? 0,
     line_total: -Math.abs(item.line_total),
     vat_rate: item.vat_rate ?? 0,
     vat_amount: -(item.vat_amount ? Math.abs(item.vat_amount) : 0),
