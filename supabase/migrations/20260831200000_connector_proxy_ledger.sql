@@ -125,7 +125,7 @@ GRANT EXECUTE ON FUNCTION public.connector_reserve_upstream(text, integer, integ
 
 -- 4. validate RPC v2: also return the key's limits, so the proxy has the
 --    entitlement caps in the same round-trip as auth. Additive: the return
---    columns 1-7 are unchanged from 20260820123000, `limits` is appended.
+--    columns 1-7 are unchanged from 20260831190000, `limits` is appended.
 DROP FUNCTION IF EXISTS public.validate_and_increment_connector_key(text);
 CREATE FUNCTION public.validate_and_increment_connector_key(p_key_hash text)
 RETURNS TABLE(

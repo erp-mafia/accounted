@@ -45,6 +45,20 @@ export function extractConnectorKey(request: Request): string | null {
   return bearer
 }
 
+/**
+ * Opaque path segments (UUIDs, long hex, long base64url tokens) become ':id'
+ * before a path is persisted for metering. Literal route words (sessions,
+ * accounts, balances, aspsps, ...) survive, so the metric keys stay useful.
+ */
+const OPAQUE_SEGMENT = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,}|[A-Za-z0-9_-]{20,})$/i
+
+export function redactEndpoint(pathname: string): string {
+  return pathname
+    .split('/')
+    .map((segment) => (OPAQUE_SEGMENT.test(segment) ? ':id' : segment))
+    .join('/')
+}
+
 export function withConnectorAuth(
   operation: string,
   handler: ConnectorHandler,
@@ -84,10 +98,14 @@ export function withConnectorAuth(
     }
     response.headers.set('X-Request-Id', requestId)
 
-    // Metering: one row per request, never on the critical path.
+    // Metering: one row per request, never on the critical path. The path is
+    // REDACTED first: proxied paths carry the EB session id / account uid as
+    // segments, and the whole ledger design is that those handles never rest
+    // hosted-side (connector_connections stores sha256 only). Persisting the
+    // raw pathname would put the cleartext handle in connector_usage_events.
     const endpoint = (() => {
       try {
-        return new URL(request.url).pathname
+        return redactEndpoint(new URL(request.url).pathname)
       } catch {
         return null
       }
