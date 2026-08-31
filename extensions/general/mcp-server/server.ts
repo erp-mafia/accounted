@@ -7838,6 +7838,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_counterparty_templates',
+    catalogVisibility: 'search',
     keywords: ['motpart', 'konteringsmall', 'mallar'],
     title: 'List Counterparty Templates',
     description: 'List active counterparty categorization templates: learned patterns from prior categorizations used for auto-matching new transactions.',
@@ -8394,6 +8395,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_dimension_values',
+    catalogVisibility: 'search',
     keywords: ['dimensionsvärden', 'kostnadsställe', 'projekt'],
     title: 'List Dimension Values',
     description: 'List values (SIE #OBJEKT codes) for one dimension, optionally fuzzy-matched by query. Use to find the right kostnadsställe/projekt code before tagging lines. sie_dim_no: 1 = kostnadsställe, 6 = projekt.',
@@ -8964,6 +8966,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_dimension_pnl',
+    catalogVisibility: 'search',
     keywords: ['projektresultat', 'kostnadsställe', 'resultat per projekt'],
     title: 'P&L per Dimension (Resultat per projekt)',
     description: 'Resultat per projekt/kostnadsställe: P&L matrix over one SIE dimension: each value with activity becomes a column plus an untagged bucket, and the Totalt column reconciles exactly with the resultatrapport. sie_dim_no: 1 = kostnadsställe, 6 = projekt.',
@@ -14297,6 +14300,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_agi_status',
+    catalogVisibility: 'search',
     keywords: ['arbetsgivardeklaration'],
     title: 'AGI Declaration Status (Arbetsgivardeklaration)',
     description: "Fetch AGI filing status for a salary run: run-scoped filing_state and kvittensnummer (a correction run never inherits the superseded original's receipt), plus live Skatteverket kvittenser.",
@@ -14384,6 +14388,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_get_employee',
+    catalogVisibility: 'search',
     keywords: ['anställd', 'personal'],
     title: 'Get Employee',
     description: 'Get one employee\'s full payroll config: salary, tax table/column, jamkning, F-skatt, vacation rule, vaxa-stod, bank details, dimensions. Personnummer masked. Use after gnubok_list_employees to drill into one employee before payroll work.',
@@ -14481,6 +14486,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_get_payslip',
+    catalogVisibility: 'search',
     keywords: ['lönebesked', 'lönespecifikation', 'lönespec', 'lön'],
     title: 'Get Payslip (Lönebesked)',
     description: 'Get one employee\'s payslip in a salary run: gross, tax, avgifter, net, every line item and the step-by-step calculation breakdown. Personnummer masked. Use after gnubok_get_salary_run to verify how one employee\'s pay was computed.',
@@ -14574,6 +14580,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_list_absence',
+    catalogVisibility: 'search',
     keywords: ['frånvaro', 'sjukfrånvaro', 'semester', 'vab'],
     title: 'List Absence (Frånvaro)',
     description: 'List an employee\'s registered absence days (sick, vab, parental, ...) in a date range, max 92 days. These per-day rows drive karensavdrag and sjuklön at calculation time. Use before gnubok_register_absence to see what is already registered.',
@@ -15447,6 +15454,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_get_vacation_balance',
+    catalogVisibility: 'search',
     keywords: ['semester', 'semestersaldo', 'semesterdagar'],
     title: 'Get Vacation Balance (Semestersaldo)',
     description: 'Get one employee\'s open vacation balance: entitled/taken/remaining days, sparade dagar per origin year, forced payouts and estimated semesterlöneskuld in SEK. Use before gnubok_close_vacation_year.',
@@ -17704,6 +17712,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_sie_preflight',
+    catalogVisibility: 'search',
     keywords: ['sie', 'sie-fil', 'kontrollera sie'],
     title: 'SIE Preflight Scan',
     description:
@@ -18889,6 +18898,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_accrual_schedules',
+    catalogVisibility: 'search',
     keywords: ['periodisering', 'periodiseringar'],
     title: 'List Periodiseringar',
     description:

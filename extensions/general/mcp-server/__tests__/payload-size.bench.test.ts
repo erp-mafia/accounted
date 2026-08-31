@@ -304,12 +304,64 @@ describe('tools/list payload size guard', () => {
     //     the staging envelope; the description is one sentence per fact).
     //     Same deliberate skip of the read-demotion rule as the entry above:
     //     the demotion needs prod usage data, not a guess inside this PR.
+    //   * 65K to 61.3K by demoting ten rarely-called READ tools to
+    //     search-only (2026-08-31). This is the demotion the two entries above
+    //     deferred for want of prod usage data, done as its own change and
+    //     ratcheting the ceiling back down as they asked.
+    //
+    //     Picked from 60 days of mcp.tool_called: default-catalog reads with
+    //     <= 25 calls, excluding anything in RECOMMENDED_WORKFLOW_LOADOUTS.
+    //     Deliberately NOT demoted despite low counts:
+    //       - gnubok_call_tool, which IS the search-only bridge;
+    //       - gnubok_receipt_matcher and gnubok_vat_review_widget, which are
+    //         WIDGET tools: the host renders them from the _meta.ui they
+    //         publish in tools/list, so search-only makes the widget
+    //         unrenderable. Their own tests catch this; both were demoted in a
+    //         first pass and put back.
+    //       - the connect_* onboarding tools (#1936 put them in the catalog on
+    //         purpose: a fresh agent has not learned to search yet);
+    //       - gnubok_lookup_company, the org-number-first onboarding entry;
+    //       - every arsredovisning / dispositioner / depreciation / accrual
+    //         PROPOSAL tool. A 60-day window ending in August cannot see
+    //         bokslut season at all: most Swedish companies close on 31 Dec and
+    //         do the work Jan-Jun, so summer counts understate them to near
+    //         zero. Demoting those would hide the year-end flow exactly when it
+    //         is needed. Usage data is necessary here, not sufficient.
+    //
     // Long-term answer to growth is no longer a ceiling bump. gnubok_call_tool
     // makes `catalogVisibility: 'search'` usable for READ tools on hosts that
     // can only invoke what tools/list showed them, which is the constraint that
     // forced gnubok_reconcile_match back into the default catalog on
     // 2026-08-26. Demote a read to search-only before proposing a bump.
-    expect(approxTokens).toBeLessThan(65_000)
+    //
+    // Only READ tools may be demoted: gnubok_call_tool refuses writes, so a
+    // search-only WRITE is uncallable on Claude.ai. That is why the three
+    // bumps above happened instead of demotions.
+    expect(approxTokens).toBeLessThan(61_600)
+  })
+
+  /**
+   * The trap that catches anyone reclaiming budget by demoting reads.
+   *
+   * A widget tool publishes _meta.ui in tools/list, and that is how the host
+   * knows to render it. Search-only hides it from tools/list, so the widget
+   * silently stops rendering while the tool still "works" when called. Two
+   * widget tools were demoted in the 2026-08-31 pass and put back; their own
+   * suites caught it, but only because those suites happen to exist. This
+   * makes the rule hold for every widget tool added later.
+   */
+  it('never lets a widget tool fall out of the default catalog', () => {
+    const hiddenWidgets = tools
+      .filter((t) => (t as { _meta?: { ui?: unknown } })._meta?.ui)
+      .filter((t) => !isDefaultCatalogTool(t))
+      .map((t) => t.name)
+
+    expect(
+      hiddenWidgets,
+      `Widget tools publish _meta.ui in tools/list and the host renders them from it. ` +
+        `catalogVisibility: 'search' hides them there, so the widget stops rendering: ` +
+        hiddenWidgets.join(', '),
+    ).toEqual([])
   })
 
   it('keeps the accounted_* namespace as the measured worst case', () => {
