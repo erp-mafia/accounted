@@ -9,10 +9,11 @@ import {
   deletePendingConnectionById,
   findByAccountUid,
   findByHandle,
+  findPendingByState,
   revokeByHandle,
   touchConnection,
 } from '@/lib/connect/hosted/ledger'
-import { signConnectorState } from '@/lib/connect/hosted/state'
+import { signConnectorState, verifyConnectorState } from '@/lib/connect/hosted/state'
 
 /**
  * Enable Banking proxy for self-hosted instances (WS3 PR5).
@@ -250,12 +251,24 @@ export const POST = withConnectorAuth('connect.bank', async (request, ctx) => {
     } catch {
       return NextResponse.json({ error: 'Invalid JSON', code: 'BAD_REQUEST' }, { status: 400 })
     }
-    // The instance sends back the signed connector state it received, so we can
-    // find the pending row it belongs to.
+    // The instance sends back the signed connector state it received. The
+    // code is only exchanged AGAINST that state's own pending row: verified
+    // signature, this key, bank service, and the row still pending. Without
+    // the binding, a code could be exchanged under a foreign or consumed
+    // state, minting an upstream session the ledger never records.
     const pendingState = typeof payload.connector_state === 'string' ? payload.connector_state : null
     if (!pendingState) {
       return NextResponse.json({ error: 'Missing connector_state', code: 'BAD_REQUEST' }, { status: 400 })
     }
+    const verified = verifyConnectorState(pendingState)
+    if (!verified.ok) {
+      return NextResponse.json({ error: 'Invalid connector state', code: 'CONNECTOR_STATE_INVALID' }, { status: 400 })
+    }
+    if (verified.payload.kid !== ctx.key.id || verified.payload.svc !== 'bank') {
+      return NextResponse.json({ error: 'State does not belong to this key', code: 'CONNECTOR_STATE_INVALID' }, { status: 403 })
+    }
+    const pendingRow = await findPendingByState(ctx.supabase, { keyId: ctx.key.id, pendingState })
+    if (!pendingRow) return notOwned()
     const blocked = await budgetOr429(ctx)
     if (blocked) return blocked
     const ebRes = await forwardToEb('POST', '/sessions', { code: payload.code })
@@ -266,12 +279,22 @@ export const POST = withConnectorAuth('connect.bank', async (request, ctx) => {
           const accountUids = (session.accounts ?? [])
             .map((a) => a.uid)
             .filter((u): u is string => typeof u === 'string')
-          await activateByPendingState(ctx.supabase, {
+          const activated = await activateByPendingState(ctx.supabase, {
             keyId: ctx.key.id,
             pendingState,
             handle: session.session_id,
             accountUids,
           })
+          if (!activated) {
+            // The pending row was consumed between the precheck and now (a
+            // concurrent replay of the same state). An unrecorded upstream
+            // session must not be handed out: close it and refuse.
+            await forwardToEb('DELETE', `/sessions/${encodeURIComponent(session.session_id)}`)
+            return NextResponse.json(
+              { error: 'Connector state already consumed', code: 'CONNECTOR_STATE_CONSUMED' },
+              { status: 409 },
+            )
+          }
         }
       } catch (err) {
         ctx.log.warn('could not record session in ledger', { err: err instanceof Error ? err.message : String(err) })
