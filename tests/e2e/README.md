@@ -226,42 +226,55 @@ re-walking a wizard.
 
 ## Still missing
 
-- **A seeded parent carrying real books.** Forks are free, so sign-up and
-  onboarding are already paid only once. What is missing is a company with a
-  year of history to report on, which is what momsdeklaration and bokslut
-  tests need. Loading a SIE file into one parent would give that, and would
-  test the migration path at the same time. It would also buy back most of the
-  wall-clock the serial ordering costs.
-- **Payroll.** The employee form is mapped (`#first_name`, `#personnummer`,
-  `#monthly_salary`, comboboxes for `salary_type` / `f_skatt_status`, and
-  `#tax_municipality`). The skattetabell is **derived from the kommun**, not
-  typed: `#tax_table_number` only exists when the user opts into overriding it
-  manually. Pick a municipality and the table and rate follow.
-- **Skattekonto.** Blocked: it calls Skatteverket, which has no fake. It fails
-  gracefully ("Kunde inte hämta skattekontot"), so the page is honest, but
-  nothing beyond that is testable. Skatteverket reads six base URLs from env,
-  so the fake is cheap when someone wants it.
-- **Import VAT** (2615, rutorna 50 and 60) and **domestic reverse charge**
-  (byggtjänster, 2647). The EU cases are covered on both sides now
-  (`reverse-charge.ts`, `purchase-reverse-charge.ts`).
+Roughly in order of what would find the most, per unit of effort.
+
+**Reachable today, no new plumbing:**
+
+- **N:1 reconciliation**, several bank rows settling one verifikat, plus the
+  residual booking the footer offers for that shape. The 1:N direction is
+  covered (`reconcile-one-to-many.ts`); this is its mirror and shares the code.
+- **Closing a year for real.** Readiness is covered (`year-end.ts`); resolving
+  the reminders and actually locking the period is not, and the lock is what
+  every other write path has to respect afterwards.
+- **Domestic reverse charge** (byggtjänster, 2647), which differs from the EU
+  case in the account and in who it applies between.
+- **Supplier credit note and the uncredit path.** The customer side is covered
+  (`credit-note.ts`); the supplier side has its own route and its own undo.
+- **Periodisering / accruals.** `lib/bookkeeping/accruals` has a whole service
+  and the invoice editor exposes it per line, with nothing end to end.
+- **Team invites and the byrå surfaces.** Multi-user is the one dimension the
+  suite has never touched: every test runs as one person in one company.
+
+**Blocked on a fixture change** (`spectest/fakes` is not cache-excluded, so
+touching it forces a cold rebuild; worth doing once, in a batch):
+
 - **Representation**, where the VAT deduction is capped at a 300 kr base per
-  person. The template carries the rule as a note and is flagged HIGH risk, but
-  nothing asserts the user ever sees it. Needs a restaurant row in the bank
-  fixture, which busts the env cache, so it was left out rather than bodged.
-- **N:1 reconciliation**, several bank rows settling one verifikat. The 1:N
-  direction is covered (`reconcile-one-to-many.ts`).
-- **Closing a year for real**, and filing. Readiness is covered; what is not is
-  resolving the reminders and locking the period, which needs the subledgers
-  reconstructed after the migration.
-- **Fakes for the remaining external APIs.** They are not equally cheap:
-  - **Skatteverket** is the easy one. It already reads six base URLs from env
-    (`SKATTEVERKET_API_BASE_URL`, `SKATTEVERKET_OAUTH_BASE_URL`,
-    `SKATTEVERKET_SKATTEKONTO_API_BASE_URL`, the two AGD ones,
-    `SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL`), so a fake drops in the same way
-    the bank fake did.
-  - **Fortnox and Qvalia hardcode their hosts** (`https://api.fortnox.se`,
-    `https://api.qvalia.com`). Faking either means first making the base URL
-    configurable, which is a small change to shipped code and should be its
-    own PR rather than something the test harness sneaks in.
-  - **Bedrock** goes through the AWS SDK, so it is intercepted at the client
-    level, not by a URL swap.
+  person. The template carries the rule and is flagged HIGH risk, but nothing
+  asserts the user ever sees it. Needs a restaurant row (mcc 5812) in the bank
+  fixture.
+- **Import VAT** (2615, rutorna 50 and 60), which needs a non-EU supplier and
+  a customs document.
+- **Foreign-currency settlement** and the 7960/3960 FX residual (#2037). The
+  EUR account exists in the bank fake; an FX invoice does not.
+
+**Blocked on a fake that does not exist yet:**
+
+- **Skattekonto.** It calls Skatteverket. The page fails gracefully ("Kunde
+  inte hämta skattekontot"), so its honesty is testable and nothing else is.
+- **Filing anything.** Momsdeklaration, AGI and INK2 all stop at the same
+  wall, and so does the årsredovisning at Bolagsverket.
+
+**Fakes, in the order they are worth building:**
+
+- **Skatteverket** is the easy one. It already reads six base URLs from env
+  (`SKATTEVERKET_API_BASE_URL`, `SKATTEVERKET_OAUTH_BASE_URL`,
+  `SKATTEVERKET_SKATTEKONTO_API_BASE_URL`, the two AGD ones,
+  `SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL`), so a fake drops in the same way the
+  bank and VIES fakes did, and it unblocks skattekonto plus every filing path
+  at once.
+- **Fortnox and Qvalia hardcode their hosts** (`https://api.fortnox.se`,
+  `https://api.qvalia.com`). Faking either means first making the base URL
+  configurable, which is a change to shipped code and belongs in its own PR
+  rather than something the test harness sneaks in.
+- **Bedrock** goes through the AWS SDK, so it is intercepted at the client
+  level, not by a URL swap. Everything AI-shaped is dark until then.
