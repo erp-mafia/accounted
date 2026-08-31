@@ -19,6 +19,7 @@ function makeItem(overrides: Partial<InvoiceWriteItemRow> = {}): InvoiceWriteIte
     quantity: 1,
     unit: 'tim',
     unit_price: 1000,
+    discount_percent: 0,
     line_total: 1000,
     vat_rate: 25,
     vat_amount: 250,

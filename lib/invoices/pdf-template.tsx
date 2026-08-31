@@ -55,6 +55,7 @@ const LABELS = {
     deliveryDate: 'Leveransdatum:',
     yourReference: 'Er referens:',
     ourReference: 'Vår referens:',
+    invoiceMarking: 'Märkning:',
     // Customer box
     custNo: 'Kundnr:',
     orgNo: 'Org.nr:',
@@ -64,6 +65,7 @@ const LABELS = {
     colQty: 'Antal',
     colUnit: 'Enhet',
     colUnitPrice: 'à-pris',
+    colDiscount: 'Rabatt',
     colVat: 'Moms',
     colTotal: 'Summa',
     // Totals
@@ -136,6 +138,7 @@ const LABELS = {
     deliveryDate: 'Delivery date:',
     yourReference: 'Your reference:',
     ourReference: 'Our reference:',
+    invoiceMarking: 'Buyer reference:',
     custNo: 'Customer no.:',
     orgNo: 'Reg. no.:',
     vat: 'VAT:',
@@ -143,6 +146,7 @@ const LABELS = {
     colQty: 'Qty',
     colUnit: 'Unit',
     colUnitPrice: 'Unit price',
+    colDiscount: 'Discount',
     colVat: 'VAT',
     colTotal: 'Amount',
     subtotal: 'Subtotal:',
@@ -365,6 +369,10 @@ function createStyles(branding?: InvoiceBranding) {
     },
     colPrice: {
       flex: 1.5,
+      textAlign: 'right',
+    },
+    colDiscount: {
+      flex: 1,
       textAlign: 'right',
     },
     colVat: {
@@ -785,6 +793,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
     ? new Set(billableItems.map((item) => item.vat_rate))
     : new Set<number>()
   const showVatColumn = hasPerLineVat && uniqueRates.size > 1
+  // Rabatt column only when some line actually carries a discount: the
+  // stored line_total is already net, so the column documents the reduction
+  // (ML 17 kap 24 § p.10: prisnedsättning ska framgå av fakturan).
+  const showDiscountColumn = billableItems.some((item) => (item.discount_percent ?? 0) > 0)
 
   // Calculate per-rate VAT breakdown for totals
   const vatByRate = hasPerLineVat
@@ -950,6 +962,18 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 </View>
               </View>
             )}
+            {/* Fakturamärkning: one buyer-required marking string, never
+                comma-split (a PO/cost-center label may contain commas). */}
+            {invoice.invoice_marking && (
+              <View style={{ marginBottom: 4 }}>
+                <Text style={styles.label}>{L.invoiceMarking}</Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
+                  <Text style={{ backgroundColor: '#f0f0f0', borderRadius: 3, paddingHorizontal: 6, paddingVertical: 2, fontSize: 9, fontWeight: 'bold' }}>
+                    {invoice.invoice_marking.trim()}
+                  </Text>
+                </View>
+              </View>
+            )}
           </View>
 
           {/* Customer */}
@@ -1003,6 +1027,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               {!isDeliveryNote && (
                 <Text style={[styles.colPrice, styles.tableHeaderText]}>{L.colUnitPrice}</Text>
               )}
+              {!isDeliveryNote && showDiscountColumn && (
+                <Text style={[styles.colDiscount, styles.tableHeaderText]}>{L.colDiscount}</Text>
+              )}
               {!isDeliveryNote && showVatColumn && (
                 <Text style={[styles.colVat, styles.tableHeaderText]}>{L.colVat}</Text>
               )}
@@ -1028,6 +1055,11 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                   <Text style={styles.colUnit}>{item.unit}</Text>
                   {!isDeliveryNote && (
                     <Text style={styles.colPrice}>{formatPdfCurrency(item.unit_price, invoice.currency, lang)}</Text>
+                  )}
+                  {!isDeliveryNote && showDiscountColumn && (
+                    <Text style={styles.colDiscount}>
+                      {(item.discount_percent ?? 0) > 0 ? `${item.discount_percent}%` : ''}
+                    </Text>
                   )}
                   {!isDeliveryNote && showVatColumn && (
                     <Text style={styles.colVat}>{item.vat_rate ?? 0}%</Text>

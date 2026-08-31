@@ -52,4 +52,19 @@ describe('buildCreditNoteItem', () => {
       dimensions: { '6': 'P001' },
     })
   })
+
+  it('carries discount_percent so the kreditfaktura face arithmetic multiplies out', () => {
+    // Original: 2 x 1000 with 10% rabatt → net 1800. The credit row must keep
+    // the discount, or -2 x 1000 next to Summa -1800 prints with no visible
+    // prisnedsättning (ML 17 kap 24 §) and violates the stored net invariant.
+    const result = buildCreditNoteItem('credit-1', item({ discount_percent: 10, line_total: 1800, vat_amount: 450 }))
+    expect(result).toMatchObject({
+      quantity: -2,
+      discount_percent: 10,
+      line_total: -1800,
+      vat_amount: -450,
+    })
+    // Legacy rows without the column default to 0.
+    expect(buildCreditNoteItem('credit-1', item()).discount_percent).toBe(0)
+  })
 })
