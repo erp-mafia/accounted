@@ -10,7 +10,10 @@ import { randomBytes } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import type { ProviderName } from '@/lib/providers/types'
 import { getOAuthConfig } from '@/lib/providers/oauth-config'
-import { buildFortnoxAuthUrl } from '@/lib/providers/fortnox/oauth'
+import {
+  buildFortnoxAuthUrl,
+  fortnoxConsentScopes,
+} from '@/lib/providers/fortnox/oauth'
 import { exchangeFortnoxCode } from '@/lib/providers/fortnox/oauth'
 import { buildVismaAuthUrl, exchangeVismaCode } from '@/lib/providers/visma/oauth'
 import { refreshBjornLundenToken } from '@/lib/providers/bjornlunden/oauth'
@@ -314,6 +317,12 @@ export async function getAuthUrl(
   provider: ProviderName,
   state?: string,
   redirectUri?: string,
+  /**
+   * Ask Fortnox for the voucher-attachment scopes as well. Opt-in, so only a
+   * user who wants their underlag is put in front of the extra permissions
+   * (and their licence requirements).
+   */
+  options?: { documentScopes?: boolean },
 ): Promise<{ url: string }> {
   const config = getOAuthConfig(provider)
 
@@ -323,7 +332,10 @@ export async function getAuthUrl(
     : config
 
   if (provider === 'fortnox') {
-    const url = buildFortnoxAuthUrl(effectiveConfig, { state })
+    const url = buildFortnoxAuthUrl(effectiveConfig, {
+      state,
+      scopes: fortnoxConsentScopes({ documents: options?.documentScopes }),
+    })
     return { url }
   }
 

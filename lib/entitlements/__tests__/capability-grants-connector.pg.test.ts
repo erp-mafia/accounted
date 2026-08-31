@@ -1,11 +1,15 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { getPool } from '../../../tests/pg/setup'
 import { seedCompany } from '../../../tests/pg/fixtures'
 import { CONNECTOR_CAPABILITIES, PAID_CAPABILITIES } from '../keys'
 
-// pg-real coverage for migration 20260820122000 (capability_grants.source
+// pg-real coverage for migration 20260831170000 (capability_grants.source
 // accepts 'connector') and the invariant that the trial-seed trigger never
 // hands a hosted company a connector grant.
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
 
 const future = () => new Date(Date.now() + 86_400_000).toISOString()
 
@@ -77,5 +81,25 @@ describe('capability_grants.source = connector', () => {
     for (const key of connectorOnly) {
       expect(rows.some((r) => r.capability_key === key), `no trial grant for ${key}`).toBe(false)
     }
+  })
+
+  // Migration 20260831180000: connector grants are a short-lived offline
+  // cache; a NULL expiry would be a permanent unlock nothing revokes.
+  it('rejects a connector grant without an expiry; other sources keep NULL expiry', async () => {
+    const { companyId } = await seedCompany()
+    await clearGrants(companyId)
+    await expect(
+      getPool().query(
+        `INSERT INTO public.capability_grants (company_id, capability_key, source, expires_at)
+         VALUES ($1, 'bank_sync', 'connector', NULL)`,
+        [companyId],
+      ),
+    ).rejects.toThrow(/capability_grants_connector_expiry_check/)
+    await getPool().query(
+      `INSERT INTO public.capability_grants (company_id, capability_key, source, expires_at)
+       VALUES ($1, 'bank_sync', 'manual', NULL)`,
+      [companyId],
+    )
+    expect(await rpc(companyId, 'bank_sync')).toBe(true)
   })
 })

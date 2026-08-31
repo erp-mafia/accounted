@@ -1180,3 +1180,96 @@ describe('company payment-terms default on create', () => {
     expect(supabaseMock.from.mock.calls.some((c) => c[0] === 'customers')).toBe(false)
   })
 })
+
+// A personnummer submitted as org_number on an individual is the personnummer
+// in the wrong field: stored encrypted in personal_number, org_number left
+// empty, on create and on update alike. (The pre-2026-08-21 docs told callers
+// org_number was accepted for individuals; it still is, it just lands right.)
+describe('personnummer submitted as org_number on an individual (v1)', () => {
+  it('POST stores it encrypted as personal_number and returns org_number empty', async () => {
+    withWriteScope()
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: {
+        data: {
+          ...SAMPLE_CUSTOMER,
+          customer_type: 'individual',
+          org_number: null,
+          vat_number: null,
+          personal_number: TEST_PERSONAL_NUMBER,
+        },
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await createCustomer(
+      makePostRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`, {
+        name: 'Bertil Bengtsson',
+        customer_type: 'individual',
+        org_number: TEST_PERSONAL_NUMBER,
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    const inserted = supabaseMock.captured.insert[0] as { org_number?: string | null; personal_number?: string | null }
+    expect(inserted.org_number ?? null).toBeNull()
+    expect(inserted.personal_number).toMatch(CIPHERTEXT_SHAPE)
+    expect(decryptPersonnummer(inserted.personal_number!)).toBe(TEST_PERSONAL_NUMBER)
+    expect(JSON.stringify(inserted)).not.toContain(TEST_PERSONAL_NUMBER)
+    const body = await res.json()
+    expect(body.data.personal_number).toBe(MASKED_PERSONAL_NUMBER)
+    expect(body.data.org_number).toBeNull()
+  })
+
+  it('PATCH stores it encrypted as personal_number and clears org_number', async () => {
+    withWriteScope()
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: {
+        data: { ...SAMPLE_CUSTOMER, customer_type: 'individual', org_number: null, personal_number: TEST_PERSONAL_NUMBER },
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await updateCustomer(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`, {
+        org_number: TEST_PERSONAL_NUMBER,
+      }),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const updated = supabaseMock.captured.update[0] as { org_number?: string | null; personal_number?: string | null }
+    expect(updated.org_number).toBeNull()
+    expect(updated.personal_number).toMatch(CIPHERTEXT_SHAPE)
+    expect(decryptPersonnummer(updated.personal_number!)).toBe(TEST_PERSONAL_NUMBER)
+  })
+
+  it('PATCH refuses an org_number that is a different personnummer than personal_number', async () => {
+    withWriteScope()
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: {
+        data: { ...SAMPLE_CUSTOMER, customer_type: 'individual' },
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await updateCustomer(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`, {
+        org_number: '19850505-5555',
+        personal_number: TEST_PERSONAL_NUMBER,
+      }),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('CUSTOMER_PERSONAL_NUMBER_CONFLICT')
+    expect(supabaseMock.captured.update).toHaveLength(0)
+  })
+})

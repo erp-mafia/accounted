@@ -4,6 +4,21 @@ import type { ExtensionDefinition } from '../types'
 export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
   'general': [
     {
+          "slug": "calendar",
+          "name": "Kalender",
+          "sector": "general",
+          "category": "operations",
+          "icon": "Calendar",
+          "dataPattern": "core",
+          "description": "Fullständig kalendervy med månads-, vecko- och dagsvisning",
+          "longDescription": "Se alla fakturadatum och deadlines i en interaktiv kalender med månads-, vecko- och dagsvy.",
+          "readsCoreTables": [
+                "invoices",
+                "deadlines",
+                "customers"
+          ]
+    },
+    {
           "slug": "enable-banking",
           "name": "Bankintegration (PSD2)",
           "sector": "general",
@@ -17,13 +32,13 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
     },
     {
           "slug": "email",
-          "name": "E-post (Resend)",
+          "name": "E-post",
           "sector": "general",
           "category": "operations",
           "icon": "Mail",
           "dataPattern": "core",
           "description": "Skicka fakturor och påminnelser via e-post",
-          "longDescription": "Aktiverar e-postfunktioner: skicka fakturor till kunder, automatiska betalningspåminnelser enligt valt schema, och e-postmeddelanden. Kräver ett Resend-konto med verifierad domän.",
+          "longDescription": "Aktiverar e-postfunktioner: skicka fakturor till kunder, automatiska betalningspåminnelser enligt valt schema, och e-postmeddelanden. Kräver ett Resend-konto med verifierad domän eller en egen SMTP-server (EMAIL_PROVIDER=smtp).",
           "readsCoreTables": [
                 "invoices",
                 "customers",

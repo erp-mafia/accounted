@@ -91,7 +91,7 @@ Karensavdrag = 20% of one week's sjuklön (80% of weekly pay). Day 2-14: 80% of 
 ### Standard monthly journal entries
 
 1. Gross salary: Debit 7210 / Credit 2710 (tax) + Credit 1930 (net pay)
-2. Employer avgifter: Debit 7510 / Credit 2730
+2. Employer avgifter: Debit 7510 / Credit 2731 (Avräkning lagstadgade sociala avgifter; this codebase's convention, cleared by the skattekonto AGI draw. 2730 is the group account: a legitimate simplification, but never mix the two within one company, see issue #1870. The accrual account is 2940, not 2731.)
 3. Vacation accrual: Debit 7290 / Credit 2920
 4. Avgifter on accrual: Debit 7519 / Credit 2940
 5. Pension premiums: Debit 7410 / Credit 2440/2740

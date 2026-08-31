@@ -6,6 +6,8 @@ import { generateARReconciliation } from '@/lib/reports/ar-reconciliation'
 import { generateReconciliation as generateAPReconciliation } from '@/lib/reports/supplier-reconciliation'
 import { computeEfDeclarationPreview } from '@/lib/bokslut/enskild-firma/ef-declaration-preview'
 import { createLogger } from '@/lib/logger'
+import { describeFiscalYearGap, findFiscalYearGaps, type PeriodLike } from '@/lib/bookkeeping/fiscal-year-gaps'
+import { listReconciliationAccounts } from '@/lib/reconciliation/service'
 import type { YearEndBlocker, YearEndValidation } from '@/types'
 
 const log = createLogger('bokslut-readiness')
@@ -76,6 +78,26 @@ export interface BokslutReadinessReport {
  * Phase 2 will replace each reminder with a concrete proposal once the
  * relevant calculator ships.
  */
+/**
+ * A missing räkenskapsår anywhere in the chain is a warning on every
+ * bokslut: balances do not roll across a hole (a one-file SIE migration
+ * that skipped a year is the usual cause). Advisory: a failed read costs
+ * only this warning.
+ */
+async function fiscalYearGapWarnings(supabase: SupabaseClient, companyId: string): Promise<string[]> {
+  try {
+    const { data, error } = await supabase
+      .from('fiscal_periods')
+      .select('id, name, period_start, period_end')
+      .eq('company_id', companyId)
+    if (error) throw new Error(error.message)
+    return findFiscalYearGaps((data ?? []) as PeriodLike[]).map(describeFiscalYearGap)
+  } catch (err) {
+    log.warn('fiscal year gap check failed', { companyId, error: err instanceof Error ? err.message : String(err) })
+    return []
+  }
+}
+
 export async function buildBokslutReadinessReport(
   supabase: SupabaseClient,
   companyId: string,
@@ -152,10 +174,7 @@ export async function buildBokslutReadinessReport(
         reconciliation.unmatched_transaction_count > 0
           ? `${reconciliation.unmatched_transaction_count} banktransaktioner är inte matchade. Avstäm banken innan bokslut.`
           : `Bankavstämningen visar en differens på ${reconciliation.difference.toFixed(2)} kr.`,
-      // Bankavstämning's real route: the earlier '/reconciliation/bank' href
-      // pointed at a page that has never existed, so the wizard's "Öppna"
-      // link 404ed.
-      href: '/reports/bank-reconciliation',
+      href: '/reconciliation',
     })
   }
 
@@ -216,6 +235,32 @@ export async function buildBokslutReadinessReport(
       'Periodiseringar (förutbetalda kostnader 17xx, upplupna kostnader 29xx) bokas manuellt. Tänk på att vända dem 1 januari nästa år.',
   })
 
+  // Bokslutsbilagor: every balance account signed off per balansdagen is what
+  // Reko 760/765 asks for. Advisory: a failed read costs only this reminder.
+  try {
+    const accounts = await listReconciliationAccounts(supabase, companyId, {
+      today: period.period_end,
+      windowFrom: period.period_start,
+      windowTo: period.period_end,
+      withStatus: false,
+    })
+    const live = accounts.filter((a) => !a.superseded_by)
+    const unsigned = live.filter((a) => !a.signed_off_through || a.signed_off_through < period.period_end)
+    if (live.length > 0) {
+      reminders.push({
+        code: 'bilagor_unsigned',
+        severity: unsigned.length > 0 ? 'warning' : 'info',
+        message:
+          unsigned.length > 0
+            ? `${unsigned.length} av ${live.length} balanskonton är inte signerade per balansdagen ${period.period_end}. Bokslutsbilagorna samlar avstämning, underlag och signering per konto.`
+            : `Alla ${live.length} balanskonton är signerade per balansdagen ${period.period_end}. Bokslutsbilagorna kan skrivas ut.`,
+        href: '/reports/bokslutsbilagor',
+      })
+    }
+  } catch (err) {
+    log.warn('bilagor reminder failed', { companyId, fiscalPeriodId, error: err instanceof Error ? err.message : String(err) })
+  }
+
   if (entityType === 'enskild_firma') {
     // Pre-compute the EF declaration so the wizard's overview reflects what
     // the user will see when they reach the dispositions step. Egenavgifter,
@@ -252,7 +297,7 @@ export async function buildBokslutReadinessReport(
     ready: validation.ready,
     blockers: validation.errors,
     blockerItems: validation.blockers,
-    warnings: validation.warnings,
+    warnings: [...validation.warnings, ...(await fiscalYearGapWarnings(supabase, companyId))],
     reminders,
     draftCount: validation.draftCount,
     unexplainedGapCount: validation.unexplainedGaps.length,

@@ -5,6 +5,8 @@
  * instead of being duplicated here.
  */
 
+import type { HydrationReport } from '@/lib/providers/provider-data-fetcher'
+
 // Re-export canonical DTOs used by entity-mapper and migration-orchestrator
 export type {
   AmountType,
@@ -68,13 +70,22 @@ export interface SkipReasons {
 }
 
 /**
+ * Asset-step skip reasons: `unsupported` counts source assets the mapping
+ * cannot represent (no positive acquisition value, no acquisition date).
+ * One shared contract for the migration producer and the wizard consumer.
+ */
+export interface AssetSkipReasons extends SkipReasons {
+  unsupported?: number
+}
+
+/**
  * A migration step that failed against the provider API, surfaced to the user
  * instead of being swallowed into a "successful" empty sync. `message` is the
  * user-facing Swedish text (mapped from the structured error registry when the
  * failure classifies, otherwise a generic sentence with the provider's reply).
  */
 export interface MigrationStepError {
-  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'reconciliation'
+  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'assets' | 'registrationLinks' | 'reconciliation'
   /** Structured code when the failure classifies (e.g. PROVIDER_API_MODULE_INACTIVE), else null. */
   code: string | null
   message: string
@@ -89,12 +100,65 @@ export interface MigrationStepError {
  * set, and the migration reports them here instead of passing them off as
  * ordinary imports. Per-invoice detail goes to the server log.
  */
+/**
+ * Per-step outcome for the two invoice registers.
+ *
+ * `vatUnresolved` counts invoices whose provider payload established no VAT at
+ * all; they are imported with the gross as subtotal and a null rate, which is
+ * the only honest reading of "the source did not say". `hydration` reports how
+ * many detail payloads were fetched, and how many the time budget could not
+ * reach, so a partially hydrated run is visible rather than looking complete.
+ */
+export interface InvoiceStepResult {
+  total: number
+  imported: number
+  skipped: number
+  skipReasons?: SkipReasons
+  fxUnresolved?: number
+  vatUnresolved?: number
+  hydration?: HydrationReport
+  errorSample?: string
+}
+
 export interface MigrationResults {
   companyInfo?: { imported: boolean }
   customers?: { total: number; imported: number; updated?: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
   suppliers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
-  salesInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; fxUnresolved?: number; errorSample?: string }
-  supplierInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; fxUnresolved?: number; errorSample?: string }
+  salesInvoices?: InvoiceStepResult
+  supplierInvoices?: InvoiceStepResult
+  /**
+   * Fortnox anläggningsregister → local asset register. Creates register
+   * rows only, never journal entries (the values arrived via SIE).
+   * `scopesMissing` marks the whole step as skipped because the consent
+   * lacks the Fortnox assets scope (or the licence behind it).
+   */
+  assets?: {
+    total: number
+    imported: number
+    skipped: number
+    skipReasons?: AssetSkipReasons
+    errorSample?: string
+    scopesMissing?: boolean
+  }
+
+  /**
+   * Imported invoices linked to the SIE-imported verifikat that BOOKED them
+   * (the registration voucher the provider named on the invoice). Only exact,
+   * amount-corroborated matches are written; the other buckets stay unlinked
+   * and explain why. `refNotFetched` counts invoices whose provider detail
+   * payload (where Fortnox carries the ref) was never fetched, so nothing is
+   * known either way. See lib/invoices/link-migrated-registration-vouchers.ts.
+   */
+  registrationLinks?: {
+    scanned: number
+    linked: number
+    noRef: number
+    refNotFetched: number
+    unresolved: number
+    ambiguous: number
+    amountMismatch: number
+    alreadyLinked: number
+  }
   /**
    * Auto-reconciliation of imported supplier invoices to the GL payment
    * vouchers that the separate SIE import already posted. `autoLinked` invoices

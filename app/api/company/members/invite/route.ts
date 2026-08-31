@@ -7,6 +7,7 @@ import { validateBody } from '@/lib/api/validate'
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getEmailService } from '@/lib/email/service'
+import { getSenderForCompany, getBaseUrlForBrand } from '@/lib/email/brand-sender'
 import {
   generateInviteEmailSubject,
   generateInviteEmailHtml,
@@ -42,6 +43,14 @@ function maskEmail(email: string): string {
  * POST /api/company/members/invite
  * Invite a user to the current company (e.g., a client as viewer).
  * Only company owners and admins can invite.
+ *
+ * The accept link (inviteUrl) is ALWAYS returned in the response, whether or
+ * not the invitation email went out, so the inviter can share it directly.
+ * This is the only place the raw link exists: tokens are stored hashed
+ * (lib/auth/invite-tokens.ts), so a self-hosted operator without a mail
+ * provider (#1710) or an inviter whose mail bounced would otherwise hold an
+ * invitation nobody can accept. There is no re-send for company invites:
+ * revoke and invite again to get a fresh link.
  */
 export const POST = withRouteContext(
   'company_members.invite',
@@ -49,7 +58,7 @@ export const POST = withRouteContext(
     const { companyId, user, log } = ctx
     const serviceClient = await createServiceClient()
 
-    // Check caller has permission (owner/admin — stricter than requireWrite)
+    // Check caller has permission (owner/admin: stricter than requireWrite)
     const { data: callerMembership } = await serviceClient
       .from('company_members')
       .select('role')
@@ -213,15 +222,21 @@ export const POST = withRouteContext(
     // Send email. email_sent is surfaced in the response so the UI can tell
     // the user when the invitation exists but the mail never went out:
     // previously a send failure was invisible (invite looked sent).
+    // Brand mail (WL-13): sender identity and the invite link follow the
+    // brand of the company the invite concerns; a company without a brand
+    // uses the validated request origin (appOrigin) and sender exactly as
+    // before.
+    const sender = await getSenderForCompany(companyId)
+    const appUrl = sender.brand ? getBaseUrlForBrand(sender.brand) : appOrigin
+    const inviteUrl = `${appUrl}/invite/${token}`
     const emailService = getEmailService()
     let emailSent = false
     if (emailService.isConfigured()) {
-      const inviteUrl = `${appOrigin}/invite/${token}`
-
       const emailData = {
         companyName: company?.name || 'Företag',
         inviterEmail: user.email || '',
         inviteUrl,
+        appName: sender.brand?.appName,
       }
 
       const result = await emailService.sendEmail({
@@ -229,6 +244,9 @@ export const POST = withRouteContext(
         subject: generateInviteEmailSubject(emailData),
         html: generateInviteEmailHtml(emailData),
         text: generateInviteEmailText(emailData),
+        fromName: sender.fromName ?? undefined,
+        fromAddress: sender.fromAddress ?? undefined,
+        replyTo: sender.replyTo ?? undefined,
       })
 
       if (result.success) {
@@ -241,17 +259,17 @@ export const POST = withRouteContext(
       log.warn('email service not configured: invite email skipped', { to: email })
     }
 
-    // In development, return the invite URL directly (no email service)
-    const isDev = process.env.NODE_ENV === 'development'
-    const devInviteUrl = isDev ? `${appOrigin}/invite/${token}` : undefined
-
     return NextResponse.json({
       data: {
         email,
         status: 'pending',
         email_sent: emailSent,
         user_provisioned: userProvisioned,
-        ...(isDev && { inviteUrl: devInviteUrl }),
+        // The accept link is always returned so the inviter can share it
+        // directly, e.g. when the mail bounced or no mail provider is
+        // configured (self-hosted without Resend). Same contract as
+        // POST /api/team/invite.
+        inviteUrl,
       },
     })
   },

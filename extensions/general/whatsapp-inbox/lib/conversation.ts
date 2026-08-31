@@ -73,6 +73,43 @@ export async function greetingThrottled(
   return rows.some((r) => new Date(r.created_at).getTime() > windowStart)
 }
 
+// M2 (bad link code) is normally bounded by the pre-binding sender quota RPC.
+// When that limiter is unavailable and the webhook fails open (#1599), this
+// small throttle bounds M2 instead: 1 per 10 minutes, 3 per day, per phone
+// hash. Without it, a sender greeted with M1 inside the last hour who then
+// sends an expired or mistyped code would hear nothing at all in degraded
+// mode, which is exactly the silent-linking-moment #1599 targets.
+const BAD_CODE_WINDOW_MS = 10 * 60 * 1000
+const BAD_CODE_DAY_MS = 24 * 60 * 60 * 1000
+const BAD_CODE_DAY_MAX = 3
+
+/** True when another M2 (bad code) reply to this phone hash would exceed the
+ *  degraded-mode cap. Fails CLOSED: if the window cannot be read, no M2 goes
+ *  out (the caller falls through to the throttled M1 path instead). */
+export async function badCodeThrottled(
+  supabase: SupabaseClient,
+  phoneHash: string,
+): Promise<boolean> {
+  const since = new Date(Date.now() - BAD_CODE_DAY_MS).toISOString()
+  const { data, error } = await supabase
+    .from('whatsapp_messages')
+    .select('created_at')
+    .eq('direction', 'outbound')
+    .eq('sender_phone_hash', phoneHash)
+    .eq('raw_payload->>template', TEMPLATE.m2BadCode)
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(BAD_CODE_DAY_MAX)
+  if (error) {
+    log.warn('bad-code throttle window unreadable; withholding M2', { error: error.message })
+    return true
+  }
+  const rows = (data ?? []) as Array<{ created_at: string }>
+  if (rows.length >= BAD_CODE_DAY_MAX) return true
+  const windowStart = Date.now() - BAD_CODE_WINDOW_MS
+  return rows.some((r) => new Date(r.created_at).getTime() > windowStart)
+}
+
 export const COMPANY_PIN_TTL_MS = 8 * 60 * 60 * 1000
 export const QUESTION_TTL_MS = 48 * 60 * 60 * 1000
 export const LATE_ANSWER_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000

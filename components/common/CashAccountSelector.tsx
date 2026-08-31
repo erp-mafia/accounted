@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef } from 'react'
+import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -10,7 +11,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useCompany } from '@/contexts/CompanyContext'
-import type { CashAccount } from '@/types'
 
 const STORAGE_KEY_PREFIX = 'Accounted:cash-account:'
 
@@ -56,57 +56,44 @@ export function CashAccountSelector({
   className,
 }: Props) {
   const { company } = useCompany()
-  const [accounts, setAccounts] = useState<CashAccount[]>([])
-  const [loaded, setLoaded] = useState(false)
+  // Session-cached and seeded by the dashboard layout (lib/reference-data):
+  // on a normal visit the list is here on the first render, so the restore
+  // below runs in the first effect tick and onReady fires without a round
+  // trip. Restore once per company load, not on every background refresh.
+  const { cashAccounts: accounts, isLoading } = useCashAccounts()
+  const loaded = !isLoading
+  const restoredForRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!company?.id) {
       onReady?.()
       return
     }
-    let cancelled = false
-    ;(async () => {
-      const res = await fetch('/api/cash-accounts')
-      if (!res.ok) {
-        if (!cancelled) {
-          setLoaded(true)
-          onReady?.()
-        }
-        return
-      }
-      const { data } = await res.json()
-      if (cancelled) return
+    if (!loaded || restoredForRef.current === company.id) return
+    restoredForRef.current = company.id
 
-      const fetched: CashAccount[] = data || []
-      // is_primary first (already ordered on the server), then by ledger code.
-      setAccounts(fetched)
-      setLoaded(true)
+    // Restore last selection or pick the primary as default.
+    if (typeof window !== 'undefined') {
+      const stored = window.sessionStorage.getItem(STORAGE_KEY_PREFIX + company.id)
+      const inFetched = (ledger: string) =>
+        accounts.some(a => a.ledger_account === ledger)
 
-      // Restore last selection or pick the primary as default.
-      if (typeof window !== 'undefined') {
-        const stored = window.sessionStorage.getItem(STORAGE_KEY_PREFIX + company.id)
-        const inFetched = (ledger: string) =>
-          fetched.some(a => a.ledger_account === ledger)
-
-        if (stored && inFetched(stored)) {
-          if (stored !== value) onChange(stored)
-        } else {
-          const primary = fetched.find(a => a.is_primary)
-          const fallback = primary ?? fetched[0]
-          if (fallback && fallback.ledger_account !== value) {
-            onChange(fallback.ledger_account)
-          }
+      if (stored && inFetched(stored)) {
+        if (stored !== value) onChange(stored)
+      } else {
+        const primary = accounts.find(a => a.is_primary)
+        const fallback = primary ?? accounts[0]
+        if (fallback && fallback.ledger_account !== value) {
+          onChange(fallback.ledger_account)
         }
       }
-
-      onReady?.()
-    })()
-    return () => {
-      cancelled = true
     }
-  // onReady excluded: lifecycle callback, shouldn't retrigger on parent renders.
+
+    onReady?.()
+  // onReady/onChange are lifecycle callbacks: fire once per load, not on
+  // parent re-renders that re-create them. `value` is read once at restore.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [company?.id])
+  }, [company?.id, loaded, accounts])
 
   const handleChange = (next: string) => {
     if (company?.id && typeof window !== 'undefined') {

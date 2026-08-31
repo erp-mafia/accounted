@@ -10,6 +10,7 @@ import {
 } from '../reminder-templates'
 import { formatCurrency } from '@/lib/utils'
 import { makeCustomer, makeInvoice, makeCompanySettings } from '@/tests/helpers'
+import type { CompanySettings } from '@/types'
 
 const company = makeCompanySettings({ company_name: 'Acme AB' })
 const customer = makeCustomer({ name: 'Erik Andersson', email: 'erik@example.se' })
@@ -292,5 +293,176 @@ describe('reminder email templates: ROT/RUT-avdrag (fakturamodellen)', () => {
       currency: 'SEK',
     })
     expect(amounts.totalDue).toBe(8_822.5)
+  })
+})
+
+describe('payment details follow the invoice currency', () => {
+  const multiCurrencyCompany = makeCompanySettings({
+    company_name: 'Acme AB',
+    bank_name: 'Svenska Banken',
+    iban: 'SE4550000000058398257466',
+    bic: 'ESSESESS',
+    invoice_payment_accounts: {
+      SEK: { bank_name: 'Svenska Banken', iban: 'SE4550000000058398257466', bic: 'ESSESESS' },
+      EUR: { bank_name: 'Deutsche Bank', iban: 'DE89370400440532013000', bic: 'DEUTDEFF' },
+    } as CompanySettings['invoice_payment_accounts'],
+  })
+
+  it('prints the EUR account on a EUR reminder, never the SEK IBAN', () => {
+    const data = { ...baseData, company: multiCurrencyCompany, invoice: eurInvoice }
+    const html = generateReminderEmailHtml(data)
+    const text = generateReminderEmailText(data)
+    for (const out of [html, text]) {
+      expect(out).toContain('DE89370400440532013000')
+      expect(out).toContain('DEUTDEFF')
+      expect(out).toContain('Deutsche Bank')
+      expect(out).not.toContain('SE4550000000058398257466')
+      expect(out).not.toContain('ESSESESS')
+    }
+  })
+
+  it('keeps the SEK account on a SEK reminder', () => {
+    const data = { ...baseData, company: multiCurrencyCompany, invoice }
+    const html = generateReminderEmailHtml(data)
+    const text = generateReminderEmailText(data)
+    for (const out of [html, text]) {
+      expect(out).toContain('SE4550000000058398257466')
+      expect(out).not.toContain('DE89370400440532013000')
+    }
+  })
+
+
+  it('never falls back to the legacy SEK fields for a EUR reminder when no EUR account exists', () => {
+    const sekOnly = makeCompanySettings({
+      company_name: 'Acme AB',
+      bank_name: 'Svenska Banken',
+      iban: 'SE4550000000058398257466',
+      bic: 'ESSESESS',
+    })
+    const data = { ...baseData, company: sekOnly, invoice: eurInvoice }
+    for (const out of [generateReminderEmailHtml(data), generateReminderEmailText(data)]) {
+      expect(out).not.toContain('SE4550000000058398257466')
+      expect(out).not.toContain('Svenska Banken')
+    }
+  })
+})
+
+describe('reminder email texts: per-company overrides', () => {
+  const zeroSurcharges = {
+    interestAmount: 0,
+    interestRate: 0,
+    interestFromDate: '2026-05-02',
+    interestDays: 0,
+    reminderFee: 0,
+  }
+  const withOverrides = (overrides: CompanySettings['reminder_text_overrides']) => ({
+    ...baseData,
+    ...zeroSurcharges,
+    company: makeCompanySettings({ company_name: 'Acme AB', reminder_text_overrides: overrides }),
+  })
+
+  it('renders the stock texts when no overrides are stored', () => {
+    const data = withOverrides(null)
+    const text = generateReminderEmailText(data)
+    const html = generateReminderEmailHtml(data)
+    const subject = generateReminderEmailSubject(data)
+    expect(text).toContain(
+      'Vi vill påminna dig om att faktura F2026010 förföll till betalning den 2026-05-01.',
+    )
+    expect(html).toContain('Om du redan har betalat kan du bortse från denna påminnelse.')
+    expect(subject).toBe(
+      `Vänlig påminnelse: Faktura F2026010 - ${formatCurrency(10_000, 'SEK')}`,
+    )
+  })
+
+  it('the stock final level is an inkassovarning, never fee math', () => {
+    const data = { ...withOverrides(null), reminderLevel: 3 as const }
+    const text = generateReminderEmailText(data)
+    const html = generateReminderEmailHtml(data)
+    for (const out of [text, html]) {
+      expect(out).toContain('inkassovarning')
+      expect(out).toContain('överlämnas fordran till inkasso')
+      expect(out).toContain('lag (1981:739)')
+      expect(out).toContain('inom 8 dagar')
+      // Text only: no fee amount is promised or invented by the template.
+      expect(out).not.toContain('450')
+    }
+    // The opening inkassovarning paragraph keeps the red emphasis.
+    expect(html).toContain('color: #dc2626; font-weight: 500;')
+  })
+
+  it('a body override wins in HTML and text; the subject stays stock', () => {
+    const data = withOverrides({ level_1: { body: 'Vår helt egna påminnelsetext.' } })
+    const text = generateReminderEmailText(data)
+    const html = generateReminderEmailHtml(data)
+    for (const out of [text, html]) {
+      expect(out).toContain('Vår helt egna påminnelsetext.')
+      expect(out).not.toContain('Vi vill påminna dig om att faktura')
+    }
+    expect(generateReminderEmailSubject(data)).toContain('Vänlig påminnelse: Faktura F2026010')
+  })
+
+  it('a subject override wins and owns the whole line: no automatic suffix', () => {
+    const data = {
+      ...withOverrides({ level_1: { subject: 'Obetald faktura {fakturanummer}' } }),
+      interestAmount: 86.3,
+      interestRate: 0.105,
+      interestDays: 30,
+      reminderFee: 60,
+    }
+    const subject = generateReminderEmailSubject(data)
+    expect(subject).toBe('Obetald faktura F2026010')
+    expect(subject).not.toContain('inkl. dröjsmålsränta')
+    // The body is untouched by a subject-only override.
+    expect(generateReminderEmailText(data)).toContain('Vi vill påminna dig om att faktura')
+  })
+
+  it('substitutes the documented placeholders in overrides', () => {
+    const data = withOverrides({
+      level_1: {
+        body: 'Faktura {fakturanummer} till {kundnamn} ({förnamn}) från {företag} förföll {förfallodatum} ({dagar} dagar sedan). Att betala: {belopp}. Skickad {fakturadatum}.',
+      },
+    })
+    const text = generateReminderEmailText(data)
+    expect(text).toContain(
+      `Faktura F2026010 till Erik Andersson (Erik) från Acme AB förföll 2026-05-01 (25 dagar sedan). Att betala: ${formatCurrency(10_000, 'SEK')}. Skickad 2026-04-15.`,
+    )
+  })
+
+  it('leaves unknown placeholders as literal text', () => {
+    const data = withOverrides({ level_1: { body: 'Hej {okänd} värld' } })
+    expect(generateReminderEmailText(data)).toContain('Hej {okänd} värld')
+  })
+
+  it('falls back to the default for whitespace-only override fields', () => {
+    const data = withOverrides({ level_1: { subject: '   ', body: '\n' } })
+    expect(generateReminderEmailSubject(data)).toContain('Vänlig påminnelse: Faktura F2026010')
+    expect(generateReminderEmailText(data)).toContain('Vi vill påminna dig om att faktura')
+  })
+
+  it('escapes override content in HTML and keeps paragraph breaks', () => {
+    const data = withOverrides({
+      level_1: { body: 'Första stycket <script>alert(1)</script>\n\nAndra stycket\nmed radbrytning' },
+    })
+    const html = generateReminderEmailHtml(data)
+    expect(html).not.toContain('<script>')
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
+    expect(html).toContain('Andra stycket<br>med radbrytning')
+    // Two paragraphs -> two <p> blocks.
+    expect(html.match(/Första stycket/g)).toHaveLength(1)
+    expect(html).toContain('<p style="margin: 0 0 15px 0;">Andra stycket<br>med radbrytning</p>')
+  })
+
+  it('applies an override only to its own level', () => {
+    const overrides = { level_2: { body: 'Egen text för nivå två.' } }
+    const level1 = generateReminderEmailText(withOverrides(overrides))
+    const level2 = generateReminderEmailText({
+      ...withOverrides(overrides),
+      reminderLevel: 2 as const,
+    })
+    expect(level1).not.toContain('Egen text för nivå två.')
+    expect(level1).toContain('Vi vill påminna dig')
+    expect(level2).toContain('Egen text för nivå två.')
+    expect(level2).not.toContain('Trots vår tidigare påminnelse')
   })
 })

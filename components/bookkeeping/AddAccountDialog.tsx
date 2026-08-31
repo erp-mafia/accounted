@@ -15,8 +15,9 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Loader2, AlertTriangle } from 'lucide-react'
-import { isStandardBASAccount } from '@/lib/bookkeeping/bas-reference'
-import { classifyAccount } from '@/lib/bookkeeping/account-classifier'
+import { isStandardBASAccountNumber } from '@/lib/bookkeeping/bas-account-numbers'
+import { classifyAccountClient as classifyAccount } from '@/lib/bookkeeping/account-classifier-client'
+import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import type { BASAccount } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { AccountVatTreatmentSelect } from './AccountVatTreatmentSelect'
@@ -49,6 +50,9 @@ export function AddAccountDialog({
   initialAccountNumber,
   initialAccountName,
 }: AddAccountDialogProps) {
+  // Loads the BAS chart chunk after mount so classification and the
+  // standard-account check get the authoritative answer once it lands.
+  useBasReference()
   const [accountNumber, setAccountNumber] = useState('')
   const [accountName, setAccountName] = useState('')
   const [description, setDescription] = useState('')
@@ -82,7 +86,7 @@ export function AddAccountDialog({
     }
   }, [open, initialAccountNumber, initialAccountName])
 
-  const isBASMatch = accountNumber.length === 4 && isStandardBASAccount(accountNumber)
+  const isBASMatch = accountNumber.length === 4 && isStandardBASAccountNumber(accountNumber)
   const derived = accountNumber.length === 4 ? classifyAccount(accountNumber) : null
 
   async function handleCreate() {

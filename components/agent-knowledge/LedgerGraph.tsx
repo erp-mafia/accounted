@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { motion, AnimatePresence, useReducedMotion, animate } from 'framer-motion'
 import { RotateCw } from 'lucide-react'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
+import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import { useTranslations } from 'next-intl'
 import { formatCurrency } from '@/lib/utils'
 import type { DeepEntity, DeepLedgerContext } from '@/lib/agent-context/ledger-deep'
@@ -240,6 +241,9 @@ const PULSE_DUR: Record<Cadence, number> = { weekly: 1.15, monthly: 2.7, irregul
 
 export function LedgerGraph({ deep, companyName }: { deep: DeepLedgerContext; companyName: string }) {
   const t = useTranslations('agentKnowledge')
+  // Loads the BAS chart chunk after mount and re-renders once names and
+  // descriptions for non-hardcoded accounts are available.
+  useBasReference()
   const reduce = useReducedMotion() ?? false
   const model = useMemo(() => buildModel(deep), [deep])
 

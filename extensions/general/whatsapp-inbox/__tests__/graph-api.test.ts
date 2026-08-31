@@ -3,6 +3,10 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { TimeoutError } from '@/lib/http/fetch-with-timeout'
 import {
   sendText,
+  sendReplyButtons,
+  sendList,
+  sendReaction,
+  RECEIVED_REACTION_EMOJI,
   downloadMedia,
   getDisplayPhoneNumber,
   resetDisplayNumberCacheForTests,
@@ -93,6 +97,108 @@ describe('graph-api', () => {
         template: TEMPLATE.m18Error,
       })
       expect(result.ok).toBe(false)
+    })
+  })
+
+  describe('interactive titles are unique (#1589, Meta #131009 "Duplicate button title")', () => {
+    it('sendReplyButtons sends distinct titles when two options share a name, ids untouched', async () => {
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify({ messages: [{ id: 'wamid.BTN' }] }), { status: 200 }),
+      )
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: null, error: null })
+
+      await sendReplyButtons(supabase as unknown as SupabaseClient, {
+        to: '46701234567',
+        body: 'Vilket företag gäller kvittot?',
+        template: TEMPLATE.m6CompanyQuestion,
+        buttons: [
+          { id: 'company-live', title: 'Capelix AB' },
+          { id: 'company-archived', title: 'Capelix AB' },
+        ],
+      })
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      const payload = JSON.parse(init.body as string) as {
+        interactive: { action: { buttons: { reply: { id: string; title: string } }[] } }
+      }
+      const [first, second] = payload.interactive.action.buttons
+      expect(first.reply.title).not.toBe(second.reply.title)
+      expect(first.reply.title.length).toBeLessThanOrEqual(20)
+      expect(second.reply.title.length).toBeLessThanOrEqual(20)
+      expect(first.reply.id).toBe('company-live')
+      expect(second.reply.id).toBe('company-archived')
+    })
+
+    it('sendList sends distinct row titles when two options share a name, ids untouched', async () => {
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify({ messages: [{ id: 'wamid.LIST' }] }), { status: 200 }),
+      )
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: null, error: null })
+
+      await sendList(supabase as unknown as SupabaseClient, {
+        to: '46701234567',
+        body: 'Vilket företag gäller kvittot?',
+        template: TEMPLATE.m6CompanyQuestion,
+        buttonLabel: 'Välj företag',
+        rows: [
+          { id: 'c-1', title: 'Bolag A AB' },
+          { id: 'c-2', title: 'Wennberg Fastighetsförvaltning AB' },
+          { id: 'c-3', title: 'Wennberg Fastighetsförvaltning Holding AB' },
+          { id: 'c-4', title: 'Bolag D AB' },
+        ],
+      })
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      const payload = JSON.parse(init.body as string) as {
+        interactive: { action: { sections: { rows: { id: string; title: string }[] }[] } }
+      }
+      const rows = payload.interactive.action.sections[0].rows
+      expect(new Set(rows.map((r) => r.title.toLowerCase())).size).toBe(4)
+      for (const row of rows) expect(row.title.length).toBeLessThanOrEqual(24)
+      expect(rows.map((r) => r.id)).toEqual(['c-1', 'c-2', 'c-3', 'c-4'])
+      expect(rows[0].title).toBe('Bolag A AB')
+      expect(rows[3].title).toBe('Bolag D AB')
+    })
+  })
+
+  describe('sendReaction', () => {
+    it('posts a reaction payload targeting the inbound wamid', async () => {
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify({ messages: [{ id: 'wamid.REACT' }] }), { status: 200 }),
+      )
+
+      await sendReaction('46701234567', 'wamid.IN1')
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/111222333/messages')
+      expect((init.headers as Record<string, string>).Authorization).toBe('Bearer token-1')
+      const body = JSON.parse(init.body as string)
+      expect(body.type).toBe('reaction')
+      expect(body.to).toBe('46701234567')
+      expect(body.reaction).toEqual({
+        message_id: 'wamid.IN1',
+        emoji: RECEIVED_REACTION_EMOJI,
+      })
+      // U+2705 exactly: the checkmark must never silently become another char.
+      expect(RECEIVED_REACTION_EMOJI.codePointAt(0)).toBe(0x2705)
+    })
+
+    it('never throws on non-2xx (best-effort, like mark-read)', async () => {
+      fetchMock.mockResolvedValueOnce(new Response('{"error":{}}', { status: 500 }))
+      await expect(sendReaction('46701234567', 'wamid.IN1')).resolves.toBeUndefined()
+    })
+
+    it('never throws on a network error', async () => {
+      fetchMock.mockRejectedValueOnce(new Error('ECONNRESET'))
+      await expect(sendReaction('46701234567', 'wamid.IN1')).resolves.toBeUndefined()
+    })
+
+    it('never throws when the access token is missing', async () => {
+      delete process.env.WHATSAPP_ACCESS_TOKEN
+      await expect(sendReaction('46701234567', 'wamid.IN1')).resolves.toBeUndefined()
+      expect(fetchMock).not.toHaveBeenCalled()
     })
   })
 

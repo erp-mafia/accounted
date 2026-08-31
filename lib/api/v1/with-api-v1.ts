@@ -20,8 +20,8 @@
  *      never cached, so a simulation can never be replayed in place of the
  *      real write that follows it.
  *   7. Invokes the handler with a typed RouteContext.
- *   8. Stamps `X-Request-Id`, `Gnubok-Version`, `X-RateLimit-Limit` on the
- *      response.
+ *   8. Stamps `X-Request-Id` and `Gnubok-Version` on the response, plus
+ *      `Retry-After` on a 429.
  *   9. Catches any thrown value and converts it to the v1 error envelope via
  *      `v1ErrorResponse`.
  *
@@ -38,12 +38,14 @@ import { type SupabaseClient } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
+import { truncateIp } from '@/lib/api/ip'
 import {
   type ApiKeyMode,
   type ApiKeyScope,
   createServiceClientNoCookies,
   extractBearerToken,
   hasScope,
+  RATE_LIMIT_RETRY_AFTER_SECONDS,
   validateApiKey,
 } from '@/lib/auth/api-keys'
 
@@ -88,6 +90,13 @@ export interface ApiV1Context {
   apiKeyName: string | undefined
   /** Scopes granted to the calling key. */
   scopes: ApiKeyScope[]
+  /**
+   * Largest amount in SEK this key may commit with no human approving it, or
+   * null for no ceiling (the default, and what every key predating the column
+   * has). Enforced at the two places an API key can post money: this surface's
+   * journal-entries.commit, and commitPendingOperation for the MCP path.
+   */
+  unattendedCommitLimit: number | null
   /**
    * test|live. Test keys are simulation-only: the wrapper forces `dryRun` on
    * for every write, so handlers never need to special-case `mode`; they just
@@ -167,24 +176,7 @@ function createAnonClient(): SupabaseClient {
  * Honors `x-forwarded-for` when set (Vercel / proxies); behind Vercel the
  * leftmost value is rewritten by the edge so we accept it as authoritative.
  */
-export function truncateIp(ip: string | undefined): string | undefined {
-  if (!ip) return undefined
-  // IPv4: validate octets are 0-255, then drop last octet → "203.0.113.0/24".
-  // Out-of-range octets indicate a spoofed or malformed header; refuse to
-  // log a pseudo-IP that would pollute abuse-pattern analysis.
-  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip)
-  if (v4) {
-    const octets = [v4[1], v4[2], v4[3], v4[4]].map((s) => Number.parseInt(s, 10))
-    if (octets.every((o) => o >= 0 && o <= 255)) {
-      return `${octets[0]}.${octets[1]}.${octets[2]}.0/24`
-    }
-    return undefined
-  }
-  // IPv6: keep first 3 hextets → "2001:db8:abc::/48"
-  const v6 = /^([0-9a-f]{1,4}:[0-9a-f]{1,4}:[0-9a-f]{1,4}):/i.exec(ip)
-  if (v6) return `${v6[1]}::/48`
-  return undefined
-}
+export { truncateIp }
 
 function extractForensicContext(request: Request, log: Logger): { ip: string | undefined; userAgent: string | undefined } {
   const fwd = request.headers.get('x-forwarded-for')
@@ -313,6 +305,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           apiKeyId: undefined,
           apiKeyName: undefined,
           scopes: [],
+          unattendedCommitLimit: null,
           mode: 'live',
           supabase: createAnonClient(),
           dryRun: false,
@@ -328,6 +321,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
               apiKeyId: auth.apiKeyId,
               apiKeyName: auth.apiKeyName,
               scopes: auth.scopes,
+              unattendedCommitLimit: auth.unattendedCommitLimit,
               mode: auth.mode,
               supabase: createServiceClientNoCookies(),
             }
@@ -349,8 +343,13 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       const auth = await validateApiKey(token)
       if ('error' in auth) {
         log.warn('api key validation failed', { status: auth.status, reason: auth.error, ...forensic })
-        const code = auth.status === 429 ? 'RATE_LIMITED' : 'UNAUTHORIZED'
-        return await v1ErrorResponseFromCode(code, log, { requestId, reason: auth.error })
+        const rateLimited = auth.status === 429
+        const code = rateLimited ? 'RATE_LIMITED' : 'UNAUTHORIZED'
+        return await v1ErrorResponseFromCode(code, log, {
+          requestId,
+          reason: auth.error,
+          ...(rateLimited ? { retryAfterSeconds: RATE_LIMIT_RETRY_AFTER_SECONDS } : {}),
+        })
       }
 
       const userLog = log.child({
@@ -492,6 +491,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         apiKeyId: auth.apiKeyId,
         apiKeyName: auth.apiKeyName,
         scopes: auth.scopes,
+        unattendedCommitLimit: auth.unattendedCommitLimit,
         mode: auth.mode,
         supabase,
         companyId,

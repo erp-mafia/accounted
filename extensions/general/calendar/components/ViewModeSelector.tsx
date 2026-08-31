@@ -2,8 +2,7 @@
 
 import { CalendarViewMode } from '@/types'
 import { VIEW_MODE_LABELS } from '@/lib/calendar/utils'
-import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 
 interface ViewModeSelectorProps {
   viewMode: CalendarViewMode
@@ -14,21 +13,11 @@ export function ViewModeSelector({ viewMode, onViewModeChange }: ViewModeSelecto
   const modes: CalendarViewMode[] = ['month', 'week', 'day']
 
   return (
-    <div className="inline-flex rounded-md border">
-      {modes.map((mode) => (
-        <Button
-          key={mode}
-          variant="ghost"
-          size="sm"
-          onClick={() => onViewModeChange(mode)}
-          className={cn(
-            'rounded-none border-r last:border-r-0 px-3',
-            viewMode === mode && 'bg-muted'
-          )}
-        >
-          {VIEW_MODE_LABELS[mode]}
-        </Button>
-      ))}
-    </div>
+    <SegmentedControl
+      value={viewMode}
+      onChange={onViewModeChange}
+      options={modes.map((mode) => ({ value: mode, label: VIEW_MODE_LABELS[mode] }))}
+      aria-label="Kalendervy"
+    />
   )
 }

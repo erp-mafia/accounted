@@ -4,7 +4,8 @@
 // Rendered by the focused /reports/[slug] route (see components/reports/FocusedReport.tsx).
 // The regulated table/figure rendering is unchanged from the original monolith.
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import { useDimensions } from '@/lib/reference-data/hooks'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -18,6 +19,7 @@ import { SegmentedControl } from '@/components/ui/segmented-control'
 import { EmptyState } from '@/components/ui/empty-state'
 import { FyPicker } from '@/components/common/FyPicker'
 import { mostRecentEndedVatPeriod } from '@/lib/vat/period-defaults'
+import { resolveInitialVatPeriodSelection } from '@/lib/vat/period-selection'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { cn, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -1516,8 +1518,12 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   // Company settings drive both the momsregistrerad gate and the default
   // periodicity (moms_period in Inställningar). Applied once per company the
   // first time its settings settle — as a render-phase adjustment, not an
-  // effect. A later manual change to the picker is preserved, and a company
-  // switch re-applies the new company's setting. `useCompanySettings` only
+  // effect. A later manual change to the picker is preserved for the session,
+  // and a company switch re-applies the new company's setting. The cadence is
+  // deliberately NOT persisted across visits: the redovisningsperiod is fixed
+  // by the company's Skatteverket registration, so this mount-time re-seed is
+  // the control that self-heals an in-session detour to the wrong period
+  // type (see lib/vat/period-selection.ts). `useCompanySettings` only
   // refetches when the active company changes, so this never clobbers a
   // manual selection mid-session.
   const { settings, isLoading: settingsLoading, refetch: refetchSettings } = useCompanySettings()
@@ -1525,25 +1531,24 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   const companyKey = settingsLoading ? null : (settings?.company_id ?? 'none')
   if (companyKey !== null && appliedCompany !== companyKey) {
     setAppliedCompany(companyKey)
-    const configured = settings?.moms_period ?? 'quarterly'
-    setPeriodType(configured)
-    if (configured === 'monthly' || configured === 'quarterly') {
-      // Default to the period whose declaration is actually open: the current
-      // one can never be filed, so seeding it forced a step-back click on
-      // every filing visit (and a year-boundary trap in January).
-      const ended = mostRecentEndedVatPeriod(configured, new Date(), {
-        over40m: settings?.vat_taxable_base_over_40m === true,
-      })
-      setYear(ended.year)
-      setPeriod(ended.period)
-    } else {
-      setPeriod(1)
-    }
+    const initial = resolveInitialVatPeriodSelection({
+      momsPeriod: settings?.moms_period ?? null,
+      over40m: settings?.vat_taxable_base_over_40m === true,
+    })
+    setPeriodType(initial.periodType)
+    setYear(initial.year)
+    setPeriod(initial.period)
   }
 
   // Settings row present and the company answered "not VAT-registered" —
   // the declaration is meaningless, so the whole view is gated below.
   const notVatRegistered = !settingsLoading && settings !== null && !settings.vat_registered
+  // No company_settings row at all (company created outside onboarding):
+  // VAT registration AND periodicity are both unknown. This used to fall
+  // through every gate and render a silently guessed quarterly declaration;
+  // the wrong period type for an årsmoms company is a compliance hazard, so
+  // it now gates like the other unknowns.
+  const settingsRowMissing = !settingsLoading && settings === null
   // Registered but never picked a redovisningsperiod (rare — onboarding
   // requires it, but companies created outside that flow can miss it).
   const momsPeriodMissing = settings?.vat_registered === true && !settings.moms_period
@@ -1585,7 +1590,11 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   // gated, or no redovisningsperiod configured); any change to it triggers a
   // refetch and stale responses are discarded.
   const fetchKey =
-    periodType === null || notVatRegistered || momsPeriodMissing || awaitingFiscalPeriod
+    periodType === null ||
+    notVatRegistered ||
+    settingsRowMissing ||
+    momsPeriodMissing ||
+    awaitingFiscalPeriod
       ? null
       : `${periodType}:${year}:${period}:${isYearly ? fiscalPeriodId : ''}:${retryKey}`
 
@@ -1792,6 +1801,21 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
             <Skeleton className="h-64" />
           </CardContent>
         </Card>
+      </div>
+    )
+  }
+
+  if (settingsRowMissing) {
+    return (
+      <div className="space-y-8">
+        {bareHeader}
+        <EmptyState
+          icon={Percent}
+          title="Skatteinställningar saknas"
+          description="Momsdeklarationen bygger på företagets skatteinställningar, men inga är angivna ännu. Ange momsregistrering och redovisningsperiod (månad, kvartal eller helår) i inställningarna, så visas deklarationen för rätt period."
+          actionLabel="Öppna skatteinställningar"
+          actionHref="/settings/tax"
+        />
       </div>
     )
   }
@@ -3426,22 +3450,17 @@ export function DimensionPnlView({ periodId, dateRange }: { periodId: string; da
     data: DimensionPnlReport | null
     error: string | null
   } | null>(null)
-  const [dims, setDims] = useState<{ sie_dim_no: number; name: string }[]>([])
   const [dimNo, setDimNo] = useState('6')
   const reportQs = `${reportQuery(periodId, dateRange)}&dim_no=${encodeURIComponent(dimNo)}`
 
-  // Registered dimensions for the pivot picker (best-effort; the report
-  // defaults to projekt if the registry read fails).
-  useEffect(() => {
-    fetch('/api/dimensions')
-      .then((res) => res.json())
-      .then((payload) => {
-        if (Array.isArray(payload.data)) {
-          setDims(payload.data.map((d: { sie_dim_no: number; name: string }) => ({ sie_dim_no: d.sie_dim_no, name: d.name })))
-        }
-      })
-      .catch(() => {})
-  }, [])
+  // Registered dimensions for the pivot picker, from the session cache
+  // (lib/reference-data); best-effort, the report defaults to projekt while
+  // the registry is unavailable.
+  const { dimensions } = useDimensions()
+  const dims = useMemo(
+    () => dimensions.map((d) => ({ sie_dim_no: d.sie_dim_no, name: d.name })),
+    [dimensions],
+  )
 
   useEffect(() => {
     let cancelled = false

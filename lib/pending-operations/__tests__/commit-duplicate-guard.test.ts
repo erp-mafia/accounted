@@ -121,8 +121,11 @@ describe('commit duplicate guard: categorize_transaction (reverse / book the ban
       { data: { id: 'tx-1', date: '2026-03-26', amount: 98565, cash_account_id: null, journal_entry_id: null } },
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: [] }, // no fiscal period yet
+      { data: [] }, // pre-FY guard: earliest-period lookup (none yet)
       { data: null }, // fiscal-period upsert
       { data: null }, // journal-entry period lookup: partial categorization path
+      { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
+      { data: [] }, // pre-FY clamp: earliest-period lookup (none yet)
       {
         data: [{
           id: 'tx-1',
@@ -169,8 +172,10 @@ describe('commit duplicate guard: categorize_transaction (reverse / book the ban
       { data: { id: 'tx-1', date: '2026-03-26', amount: 98565, cash_account_id: null, journal_entry_id: null } },
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: [] }, // no fiscal period yet
+      { data: [] }, // pre-FY guard: earliest-period lookup (none yet)
       { data: null }, // fiscal-period upsert
       { data: null }, // journal-entry period lookup: partial categorization path
+      { data: [] }, // pre-FY clamp: earliest-period lookup (none yet)
       {
         data: [{
           id: 'tx-1',

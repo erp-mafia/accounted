@@ -158,6 +158,7 @@ function inferCode(message: string): string | null {
   if (/Bokföringen är låst/i.test(message)) return 'PERIOD_LOCKED'
   if (/Transaction not found/i.test(message)) return 'NOT_FOUND'
   if (/Invoice not found/i.test(message)) return 'NOT_FOUND'
+  if (/must be \d+ characters or fewer/i.test(message)) return 'VALIDATION_ERROR'
   return null
 }
 

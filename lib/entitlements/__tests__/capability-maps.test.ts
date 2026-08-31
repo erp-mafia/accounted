@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   MCP_TOOL_CAPABILITY_MAP,
   PAID_OPERATION_CAPABILITY_MAP,
@@ -12,6 +12,10 @@ import {
  * external-service tool silently bypassing the paywall: mirrors the
  * TOOL_SCOPE_MAP assertions in the mcp-server tests.
  */
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
 /**
  * MCP tools that invoke a paid capability directly (no stage→commit round-trip),
  * so they are gated at DISPATCH only and have no commit-time (operation-map)
@@ -22,6 +26,9 @@ const DISPATCH_ONLY_MCP_TOOLS = new Set<string>([
   'gnubok_upload_document',
   'gnubok_create_document_upload',
   'gnubok_complete_document_upload',
+  // Onboarding connect-link tools: read status + hand out a browser link; no commit counterpart.
+  'gnubok_connect_bank',
+  'gnubok_connect_skatteverket',
 ])
 
 describe('MCP_TOOL_CAPABILITY_MAP', () => {
@@ -30,6 +37,8 @@ describe('MCP_TOOL_CAPABILITY_MAP', () => {
       gnubok_send_invoice: CAPABILITY.email_send,
       gnubok_vat_declaration_submit: CAPABILITY.skatteverket,
       gnubok_agi_submit: CAPABILITY.skatteverket,
+      gnubok_connect_bank: CAPABILITY.bank_sync,
+      gnubok_connect_skatteverket: CAPABILITY.skatteverket,
       // Dispatch-only AI tools: inline Bedrock OCR, no staged operation. The
       // signed-URL pair is gated at create AND complete so a free-tier key can
       // neither reserve nor finalize a paid extraction.

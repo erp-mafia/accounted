@@ -25,6 +25,7 @@ import {
   Landmark,
   Loader2,
   ReceiptText,
+  Scale,
   ShieldCheck,
   Stamp,
 } from 'lucide-react'
@@ -59,6 +60,14 @@ interface AttGoraSectionProps {
    * state then says "nothing here yet" instead of a false "all caught up".
    */
   emptyLedger?: boolean
+  /**
+   * False when the company has no active bank connection. The all-clear state
+   * then explains that nothing flows in automatically and offers "Anslut bank"
+   * instead of a bare "all caught up": for a disconnected company the silence
+   * is a setup gap, not an achievement. Defaults to true so a fetch error
+   * degrades to the ordinary all-clear copy, never to a wrong nag.
+   */
+  hasActiveBankConnection?: boolean
 }
 
 interface WorklistRowProps {
@@ -107,6 +116,7 @@ export default function AttGoraSection({
   suggestedMatches,
   expiringBankConnections = [],
   emptyLedger = false,
+  hasActiveBankConnection = true,
 }: AttGoraSectionProps) {
   const t = useTranslations('dashboard')
   const { toast } = useToast()
@@ -198,6 +208,7 @@ export default function AttGoraSection({
   const bevakaRows =
     counts.overdue_invoice > 0 ||
     counts.deadline_action > 0 ||
+    counts.reconciliation_due > 0 ||
     expiringBankConnections.length > 0
   const allClear = !bokforRows && !granskaRows && !bevakaRows
 
@@ -235,11 +246,20 @@ export default function AttGoraSection({
                 description={t('att_gora_new_body')}
                 className="py-10"
               />
-            ) : (
+            ) : hasActiveBankConnection ? (
               <EmptyState
                 icon={CheckCircle2}
                 title={t('att_gora_empty_title')}
                 description={t('att_gora_empty_body')}
+                className="py-10"
+              />
+            ) : (
+              <EmptyState
+                icon={Landmark}
+                title={t('att_gora_no_bank_title')}
+                description={t('att_gora_no_bank_body')}
+                actionLabel={t('att_gora_no_bank_action')}
+                actionHref="/settings/banking"
                 className="py-10"
               />
             )
@@ -392,6 +412,15 @@ export default function AttGoraSection({
                         icon={CalendarClock}
                         label={t('row_deadlines')}
                         count={counts.deadline_action}
+                      />
+                    )}
+                    {counts.reconciliation_due > 0 && (
+                      <WorklistRow
+                        href="/reconciliation"
+                        icon={Scale}
+                        label={t('row_reconciliation_due')}
+                        detail={t('row_reconciliation_due_detail')}
+                        count={counts.reconciliation_due}
                       />
                     )}
                     {expiringBankConnections.length > 0 && (

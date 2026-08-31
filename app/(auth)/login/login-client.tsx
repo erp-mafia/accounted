@@ -24,18 +24,27 @@ import {
 } from 'lucide-react'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { isBankIdEnabled } from '@/lib/auth/bankid'
-import { getBranding } from '@/lib/branding/service'
+import { isBankIdEnabled } from '@/lib/auth/bankid-flags'
+import { useBranding } from '@/lib/branding/brand-context'
+import { SourceCodeFooter } from '@/components/branding/SourceCodeFooter'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import { resolvePostLoginDestination } from '@/lib/company/post-login-landing'
 import {
   consumeInviteCookie,
   INVITE_PROBLEM_MESSAGE_KEYS,
 } from '@/lib/auth/consume-invite-cookie'
 import { buildPasswordResetRedirectTo } from '@/lib/domains/trusted-app-origin'
 import { AuthFormError } from '@/components/auth/AuthFormError'
-import { GoogleAuthButton } from '@/components/auth/GoogleAuthButton'
-import { isGoogleAuthEnabled } from '@/lib/auth/google-oauth'
+import { OAuthButton } from '@/components/auth/OAuthButton'
+import {
+  TurnstileChallenge,
+  type TurnstileChallengeHandle,
+} from '@/components/auth/TurnstileChallenge'
+import {
+  captchaTokenOptions,
+  isTurnstileSubmissionBlocked,
+} from '@/lib/auth/turnstile'
 import { classifyAuthError, type AuthErrorKind } from '@/lib/auth/classify-auth-error'
 import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
 import { persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
@@ -44,8 +53,8 @@ import {
   setSessionAuthMethodHint,
   type SessionTimeoutReason,
 } from '@/lib/auth/session-timeout-shared'
+import type { GoTrueAuthSettings } from '@/lib/auth/gotrue-providers'
 
-const branding = getBranding()
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
 
 const BankIdAuth = dynamic(
@@ -60,7 +69,16 @@ const BankIdAuth = dynamic(
  * `initialMethod` comes from the server page reading the method-hint cookie,
  * so a returning password user lands straight on the form with no flash.
  */
-export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | null }) {
+export function LoginClient({
+  initialMethod,
+  authSettings,
+  canUseSaml
+}: {
+  initialMethod: LoginMethod | null
+  authSettings: GoTrueAuthSettings
+  canUseSaml?: boolean
+}) {
+  const { providers, passwordLoginEnabled, registrationEnabled, samlEnabled } = authSettings
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -77,8 +95,12 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   // Consecutive credential failures; from the second one on, the error line
   // grows a reset-password action (extra help on repeated errors).
   const [failedAttempts, setFailedAttempts] = useState(0)
+  const [passwordCaptchaToken, setPasswordCaptchaToken] = useState<string | null>(null)
+  const [resetCaptchaToken, setResetCaptchaToken] = useState<string | null>(null)
   const passwordInputRef = useRef<HTMLInputElement>(null)
   const emailInputRef = useRef<HTMLInputElement>(null)
+  const passwordTurnstileRef = useRef<TurnstileChallengeHandle>(null)
+  const resetTurnstileRef = useRef<TurnstileChallengeHandle>(null)
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -93,9 +115,15 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   // (/login?next=/api/mcp-oauth/authorize?...). Sanitized to a same-origin
   // relative path; '/' means no explicit destination.
   const nextPath = safeReturnTo(searchParams.get('next'), '/')
+  // A visitor who arrives here from the MCP consent page and has no account
+  // yet must be able to sign up without losing that destination (issue
+  // #1814). The register page re-sanitises it through safeReturnTo.
+  const registerHref = nextPath === '/' ? '/register' : `/register?next=${encodeURIComponent(nextPath)}`
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
-  const googleAuthEnabled = isGoogleAuthEnabled()
+  // Per-request brand merged over getBranding() defaults (WL-12): identical
+  // values on default hosts, brand values on branded hosts.
+  const branding = useBranding()
   const tAuth = useTranslations('auth')
   const tCommon = useTranslations('common')
   const tInvite = useTranslations('invite')
@@ -141,12 +169,46 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
 
   const openResetForm = () => {
     setFormError(null)
+    setResetCaptchaToken(null)
     setShowResetPassword(true)
   }
 
   const closeResetForm = () => {
     setFormError(null)
+    setResetCaptchaToken(null)
     setShowResetPassword(false)
+  }
+
+  const handleSamlLogin = async () => {
+    setFormError(null)
+    setIsLoading(true)
+    try {
+      const ssoDomain = process.env.NEXT_PUBLIC_SSO_DOMAIN
+      const ssoProviderId = process.env.NEXT_PUBLIC_SSO_PROVIDER_ID
+      const params = ssoProviderId
+        ? { providerId: ssoProviderId }
+        : ssoDomain
+          ? { domain: ssoDomain }
+          : null
+      if (!params) {
+        setFormError({ kind: 'oauth', message: tAuth('saml_no_domain') })
+        return
+      }
+      const { error } = await supabase.auth.signInWithSSO({
+        ...params,
+        options: { redirectTo: `${window.location.origin}/auth/callback?flow=oauth&next=${encodeURIComponent(nextPath)}` },
+      })
+      if (error) {
+        setFormError({ kind: 'oauth', message: getErrorMessage(error, { context: 'auth', locale: errorLocale }) })
+      }
+    } catch (error) {
+      setFormError({
+        kind: 'oauth',
+        message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
+      })
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   // Accept a pending invite, if any, and report a non-definitive failure.
@@ -227,9 +289,13 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
           return
         }
 
-        // Always land on the picker after BankID login so the user sees
-        // fresh CompanyRoles fetched during this session's enrichment.
-        router.push('/select-company')
+        // Byrå staff on their byrå's home domain land in the cockpit
+        // (WL-14). Everyone else keeps the picker: landing on
+        // /select-company after BankID is deliberate, so the user sees
+        // fresh CompanyRoles fetched during this session's enrichment
+        // (and any failure inside the helper degrades to it).
+        const dest = await resolvePostLoginDestination()
+        router.push(dest === '/clients' ? '/clients' : '/select-company')
         router.refresh()
       } catch (error) {
         console.error('[login] BankID complete error', error)
@@ -244,6 +310,12 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   const handlePasswordLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setFormError(null)
+
+    if (isTurnstileSubmissionBlocked(passwordCaptchaToken)) {
+      setFormError({ kind: 'unknown', message: tAuth('turnstile_required') })
+      return
+    }
+
     setIsLoading(true)
 
     const formData = new FormData(e.currentTarget)
@@ -254,6 +326,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
       const { error } = await supabase.auth.signInWithPassword({
         email: emailValue,
         password: passwordValue,
+        options: captchaTokenOptions(passwordCaptchaToken),
       })
 
       if (error) {
@@ -305,7 +378,10 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
         return
       }
 
-      router.push('/')
+      // Byrå staff land in the cockpit on their byrå's home domain (WL-14);
+      // everyone else resolves to '/' and keeps today's flow byte-identically
+      // (any failure inside the helper also degrades to '/').
+      router.push(await resolvePostLoginDestination())
       router.refresh()
     } catch (error) {
       setFormError({
@@ -313,6 +389,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
         message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
       })
     } finally {
+      passwordTurnstileRef.current?.reset()
       setIsLoading(false)
     }
   }
@@ -320,6 +397,12 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   const handleResetPassword = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setFormError(null)
+
+    if (isTurnstileSubmissionBlocked(resetCaptchaToken)) {
+      setFormError({ kind: 'unknown', message: tAuth('turnstile_required') })
+      return
+    }
+
     setIsLoading(true)
 
     const formData = new FormData(e.currentTarget)
@@ -328,6 +411,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(emailValue, {
         redirectTo: buildPasswordResetRedirectTo(window.location.origin),
+        ...captchaTokenOptions(resetCaptchaToken),
       })
 
       if (error) {
@@ -353,6 +437,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
         message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
       })
     } finally {
+      resetTurnstileRef.current?.reset()
       setIsLoading(false)
     }
   }
@@ -461,7 +546,20 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                   className="h-11"
                 />
               </div>
-              <Button type="submit" className="w-full h-11" disabled={isLoading || !!resetCooldownUntil}>
+              <TurnstileChallenge
+                ref={resetTurnstileRef}
+                action="accounted_password_reset"
+                onTokenChange={setResetCaptchaToken}
+              />
+              <Button
+                type="submit"
+                className="w-full h-11"
+                disabled={
+                  isLoading ||
+                  !!resetCooldownUntil ||
+                  isTurnstileSubmissionBlocked(resetCaptchaToken)
+                }
+              >
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -490,8 +588,14 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   }
 
   const showBankIdChip = method === 'email' && bankIdEnabled
-  const showEmailChip = method === 'bankid'
-  const chipCount = (showBankIdChip ? 1 : 0) + (showEmailChip ? 1 : 0) + (googleAuthEnabled ? 1 : 0)
+  const showEmailChip = method === 'bankid' && passwordLoginEnabled
+  const samlAvailable = samlEnabled && canUseSaml
+  const chipCount = (showBankIdChip ? 1 : 0) + (showEmailChip ? 1 : 0) + providers.length + (samlAvailable ? 1 : 0)
+
+  const hasPrimaryMethod =
+    (method === 'bankid' && bankIdEnabled) ||
+    (method === 'email' && passwordLoginEnabled)
+  const hasSecondaryMethods = chipCount > 0
 
   return (
     <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
@@ -546,14 +650,16 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                 {tAuth('bankid_no_account_greeting', { name: bankIdNoAccount.givenName ?? '' })}
               </p>
               <p className="mt-1 text-muted-foreground">{tAuth('bankid_no_account_body')}</p>
-              <p className="mt-1">
-                <Link
-                  href="/register"
-                  className="text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors"
-                >
-                  {tAuth('bankid_no_account_create')}
-                </Link>
-              </p>
+        {passwordLoginEnabled && registrationEnabled && (
+                <p className="mt-1">
+                  <Link
+                    href={registerHref}
+                    className="text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors"
+                  >
+                    {tAuth('bankid_no_account_create')}
+                  </Link>
+                </p>
+              )}
             </div>
           )}
           {bankIdUnavailable && (
@@ -564,9 +670,9 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
           )}
 
           <div key={method} className="animate-fade-in">
-            {method === 'bankid' ? (
+            {method === 'bankid' && bankIdEnabled ? (
               <BankIdAuth mode="login" hero onComplete={handleBankIdComplete} />
-            ) : (
+            ) : method === 'email' && passwordLoginEnabled ? (
               <form onSubmit={handlePasswordLogin} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="email">{tAuth('email_label')}</Label>
@@ -649,7 +755,16 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                     </p>
                   )}
                 </div>
-                <Button type="submit" className="w-full h-11" disabled={isLoading}>
+                <TurnstileChallenge
+                  ref={passwordTurnstileRef}
+                  action="accounted_login"
+                  onTokenChange={setPasswordCaptchaToken}
+                />
+                <Button
+                  type="submit"
+                  className="w-full h-11"
+                  disabled={isLoading || isTurnstileSubmissionBlocked(passwordCaptchaToken)}
+                >
                   {isLoading ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -660,10 +775,58 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                   )}
                 </Button>
               </form>
+            ) : (
+              providers.length > 0 ? (
+                <div className="space-y-3">
+                  {providers.map((provider) => (
+                    <OAuthButton
+                      key={provider.id}
+                      provider={provider}
+                      next={nextPath}
+                      onError={(message) => setFormError({ kind: 'oauth', message })}
+                    />
+                  ))}
+                  {samlAvailable && !hasPrimaryMethod && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full h-11 gap-2"
+                      onClick={handleSamlLogin}
+                      disabled={isLoading}
+                    >
+                      {isLoading ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                      )}
+                      {tAuth('continue_with_provider', { provider: 'SAML' })}
+                    </Button>
+                  )}
+                </div>
+              ) : samlAvailable ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full h-11 gap-2"
+                  onClick={handleSamlLogin}
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                  )}
+                  {tAuth('continue_with_provider', { provider: 'SAML' })}
+                </Button>
+              ) : (
+                <p className="text-center text-sm text-muted-foreground">
+                  {tAuth('no_login_methods')}
+                </p>
+              )
             )}
           </div>
 
-          {chipCount > 0 && (
+          {hasPrimaryMethod && hasSecondaryMethods && (
             <>
               <div className="relative my-6">
                 <div className="absolute inset-0 flex items-center">
@@ -693,12 +856,15 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                     BankID
                   </Button>
                 )}
-                {googleAuthEnabled && (
-                  <GoogleAuthButton
+                {providers.map((provider) => (
+                  <OAuthButton
                     compact
+                    key={provider.id}
+                    provider={provider}
+                    next={nextPath}
                     onError={(message) => setFormError({ kind: 'oauth', message })}
                   />
-                )}
+                ))}
                 {showEmailChip && (
                   <Button
                     type="button"
@@ -710,32 +876,67 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                     {tAuth('method_email_chip')}
                   </Button>
                 )}
+                {samlAvailable && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 w-full gap-2"
+                    onClick={handleSamlLogin}
+                    disabled={isLoading}
+                  >
+                    {isLoading ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <KeyRound className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    )}
+                    {tAuth('continue_with_provider', { provider: 'SAML' })}
+                  </Button>
+                )}
               </div>
             </>
           )}
         </div>
 
-        <p className="mt-6 text-center text-[13px] text-muted-foreground">
-          {tAuth('login_new_here')}{' '}
-          <Link
-            href="/register"
-            className="font-medium text-foreground underline underline-offset-2 hover:opacity-80 transition-opacity"
-          >
-            {tAuth('no_account')}
-          </Link>
-        </p>
+        {passwordLoginEnabled && registrationEnabled && (
+          <p className="mt-6 text-center text-[13px] text-muted-foreground">
+            {tAuth('login_new_here')}{' '}
+            <Link
+              href={registerHref}
+              className="font-medium text-foreground underline underline-offset-2 hover:opacity-80 transition-opacity"
+            >
+              {tAuth('no_account')}
+            </Link>
+          </p>
+        )}
 
         <p className="mt-3 text-center text-xs text-muted-foreground/80 leading-relaxed">
           {tAuth('terms_prefix')}{' '}
-          <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
+          {/* The platform's terms live on the marketing site; the privacy
+              policy is the in-app /privacy page (host-relative, so it works
+              on branded byrå domains too). New tab: don't lose login state. */}
+          <a
+            href="https://accounted.se/terms"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-foreground transition-colors"
+          >
             {tAuth('terms_link')}
           </a>{' '}
           {tAuth('terms_and')}{' '}
-          <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
+          <a
+            href="/privacy"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-foreground transition-colors"
+          >
             {tAuth('privacy_link')}
           </a>
           .
         </p>
+
+        {/* AGPL section 13 source offer (WL-06): renders on both default and
+            branded hosts; never gate this on a brand. */}
+        <SourceCodeFooter className="mt-4" />
       </div>
     </div>
   )

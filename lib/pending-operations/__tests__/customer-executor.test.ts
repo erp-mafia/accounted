@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PendingOperation } from '@/types'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { encryptPersonnummer } from '@/lib/salary/personnummer'
 import { commitPendingOperation } from '../commit'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 
@@ -248,5 +249,181 @@ describe('commitPendingOperation: update_customer', () => {
     expect(result.http_status).toBe(400)
     expect(result.error).toMatch(/unrecognized key/i)
     expect(supabase.from).toHaveBeenCalledTimes(2)
+  })
+})
+
+// ── personal_number (#1876) ───────────────────────────────────────────
+//
+// Synthetic personnummer, never a real one. Staging encrypts, so the
+// executor only ever sees personal_number_encrypted: ciphertext sets the
+// column, explicit null clears it, absent leaves it untouched.
+const PERSONAL_NUMBER = '19900101-1234'
+
+function individualRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: CUSTOMER_ID,
+    name: 'Anna Andersson',
+    customer_type: 'individual',
+    customer_number: null,
+    email: null,
+    phone: null,
+    address_line1: null,
+    address_line2: null,
+    postal_code: null,
+    city: null,
+    country: 'Sweden',
+    org_number: null,
+    vat_number: null,
+    vat_number_validated: false,
+    language: 'sv',
+    default_payment_terms: 30,
+    notes: null,
+    personal_number: null,
+    ...overrides,
+  }
+}
+
+describe('commitPendingOperation: update_customer personal_number', () => {
+  it('stores the staged ciphertext as the customer personal_number and returns only the mask', async () => {
+    const encrypted = encryptPersonnummer(PERSONAL_NUMBER)
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-customer-1' } }) // CAS claim
+    enqueue({ data: { customer_type: 'individual' } }) // current read
+    enqueue({ data: individualRow({ personal_number: encrypted }) }) // update returning
+    enqueue({ data: null }) // dispatcher update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        customer_id: CUSTOMER_ID,
+        changes: { personal_number_encrypted: encrypted },
+      }),
+    )
+
+    expect(result.status).toBe('committed')
+    const updatePayload = findCall('customers', 'update')?.[0] as Record<string, unknown>
+    expect(updatePayload).toMatchObject({ personal_number: encrypted })
+    expect(updatePayload).not.toHaveProperty('personal_number_encrypted')
+    expect(result.data).toMatchObject({
+      customer_id: CUSTOMER_ID,
+      personal_number_masked: '********-1234',
+    })
+    // result_data is persisted and rendered in approval UIs: never the
+    // plaintext, never the raw ciphertext.
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain(PERSONAL_NUMBER)
+    expect(serialized).not.toContain(encrypted)
+  })
+
+  it('clears the stored personnummer on explicit null', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-customer-1' } })
+    enqueue({ data: { customer_type: 'individual' } })
+    enqueue({ data: individualRow() })
+    enqueue({ data: null })
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        customer_id: CUSTOMER_ID,
+        changes: { personal_number_encrypted: null },
+      }),
+    )
+
+    expect(result.status).toBe('committed')
+    const updatePayload = findCall('customers', 'update')?.[0] as Record<string, unknown>
+    expect(updatePayload).toHaveProperty('personal_number', null)
+    expect(result.data).toMatchObject({ personal_number_masked: null })
+  })
+
+  it('leaves the stored personnummer untouched when the field is absent', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-customer-1' } })
+    enqueue({ data: { customer_type: 'individual' } })
+    enqueue({ data: individualRow({ city: 'New City' }) })
+    enqueue({ data: null })
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        customer_id: CUSTOMER_ID,
+        changes: { city: 'New City' },
+      }),
+    )
+
+    expect(result.status).toBe('committed')
+    const updatePayload = findCall('customers', 'update')?.[0] as Record<string, unknown>
+    expect(updatePayload).not.toHaveProperty('personal_number')
+  })
+
+  it('refuses a staged personnummer on a business customer without writing', async () => {
+    const encrypted = encryptPersonnummer(PERSONAL_NUMBER)
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-customer-1' } })
+    enqueue({ data: { customer_type: 'swedish_business' } })
+    enqueue({ data: null }) // dispatcher's reject update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        customer_id: CUSTOMER_ID,
+        changes: { personal_number_encrypted: encrypted },
+      }),
+    )
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toMatch(/individual/)
+    expect(findCall('customers', 'update')).toBeUndefined()
+  })
+
+  it('rejects a tampered plaintext personal_number key in changes', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-customer-1' } })
+    enqueue({ data: null })
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        customer_id: CUSTOMER_ID,
+        changes: { personal_number: PERSONAL_NUMBER },
+      }),
+    )
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toMatch(/unrecognized key/i)
+    expect(findCall('customers', 'update')).toBeUndefined()
+  })
+
+  it('rejects a tampered plaintext value under personal_number_encrypted', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-customer-1' } })
+    enqueue({ data: null })
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        customer_id: CUSTOMER_ID,
+        changes: { personal_number_encrypted: PERSONAL_NUMBER },
+      }),
+    )
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toMatch(/encrypted personal number/i)
+    expect(findCall('customers', 'update')).toBeUndefined()
   })
 })

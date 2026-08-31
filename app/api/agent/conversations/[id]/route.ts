@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
+import { rejectPendingForConversation } from '@/lib/agent/pending/reject-conversation-pending'
 
 // GET /api/agent/conversations/[id]
 //
@@ -147,6 +148,18 @@ export const PATCH = withRouteContext(
       .select('id, intent_id, context_ref, title, pinned, archived, last_message_at, created_at')
       .single()
     if (error) throw error
+
+    // Archiving a thread means "I'm done with it": clear any proposals the
+    // assistant staged here that the user never acted on, so they don't linger
+    // in Granskning. Best-effort — a failure here must not fail the archive.
+    if (body.archived === true) {
+      try {
+        await rejectPendingForConversation(supabase, existing.company_id as string, id)
+      } catch {
+        // ignored
+      }
+    }
+
     return NextResponse.json({ data })
   },
 )

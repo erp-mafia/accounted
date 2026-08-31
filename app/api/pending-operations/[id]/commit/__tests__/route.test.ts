@@ -133,6 +133,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
         { data: { id: 'op-1' } },                    // CAS claim
         { data: tx },                                 // fetch transaction
         { data: settings },                           // fetch company settings
+        { data: [] },                                 // resolveSettlementAccount: no cash accounts -> 1930
         { data: [{ id: 'fp-1' }] },                  // fiscal period check
         { data: [{ id: 'tx-1' }], error: null },      // transaction CAS matched
         { data: null, error: null },                  // upsert counterparty template
@@ -164,6 +165,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
         { data: { id: 'op-1' } },                    // CAS claim (pending -> committing)
         { data: tx },                                 // fetch transaction
         { data: settings },                           // fetch company settings
+        { data: [] },                                 // resolveSettlementAccount: no cash accounts -> 1930
         { data: [{ id: 'fp-1' }] },                  // fiscal period exists
         { data: null, error: null },                  // dispatcher releases op back to 'pending'
       ])

@@ -19,10 +19,40 @@ export const PFOND_MAX_HOLD_YEARS = 6
  * calendar year in which the beskattningsår ends, floored at 0.5 %. Note:
  * the rate is the SLR itself, NOT SLR + 1 procentenhet (that formula is
  * negativ räntefördelning). Keyed by the closing calendar year.
+ *
+ * The table starts at closing year 2020. The "100 % of SLR" rule applies to
+ * beskattningsår that START 2019-01-01 or later (prop. 2017/18:245; before
+ * that the rate was 72 % of SLR), so a 2019 closing can still be a brutet
+ * räkenskapsår under the old factor: 2019 and earlier therefore stay
+ * unmapped (fail closed) rather than carry a value that is wrong for some
+ * companies. SLR values per Riksgälden's 30 November announcements.
  */
 const SCHABLONINTAKT_RATE_BY_CLOSING_YEAR: Record<number, number> = {
+  2020: 0.005, // SLR 2019-11-30 = -0.09 %, floored to 0.5 %
+  2021: 0.005, // SLR 2020-11-30 = -0.10 %, floored to 0.5 %
+  2022: 0.005, // SLR 2021-11-30 = 0.23 %, floored to 0.5 %
+  2023: 0.0194, // SLR 2022-11-30 = 1.94 %
+  2024: 0.0262, // SLR 2023-11-30 = 2.62 %
   2025: 0.0196, // SLR 2024-11-30 = 1.96 %
   2026: 0.0255, // SLR 2025-11-30 = 2.55 %
+}
+
+/**
+ * Thrown when the closing year has no SLR in the table. Carries a registry
+ * code so errorResponse() maps it to a specific Swedish message instead of a
+ * generic "oväntat serverfel", and the fiscal year so the UI or an agent can
+ * name the year.
+ */
+export class SchablonintaktRateNotConfiguredError extends Error {
+  readonly code = 'SCHABLONINTAKT_RATE_NOT_CONFIGURED'
+  constructor(readonly fiscalYear: number) {
+    super(
+      `Schablonintäkt rate for fiscal year ${fiscalYear} is not configured. `
+      + 'Add the SLR (30 Nov of the preceding year, floor 0.5 %) to '
+      + 'SCHABLONINTAKT_RATE_BY_CLOSING_YEAR in periodiseringsfond-service.ts.',
+    )
+    this.name = 'SchablonintaktRateNotConfiguredError'
+  }
 }
 
 /**
@@ -34,14 +64,30 @@ const SCHABLONINTAKT_RATE_BY_CLOSING_YEAR: Record<number, number> = {
  */
 export function getSchablonintaktRate(fiscalYear: number): number {
   const rate = SCHABLONINTAKT_RATE_BY_CLOSING_YEAR[fiscalYear]
-  if (rate === undefined) {
-    throw new Error(
-      `Schablonintäkt rate for fiscal year ${fiscalYear} is not configured. `
-      + 'Add the SLR (30 Nov of the preceding year, floor 0.5 %) to '
-      + 'SCHABLONINTAKT_RATE_BY_CLOSING_YEAR in periodiseringsfond-service.ts.',
-    )
-  }
+  if (rate === undefined) throw new SchablonintaktRateNotConfiguredError(fiscalYear)
   return rate
+}
+
+/**
+ * Resolve the schablonintäkt rate for one bokslut run. The rate only matters
+ * when some 212X account carried a balance at beskattningsårets ingång
+ * (IL 30 kap 6a §: schablonintäkt = rate × opening fond balance), so a
+ * company without periodiseringsfonder never consults the table and never
+ * fails on an unmapped year: the bokslut wizard must not 500 for the common
+ * no-fond AB just because that year's SLR is missing (which is exactly what
+ * happened for every pre-2025 closing before the table was backfilled). With
+ * opening fonder the table is authoritative unless the caller supplied a
+ * validated override; a missing year still fails closed.
+ */
+export function resolveSchablonintaktRate(
+  fiscalYear: number,
+  existingFonder: ReadonlyArray<Pick<ExistingFond, 'opening_balance'>>,
+  override?: number,
+): number {
+  if (override !== undefined) return override
+  const hasOpeningBalance = existingFonder.some((f) => f.opening_balance > 0)
+  if (!hasOpeningBalance) return 0
+  return getSchablonintaktRate(fiscalYear)
 }
 
 /**

@@ -28,44 +28,16 @@ import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
 import { API_V1_VERSION } from '@/lib/api/v1/version'
 import { kickWebhookDispatch } from './dispatch-kick'
+import { PUBLIC_WEBHOOK_EVENTS as PUBLIC_WEBHOOK_EVENT_CATALOGUE } from './public-events'
 
 const log = createLogger('webhooks/handler')
 
 /**
- * Set of event types that the v1 webhook surface delivers. Restricted to the
- * resource-state-change events that are useful to external integrations;
- * MCP telemetry events and internal-only flows (event_log writes, etc.) are
- * deliberately excluded.
- *
- * Adding a new event type to this set is a public-API change: bump
- * API_V1_VERSION + add to the changelog when you do.
+ * Set of event types that the v1 webhook surface delivers. Derived from the
+ * public catalogue in ./public-events.ts, which is also what the v1 create
+ * schema and the docs page enumerate: add new event types THERE, not here.
  */
-const PUBLIC_WEBHOOK_EVENTS = new Set<CoreEventType>([
-  'invoice.created',
-  'invoice.sent',
-  'invoice.paid',
-  'credit_note.created',
-  'customer.created',
-  'supplier.created',
-  'supplier_invoice.registered',
-  'supplier_invoice.approved',
-  'supplier_invoice.paid',
-  'supplier_invoice.credited',
-  'supplier_invoice.uncredited',
-  'transaction.categorized',
-  'transaction.reconciled',
-  'journal_entry.committed',
-  'journal_entry.reversed',
-  'journal_entry.corrected',
-  'period.locked',
-  'period.unlocked',
-  'period.year_closed',
-  'salary_run.created',
-  'salary_run.approved',
-  'salary_run.booked',
-  'agi.generated',
-  'document.uploaded',
-])
+const PUBLIC_WEBHOOK_EVENTS = new Set<CoreEventType>(PUBLIC_WEBHOOK_EVENT_CATALOGUE)
 
 let registered = false
 

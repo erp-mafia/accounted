@@ -234,4 +234,57 @@ describe('gnubok_import_sie: update_account_names staging', () => {
 
     expect((staged[0].params as Record<string, unknown>).update_account_names).toBe(false)
   })
+
+  it('passes opening_balance_series through to the staged params (issue #1882)', async () => {
+    const { supabase, staged } = buildCapturingSupabase()
+
+    await importSie.execute(
+      {
+        file_content: VALID_SIE,
+        filename: 'bok.se',
+        mappings: COVER_VALID_SIE,
+        import_opening_balances: true,
+        opening_balance_series: 'K',
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    )
+
+    expect((staged[0].params as Record<string, unknown>).opening_balance_series).toBe('K')
+  })
+
+  it('drops a non-string opening_balance_series instead of staging it (hosts do not always enforce inputSchema)', async () => {
+    const { supabase, staged } = buildCapturingSupabase()
+
+    await importSie.execute(
+      {
+        file_content: VALID_SIE,
+        filename: 'bok.se',
+        mappings: COVER_VALID_SIE,
+        opening_balance_series: 123,
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    )
+
+    expect((staged[0].params as Record<string, unknown>).opening_balance_series).toBeUndefined()
+  })
+
+  it('leaves opening_balance_series unset when omitted so the engine picks a non-colliding default', async () => {
+    const { supabase, staged } = buildCapturingSupabase()
+
+    await importSie.execute(
+      { file_content: VALID_SIE, filename: 'bok.se', mappings: COVER_VALID_SIE },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    )
+
+    expect((staged[0].params as Record<string, unknown>).opening_balance_series).toBeUndefined()
+  })
 })

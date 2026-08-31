@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { useTranslations, useLocale } from 'next-intl'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -9,7 +10,6 @@ import { AlertTriangle, Loader2 } from 'lucide-react'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
-import type { CashAccount } from '@/types'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 
 /** The bank transaction being booked, as much as the caller knows about it.
@@ -99,6 +99,10 @@ export default function DuplicateBookingDialog({
   const canMatch = candidate !== null && !!matchTransaction && !!onMatched
   const canIgnore = isSiblingCandidate && !!matchTransaction && !!onIgnored
 
+  // Session-cached (lib/reference-data); an empty list resolves to 1930 and
+  // the link route re-validates the account either way.
+  const { cashAccounts } = useCashAccounts()
+
   async function handleMatch() {
     if (!candidate || !matchTransaction || !onMatched || matching) return
     setMatching(true)
@@ -112,20 +116,11 @@ export default function DuplicateBookingDialog({
       // this account and that the transaction belongs to it.
       let account = candidate.account_number ?? '1930'
       if (!candidate.account_number) {
-        try {
-          const caRes = await fetch('/api/cash-accounts')
-          if (caRes.ok) {
-            const caJson = await caRes.json()
-            const accounts = (caJson.data ?? []) as CashAccount[]
-            account = resolveAccount(
-              accounts,
-              matchTransaction.cash_account_id ?? null,
-              matchTransaction.currency ?? 'SEK',
-            ).account
-          }
-        } catch {
-          // Network hiccup: fall back to 1930; the link route re-validates.
-        }
+        account = resolveAccount(
+          cashAccounts,
+          matchTransaction.cash_account_id ?? null,
+          matchTransaction.currency ?? 'SEK',
+        ).account
       }
 
       const res = await fetch('/api/reconciliation/bank/link', {

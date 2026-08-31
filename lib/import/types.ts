@@ -265,6 +265,12 @@ export interface ImportOptions {
   // Voucher series to use for imported entries
   voucherSeries?: string
 
+  // Voucher series for the opening-balance (Ingående balanser) entry.
+  // Defaults to a series the file's own vouchers do not use (see
+  // lib/import/opening-balance-defaults.ts) so the IB voucher never shifts
+  // the numbering of the file's series (issue #1882).
+  openingBalanceSeries?: string
+
   // Opt-in: mark imported verifikat as "Inget underlag krävs" so a migration
   // doesn't flood "Att hantera: saknade underlag". OFF by default.
   markImportedNoDocRequired?: boolean
@@ -412,6 +418,12 @@ export interface ImportPreview {
 
   // Source-system accounts excluded from import (e.g. Fortnox 0099)
   excludedSystemAccounts: { number: string; name: string }[]
+
+  // Distinct voucher series used by the file's #VER records. Lets the
+  // wizard default the IB-voucher series to one that does not collide
+  // with the file's own numbering (issue #1882). Optional: previews built
+  // before this field existed lack it; consumers must treat absence as [].
+  voucherSeriesInFile?: string[]
 
   // Issues to review
   issues: ParseIssue[]

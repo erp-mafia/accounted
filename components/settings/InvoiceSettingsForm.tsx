@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Switch } from '@/components/ui/switch'
+import { AttnLine } from '@/components/ui/attn-line'
 import {
   SettingsGroup,
   SettingsInput,
@@ -10,6 +11,7 @@ import {
   SettingsRow,
   SettingsTextarea,
 } from '@/components/settings/SettingsRows'
+import { REMINDERS_SENDING_ENABLED } from '@/lib/invoices/reminders-enabled'
 import type { CompanySettings } from '@/types'
 
 interface InvoiceSettingsFormProps {
@@ -104,6 +106,9 @@ export function InvoiceSettingsForm({ settings }: InvoiceSettingsFormProps) {
       </SettingsGroup>
 
       <SettingsGroup label={t('reminder_days_heading')} help={t('reminder_days_help')}>
+        {!REMINDERS_SENDING_ENABLED && (
+          <AttnLine className="px-1 pt-2">{t('sending_disabled_notice')}</AttnLine>
+        )}
         <SettingsRow
           label={t('send_reminders_label')}
           htmlFor="send_invoice_reminders"

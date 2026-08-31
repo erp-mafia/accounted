@@ -22,6 +22,7 @@ export interface InvoiceCopyItem {
   quantity: number
   unit: string
   unit_price: number
+  discount_percent: number
   vat_rate: number
   article_id: null
   revenue_account: string | null
@@ -85,6 +86,8 @@ export function buildInvoiceCopyInitial(source: InvoiceCopySource): InvoiceCopyI
         quantity: item.quantity,
         unit: item.unit,
         unit_price: item.unit_price,
+        // Agreed price reduction is reusable commercial content, like the price.
+        discount_percent: item.discount_percent ?? 0,
         vat_rate: item.vat_rate ?? 25,
         // A copied line keeps the frozen description and price, but is not
         // linked to a possibly changed or archived article preset.

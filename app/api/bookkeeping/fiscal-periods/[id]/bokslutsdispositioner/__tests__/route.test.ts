@@ -68,12 +68,24 @@ import {
   sumPostedYearEndDispositions,
 } from '@/lib/bokslut/tax-provision/bolagsskatt-calculator'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
-import { listExistingPeriodiseringsfonder } from '@/lib/bokslut/reserves/periodiseringsfond-service'
+import {
+  listExistingPeriodiseringsfonder,
+  SchablonintaktRateNotConfiguredError,
+} from '@/lib/bokslut/reserves/periodiseringsfond-service'
 import { calculateOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-calculator'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
-import { POST, PUT } from '../route'
+import { GET, POST, PUT } from '../route'
 
 const idParams = { params: Promise.resolve({ id: 'period-1' }) }
+
+function get() {
+  return GET(
+    createMockRequest('/api/bookkeeping/fiscal-periods/period-1/bokslutsdispositioner', {
+      method: 'GET',
+    }),
+    idParams,
+  )
+}
 
 function post(body: unknown) {
   return POST(
@@ -198,6 +210,43 @@ beforeEach(() => {
   vi.mocked(createJournalEntry).mockResolvedValue({ id: 'entry-tax' } as Awaited<
     ReturnType<typeof createJournalEntry>
   >)
+})
+
+describe('GET /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () => {
+  it('returns 401 when not authenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: null,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    const res = await get()
+    expect(res.status).toBe(401)
+  })
+
+  it('returns the proposal snapshot', async () => {
+    const { status, body } = await parseJsonResponse<{ data: { entityType: string } }>(await get())
+    expect(status).toBe(200)
+    expect(body.data.entityType).toBe('aktiebolag')
+  })
+
+  it('returns 404 when the builder cannot find the period', async () => {
+    vi.mocked(buildDispositionsProposal).mockRejectedValue(new Error('Fiscal period not found'))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await get())
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('PERIOD_NOT_FOUND')
+  })
+
+  it('surfaces a missing SLR year as a typed Swedish error, not a generic 500', async () => {
+    vi.mocked(buildDispositionsProposal).mockRejectedValue(
+      new SchablonintaktRateNotConfiguredError(2030),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
+      await get(),
+    )
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('SCHABLONINTAKT_RATE_NOT_CONFIGURED')
+    expect(body.error.message).toMatch(/Statslåneräntan/)
+  })
 })
 
 describe('PUT /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () => {

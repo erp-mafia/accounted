@@ -4,6 +4,14 @@ vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(),
 }))
 
+const contextMocks = vi.hoisted(() => ({
+  getActiveCompanyId: vi.fn(),
+}))
+
+vi.mock('@/lib/company/active-company', () => ({
+  getActiveCompanyId: (...args: unknown[]) => contextMocks.getActiveCompanyId(...args),
+}))
+
 import {
   generateApiKey,
   hashApiKey,
@@ -290,6 +298,7 @@ describe('validateApiKey', () => {
       apiKeyName: undefined,
       scopes: ['transactions:read', 'reports:read'],
       mode: 'live',
+      unattendedCommitLimit: null,
     })
   })
 
@@ -312,6 +321,7 @@ describe('validateApiKey', () => {
       apiKeyName: undefined,
       scopes: DEFAULT_SCOPES,
       mode: 'live',
+      unattendedCommitLimit: null,
     })
   })
 
@@ -337,6 +347,116 @@ describe('validateApiKey', () => {
       apiKeyName: 'CI test key',
       scopes: ['transactions:read'],
       mode: 'test',
+      unattendedCommitLimit: null,
+    })
+  })
+
+  describe('unattended commit limit', () => {
+    it('surfaces a positive ceiling from the RPC row', async () => {
+      setupMockRpc({
+        data: [{
+          user_id: 'user-123',
+          company_id: 'company-456',
+          scopes: ['transactions:read'],
+          rate_limited: false,
+          // numeric(14,2) comes back from PostgREST as a string.
+          unattended_commit_limit: '25000.00',
+        }],
+        error: null,
+      })
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).toMatchObject({ unattendedCommitLimit: 25000 })
+    })
+
+    it('reads anything that is not a positive number as no ceiling', async () => {
+      // The whole guard is NULL-first: an unparseable or non-positive value
+      // must mean "unlimited", never "block every commit this key attempts".
+      for (const raw of [null, undefined, 0, -1, 'abc', {}]) {
+        setupMockRpc({
+          data: [{
+            user_id: 'user-123',
+            company_id: 'company-456',
+            scopes: ['transactions:read'],
+            rate_limited: false,
+            unattended_commit_limit: raw,
+          }],
+          error: null,
+        })
+        const result = await validateApiKey('gnubok_sk_test-key-value')
+        expect(result).toMatchObject({ unattendedCommitLimit: null })
+      }
+    })
+  })
+
+  describe('unbound keys (minted before the first company existed, issue #1814)', () => {
+    function setupUnboundKeyClient(rpcRow: Record<string, unknown>) {
+      const chain = {
+        update: vi.fn(),
+        eq: vi.fn(),
+        is: vi.fn().mockResolvedValue({ data: null, error: null }),
+      }
+      chain.update.mockReturnValue(chain)
+      chain.eq.mockReturnValue(chain)
+      const from = vi.fn().mockReturnValue(chain)
+      const rpc = vi.fn().mockResolvedValue({ data: [rpcRow], error: null })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockCreateClient.mockReturnValue({ rpc, from } as any)
+      return { from, chain }
+    }
+
+    const unboundRow = {
+      user_id: 'user-123',
+      company_id: null,
+      api_key_id: 'ak_1',
+      api_key_name: 'MCP-klient (OAuth)',
+      scopes: ['transactions:read'],
+      rate_limited: false,
+      mode: 'live',
+    }
+
+    it('binds the key to the user\'s company once one exists and heals the row', async () => {
+      const { from, chain } = setupUnboundKeyClient(unboundRow)
+      contextMocks.getActiveCompanyId.mockResolvedValue('company-789')
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+
+      expect('companyId' in result && result.companyId).toBe('company-789')
+      expect(from).toHaveBeenCalledWith('api_keys')
+      expect(chain.update).toHaveBeenCalledWith({ company_id: 'company-789' })
+      expect(chain.eq).toHaveBeenCalledWith('id', 'ak_1')
+      // Only an unbound row is ever rewritten: a concurrent bind must not be clobbered.
+      expect(chain.is).toHaveBeenCalledWith('company_id', null)
+    })
+
+    it('returns companyId null while the user still has no company', async () => {
+      const { from } = setupUnboundKeyClient(unboundRow)
+      contextMocks.getActiveCompanyId.mockResolvedValue(null)
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+
+      expect('companyId' in result && result.companyId).toBeNull()
+      expect(from).not.toHaveBeenCalled()
+    })
+
+    it('treats a failed company resolution as still unbound rather than failing the key', async () => {
+      setupUnboundKeyClient(unboundRow)
+      contextMocks.getActiveCompanyId.mockRejectedValue(new Error('db blip'))
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+
+      expect('companyId' in result && result.companyId).toBeNull()
+      expect('userId' in result && result.userId).toBe('user-123')
+    })
+
+    it('skips the heal when the RPC predates api_key_id in its return shape', async () => {
+      const { from } = setupUnboundKeyClient({ ...unboundRow, api_key_id: undefined })
+      contextMocks.getActiveCompanyId.mockResolvedValue('company-789')
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+
+      expect('companyId' in result && result.companyId).toBe('company-789')
+      expect(from).not.toHaveBeenCalled()
     })
   })
 })

@@ -72,6 +72,29 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (merged.f_skatt_status === 'a_skatt' && !merged.is_sidoinkomst && !merged.tax_table_number) {
       mergedErrors.push('Skattetabell krävs för A-skatt anställda')
     }
+    // Merged-state jämkning check (same rule as the v1 route and
+    // employee-commands): a non-null percentage needs a start date, and the
+    // dates must be ordered, but the schema can only see the body. Only run
+    // when the PATCH touches a jamkning field: a legacy row with inconsistent
+    // jamkning_* state must not block unrelated updates (fixing it requires
+    // touching those very fields). `body` is the parsed patch: absent keys are
+    // absent, explicit nulls survive.
+    const jamkningTouched =
+      'jamkning_percentage' in body ||
+      'jamkning_valid_from' in body ||
+      'jamkning_valid_to' in body
+    if (jamkningTouched) {
+      if (merged.jamkning_percentage != null && !merged.jamkning_valid_from) {
+        mergedErrors.push('Jämkningens startdatum måste anges när jämkningsprocent sätts')
+      }
+      if (
+        merged.jamkning_valid_from &&
+        merged.jamkning_valid_to &&
+        merged.jamkning_valid_to < merged.jamkning_valid_from
+      ) {
+        mergedErrors.push('Jämkningens slutdatum måste vara efter startdatumet')
+      }
+    }
     if (mergedErrors.length > 0) {
       return NextResponse.json({ error: mergedErrors.join('. ') }, { status: 400 })
     }

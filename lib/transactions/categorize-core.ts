@@ -17,9 +17,12 @@
  * reverse-charge VAT, and the propagation step below attaches the underlag to
  * the new verifikation (BFL 7 kap) and stamps the inbox item resolved.
  *
- * Booking is always in SEK off the bank transaction's own amount (BFL 5 kap
- * 2§), so the foreign-currency underlag never needs an FX step here: the bank
- * already settled it.
+ * Journal entry lines are always SEK (BFL 5 kap 2§), but transaction.amount is
+ * denominated in transaction.currency: the SEK resolution happens inside the
+ * mapping builders and buildTransactionEntryLines (amount_sek / exchange_rate,
+ * see lib/bookkeeping/currency-utils.ts), never off the raw amount. The
+ * foreign-currency underlag needs no extra FX step here because those two
+ * resolve it, not because the amount already is kronor.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
@@ -27,8 +30,10 @@ import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mappi
 import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { guardCounterLegs } from '@/lib/cash-accounts/service'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
+import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
@@ -38,10 +43,13 @@ import {
   type BookingDuplicateExclusions,
 } from '@/lib/transactions/booking-duplicate-detection'
 import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
+import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createLogger } from '@/lib/logger'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import type { InboxChannelContext, Transaction, TransactionCategory, EntityType, VatTreatment } from '@/types'
 
 const log = createLogger('transactions/categorize-core')
@@ -50,6 +58,12 @@ const log = createLogger('transactions/categorize-core')
 export interface CategorizeCoreResult {
   data?: Record<string, unknown>
   error?: string
+  /**
+   * Structured-error registry code for `error`, when the core has one.
+   * commit.ts surfaces it as CommitResult.code and persists it in
+   * result_data.error_code so approvers can branch on the failure mode.
+   */
+  errorCode?: string
   status?: number
 }
 
@@ -155,6 +169,17 @@ export async function ensureFiscalPeriod(
 
   if (existing && existing.length > 0) return true
 
+  // Pre-FY guard (issue #1825): a date before the company's first fiscal
+  // period must NEVER mint a calendar-year rakenskapsar. Depending on overlap
+  // with the real first period, the upsert below would either bounce off the
+  // no_overlapping_fiscal_periods exclusion constraint (log noise) or silently
+  // create a pre-registration year (legally wrong). Return true and let the
+  // pre-FY clamp in createTransactionJournalEntry book the event on the first
+  // fiscal year's first day. Dates AFTER the latest period (next-year
+  // auto-creation) pass through unchanged.
+  const earliestStart = await getEarliestFiscalPeriodStart(supabase, companyId)
+  if (earliestStart && date < earliestStart) return true
+
   const txDate = new Date(date)
   const txMonth = txDate.getMonth() + 1
   const txYear = txDate.getFullYear()
@@ -224,11 +249,24 @@ export async function categorizeMatchedTransaction(
 ): Promise<CategorizeCoreResult> {
   const { category, vatTreatment, vatAmount, notes, allowDuplicate, dimensions, accountOverride } = opts
 
-  const { data: transaction, error: fetchError } = await supabase
-    .from('transactions').select('*').eq('id', txId).eq('company_id', companyId).single()
+  // The junction rows ride along on the same read: a row bulk-booked into a
+  // samlingsverifikat or split over several verifikat (1:N, #1553) carries
+  // journal_entry_id = NULL, and the pointer alone would let it be booked a
+  // second time. Only 'bank_line' rows count (hasBankLineJunctionRow): a
+  // residual's 'other' row left behind by a storno must stay re-bookable.
+  const { data: transactionRow, error: fetchError } = await supabase
+    .from('transactions')
+    .select('*, transaction_voucher_links(journal_entry_id, role)')
+    .eq('id', txId)
+    .eq('company_id', companyId)
+    .single()
 
-  if (fetchError || !transaction) {
+  if (fetchError || !transactionRow) {
     return { error: 'Transaction not found: it may have been deleted.', status: 404 }
+  }
+  const { transaction_voucher_links: junctionLinks, ...transaction } = transactionRow
+  if (hasBankLineJunctionRow(junctionLinks)) {
+    return { error: 'Transaction already has a journal entry: it was categorized in the meantime.', status: 409 }
   }
   // A stale pointer at a 'reversed' entry (storno/correction left it behind)
   // must not block re-categorization: the row reads as "utan koppling" in the
@@ -351,6 +389,7 @@ export async function categorizeMatchedTransaction(
     companyId,
     transaction.cash_account_id,
     log,
+    transaction.currency,
   )
   mappingResult = applySettlementAccount(mappingResult, settlementAccount)
   // Re-validated here (not only at staging): the account can be deactivated
@@ -380,7 +419,55 @@ export async function categorizeMatchedTransaction(
     return { error: `No account mapping for category "${category}" with entity type "${entityType}".`, status: 400 }
   }
 
+  // Issue #1643 problem 4: never book the COUNTER leg onto an orphaned
+  // cash-account ledger or a twin ledger of the transaction's own bank
+  // account. An account_override or learned mapping pointing there would
+  // silently drop revenue/expense from the P&L onto a junk balance-sheet
+  // account. A twin that is merely the stale BANK leg is rewritten to the
+  // settlement account instead (see guardCounterLegs).
+  {
+    const guarded = await guardCounterLegs(
+      supabase,
+      companyId,
+      mappingResult,
+      settlementAccount,
+      transaction.cash_account_id,
+    )
+    if (guarded.refusedLedger) {
+      return {
+        error: `Motkontot ${guarded.refusedLedger} är ett bankkonto som hör till transaktionens eget konto eller till en frånkopplad bankanslutning och kan inte användas. Välj ett intäkts- eller kostnadskonto i stället.`,
+        status: 400,
+      }
+    }
+    mappingResult = guarded.mappingResult
+  }
+
   await ensureFiscalPeriod(supabase, userId, companyId, transaction.date, fiscalYearStartMonth)
+
+  // Issue #1661: a private marking books eget uttag/insättning, so a locked
+  // period refuses it like any verifikat, but the trigger's message would
+  // only say "locked" and the MCP/bulk callers would steer to unlock. The row
+  // they want to clear is usually no affärshändelse at all: pre-check private
+  // rows so the refusal names the ignore path (staged gnubok_ignore_transaction
+  // or the page). Business rows keep the trigger/null handling below.
+  if (!isBusiness) {
+    const privateLock = await checkPeriodLock(supabase, companyId, transaction.date)
+    if (privateLock.locked) {
+      log.warn('private marking refused: period is locked', {
+        txId,
+        companyId,
+        date: transaction.date,
+        reason: privateLock.reason ?? null,
+      })
+      return {
+        error:
+          getErrorEntry('TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED')?.message_sv ??
+          'Perioden är låst. Ignorera raden i stället om den inte är en affärshändelse.',
+        errorCode: 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED',
+        status: 400,
+      }
+    }
+  }
 
   let journalEntryId: string | null = null
   try {
@@ -392,6 +479,38 @@ export async function categorizeMatchedTransaction(
     if (isBookkeepingError(err)) throw err
     log.error('Failed to create journal entry:', err)
     return { error: err instanceof Error ? err.message : 'Failed to create journal entry', status: 500 }
+  }
+
+  // createTransactionJournalEntry returns null WITHOUT throwing when
+  // findFiscalPeriod sees no OPEN period covering the date and the pre-FY
+  // clamp does not apply: either no rakenskapsar exists there at all, or the
+  // covering period is closed (is_closed = true; a locked_at-only lock throws
+  // from the DB trigger and is rethrown above as a bookkeeping error). Fail
+  // closed exactly like the HTTP routes (issue #1947): refuse BEFORE the
+  // transactions update below, so the row never leaves "Att bokfora" as
+  // categorized-but-unbooked (journal_entry_id NULL) and the pending
+  // operation or bulk driver reports the failure instead of success.
+  // checkPeriodLock tells the two null causes apart for an honest message.
+  if (!journalEntryId) {
+    const verdict = await checkPeriodLock(supabase, companyId, transaction.date)
+    const code = verdict.locked
+      ? isBusiness
+        ? 'PERIOD_LOCKED'
+        : 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED'
+      : 'NO_OPEN_PERIOD_FOR_DATE'
+    log.warn('journal entry refused: no open fiscal period for date', {
+      txId,
+      companyId,
+      date: transaction.date,
+      reason: verdict.reason ?? null,
+    })
+    return {
+      error:
+        getErrorEntry(code)?.message_sv ??
+        'Det finns ingen öppen räkenskapsperiod som täcker transaktionsdatumet.',
+      errorCode: code,
+      status: 400,
+    }
   }
 
   const updateQuery = supabase
@@ -598,10 +717,14 @@ export async function bulkBookMatchedInboxItems(
 
     if (result.error) {
       const reason =
-        result.status === 404 ? 'transaction_not_found'
-        : result.status === 409 ? 'already_booked_or_duplicate'
-        : result.status === 400 ? 'no_account_mapping'
-        : 'error'
+        result.errorCode === 'PERIOD_LOCKED' ||
+        result.errorCode === 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED' ||
+        result.errorCode === 'NO_OPEN_PERIOD_FOR_DATE'
+          ? 'no_open_period'
+          : result.status === 404 ? 'transaction_not_found'
+          : result.status === 409 ? 'already_booked_or_duplicate'
+          : result.status === 400 ? 'no_account_mapping'
+          : 'error'
       skipped.push({ item_id: itemId, reason, detail: result.error })
       continue
     }

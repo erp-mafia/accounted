@@ -37,8 +37,9 @@ import {
 import { sortArticles } from '@/lib/articles/sort'
 import ArticleCombobox from '@/components/invoices/ArticleCombobox'
 import { getAmountToPay } from '@/lib/invoices/rounding'
+import { computeLineNet, hasLineDiscount } from '@/lib/invoices/line-amounts'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
-import { Loader2, X, ArrowLeft, Send, Eye, Landmark, Lock, AlertTriangle, MoreVertical, CalendarClock, Tags, Package, Copy } from 'lucide-react'
+import { Loader2, X, ArrowLeft, Send, Eye, Landmark, Lock, AlertTriangle, MoreVertical, CalendarClock, Tags, Package, Copy, Percent } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -50,6 +51,7 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useBranding } from '@/lib/branding/brand-context'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { InvoiceReviewContent } from '@/components/invoices/InvoiceReviewContent'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -59,6 +61,8 @@ import CustomerForm from '@/components/customers/CustomerForm'
 import { BankDetailsSetupDialog } from '@/components/invoices/BankDetailsSetupDialog'
 import { FirstInvoiceLogoPrompt } from '@/components/invoices/FirstInvoiceLogoPrompt'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
+import { useAccounts, useArticles, useCompanySettings, useCustomers } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import {
@@ -87,7 +91,7 @@ import {
   buildSelfBilledPayload,
   hasDimensionValues,
 } from '@/lib/invoices/editor-payload'
-import type { Customer, Currency, CreateCustomerInput, InvoiceDocumentType, Article, Invoice, InvoiceItem, BASAccount } from '@/types'
+import type { Customer, Currency, CreateCustomerInput, InvoiceDocumentType, Article, Invoice, InvoiceItem } from '@/types'
 
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
 const units = ['st', 'tim', 'dag', 'månad', 'km', 'kg']
@@ -176,6 +180,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const ts = useTranslations('self_billing')
   const ta = useTranslations('accruals')
   const tCommon = useTranslations('common')
+  const { appName } = useBranding()
   // Normal customer invoice (default) or a received self-billing invoice
   // (mottagen självfaktura, ML 17 kap 15§). The mode is chosen upstream in
   // the Ny faktura split button (?self=1) and is fixed for the editor's
@@ -255,6 +260,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       quantity: z.number(),
       unit: z.string(),
       unit_price: z.number(),
+      // Rabatt i procent per rad (⋮ menu). null = no discount.
+      discount_percent: z
+        .number()
+        .min(0, t('validation_discount_range'))
+        .max(100, t('validation_discount_range'))
+        .nullable()
+        .optional(),
       vat_rate: z.number().min(0).max(25),
       // Article linkage (artikelregister). Optional: free-text lines omit them.
       article_id: z.string().nullable().optional(),
@@ -339,6 +351,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       document_type: z.enum(['invoice', 'proforma', 'delivery_note']),
       your_reference: z.string().optional(),
       our_reference: z.string().optional(),
+      invoice_marking: z.string().optional(),
       notes: z.string().optional(),
       // Optional online payment link (pasted from e.g. the Stripe dashboard).
       // https-only: mirrors the server-side CreateInvoiceSchema gate.
@@ -377,8 +390,41 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
   type FormData = z.infer<typeof schema>
 
-  const [customers, setCustomers] = useState<Customer[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  // Reference data from the session cache (lib/reference-data): customers,
+  // articles, posting accounts and company settings are read from SWR
+  // instead of four fetches per mount, so a cached editor renders every
+  // field populated on the first paint and reopening the dialog costs no
+  // requests. Customers come through /api/customers, which masks the
+  // personnummer column; nothing here rendered it.
+  const { customers: cachedCustomers, isLoading: customersLoading, error: customersError } = useCustomers()
+  // Archived customers (v1 API soft-delete) are not offered in the picker
+  // (/api/customers filters archived_at IS NULL). An existing draft or copied
+  // invoice may still point at one (archiving only refuses when open invoices
+  // exist, drafts do not count), so that single row is fetched on its own and
+  // kept in the list, or the select would render blank.
+  const keepCustomerId = initial?.customer_id ?? copyInitial?.customer_id ?? null
+  const [keptCustomer, setKeptCustomer] = useState<Customer | null>(null)
+  useEffect(() => {
+    if (!keepCustomerId || customersLoading) return
+    if (cachedCustomers.some((c) => c.id === keepCustomerId)) return
+    let cancelled = false
+    fetch(`/api/customers/${encodeURIComponent(keepCustomerId)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json: { data?: Customer } | null) => {
+        if (!cancelled && json?.data) setKeptCustomer(json.data)
+      })
+      .catch(() => {
+        // The picker simply shows no selection for a customer that no longer resolves.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [keepCustomerId, customersLoading, cachedCustomers])
+  const customers = useMemo(() => {
+    if (!keptCustomer || cachedCustomers.some((c) => c.id === keptCustomer.id)) return cachedCustomers
+    return [...cachedCustomers, keptCustomer].sort((a, b) => a.name.localeCompare(b.name))
+  }, [cachedCustomers, keptCustomer])
+  const { settings: companySettings } = useCompanySettings()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isSavingDraft, setIsSavingDraft] = useState(false)
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
@@ -403,12 +449,22 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const [numberPreview, setNumberPreview] = useState<string | null>(null)
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
   // Artikelregister: active articles for the line picker + which line is mid quick-create.
-  const [articles, setArticles] = useState<ArticleOption[]>([])
+  const { articles: articleRows } = useArticles()
+  // Numeric-aware order by article number ('2' before '10', unnumbered last):
+  // the picker should follow the user's own numbering, not the alphabet.
+  const articles = useMemo(() => sortArticles(articleRows as ArticleOption[]), [articleRows])
   const [savingArticleIndex, setSavingArticleIndex] = useState<number | null>(null)
   // Active balance-sheet and revenue accounts for the optional per-line
   // posting override, plus which rows currently show that picker.
-  const [postingAccounts, setPostingAccounts] = useState<BASAccount[]>([])
+  const { accounts: activeAccounts } = useAccounts()
+  const postingAccounts = useMemo(
+    () => activeAccounts.filter((account) => account.account_class >= 1 && account.account_class <= 3),
+    [activeAccounts],
+  )
   const [accountOverrideRows, setAccountOverrideRows] = useState<Set<number>>(new Set())
+  // Rabatt per rad: rows whose discount strip is open (⋮ menu), same
+  // lifecycle as the account override above. A stored discount also opens it.
+  const [discountRows, setDiscountRows] = useState<Set<number>>(new Set())
   // Dimension tagging (kostnadsställe/projekt, dimensions PR7). Affordances
   // render only when company_settings.dimensions_enabled: a UI-visibility
   // gate; a draft that already carries bags still round-trips untouched when
@@ -485,6 +541,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           document_type: (initial.document_type ?? 'invoice') as InvoiceDocumentType,
           your_reference: initial.your_reference ?? '',
           our_reference: initial.our_reference ?? '',
+          invoice_marking: initial.invoice_marking ?? '',
           notes: initial.notes ?? '',
           payment_link_url: initial.payment_link_url ?? '',
           payment_link_auto: initial.payment_link_auto ?? true,
@@ -499,6 +556,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             quantity: item.quantity,
             unit: item.unit,
             unit_price: item.unit_price,
+            discount_percent: hasLineDiscount(item.discount_percent) ? item.discount_percent : null,
             vat_rate: item.vat_rate ?? 25,
             article_id: item.article_id ?? null,
             revenue_account: item.revenue_account ?? null,
@@ -524,6 +582,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             document_type: 'invoice' as InvoiceDocumentType,
             your_reference: '',
             our_reference: copyInitial.our_reference,
+            invoice_marking: '',
             notes: copyInitial.notes,
             payment_link_url: '',
             payment_link_auto: true,
@@ -591,6 +650,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const watchReceivedDate = watch('received_date')
   const watchDeliveryDate = watch('delivery_date')
   const watchYourReference = watch('your_reference')
+  const watchInvoiceMarking = watch('invoice_marking')
   const watchPaymentLinkUrl = watch('payment_link_url')
   const watchPaymentLinkAuto = watch('payment_link_auto')
   const watchPersonnummer = watch('deduction_personnummer')
@@ -608,37 +668,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   }, [customers, setValue])
 
   useEffect(() => {
-    if (!company?.id) return
-    fetchCustomers()
-    fetchDefaultNotes()
-    fetchArticles()
-    fetchRevenueAccounts()
-  }, [company?.id])
-
-  async function fetchArticles() {
-    if (!company?.id) return
-    const { data } = await supabase
-      .from('articles')
-      .select('id, article_number, name, unit, price_excl_vat, vat_rate, revenue_account, currency, housework_type')
-      .eq('company_id', company.id)
-      .eq('active', true)
-    // Numeric-aware order by article number ('2' before '10', unnumbered last):
-    // the picker should follow the user's own numbering, not the alphabet.
-    setArticles(sortArticles((data ?? []) as ArticleOption[]))
-  }
-
-  async function fetchRevenueAccounts() {
-    if (!company?.id) return
-    try {
-      const res = await fetch('/api/bookkeeping/accounts')
-      const body = await res.json()
-      const accounts = ((body?.data as BASAccount[]) || [])
-        .filter((account) => account.account_class >= 1 && account.account_class <= 3)
-      setPostingAccounts(accounts)
-    } catch {
-      // Non-fatal: the override picker degrades to free 4-digit entry.
-    }
-  }
+    if (!customersError) return
+    toast({
+      title: t('load_customers_failed_title'),
+      description: t('load_customers_failed_description'),
+      variant: 'destructive',
+    })
+  }, [customersError, toast, t])
 
   // Apply a chosen article's defaults onto a line. Selecting "none" detaches the
   // article link (and its account override) but keeps the typed text/price so the
@@ -762,7 +798,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         throw new Error(getErrorMessage(result, { context: 'article', statusCode: response.status }))
       }
       const created = result.data as ArticleOption
-      setArticles((prev) => sortArticles([...prev, created]))
+      // Every article picker on the page reads the shared cache: refresh it
+      // (awaited, so the new option resolves before the line points at it).
+      await invalidateReferenceData('ref:articles')
       setValue(`items.${index}.article_id`, created.id, { shouldDirty: true })
       toast({ title: t('article_saved_title'), description: created.name })
     } catch (error) {
@@ -795,6 +833,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       quantity: 1,
       unit: 'st',
       unit_price: 0,
+      discount_percent: null,
       vat_rate: vatRegistered ? vatRatePlan.defaultRate : 0,
       article_id: null,
       revenue_account: null,
@@ -849,6 +888,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       quantity: 0,
       unit: '',
       unit_price: 0,
+      discount_percent: null,
       vat_rate: 0,
       article_id: null,
       revenue_account: null,
@@ -913,13 +953,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     })
   }
 
-  async function fetchDefaultNotes() {
-    if (!company?.id) return
-    const { data } = await supabase
-      .from('company_settings')
-      .select('invoice_default_notes, default_our_reference, clearing_number, account_number, bankgiro, accounting_method, ore_rounding, logo_url, vat_registered, dimensions_enabled, invoice_payment_links_enabled')
-      .eq('company_id', company.id)
-      .single()
+  // Apply the company settings ONCE per editor instance. The settings row is
+  // a live SWR value: a background revalidation must not re-run the
+  // create-mode prefills below over notes or a reference the user has since
+  // typed. The gates read each time (vatRegistered, dimensions, payment
+  // links) are cheap and deliberately re-applied too, they are not user input.
+  const settingsAppliedRef = useRef(false)
+  useEffect(() => {
+    const data = companySettings
+    if (!data || settingsAppliedRef.current) return
+    settingsAppliedRef.current = true
     if (data?.invoice_default_notes) {
       setDefaultNotes(data.invoice_default_notes)
       if (!isEditMode && !isCopyMode) {
@@ -950,7 +993,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     setDimensionsEnabled(data?.dimensions_enabled === true)
     // Gates the payment-link section (opt-in on the invoice settings page).
     setPaymentLinksEnabled(data?.invoice_payment_links_enabled === true)
-  }
+  // The initial-mode flags and the draft's own rounding are fixed for the
+  // editor's lifetime; setValue is stable (react-hook-form).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companySettings])
 
   // First-invoice detection (issue #520): captured at page load so the
   // post-create flow can offer the logo prompt for genuinely first-time
@@ -1040,26 +1086,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
   }, [watchCustomerId, customers, setValue])
 
-  async function fetchCustomers() {
-    if (!company?.id) return
-    const { data, error } = await supabase
-      .from('customers')
-      .select('*')
-      .eq('company_id', company.id)
-      .order('name', { ascending: true })
-
-    if (error) {
-      toast({
-        title: t('load_customers_failed_title'),
-        description: t('load_customers_failed_description'),
-        variant: 'destructive',
-      })
-    } else {
-      setCustomers(data || [])
-    }
-    setIsLoading(false)
-  }
-
   async function handleCreateCustomer(data: CreateCustomerInput) {
     setIsCreatingCustomer(true)
 
@@ -1083,7 +1109,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         description: t('customer_created_description', { name: data.name }),
       })
       pendingCustomerRef.current = result.data
-      setCustomers(prev => [...prev, result.data])
+      // The selection effect above picks the pending customer up as soon as
+      // the refreshed shared list contains it.
+      await invalidateReferenceData('ref:customers')
       setIsCreateCustomerOpen(false)
     }
 
@@ -1091,7 +1119,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   }
 
   const subtotal = watchItems.reduce((sum, item) => {
-    return sum + (item.quantity || 0) * (item.unit_price || 0)
+    return sum + computeLineNet(item.quantity || 0, item.unit_price || 0, item.discount_percent)
   }, 0)
 
   const vatRules = selectedCustomer
@@ -1124,7 +1152,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   let vatAmount = 0
   for (const item of watchItems) {
     const rate = vatRegistered ? (item.vat_rate ?? (vatRules?.rate || 25)) : 0
-    const lineTotal = (item.quantity || 0) * (item.unit_price || 0)
+    const lineTotal = computeLineNet(item.quantity || 0, item.unit_price || 0, item.discount_percent)
     const lineVat = Math.round(lineTotal * rate / 100 * 100) / 100
     vatAmount += lineVat
     const existing = vatByRate.get(rate) || { base: 0, vat: 0 }
@@ -1216,6 +1244,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       const amount = computeDeduction({
         unit_price: item.unit_price || 0,
         quantity: item.quantity || 0,
+        discount_percent: item.discount_percent,
         deduction_type: item.deduction_type,
         // Same rate resolution as the VAT totals loop above: the deduction
         // base is the line total inkl. moms (HUSFL 6-9 §§).
@@ -1294,6 +1323,23 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       })
     } else {
       setAccountOverrideRows((prev) => new Set(prev).add(index))
+    }
+  }
+
+  // Open/close the per-line discount (⋮ menu). Closing clears the value so
+  // the row books at full price again.
+  function toggleDiscount(index: number) {
+    const isOpen = discountRows.has(index) || hasLineDiscount(watchItems[index]?.discount_percent)
+    if (isOpen) {
+      setValue(`items.${index}.discount_percent`, null, { shouldDirty: true, shouldValidate: true })
+      setDiscountRows((prev) => {
+        const next = new Set(prev)
+        next.delete(index)
+        return next
+      })
+    } else {
+      setDiscountRows((prev) => new Set(prev).add(index))
+      window.setTimeout(() => setFocus(`items.${index}.discount_percent`), 0)
     }
   }
 
@@ -1521,6 +1567,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   function focusSettingsField(
     name: 'invoice_date' | 'due_date' | 'received_date' | 'payment_link_url',
   ) {
+    // In self-billed mode fakturadatum and mottagningsdatum render uncollapsed
+    // next to the external number: focus directly, no panel to expand.
+    if (isSelfBilled && (name === 'invoice_date' || name === 'received_date')) {
+      setFocus(name)
+      return
+    }
     // The field lives in the collapsed Förval panel: expand first, focus once
     // the panel is visible (focus() is a no-op inside visibility: hidden).
     setSettingsOpen(true)
@@ -1738,6 +1790,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           items: data.items,
           your_reference: data.your_reference,
           our_reference: data.our_reference,
+          invoice_marking: data.invoice_marking,
           notes: data.notes,
           payment_link_url: data.payment_link_url,
           invoice_number: numberPreview,
@@ -1766,7 +1819,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         window.URL.revokeObjectURL(url)
         toast({
           title: t('preview_pdf_failed'),
-          description: tCommon('popup_blocked_description'),
+          description: tCommon('popup_blocked_description', { appName }),
           variant: 'destructive',
         })
         return
@@ -1784,14 +1837,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     } finally {
       setIsPreviewing(false)
     }
-  }
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    )
   }
 
   const titleText = isEditMode
@@ -1874,6 +1919,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     receivedDate: watchReceivedDate || '',
     deliveryDate: watchDeliveryDate || '',
     yourReference: watchYourReference || '',
+    invoiceMarking: watchInvoiceMarking || '',
     paymentLink: paymentLinkMode,
     oreRounding,
     dims: hasDimensionValues(defaultDims) ? compactDims(defaultDims) : null,
@@ -1884,6 +1930,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         return chip.documentType === 'proforma' ? t('doctype_proforma') : t('doctype_delivery_note')
       case 'currency':
         return t('chip_currency', { currency: chip.currency })
+      case 'invoice_date':
+        return t('chip_invoice_date', { date: chip.date })
       case 'due_days':
         return t('chip_due_days', { days: chip.days, date: chip.date })
       case 'due_date':
@@ -1894,6 +1942,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         return t('chip_delivery', { date: chip.date })
       case 'your_reference':
         return t('chip_your_reference', { reference: chip.reference })
+      case 'invoice_marking':
+        return t('chip_invoice_marking', { marking: chip.marking })
       case 'payment_link':
         return chip.mode === 'auto' ? t('chip_stripe_auto') : t('chip_payment_link')
       case 'ore_off':
@@ -1993,7 +2043,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         sliver; give the zero-customer state real content. */}
                     {customers.length === 0 && (
                       <div className="px-3 py-2 text-[13px] text-muted-foreground">
-                        {t('no_customers_yet')}
+                        {customersLoading ? t('loading_customers') : t('no_customers_yet')}
                       </div>
                     )}
                     {customers.map((customer) => (
@@ -2043,6 +2093,35 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 <div className="space-y-2">
                   <Label>{ts('agreement_ref_label')}</Label>
                   <Input placeholder={ts('agreement_ref_placeholder')} {...register('self_billing_agreement_ref')} />
+                </div>
+                {/* The counterparty's issue date and our received date are
+                    mandatory transcription fields, not defaults: keep them
+                    visible instead of collapsed into Förval, where the
+                    silent today-default registered wrong dates on immutable
+                    self-billed invoices (issue #1820). */}
+                <div className="space-y-2">
+                  <Label>{ts('invoice_date_label')}<RequiredMark /></Label>
+                  <Input
+                    type="date"
+                    {...register('invoice_date')}
+                    aria-required="true"
+                    className="tabular-nums"
+                  />
+                  {errors.invoice_date && (
+                    <p className="text-sm text-destructive">{errors.invoice_date.message}</p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label>{ts('received_date_label')}<RequiredMark /></Label>
+                  <Input
+                    type="date"
+                    {...register('received_date')}
+                    aria-required="true"
+                    className="tabular-nums"
+                  />
+                  {errors.received_date && (
+                    <p className="text-sm text-destructive">{errors.received_date.message}</p>
+                  )}
                 </div>
               </div>
             )}
@@ -2117,7 +2196,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         )
                       }
 
-                      const lineTotal = (item?.quantity || 0) * (item?.unit_price || 0)
+                      const lineTotal = computeLineNet(
+                        item?.quantity || 0,
+                        item?.unit_price || 0,
+                        item?.discount_percent,
+                      )
                       const rowErrors = errors.items?.[index]
                       const rowErrorMsg =
                         rowErrors?.description?.message ??
@@ -2127,6 +2210,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       const articleStripOpen = articlePickerRows.has(index)
                       const accountStripOpen =
                         isInvoiceDoc && (accountOverrideRows.has(index) || Boolean(item?.revenue_account))
+                      // Not offered for a received självfaktura: the self-billed
+                      // endpoint's reduced item shape carries no discount, so a
+                      // previewed rebate would silently book gross.
+                      const discountStripOpen =
+                        !isSelfBilled &&
+                        (discountRows.has(index) || hasLineDiscount(item?.discount_percent))
                       const dimensionStripOpen =
                         dimensionsEnabled &&
                         isInvoiceDoc &&
@@ -2253,6 +2342,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                       <Package className="h-4 w-4" />
                                       {t('row_menu_pick_article')}
                                     </DropdownMenuItem>
+                                    {!isSelfBilled && (
+                                      <>
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuItem onSelect={() => toggleDiscount(index)} className="py-2">
+                                          <Percent className="h-4 w-4" />
+                                          {discountStripOpen
+                                            ? t('row_menu_remove_discount')
+                                            : t('row_menu_add_discount')}
+                                        </DropdownMenuItem>
+                                      </>
+                                    )}
                                     {isInvoiceDoc && (
                                       <>
                                         <DropdownMenuSeparator />
@@ -2383,6 +2483,59 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                               </div>
                             )}
 
+                            {/* Rabatt strip: opened via the ⋮ menu; a stored
+                                discount keeps it open in edit mode. */}
+                            {discountStripOpen && (
+                              <div className="px-2 pb-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Label
+                                    htmlFor={`invoice-line-discount-${index}`}
+                                    className="text-xs text-muted-foreground"
+                                  >
+                                    {t('discount_label')}
+                                  </Label>
+                                  <div className="flex items-center gap-1">
+                                    <Input
+                                      id={`invoice-line-discount-${index}`}
+                                      type="number"
+                                      step="0.01"
+                                      min={0}
+                                      max={100}
+                                      inputMode="decimal"
+                                      placeholder="0"
+                                      className="h-8 w-24 text-right tabular-nums"
+                                      aria-label={t('discount_label')}
+                                      aria-invalid={Boolean(rowErrors?.discount_percent) || undefined}
+                                      {...register(`items.${index}.discount_percent`, {
+                                        // valueAsNumber turns an emptied field into
+                                        // NaN, which the schema rejects invisibly;
+                                        // same pattern as labor_hours.
+                                        setValueAs: (v) => {
+                                          if (v === '' || v == null) return null
+                                          const n = Number(v)
+                                          return Number.isFinite(n) ? n : null
+                                        },
+                                      })}
+                                    />
+                                    <span className="text-xs text-muted-foreground">%</span>
+                                  </div>
+                                  {hasLineDiscount(item?.discount_percent) && (
+                                    <span className="text-xs tabular-nums text-muted-foreground">
+                                      &minus;{formatCurrency(
+                                        roundOre((item?.quantity || 0) * (item?.unit_price || 0)) - lineTotal,
+                                        watchCurrency,
+                                      )}
+                                    </span>
+                                  )}
+                                </div>
+                                {rowErrors?.discount_percent && (
+                                  <p className="mt-1 text-sm text-destructive">
+                                    {rowErrors.discount_percent.message}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+
                             {/* ROT/RUT-avdrag strip: only when a deduction is
                                 active on this row (chosen via the ⋮ menu). */}
                             {isInvoiceDoc && item?.deduction_type && (
@@ -2443,6 +2596,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                     const amt = computeDeduction({
                                       unit_price: item?.unit_price || 0,
                                       quantity: item?.quantity || 0,
+                                      discount_percent: item?.discount_percent,
                                       deduction_type: item?.deduction_type,
                                       vat_rate: vatRegistered
                                         ? (item?.vat_rate ?? (vatRules?.rate || 25))
@@ -2800,22 +2954,28 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     />
                   </div>
 
-                  <div className={SETTINGS_ROW_CLASS}>
-                    <Label className="text-[13px] font-normal">
-                      {t('invoice_date_label')}<RequiredMark />
-                    </Label>
-                    <div>
-                      <Input
-                        type="date"
-                        {...register('invoice_date')}
-                        aria-required="true"
-                        className="h-8 w-40 text-[13px] tabular-nums"
-                      />
-                      {errors.invoice_date && (
-                        <p className="mt-1 text-xs text-destructive">{errors.invoice_date.message}</p>
-                      )}
+                  {/* Self-billed mode renders fakturadatum and mottagningsdatum
+                      uncollapsed next to the external number instead: they are
+                      transcription fields there, and registering the same RHF
+                      field twice would desync the inputs. */}
+                  {!isSelfBilled && (
+                    <div className={SETTINGS_ROW_CLASS}>
+                      <Label className="text-[13px] font-normal">
+                        {t('invoice_date_label')}<RequiredMark />
+                      </Label>
+                      <div>
+                        <Input
+                          type="date"
+                          {...register('invoice_date')}
+                          aria-required="true"
+                          className="h-8 w-40 text-[13px] tabular-nums"
+                        />
+                        {errors.invoice_date && (
+                          <p className="mt-1 text-xs text-destructive">{errors.invoice_date.message}</p>
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   <div className={SETTINGS_ROW_CLASS}>
                     <Label className="text-[13px] font-normal">
@@ -2833,25 +2993,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       )}
                     </div>
                   </div>
-
-                  {isSelfBilled && (
-                    <div className={SETTINGS_ROW_CLASS}>
-                      <Label className="text-[13px] font-normal">
-                        {ts('received_date_label')}<RequiredMark />
-                      </Label>
-                      <div>
-                        <Input
-                          type="date"
-                          {...register('received_date')}
-                          aria-required="true"
-                          className="h-8 w-40 text-[13px] tabular-nums"
-                        />
-                        {errors.received_date && (
-                          <p className="mt-1 text-xs text-destructive">{errors.received_date.message}</p>
-                        )}
-                      </div>
-                    </div>
-                  )}
 
                   {watchDocumentType === 'invoice' && !isSelfBilled && (
                     <div className={SETTINGS_ROW_CLASS}>
@@ -2895,6 +3036,23 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                 placeholder={t('your_reference_placeholder')}
                               />
                             )}
+                          />
+                        </div>
+                      </div>
+                      {/* Fakturamärkning: one buyer-required marking string
+                          (kostnadsställe/projekt/PO), separate from Er
+                          referens. Plain input, never comma-split. */}
+                      <div className={SETTINGS_ROW_CLASS}>
+                        <Label htmlFor="invoice_marking" className="text-[13px] font-normal">
+                          {t('invoice_marking_label')}
+                        </Label>
+                        <div className="w-56">
+                          <Input
+                            id="invoice_marking"
+                            maxLength={200}
+                            placeholder={t('invoice_marking_placeholder')}
+                            className="h-8 text-[13px]"
+                            {...register('invoice_marking')}
                           />
                         </div>
                       </div>
@@ -3186,6 +3344,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             total={total}
             yourReference={pendingData?.your_reference}
             ourReference={pendingData?.our_reference}
+            invoiceMarking={pendingData?.invoice_marking}
             notes={pendingData?.notes}
             numberPreview={numberPreview}
             oreRounding={oreRounding}

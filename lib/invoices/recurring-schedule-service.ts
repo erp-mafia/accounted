@@ -31,6 +31,7 @@ import {
 } from '@/lib/invoices/pdf-render-helpers'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { getEmailService } from '@/lib/email/service'
+import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
@@ -279,6 +280,25 @@ export async function executeRecurringSchedule(
     throw new Error(`schedule ${schedule.id} has no items`)
   }
 
+  // VAT registration gate, mirroring buildInvoiceWriteData (issue #1719): a
+  // non-momsregistrerad company books no output VAT, so the spawned invoice
+  // must be momsfri regardless of what the schedule template says. Both a
+  // stored template rate (the dialog defaults new lines to 25%, and older
+  // schedules may predate a deregistration) and the null-rate fallback to the
+  // customer default below (25% for Swedish customers) would otherwise put
+  // VAT on the cron-generated invoice even though momskrysset is off. Zero
+  // every line at spawn time; 0% is a permitted rate for every customer type,
+  // so the allowedRates gate below still passes.
+  const { data: vatSettings } = await supabase
+    .from('company_settings')
+    .select('vat_registered')
+    .eq('company_id', schedule.company_id)
+    .maybeSingle()
+  const notVatRegistered = vatSettings?.vat_registered === false
+  if (notVatRegistered) {
+    for (const item of items) item.vat_rate = 0
+  }
+
   const subtotal = items.reduce((sum, it) => sum + it.quantity * it.unit_price, 0)
   let vatAmount = 0
   for (const item of items) {
@@ -351,10 +371,13 @@ export async function executeRecurringSchedule(
       total,
       total_sek: totalSek,
       remaining_amount: total,
-      vat_treatment: vatRules.treatment,
+      // Header VAT fields mirror buildInvoiceWriteData: a not-VAT-registered
+      // company stamps the sale as momsfri (treatment 'exempt', no ruta, no
+      // reverse-charge notation); every line rate is already zeroed above.
+      vat_treatment: notVatRegistered ? 'exempt' : vatRules.treatment,
       vat_rate: isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate),
-      moms_ruta: vatRules.momsRuta,
-      reverse_charge_text: vatRules.reverseChargeText || null,
+      moms_ruta: notVatRegistered ? null : vatRules.momsRuta,
+      reverse_charge_text: notVatRegistered ? null : (vatRules.reverseChargeText || null),
       your_reference: schedule.your_reference,
       our_reference: schedule.our_reference,
       notes: schedule.notes,
@@ -661,6 +684,7 @@ async function sendInvoiceFromSchedule(
       text,
       replyTo: company.email || undefined,
       fromName: company.company_name ?? undefined,
+      from: await resolveInvoiceSender(supabase, companyId, company.company_name),
       filename,
       pdfBuffer,
     })

@@ -83,6 +83,10 @@ describe('MCP namespace compatibility', () => {
     )
     const serverInfo = initialized.serverInfo as Record<string, unknown>
     expect(serverInfo.name).toBe('gnubok')
+    // Build-derived (commit SHA prefix) or the '1.0.0' self-hosted fallback:
+    // never empty, so clients can tell deploys apart.
+    expect(typeof serverInfo.version).toBe('string')
+    expect((serverInfo.version as string).length).toBeGreaterThan(0)
     expect(initialized.instructions).toContain('gnubok_search_tools')
 
     const listed = await readResult(mcpRequest('tools/list'))
@@ -105,6 +109,8 @@ describe('MCP namespace compatibility', () => {
     )
     const serverInfo = initialized.serverInfo as Record<string, unknown>
     expect(serverInfo.name).toBe('accounted')
+    expect(typeof serverInfo.version).toBe('string')
+    expect((serverInfo.version as string).length).toBeGreaterThan(0)
     expect(initialized.instructions).toContain('accounted_search_tools')
 
     const listed = await readResult(mcpRequest('tools/list', undefined, 'accounted'))

@@ -12,6 +12,13 @@ const isDev = process.env.NODE_ENV === "development";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 
+// Hosted builds only widen the CSP when Turnstile is prepared. The generic
+// Docker image builds with a site-key sentinel, so it always includes this
+// origin and can safely enable Turnstile later through runtime substitution.
+const turnstileOrigin = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY
+  ? " https://challenges.cloudflare.com"
+  : "";
+
 // WebSocket origin for Supabase Realtime. Hosted projects are covered by the
 // wss://*.supabase.co wildcard below, but a SELF-HOSTED Supabase URL is not:
 // Realtime opens wss://<supabase-host>/realtime/v1/websocket, and WebKit
@@ -27,6 +34,19 @@ const supabaseWsUrl =
   process.env.NEXT_PUBLIC_SUPABASE_WS_URL ??
   supabaseUrl.replace(/^http(s?):/, "ws$1:");
 
+// Brand logos (WL-12 slice A3) are served from Supabase Storage public
+// objects and rendered via next/image, which requires the host to be
+// allowlisted. The pattern stays narrow: public storage objects only.
+// try/catch because Docker builds may bake a sentinel value that is not a
+// parseable URL; no hostname simply means no remote images are allowed,
+// exactly as before.
+let supabaseImageHostname = "";
+try {
+  supabaseImageHostname = supabaseUrl ? new URL(supabaseUrl).hostname : "";
+} catch {
+  supabaseImageHostname = "";
+}
+
 const cspDirectives = [
   "default-src 'self'",
   // No analytics hosts here on purpose. PostHog replaced Recapt and is
@@ -36,7 +56,7 @@ const cspDirectives = [
   // re-widen the policy for no benefit and undo the ad-blocker resistance.
   `connect-src 'self' ${supabaseUrl} ${supabaseWsUrl} https://*.supabase.co wss://*.supabase.co https://*.enablebanking.com`,
   `style-src 'self' 'unsafe-inline' https://*.enablebanking.com`,
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://*.enablebanking.com`,
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://*.enablebanking.com${turnstileOrigin}`,
   "img-src 'self' data: blob: https:",
   "font-src 'self'",
   "worker-src 'self' blob:",
@@ -47,18 +67,48 @@ const cspDirectives = [
   // "Det här innehållet har blockerats" in Chrome. Firefox uses PDF.js and
   // Edge uses its own viewer, so neither hits this. See crbug.com/271452.
   "object-src 'self' blob:",
-  `frame-src 'self' blob: ${supabaseUrl}`,
+  `frame-src 'self' blob: ${supabaseUrl}${turnstileOrigin}`,
   "frame-ancestors 'none'",
 ].join("; ");
 
 const nextConfig: NextConfig = {
-  output: 'standalone',
+  // Standalone output feeds the Docker image (Dockerfile copies
+  // .next/standalone). Vercel never reads it: its build adapter
+  // (onBuildComplete) traces and packages functions itself, and as of Next
+  // 16.3 the adapter path no longer leaves the next-server.js.nft.json the
+  // standalone writer copies from, so the build failed with ENOENT right after
+  // "Running onBuildComplete from Vercel" (#1750 preview). VERCEL=1 is a
+  // system env var on every Vercel build; self-hosted and local builds keep
+  // the standalone directory.
+  output: process.env.VERCEL ? undefined : 'standalone',
+  ...(supabaseImageHostname
+    ? {
+        images: {
+          remotePatterns: [
+            {
+              protocol: "https" as const,
+              hostname: supabaseImageHostname,
+              pathname: "/storage/v1/object/public/**",
+            },
+          ],
+        },
+      }
+    : {}),
   // Build id inlined into the client bundle so a running tab can tell when a
   // newer deploy is live (see components/system/DeployReloadPrompt). On Vercel
   // this is the commit SHA; empty elsewhere (dev / self-hosted), which disables
   // the check. The /api/version route reads the same var at runtime to compare.
   env: {
     NEXT_PUBLIC_BUILD_ID: process.env.VERCEL_GIT_COMMIT_SHA ?? '',
+  },
+  // The build type-checks what ships: tsconfig.build.json extends
+  // tsconfig.json and excludes tests. tsconfig.json stays the editor/ESLint
+  // view of the whole repo. Next 16.3's default CLI checker checks the complete
+  // project it is given and no longer drops test-file diagnostics the way the
+  // old API checker did, so without this the build would fail on test typing
+  // debt that vitest never type-checks (see DECISIONS.md 2026-08-20).
+  typescript: {
+    tsconfigPath: 'tsconfig.build.json',
   },
   // Multiple lockfiles exist above this project (e.g. a parent yarn.lock),
   // which makes Turbopack infer the wrong workspace root. Pin it explicitly.
@@ -70,6 +120,25 @@ const nextConfig: NextConfig = {
   skipTrailingSlashRedirect: true,
   experimental: {
     optimizePackageImports: ['recharts', 'date-fns', 'framer-motion'],
+    // Client router cache for dynamic routes: a page visited in the last
+    // 30 s (back/forward, re-clicking a nav item) re-renders from the cached
+    // RSC payload instead of a new server request through the auth proxy.
+    // Mutation flows already call router.refresh() where a stale server
+    // render would mislead (16 sites); the client-side reference-data cache
+    // (lib/reference-data) is independent of this and refreshes on its own.
+    // Default was 0 (always refetch). Static routes keep the 5 min default.
+    staleTimes: { dynamic: 30, static: 300 },
+    // Vercel's standard build container OOM-kills the build since 2026-08-26
+    // (the tree outgrew it; SIGKILL during "Creating an optimized production
+    // build"). Two knobs, disjoint phases:
+    // - compile phase (Turbopack, where the kills happen): evict finished
+    //   tasks to the on-disk cache after every snapshot instead of the lazier
+    //   'auto' default. Trades some compile speed for a bounded working set;
+    //   requires the persistent FS cache, which is on by default in Next 16.
+    turbopackMemoryEviction: 'full',
+    // - static-generation phase: cap prerender workers (default is cores-1;
+    //   each is a full Node process on the shared container RAM).
+    cpus: 2,
   },
   // PostHog reverse proxy. Keeping analytics same-origin buys three things:
   // the strict CSP below needs NO posthog hosts (`connect-src 'self'` already

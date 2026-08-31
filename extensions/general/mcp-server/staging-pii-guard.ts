@@ -3,9 +3,11 @@
  *
  * pending_operations.params and .preview_data are persisted verbatim and
  * rendered in approval UIs, so no staging payload may carry a plaintext
- * personnummer. The one tool that legitimately receives one
- * (gnubok_create_employee) encrypts at staging time and stores only
- * `personnummer_encrypted` / `personnummer_last4` / `personnummer_masked`.
+ * personnummer. The tools that legitimately receive one
+ * (gnubok_create_employee, gnubok_create_customer) encrypt at staging time and
+ * store only `personnummer_encrypted` / `personnummer_last4` /
+ * `personnummer_masked` (employees) or `personal_number_encrypted` /
+ * `personal_number_masked` (customers).
  * This guard runs inside stagePendingOperation, so every current and FUTURE
  * staging tool inherits the rule: a tool that forgets to encrypt fails loudly
  * at staging instead of silently persisting PII.
@@ -16,7 +18,15 @@
  * forms above are therefore allowed by construction.
  */
 
-const FORBIDDEN_KEYS = new Set(['personnummer', 'pnr', 'social_security_number', 'ssn'])
+const FORBIDDEN_KEYS = new Set([
+  'personnummer',
+  'pnr',
+  'social_security_number',
+  'ssn',
+  // customers.personal_number: gnubok_create_customer stages it as
+  // personal_number_encrypted + personal_number_masked, never under this key.
+  'personal_number',
+])
 
 /**
  * Cycle/degenerate-payload stop: staged payloads are shallow JSON. Anything

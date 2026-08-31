@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { isSelfHosted } from '@/lib/env/public-flags'
 import { PAID_CAPABILITIES, isConnectorCapability, type CapabilityKey } from './keys'
+import { hasOwnCredentialsFor } from './own-credentials'
 
 /**
  * Entitlement gate: the single primitive behind the paywall ("non-payer loses
@@ -60,12 +61,28 @@ function isDevBypass(): boolean {
  *   hosted          : dev / DISABLE_PAYWALL bypass, FORCE_PAYWALL wins (unchanged).
  *   self-hosted     : local capabilities are always on (FORCE_PAYWALL included:
  *                     an AGPL operator's own instance is never gated on what it
- *                     runs itself); connector capabilities behave like hosted
+ *                     runs itself); connector capabilities served from the
+ *                     instance's OWN credentials count as local (the operator
+ *                     runs that upstream themselves; see own-credentials.ts);
+ *                     the remaining connector capabilities behave like hosted
  *                     (dev bypass, FORCE_PAYWALL, otherwise the grant lookup).
  */
 function isBypassedFor(key: CapabilityKey): boolean {
-  if (isSelfHosted() && !isConnectorCapability(key)) return true
+  if (isSelfHosted() && (!isConnectorCapability(key) || hasOwnCredentialsFor(key))) return true
   return isDevBypass()
+}
+
+/**
+ * Whether only the connector sync's own grants may unlock a capability.
+ *
+ * The trial-seed trigger (seed_trial_capability_grants) writes 30-day
+ * source = 'trial' rows for bank_sync and skatteverket on EVERY company
+ * insert, self-hosts included, and a self-host has no trial: without this
+ * predicate a fresh self-host company would hold every connector capability
+ * for a month with no connector key. Hosted keeps reading every source.
+ */
+function connectorGrantsOnly(): boolean {
+  return isSelfHosted()
 }
 
 /**
@@ -150,23 +167,28 @@ export async function getCompanyIdsWithCapability(
 
   const teamIds = [...new Set(companies.map(company => company.team_id).filter((id): id is string => !!id))]
   const grants: GrantScope[] = []
+  const onlyConnectorGrants = connectorGrantsOnly()
 
   for (const chunk of chunksOf(validCompanyIds, CAPABILITY_SCOPE_CHUNK_SIZE)) {
-    const { data, error } = await supabase
+    let companyGrantsQuery = supabase
       .from('capability_grants')
       .select('company_id, team_id, expires_at')
       .eq('capability_key', key)
       .in('company_id', chunk)
+    if (onlyConnectorGrants) companyGrantsQuery = companyGrantsQuery.eq('source', 'connector')
+    const { data, error } = await companyGrantsQuery
     if (error) throw new Error(`Failed to resolve company capability grants: ${error.message}`)
     grants.push(...((data ?? []) as GrantScope[]))
   }
 
   for (const chunk of chunksOf(teamIds, CAPABILITY_SCOPE_CHUNK_SIZE)) {
-    const { data, error } = await supabase
+    let firmGrantsQuery = supabase
       .from('capability_grants')
       .select('company_id, team_id, expires_at')
       .eq('capability_key', key)
       .in('team_id', chunk)
+    if (onlyConnectorGrants) firmGrantsQuery = firmGrantsQuery.eq('source', 'connector')
+    const { data, error } = await firmGrantsQuery
     if (error) throw new Error(`Failed to resolve firm capability grants: ${error.message}`)
     grants.push(...((data ?? []) as GrantScope[]))
   }
@@ -213,11 +235,13 @@ export async function hasCapability(
   const scopeFilter = teamId
     ? `company_id.eq.${companyId},team_id.eq.${teamId}`
     : `company_id.eq.${companyId}`
-  const { data: grants, error: grantsError } = await supabase
+  let grantsQuery = supabase
     .from('capability_grants')
     .select('expires_at')
     .eq('capability_key', key)
     .or(scopeFilter)
+  if (connectorGrantsOnly()) grantsQuery = grantsQuery.eq('source', 'connector')
+  const { data: grants, error: grantsError } = await grantsQuery
 
   if (grantsError) return false // fail-closed on any read error
   const now = Date.now()
@@ -246,14 +270,31 @@ export const CAPABILITY_BLOCKED_MESSAGE_EN =
   'This feature requires a paid subscription. Upgrade to keep using external services.'
 
 /**
+ * Self-host variant: the remedy there is a connector key (or the instance's
+ * own upstream credentials), never a hosted subscription, so the hosted
+ * upsell copy would mislead the operator.
+ */
+export const CAPABILITY_BLOCKED_MESSAGE_SELF_HOSTED_SV =
+  'Den här funktionen kräver en connector-nyckel från Accounted (GNUBOK_CONNECTOR_KEY) eller instansens egna API-uppgifter för tjänsten.'
+export const CAPABILITY_BLOCKED_MESSAGE_SELF_HOSTED_EN =
+  'This feature requires an Accounted connector key (GNUBOK_CONNECTOR_KEY) or the instance\'s own API credentials for the service.'
+
+function blockedMessageSv(): string {
+  return isSelfHosted() ? CAPABILITY_BLOCKED_MESSAGE_SELF_HOSTED_SV : CAPABILITY_BLOCKED_MESSAGE_SV
+}
+function blockedMessageEn(): string {
+  return isSelfHosted() ? CAPABILITY_BLOCKED_MESSAGE_SELF_HOSTED_EN : CAPABILITY_BLOCKED_MESSAGE_EN
+}
+
+/**
  * Standard bilingual 403 for a capability-blocked endpoint. Matches the
  * sandbox/guard envelope so the UI surfaces the upsell consistently.
  */
 export function capabilityBlockedResponse(key: CapabilityKey): NextResponse {
   return NextResponse.json(
     {
-      error: CAPABILITY_BLOCKED_MESSAGE_SV,
-      error_en: CAPABILITY_BLOCKED_MESSAGE_EN,
+      error: blockedMessageSv(),
+      error_en: blockedMessageEn(),
       capability_blocked: true,
       capability: key,
     },
@@ -280,8 +321,8 @@ export function capabilityBlockedError(key: CapabilityKey): CapabilityBlockedErr
     code: 'capability_blocked',
     capability_blocked: true,
     capability: key,
-    message_sv: CAPABILITY_BLOCKED_MESSAGE_SV,
-    message_en: CAPABILITY_BLOCKED_MESSAGE_EN,
+    message_sv: blockedMessageSv(),
+    message_en: blockedMessageEn(),
   }
 }
 
@@ -341,15 +382,58 @@ export interface CompanyEntitlements {
 /** company_subscriptions.status values that count as a live subscription. */
 const PAYING_SUBSCRIPTION_STATUSES = ['active', 'trialing', 'past_due']
 
+function normalizeTeamId(raw: string | null | undefined): string | null {
+  return raw && isUuid(raw) ? raw : null
+}
+
+/**
+ * The grants read behind getCompanyEntitlements. `keys` is the paid-key list
+ * the caller wants resolved from grants (every paid key on hosted; only the
+ * connector keys on a self-host, where the local ones are held outright).
+ * On a self-host only the connector sync's own rows count; see
+ * connectorGrantsOnly().
+ */
+function readGrants(
+  supabase: SupabaseClient,
+  companyId: string,
+  teamId: string | null,
+  keys: readonly CapabilityKey[],
+) {
+  const scopeFilter = teamId
+    ? `company_id.eq.${companyId},team_id.eq.${teamId}`
+    : `company_id.eq.${companyId}`
+  let grantsQuery = supabase
+    .from('capability_grants')
+    .select('capability_key, expires_at, source')
+    .in('capability_key', keys as unknown as string[])
+    .or(scopeFilter)
+  if (connectorGrantsOnly()) grantsQuery = grantsQuery.eq('source', 'connector')
+  return grantsQuery
+}
+
+export interface GetCompanyEntitlementsOptions {
+  /**
+   * The company's team_id when the caller already has it (the dashboard
+   * layout reads it off the membership join): skips the companies lookup and
+   * lets the grants read run in the same wave as the other two, one round
+   * trip instead of two on the layout's critical path. Pass null for a
+   * company without a team.
+   */
+  teamId?: string | null
+}
+
 /**
  * Resolve which PAID capabilities a company currently holds (entitled AND
  * enabled) plus its trial state, in two queries. Used to seed the client
  * CompanyContext so the UI can hide/disable/upsell gated features.
- * Self-hosted holds everything.
+ * Self-hosted holds every local capability outright; the
+ * CONNECTOR_CAPABILITIES are read from `source = 'connector'` grants only
+ * (see connectorGrantsOnly()).
  */
 export async function getCompanyEntitlements(
   supabase: SupabaseClient,
   companyId: string,
+  options: GetCompanyEntitlementsOptions = {},
 ): Promise<CompanyEntitlements> {
   if (isPaywallBypassed()) {
     return {
@@ -368,8 +452,12 @@ export async function getCompanyEntitlements(
   // `source = 'connector'` by the instance's connector sync). Same query
   // below, narrowed to those keys.
   const selfHosted = isSelfHosted()
-  const localPaid = selfHosted ? PAID_CAPABILITIES.filter((k) => !isConnectorCapability(k)) : []
-  const queriedKeys = selfHosted ? PAID_CAPABILITIES.filter((k) => isConnectorCapability(k)) : PAID_CAPABILITIES
+  // Own-credentials connector keys count as local: the operator runs that
+  // upstream themselves (see own-credentials.ts), so they are held outright
+  // and never read from grants.
+  const selfHostLocal = (k: CapabilityKey) => !isConnectorCapability(k) || hasOwnCredentialsFor(k)
+  const localPaid = selfHosted ? PAID_CAPABILITIES.filter(selfHostLocal) : []
+  const queriedKeys = selfHosted ? PAID_CAPABILITIES.filter((k) => !selfHostLocal(k)) : PAID_CAPABILITIES
 
   // The disabled-config subtraction and the subscription-status read only
   // need companyId, so they run in parallel with the team lookup: this
@@ -378,8 +466,11 @@ export async function getCompanyEntitlements(
   // per RLS) distinguishes a churned payer from an expired trial: cancelled
   // subscriptions have their stripe grants deleted, so the grants alone
   // cannot tell the two apart.
-  const [{ data: company }, { data: configs }, { data: subscription }] = await Promise.all([
-    supabase.from('companies').select('team_id').eq('id', companyId).maybeSingle(),
+  const knownTeam = options.teamId !== undefined
+  const [{ data: company }, { data: configs }, { data: subscription }, earlyGrants] = await Promise.all([
+    knownTeam
+      ? Promise.resolve({ data: { team_id: options.teamId } })
+      : supabase.from('companies').select('team_id').eq('id', companyId).maybeSingle(),
     supabase
       .from('company_capability_config')
       .select('capability_key, enabled')
@@ -390,18 +481,21 @@ export async function getCompanyEntitlements(
       .select('status')
       .eq('company_id', companyId)
       .maybeSingle(),
+    // With the team known up front the grants read joins this wave. A
+    // self-host serving every connector upstream from its own credentials has
+    // nothing to read from grants: skip the query (`in.()` on an empty list
+    // is not a valid PostgREST filter).
+    knownTeam && queriedKeys.length > 0
+      ? readGrants(supabase, companyId, normalizeTeamId(options.teamId), queriedKeys)
+      : Promise.resolve(null),
   ])
-  const rawTeamId = (company as { team_id: string | null } | null)?.team_id ?? null
-  const teamId = rawTeamId && isUuid(rawTeamId) ? rawTeamId : null
+  const teamId = normalizeTeamId((company as { team_id: string | null } | null)?.team_id ?? null)
 
-  const scopeFilter = teamId
-    ? `company_id.eq.${companyId},team_id.eq.${teamId}`
-    : `company_id.eq.${companyId}`
-  const { data: grants } = await supabase
-    .from('capability_grants')
-    .select('capability_key, expires_at, source')
-    .in('capability_key', queriedKeys as unknown as string[])
-    .or(scopeFilter)
+  const { data: grants } =
+    earlyGrants ??
+    (queriedKeys.length > 0
+      ? await readGrants(supabase, companyId, teamId, queriedKeys)
+      : { data: [] })
 
   const now = Date.now()
   const entitled = new Set<string>(localPaid)
@@ -413,6 +507,9 @@ export async function getCompanyEntitlements(
   let hasActiveConnectorGrant = false
   for (const g of grants ?? []) {
     const row = g as { capability_key: string; expires_at: string | null; source: string | null }
+    // Self-host: a trial-seeded (or any non-connector) row never unlocks a
+    // connector capability; see connectorGrantsOnly().
+    if (selfHosted && row.source !== 'connector') continue
     if (
       row.source === 'trial' &&
       row.expires_at &&

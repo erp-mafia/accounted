@@ -411,6 +411,28 @@ describe('getErrorMessage: API response body vs new Error(body.error)', () => {
     )
   })
 
+  // #1996: the envelope a missing PERSONNUMMER_ENCRYPTION_KEY now produces.
+  it('a typed configuration-gap envelope yields the registry text per locale', () => {
+    const configGap = {
+      error: {
+        code: 'PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED',
+        message:
+          'Lönemodulen är inte konfigurerad: krypteringsnyckeln för personnummer (PERSONNUMMER_ENCRYPTION_KEY) saknas i driftmiljön. Kontakta supporten.',
+        message_en:
+          'Payroll is not configured: the personal-number encryption key (PERSONNUMMER_ENCRYPTION_KEY) is missing from the deployment environment. Contact support.',
+        requestId: 'req_00000000-0000-4000-8000-000000000001',
+      },
+    }
+    const sv = getErrorMessage(configGap, { context: 'salary', statusCode: 503, locale: 'sv' })
+    expect(sv).toBe(configGap.error.message)
+    const en = getErrorMessage(configGap, { context: 'salary', statusCode: 503, locale: 'en' })
+    expect(en).toBe(configGap.error.message_en)
+    // Neither locale falls back to the generic 503 "temporarily unavailable"
+    // text: this failure is permanent until an operator sets the variable.
+    expect(sv).not.toMatch(/tillfälligt/i)
+    expect(en).not.toMatch(/temporarily/i)
+  })
+
   it('the same call handles an unparseable body via statusCode', () => {
     // `await response.json().catch(() => null)` on an HTML 403 page.
     expect(getErrorMessage(null, { statusCode: 403 })).toBe(

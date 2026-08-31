@@ -2,19 +2,28 @@ import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { NextResponse } from 'next/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { z } from 'zod'
-import { uploadDocument } from '@/lib/core/documents/document-service'
+import {
+  uploadDocument,
+  createPendingDocumentUpload,
+  completePendingDocumentUpload,
+} from '@/lib/core/documents/document-service'
 import { createServiceClient } from '@/lib/supabase/server'
+import { validateBody } from '@/lib/api/validate'
+import { hasErrorEntry } from '@/lib/errors/structured-errors'
+import { dbError } from '@/lib/errors/db-error'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
-import { extractInvoiceFields, ExtractionSchema, emptyResult } from './lib/extract-invoice-fields'
+import { extractInvoiceFields, ExtractionSchema, emptyResult, fetchOwnCompanyIdentity } from './lib/extract-invoice-fields'
+import { mirrorExtractionToDocument } from './lib/mirror-extraction'
 import {
   uploadAndExtract,
+  processArchivedDocument,
   sanitiseFilename,
   sanitiseMime,
   isSandboxCompany,
   countPdfPages,
   slicePdfForExtraction,
   MAX_FILE_SIZE,
-  MAX_PAGES_FOR_AUTO_EXTRACT,
+  maxPagesForAutoExtract,
   UPLOAD_ALLOWED_MIME_TYPES,
   EMAIL_ALLOWED_MIME_TYPES,
   ensureHtmlDocument,
@@ -43,12 +52,13 @@ import {
   applyDomainStatusFromWebhook,
 } from './lib/custom-domains'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import {
   resolveSupplierInvoiceExchangeRate,
   supplierInvoiceSekAmounts,
@@ -61,7 +71,16 @@ import { bulkBookMatchedInboxItems } from '@/lib/transactions/categorize-core'
 import {
   completeInboxItemsForBookedTransaction,
   resolveBookedJournalEntryIds,
+  resolveUnderlagAnchoring,
+  type UnderlagAnchoring,
 } from '@/lib/transactions/inbox-underlag'
+
+/**
+ * Per-item underlag status on the wire (#1548): the anchoring verdict, or
+ * 'unknown' when the document row could not be read. Absence is never
+ * reported as anchored; the UI keeps 'unknown' out of the booked bucket.
+ */
+type UnderlagStatus = UnderlagAnchoring | 'unknown'
 import { hasCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
@@ -137,6 +156,100 @@ const UpdateExtractedDataSchema = z.object({
 const ClaimDomainSchema = z.object({
   domain: z.string().trim().min(1).max(255),
 })
+
+// Direct-to-storage upload (signed URL, see the /upload/create route).
+// size_bytes is the browser's own report: the server re-measures the object
+// on completion, so this only refuses the obviously oversized before a URL
+// is handed out. file_name must be sent identically to both steps: it is
+// part of the reserved storage key.
+const CreateSignedUploadSchema = z.object({
+  file_name: z.string().trim().min(1).max(255),
+  mime_type: z.string().trim().min(1).max(120),
+  size_bytes: z.number().int().min(1),
+})
+
+const CompleteSignedUploadSchema = z.object({
+  upload_id: z.string().uuid(),
+  file_name: z.string().trim().min(1).max(255),
+  mime_type: z.string().trim().min(1).max(120),
+  matched_transaction_id: z.string().uuid().nullable().optional(),
+  skip_extraction: z.boolean().optional(),
+})
+
+/**
+ * The inbox item already filed for an archived document, in the /upload
+ * response shape. Lets /upload/complete be retried after a lost response:
+ * completePendingDocumentUpload converges on the same document row, and
+ * this keeps the pipeline from filing a second item for it.
+ */
+async function findInboxItemForDocument(
+  supabase: import('@supabase/supabase-js').SupabaseClient,
+  companyId: string,
+  documentId: string,
+) {
+  const { data, error } = await supabase
+    .from('invoice_inbox_items')
+    .select('id, status, extracted_data, matched_supplier_id, matched_transaction_id, extraction_skipped')
+    .eq('company_id', companyId)
+    .eq('document_id', documentId)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  if (error) throw dbError(error, 'Completed-upload lookup failed')
+  if (!data) return null
+  return {
+    document_id: documentId,
+    inbox_item_id: data.id as string,
+    status: data.status as string,
+    extracted_data: data.extracted_data,
+    matched_supplier_id: data.matched_supplier_id as string | null,
+    matched_transaction_id: data.matched_transaction_id as string | null,
+    extraction_skipped: data.extraction_skipped === true,
+    skip_reason: null,
+    page_count: null,
+    already_completed: true as const,
+  }
+}
+
+/**
+ * Map a failure in the signed-upload steps to the error envelope. Coded
+ * failures get their own status and copy: a viewer-role member's 42501 on
+ * the document insert (the storage policy admits the bytes on membership
+ * alone), an expired or never-written reservation, and the document
+ * service's content verdicts (empty object, over the cap, bytes that are
+ * not the declared type; that last one carries its authored Swedish
+ * sentence as `messageSv`). Everything else lands on INBOX_UPLOAD_FAILED
+ * with the registry copy: the raw message goes to the log only.
+ */
+function signedUploadFailureResponse(
+  error: unknown,
+  ctx: ExtensionContext,
+  step: 'upload/create' | 'upload/complete',
+): NextResponse {
+  const reason = error instanceof Error ? error.message : String(error)
+  ctx.log.error(`[invoice-inbox/${step}] Failed`, error)
+  const coded = (typeof error === 'object' && error !== null ? error : {}) as {
+    code?: unknown
+    messageSv?: unknown
+  }
+  const code = typeof coded.code === 'string' ? coded.code : null
+  if (code === '42501') {
+    return errorResponseFromCode('INBOX_UPLOAD_NOT_PERMITTED', ctx.log, {
+      requestId: ctx.requestId,
+      reason,
+    })
+  }
+  if (code && hasErrorEntry(code)) {
+    return errorResponseFromCode(code, ctx.log, {
+      requestId: ctx.requestId,
+      reason,
+      ...(typeof coded.messageSv === 'string' && coded.messageSv.trim()
+        ? { messageSv: coded.messageSv }
+        : {}),
+    })
+  }
+  return errorResponseFromCode('INBOX_UPLOAD_FAILED', ctx.log, { requestId: ctx.requestId, reason })
+}
 
 // Custom inbound domains are fully built but deliberately not exposed,
 // product decision 2026-07-02: the default is the Fortnox-style shared
@@ -295,6 +408,174 @@ export const invoiceInboxExtension: Extension = {
       },
     },
 
+    // ── Direct-to-storage upload (signed URL, two steps) ────
+    // A hosted function body is capped at 4.5 MB by the platform, before the
+    // route runs, so a scanned PDF above that can never reach /upload
+    // (issue #1551). The browser instead asks for a short-lived signed URL
+    // here, PUTs the bytes straight to Storage, and hands the reservation to
+    // /upload/complete, which reads the object back out of Storage, hashes
+    // and archives it: the integrity chain stays server-computed. Two path
+    // segments so the dispatcher's segment-count match never confuses these
+    // with /upload. Rate-limited on create only: complete cannot mint
+    // anything the create step did not already pay for.
+    {
+      method: 'POST',
+      path: '/upload/create',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+        const limit = await checkInboxUploadRateLimit(ctx.supabase, ctx.companyId)
+        if (!limit.ok) {
+          return NextResponse.json(
+            {
+              error: {
+                code: 'RATE_LIMITED',
+                message:
+                  limit.scope === 'minute'
+                    ? 'För många uppladdningar på kort tid. Försök igen om en stund.'
+                    : 'Dagsgränsen för uppladdningar är nådd. Försök igen imorgon.',
+                message_en:
+                  limit.scope === 'minute'
+                    ? 'Too many uploads in a short time. Try again in a moment.'
+                    : 'The daily upload limit has been reached. Try again tomorrow.',
+              },
+              retry_after: limit.retryAfterSec,
+            },
+            { status: 429, headers: { 'Retry-After': String(limit.retryAfterSec ?? 60) } },
+          )
+        }
+
+        const parsed = await validateBody(request, CreateSignedUploadSchema)
+        if (!parsed.success) return parsed.response
+        const { file_name: fileName, mime_type: mimeType, size_bytes: sizeBytes } = parsed.data
+
+        if (!UPLOAD_ALLOWED_MIME_TYPES.has(mimeType)) {
+          return errorResponseFromCode('INBOX_UPLOAD_UNSUPPORTED_TYPE', ctx.log, {
+            requestId: ctx.requestId,
+            messageSv: `Filtypen stöds inte: ${mimeType}. Tillåtna format: PDF, JPEG, PNG, HEIC och WebP.`,
+            messageEn: `Unsupported file type: ${mimeType}. Allowed: PDF, JPEG, PNG, HEIC, WebP.`,
+          })
+        }
+        if (sizeBytes > MAX_FILE_SIZE) {
+          return errorResponseFromCode('INBOX_UPLOAD_TOO_LARGE', ctx.log, {
+            requestId: ctx.requestId,
+            messageSv: `Filen är för stor. Maxstorlek är ${MAX_FILE_SIZE / 1024 / 1024} MB.`,
+            messageEn: `File exceeds the ${MAX_FILE_SIZE / 1024 / 1024} MB size limit.`,
+          })
+        }
+
+        try {
+          const uploadId = crypto.randomUUID()
+          const reservation = await createPendingDocumentUpload(
+            ctx.supabase,
+            ctx.companyId,
+            ctx.userId,
+            uploadId,
+            fileName,
+          )
+          // The RAW Storage URL, deliberately not the same-origin proxy the
+          // MCP tools hand out (toSameOriginStorageUrl): that proxy buffers
+          // the PUT body inside a function and so sits under the very
+          // ceiling this route exists to get around. CSP connect-src
+          // already allows the Storage host.
+          return NextResponse.json({
+            data: {
+              upload_id: reservation.uploadId,
+              upload_url: reservation.signedUrl,
+              expires_at: reservation.expiresAt,
+            },
+          })
+        } catch (error) {
+          return signedUploadFailureResponse(error, ctx, 'upload/create')
+        }
+      },
+    },
+
+    {
+      method: 'POST',
+      path: '/upload/complete',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+        const parsed = await validateBody(request, CompleteSignedUploadSchema)
+        if (!parsed.success) return parsed.response
+        const { upload_id: uploadId, file_name: fileName, mime_type: mimeType } = parsed.data
+        const matchedTransactionId = parsed.data.matched_transaction_id ?? null
+        const skipExtraction = parsed.data.skip_extraction === true
+
+        // The declared type drives the magic-byte check on completion, so
+        // it is gated exactly like the multipart route's file.type.
+        if (!UPLOAD_ALLOWED_MIME_TYPES.has(mimeType)) {
+          return errorResponseFromCode('INBOX_UPLOAD_UNSUPPORTED_TYPE', ctx.log, {
+            requestId: ctx.requestId,
+            messageSv: `Filtypen stöds inte: ${mimeType}. Tillåtna format: PDF, JPEG, PNG, HEIC och WebP.`,
+            messageEn: `Unsupported file type: ${mimeType}. Allowed: PDF, JPEG, PNG, HEIC, WebP.`,
+          })
+        }
+
+        // Same ownership check as /upload: fail fast with a clear code
+        // rather than letting RLS reject the insert after extraction.
+        if (matchedTransactionId) {
+          const { data: tx, error: txErr } = await ctx.supabase
+            .from('transactions')
+            .select('id')
+            .eq('id', matchedTransactionId)
+            .eq('company_id', ctx.companyId)
+            .maybeSingle()
+          if (txErr) {
+            return errorResponse(txErr, ctx.log, { requestId: ctx.requestId })
+          }
+          if (!tx) {
+            return errorResponseFromCode('INBOX_UPLOAD_TX_NOT_IN_COMPANY', ctx.log, {
+              requestId: ctx.requestId,
+            })
+          }
+        }
+
+        try {
+          // Idempotent: a retry after a lost response (tab reloaded, network
+          // dropped) must return the item that already exists, not file a
+          // second one. The document id IS the upload id.
+          const existing = await findInboxItemForDocument(ctx.supabase, ctx.companyId, uploadId)
+          if (existing) return NextResponse.json({ data: existing })
+
+          const completed = await completePendingDocumentUpload(
+            ctx.supabase,
+            ctx.companyId,
+            ctx.userId,
+            uploadId,
+            fileName,
+            mimeType,
+            undefined,
+            {
+              extractionOwner: 'invoice-inbox',
+              uploadSource: 'file_upload',
+              // Same content dedupe the multipart route gets from
+              // uploadDocument: the same receipt uploaded twice must not
+              // become a second archived document.
+              dedupeByContent: true,
+            },
+          )
+          // From here on this is the multipart route, byte for byte: same
+          // staged extraction, same inbox row, same response shape.
+          const result = await processArchivedDocument(
+            ctx.supabase,
+            ctx.userId,
+            ctx.companyId,
+            completed.document,
+            { name: fileName, buffer: completed.buffer, type: mimeType },
+            'upload',
+            undefined,
+            matchedTransactionId,
+            { skipExtraction, deferExtraction: true },
+          )
+          return NextResponse.json({ data: result })
+        } catch (error) {
+          return signedUploadFailureResponse(error, ctx, 'upload/complete')
+        }
+      },
+    },
+
     // ── List inbox items ────────────────────────────────────
     {
       method: 'GET',
@@ -337,34 +618,61 @@ export const invoiceInboxExtension: Extension = {
         // leave the active inbox (2026-08-12 report: booked items stuck in
         // "Att göra" pointing at a transaction no longer in the work list).
         type ItemRow = {
+          id: string
+          document_id: string | null
           matched_transaction_id: string | null
           created_journal_entry_id: string | null
           created_supplier_invoice_id: string | null
         }
         const rows = (data ?? []) as ItemRow[]
+        const unresolved = rows.filter(
+          (r) =>
+            r.matched_transaction_id &&
+            !r.created_journal_entry_id &&
+            !r.created_supplier_invoice_id,
+        )
         const unresolvedTxIds = Array.from(
-          new Set(
-            rows
-              .filter(
-                (r) =>
-                  r.matched_transaction_id &&
-                  !r.created_journal_entry_id &&
-                  !r.created_supplier_invoice_id,
-              )
-              .map((r) => r.matched_transaction_id as string),
-          ),
+          new Set(unresolved.map((r) => r.matched_transaction_id as string)),
         )
         const bookedByTx = await resolveBookedJournalEntryIds(
           ctx.supabase,
           ctx.companyId,
           unresolvedTxIds,
         )
-        const items = rows.map((r) => ({
-          ...r,
-          matched_transaction_journal_entry_id: r.matched_transaction_id
+        // Per-item honesty (#1548): the transaction being booked says a
+        // verifikat exists, not that THIS item's underlag reached it. A
+        // document whose link failed, or that is anchored to another
+        // verifikat, must keep the item in "Att göra" instead of reading as
+        // booked on the transaction's word alone.
+        const anchoring = await resolveUnderlagAnchoring(
+          ctx.supabase,
+          ctx.companyId,
+          unresolved
+            .filter((r) => bookedByTx.has(r.matched_transaction_id as string))
+            .map((r) => ({
+              id: r.id,
+              document_id: r.document_id,
+              journalEntryId: bookedByTx.get(r.matched_transaction_id as string) as string,
+            })),
+        )
+        const items = rows.map((r) => {
+          const derivedEntryId = r.matched_transaction_id
             ? bookedByTx.get(r.matched_transaction_id) ?? null
-            : null,
-        }))
+            : null
+          // Absent from the anchoring map means the document row could not
+          // be read: 'unknown', which the UI treats like a divergent item
+          // (stays in Att göra, no booking bridge). Never booked on a guess.
+          // Only unstamped items were sent to the anchoring read; a stamped
+          // sibling is booked by its own column and gets no verdict here.
+          const unstamped = !r.created_journal_entry_id && !r.created_supplier_invoice_id
+          const underlagStatus: UnderlagStatus | null =
+            derivedEntryId && unstamped ? anchoring.get(r.id)?.status ?? 'unknown' : null
+          return {
+            ...r,
+            matched_transaction_journal_entry_id: derivedEntryId,
+            underlag_status: underlagStatus,
+          }
+        })
 
         return NextResponse.json({ data: { items, count: items.length } })
       },
@@ -430,11 +738,14 @@ export const invoiceInboxExtension: Extension = {
         // Same enrichment as the list: the detail rail must not offer to
         // book a matched transaction that is already booked.
         const row = data as {
+          id: string
+          document_id: string | null
           matched_transaction_id: string | null
           created_journal_entry_id: string | null
           created_supplier_invoice_id: string | null
         }
         let matchedTransactionJournalEntryId: string | null = null
+        let underlagStatus: UnderlagStatus | null = null
         if (
           row.matched_transaction_id &&
           !row.created_journal_entry_id &&
@@ -444,10 +755,24 @@ export const invoiceInboxExtension: Extension = {
             row.matched_transaction_id,
           ])
           matchedTransactionJournalEntryId = bookedByTx.get(row.matched_transaction_id) ?? null
+          if (matchedTransactionJournalEntryId) {
+            const anchoring = await resolveUnderlagAnchoring(ctx.supabase, ctx.companyId, [
+              {
+                id: row.id,
+                document_id: row.document_id,
+                journalEntryId: matchedTransactionJournalEntryId,
+              },
+            ])
+            underlagStatus = anchoring.get(row.id)?.status ?? 'unknown'
+          }
         }
 
         return NextResponse.json({
-          data: { ...row, matched_transaction_journal_entry_id: matchedTransactionJournalEntryId },
+          data: {
+            ...row,
+            matched_transaction_journal_entry_id: matchedTransactionJournalEntryId,
+            underlag_status: underlagStatus,
+          },
         })
       },
     },
@@ -476,7 +801,7 @@ export const invoiceInboxExtension: Extension = {
 
         const { data: item } = await ctx.supabase
           .from('invoice_inbox_items')
-          .select('id, extracted_data, created_supplier_invoice_id')
+          .select('id, extracted_data, created_supplier_invoice_id, updated_at')
           .eq('id', id)
           .eq('company_id', ctx.companyId)
           .maybeSingle()
@@ -511,17 +836,37 @@ export const invoiceInboxExtension: Extension = {
           vatBreakdown: current.vatBreakdown ?? [],
           confidence: current.confidence ?? 0,
         }
+        // A human touching TOTALT settles it: the value stops being a
+        // promoted prominent amount (totalSource 'prominent', fallback-grade
+        // in matching) and becomes a user-verified total at full weight.
+        if (body.totals && 'total' in body.totals) {
+          merged.totalSource = null
+        }
 
+        // Optimistic concurrency on the row's trigger-maintained updated_at:
+        // this handler is read-merge-write over the whole jsonb blob, so a
+        // write racing another autosave would silently restore the loser's
+        // stale copy of every field it did not touch: including a
+        // totalSource: 'prominent' stamp a concurrent TOTALT edit had just
+        // cleared. Zero rows updated means the row moved under us; the client
+        // gets a 409 and its next debounced save re-reads and re-applies.
         const { data: updated, error: updateError } = await ctx.supabase
           .from('invoice_inbox_items')
           .update({ extracted_data: merged as unknown as Record<string, unknown> })
           .eq('id', id)
           .eq('company_id', ctx.companyId)
+          .eq('updated_at', (item as { updated_at: string }).updated_at)
           .select('id, extracted_data')
-          .single()
+          .maybeSingle()
 
         if (updateError) {
           return NextResponse.json({ error: updateError.message }, { status: 500 })
+        }
+        if (!updated) {
+          return NextResponse.json(
+            { error: 'Posten ändrades samtidigt av någon annan. Försök igen.' },
+            { status: 409 }
+          )
         }
 
         return NextResponse.json({ data: updated })
@@ -697,16 +1042,20 @@ export const invoiceInboxExtension: Extension = {
             type: file.type,
           }, {
             upload_source: 'file_upload',
+            // This route extracts below and mirrors the outcome onto the
+            // document row; the document-extraction extension must not race it.
+            extractionOwner: 'invoice-inbox',
           })
 
           // Same page handling as /upload (issue #553): long PDFs extract
-          // from a slice of their first pages; the skip only remains for
-          // unsliceable (encrypted/malformed) PDFs. Sandbox companies skip
-          // Bedrock unconditionally.
+          // from a slice (first pages + the last page); the skip only remains
+          // for unsliceable (encrypted/malformed) PDFs. Sandbox companies
+          // skip Bedrock unconditionally.
+          const maxAutoExtractPages = maxPagesForAutoExtract()
           const pageCount =
             file.type === 'application/pdf' ? await countPdfPages(buffer) : null
           const gatedByPageCount =
-            pageCount != null && pageCount > MAX_PAGES_FOR_AUTO_EXTRACT
+            pageCount != null && pageCount > maxAutoExtractPages
           const sandbox = await isSandboxCompany(ctx.supabase, ctx.companyId)
           // Paid-tier gate: no `ai` capability → no Bedrock OCR (seed empty
           // skeleton; the attached document is still stored). Same paywall as
@@ -714,7 +1063,7 @@ export const invoiceInboxExtension: Extension = {
           const hasAiEntitlement = await hasCapability(ctx.supabase, ctx.companyId, CAPABILITY.ai)
           const slicedBuffer =
             gatedByPageCount && hasAiEntitlement && !sandbox
-              ? await slicePdfForExtraction(buffer, MAX_PAGES_FOR_AUTO_EXTRACT)
+              ? await slicePdfForExtraction(buffer, maxAutoExtractPages)
               : null
           const skipReason: 'no_ai_entitlement' | 'too_many_pages' | 'sandbox' | null =
             !hasAiEntitlement
@@ -726,16 +1075,24 @@ export const invoiceInboxExtension: Extension = {
                   : null
           const skipExtraction = skipReason !== null
 
-          const { data: extracted } = skipExtraction
-            ? { data: emptyResult() }
+          const extraction = skipExtraction
+            ? { data: emptyResult(), rawText: null, model: null, skipped: null }
             : await extractInvoiceFields({
                 buffer: Buffer.from(slicedBuffer ?? buffer),
                 mimeType: file.type,
                 fileName: file.name,
+                ownCompany: await fetchOwnCompanyIdentity(ctx.supabase, ctx.companyId),
               })
+          const { data: extracted } = extraction
           if (!skipExtraction && slicedBuffer != null && pageCount != null) {
-            extracted.pages = { total: pageCount, analyzed: MAX_PAGES_FOR_AUTO_EXTRACT }
+            extracted.pages = { total: pageCount, analyzed: maxAutoExtractPages }
           }
+          await mirrorExtractionToDocument(doc.id, {
+            data: extracted,
+            rawText: extraction.rawText,
+            model: extraction.model ?? null,
+            skipped: skipReason ?? extraction.skipped ?? null,
+          })
 
           const { error: linkError } = await ctx.supabase
             .from('invoice_inbox_items')
@@ -1088,10 +1445,18 @@ export const invoiceInboxExtension: Extension = {
 
         try {
           const buffer = Buffer.from(await blob.arrayBuffer())
-          const { data: extracted } = await extractInvoiceFields({
+          const extraction = await extractInvoiceFields({
             buffer,
             mimeType: doc.mime_type,
             fileName: doc.file_name,
+            ownCompany: await fetchOwnCompanyIdentity(ctx.supabase, ctx.companyId),
+          })
+          const { data: extracted } = extraction
+          await mirrorExtractionToDocument(item.document_id, {
+            data: extracted,
+            rawText: extraction.rawText,
+            model: extraction.model ?? null,
+            skipped: extraction.skipped ?? null,
           })
 
           // Re-running the extraction has to re-run the match too, or the one
@@ -2133,14 +2498,15 @@ export const invoiceInboxExtension: Extension = {
 
         const { data: settings } = await ctx.supabase
           .from('company_settings')
-          .select('accounting_method')
+          .select('accounting_method, defer_invoice_booking')
           .eq('company_id', ctx.companyId)
           .single()
 
-        const accountingMethod = settings?.accounting_method || 'accrual'
         let registrationJournalEntryId: string | null = null
 
-        if (accountingMethod === 'accrual') {
+        // #967: deferred companies register WITHOUT booking (same gate as
+        // POST /api/supplier-invoices); ekonomi books later via Bokför.
+        if (booksInvoicesOnIssue(settings)) {
           try {
             const journalEntry = await createSupplierInvoiceRegistrationEntry(
               ctx.supabase,
@@ -2633,6 +2999,7 @@ export const invoiceInboxExtension: Extension = {
             ctx.companyId,
             (tx as Transaction).cash_account_id,
             createLogger('invoice-inbox.suggest-booking'),
+            (tx as Transaction).currency,
           )
           // evaluateMappingRules applies the settlement account itself on every
           // return path. Applying it again rewrote a legitimate 1930 leg, which

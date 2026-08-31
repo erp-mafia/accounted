@@ -64,6 +64,7 @@ function makeOrderRow(overrides: Record<string, unknown> = {}) {
     journal_entry_id: null,
     invoice_id: null,
     legacy_transaction_id: null,
+    manually_booked_at: null,
     store_label: 'Butiken',
     store_scope: 'butik.example.se',
     ...overrides,
@@ -150,6 +151,15 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
     )
     expect(status).toBe(409)
     expect(body.error.code).toBe('WEBSHOP_ORDER_ALREADY_BOOKED')
+  })
+
+  it('returns 409 when marked as booked outside the integration', async () => {
+    enqueue({ data: makeOrderRow({ manually_booked_at: '2026-08-01T00:00:00Z' }) })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await postCreate(),
+    )
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('WEBSHOP_ORDER_MANUALLY_BOOKED')
   })
 
   it('returns 422 when the order carries no customer data and none is chosen', async () => {

@@ -43,7 +43,10 @@ import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { eventBus } from '@/lib/events'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
-import { planInvoicePaymentForLines } from '@/lib/invoices/apply-invoice-payment'
+import {
+  deriveCustomerSettlementAmount,
+  planInvoicePaymentForLines,
+} from '@/lib/invoices/apply-invoice-payment'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { roundOre } from '@/lib/money'
@@ -177,13 +180,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     // Pre-flight: fetch invoice with relations needed for journal entry.
-    // journal_entry_id is fetched for booking-state routing only (it stays out
-    // of INVOICE_MARK_PAID_RESPONSE_COLUMNS so the response contract and the
-    // invoice.paid event payload are unchanged).
+    // journal_entry_id (booking-state routing) and deduction_total (ROT/RUT
+    // settlement derivation) are fetched ad hoc: they stay out of
+    // INVOICE_MARK_PAID_RESPONSE_COLUMNS so the response contract and the
+    // invoice.paid event payload are unchanged.
     const { data: invoice, error: fetchErr } = await ctx.supabase
       .from('invoices')
       .select(
-        `${INVOICE_MARK_PAID_RESPONSE_COLUMNS}, journal_entry_id, customer:customers(id, name, customer_type), items:invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, dimensions)`,
+        `${INVOICE_MARK_PAID_RESPONSE_COLUMNS}, journal_entry_id, deduction_total, customer:customers(id, name, customer_type), items:invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, dimensions)`,
       )
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)
@@ -264,19 +268,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const invoiceAlreadyBooked = !!(typed as { journal_entry_id?: string | null }).journal_entry_id
     const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash'
 
-    // Compute the would-be payment amount. Default path (no customLines):
-    // use remaining_amount, not total: protects against over-crediting AR
-    // when a concurrent partial payment slips through the pre-flight check
-    // (pre-flight sees status='sent' but the race-guard UPDATE later sees
-    // status='partially_paid' so a second full-total amount would be booked
-    // against an already-reduced AR balance). For legacy rows where
-    // remaining_amount was never written, derive it from total − paid_amount
-    // rather than the full total. This is the booking-currency amount (SEK for
-    // custom lines) used by the duplicate guard, the JE builder, and the event.
-    const paymentAmount = customLines
-      ? customLines.reduce((s, l) => s + l.debit_amount, 0)
-      : (typed.remaining_amount ?? typed.total - (typed.paid_amount ?? 0))
-
     // Unit contract: total / paid_amount / remaining_amount are stored in the
     // INVOICE currency (total_sek carries the SEK view of total, and there is
     // no remaining_amount_sek twin); custom lines are journal lines, so they
@@ -303,6 +294,40 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         details: { invoice_id: invoiceId, currency: typed.currency },
       })
     }
+
+    // Compute the would-be payment amount. Default path (no customLines):
+    // use remaining_amount, not total: protects against over-crediting AR
+    // when a concurrent partial payment slips through the pre-flight check
+    // (pre-flight sees status='sent' but the race-guard UPDATE later sees
+    // status='partially_paid' so a second full-total amount would be booked
+    // against an already-reduced AR balance). For legacy rows where
+    // remaining_amount was never written, derive it from total - paid_amount
+    // rather than the full total. This is the booking-currency amount (SEK for
+    // custom lines) used by the duplicate guard, the JE builder, and the event.
+    //
+    // Custom lines yield the customer settlement, not the gross debit sum: the
+    // kontantmetoden ROT/RUT entry carries a second debit leg on 1513
+    // (Skatteverket's share) while remaining_amount is stored net of the
+    // deduction, so summing all debits would reject every such invoice with
+    // MATCH_AMOUNT_EXCEEDS_REMAINING by exactly deduction_total (see
+    // deriveCustomerSettlementAmount). deduction_total is invoice-currency;
+    // the cap is converted to SEK to match the lines.
+    //
+    // Gated on the invoice NOT being booked yet: an invoice booked at send
+    // already debited 1513 in its registration entry, so a 1513 debit in the
+    // PAYMENT lines is always wrong there (double 1513, double 30xx/26xx).
+    // For those, the gross sum stays the payment amount and the overpayment
+    // guard keeps rejecting the wrong-shaped entry exactly as before.
+    const deductionTotal = invoiceAlreadyBooked
+      ? 0
+      : (typed as { deduction_total?: number | null }).deduction_total ?? 0
+    const deductionCapSek =
+      deductionTotal > 0 && needsFxConversion
+        ? roundOre(deductionTotal * fxRate!)
+        : deductionTotal
+    const paymentAmount = customLines
+      ? deriveCustomerSettlementAmount(customLines, deductionCapSek)
+      : (typed.remaining_amount ?? typed.total - (typed.paid_amount ?? 0))
     const paymentAmountInInvoiceCurrency = needsFxConversion
       ? roundOre(paymentAmount / fxRate!)
       : paymentAmount

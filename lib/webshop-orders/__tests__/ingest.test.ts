@@ -56,6 +56,7 @@ function existingRow(overrides: Record<string, unknown> = {}) {
     external_id: 'woo_butik.example.se_order_1001',
     journal_entry_id: null,
     invoice_id: null,
+    manually_booked_at: null,
     legacy_transaction_id: null,
     remote_changed_after_freeze: false,
     total: 500,
@@ -251,6 +252,24 @@ describe('upsertWebshopOrders', () => {
     expect(update).not.toHaveProperty('total')
     expect(update).not.toHaveProperty('total_sek')
     expect(update).not.toHaveProperty('paid_date')
+  })
+
+  it('flags a manually marked row whose financials drifted instead of updating them (#1879)', async () => {
+    mock.enqueueMany([
+      { data: [existingRow({ manually_booked_at: '2026-08-10T00:00:00Z' })] },
+      { data: [] },
+      { data: null }, // safe-field update
+    ])
+
+    const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [
+      makeUpsert({ total: 600, status: 'completed' }),
+    ])
+
+    expect(result.frozenFlagged).toBe(1)
+    const update = mock.findCall('webshop_orders', 'update')![0] as Record<string, unknown>
+    expect(update.remote_changed_after_freeze).toBe(true)
+    expect(update).not.toHaveProperty('total')
+    expect(update).not.toHaveProperty('line_items')
   })
 
   it('leaves total_sek null when the exchange rate cannot resolve', async () => {

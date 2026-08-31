@@ -358,3 +358,67 @@ describe('generateIncomeStatement', () => {
     expect(roundOre(sectionSum)).toBe(expectedTotal)
   })
 })
+
+describe('generateIncomeStatement with a fromDate range', () => {
+  // With fromDate > period_start, the trial balance rolls all pre-range
+  // activity (P&L accounts included) into the opening columns, so closing
+  // columns hold year-to-date figures. The ranged income statement must sum
+  // the window's movements only (period columns): a July-only report of a
+  // company with 10 000 kr January revenue and 5 000 kr July revenue shows
+  // 5 000, not 15 000.
+  const RANGED_ROWS = [
+    makeRow({
+      account_number: '3001',
+      account_name: 'Försäljning 25%',
+      account_class: 3,
+      opening_credit: 10000, // Jan-Jun activity rolled into IB at range start
+      period_credit: 5000, // July activity
+      closing_credit: 15000, // opening + period = YTD
+    }),
+    makeRow({
+      account_number: '5010',
+      account_name: 'Lokalhyra',
+      account_class: 5,
+      opening_debit: 6000,
+      period_debit: 1000,
+      closing_debit: 7000,
+    }),
+  ]
+
+  it('sums period movements, not YTD closing balances, when fromDate is set', async () => {
+    mockTrialBalance.mockResolvedValue({
+      rows: RANGED_ROWS,
+      totalDebit: 7000,
+      totalCredit: 15000,
+      isBalanced: false,
+    })
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1', {
+      fromDate: '2026-07-01',
+      toDate: '2026-07-31',
+    })
+
+    expect(report.total_revenue).toBe(5000)
+    expect(report.total_expenses).toBe(1000)
+    expect(report.net_result).toBe(4000)
+  })
+
+  it('keeps closing-balance behavior when no fromDate is given', async () => {
+    mockTrialBalance.mockResolvedValue({
+      rows: RANGED_ROWS,
+      totalDebit: 7000,
+      totalCredit: 15000,
+      isBalanced: false,
+    })
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1', {
+      toDate: '2026-07-31',
+    })
+
+    // Without fromDate there is no roll-forward: closing = period for P&L
+    // accounts in real data. The fixture's opening values stand in for the
+    // (absent) roll-forward, so closing-column sums are expected here.
+    expect(report.total_revenue).toBe(15000)
+    expect(report.total_expenses).toBe(7000)
+  })
+})

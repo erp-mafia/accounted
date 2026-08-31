@@ -1,5 +1,5 @@
 # ── Stage 1: Base ──
-FROM node:22-alpine@sha256:968df39aedcea65eeb078fb336ed7191baf48f972b4479711397108be0966920 AS base
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS base
 # `apk upgrade` patches OS packages (e.g. libssl3/libcrypto3) that have fixes
 # published after the pinned base digest was built, so the Trivy image scan in
 # CI doesn't fail on fixable Alpine CVEs. The digest stays pinned for a
@@ -42,6 +42,9 @@ ENV NEXT_PUBLIC_SESSION_IDLE_TIMEOUT_MS=__NEXT_PUBLIC_SESSION_IDLE_TIMEOUT_MS__
 ENV NEXT_PUBLIC_SESSION_ABSOLUTE_TIMEOUT_MS=__NEXT_PUBLIC_SESSION_ABSOLUTE_TIMEOUT_MS__
 ENV NEXT_PUBLIC_SESSION_WARNING_MS=__NEXT_PUBLIC_SESSION_WARNING_MS__
 ENV NEXT_PUBLIC_SESSION_TIMEOUT_FORCE_ALL=__NEXT_PUBLIC_SESSION_TIMEOUT_FORCE_ALL__
+# Optional Supabase Auth bot protection. The site key is public; the matching
+# secret belongs in GoTrue/Supabase Auth and must never be baked into this image.
+ENV NEXT_PUBLIC_TURNSTILE_SITE_KEY=__NEXT_PUBLIC_TURNSTILE_SITE_KEY__
 # Keep the branding placeholder intact through prebuild's inject script so
 # docker-entrypoint.sh can substitute the runtime value into public/sw.js.
 ENV NEXT_PUBLIC_BRANDING_APP_NAME=__NEXT_PUBLIC_BRANDING_APP_NAME__
@@ -51,7 +54,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 # ── Stage 4: Runner ──
-FROM node:22-alpine@sha256:968df39aedcea65eeb078fb336ed7191baf48f972b4479711397108be0966920 AS runner
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS runner
 WORKDIR /app
 
 # Patch OS packages (libssl3/libcrypto3, …) with fixes published after the
@@ -64,6 +67,16 @@ WORKDIR /app
 # surface.
 RUN apk upgrade --no-cache && \
     rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
+# poppler-utils (pdftoppm, ~4 MB plus shared libs) renders PDF pages to images
+# for AI backends that cannot read PDF bytes natively: a self-host pointing
+# AI_BASE_URL at an OpenAI-compatible endpoint (e.g. a Swedish inference
+# provider) rasterizes the first pages of a receipt/invoice before extraction
+# (lib/ai/rasterize-pdf.ts, AI_PDF_MODE). Hosted runs Claude on Bedrock, which
+# reads PDFs natively and never calls it. Deliberately the only system
+# package beyond the base image. Temp files go to /tmp, which
+# docker-compose.yml mounts as tmpfs (the root filesystem is read-only).
+RUN apk add --no-cache poppler-utils
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1

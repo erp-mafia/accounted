@@ -212,6 +212,7 @@ async function categorizeOne(
       companyId,
       transaction.cash_account_id,
       log,
+      transaction.currency,
     )
     mappingResult = applySettlementAccount(mappingResult, settlementAccount)
   } catch (err) {
@@ -322,6 +323,30 @@ async function categorizeOne(
   // than a generic INTERNAL_ERROR from the trigger exception.
   const periodLock = await checkPeriodLock(supabase, companyId, transaction.date)
   if (periodLock.locked) {
+    // Issue #1661: a private marking is a real booking (eget uttag /
+    // insättning), so the lock applies, but the row the caller wants to
+    // clear is usually not a business event at all. Name the ignore path
+    // instead of a bare PERIOD_LOCKED so an agent clearing PSD2 ghost rows
+    // out of a closed period is not steered to unlock it.
+    if (!is_business) {
+      return {
+        ok: false,
+        request_index: index,
+        transaction_id: transactionId,
+        error: {
+          code: 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED',
+          message:
+            getErrorEntry('TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED')?.message_sv ??
+            'Perioden är låst. Ignorera raden i stället om den inte är en affärshändelse.',
+          details: {
+            transaction_date: transaction.date,
+            reason: periodLock.reason,
+            fiscal_period_id: periodLock.fiscal_period_id,
+            suggested_action: 'ignore',
+          },
+        },
+      }
+    }
     return {
       ok: false,
       request_index: index,
@@ -339,7 +364,6 @@ async function categorizeOne(
   }
 
   let journalEntryId: string | null = null
-  let journalEntryError: string | null = null
   try {
     const je = await createTransactionJournalEntry(
       supabase,
@@ -371,10 +395,37 @@ async function categorizeOne(
         },
       }
     }
-    if (isBookkeepingError(err)) {
-      journalEntryError = getErrorMessage(err, { context: 'transaction' })
-    } else {
-      journalEntryError = err instanceof Error ? err.message : 'Unknown error'
+    // Fail closed (issue #1947): the verifikat IS the booking. Any other
+    // engine failure is a per-item refusal with nothing written, so the row
+    // keeps matching the worklist predicate (is_business IS NULL) instead of
+    // vanishing from "Att bokföra" as categorized-but-unbooked.
+    return {
+      ok: false,
+      request_index: index,
+      transaction_id: transactionId,
+      error: {
+        code: 'TX_CATEGORIZE_JOURNAL_ENTRY_FAILED',
+        message: getErrorMessage(err, { context: 'transaction' }),
+        details: { cause: getStructuredError(err).code },
+      },
+    }
+  }
+
+  // createTransactionJournalEntry returns null (no throw) when no fiscal
+  // period covers the date and the pre-FY clamp does not apply. Same
+  // fail-closed rule: refuse the item rather than mark it categorized-but-unbooked.
+  if (!journalEntryId) {
+    return {
+      ok: false,
+      request_index: index,
+      transaction_id: transactionId,
+      error: {
+        code: 'NO_OPEN_PERIOD_FOR_DATE',
+        message:
+          getErrorEntry('NO_OPEN_PERIOD_FOR_DATE')?.message_sv ??
+          'Det finns ingen räkenskapsperiod som täcker det valda datumet.',
+        details: { transaction_date: transaction.date },
+      },
     }
   }
 
@@ -458,7 +509,9 @@ async function categorizeOne(
     data: {
       journal_entry_created: !!journalEntryId,
       journal_entry_id: journalEntryId,
-      journal_entry_error: journalEntryError,
+      // Always null: a failed verifikat is a per-item refusal above (#1947).
+      // Kept for response-shape compatibility.
+      journal_entry_error: null,
       category: finalCategory,
     },
   }

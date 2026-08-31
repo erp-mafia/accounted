@@ -18,12 +18,14 @@ import RattelseExplainer from '@/components/bookkeeping/RattelseExplainer'
 import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import { AccountNumber } from '@/components/ui/account-number'
 import { useToast } from '@/components/ui/use-toast'
+import { useAccounts } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { changeCorrectionLineAccount, getSelectableCorrectionCatalog } from '@/lib/bookkeeping/correction-line-account'
 import { splitCreateAccountPrefill } from '@/lib/bookkeeping/create-account-prefill'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import { Loader2, Plus, Trash2 } from 'lucide-react'
-import type { JournalEntry, JournalEntryLine, BASAccount } from '@/types'
+import type { JournalEntry, JournalEntryLine } from '@/types'
 
 interface NewLine {
   account_number: string
@@ -49,9 +51,18 @@ interface Props {
 export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrected }: Props) {
   const { toast } = useToast()
   const t = useTranslations('journal_detail')
-  const [accounts, setAccounts] = useState<BASAccount[]>([])
+  // The full chart (deactivated rows included) comes from the session cache
+  // (lib/reference-data); only the static BAS catalogue is loaded per open,
+  // and it is module-cached after the first time.
+  const { accounts, isLoading: accountsLoading, error: accountsError, refresh: refreshAccounts } = useAccounts(false)
   const [catalog, setCatalog] = useState<CatalogAccount[]>([])
-  const [accountsStatus, setAccountsStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [catalogStatus, setCatalogStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const accountsStatus: 'loading' | 'ready' | 'error' =
+    accountsLoading || catalogStatus === 'loading'
+      ? 'loading'
+      : accountsError || catalogStatus === 'error'
+        ? 'error'
+        : 'ready'
   const [strikeIds, setStrikeIds] = useState<Set<string>>(new Set())
   const [newLines, setNewLines] = useState<NewLine[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -77,26 +88,18 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
     if (open) {
       setStrikeIds(new Set())
       setNewLines([])
-      void fetchAccounts()
+      void loadCatalog()
     }
-  }, [open, entry.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, entry.id])
 
-  async function fetchAccounts() {
-    setAccountsStatus('loading')
+  async function loadCatalog() {
+    setCatalogStatus('loading')
     try {
-      const [res, basCatalog] = await Promise.all([
-        fetch('/api/bookkeeping/accounts?active=false'),
-        loadBasCatalog(),
-      ])
-      if (!res.ok) throw new Error(`accounts ${res.status}`)
-      const { data } = await res.json()
-      setAccounts(data || [])
-      setCatalog(basCatalog)
-      setAccountsStatus('ready')
+      setCatalog(await loadBasCatalog())
+      setCatalogStatus('ready')
     } catch {
-      setAccounts([])
       setCatalog([])
-      setAccountsStatus('error')
+      setCatalogStatus('error')
     }
   }
 
@@ -139,9 +142,9 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
   // a dead end here: the rättelse can only post to accounts that exist in the
   // chart. Creating it inline keeps the half-finished rättelse intact.
   const handleAccountCreated = async (account: { account_number: string; account_name?: string }) => {
-    await fetchAccounts()
+    await invalidateReferenceData('ref:accounts')
     if (creatingAccountForLine != null) {
-      // fetchAccounts' state update is not visible in this closure, so the
+      // The refreshed cache is not visible in this closure, so the
       // fresh account's own name is passed alongside the stale sources. The
       // reactivate path reports no name, but that account is already in
       // `accounts` (the fetch includes deactivated rows).
@@ -300,7 +303,7 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
                 {accountsStatus === 'loading' ? t('accounts_loading') : t('accounts_load_failed')}
               </span>
               {accountsStatus === 'error' && (
-                <Button variant="outline" size="sm" onClick={() => void fetchAccounts()}>
+                <Button variant="outline" size="sm" onClick={() => void refreshAccounts()}>
                   {t('accounts_retry')}
                 </Button>
               )}

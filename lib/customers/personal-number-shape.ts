@@ -37,3 +37,42 @@ export function looksLikeSwedishPersonalNumber(value: string): boolean {
   const birthDay = day > 60 ? day - 60 : day
   return birthDay >= 1 && birthDay <= 31
 }
+
+/**
+ * True when a customer row's org_number is really its personnummer: the row
+ * is an individual (privatperson) and the value has personnummer shape.
+ *
+ * Every write path treats that combination as "personnummer submitted in the
+ * wrong field": the value is moved into personal_number (encrypted, masked on
+ * read) and org_number is left empty. Nothing masks org_number, so leaving it
+ * there is exactly the unmasked-identifier leak the business-type guard above
+ * exists to prevent; and the MCP create tool had no personal_number input at
+ * all until 2026-08-21, so agents had nowhere else to put it.
+ */
+export function orgNumberHoldsPersonalNumber(
+  customerType: string | null | undefined,
+  orgNumber: string | null | undefined,
+): boolean {
+  return (
+    customerType === 'individual'
+    && typeof orgNumber === 'string'
+    && orgNumber.trim() !== ''
+    && looksLikeSwedishPersonalNumber(orgNumber)
+  )
+}
+
+/**
+ * The personnummer as it should be stored once it has been lifted out of
+ * org_number: separators are kept (the encrypt path accepts any of the four
+ * input forms) but whitespace is dropped, because "19900101 1234" passes the
+ * shape check yet fails PERSONAL_NUMBER_INPUT_RE and the legacy-plaintext
+ * reveal regex.
+ */
+export function normalizeReroutedPersonalNumber(orgNumber: string): string {
+  return orgNumber.replace(/\s+/g, '')
+}
+
+/** Digits only, for comparing a personnummer across its written forms. */
+export function personalNumberDigits(value: string): string {
+  return value.replace(/\D/g, '')
+}

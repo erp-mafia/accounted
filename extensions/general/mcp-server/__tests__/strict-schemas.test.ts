@@ -41,4 +41,18 @@ describe('MCP tool inputSchema strictness', () => {
 
     expect(missing).toEqual([])
   })
+
+  it('every widget-bearing tool is read-only: Claude.ai drops write-annotated interactive tools', () => {
+    // A tool with definition-level _meta.ui renders on every call. Claude.ai
+    // accepts that only for read-only tools and silently DROPS a
+    // write-annotated one from the connector (E2E #9, 2026-08-26: the SIE
+    // drop card flapped into the Interactive list and vanished). Widget
+    // tools mint links/lists only; actual writes go through separate
+    // approval-gated tools the widget calls.
+    const writers = tools
+      .filter((t) => (t as { _meta?: { ui?: unknown } })._meta?.ui !== undefined)
+      .filter((t) => t.annotations.readOnlyHint !== true)
+      .map((t) => t.name)
+    expect(writers).toEqual([])
+  })
 })

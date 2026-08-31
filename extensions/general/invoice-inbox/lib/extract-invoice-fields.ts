@@ -1,10 +1,12 @@
 // AI-driven invoice/receipt field extraction.
 //
-// Sends the uploaded document directly to Claude Sonnet 4.6 via AWS
-// Bedrock and asks for a structured InvoiceExtractionResult JSON. Sonnet
-// reads PDFs, images, and scans natively, which the previous regex
-// extractor couldn't: that's why English receipts (Anthropic, AWS,
-// Stripe, …) and image-only PDFs came back empty.
+// Sends the uploaded document to the configured AI backend through the
+// job-shaped service in lib/ai (Claude on Bedrock or the direct API on
+// hosted; any OpenAI-compatible endpoint, e.g. a Swedish inference provider,
+// on a sovereign self-host) and asks for a structured InvoiceExtractionResult
+// JSON. Vision models read PDFs, images and scans, which the previous regex
+// extractor couldn't: that's why English receipts (Anthropic, AWS, Stripe, …)
+// and image-only PDFs came back empty.
 //
 // The AI output is validated against a Zod schema; anything that doesn't
 // parse falls back to an empty result so the inbox row still lands and
@@ -12,31 +14,27 @@
 
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { InvoiceExtractionResult } from '@/types'
-import { createAiClient, hasAiCredentials, toProviderModelId } from '@/lib/ai/provider'
+import { getAiService, readAiConfig, extractJsonObject } from '@/lib/ai'
+import type { AiDocumentInput, AiImageMediaType, ExtractionSkipReason } from '@/lib/ai'
 import { createLogger } from '@/lib/logger'
+
+// Re-exported for callers and tests that import it from here.
+export { extractJsonObject }
 
 const log = createLogger('invoice-inbox-extract')
 
-// Both overridable via env vars so ops can swap models / raise token caps
-// without a code deploy. The model id is written bare and adapted to whichever
-// backend is configured (Bedrock in eu-north-1 on hosted, the direct Anthropic
-// API on self-hosted: see lib/ai/provider.ts). 8192 tokens is enough headroom
-// for invoices with 20+ line items.
-const MODEL = toProviderModelId(process.env.BEDROCK_MODEL_ID || 'claude-sonnet-5')
-const MAX_TOKENS = (() => {
-  const parsed = Number(process.env.BEDROCK_MAX_TOKENS)
-  // Use the env value only if it's a positive number: `||` would also
-  // fall back on a deliberate `0`, masking what is really an invalid
-  // configuration rather than the intent to disable.
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 8192
-})()
+// Output cap: AI_EXTRACTION_MAX_TOKENS (legacy BEDROCK_MAX_TOKENS) or 8192,
+// enough headroom for invoices with 20+ line items. The model id per tier is
+// resolved by lib/ai/config.ts (AI_EXTRACTION_MODEL, legacy BEDROCK_MODEL_ID,
+// AI_MODEL, then the Claude default on the Anthropic family).
 
-// Bedrock supports these document/image media types directly. HEIC/HEIF
-// are not on the list, so we skip AI for those: the inbox row still
-// lands and the user can edit fields manually or replace the file.
-// text/html (mail-body invoices from the inbound pipeline) is not sent as
-// a document block: it is converted to plain text via htmlToText() first.
+// Media types the extraction accepts. HEIC/HEIF are not on the list, so we
+// skip AI for those: the inbox row still lands and the user can edit fields
+// manually or replace the file. text/html (mail-body invoices from the
+// inbound pipeline) is not sent as a document block: it is converted to plain
+// text via htmlToText() first, which also makes it work on text-only models.
 const SUPPORTED_MEDIA_TYPES = new Set([
   'application/pdf',
   'image/jpeg',
@@ -50,12 +48,31 @@ export interface ExtractionInput {
   buffer: Buffer
   mimeType: string
   fileName: string
+  /**
+   * The receiving company's own identity. When set, an extracted supplier
+   * that turns out to BE this company (the model read the Kund/Kunduppgifter
+   * block instead of the issuer) is stripped to all-null before the result is
+   * returned, so the own company is never supplier-matched or offered for
+   * creation. Optional: callers without company context lose only this guard.
+   */
+  ownCompany?: OwnCompanyIdentity
 }
+
+export interface OwnCompanyIdentity {
+  orgNumber: string | null
+  name: string | null
+}
+
+export type ExtractionSkipped = ExtractionSkipReason | 'unsupported_media'
 
 export interface ExtractionOutput {
   data: InvoiceExtractionResult
-  /** The raw JSON string returned by the model, or null on failure. */
+  /** The raw JSON string returned by the model, or null on failure/skip. */
   rawText: string | null
+  /** Provider-form id of the model that answered, when a call was made. */
+  model?: string | null
+  /** Set when no model call was made at all (and why). */
+  skipped?: ExtractionSkipped | null
 }
 
 // Classification fields are nullable AND .catch(null): a hallucinated enum
@@ -156,7 +173,159 @@ export const ExtractionSchema = z.object({
       amount: z.number(),
     })
   ),
+  // Amounts visible on non-invoice documents (bankintyg, avtal, contracts)
+  // that carry no invoice-style total. Matching hint only; never booked.
+  // .catch([]) so a hallucinated shape degrades to "no amounts" instead of
+  // failing the whole document parse; optional so cached raw outputs from
+  // before the field existed still validate.
+  prominentAmounts: z
+    .array(
+      z.object({
+        amount: z.number(),
+        label: z.string().nullable(),
+      })
+    )
+    .catch([])
+    .optional(),
+  // Set by promoteSingleProminentAmount (code, never the model): 'prominent'
+  // means totals.total was copied from the document's single prominent amount
+  // so the user gets one editable TOTALT field. Matching treats such a total
+  // as fallback-grade (discounted, date-guarded, hunt-excluded); a user edit
+  // of totals.total clears it. In the schema so re-validation paths
+  // (PUT /extracted-data, MCP set) don't silently strip the provenance and
+  // launder a printed figure into a full-weight invoice total.
+  totalSource: z.enum(['prominent']).nullable().catch(null).optional(),
 })
+
+/**
+ * Give non-invoice documents one editable amount field.
+ *
+ * A bankintyg or avtal has no "Att betala" total, so the extractor leaves
+ * totals.total null; but when the document shows exactly one distinct amount
+ * there is nothing ambiguous about which figure the user means, and leaving
+ * TOTALT empty while the amount hides in a read-only row read as "extraction
+ * failed" (and made a misread amount uncorrectable). Promote that single
+ * amount into totals.total, stamped totalSource: 'prominent' so matching
+ * keeps treating it as fallback-grade evidence and the fields-PATCH route can
+ * clear the stamp when a human edits the value.
+ *
+ * Multi-amount documents are left alone: picking one silently would invent a
+ * total the document does not have.
+ */
+export function promoteSingleProminentAmount(
+  data: InvoiceExtractionResult
+): InvoiceExtractionResult {
+  if (data.documentKind !== 'other' && data.documentKind !== 'government_letter') return data
+  if (data.totals.total != null) return data
+  const distinct = [
+    ...new Set(
+      (data.prominentAmounts ?? [])
+        .map((a) => a.amount)
+        .filter((a) => Number.isFinite(a) && a !== 0)
+    ),
+  ]
+  if (distinct.length !== 1) return data
+  return {
+    ...data,
+    totals: { ...data.totals, total: distinct[0] },
+    totalSource: 'prominent',
+  }
+}
+
+/** Digits only; the comparable core of an org/VAT number. */
+const digitsOf = (value: string | null | undefined): string => (value ?? '').replace(/\D/g, '')
+
+/**
+ * Canonical 10-digit form of a Swedish organisation number, or '' when the
+ * input is not one. The 12-digit century-prefixed forms denote the same
+ * identity: "16" for organisations, "19"/"20" for personnummer-form numbers
+ * (enskild firma stores the owner's personnummer as org number). Junk that is
+ * not 10 digits after trimming never matches anything.
+ */
+function toOrg10(digits: string): string {
+  const trimmed =
+    digits.length === 12 && /^(16|19|20)/.test(digits) ? digits.slice(2) : digits
+  return trimmed.length === 10 ? trimmed : ''
+}
+
+/**
+ * Never present the receiving company as its own supplier.
+ *
+ * Documents like bank agreements and bankintyg print the CUSTOMER's company
+ * in a prominent Kund/Kunduppgifter block while the issuer (the bank) sits in
+ * a logo. The model sometimes extracts that block as the supplier, and the
+ * inbox then offers to create the user's own company as a leverantör. The
+ * prompt tells the model not to; this guard makes it deterministic: when the
+ * extracted supplier's org number, VAT number (SE<orgnr>01), or exact name
+ * equals the receiving company's own, the whole supplier block is nulled.
+ * A false positive costs an empty LEVERANTÖR field the user fills in by
+ * hand; wrong data is never written.
+ */
+export function stripOwnCompanyAsSupplier(
+  data: InvoiceExtractionResult,
+  own: OwnCompanyIdentity | undefined
+): InvoiceExtractionResult {
+  if (!own) return data
+  const ownOrg10 = toOrg10(digitsOf(own.orgNumber))
+  const extractedOrg10 = toOrg10(digitsOf(data.supplier.orgNumber))
+  const extractedVat = digitsOf(data.supplier.vatNumber)
+  const orgHit = ownOrg10 !== '' && extractedOrg10 !== '' && extractedOrg10 === ownOrg10
+  const vatHit = ownOrg10 !== '' && extractedVat === `${ownOrg10}01`
+  // A name coincidence must not outvote a real, provably different org
+  // number: a same-named foreign or unrelated entity stays a valid supplier.
+  const orgProvenDifferent =
+    ownOrg10 !== '' && extractedOrg10 !== '' && extractedOrg10 !== ownOrg10
+  const ownName = own.name?.trim().toLowerCase() ?? ''
+  const nameHit =
+    !orgProvenDifferent &&
+    ownName !== '' &&
+    data.supplier.name?.trim().toLowerCase() === ownName
+  if (!orgHit && !vatHit && !nameHit) return data
+  return {
+    ...data,
+    supplier: {
+      name: null,
+      orgNumber: null,
+      vatNumber: null,
+      address: null,
+      bankgiro: null,
+      plusgiro: null,
+    },
+  }
+}
+
+/**
+ * Best-effort lookup of the company's own name and org number for the
+ * ownCompany guard above. Never throws: on any failure the guard simply does
+ * not fire, which is the pre-guard behavior.
+ */
+export async function fetchOwnCompanyIdentity(
+  supabase: SupabaseClient,
+  companyId: string
+): Promise<OwnCompanyIdentity> {
+  try {
+    const { data, error } = await supabase
+      .from('companies')
+      .select('name, org_number')
+      .eq('id', companyId)
+      .maybeSingle()
+    // maybeSingle() reports query/RLS failures in `error` without throwing;
+    // route them through the catch so they are logged, not silently nulled.
+    if (error) throw error
+    return {
+      orgNumber: (data?.org_number as string | null) ?? null,
+      name: (data?.name as string | null) ?? null,
+    }
+  } catch (err) {
+    // Fail open, but visibly: a persistent lookup failure (RLS misconfig,
+    // DB outage) silently disables the guard, and only this log reveals it.
+    log.warn('own_company_identity_lookup_failed', {
+      company_id: companyId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return { orgNumber: null, name: null }
+  }
+}
 
 // Agent-supplied extraction: accountSuggestion is preserved instead of forced
 // to null. Agents (unlike AI extractors) can reliably assign a BAS expense
@@ -219,6 +388,9 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
   },
   "vatBreakdown": [
     { "rate": number, "base": number, "amount": number }   // rate as percent integer, e.g. 25 for 25%
+  ],
+  "prominentAmounts": [
+    { "amount": number, "label": string | null }   // non-invoice documents only, see rules
   ]
 }
 
@@ -227,6 +399,7 @@ VAT rate convention: BOTH lineItems[].vatRate AND vatBreakdown[].rate use the sa
 Rules:
 - Output JSON only. The first character must be '{' and the last must be '}'.
 - documentKind: "receipt" = point-of-sale proof of a COMPLETED payment (kassakvitto, kortkvitto, taxi/parking slip, webshop order confirmation marked paid). "supplier_invoice" = a request for payment (has due date, OCR/payment reference, bankgiro, "Att betala senast"). "government_letter" = correspondence from a myndighet (Skatteverket, Bolagsverket, Försäkringskassan...). "other" = contracts, statements, reports. null only when truly indeterminate.
+- supplier: ALWAYS the party that ISSUED the document and charges or receives the money (the seller, the bank, the myndighet). NEVER the customer or recipient: blocks labeled "Kund", "Kunduppgifter", "Fakturamottagare", "Mottagare", "Kundens ex", "Er referens" or a delivery/billing address describe the RECEIVING company, and none of their fields (name, org number, address) may be used for supplier. On bank documents (avtal, bankintyg, kontoutdrag) the bank is the supplier even when the customer's company details are printed more prominently than the bank's. If only the customer's identity is readable, leave every supplier field null.
 - merchantCategory: judge from the merchant name and line items (a receipt from "Prinsen" listing food and wine is "restaurant" even without the word). Use "other" when unsure. null for non-receipts.
 - legibility: "good" = all key amounts and the merchant are readable. "partial" = some key fields are cut off, blurry, or unreadable. "unreadable" = the document is mostly illegible (too blurry/dark/small). Judge the IMAGE quality, not whether fields exist on the document.
 - payment: only for documents that show how payment was made. "card" for kort/VISA/Mastercard; cardLast4 only when a masked card number like ****1234 is printed. "invoice" means the document says it will be billed separately.
@@ -242,62 +415,8 @@ Rules:
 - Numbers: parse with the document's locale (Swedish "1 234,56" = 1234.56; English "$1,234.56" = 1234.56). Output as plain JSON numbers.
 - If a field is missing or unreadable, set it to null. Never invent values.
 - lineItems: include every line. Empty array is fine if the document has no itemised lines.
-- vatBreakdown: include one entry per distinct VAT rate. Empty array is fine.`
-
-// Sonnet 5 intermittently wraps its answer in markdown fences (```json ... ```)
-// or adds prose around it, despite the JSON-only instruction in the system
-// prompt. Scan for balanced top-level '{'..'}' candidates (string- and
-// escape-aware, so braces inside JSON string values don't end a candidate
-// early) and return the first one JSON.parse accepts; prose braces around the
-// object form unparseable candidates and are skipped. Returns the input
-// unchanged when no candidate parses, so the existing parse-failure path
-// handles prose-only refusals. Zod validation downstream still rejects
-// well-formed-but-wrong JSON.
-// Bounds for the candidate scan below. Real model output is already capped
-// by MAX_TOKENS (roughly 33 KB of text at 8192 tokens), so genuine responses
-// never come near these; they exist so pathological or adversarially
-// brace-laden text cannot make the scan quadratic (compliance review
-// A.8.28). Oversized or exhausted inputs fall through to the raw text and
-// land in the existing empty-result path.
-const MAX_SCAN_INPUT_LENGTH = 256 * 1024
-const MAX_CANDIDATE_ATTEMPTS = 50
-
-export function extractJsonObject(raw: string): string {
-  if (raw.length > MAX_SCAN_INPUT_LENGTH) return raw
-  let attempts = 0
-  let start = raw.indexOf('{')
-  while (start !== -1 && attempts < MAX_CANDIDATE_ATTEMPTS) {
-    attempts++
-    let depth = 0
-    let inString = false
-    let escaped = false
-    for (let i = start; i < raw.length; i++) {
-      const ch = raw[i]
-      if (inString) {
-        if (escaped) escaped = false
-        else if (ch === '\\') escaped = true
-        else if (ch === '"') inString = false
-      } else if (ch === '"') {
-        inString = true
-      } else if (ch === '{') {
-        depth++
-      } else if (ch === '}') {
-        depth--
-        if (depth === 0) {
-          const candidate = raw.slice(start, i + 1)
-          try {
-            JSON.parse(candidate)
-            return candidate
-          } catch {
-            break
-          }
-        }
-      }
-    }
-    start = raw.indexOf('{', start + 1)
-  }
-  return raw
-}
+- vatBreakdown: include one entry per distinct VAT rate. Empty array is fine.
+- prominentAmounts: ONLY for documents that are NOT invoices or receipts (documentKind "other" or "government_letter") AND where totals.total is null, when the document still displays clear monetary amounts (a price, fee, deposit or paid-in sum: "Engångspris", "Anslutningspris", "Insatt belopp", "Månadspris", "Pris", "Belopp"). Typical sources: bankintyg, bank/account agreements, contracts, statements. One entry per distinct amount, label = the document's own label for it. NEVER include account numbers, org numbers, phone numbers, OCR/reference numbers, dates, percentages, or zero amounts. ALWAYS an empty array for invoices and receipts, including ones whose total is unreadable: never move an invoice total here.`
 
 export function emptyResult(): InvoiceExtractionResult {
   return {
@@ -326,6 +445,7 @@ export function emptyResult(): InvoiceExtractionResult {
     lineItems: [],
     totals: { subtotal: null, vatAmount: null, total: null, roundingAmount: null },
     vatBreakdown: [],
+    prominentAmounts: [],
     confidence: 0,
   }
 }
@@ -367,7 +487,9 @@ async function normalizeImageForExtraction(
       })
       .jpeg({ quality: 80 })
       .toBuffer()
-    return { buffer: converted, mimeType: 'image/jpeg', fileName: input.fileName }
+    // Spread first: normalization must not shed fields like ownCompany, or
+    // the own-company supplier guard silently dies for photographed documents.
+    return { ...input, buffer: converted, mimeType: 'image/jpeg' }
   } catch (err) {
     // HEIC without libheif lands here → caller hits the unsupported-type
     // guard, same net behavior as before this step existed. For oversized
@@ -427,44 +549,147 @@ export function htmlToText(html: string): string {
     .slice(0, MAX_EXTRACTION_TEXT_LENGTH)
 }
 
-function buildContent(input: ExtractionInput) {
+const EXTRACTION_INSTRUCTION = 'Extract the fields per the schema. JSON only.'
+
+/** Map an upload to the service's document input. HTML becomes plain text. */
+function toDocumentInput(input: ExtractionInput): AiDocumentInput {
   if (input.mimeType === 'text/html') {
     const text = htmlToText(input.buffer.toString('utf8'))
-    return [
-      {
-        type: 'text' as const,
-        text: `The document is an HTML email invoice, converted to plain text:\n\n${text}`,
-      },
-      { type: 'text' as const, text: 'Extract the fields per the schema. JSON only.' },
-    ]
+    return {
+      kind: 'text',
+      text: `The document is an HTML email invoice, converted to plain text:\n\n${text}`,
+    }
   }
-  const base64 = input.buffer.toString('base64')
   if (input.mimeType === 'application/pdf') {
-    return [
-      {
-        type: 'document' as const,
-        source: { type: 'base64' as const, media_type: 'application/pdf' as const, data: base64 },
-      },
-      { type: 'text' as const, text: 'Extract the fields per the schema. JSON only.' },
-    ]
+    return { kind: 'pdf', data: input.buffer, fileName: input.fileName }
   }
-  return [
-    {
-      type: 'image' as const,
-      source: {
-        type: 'base64' as const,
-        media_type: input.mimeType as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif',
-        data: base64,
+  return { kind: 'image', data: input.buffer, mediaType: input.mimeType as AiImageMediaType }
+}
+
+// Hand-maintained JSON-schema mirror of ExtractionSchema, used ONLY when the
+// operator opts into strict JSON mode on an OpenAI-compatible endpoint
+// (AI_STRICT_JSON=true). Deliberately not auto-converted from the Zod schema:
+// .catch()/.transform() have no JSON-schema equivalent and the conversion
+// would drift silently. Permissive on purpose (types + nullability only):
+// Zod stays the validator, this just keeps the model inside the shape.
+const nullable = (type: string) => ({ type: [type, 'null'] })
+const EXTRACTION_JSON_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    documentKind: nullable('string'),
+    merchantCategory: nullable('string'),
+    legibility: nullable('string'),
+    purchaseTime: nullable('string'),
+    payment: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      properties: { method: nullable('string'), cardLast4: nullable('string') },
+      required: ['method', 'cardLast4'],
+    },
+    supplier: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: nullable('string'),
+        orgNumber: nullable('string'),
+        vatNumber: nullable('string'),
+        address: nullable('string'),
+        bankgiro: nullable('string'),
+        plusgiro: nullable('string'),
+      },
+      required: ['name', 'orgNumber', 'vatNumber', 'address', 'bankgiro', 'plusgiro'],
+    },
+    invoice: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        invoiceNumber: nullable('string'),
+        invoiceDate: nullable('string'),
+        dueDate: nullable('string'),
+        paymentReference: nullable('string'),
+        currency: { type: 'string' },
+        servicePeriodStart: nullable('string'),
+        servicePeriodEnd: nullable('string'),
+      },
+      required: [
+        'invoiceNumber',
+        'invoiceDate',
+        'dueDate',
+        'paymentReference',
+        'currency',
+        'servicePeriodStart',
+        'servicePeriodEnd',
+      ],
+    },
+    lineItems: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          description: { type: 'string' },
+          quantity: { type: 'number' },
+          unitPrice: nullable('number'),
+          lineTotal: { type: 'number' },
+          vatRate: nullable('number'),
+          accountSuggestion: { type: 'null' },
+        },
+        required: ['description', 'quantity', 'unitPrice', 'lineTotal', 'vatRate', 'accountSuggestion'],
       },
     },
-    { type: 'text' as const, text: 'Extract the fields per the schema. JSON only.' },
-  ]
+    totals: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        subtotal: nullable('number'),
+        vatAmount: nullable('number'),
+        total: nullable('number'),
+        roundingAmount: nullable('number'),
+      },
+      required: ['subtotal', 'vatAmount', 'total', 'roundingAmount'],
+    },
+    vatBreakdown: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { rate: { type: 'number' }, base: { type: 'number' }, amount: { type: 'number' } },
+        required: ['rate', 'base', 'amount'],
+      },
+    },
+    prominentAmounts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { amount: { type: 'number' }, label: nullable('string') },
+        required: ['amount', 'label'],
+      },
+    },
+  },
+  required: [
+    'documentKind',
+    'merchantCategory',
+    'legibility',
+    'purchaseTime',
+    'payment',
+    'supplier',
+    'invoice',
+    'lineItems',
+    'totals',
+    'vatBreakdown',
+    'prominentAmounts',
+  ],
 }
 
 /**
- * Extract invoice fields by sending the document directly to Claude
- * Sonnet 4.6 via AWS Bedrock. Never throws on extraction failure:
- * always returns an InvoiceExtractionResult. Empty fields are null.
+ * Extract invoice fields by sending the document to the configured AI
+ * backend. Never throws on extraction failure: always returns an
+ * InvoiceExtractionResult. Empty fields are null. `skipped` is set when no
+ * model call was made (unsupported file type, AI not configured, no vision
+ * on this backend, PDF rasterizer missing), so callers can tell "nothing to
+ * read" from "read and found nothing".
  */
 export async function extractInvoiceFields(
   rawInput: ExtractionInput
@@ -474,63 +699,86 @@ export async function extractInvoiceFields(
   const input = await normalizeImageForExtraction(rawInput)
 
   if (!SUPPORTED_MEDIA_TYPES.has(input.mimeType)) {
-    return { data: emptyResult(), rawText: null }
+    return { data: emptyResult(), rawText: null, skipped: 'unsupported_media' }
   }
 
-  if (!hasAiCredentials()) {
-    log.warn('AI credentials missing: returning empty extraction', {
-      file_name_hash: createHash('sha256').update(input.fileName).digest('hex').slice(0, 12),
-    })
-    return { data: emptyResult(), rawText: null }
-  }
-
-  const client = createAiClient()
+  const fileNameHash = createHash('sha256').update(input.fileName).digest('hex').slice(0, 12)
+  const service = getAiService()
 
   let rawText: string | null = null
+  let model: string | null = null
   try {
-    // SYSTEM_PROMPT is byte-stable per deploy and ~3.5 KB: marking it as
-    // ephemeral lets Bedrock reuse the prompt-cache on rapid sequential
-    // extractions (e.g. a user uploading a stack of receipts within minutes).
-    // Bedrock supports `{ type: 'ephemeral' }` with the default short TTL;
-    // the 1h TTL from the agent-native API plan (item 10) requires the direct
-    // Anthropic API rather than Bedrock and is out of scope here.
-    const resp = await client.messages.create({
-      model: MODEL,
-      max_tokens: MAX_TOKENS,
-      system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
-      messages: [{ role: 'user', content: buildContent(input) }],
-    })
-
-    rawText = resp.content
-      .flatMap((b) => (b.type === 'text' ? [b.text] : []))
-      .join('')
-      .trim()
+    const baseMaxTokens = readAiConfig().extractionMaxTokens
+    const request = {
+      document: toDocumentInput(input),
+      system: SYSTEM_PROMPT,
+      instruction: EXTRACTION_INSTRUCTION,
+      jsonSchema: EXTRACTION_JSON_SCHEMA,
+    }
+    let result = await service.extractFromDocument({ ...request, maxTokens: baseMaxTokens })
+    if (!result.ok) {
+      // Not a failure: the deployment cannot read this document at all.
+      // `ai_unconfigured` is the self-host "no key yet" case the 30 s
+      // upload hang used to hide; the others are honest capability gaps.
+      log.warn('AI extraction skipped', { file_name_hash: fileNameHash, reason: result.skipped })
+      return { data: emptyResult(), rawText: null, skipped: result.skipped }
+    }
+    if (result.truncated) {
+      // The output hit maxTokens mid-JSON (line-item-heavy documents). Left
+      // alone this parsed to nothing and looked like an unreadable document;
+      // one retry at double the cap recovers it. A second truncation falls
+      // through to the normal parse path, which fails visibly in the log
+      // below instead of silently.
+      log.warn('ai_extraction_truncated', {
+        file_name_hash: fileNameHash,
+        max_tokens: baseMaxTokens,
+        retrying: true,
+      })
+      // A retry that THROWS (throttle, network) must not sink the first
+      // response: its text may still parse despite the truncation flag, and
+      // the outer catch would otherwise return the empty skeleton with
+      // rawText null. Swallow locally and continue with the first result.
+      try {
+        const retry = await service.extractFromDocument({
+          ...request,
+          maxTokens: baseMaxTokens * 2,
+        })
+        if (retry.ok) {
+          result = retry
+          if (retry.truncated) {
+            log.warn('ai_extraction_truncated', {
+              file_name_hash: fileNameHash,
+              max_tokens: baseMaxTokens * 2,
+              retrying: false,
+            })
+          }
+        }
+      } catch (retryErr) {
+        log.warn('ai_extraction_retry_failed', {
+          file_name_hash: fileNameHash,
+          error: retryErr instanceof Error ? retryErr.message : String(retryErr),
+        })
+      }
+    }
+    rawText = result.text
+    model = result.model
 
     // Observability for the prompt-cache hit ratio. The agent-native plan
     // targets cache_read_input_tokens / total_input_tokens ≥ 0.85 in steady
     // state; logging here makes that measurable without a separate dashboard.
-    const usage = resp.usage as
-      | {
-          input_tokens?: number
-          output_tokens?: number
-          cache_creation_input_tokens?: number
-          cache_read_input_tokens?: number
-        }
-      | undefined
-    if (usage) {
-      // Raw fileName can constitute personal data (e.g. "faktura_Sven_Andersson.pdf").
-      // Log a short hash so the operator can correlate without exposing PII
-      // to the log destination (GDPR Art. 5(1)(f)).
-      const fileNameHash = createHash('sha256').update(input.fileName).digest('hex').slice(0, 12)
-      log.info('ai_extraction_usage', {
-        file_name_hash: fileNameHash,
-        mime_type: input.mimeType,
-        input_tokens: usage.input_tokens ?? null,
-        output_tokens: usage.output_tokens ?? null,
-        cache_creation_input_tokens: usage.cache_creation_input_tokens ?? null,
-        cache_read_input_tokens: usage.cache_read_input_tokens ?? null,
-      })
-    }
+    // Raw fileName can constitute personal data (e.g. "faktura_Sven_Andersson.pdf").
+    // Log a short hash so the operator can correlate without exposing PII
+    // to the log destination (GDPR Art. 5(1)(f)).
+    log.info('ai_extraction_usage', {
+      file_name_hash: fileNameHash,
+      mime_type: input.mimeType,
+      model,
+      input_tokens: result.usage.inputTokens,
+      output_tokens: result.usage.outputTokens,
+      cache_creation_input_tokens: result.usage.cacheCreationInputTokens,
+      cache_read_input_tokens: result.usage.cacheReadInputTokens,
+      ...(result.pagesRasterized ? { pages_rasterized: result.pagesRasterized } : {}),
+    })
 
     const parsed = JSON.parse(extractJsonObject(rawText))
     const validated = ExtractionSchema.parse(parsed)
@@ -538,16 +786,20 @@ export async function extractInvoiceFields(
     return {
       // accountSuggestion is null at this point, enforced by the schema's
       // .transform, so no post-validation coercion is needed.
-      data: { ...validated, confidence: 1 },
+      data: stripOwnCompanyAsSupplier(
+        promoteSingleProminentAmount({ ...validated, confidence: 1 }),
+        input.ownCompany
+      ),
       rawText,
+      model,
     }
   } catch (err) {
     log.warn('AI extraction failed', {
-      file_name_hash: createHash('sha256').update(input.fileName).digest('hex').slice(0, 12),
+      file_name_hash: fileNameHash,
       mimeType: input.mimeType,
       error: err instanceof Error ? err.message : String(err),
       hasRawText: rawText != null,
     })
-    return { data: emptyResult(), rawText }
+    return { data: emptyResult(), rawText, model }
   }
 }

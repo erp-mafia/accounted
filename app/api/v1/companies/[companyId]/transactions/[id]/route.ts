@@ -31,6 +31,7 @@ const TransactionDetail = z.object({
   external_id: z.string().nullable(),
   import_source: z.string().nullable(),
   reconciliation_method: z.string().nullable(),
+  cash_account_id: z.string().uuid().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
 })
@@ -41,7 +42,7 @@ const TRANSACTION_DETAIL_COLUMNS =
   'id, date, description, amount, currency, amount_sek, reference, merchant_name, ' +
   'counterparty_account, journal_entry_id, invoice_id, supplier_invoice_id, ' +
   'potential_invoice_id, is_business, category, receipt_id, document_id, ' +
-  'external_id, import_source, reconciliation_method, created_at, updated_at'
+  'external_id, import_source, reconciliation_method, cash_account_id, created_at, updated_at'
 
 registerEndpoint({
   operation: 'transactions.get',
