@@ -134,6 +134,25 @@ negative ones. Reading straight after the click made #2025's test pass for the
 wrong reason: the row it was asserting the absence of had merely not been
 written yet.
 
+## Both correction tracks are covered
+
+BFL 5 kap. 5 § allows exactly two ways to correct a posted verifikat, and the
+suite walks both:
+
+- `storno.ts`: cancel with a mirroring entry. The original survives, marked
+  reversed, and the pair nets to zero.
+- `inline-rattelse.ts`: strike and replace lines inside the same verifikat
+  while the period is open and unlocked. No new voucher number, the struck
+  original preserved in `journal_entry_rattelse_log`, and the log refused an
+  UPDATE and a DELETE issued with the SERVICE ROLE, so the guarantee is proven
+  at the table rather than at the policy.
+
+The third test in that file is the refusal that makes the pair a system rather
+than two features: an entry matched to a bank transaction may not have its
+bank-account lines struck OR replaced, in either direction, because the ledger
+would stop agreeing with the bank while every entry still balanced. The RPC
+says so and names storno as the track that does apply.
+
 ## The VIES fake
 
 `lib/vat/vies-client.ts` hardcodes `https://ec.europa.eu/...`, so there is no
