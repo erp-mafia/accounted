@@ -36,14 +36,18 @@ beforeEach(() => {
 })
 
 describe('extractConnectorKey', () => {
-  it('reads X-Connector-Key first (its whole purpose is Authorization carrying an upstream token), then Bearer', () => {
+  it('takes a connector-prefixed Bearer, else X-Connector-Key, else the raw Bearer for the format-check 401', () => {
     expect(extractConnectorKey(req({ authorization: 'Bearer gnubok_ck_a' }))).toBe('gnubok_ck_a')
     expect(extractConnectorKey(req({ 'x-connector-key': 'gnubok_ck_b' }))).toBe('gnubok_ck_b')
+    // A connector-prefixed Bearer is unambiguous and wins.
+    expect(extractConnectorKey(req({ authorization: 'Bearer gnubok_ck_a', 'x-connector-key': 'gnubok_ck_b' }))).toBe('gnubok_ck_a')
     // The proxied-call shape (SKV data proxy): Authorization is the user's
     // upstream SKV token, X-Connector-Key authenticates the instance. The
     // connector key MUST win or every such request 401s on a hashed upstream
     // token.
     expect(extractConnectorKey(req({ authorization: 'Bearer upstream-skv-token', 'x-connector-key': 'gnubok_ck_b' }))).toBe('gnubok_ck_b')
+    // Non-prefixed Bearer alone still reaches the format check (401).
+    expect(extractConnectorKey(req({ authorization: 'Bearer not-a-connector-key' }))).toBe('not-a-connector-key')
     expect(extractConnectorKey(req())).toBeNull()
     expect(extractConnectorKey(req({ authorization: 'Basic xyz' }))).toBeNull()
   })

@@ -164,7 +164,23 @@ export async function syncConnectorEntitlements(
   let entitlements: ConnectorEntitlements
   try {
     const body = (await response.json()) as { data?: ConnectorEntitlements }
-    if (!body.data || typeof body.data.status !== 'string' || !Array.isArray(body.data.scopes)) {
+    // Full shape validation, not just presence: an UNKNOWN status string must
+    // land in keep-grants (server_error), not fall through to the
+    // "status !== 'active'" delete below (contract drift or a tampering
+    // middlebox must never wipe the cache), and a malformed
+    // current_period_end would make connectorGrantExpiry throw mid-write.
+    if (
+      !body.data ||
+      !['active', 'suspended', 'revoked'].includes(body.data.status as string) ||
+      !Array.isArray(body.data.scopes) ||
+      !body.data.scopes.every((s) => typeof s === 'string') ||
+      !(
+        body.data.current_period_end === null ||
+        body.data.current_period_end === undefined ||
+        (typeof body.data.current_period_end === 'string' &&
+          Number.isFinite(new Date(body.data.current_period_end).getTime()))
+      )
+    ) {
       throw new Error('unexpected entitlements payload')
     }
     entitlements = body.data

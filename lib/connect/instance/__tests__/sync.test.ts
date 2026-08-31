@@ -184,6 +184,25 @@ describe('syncConnectorEntitlements', () => {
     }
   })
 
+  it('keeps grants on an UNKNOWN status or malformed current_period_end (contract drift lands in server_error, never delete)', async () => {
+    const shapes = [
+      { status: 'past_due', scopes: ['bank_sync'], current_period_end: null, org_number: 'x', instance_url: null, server_time: 'x' },
+      { status: 'active', scopes: ['bank_sync'], current_period_end: 'not-a-date', org_number: 'x', instance_url: null, server_time: 'x' },
+      { status: 'active', scopes: [42], current_period_end: null, org_number: 'x', instance_url: null, server_time: 'x' },
+    ]
+    for (const data of shapes) {
+      const { supabase, upserts, deletes } = makeSupabase([C1])
+      const result = await syncConnectorEntitlements(supabase, {
+        config: CONFIG,
+        fetchImpl: vi.fn().mockResolvedValue(jsonResponse(200, { data })),
+        now: NOW,
+      })
+      expect(result.outcome, JSON.stringify(data)).toBe('server_error')
+      expect(upserts).toHaveLength(0)
+      expect(deletes).toHaveLength(0)
+    }
+  })
+
   it('removes every connector grant when the key is not active', async () => {
     const { supabase, deletes } = makeSupabase([C1])
     const result = await syncConnectorEntitlements(supabase, {
