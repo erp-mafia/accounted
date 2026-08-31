@@ -1,0 +1,8 @@
+{
+  "name": "accounted-spectest",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@specific.dev/spectest": "^0.67.0"
+  }
+}

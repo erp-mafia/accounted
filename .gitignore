@@ -101,3 +101,6 @@ scripts/reopen-bokslut.sql
 # part of the app. The integration itself lives in lib/analytics/ and
 # instrumentation-client.ts.
 .posthog/
+
+# Spectest runtime state (volumes, run metadata). The suite itself is in spectest/.
+.spectest/

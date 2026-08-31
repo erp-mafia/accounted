@@ -59,6 +59,14 @@ const eslintConfig = defineConfig([
     // local `npm run lint` / `check:lint` walks them (and their node_modules
     // siblings), inflating the report until the ratchet's JSON parse fails.
     ".claude/worktrees/**",
+    // Runtime state the Supabase CLI writes under supabase/ when the local
+    // stack is up (edge-runtime scratch files, start secrets). Generated, not
+    // authored, and gitignored: linting it reports errors nobody can fix.
+    "supabase/.temp/**",
+    "supabase/.branches/**",
+    // The Spectest suite has its own tsconfig and dependency tree; it is
+    // typechecked by `tsc --noEmit` inside spectest/, not by the app's rules.
+    "spectest/node_modules/**",
   ]),
 ]);
 

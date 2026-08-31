@@ -90,7 +90,9 @@ npm run skills:generate  # Regenerate agent_atom_registry seed after editing an 
 
 ## Testing
 
-Vitest 4, `node` env, tests in `__tests__/`, scope `lib/` + `app/api/` (no component/E2E tests). Helpers in `tests/helpers.ts`: `createMockSupabase()`, `createQueuedMockSupabase()`, `createMockRequest()`, `parseJsonResponse()`, plus fixture factories (`makeTransaction`, `makeJournalEntry`, `makeInvoice`, …). `vi.clearAllMocks()` + `eventBus.clear()` in `beforeEach`. Trigger/RPC/RLS behavior is tested in `*.pg.test.ts` against real Postgres, not with mocks.
+Vitest 4, `node` env, tests in `__tests__/`, scope `lib/` + `app/api/`. Helpers in `tests/helpers.ts`: `createMockSupabase()`, `createQueuedMockSupabase()`, `createMockRequest()`, `parseJsonResponse()`, plus fixture factories (`makeTransaction`, `makeJournalEntry`, `makeInvoice`, …). `vi.clearAllMocks()` + `eventBus.clear()` in `beforeEach`. Trigger/RPC/RLS behavior is tested in `*.pg.test.ts` against real Postgres, not with mocks.
+
+End-to-end is Spectest: it boots the whole system (app + self-hosted Supabase + fakes for the external APIs) in a microVM and drives a browser against it. Run `spectest docs` to learn how to write and run tests; the suite lives in `spectest/`, with `tests/e2e/` holding the local-stack variant and the contract tests that keep the fakes honest. After a change, run `spectest test` and hand the user the dashboard link so they can inspect the diff.
 
 ## Detail Loads On Demand
 
