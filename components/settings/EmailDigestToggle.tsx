@@ -35,8 +35,9 @@ export function EmailDigestToggle() {
           .eq('user_id', user.id)
           .maybeSingle()
         if (active) setEnabled(data?.email_digest_enabled === true)
-      } catch {
+      } catch (err) {
         // Leave the default (off); a failed read must not block the page.
+        console.error('Could not read email digest setting:', err)
       } finally {
         if (active) setLoading(false)
       }
@@ -67,7 +68,8 @@ export function EmailDigestToggle() {
           ? t('digest_enabled_toast')
           : t('digest_disabled_toast'),
       })
-    } catch {
+    } catch (err) {
+      console.error('Could not save email digest setting:', err)
       setEnabled(!next)
       toast({ title: t('digest_save_failed'), variant: 'destructive' })
     } finally {
