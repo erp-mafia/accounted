@@ -110,6 +110,7 @@ Request body:
   document_type?: "invoice" | "proforma" | "delivery_note",
   your_reference?: string,
   our_reference?: string,
+  invoice_marking?: string,
   notes?: string,
   payment_link_url?: string | "",
   payment_link_auto?: boolean,
@@ -124,7 +125,7 @@ Request body:
   external_invoice_number?: string | "",
   self_billing_agreement_ref?: string,
   received_date?: string | "",
-  items: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, vat_rate?: number, article_id?: string, revenue_account?: string, deduction_type?: "rot" | "rut", labor_hours?: number, work_type?: string, housing_designation?: string, apartment_number?: string, brf_org_number?: string | "", accrual_period_start?: string, accrual_period_end?: string, accrual_balance_account?: string, dimensions?: Record<string, string> }[]
+  items: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number, vat_rate?: number, article_id?: string, revenue_account?: string, deduction_type?: "rot" | "rut", labor_hours?: number, work_type?: string, housing_designation?: string, apartment_number?: string, brf_org_number?: string | "", accrual_period_start?: string, accrual_period_end?: string, accrual_balance_account?: string, dimensions?: Record<string, string> }[]
 }
 ```
 
@@ -305,7 +306,7 @@ Request body:
   our_reference?: string | unknown,
   notes?: string | unknown,
   default_dimensions?: Record<string, string>,
-  items?: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, vat_rate?: number, article_id?: string, revenue_account?: string, deduction_type?: "rot" | "rut", labor_hours?: number, work_type?: string, housing_designation?: string, apartment_number?: string, brf_org_number?: string | "", accrual_period_start?: string, accrual_period_end?: string, accrual_balance_account?: string, dimensions?: Record<string, string> }[]
+  items?: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number, vat_rate?: number, article_id?: string, revenue_account?: string, deduction_type?: "rot" | "rut", labor_hours?: number, work_type?: string, housing_designation?: string, apartment_number?: string, brf_org_number?: string | "", accrual_period_start?: string, accrual_period_end?: string, accrual_balance_account?: string, dimensions?: Record<string, string> }[]
 }
 ```
 
@@ -776,7 +777,7 @@ Bulk-creation endpoint. Each invoice in the request array is validated and inser
 Request body:
 ```ts
 {
-  invoices: { customer_id: string, invoice_date: string, due_date: string, delivery_date?: string | "", currency: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK", document_type?: "invoice" | "proforma" | "delivery_note", your_reference?: string, our_reference?: string, notes?: string, payment_link_url?: string | "", payment_link_auto?: boolean, deduction_personnummer?: string, deduction_housing_designation?: string, deduction_apartment_number?: string, deduction_brf_org_number?: string | "", save_as_draft?: boolean, ore_rounding?: boolean, default_dimensions?: Record<string, string>, is_self_billed?: boolean, external_invoice_number?: string | "", self_billing_agreement_ref?: string, received_date?: string | "", items: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, vat_rate?: number, article_id?: string, revenue_account?: string, deduction_type?: "rot" | "rut", labor_hours?: number, work_type?: string, housing_designation?: string, apartment_number?: string, brf_org_number?: string | "", accrual_period_start?: string, accrual_period_end?: string, accrual_balance_account?: string, dimensions?: Record<string, string> }[] }[],
+  invoices: { customer_id: string, invoice_date: string, due_date: string, delivery_date?: string | "", currency: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK", document_type?: "invoice" | "proforma" | "delivery_note", your_reference?: string, our_reference?: string, invoice_marking?: string, notes?: string, payment_link_url?: string | "", payment_link_auto?: boolean, deduction_personnummer?: string, deduction_housing_designation?: string, deduction_apartment_number?: string, deduction_brf_org_number?: string | "", save_as_draft?: boolean, ore_rounding?: boolean, default_dimensions?: Record<string, string>, is_self_billed?: boolean, external_invoice_number?: string | "", self_billing_agreement_ref?: string, received_date?: string | "", items: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number, vat_rate?: number, article_id?: string, revenue_account?: string, deduction_type?: "rot" | "rut", labor_hours?: number, work_type?: string, housing_designation?: string, apartment_number?: string, brf_org_number?: string | "", accrual_period_start?: string, accrual_period_end?: string, accrual_balance_account?: string, dimensions?: Record<string, string> }[] }[],
   all_or_nothing?: boolean
 }
 ```
