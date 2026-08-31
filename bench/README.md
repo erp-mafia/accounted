@@ -169,9 +169,11 @@ on top; its accuracy is tracked separately by the backtest scripts).
   bins). An agent that books unattended is only as safe as its calibration:
   a model that is wrong at stated 0.95 is more dangerous than one that is
   wrong at stated 0.5. We know of no public leaderboard that ranks this.
-- **Cost per suite** computed from token usage at Anthropic first-party list
-  prices (or the provider-reported request cost for OpenRouter models), as
-  an upper bound without prompt caching.
+- **Cost per suite** computed from measured tokens at list prices, uncached,
+  for every model. Provider-billed amounts stay in the raw records but are
+  never compared: OpenAI's automatic prompt caching via OpenRouter made one
+  model look ~6x cheaper than its list price in v1.2, which is a deployment
+  property, not a model property. Surfaced by founder review; fixed in v1.3.
 - **End state, not transcript.** The ledger-agent suite never grades prose.
   The seeded Postgres runs the production schema with every migration
   applied; balance, immutability, voucher sequencing and period locks are the

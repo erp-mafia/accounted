@@ -380,6 +380,21 @@ function main() {
       if (records.length === 0) continue
       const pass = records.filter((r) => r.pass).length
       const w = wilson(pass, records.length)
+      // Comparable cost: measured tokens at list price, uncached, for every
+      // model. Provider-billed amounts (which can include provider-side
+      // prompt-cache discounts, e.g. OpenAI via OpenRouter) stay in the raw
+      // records but are not compared: a cache discount is a deployment
+      // property, not a model property.
+      const listCost = model.pricing
+        ? records.reduce(
+            (s2, r) =>
+              s2 +
+              (r.usage.inputTokens * model.pricing!.inputPerMTok +
+                r.usage.outputTokens * model.pricing!.outputPerMTok) /
+                1_000_000,
+            0,
+          )
+        : records.reduce((s2, r) => s2 + r.usage.costUsd, 0)
       rows.push({
         model: model.id,
         label: model.label,
@@ -390,11 +405,8 @@ function main() {
         passRate: round3(w.p),
         wilsonLo: round3(w.lo),
         wilsonHi: round3(w.hi),
-        totalCostUsd: round3(records.reduce((s, r) => s + r.usage.costUsd, 0)),
-        avgCostUsd:
-          Math.round(
-            (records.reduce((s, r) => s + r.usage.costUsd, 0) / records.length) * 100000,
-          ) / 100000,
+        totalCostUsd: round3(listCost),
+        avgCostUsd: Math.round((listCost / records.length) * 100000) / 100000,
         avgTurns: round3(records.reduce((s, r) => s + r.turns, 0) / records.length),
         avgDurationMs: Math.round(
           records.reduce((s, r) => s + r.durationMs, 0) / records.length,
