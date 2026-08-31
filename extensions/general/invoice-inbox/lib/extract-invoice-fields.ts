@@ -14,6 +14,7 @@
 
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { InvoiceExtractionResult } from '@/types'
 import { getAiService, readAiConfig, extractJsonObject } from '@/lib/ai'
 import type { AiDocumentInput, AiImageMediaType, ExtractionSkipReason } from '@/lib/ai'
@@ -47,6 +48,19 @@ export interface ExtractionInput {
   buffer: Buffer
   mimeType: string
   fileName: string
+  /**
+   * The receiving company's own identity. When set, an extracted supplier
+   * that turns out to BE this company (the model read the Kund/Kunduppgifter
+   * block instead of the issuer) is stripped to all-null before the result is
+   * returned, so the own company is never supplier-matched or offered for
+   * creation. Optional: callers without company context lose only this guard.
+   */
+  ownCompany?: OwnCompanyIdentity
+}
+
+export interface OwnCompanyIdentity {
+  orgNumber: string | null
+  name: string | null
 }
 
 export type ExtractionSkipped = ExtractionSkipReason | 'unsupported_media'
@@ -218,6 +232,86 @@ export function promoteSingleProminentAmount(
   }
 }
 
+/** Digits only; the comparable core of an org/VAT number. */
+const digitsOf = (value: string | null | undefined): string => (value ?? '').replace(/\D/g, '')
+
+/**
+ * Compare two Swedish organisation numbers by their digits. The 12-digit
+ * "16"-prefixed form (161234567890) denotes the same organisation as the
+ * 10-digit form; both sides are trimmed to 10 before comparing. Junk that is
+ * not 10 digits after trimming never matches anything.
+ */
+function orgNumbersEqual(a: string, b: string): boolean {
+  const trim = (d: string) => (d.length === 12 && d.startsWith('16') ? d.slice(2) : d)
+  const ta = trim(a)
+  return ta.length === 10 && ta === trim(b)
+}
+
+/**
+ * Never present the receiving company as its own supplier.
+ *
+ * Documents like bank agreements and bankintyg print the CUSTOMER's company
+ * in a prominent Kund/Kunduppgifter block while the issuer (the bank) sits in
+ * a logo. The model sometimes extracts that block as the supplier, and the
+ * inbox then offers to create the user's own company as a leverantör. The
+ * prompt tells the model not to; this guard makes it deterministic: when the
+ * extracted supplier's org number, VAT number (SE<orgnr>01), or exact name
+ * equals the receiving company's own, the whole supplier block is nulled.
+ * A false positive costs an empty LEVERANTÖR field the user fills in by
+ * hand; wrong data is never written.
+ */
+export function stripOwnCompanyAsSupplier(
+  data: InvoiceExtractionResult,
+  own: OwnCompanyIdentity | undefined
+): InvoiceExtractionResult {
+  if (!own) return data
+  const ownOrg = digitsOf(own.orgNumber)
+  const ownOrg10 = ownOrg.length === 12 && ownOrg.startsWith('16') ? ownOrg.slice(2) : ownOrg
+  const extractedOrg = digitsOf(data.supplier.orgNumber)
+  const extractedVat = digitsOf(data.supplier.vatNumber)
+  const orgHit = ownOrg.length > 0 && extractedOrg.length > 0 && orgNumbersEqual(extractedOrg, ownOrg)
+  const vatHit = ownOrg10.length === 10 && extractedVat === `${ownOrg10}01`
+  const ownName = own.name?.trim().toLowerCase() ?? ''
+  const nameHit =
+    ownName !== '' && data.supplier.name?.trim().toLowerCase() === ownName
+  if (!orgHit && !vatHit && !nameHit) return data
+  return {
+    ...data,
+    supplier: {
+      name: null,
+      orgNumber: null,
+      vatNumber: null,
+      address: null,
+      bankgiro: null,
+      plusgiro: null,
+    },
+  }
+}
+
+/**
+ * Best-effort lookup of the company's own name and org number for the
+ * ownCompany guard above. Never throws: on any failure the guard simply does
+ * not fire, which is the pre-guard behavior.
+ */
+export async function fetchOwnCompanyIdentity(
+  supabase: SupabaseClient,
+  companyId: string
+): Promise<OwnCompanyIdentity> {
+  try {
+    const { data } = await supabase
+      .from('companies')
+      .select('name, org_number')
+      .eq('id', companyId)
+      .maybeSingle()
+    return {
+      orgNumber: (data?.org_number as string | null) ?? null,
+      name: (data?.name as string | null) ?? null,
+    }
+  } catch {
+    return { orgNumber: null, name: null }
+  }
+}
+
 // Agent-supplied extraction: accountSuggestion is preserved instead of forced
 // to null. Agents (unlike AI extractors) can reliably assign a BAS expense
 // account; the regex enforces the class-4-7 range required for cost accounts.
@@ -290,6 +384,7 @@ VAT rate convention: BOTH lineItems[].vatRate AND vatBreakdown[].rate use the sa
 Rules:
 - Output JSON only. The first character must be '{' and the last must be '}'.
 - documentKind: "receipt" = point-of-sale proof of a COMPLETED payment (kassakvitto, kortkvitto, taxi/parking slip, webshop order confirmation marked paid). "supplier_invoice" = a request for payment (has due date, OCR/payment reference, bankgiro, "Att betala senast"). "government_letter" = correspondence from a myndighet (Skatteverket, Bolagsverket, Försäkringskassan...). "other" = contracts, statements, reports. null only when truly indeterminate.
+- supplier: ALWAYS the party that ISSUED the document and charges or receives the money (the seller, the bank, the myndighet). NEVER the customer or recipient: blocks labeled "Kund", "Kunduppgifter", "Fakturamottagare", "Mottagare", "Kundens ex", "Er referens" or a delivery/billing address describe the RECEIVING company, and none of their fields (name, org number, address) may be used for supplier. On bank documents (avtal, bankintyg, kontoutdrag) the bank is the supplier even when the customer's company details are printed more prominently than the bank's. If only the customer's identity is readable, leave every supplier field null.
 - merchantCategory: judge from the merchant name and line items (a receipt from "Prinsen" listing food and wine is "restaurant" even without the word). Use "other" when unsure. null for non-receipts.
 - legibility: "good" = all key amounts and the merchant are readable. "partial" = some key fields are cut off, blurry, or unreadable. "unreadable" = the document is mostly illegible (too blurry/dark/small). Judge the IMAGE quality, not whether fields exist on the document.
 - payment: only for documents that show how payment was made. "card" for kort/VISA/Mastercard; cardLast4 only when a masked card number like ****1234 is printed. "invoice" means the document says it will be billed separately.
@@ -674,7 +769,10 @@ export async function extractInvoiceFields(
     return {
       // accountSuggestion is null at this point, enforced by the schema's
       // .transform, so no post-validation coercion is needed.
-      data: promoteSingleProminentAmount({ ...validated, confidence: 1 }),
+      data: stripOwnCompanyAsSupplier(
+        promoteSingleProminentAmount({ ...validated, confidence: 1 }),
+        input.ownCompany
+      ),
       rawText,
       model,
     }

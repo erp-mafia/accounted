@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
 import {
   extractInvoiceFields,
   extractJsonObject,
+  stripOwnCompanyAsSupplier,
+  emptyResult,
 } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 
 // Mock the Bedrock SDK so tests drive the JSON parser without
@@ -610,6 +612,54 @@ describe('extractInvoiceFields', () => {
     expect(content[0].source.media_type).toBe('image/jpeg')
   })
 
+  // ── Own-company-as-supplier guard (2026-08) ──────────
+
+  it('strips the supplier when the model extracted the receiving company itself', async () => {
+    // A bank agreement's Kunduppgifter block: the model read the customer
+    // (the user's own company) as the issuer.
+    mockCreate.mockReturnValueOnce(
+      aiResponse({
+        ...VALID_RESULT,
+        documentKind: 'other',
+        supplier: {
+          name: 'Testbrand AB',
+          orgNumber: '5566778899',
+          vatNumber: null,
+          address: 'Provgatan 1, 111 11 Teststad',
+          bankgiro: null,
+          plusgiro: null,
+        },
+      })
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'affarsavtal.pdf',
+      ownCompany: { orgNumber: '556677-8899', name: 'Testbrand AB' },
+    })
+    expect(data.supplier).toEqual({
+      name: null,
+      orgNumber: null,
+      vatNumber: null,
+      address: null,
+      bankgiro: null,
+      plusgiro: null,
+    })
+    // Only the supplier block is affected.
+    expect(data.totals.total).toBe(6.25)
+  })
+
+  it('leaves a genuine supplier untouched when ownCompany is passed', async () => {
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'invoice.pdf',
+      ownCompany: { orgNumber: '556677-8899', name: 'Testbrand AB' },
+    })
+    expect(data.supplier.name).toBe('Anthropic, PBC')
+  })
+
   it('does not invoke sharp for normal-sized supported images', async () => {
     mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
     await extractInvoiceFields({
@@ -626,5 +676,83 @@ describe('extractInvoiceFields', () => {
     else delete process.env.AWS_ACCESS_KEY_ID
     if (ORIG_AWS_SECRET_ACCESS_KEY) process.env.AWS_SECRET_ACCESS_KEY = ORIG_AWS_SECRET_ACCESS_KEY
     else delete process.env.AWS_SECRET_ACCESS_KEY
+  })
+})
+
+describe('stripOwnCompanyAsSupplier', () => {
+  function withSupplier(supplier: Partial<ReturnType<typeof emptyResult>['supplier']>) {
+    const base = emptyResult()
+    return { ...base, supplier: { ...base.supplier, ...supplier } }
+  }
+  const strippedSupplier = {
+    name: null,
+    orgNumber: null,
+    vatNumber: null,
+    address: null,
+    bankgiro: null,
+    plusgiro: null,
+  }
+  const own = { orgNumber: '556677-8899', name: 'Testbrand AB' }
+
+  it('matches the org number across hyphen and 12-digit variants', () => {
+    for (const extracted of ['5566778899', '556677-8899', '165566778899', '16556677-8899']) {
+      const result = stripOwnCompanyAsSupplier(
+        withSupplier({ name: 'Något AB', orgNumber: extracted }),
+        own
+      )
+      expect(result.supplier, `orgNumber ${extracted}`).toEqual(strippedSupplier)
+    }
+  })
+
+  it('matches the derived Swedish VAT number (SE<orgnr>01)', () => {
+    const result = stripOwnCompanyAsSupplier(
+      withSupplier({ name: 'Något AB', vatNumber: 'SE556677889901' }),
+      own
+    )
+    expect(result.supplier).toEqual(strippedSupplier)
+  })
+
+  it('matches the exact company name case-insensitively', () => {
+    const result = stripOwnCompanyAsSupplier(withSupplier({ name: '  testbrand ab ' }), own)
+    expect(result.supplier).toEqual(strippedSupplier)
+  })
+
+  it('leaves a different supplier alone', () => {
+    const supplier = {
+      name: 'SEB',
+      orgNumber: '5029032081',
+      vatNumber: null,
+      address: null,
+      bankgiro: null,
+      plusgiro: null,
+    }
+    expect(stripOwnCompanyAsSupplier(withSupplier(supplier), own).supplier).toEqual(supplier)
+  })
+
+  it('never matches on an empty own identity (junk cannot match junk)', () => {
+    const result = stripOwnCompanyAsSupplier(
+      withSupplier({ name: 'Något AB', orgNumber: null }),
+      { orgNumber: null, name: null }
+    )
+    expect(result.supplier.name).toBe('Något AB')
+  })
+
+  it('is a no-op without ownCompany', () => {
+    const data = withSupplier({ name: 'Testbrand AB', orgNumber: '5566778899' })
+    expect(stripOwnCompanyAsSupplier(data, undefined)).toBe(data)
+  })
+
+  it('preserves every non-supplier field when stripping', () => {
+    const base = withSupplier({ name: 'Testbrand AB' })
+    const data = {
+      ...base,
+      documentKind: 'other' as const,
+      totals: { ...base.totals, total: 2500 },
+      prominentAmounts: [{ amount: 2500, label: 'Engångspris' }],
+    }
+    const result = stripOwnCompanyAsSupplier(data, own)
+    expect(result.documentKind).toBe('other')
+    expect(result.totals.total).toBe(2500)
+    expect(result.prominentAmounts).toEqual([{ amount: 2500, label: 'Engångspris' }])
   })
 })
