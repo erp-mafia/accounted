@@ -236,15 +236,16 @@ export function promoteSingleProminentAmount(
 const digitsOf = (value: string | null | undefined): string => (value ?? '').replace(/\D/g, '')
 
 /**
- * Compare two Swedish organisation numbers by their digits. The 12-digit
- * "16"-prefixed form (161234567890) denotes the same organisation as the
- * 10-digit form; both sides are trimmed to 10 before comparing. Junk that is
+ * Canonical 10-digit form of a Swedish organisation number, or '' when the
+ * input is not one. The 12-digit century-prefixed forms denote the same
+ * identity: "16" for organisations, "19"/"20" for personnummer-form numbers
+ * (enskild firma stores the owner's personnummer as org number). Junk that is
  * not 10 digits after trimming never matches anything.
  */
-function orgNumbersEqual(a: string, b: string): boolean {
-  const trim = (d: string) => (d.length === 12 && d.startsWith('16') ? d.slice(2) : d)
-  const ta = trim(a)
-  return ta.length === 10 && ta === trim(b)
+function toOrg10(digits: string): string {
+  const trimmed =
+    digits.length === 12 && /^(16|19|20)/.test(digits) ? digits.slice(2) : digits
+  return trimmed.length === 10 ? trimmed : ''
 }
 
 /**
@@ -265,15 +266,20 @@ export function stripOwnCompanyAsSupplier(
   own: OwnCompanyIdentity | undefined
 ): InvoiceExtractionResult {
   if (!own) return data
-  const ownOrg = digitsOf(own.orgNumber)
-  const ownOrg10 = ownOrg.length === 12 && ownOrg.startsWith('16') ? ownOrg.slice(2) : ownOrg
-  const extractedOrg = digitsOf(data.supplier.orgNumber)
+  const ownOrg10 = toOrg10(digitsOf(own.orgNumber))
+  const extractedOrg10 = toOrg10(digitsOf(data.supplier.orgNumber))
   const extractedVat = digitsOf(data.supplier.vatNumber)
-  const orgHit = ownOrg.length > 0 && extractedOrg.length > 0 && orgNumbersEqual(extractedOrg, ownOrg)
-  const vatHit = ownOrg10.length === 10 && extractedVat === `${ownOrg10}01`
+  const orgHit = ownOrg10 !== '' && extractedOrg10 !== '' && extractedOrg10 === ownOrg10
+  const vatHit = ownOrg10 !== '' && extractedVat === `${ownOrg10}01`
+  // A name coincidence must not outvote a real, provably different org
+  // number: a same-named foreign or unrelated entity stays a valid supplier.
+  const orgProvenDifferent =
+    ownOrg10 !== '' && extractedOrg10 !== '' && extractedOrg10 !== ownOrg10
   const ownName = own.name?.trim().toLowerCase() ?? ''
   const nameHit =
-    ownName !== '' && data.supplier.name?.trim().toLowerCase() === ownName
+    !orgProvenDifferent &&
+    ownName !== '' &&
+    data.supplier.name?.trim().toLowerCase() === ownName
   if (!orgHit && !vatHit && !nameHit) return data
   return {
     ...data,
@@ -472,7 +478,9 @@ async function normalizeImageForExtraction(
       })
       .jpeg({ quality: 80 })
       .toBuffer()
-    return { buffer: converted, mimeType: 'image/jpeg', fileName: input.fileName }
+    // Spread first: normalization must not shed fields like ownCompany, or
+    // the own-company supplier guard silently dies for photographed documents.
+    return { ...input, buffer: converted, mimeType: 'image/jpeg' }
   } catch (err) {
     // HEIC without libheif lands here → caller hits the unsupported-type
     // guard, same net behavior as before this step existed. For oversized

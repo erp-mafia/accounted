@@ -649,6 +649,27 @@ describe('extractInvoiceFields', () => {
     expect(data.totals.total).toBe(6.25)
   })
 
+  it('still strips the own company on the image-normalization path (photographed documents)', async () => {
+    // normalizeImageForExtraction rebuilds the input for HEIC/oversized
+    // photos; ownCompany must survive that rebuild or the guard is dead for
+    // exactly the phone-photo documents the fix targets.
+    sharpMock.mockImplementationOnce(() => workingSharpChain(Buffer.from('converted-jpeg')))
+    mockCreate.mockReturnValueOnce(
+      aiResponse({
+        ...VALID_RESULT,
+        supplier: { ...VALID_RESULT.supplier, name: 'Testbrand AB', orgNumber: '5566778899' },
+      })
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.alloc(5 * 1024 * 1024, 1),
+      mimeType: 'image/jpeg',
+      fileName: 'photo-of-avtal.jpg',
+      ownCompany: { orgNumber: '556677-8899', name: 'Testbrand AB' },
+    })
+    expect(data.supplier.name).toBeNull()
+    expect(data.supplier.orgNumber).toBeNull()
+  })
+
   it('leaves a genuine supplier untouched when ownCompany is passed', async () => {
     mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
     const { data } = await extractInvoiceFields({
@@ -715,6 +736,30 @@ describe('stripOwnCompanyAsSupplier', () => {
   it('matches the exact company name case-insensitively', () => {
     const result = stripOwnCompanyAsSupplier(withSupplier({ name: '  testbrand ab ' }), own)
     expect(result.supplier).toEqual(strippedSupplier)
+  })
+
+  it('matches a personnummer-form own org number (enskild firma)', () => {
+    // companies.org_number for enskild firma is the owner's personnummer,
+    // often stored in 12-digit century form.
+    const result = stripOwnCompanyAsSupplier(
+      withSupplier({ name: 'Firma X', orgNumber: '550505-5566' }),
+      { orgNumber: '195505055566', name: 'Firma X Enskild' }
+    )
+    expect(result.supplier).toEqual(strippedSupplier)
+  })
+
+  it('lets a provably different org number outvote a name coincidence', () => {
+    // A same-named but distinct entity (foreign registry, generic name) with
+    // its own org number on the document stays a valid supplier.
+    const supplier = {
+      name: 'Testbrand AB',
+      orgNumber: '5029032081',
+      vatNumber: null,
+      address: null,
+      bankgiro: null,
+      plusgiro: null,
+    }
+    expect(stripOwnCompanyAsSupplier(withSupplier(supplier), own).supplier).toEqual(supplier)
   })
 
   it('leaves a different supplier alone', () => {
