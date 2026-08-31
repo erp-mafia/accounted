@@ -90,7 +90,11 @@ export const createFirstInvoice = env.test(
                vat_amount::text as vat_amount,
                total::text      as total
         from public.invoices`;
-      return rows.unwrap().length === 1 ? rows : null;
+      // Wait for the NUMBER, not just for the row. The draft is inserted
+      // first and numbered a moment later, so gating on the row's existence
+      // reads invoice_number as null on a fast machine.
+      const r = rows.unwrap();
+      return r.length === 1 && r[0]?.invoice_number ? rows : null;
     });
 
     expect(invoices[0]?.invoice_number).toBe("001");

@@ -241,10 +241,10 @@ re-walking a wizard.
   gracefully ("Kunde inte hämta skattekontot"), so the page is honest, but
   nothing beyond that is testable. Skatteverket reads six base URLs from env,
   so the fake is cheap when someone wants it.
-- **The 12 % and 6 % rates.** Each fills a different ruta, which is where the
-  expensive mistakes live. Kreditfaktura, EU reverse charge and the
-  non-registered company are covered now (`credit-note.ts`,
-  `reverse-charge.ts`, `no-vat.ts`).
+- **Import VAT and reverse charge on the purchase side.** The sales side is
+  covered (`reverse-charge.ts`); 2614/2645 and rutorna 20-24 and 30 are not.
+- **Bank reconciliation 1:N** (#1553), one bank event against several
+  verifikationer. New, and the largest untested surface left.
 - **Closing a year for real**, and filing. Readiness is covered; what is not is
   resolving the reminders and locking the period, which needs the subledgers
   reconstructed after the migration.
