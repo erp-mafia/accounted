@@ -1689,8 +1689,11 @@ async function commitCreateInvoice(
     if (!allowedRates.has(itemRate)) {
       return { error: `Momssats ${itemRate}% är inte tillåten för denna kundtyp`, status: 400 }
     }
+    // Strict typeof: staged params are JSON a tampered client could shape;
+    // a string would coerce past a bare range check but be ignored by the
+    // number-typed totals math, then land in the NUMERIC column anyway.
     const discountPercent = item.discount_percent ?? 0
-    if (!(discountPercent >= 0 && discountPercent <= 100)) {
+    if (typeof discountPercent !== 'number' || !(discountPercent >= 0 && discountPercent <= 100)) {
       return { error: 'Rabatten per rad måste vara mellan 0 och 100 procent', status: 400 }
     }
     const lineTotal = computeLineNet(item.quantity, item.unit_price, discountPercent)
@@ -4569,6 +4572,7 @@ async function commitCreditInvoice(
       reverse_charge_text: original.reverse_charge_text,
       your_reference: original.your_reference,
       our_reference: original.our_reference,
+      invoice_marking: original.invoice_marking ?? null,
       notes: reason || `Krediterar faktura ${original.invoice_number}`,
       credited_invoice_id: id,
       // Dimensions PR7: copy so the reversal nets against the same cells.
@@ -4589,6 +4593,7 @@ async function commitCreditInvoice(
     quantity: number
     unit: string
     unit_price: number
+    discount_percent?: number | null
     line_total: number
     vat_rate?: number
     vat_amount?: number
@@ -4603,6 +4608,8 @@ async function commitCreditInvoice(
     quantity: -Math.abs(item.quantity),
     unit: item.unit,
     unit_price: item.unit_price,
+    // Kreditfakturans face arithmetic must multiply out like the original's.
+    discount_percent: item.discount_percent ?? 0,
     line_total: -Math.abs(item.line_total),
     vat_rate: item.vat_rate ?? 0,
     vat_amount: -(item.vat_amount ? Math.abs(item.vat_amount) : 0),

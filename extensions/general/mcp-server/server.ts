@@ -378,8 +378,15 @@ function resolveInvoiceLineFromArticle(
     }
   }
   if (!item.quantity || item.quantity <= 0) throw new Error(`Item ${lineNo}: quantity must be positive`)
-  if (item.discount_percent != null && !(item.discount_percent >= 0 && item.discount_percent <= 100)) {
-    throw new Error(`Item ${lineNo}: discount_percent must be between 0 and 100`)
+  // Strict typeof: a host that skips inputSchema validation could send a
+  // string, which JS comparisons would coerce past a bare range check while
+  // hasLineDiscount (typeof === 'number') then ignores it in the totals.
+  if (
+    item.discount_percent != null &&
+    (typeof item.discount_percent !== 'number' ||
+      !(item.discount_percent >= 0 && item.discount_percent <= 100))
+  ) {
+    throw new Error(`Item ${lineNo}: discount_percent must be a number between 0 and 100`)
   }
   if (item.article_id && !article) {
     throw new Error(`Item ${lineNo}: article ${item.article_id} not found in this company. Use gnubok_list_articles to find valid IDs.`)

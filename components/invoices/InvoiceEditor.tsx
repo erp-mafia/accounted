@@ -1790,6 +1790,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           items: data.items,
           your_reference: data.your_reference,
           our_reference: data.our_reference,
+          invoice_marking: data.invoice_marking,
           notes: data.notes,
           payment_link_url: data.payment_link_url,
           invoice_number: numberPreview,
@@ -2209,8 +2210,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       const articleStripOpen = articlePickerRows.has(index)
                       const accountStripOpen =
                         isInvoiceDoc && (accountOverrideRows.has(index) || Boolean(item?.revenue_account))
+                      // Not offered for a received självfaktura: the self-billed
+                      // endpoint's reduced item shape carries no discount, so a
+                      // previewed rebate would silently book gross.
                       const discountStripOpen =
-                        discountRows.has(index) || hasLineDiscount(item?.discount_percent)
+                        !isSelfBilled &&
+                        (discountRows.has(index) || hasLineDiscount(item?.discount_percent))
                       const dimensionStripOpen =
                         dimensionsEnabled &&
                         isInvoiceDoc &&
@@ -2337,13 +2342,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                       <Package className="h-4 w-4" />
                                       {t('row_menu_pick_article')}
                                     </DropdownMenuItem>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem onSelect={() => toggleDiscount(index)} className="py-2">
-                                      <Percent className="h-4 w-4" />
-                                      {discountStripOpen
-                                        ? t('row_menu_remove_discount')
-                                        : t('row_menu_add_discount')}
-                                    </DropdownMenuItem>
+                                    {!isSelfBilled && (
+                                      <>
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuItem onSelect={() => toggleDiscount(index)} className="py-2">
+                                          <Percent className="h-4 w-4" />
+                                          {discountStripOpen
+                                            ? t('row_menu_remove_discount')
+                                            : t('row_menu_add_discount')}
+                                        </DropdownMenuItem>
+                                      </>
+                                    )}
                                     {isInvoiceDoc && (
                                       <>
                                         <DropdownMenuSeparator />

@@ -79,6 +79,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       reverse_charge_text: proforma.reverse_charge_text,
       your_reference: proforma.your_reference,
       our_reference: proforma.our_reference,
+      // Buyer routing survives conversion (Peppol BT-10 may rely on it alone).
+      invoice_marking: proforma.invoice_marking ?? null,
       notes: proforma.notes,
       document_type: 'invoice',
       converted_from_id: id,
@@ -92,7 +94,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     return NextResponse.json({ error: getUserErrorMessage(invoiceError) }, { status: 500 })
   }
 
-  const items = (proforma.items || []).map((item: { sort_order: number; line_type?: 'product' | 'text'; description: string; quantity: number; unit: string; unit_price: number; line_total: number; dimensions?: Record<string, string> }) => ({
+  const items = (proforma.items || []).map((item: { sort_order: number; line_type?: 'product' | 'text'; description: string; quantity: number; unit: string; unit_price: number; discount_percent?: number | null; line_total: number; dimensions?: Record<string, string> }) => ({
     invoice_id: invoice.id,
     sort_order: item.sort_order,
     line_type: item.line_type ?? 'product',
@@ -100,6 +102,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     quantity: item.quantity,
     unit: item.unit,
     unit_price: item.unit_price,
+    // The stored line_total is net of this; dropping it would make the
+    // converted invoice fail the Peppol line check and lose the rebate on
+    // the next builder pass.
+    discount_percent: item.discount_percent ?? 0,
     line_total: item.line_total,
     dimensions: item.dimensions ?? {},
   }))
