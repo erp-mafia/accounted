@@ -36,7 +36,8 @@ nothing else. The git worktree deliberately has no `.env.local` at all.
 | Storage | real | storage-api, so underlag upload is exercised rather than stubbed |
 | Enable Banking | fake | `fakes/enable-banking-server.mjs` |
 | VIES (EU VAT register) | fake | `spectest/fakes/vies.ts`, answering at `ec.europa.eu` |
-| Skatteverket, Fortnox, Qvalia, Bedrock | not yet faked | see "Still missing" |
+| Skatteverket | fake | `spectest/fakes/skatteverket.ts`, answering at both of its test hosts |
+| Fortnox, Qvalia, Bedrock | not yet faked | see "Still missing" |
 
 ## The Enable Banking fake
 
@@ -171,6 +172,28 @@ charged.
 `ctx.fakes.vies.setOutage(true)` makes the register answer 503 so a test can
 prove an outage does not read as "verified".
 
+## The Skatteverket fake
+
+Two hosts, because the extension uses two: `peroauth2.test.skatteverket.se`
+for the personal BankID OAuth flow and `api.test.skatteverket.se` for
+momsdeklaration, AGI and skattekonto. Both are where the clients already point
+when no base URL is configured, so nothing test-only is injected into the app.
+
+Four environment values are still needed, and they are credentials rather than
+addresses: `SKATTEVERKET_ENABLED` (a server-side flag checked as the literal
+string "true", without which every route answers 503), the OAuth and API
+gateway client id/secret pairs, and `SKATTEVERKET_TOKEN_ENCRYPTION_KEY` (tokens
+are stored encrypted; without it the callback exchanges the code and then
+throws before persisting).
+
+The fake is deliberately not more forgiving than production. It refuses an
+authorize request without a `code_challenge`, because this client always sends
+PKCE. It answers 401 with no body when the gateway headers are missing, the way
+the real gateway does before it ever looks at the token. Codes are single-use.
+Helpers: `setFelkod(1-5)` for Skatteverket's own error envelope,
+`expireConsent()` for a consent revoked at the authority, and `calls()` for
+what the app actually asked for.
+
 ## Fixtures go in spectest/tests/fixtures/
 
 Only `spectest/tests/**` is excluded from the environment's cache key. A file
@@ -257,21 +280,22 @@ touching it forces a cold rebuild; worth doing once, in a batch):
 - **Foreign-currency settlement** and the 7960/3960 FX residual (#2037). The
   EUR account exists in the bank fake; an FX invoice does not.
 
-**Blocked on a fake that does not exist yet:**
+**Now reachable, since the Skatteverket fake landed:**
 
-- **Skattekonto.** It calls Skatteverket. The page fails gracefully ("Kunde
-  inte hämta skattekontot"), so its honesty is testable and nothing else is.
-- **Filing anything.** Momsdeklaration, AGI and INK2 all stop at the same
-  wall, and so does the årsredovisning at Bolagsverket.
+- **Filing a momsdeklaration and an AGI.** The fake serves the OAuth and the
+  gateway; the submission endpoints still need handlers, which is an afternoon
+  rather than a project. `skattekonto.ts` shows the shape.
+- **Skattekonto reconciliation against the bank.** The fake's deposit is the
+  same 43 120 kr the bank fixture shows leaving the account, so both sides of
+  one event exist for the first time.
+
+**Still blocked on a fake:**
+
+- **Årsredovisning at Bolagsverket**, which has no fake and no configurable
+  host.
 
 **Fakes, in the order they are worth building:**
 
-- **Skatteverket** is the easy one. It already reads six base URLs from env
-  (`SKATTEVERKET_API_BASE_URL`, `SKATTEVERKET_OAUTH_BASE_URL`,
-  `SKATTEVERKET_SKATTEKONTO_API_BASE_URL`, the two AGD ones,
-  `SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL`), so a fake drops in the same way the
-  bank and VIES fakes did, and it unblocks skattekonto plus every filing path
-  at once.
 - **Fortnox and Qvalia hardcode their hosts** (`https://api.fortnox.se`,
   `https://api.qvalia.com`). Faking either means first making the base URL
   configurable, which is a change to shipped code and belongs in its own PR
