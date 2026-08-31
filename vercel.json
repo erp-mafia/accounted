@@ -99,6 +99,10 @@
       "schedule": "30 5 * * *"
     },
     {
+      "path": "/api/notifications/bookkeeping-digest/cron",
+      "schedule": "45 5 * * *"
+    },
+    {
       "path": "/api/peppol/inbound/cron",
       "schedule": "*/10 * * * *"
     },
