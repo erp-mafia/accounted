@@ -786,6 +786,25 @@ describe('stripOwnCompanyAsSupplier', () => {
     expect(result.supplier.name).toBe('Något AB')
   })
 
+  it('fetchOwnCompanyIdentity degrades to nulls on a reported query error (fail open, logged)', async () => {
+    const { fetchOwnCompanyIdentity } = await import(
+      '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+    )
+    const supabase = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            maybeSingle: () =>
+              Promise.resolve({ data: null, error: new Error('permission denied') }),
+          }),
+        }),
+      }),
+    }
+    await expect(
+      fetchOwnCompanyIdentity(supabase as never, 'company-1')
+    ).resolves.toEqual({ orgNumber: null, name: null })
+  })
+
   it('is a no-op without ownCompany', () => {
     const data = withSupplier({ name: 'Testbrand AB', orgNumber: '5566778899' })
     expect(stripOwnCompanyAsSupplier(data, undefined)).toBe(data)

@@ -304,11 +304,14 @@ export async function fetchOwnCompanyIdentity(
   companyId: string
 ): Promise<OwnCompanyIdentity> {
   try {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('companies')
       .select('name, org_number')
       .eq('id', companyId)
       .maybeSingle()
+    // maybeSingle() reports query/RLS failures in `error` without throwing;
+    // route them through the catch so they are logged, not silently nulled.
+    if (error) throw error
     return {
       orgNumber: (data?.org_number as string | null) ?? null,
       name: (data?.name as string | null) ?? null,
