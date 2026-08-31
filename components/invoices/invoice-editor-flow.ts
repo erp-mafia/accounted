@@ -121,6 +121,7 @@ export type ForvalChip =
   | { kind: 'received'; date: string }
   | { kind: 'delivery'; date: string }
   | { kind: 'your_reference'; reference: string }
+  | { kind: 'invoice_marking'; marking: string }
   | { kind: 'payment_link'; mode: 'auto' | 'manual' }
   | { kind: 'ore_off' }
   | { kind: 'dims'; dims: string }
@@ -134,6 +135,7 @@ export interface ForvalChipsInput {
   receivedDate: string
   deliveryDate: string
   yourReference: string
+  invoiceMarking: string
   paymentLink: 'auto' | 'manual' | null
   oreRounding: boolean
   /** Compact display of the invoice-level default dims, or null when none. */
@@ -173,6 +175,9 @@ export function deriveForvalChips(input: ForvalChipsInput): ForvalChip[] {
   }
   if (!input.isSelfBilled && input.yourReference.trim()) {
     chips.push({ kind: 'your_reference', reference: input.yourReference.trim() })
+  }
+  if (!input.isSelfBilled && input.invoiceMarking.trim()) {
+    chips.push({ kind: 'invoice_marking', marking: input.invoiceMarking.trim() })
   }
   if (!input.isSelfBilled && input.paymentLink) {
     chips.push({ kind: 'payment_link', mode: input.paymentLink })

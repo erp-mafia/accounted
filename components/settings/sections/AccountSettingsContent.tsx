@@ -9,6 +9,7 @@ import { Sun, Moon, Monitor, LogOut, ExternalLink } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { createClient } from '@/lib/supabase/client'
 import { SecuritySettings } from '@/components/settings/SecuritySettings'
+import { EmailDigestToggle } from '@/components/settings/EmailDigestToggle'
 import { InstallAppSection } from '@/components/settings/InstallAppSection'
 import { CalendarFeedSettings } from '@/components/settings/CalendarFeedSettings'
 import { AccountDangerZone } from '@/components/settings/AccountDangerZone'
@@ -334,6 +335,9 @@ export function AccountSettingsContent() {
 
       {/* Security: BankID, password, 2FA (renders its own group) */}
       <SecuritySettings />
+
+      {/* Notifications: daily "nytt att bokfora" email digest opt-in */}
+      <EmailDigestToggle />
 
       {/* Calendar feed (extension-gated) */}
       {hasCalendarExtension && <CalendarFeedSettings />}

@@ -189,6 +189,7 @@ describe('gnubok_get_invoice: execute', () => {
       quantity: 2,
       unit: 'tim',
       unit_price: 1200,
+      discount_percent: 0,
       line_total: 2400,
       vat_rate: 25,
       vat_amount: 600,

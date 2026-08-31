@@ -298,6 +298,7 @@ describe('validateApiKey', () => {
       apiKeyName: undefined,
       scopes: ['transactions:read', 'reports:read'],
       mode: 'live',
+      unattendedCommitLimit: null,
     })
   })
 
@@ -320,6 +321,7 @@ describe('validateApiKey', () => {
       apiKeyName: undefined,
       scopes: DEFAULT_SCOPES,
       mode: 'live',
+      unattendedCommitLimit: null,
     })
   })
 
@@ -345,6 +347,45 @@ describe('validateApiKey', () => {
       apiKeyName: 'CI test key',
       scopes: ['transactions:read'],
       mode: 'test',
+      unattendedCommitLimit: null,
+    })
+  })
+
+  describe('unattended commit limit', () => {
+    it('surfaces a positive ceiling from the RPC row', async () => {
+      setupMockRpc({
+        data: [{
+          user_id: 'user-123',
+          company_id: 'company-456',
+          scopes: ['transactions:read'],
+          rate_limited: false,
+          // numeric(14,2) comes back from PostgREST as a string.
+          unattended_commit_limit: '25000.00',
+        }],
+        error: null,
+      })
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).toMatchObject({ unattendedCommitLimit: 25000 })
+    })
+
+    it('reads anything that is not a positive number as no ceiling', async () => {
+      // The whole guard is NULL-first: an unparseable or non-positive value
+      // must mean "unlimited", never "block every commit this key attempts".
+      for (const raw of [null, undefined, 0, -1, 'abc', {}]) {
+        setupMockRpc({
+          data: [{
+            user_id: 'user-123',
+            company_id: 'company-456',
+            scopes: ['transactions:read'],
+            rate_limited: false,
+            unattended_commit_limit: raw,
+          }],
+          error: null,
+        })
+        const result = await validateApiKey('gnubok_sk_test-key-value')
+        expect(result).toMatchObject({ unattendedCommitLimit: null })
+      }
     })
   })
 

@@ -1,4 +1,5 @@
 import { roundOre } from '@/lib/money'
+import { computeLineNet } from '@/lib/invoices/line-amounts'
 
 /**
  * ROT/RUT-avdrag rules.
@@ -211,6 +212,12 @@ export interface ItemForDeduction {
   unit_price: number
   /** Quantity. Same field as invoice_items.quantity. */
   quantity: number
+  /**
+   * Percentage discount on the line (0-100), invoice_items.discount_percent.
+   * The deduction base is the amount the customer actually pays, so a
+   * discounted line deducts on the NET line total. Omitted/null = 0.
+   */
+  discount_percent?: number | null
   /** 'rot' | 'rut' | null. Drives whether the deduction kicks in at all. */
   deduction_type?: DeductionType | null
   /**
@@ -242,7 +249,8 @@ export interface ItemForDeduction {
  */
 export function computeDeduction(item: ItemForDeduction): number {
   if (!item.deduction_type) return 0
-  const lineTotal = item.unit_price * item.quantity
+  // Net of any line discount: the deduction follows what the customer pays.
+  const lineTotal = computeLineNet(item.quantity, item.unit_price, item.discount_percent)
   if (lineTotal <= 0) return 0
   const rate = item.vat_rate ?? 0
   const lineVat = rate > 0 ? Math.round(lineTotal * rate / 100 * 100) / 100 : 0

@@ -165,6 +165,7 @@ function chipsInput(overrides: Partial<ForvalChipsInput> = {}): ForvalChipsInput
     receivedDate: '',
     deliveryDate: '',
     yourReference: '',
+    invoiceMarking: '',
     paymentLink: null,
     oreRounding: true,
     dims: null,
@@ -221,6 +222,7 @@ describe('deriveForvalChips', () => {
         currency: 'EUR',
         deliveryDate: '2026-08-20',
         yourReference: 'Anna',
+        invoiceMarking: 'KST 4711',
         paymentLink: 'manual',
         oreRounding: false,
         dims: 'KS01 · P001',
@@ -230,6 +232,7 @@ describe('deriveForvalChips', () => {
     expect(chips).toContainEqual({ kind: 'currency', currency: 'EUR' })
     expect(chips).toContainEqual({ kind: 'delivery', date: '2026-08-20' })
     expect(chips).toContainEqual({ kind: 'your_reference', reference: 'Anna' })
+    expect(chips).toContainEqual({ kind: 'invoice_marking', marking: 'KST 4711' })
     expect(chips).toContainEqual({ kind: 'payment_link', mode: 'manual' })
     expect(chips).toContainEqual({ kind: 'dims', dims: 'KS01 · P001' })
     // ore_off is SEK-only: an EUR invoice has no öresavrundning to disable.
@@ -249,6 +252,7 @@ describe('deriveForvalChips', () => {
         receivedDate: '2026-08-15',
         documentType: 'proforma',
         yourReference: 'x',
+        invoiceMarking: 'x',
         paymentLink: 'auto',
         oreRounding: false,
         dims: 'KS01',
