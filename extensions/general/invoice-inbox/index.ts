@@ -801,7 +801,7 @@ export const invoiceInboxExtension: Extension = {
 
         const { data: item } = await ctx.supabase
           .from('invoice_inbox_items')
-          .select('id, extracted_data, created_supplier_invoice_id')
+          .select('id, extracted_data, created_supplier_invoice_id, updated_at')
           .eq('id', id)
           .eq('company_id', ctx.companyId)
           .maybeSingle()
@@ -836,17 +836,37 @@ export const invoiceInboxExtension: Extension = {
           vatBreakdown: current.vatBreakdown ?? [],
           confidence: current.confidence ?? 0,
         }
+        // A human touching TOTALT settles it: the value stops being a
+        // promoted prominent amount (totalSource 'prominent', fallback-grade
+        // in matching) and becomes a user-verified total at full weight.
+        if (body.totals && 'total' in body.totals) {
+          merged.totalSource = null
+        }
 
+        // Optimistic concurrency on the row's trigger-maintained updated_at:
+        // this handler is read-merge-write over the whole jsonb blob, so a
+        // write racing another autosave would silently restore the loser's
+        // stale copy of every field it did not touch: including a
+        // totalSource: 'prominent' stamp a concurrent TOTALT edit had just
+        // cleared. Zero rows updated means the row moved under us; the client
+        // gets a 409 and its next debounced save re-reads and re-applies.
         const { data: updated, error: updateError } = await ctx.supabase
           .from('invoice_inbox_items')
           .update({ extracted_data: merged as unknown as Record<string, unknown> })
           .eq('id', id)
           .eq('company_id', ctx.companyId)
+          .eq('updated_at', (item as { updated_at: string }).updated_at)
           .select('id, extracted_data')
-          .single()
+          .maybeSingle()
 
         if (updateError) {
           return NextResponse.json({ error: updateError.message }, { status: 500 })
+        }
+        if (!updated) {
+          return NextResponse.json(
+            { error: 'Posten ändrades samtidigt av någon annan. Försök igen.' },
+            { status: 409 }
+          )
         }
 
         return NextResponse.json({ data: updated })

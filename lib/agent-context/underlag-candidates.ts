@@ -111,7 +111,13 @@ function extractionSignals(extracted: InvoiceExtractionResult | null | undefined
   return {
     supplier: extracted?.supplier?.name?.trim() || null,
     date: extracted?.invoice?.invoiceDate ?? null,
-    total: extracted?.totals?.total ?? null,
+    // A total promoted from the document's single prominent amount
+    // (totalSource 'prominent') exists for the editable TOTALT field, not as
+    // invoice-grade evidence: score it through the fallback path below (the
+    // prominentAmounts list still carries it), which keeps the discount, the
+    // date guard, and the hunt's amountSource exclusion intact. A user-edited
+    // total has the stamp cleared and counts at full weight.
+    total: extracted?.totalSource === 'prominent' ? null : (extracted?.totals?.total ?? null),
     vat: extracted?.totals?.vatAmount ?? null,
     currency: (extracted?.invoice?.currency || 'SEK').toUpperCase(),
     // Non-invoice documents (bankintyg, avtal) carry no total but often show
