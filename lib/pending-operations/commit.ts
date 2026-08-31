@@ -112,7 +112,7 @@ import {
 import { PartialCommitError } from '@/lib/pending-operations/errors'
 import { getEmailService } from '@/lib/email/service'
 import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
-import { hasCapability, CAPABILITY_BLOCKED_MESSAGE_SV } from '@/lib/entitlements/has-capability'
+import { hasCapability, capabilityBlockedError } from '@/lib/entitlements/has-capability'
 import { PAID_OPERATION_CAPABILITY_MAP } from '@/lib/entitlements/keys'
 import {
   generateInvoiceEmailHtml,
@@ -6643,7 +6643,9 @@ async function commitPendingOperationInner(
   if (requiredCapability && !(await hasCapability(supabase, companyId, requiredCapability))) {
     return {
       status: 'failed',
-      error: CAPABILITY_BLOCKED_MESSAGE_SV,
+      // Via capabilityBlockedError so the self-host variant applies (the
+      // hosted constant upsells a subscription a self-host cannot buy).
+      error: capabilityBlockedError(requiredCapability).message_sv,
       http_status: 403,
       code: 'capability_blocked',
       operation_status: 'pending',
