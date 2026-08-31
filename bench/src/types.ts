@@ -170,6 +170,8 @@ export interface RunRecord {
   taskId: string
   model: string
   provider: string
+  // Repeat index for reliability runs (pass^k); absent means attempt 0.
+  attempt?: number
   startedAt: string
   durationMs: number
   turns: number

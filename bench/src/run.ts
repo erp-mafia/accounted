@@ -30,6 +30,8 @@ interface Args {
   limit: number | null
   concurrency: number
   taskFilter: string | null
+  // Repeat each task this many times (reliability / pass^k runs).
+  runs: number
 }
 
 function parseArgs(): Args {
@@ -51,6 +53,7 @@ function parseArgs(): Args {
     limit: limitRaw ? Number(limitRaw) : null,
     concurrency: Number(get('--concurrency') ?? '4'),
     taskFilter: get('--task'),
+    runs: Math.max(1, Number(get('--runs') ?? '1')),
   }
 }
 
@@ -109,12 +112,18 @@ async function runSuite(
     return []
   }
 
-  const records = await mapWithConcurrency(tasks, concurrency, async (task) => {
+  const work: { task: Task; attempt: number }[] = []
+  for (const task of tasks) {
+    for (let attempt = 0; attempt < args.runs; attempt++) work.push({ task, attempt })
+  }
+  const records = await mapWithConcurrency(work, concurrency, async ({ task, attempt }) => {
     try {
       const rec = await runner(spec, task as never)
+      if (attempt > 0) rec.attempt = attempt
       const mark = rec.pass ? 'PASS' : 'fail'
+      const att = args.runs > 1 ? ` a${attempt}` : ''
       console.log(
-        `  [${suite}] ${task.id} ${spec.id}: ${mark} ` +
+        `  [${suite}] ${task.id}${att} ${spec.id}: ${mark} ` +
           `($${rec.usage.costUsd.toFixed(4)}, ${rec.turns}t, ${(rec.durationMs / 1000).toFixed(1)}s)`,
       )
       return rec
@@ -124,6 +133,7 @@ async function runSuite(
       return {
         benchVersion: 'v1',
         suite,
+        attempt: attempt > 0 ? attempt : undefined,
         taskId: task.id,
         model: spec.id,
         provider: spec.provider,

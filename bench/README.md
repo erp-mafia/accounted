@@ -115,6 +115,23 @@ on top; its accuracy is tracked separately by the backtest scripts).
   correct; reasoning: exact answer; extraction: all gold fields correct;
   ledger-agent: all end-state assertions hold). Reported with a Wilson score
   interval at z=1, matching how Ramp reports spread.
+- **Automation coverage (booking).** The deployment question collapsed into
+  one number: if bookings are auto-committed only when the model's stated
+  confidence clears a threshold, what share of the work is automated while
+  precision stays at or above the target (reported at 95% and 99%)? A model
+  with uninformative confidence scores 0% regardless of accuracy.
+- **Reliability (ledger-agent), pass^k.** Each agent task runs k=3 times;
+  reliability is the share of tasks solved on EVERY attempt. An agent that is
+  rerun monthly is only as good as its worst month.
+- **Verdicts.** Each model receives a revisor-style opinion on
+  confidence-gated unattended booking, from published criteria:
+  **tillstyrks** requires booking >= 85%, coverage@99% >= 50%, reasoning
+  >= 80%, and a clean ledger-agent record; **tillstyrks med reservation**
+  requires booking >= 75%, reasoning >= 60%, and a usable confidence gate
+  (coverage@99% >= 20% or coverage@95% >= 50%); everything else is
+  **avstyrks**. Criteria live in `src/aggregate.ts` and are deliberately
+  retunable; the point is that the benchmark states an opinion and shows its
+  arithmetic.
 - **Secondary metrics:** booking account-accuracy and VAT-accuracy separately;
   extraction per-field accuracy; ledger-agent tool errors and invariant
   refusals; turns; wall-clock.
@@ -190,10 +207,11 @@ this benchmark exists to measure.
   ranked, that is a bias surface the private prod-derived split does not
   share (its labels come from human bookings). Corrections via PR or issue
   are welcome and versioned.
-- v1 model coverage runs on the Bedrock EU deployment (Anthropic models).
-  OpenRouter adapters for GPT/Gemini/Llama/Qwen/DeepSeek are implemented and
-  registry slots exist, pending an API key; their slugs must be verified at
-  enable time.
+- Model coverage: Anthropic tiers on the Bedrock EU deployment; GPT, Gemini,
+  Grok and open-weights models (DeepSeek, Qwen, Llama, Kimi, GLM, GPT-OSS)
+  via OpenRouter, slugs verified against the live catalog at enable time.
+  OpenRouter throttles new accounts to 20 requests/minute per model; the
+  adapter enforces a per-model gate plus 429 backoff.
 - The booking suite's single gold account is a convention choice; Swedish
   practice sometimes admits several defensible accounts. We mitigate with
   explicit acceptable-lists, and report exact-gold agreement separately.

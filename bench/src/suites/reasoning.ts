@@ -58,7 +58,7 @@ export async function runReasoningTask(
   assertDataClassAllowed(task, spec)
   const startedAt = nowIso()
   const t0 = Date.now()
-  const call = await singleJsonCall(spec, SYSTEM, userPrompt(task), 1500)
+  const call = await singleJsonCall(spec, SYSTEM, userPrompt(task), 8000)
 
   const answer = call.parsed?.answer
   const confidenceRaw = call.parsed?.confidence

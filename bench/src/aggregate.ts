@@ -41,11 +41,48 @@ function loadAllRecords(): RunRecord[] {
 function latestPerKey(records: RunRecord[]): RunRecord[] {
   const byKey = new Map<string, RunRecord>()
   for (const rec of records) {
-    const key = `${rec.suite}::${rec.taskId}::${rec.model}`
+    const key = `${rec.suite}::${rec.taskId}::${rec.model}::${rec.attempt ?? 0}`
     const existing = byKey.get(key)
     if (!existing || rec.startedAt > existing.startedAt) byKey.set(key, rec)
   }
   return [...byKey.values()]
+}
+
+// Selective automation: if bookings are auto-committed only when the model's
+// stated confidence clears a threshold, what share of the work is automated
+// while keeping precision at or above the target? This is the deployment
+// question (auto/suggest/review routing) collapsed into one number.
+function coverageAtPrecision(
+  samples: { confidence: number; correct: boolean }[],
+  target: number,
+): number | null {
+  if (samples.length < 10) return null
+  let best = 0
+  const thresholds = [...new Set(samples.map((s) => s.confidence))].sort()
+  for (const t of thresholds) {
+    const sel = samples.filter((s) => s.confidence >= t)
+    if (sel.length === 0) continue
+    const precision = sel.filter((s) => s.correct).length / sel.length
+    if (precision >= target) best = Math.max(best, sel.length / samples.length)
+  }
+  return Math.round(best * 1000) / 1000
+}
+
+// Reliability: among tasks attempted more than once, the share where EVERY
+// attempt passed (the pass^k stance: an agent you rerun monthly is only as
+// good as its worst month).
+function reliability(records: RunRecord[]): { value: number; k: number } | null {
+  const byTask = new Map<string, RunRecord[]>()
+  for (const r of records) {
+    const list = byTask.get(r.taskId) ?? []
+    list.push(r)
+    byTask.set(r.taskId, list)
+  }
+  const multi = [...byTask.values()].filter((l) => l.length > 1)
+  if (multi.length === 0) return null
+  const allPass = multi.filter((l) => l.every((r) => r.pass)).length
+  const k = Math.max(...multi.map((l) => l.length))
+  return { value: Math.round((allPass / multi.length) * 1000) / 1000, k }
 }
 
 function wilson(x: number, n: number, z = 1): { p: number; lo: number; hi: number } {
@@ -129,6 +166,18 @@ function suiteExtras(
       accountAccuracy: round3(accountAcc),
       vatAccuracy: round3(vatAcc),
       ece: ece(calibration),
+      coverage95: coverageAtPrecision(
+        records
+          .filter((r) => typeof r.score.confidence === 'number')
+          .map((r) => ({ confidence: r.score.confidence as number, correct: r.pass })),
+        0.95,
+      ),
+      coverage99: coverageAtPrecision(
+        records
+          .filter((r) => typeof r.score.confidence === 'number')
+          .map((r) => ({ confidence: r.score.confidence as number, correct: r.pass })),
+        0.99,
+      ),
       parseFailures: records.filter((r) => r.score.parseFailed === true).length,
       segments: { underlag: seg('underlag'), bank_only: seg('bank_only') },
     }
@@ -149,6 +198,7 @@ function suiteExtras(
     return { fieldAccuracy: round3(fieldAcc) }
   }
   if (suite === 'ledger-agent') {
+    const rel = reliability(records)
     return {
       totalToolCalls: records.reduce((s, r) => s + ((r.score.toolCalls as number) ?? 0), 0),
       totalToolErrors: records.reduce((s, r) => s + ((r.score.toolErrors as number) ?? 0), 0),
@@ -156,6 +206,8 @@ function suiteExtras(
         (s, r) => s + ((r.score.invariantRefusals as number) ?? 0),
         0,
       ),
+      reliability: rel?.value ?? null,
+      reliabilityK: rel?.k ?? null,
     }
   }
   return {}
@@ -189,12 +241,16 @@ function main() {
     // Per-task outcome matrix: which model passed which task.
     const matrix: Record<string, unknown>[] = []
     for (const task of suiteTasks.get(suite) ?? []) {
-      const results: Record<string, boolean | null> = {}
+      // Fraction of attempts passed (1 = always, 0 = never, between = flaky).
+      const results: Record<string, number | null> = {}
       for (const model of MODELS.filter((m) => m.enabled)) {
-        const rec = latest.find(
+        const recs = latest.filter(
           (r) => r.suite === suite && r.taskId === task.id && r.model === model.id,
         )
-        results[model.id] = rec ? rec.pass : null
+        results[model.id] =
+          recs.length === 0
+            ? null
+            : Math.round((recs.filter((r) => r.pass).length / recs.length) * 100) / 100
       }
       matrix.push({
         id: task.id,
@@ -243,6 +299,40 @@ function main() {
     rows.sort((a, b) => b.passRate - a.passRate)
     ;(leaderboard.suites as Record<string, unknown>)[suite] = rows
   }
+
+  // Verdict per model, revisor-style, from published criteria (README).
+  // tillstyrks: fit for confidence-gated unattended booking today.
+  // reservation: usable with human review of everything below the gate.
+  // avstyrks: should not book unattended in any configuration.
+  const verdicts: Record<string, unknown> = {}
+  const suitesObj = leaderboard.suites as Record<string, SuiteRow[]>
+  const allModelIds = new Set(
+    Object.values(suitesObj).flatMap((rows) => rows.map((r) => r.model)),
+  )
+  for (const id of allModelIds) {
+    const booking = suitesObj['booking']?.find((r) => r.model === id)
+    const reasoning = suitesObj['reasoning']?.find((r) => r.model === id)
+    const agent = suitesObj['ledger-agent']?.find((r) => r.model === id)
+    const cov99 = (booking?.extras.coverage99 as number | null) ?? 0
+    const cov95 = (booking?.extras.coverage95 as number | null) ?? 0
+    const bp = booking?.passRate ?? 0
+    const rp = reasoning?.passRate ?? 0
+    const agentClean = (agent?.passRate ?? 0) >= 0.999
+    let verdict: 'tillstyrks' | 'tillstyrks_med_reservation' | 'avstyrks' = 'avstyrks'
+    if (bp >= 0.85 && cov99 >= 0.5 && rp >= 0.8 && agentClean) verdict = 'tillstyrks'
+    else if (bp >= 0.75 && rp >= 0.6 && (cov99 >= 0.2 || cov95 >= 0.5)) {
+      verdict = 'tillstyrks_med_reservation'
+    }
+    verdicts[id] = {
+      verdict,
+      coverage99: cov99,
+      coverage95: cov95,
+      booking: booking?.passRate ?? null,
+      reasoning: reasoning?.passRate ?? null,
+      agentClean,
+    }
+  }
+  leaderboard.verdicts = verdicts
 
   const out = path.join(BENCH_ROOT, 'results', 'leaderboard.json')
   fs.writeFileSync(out, JSON.stringify(leaderboard, null, 2) + '\n')

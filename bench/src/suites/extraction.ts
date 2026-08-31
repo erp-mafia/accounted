@@ -153,7 +153,7 @@ export async function runExtractionTask(
       { type: 'image_png_base64', data: image },
       { type: 'text', text: 'Extract the fields from this document.' },
     ],
-    4000,
+    8000,
   )
 
   const grades = gradeExtraction(task.gold, call.parsed)

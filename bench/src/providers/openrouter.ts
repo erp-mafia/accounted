@@ -12,6 +12,21 @@ import type {
 
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1'
 
+// OpenRouter throttles new accounts to 20 requests/minute PER MODEL. A
+// per-model gate spaces request starts >= 3.2s apart (about 18 rpm), and a
+// 429 still triggers exponential backoff below. Different models proceed in
+// parallel: the cap is per model, not per account-wide.
+const MIN_INTERVAL_MS = Number(process.env.OPENROUTER_MIN_INTERVAL_MS ?? '3200')
+const nextSlot = new Map<string, number>()
+
+async function rateGate(model: string): Promise<void> {
+  const now = Date.now()
+  const slot = Math.max(nextSlot.get(model) ?? 0, now)
+  nextSlot.set(model, slot + MIN_INTERVAL_MS)
+  const wait = slot - now
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait))
+}
+
 interface OpenAiMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string | unknown[] | null
@@ -66,10 +81,12 @@ export async function openrouterChat(spec: ModelSpec, req: ChatRequest): Promise
     throw new Error('OPENROUTER_API_KEY is not set; OpenRouter models cannot run yet')
   }
 
+  // Vendor-default sampling (no temperature): several current reasoning
+  // models reject sampling parameters, and the Anthropic adapter sends none
+  // either, so omitting them everywhere is the uniform policy.
   const body: Record<string, unknown> = {
     model: spec.apiModel,
     max_tokens: req.maxTokens,
-    temperature: 0,
     usage: { include: true },
     messages: toOpenAiMessages(req.system, req.messages),
   }
@@ -80,17 +97,31 @@ export async function openrouterChat(spec: ModelSpec, req: ChatRequest): Promise
     }))
   }
 
-  const res = await fetch(`${BASE_URL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  })
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '')
-    throw new Error(`OpenRouter ${res.status}: ${detail.slice(0, 500)}`)
+  let res: Response | null = null
+  for (let tryNo = 0; tryNo < 7; tryNo++) {
+    await rateGate(spec.apiModel)
+    res = await fetch(`${BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://github.com/erp-mafia/accounted',
+        'X-Title': 'Accounted Ledger-Bench',
+      },
+      body: JSON.stringify(body),
+    })
+    if (res.status === 429 || res.status >= 500) {
+      const retryAfter = Number(res.headers.get('retry-after') ?? '0')
+      const backoff = Math.max(retryAfter * 1000, Math.min(60_000, 8000 * 2 ** tryNo))
+      await res.text().catch(() => '')
+      await new Promise((r) => setTimeout(r, backoff))
+      continue
+    }
+    break
+  }
+  if (!res || !res.ok) {
+    const detail = res ? await res.text().catch(() => '') : ''
+    throw new Error(`OpenRouter ${res?.status}: ${detail.slice(0, 500)}`)
   }
   const json = (await res.json()) as {
     choices: {

@@ -68,7 +68,7 @@ export async function runBookingTask(
   assertDataClassAllowed(task, spec)
   const startedAt = nowIso()
   const t0 = Date.now()
-  const call = await singleJsonCall(spec, systemPrompt(), userPrompt(task), 2000)
+  const call = await singleJsonCall(spec, systemPrompt(), userPrompt(task), 8000)
 
   const konto = typeof call.parsed?.konto === 'string' ? call.parsed.konto.trim() : null
   const moms = typeof call.parsed?.moms === 'string' ? call.parsed.moms.trim() : null

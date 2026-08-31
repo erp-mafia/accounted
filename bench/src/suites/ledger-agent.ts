@@ -55,7 +55,7 @@ export async function runLedgerAgentTask(
         system: SYSTEM,
         messages,
         tools: LEDGER_TOOLS,
-        maxTokens: 4000,
+        maxTokens: 8000,
       })
       turns++
       inputTokens += response.usage.inputTokens
