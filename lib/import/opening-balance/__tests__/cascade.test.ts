@@ -365,6 +365,68 @@ describe('cascadeOpeningBalanceCorrection', () => {
     expect(audit.length).toBeGreaterThan(0)
   })
 
+  it('inline mode: appends adjustment lines in the same verifikat, no storno, no line fetch', async () => {
+    enqueue({ data: [periodRow()] }) // subsequent periods
+    enqueue({ count: 0 }) // year-end check
+    enqueue({ data: { log_id: 'log-1', struck_count: 0, added_count: 2 } }) // inline RPC
+
+    const result = await cascadeOpeningBalanceCorrection(supabase, 'company-1', 'user-1', {
+      basePeriodStart: '2019-01-01',
+      deltas: DELTAS,
+      lockDate: null,
+      mode: 'inline',
+      log,
+    })
+
+    expect(result.corrected).toEqual([
+      {
+        fiscal_period_id: 'period-2020',
+        period_name: '2020',
+        journal_entry_id: 'ib-2020',
+        reversed_entry_id: null,
+      },
+    ])
+    expect(result.skipped).toEqual([])
+
+    expect(mockSupabase.rpc).toHaveBeenCalledWith(
+      'correct_entry_lines_inline',
+      expect.objectContaining({
+        p_company_id: 'company-1',
+        p_entry_id: 'ib-2020',
+        p_strike_line_ids: [],
+        p_new_lines: [
+          expect.objectContaining({ account_number: '1630', debit_amount: 10000, line_description: 'IB-rättelse 1630' }),
+          expect.objectContaining({ account_number: '1930', credit_amount: 10000, line_description: 'IB-rättelse 1930' }),
+        ],
+        p_user_id: 'user-1',
+      }),
+    )
+    expect(mockReplaceOpeningBalanceEntry).not.toHaveBeenCalled()
+    expect(mockFetchEntryLines).not.toHaveBeenCalled()
+  })
+
+  it('inline mode: a refused rättelse skips the year and is audited', async () => {
+    enqueue({ data: [periodRow()] })
+    enqueue({ count: 0 }) // year-end check
+    enqueue({ data: null, error: { message: 'Perioden är stängd eller låst: använd rättelseverifikat (storno).' } })
+
+    const result = await cascadeOpeningBalanceCorrection(supabase, 'company-1', 'user-1', {
+      basePeriodStart: '2019-01-01',
+      deltas: DELTAS,
+      lockDate: null,
+      mode: 'inline',
+      log,
+    })
+
+    expect(result.corrected).toEqual([])
+    expect(result.skipped).toEqual([
+      { fiscal_period_id: 'period-2020', period_name: '2020', reason: 'correction_failed' },
+    ])
+
+    const audit = sink.filter((r) => String(r.msg).includes('cascade correction failed'))
+    expect(audit.length).toBeGreaterThan(0)
+  })
+
   it('skips a period whose shifted lines no longer validate', async () => {
     // The period's IB is a single line pair that the delta exactly cancels,
     // leaving zero-amount adjustments only... construct instead the <2 lines

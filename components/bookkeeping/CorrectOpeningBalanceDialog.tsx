@@ -12,7 +12,6 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { AlertTriangle } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -150,15 +149,66 @@ export default function CorrectOpeningBalanceDialog({
 
     setIsSubmitting(true)
     try {
-      const lines = state.rows
-        .filter((r) => r.debit_amount > 0 || r.credit_amount > 0)
-        .map((r) => ({
-          account_number: r.account_number,
-          debit_amount: r.debit_amount,
-          credit_amount: r.credit_amount,
-        }))
+      // Diff the edited rows against the booked lines: only changed rows are
+      // struck and re-added (inline rättelse in the SAME verifikat, no
+      // storno). Untouched rows keep their ids, descriptions and dimensions.
+      const originalLines = ((entry.lines || []) as JournalEntryLine[])
+      const rowById = new Map(state.rows.map((r) => [r.id, r]))
 
-      const res = await fetch('/api/import/opening-balance/correct', {
+      const strike_line_ids: string[] = []
+      const new_lines: Array<{
+        account_number: string
+        debit_amount: number
+        credit_amount: number
+        line_description?: string
+        dimensions?: Record<string, string>
+      }> = []
+
+      for (const orig of originalLines) {
+        const row = orig.id ? rowById.get(orig.id) : undefined
+        if (!row || (row.debit_amount <= 0 && row.credit_amount <= 0)) {
+          // Row removed or zeroed out by the user: strike without replacement.
+          if (orig.id) strike_line_ids.push(orig.id)
+          continue
+        }
+        const changed =
+          row.account_number !== orig.account_number ||
+          row.debit_amount !== (Number(orig.debit_amount) || 0) ||
+          row.credit_amount !== (Number(orig.credit_amount) || 0)
+        if (changed && orig.id) {
+          strike_line_ids.push(orig.id)
+          new_lines.push({
+            account_number: row.account_number,
+            debit_amount: row.debit_amount,
+            credit_amount: row.credit_amount,
+            line_description:
+              row.account_number === orig.account_number
+                ? orig.line_description ?? undefined
+                : `IB ${row.account_number}`,
+            dimensions: orig.dimensions,
+          })
+        }
+      }
+
+      const originalIds = new Set(originalLines.map((l) => l.id))
+      for (const row of state.rows) {
+        if (originalIds.has(row.id)) continue
+        if (row.debit_amount <= 0 && row.credit_amount <= 0) continue
+        new_lines.push({
+          account_number: row.account_number,
+          debit_amount: row.debit_amount,
+          credit_amount: row.credit_amount,
+          line_description: `IB ${row.account_number}`,
+        })
+      }
+
+      if (strike_line_ids.length === 0 && new_lines.length === 0) {
+        toast({ title: 'Inga ändringar att spara' })
+        setIsSubmitting(false)
+        return
+      }
+
+      const res = await fetch('/api/import/opening-balance/correct-inline', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // cascade is ALWAYS sent (default on): if the reference cache has not
@@ -167,7 +217,8 @@ export default function CorrectOpeningBalanceDialog({
         // returns an empty cascade result when no later period exists.
         body: JSON.stringify({
           fiscal_period_id: entry.fiscal_period_id,
-          lines,
+          strike_line_ids,
+          new_lines,
           cascade,
         }),
       })
@@ -185,7 +236,7 @@ export default function CorrectOpeningBalanceDialog({
       }
 
       const cascadeSummary = (result?.data?.cascade ?? null) as CascadeSummary | null
-      let description = 'Den gamla IB-verifikationen stornades och en ny bokfördes.'
+      let description = 'Beloppen uppdaterades direkt i verifikationen. Ingen ny verifikation skapades.'
       if (cascadeSummary) {
         const done = cascadeSummary.corrected.length
         // Blocked (locked/closed/bokslut) and failed skips are different
@@ -233,7 +284,7 @@ export default function CorrectOpeningBalanceDialog({
     } finally {
       setIsSubmitting(false)
     }
-  }, [state, isSubmitting, entry.fiscal_period_id, cascade, toast, onOpenChange, onCorrected])
+  }, [state, isSubmitting, entry.fiscal_period_id, entry.lines, cascade, toast, onOpenChange, onCorrected])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -241,18 +292,17 @@ export default function CorrectOpeningBalanceDialog({
         <DialogHeader>
           <DialogTitle>Korrigera ingående balanser</DialogTitle>
           <DialogDescription>
-            Ändra beloppen nedan och spara. Den befintliga IB-verifikationen (
-            <span data-ph-mask="">{formatVoucher(entry)}</span>) makuleras och en ny bokförs med
-            de korrigerade beloppen.
+            Ändra beloppen nedan och spara. Verifikationen (
+            <span data-ph-mask="">{formatVoucher(entry)}</span>) uppdateras direkt: ingen ny
+            verifikation skapas.
           </DialogDescription>
         </DialogHeader>
 
-        {/* Storno explanation: a booked verifikat can't be edited in place */}
+        {/* Inline rättelse (BFL 5 kap 5 §): edited in place, original logged */}
         <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
-          <AlertTriangle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
-          <p className="text-sm text-warning">
-            En bokförd verifikation kan inte ändras direkt (Bokföringslagen). När du sparar stornas
-            den gamla IB-verifikationen och en ny bokförs: båda sparas som en spårbar rättelse.
+          <p className="text-sm text-muted-foreground">
+            Ändringen sparas som en spårbar rättelse i samma verifikation (Bokföringslagen 5 kap
+            5 §): de ursprungliga raderna bevaras i rättelseloggen.
           </p>
         </div>
 
@@ -302,10 +352,10 @@ export default function CorrectOpeningBalanceDialog({
                 Uppdatera även senare räkenskapsår ({laterPeriodsWithIB.length})
               </span>
               <span className="block text-sm text-muted-foreground">
-                Samma ändring bokförs i senare års ingående balanser så att saldona stämmer
-                framåt. År som är låsta eller har bokslut hoppas över. Avser rättelsen ett
-                tidigare års resultat (t.ex. konto 2099) kan en omföring till balanserat
-                resultat fortfarande behöva bokföras som vanligt.
+                Samma ändring förs in i senare års ingående balanser så att saldona stämmer
+                framåt, utan nya verifikat. År som är låsta eller har bokslut hoppas över.
+                Avser rättelsen ett tidigare års resultat (t.ex. konto 2099) kan en omföring
+                till balanserat resultat fortfarande behöva bokföras som vanligt.
               </span>
             </span>
           </label>

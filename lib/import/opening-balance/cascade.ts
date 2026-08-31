@@ -43,7 +43,8 @@ export interface CascadeCorrectedPeriod {
   fiscal_period_id: string
   period_name: string | null
   journal_entry_id: string
-  reversed_entry_id: string
+  /** Storno mode: the replaced entry. Inline mode: null (same verifikat edited in place). */
+  reversed_entry_id: string | null
 }
 
 export type CascadeSkipReason =
@@ -116,7 +117,12 @@ export function buildCascadedLines(
       dimensions: l.dimensions ?? undefined,
     }))
 
-  const adjustments: CreateJournalEntryLineInput[] = [...deltas.entries()]
+  return [...kept, ...buildAdjustmentLines(deltas)]
+}
+
+/** One labelled adjustment line per delta account, sorted; balances to zero. */
+export function buildAdjustmentLines(deltas: AccountDeltas): CreateJournalEntryLineInput[] {
+  return [...deltas.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([account_number, delta]) => ({
       account_number,
@@ -124,8 +130,6 @@ export function buildCascadedLines(
       credit_amount: delta < 0 ? roundOre(-delta) : 0,
       line_description: `IB-rättelse ${account_number}`,
     }))
-
-  return [...kept, ...adjustments]
 }
 
 /** Fetch an entry's lines with the fields a cascaded rebook must preserve. */
@@ -180,6 +184,15 @@ export interface CascadeOptions {
   deltas: AccountDeltas
   /** company_settings.bookkeeping_locked_through, already fetched by the caller. */
   lockDate: string | null
+  /**
+   * How each later year's IB is corrected:
+   * - 'storno' (default): atomic replaceOpeningBalanceEntry (storno + rebook
+   *   + pointer swap), used by the storno-based /correct route.
+   * - 'inline': append the labelled adjustment lines inside the SAME
+   *   verifikat via correct_entry_lines_inline (BFL 5 kap 5 § track 2): no
+   *   new verifikat at all. Used by the /correct-inline route.
+   */
+  mode?: 'storno' | 'inline'
   log: Logger
 }
 
@@ -196,6 +209,7 @@ export async function cascadeOpeningBalanceCorrection(
   options: CascadeOptions,
 ): Promise<CascadeResult> {
   const { basePeriodStart, deltas, lockDate, log } = options
+  const mode = options.mode ?? 'storno'
   const result: CascadeResult = { corrected: [], skipped: [] }
 
   if (deltas.size === 0) return result
@@ -282,6 +296,40 @@ export async function cascadeOpeningBalanceCorrection(
     }
 
     const oldEntryId = period.opening_balance_entry_id
+
+    if (mode === 'inline') {
+      // Append the labelled adjustment lines inside the SAME verifikat: no
+      // storno, no new verifikat. The RPC transaction enforces the whole
+      // envelope (posted, current linked IB, no bokslut, class 1-2, balance
+      // to the öre, rättelse log) and rolls the period back on any failure.
+      const { error: inlineError } = await supabase.rpc('correct_entry_lines_inline', {
+        p_company_id: companyId,
+        p_entry_id: oldEntryId,
+        p_strike_line_ids: [],
+        p_new_lines: buildAdjustmentLines(deltas).map((l) => ({
+          account_number: l.account_number,
+          debit_amount: l.debit_amount,
+          credit_amount: l.credit_amount,
+          line_description: l.line_description ?? null,
+          dimensions: {},
+        })),
+        p_user_id: userId,
+      })
+
+      if (inlineError) {
+        auditFailure({ phase: 'inline_rattelse_failed', reason: inlineError.message })
+        skip('correction_failed')
+        continue
+      }
+
+      result.corrected.push({
+        fiscal_period_id: period.id,
+        period_name: period.name,
+        journal_entry_id: oldEntryId,
+        reversed_entry_id: null,
+      })
+      continue
+    }
 
     let lines: CreateJournalEntryLineInput[]
     try {

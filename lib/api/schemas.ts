@@ -2676,6 +2676,22 @@ export const OpeningBalanceCorrectSchema = OpeningBalanceExecuteSchema.extend({
   cascade: z.boolean().optional(),
 })
 
+/**
+ * Inline (no-storno) IB correction: strike changed lines and add replacements
+ * inside the SAME verifikat, BFL 5 kap 5 § track 2. Only for open, unlocked
+ * years; the correct_entry_lines_inline RPC enforces the full envelope.
+ */
+export const OpeningBalanceCorrectInlineSchema = z
+  .object({
+    fiscal_period_id: uuid,
+    strike_line_ids: z.array(uuid).max(200).default([]),
+    new_lines: z.array(InlineRattelseLineSchema).max(100).default([]),
+    cascade: z.boolean().optional(),
+  })
+  .refine((body) => body.strike_line_ids.length > 0 || body.new_lines.length > 0, {
+    message: 'Rättelsen måste stryka eller lägga till minst en rad',
+  })
+
 // ============================================================
 // Register import schemas (customers, suppliers)
 // ============================================================
