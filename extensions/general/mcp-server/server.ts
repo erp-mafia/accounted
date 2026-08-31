@@ -266,7 +266,7 @@ import {
 } from '@/lib/core/documents/document-service'
 import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
 import { createHash } from 'node:crypto'
-import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema, AgentExtractionSchema } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema, AgentExtractionSchema, fetchOwnCompanyIdentity } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 import { mirrorExtractionToDocument } from '@/extensions/general/invoice-inbox/lib/mirror-extraction'
 // Skatteverket filing tools (PR5). Cross-extension lib import, same sanctioned
 // pattern as invoice-inbox above: the CI guard only checks lib/, app/api/,
@@ -602,7 +602,12 @@ async function createDocumentInboxItem(
     if (existing) return existing
   }
 
-  const extraction = await extractInvoiceFields({ buffer, mimeType, fileName })
+  const extraction = await extractInvoiceFields({
+    buffer,
+    mimeType,
+    fileName,
+    ownCompany: await fetchOwnCompanyIdentity(supabase, companyId),
+  })
   const { data: extracted } = extraction
   // uploadDocument()/completePendingDocumentUpload() were told this inbox
   // item owns extraction, so the document-extraction extension yielded;

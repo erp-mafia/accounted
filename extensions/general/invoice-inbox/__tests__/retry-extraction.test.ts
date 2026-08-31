@@ -9,6 +9,7 @@ import type { ExtensionContext } from '@/lib/extensions/types'
 
 vi.mock('@/extensions/general/invoice-inbox/lib/extract-invoice-fields', () => ({
   extractInvoiceFields: vi.fn(),
+  fetchOwnCompanyIdentity: vi.fn().mockResolvedValue({ orgNumber: null, name: null }),
 }))
 
 vi.mock('@/lib/rate-limits/inbox', () => ({
