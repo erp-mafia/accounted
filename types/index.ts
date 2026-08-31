@@ -2910,7 +2910,7 @@ export interface NotificationLog {
   reference_id: string
   days_before: number
   sent_at: string
-  delivery_status: 'sent' | 'delivered' | 'failed'
+  delivery_status: 'pending' | 'sent' | 'delivered' | 'failed'
 }
 
 // ============================================================
