@@ -136,7 +136,7 @@ describe('commitPendingOperation: unattended commit limit', () => {
     expect(result.code).not.toBe('UNATTENDED_COMMIT_LIMIT_EXCEEDED')
   })
 
-  it('lets an unpriceable operation type through rather than blocking it', async () => {
+  it('lets a genuinely unpriceable operation type through rather than blocking it', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null, error: null })
 
@@ -144,14 +144,37 @@ describe('commitPendingOperation: unattended commit limit', () => {
       supabase as never,
       'user-1',
       'company-1',
+      // pair_count is a count, not kronor. Nothing here can be compared to a
+      // ceiling, so the op goes through.
       makePendingOp({
-        operation_type: 'match_batch_allocate',
-        preview_data: { amount: 999999 },
+        operation_type: 'reconciliation_match',
+        preview_data: { pair_count: 9 },
       }),
       { actor: { ...apiKeyActor, unattendedCommitLimit: 100 } },
     )
 
     expect(result.code).not.toBe('UNATTENDED_COMMIT_LIMIT_EXCEEDED')
+  })
+
+  it('blocks the settlement and batch paths that used to fail open', async () => {
+    for (const [operation_type, preview_data] of [
+      ['link_transaction_journal_entry', { transaction_amount: 250000 }],
+      ['bulk_book_transactions', { tx_sum: 250000 }],
+      ['link_supplier_invoice_voucher', { payment_amount: 250000 }],
+      ['match_batch_allocate', { total_allocated: 250000 }],
+      ['mark_invoice_paid', { total: 250000 }],
+    ] as const) {
+      const { supabase } = createQueuedMockSupabase()
+      const result = await commitPendingOperation(
+        supabase as never,
+        'user-1',
+        'company-1',
+        makePendingOp({ operation_type, preview_data }),
+        { actor: { ...apiKeyActor, unattendedCommitLimit: 10000 } },
+      )
+      expect(result.code).toBe('UNATTENDED_COMMIT_LIMIT_EXCEEDED')
+      expect(result.operation_status).toBe('pending')
+    }
   })
 
   it('also covers categorize_transaction and supplier invoices from the inbox', async () => {

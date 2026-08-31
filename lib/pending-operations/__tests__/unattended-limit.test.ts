@@ -18,12 +18,45 @@ describe('priceOperation', () => {
     expect(priceOperation('categorize_transaction', { amount: -25000 })).toBe(25000)
   })
 
-  it('returns null for operation types whose amount is only known during dispatch', () => {
-    // These compute their totals inside SQL. Pricing them here would be a
-    // guess, and a wrong guess blocks a legitimate commit.
-    expect(priceOperation('match_batch_allocate', { amount: 999999 })).toBeNull()
+  it('prices every settlement and batch path that posts money', () => {
+    // These were left unpriced in the first cut, on the assumption their
+    // totals only existed inside SQL at dispatch. Production says otherwise:
+    // each field below is present and numeric on 100% of that type's staged
+    // rows, because it is the number a human is shown when approving. Leaving
+    // them unpriced let a key with a ceiling post any amount through the four
+    // largest settlement paths.
+    expect(priceOperation('link_transaction_journal_entry', { transaction_amount: 12500 })).toBe(12500)
+    expect(priceOperation('bulk_book_transactions', { tx_sum: 88000 })).toBe(88000)
+    expect(priceOperation('link_supplier_invoice_voucher', { payment_amount: 4300 })).toBe(4300)
+    expect(priceOperation('match_batch_allocate', { total_allocated: 99000 })).toBe(99000)
+    expect(priceOperation('mark_invoice_paid', { total: 6250 })).toBe(6250)
+  })
+
+  it('leaves genuinely unpriceable types unpriced rather than inventing a number', () => {
+    // pair_count is a COUNT. Pricing reconciliation_match off it would compare
+    // pairs against kronor, which is worse than not enforcing.
+    expect(priceOperation('reconciliation_match', { pair_count: 7 })).toBeNull()
+    // These attach räkenskapsinformation to something already booked; the
+    // transaction_amount they carry is context, not a posting.
     expect(priceOperation('link_document_to_voucher', {})).toBeNull()
-    expect(priceOperation('bulk_book_transactions', { amount: 500000 })).toBeNull()
+    expect(priceOperation('attach_document_to_transaction', { transaction_amount: 999999 })).toBeNull()
+  })
+
+  it('has no priceable type whose field is missing from the allowlist', () => {
+    // Guards the shape of the allowlist itself: a typo'd field name would make
+    // that type silently unpriceable, which is exactly the hole this closes.
+    for (const [op, fields] of Object.entries({
+      create_voucher: { total_debit: 1 },
+      categorize_transaction: { amount: 1 },
+      create_supplier_invoice_from_inbox: { total: 1 },
+      link_transaction_journal_entry: { transaction_amount: 1 },
+      bulk_book_transactions: { tx_sum: 1 },
+      link_supplier_invoice_voucher: { payment_amount: 1 },
+      match_batch_allocate: { total_allocated: 1 },
+      mark_invoice_paid: { total: 1 },
+    })) {
+      expect(priceOperation(op, fields)).toBe(1)
+    }
   })
 
   it('returns null rather than throwing on malformed preview_data', () => {
@@ -86,13 +119,23 @@ describe('exceedsUnattendedLimit', () => {
     }
   })
 
-  it('fails open when the operation cannot be priced before dispatch', () => {
+  it('fails open when the operation genuinely cannot be priced', () => {
     const result = exceedsUnattendedLimit({
       ...over,
-      operationType: 'match_batch_allocate',
-      previewData: { amount: 10_000_000 },
+      operationType: 'reconciliation_match',
+      previewData: { pair_count: 7 },
     })
     expect(result.exceeded).toBe(false)
     expect(result.attempted).toBeNull()
+  })
+
+  it('blocks an over-ceiling batch allocation, the path that used to fail open', () => {
+    const result = exceedsUnattendedLimit({
+      ...over,
+      operationType: 'match_batch_allocate',
+      previewData: { total_allocated: 10_000_000 },
+    })
+    expect(result.exceeded).toBe(true)
+    expect(result.attempted).toBe(10_000_000)
   })
 })

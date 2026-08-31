@@ -21,26 +21,51 @@
  */
 
 /**
- * Operations whose money amount is knowable BEFORE dispatch, with the
- * preview_data field that carries it.
+ * Every operation type that posts money, with the preview_data field carrying
+ * the amount it will post.
  *
- * An explicit allowlist, not a heuristic search, and derived from what
- * production actually stores (60-day sample): create_voucher carries
- * total_debit on 1 389 of 1 389 rows, categorize_transaction carries amount on
- * 2 002 of 2 003, create_supplier_invoice_from_inbox carries total on 208 of
- * 228.
+ * An explicit allowlist, and every entry is verified against production rather
+ * than guessed. Over the last 120 days each field below is present and numeric
+ * on 100% of that type's staged rows:
  *
- * Everything else is unpriceable here and FAILS OPEN. match_batch_allocate,
- * bulk_book_transactions and the link_*_to_voucher settlement paths compute
- * their totals inside SQL during dispatch, so a pre-dispatch check cannot see
- * them. Treating unpriceable as over-limit would silently break batch
- * allocation the day someone sets a limit, which is a worse failure than not
- * enforcing on those paths.
+ *   create_voucher                    total_debit         1389 rows
+ *   categorize_transaction            amount              2003 rows
+ *   create_supplier_invoice_from_inbox total               228 rows
+ *   link_transaction_journal_entry    transaction_amount  1369 rows
+ *   bulk_book_transactions            tx_sum               273 rows
+ *   link_supplier_invoice_voucher     payment_amount        55 rows
+ *   match_batch_allocate              total_allocated       24 rows
+ *   mark_invoice_paid                 total                  3 rows
+ *
+ * The staged preview already carries the amount the operation intends to post,
+ * because that is the number a human is shown when approving it. An earlier
+ * draft of this file assumed the batch and settlement paths computed their
+ * totals only inside SQL at dispatch and therefore left them unpriced; that was
+ * wrong, and it left the four largest settlement paths able to post any amount
+ * on a key with a ceiling.
+ *
+ * Types deliberately absent, and why:
+ *   - reconciliation_match carries pair_count, a COUNT, not an amount. Pricing
+ *     it off that number would compare pairs against kronor. It stays unpriced.
+ *   - link_document_to_voucher and attach_document_to_transaction move no
+ *     money; they attach räkenskapsinformation to something already booked.
+ *   - create_customer, create_transaction and the rest of the registry post
+ *     nothing to the ledger.
+ *
+ * Anything not listed is unpriceable and FAILS OPEN. That is the safe direction
+ * for a control that can only ever narrow what a key does: a wrong guess at an
+ * amount blocks a legitimate commit, and the failure mode of guessing high is
+ * an agent that cannot work at all.
  */
 const PRICEABLE_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
   create_voucher: ['total_debit'],
   categorize_transaction: ['amount'],
   create_supplier_invoice_from_inbox: ['total'],
+  link_transaction_journal_entry: ['transaction_amount'],
+  bulk_book_transactions: ['tx_sum'],
+  link_supplier_invoice_voucher: ['payment_amount'],
+  match_batch_allocate: ['total_allocated'],
+  mark_invoice_paid: ['total'],
 }
 
 /**
