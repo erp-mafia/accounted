@@ -8,10 +8,15 @@
  * the same morning.
  *
  * One email per user per company per day: dedup goes through notification_log
- * under type 'bookkeeping_digest' with the same claim-then-send mechanism as
- * the kvittens email (migration 20260831100000). reference_id is a
+ * under type 'bookkeeping_digest', guarded by a partial unique index on
+ * (user_id, reference_id) (migration 20260831100000). reference_id is a
  * deterministic uuid derived from (company, digest date), so overlapping cron
- * invocations race on the insert and exactly one wins.
+ * invocations race on the insert and exactly one wins. The claim is
+ * recoverable: it is inserted as delivery_status 'pending', flipped to 'sent'
+ * only after the provider accepted the mail, and a 'pending' claim older than
+ * STALE_CLAIM_MS (a run that died before sending, or a send that failed) can
+ * be atomically taken over by a later run, so an interruption never silently
+ * swallows that day's digest.
  *
  * The body carries counts only, never amounts or counterparties: the mere
  * existence of company mail is sensitive financial signal, so the details
@@ -34,6 +39,20 @@ const log = createLogger('bookkeeping-digest')
 /** The digest counts changes in the last 24h: one cron cadence back. */
 const WINDOW_MS = 24 * 60 * 60 * 1000
 
+/**
+ * A 'pending' claim older than this is considered abandoned (the run that
+ * inserted it died before sending) and may be taken over by a later run.
+ * The cron is daily, so anything measured in minutes is safely stale.
+ */
+const STALE_CLAIM_MS = 15 * 60 * 1000
+
+/**
+ * Max ids per PostgREST .in() filter: ids travel in the GET query string,
+ * and an unchunked list 414s past proxy URL limits (same limit and
+ * rationale as lib/worklist/categories.ts).
+ */
+const IN_CLAUSE_CHUNK = 150
+
 export interface DigestCounts {
   newTransactions: number
   newInboxItems: number
@@ -49,11 +68,14 @@ export interface DigestRunSummary {
 }
 
 /**
- * Count what arrived in the window and is still unhandled. Transactions:
+ * Count what arrived in the window and is still unhandled, using the same
+ * anchors as the worklist counts (lib/worklist/categories.ts). Transactions:
  * created in the window, not yet booked (journal_entry_id anchor only; rows
  * junction-linked via samlingsverifikat are a rounding error a few hours
- * after import) and not marked private. Inbox items: created in the window
- * and still in an unhandled status.
+ * after import), not marked private, and not ignored. Inbox items: created
+ * in the window and not yet terminal on any of the three markers
+ * (supplier invoice created, booked directly, or matched to a transaction;
+ * status stays 'received' in all three cases).
  */
 export async function countNewToBook(
   supabase: SupabaseClient,
@@ -67,17 +89,17 @@ export async function countNewToBook(
       .eq('company_id', companyId)
       .gte('created_at', sinceIso)
       .is('journal_entry_id', null)
-      .not('is_business', 'is', false),
+      .not('is_business', 'is', false)
+      .eq('is_ignored', false),
     supabase
       .from('invoice_inbox_items')
       .select('id', { count: 'exact', head: true })
       .eq('company_id', companyId)
       .gte('created_at', sinceIso)
-      // Not yet failed, and not yet turned into a supplier invoice: the
-      // created_supplier_invoice_id marker is what the inbox UI treats as
-      // "processed" (status stays 'received').
       .in('status', ['received', 'processing'])
-      .is('created_supplier_invoice_id', null),
+      .is('created_supplier_invoice_id', null)
+      .is('created_journal_entry_id', null)
+      .is('matched_transaction_id', null),
   ])
   if (txHead.error) throw new Error(`transactions count failed: ${txHead.error.message}`)
   if (inboxHead.error) throw new Error(`inbox count failed: ${inboxHead.error.message}`)
@@ -123,17 +145,21 @@ export async function runBookkeepingDigest(
   if (optedIn.length === 0) return summary
 
   const userIds = optedIn.map((r) => r.user_id)
-  const memberships = await fetchAllRows<{ user_id: string; company_id: string }>(({ from, to }) =>
-    supabase
-      .from('company_members')
-      .select('user_id, company_id')
-      .in('user_id', userIds)
-      // (company_id, user_id) is unique per membership: stable total order
-      // for range paging.
-      .order('company_id', { ascending: true })
-      .order('user_id', { ascending: true })
-      .range(from, to)
-  )
+  const memberships: Array<{ user_id: string; company_id: string }> = []
+  for (const idChunk of chunk(userIds, IN_CLAUSE_CHUNK)) {
+    const page = await fetchAllRows<{ user_id: string; company_id: string }>(({ from, to }) =>
+      supabase
+        .from('company_members')
+        .select('user_id, company_id')
+        .in('user_id', idChunk)
+        // (company_id, user_id) is unique per membership: stable total order
+        // for range paging.
+        .order('company_id', { ascending: true })
+        .order('user_id', { ascending: true })
+        .range(from, to)
+    )
+    memberships.push(...page)
+  }
 
   const usersByCompany = new Map<string, string[]>()
   for (const m of memberships) {
@@ -194,7 +220,9 @@ async function sendDigestForCompany(
     .select('name')
     .eq('id', input.companyId)
     .maybeSingle()
-  const companyName = (company as { name?: string } | null)?.name ?? null
+  const rawCompanyName = (company as { name?: string } | null)?.name ?? null
+  // The name reaches the Subject header: sanitize against header injection.
+  const companyName = rawCompanyName ? sanitizeHeaderText(rawCompanyName) || null : null
 
   // One brand resolution per company; sender identity and link base follow
   // the company's brand (white-label rule: mail goes out in the brand of the
@@ -215,28 +243,14 @@ async function sendDigestForCompany(
     const recipient = memberEmails.get(userId)
     if (!recipient) continue
 
-    // Claim before sending: the partial unique index on notification_log
-    // (user_id, reference_id) where notification_type = 'bookkeeping_digest'
-    // makes this atomic; the loser of two overlapping cron runs gets 23505.
-    const { error: claimError } = await supabase.from('notification_log').insert({
-      user_id: userId,
-      company_id: input.companyId,
-      notification_type: 'bookkeeping_digest',
-      reference_id: referenceUuid,
-      days_before: 0,
-      delivery_status: 'sent',
-    })
-    if (claimError) {
-      if (claimError.code === '23505') {
-        out.skippedDuplicate++
-      } else {
-        // Without a claim we cannot guarantee once-per-day: fail closed.
-        log.warn('digest claim insert failed', {
-          companyId: input.companyId,
-          error: claimError.message,
-        })
-        out.failed++
-      }
+    const claim = await acquireClaim(supabase, userId, input.companyId, referenceUuid)
+    if (claim === 'duplicate') {
+      out.skippedDuplicate++
+      continue
+    }
+    if (claim === 'error') {
+      // Without a claim we cannot guarantee once-per-day: fail closed.
+      out.failed++
       continue
     }
 
@@ -259,7 +273,7 @@ async function sendDigestForCompany(
         ...(sender.replyTo ? { replyTo: sender.replyTo } : {}),
       })
     } catch (err) {
-      await releaseClaim(supabase, userId, referenceUuid)
+      // The claim stays 'pending': a later run takes it over once stale.
       out.failed++
       log.warn('digest email send threw', {
         companyId: input.companyId,
@@ -268,7 +282,6 @@ async function sendDigestForCompany(
       continue
     }
     if (!sendResult.success) {
-      await releaseClaim(supabase, userId, referenceUuid)
       out.failed++
       log.warn('digest email send failed', {
         companyId: input.companyId,
@@ -276,10 +289,88 @@ async function sendDigestForCompany(
       })
       continue
     }
+    await markClaimSent(supabase, userId, referenceUuid)
     out.sent++
   }
 
   return out
+}
+
+type ClaimOutcome = 'acquired' | 'duplicate' | 'error'
+
+/**
+ * Acquire the once-per-day send claim. The insert (delivery_status
+ * 'pending') is made atomic by the partial unique index on
+ * (user_id, reference_id) for this notification_type; the loser of two
+ * overlapping runs gets 23505. A 'pending' claim whose sent_at lease is
+ * older than STALE_CLAIM_MS belonged to a run that died before sending (or
+ * whose send failed): it is taken over by atomically renewing the lease,
+ * conditioned on the row still being the same stale 'pending', so exactly
+ * one contender wins.
+ */
+async function acquireClaim(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  referenceUuid: string
+): Promise<ClaimOutcome> {
+  const { error: claimError } = await supabase.from('notification_log').insert({
+    user_id: userId,
+    company_id: companyId,
+    notification_type: 'bookkeeping_digest',
+    reference_id: referenceUuid,
+    days_before: 0,
+    delivery_status: 'pending',
+  })
+  if (!claimError) return 'acquired'
+  if (claimError.code !== '23505') {
+    log.warn('digest claim insert failed', { companyId, error: claimError.message })
+    return 'error'
+  }
+
+  const { data: existing, error: readError } = await supabase
+    .from('notification_log')
+    .select('id, delivery_status, sent_at')
+    .eq('user_id', userId)
+    .eq('notification_type', 'bookkeeping_digest')
+    .eq('reference_id', referenceUuid)
+    .maybeSingle()
+  if (readError || !existing) return 'duplicate'
+  const row = existing as { id: string; delivery_status: string; sent_at: string | null }
+  if (row.delivery_status !== 'pending') return 'duplicate'
+  const staleCutoffIso = new Date(Date.now() - STALE_CLAIM_MS).toISOString()
+  if (row.sent_at && row.sent_at > staleCutoffIso) return 'duplicate'
+
+  const { data: taken, error: takeError } = await supabase
+    .from('notification_log')
+    .update({ sent_at: new Date().toISOString() })
+    .eq('id', row.id)
+    .eq('delivery_status', 'pending')
+    .lte('sent_at', staleCutoffIso)
+    .select('id')
+  if (takeError || !taken || taken.length === 0) return 'duplicate'
+  return 'acquired'
+}
+
+/**
+ * Flip the claim to 'sent' after the provider accepted the mail. Best-effort:
+ * if this update fails the claim stays 'pending' and a stale takeover could
+ * resend, which is the accepted trade against silently losing the digest.
+ */
+async function markClaimSent(
+  supabase: SupabaseClient,
+  userId: string,
+  referenceUuid: string
+): Promise<void> {
+  const { error } = await supabase
+    .from('notification_log')
+    .update({ delivery_status: 'sent', sent_at: new Date().toISOString() })
+    .eq('user_id', userId)
+    .eq('notification_type', 'bookkeeping_digest')
+    .eq('reference_id', referenceUuid)
+  if (error) {
+    log.warn('could not mark digest claim sent', { userId, referenceUuid, error: error.message })
+  }
 }
 
 interface DigestEmailContent {
@@ -391,26 +482,21 @@ function toReferenceUuid(referenceKey: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
 }
 
-/** Remove a claim whose email never went out, so tomorrow is unaffected and a retried run can resend. */
-async function releaseClaim(
-  supabase: SupabaseClient,
-  userId: string,
-  referenceUuid: string
-): Promise<void> {
-  try {
-    await supabase
-      .from('notification_log')
-      .delete()
-      .eq('user_id', userId)
-      .eq('notification_type', 'bookkeeping_digest')
-      .eq('reference_id', referenceUuid)
-  } catch (err) {
-    log.warn('failed to release digest claim', {
-      userId,
-      referenceUuid,
-      error: err instanceof Error ? err.message : String(err),
-    })
-  }
+/** Split ids into .in()-safe chunks (see IN_CLAUSE_CHUNK). */
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
+
+/**
+ * Company names are user-controlled and reach the Subject header: strip
+ * CR/LF and other control characters so the value can never smuggle extra
+ * mail headers.
+ */
+function sanitizeHeaderText(input: string): string {
+  // eslint-disable-next-line no-control-regex
+  return input.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
 function escapeHtml(input: string): string {
