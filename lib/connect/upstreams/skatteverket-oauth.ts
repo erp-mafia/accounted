@@ -16,8 +16,23 @@ const DEFAULT_OAUTH_BASE_URL = 'https://peroauth2.test.skatteverket.se/oauth2/v1
 // "clean up"): the exact set is documented in the extension's oauth.ts.
 const DEFAULT_SCOPES = 'momsdeklaration inkforetag skahmst skattekonto ska agd agdredovisningperiod'
 
+/**
+ * Every SKV base URL must be https (http only for loopback dev): the OAuth
+ * exchange carries Arcim's client secret and the data calls carry the
+ * gateway Client_Secret, so a plaintext override would ship credentials
+ * unencrypted. Throws so a bad env fails the request, never the build.
+ */
+function httpsOnly(raw: string, name: string): string {
+  const url = new URL(raw)
+  const loopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
+    throw new Error(`${name} must be https: Skatteverket credentials ride in these requests`)
+  }
+  return raw
+}
+
 export function skvOauthBaseUrl(): string {
-  return process.env.SKATTEVERKET_OAUTH_BASE_URL || DEFAULT_OAUTH_BASE_URL
+  return httpsOnly(process.env.SKATTEVERKET_OAUTH_BASE_URL || DEFAULT_OAUTH_BASE_URL, 'SKATTEVERKET_OAUTH_BASE_URL')
 }
 export function skvDefaultScopes(): string {
   return DEFAULT_SCOPES
@@ -113,10 +128,10 @@ export function generatePkcePair(): { verifier: string; challenge: string } {
  * addresses them as /api/connect/skv/api/<service>/<path>.
  */
 export const SKV_API_BASES: Record<string, () => string> = {
-  moms: () => process.env.SKATTEVERKET_API_BASE_URL || 'https://api.test.skatteverket.se/momsdeklaration/v1',
-  skattekonto: () => process.env.SKATTEVERKET_SKATTEKONTO_API_BASE_URL || 'https://api.test.skatteverket.se/beskattning/skattekonto/v2',
-  'agd-inlamning': () => process.env.SKATTEVERKET_AGD_INLAMNING_API_BASE_URL || 'https://api.test.skatteverket.se/arbetsgivardeklaration/inlamning/v1',
-  'agd-period': () => process.env.SKATTEVERKET_AGD_PERIOD_API_BASE_URL || 'https://api.test.skatteverket.se/arbetsgivardeklaration/hanteraredovisningsperiod/v1',
+  moms: () => httpsOnly(process.env.SKATTEVERKET_API_BASE_URL || 'https://api.test.skatteverket.se/momsdeklaration/v1', 'SKATTEVERKET_API_BASE_URL'),
+  skattekonto: () => httpsOnly(process.env.SKATTEVERKET_SKATTEKONTO_API_BASE_URL || 'https://api.test.skatteverket.se/beskattning/skattekonto/v2', 'SKATTEVERKET_SKATTEKONTO_API_BASE_URL'),
+  'agd-inlamning': () => httpsOnly(process.env.SKATTEVERKET_AGD_INLAMNING_API_BASE_URL || 'https://api.test.skatteverket.se/arbetsgivardeklaration/inlamning/v1', 'SKATTEVERKET_AGD_INLAMNING_API_BASE_URL'),
+  'agd-period': () => httpsOnly(process.env.SKATTEVERKET_AGD_PERIOD_API_BASE_URL || 'https://api.test.skatteverket.se/arbetsgivardeklaration/hanteraredovisningsperiod/v1', 'SKATTEVERKET_AGD_PERIOD_API_BASE_URL'),
 }
 
 function apigwClientId(): string {

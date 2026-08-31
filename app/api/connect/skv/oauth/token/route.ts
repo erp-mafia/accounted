@@ -4,7 +4,8 @@ import { validateBody } from '@/lib/api/validate'
 import { withConnectorAuth, type ConnectorContext } from '@/lib/connect/hosted/with-connector-auth'
 import { exchangeSkvCode, refreshSkvToken, type SkvTokenResponse } from '@/lib/connect/upstreams/skatteverket-oauth'
 import { reserveUpstream } from '@/lib/connect/hosted/upstream-budget'
-import { activateByPendingState, hashHandle } from '@/lib/connect/hosted/ledger'
+import { activateByPendingState, findByRefreshHash, findPendingByState, hashHandle } from '@/lib/connect/hosted/ledger'
+import { verifyConnectorState } from '@/lib/connect/hosted/state'
 
 /**
  * POST /api/connect/skv/oauth/token
@@ -56,8 +57,38 @@ export const POST = withConnectorAuth('connect.skv', async (request, ctx) => {
   try {
     if (parsed.data.grant_type === 'authorization_code') {
       const { code, redirect_uri, code_verifier, connector_state } = parsed.data
+      // Same binding as the bank /sessions exchange: verified state signature,
+      // this key, skv service, and an existing pending row are preconditions
+      // for the privileged exchange (Arcim's client secret). Without them a
+      // code could be exchanged under a foreign or consumed state and live
+      // tokens handed out with no ledger row proving ownership.
+      const verified = verifyConnectorState(connector_state)
+      if (!verified.ok) {
+        return NextResponse.json({ error: 'Invalid connector state', code: 'CONNECTOR_STATE_INVALID' }, { status: 400 })
+      }
+      if (verified.payload.kid !== ctx.key.id || verified.payload.svc !== 'skv') {
+        return NextResponse.json({ error: 'State does not belong to this key', code: 'CONNECTOR_STATE_INVALID' }, { status: 403 })
+      }
+      const pendingRow = await findPendingByState(ctx.supabase, { keyId: ctx.key.id, pendingState: connector_state })
+      if (!pendingRow) {
+        return NextResponse.json({ error: 'Unknown connection for this key', code: 'CONNECTOR_NOT_OWNED' }, { status: 404 })
+      }
       const tokens = await exchangeSkvCode(code, redirect_uri, code_verifier)
-      await activateByPendingState(ctx.supabase, { keyId: ctx.key.id, pendingState: connector_state, handle: tokens.access_token })
+      const activated = await activateByPendingState(ctx.supabase, {
+        keyId: ctx.key.id,
+        pendingState: connector_state,
+        handle: tokens.access_token,
+      })
+      if (!activated) {
+        // Consumed concurrently (replay of the same state): never hand out
+        // tokens the ledger cannot vouch for. SKV has no revoke endpoint;
+        // the unreturned pair simply expires unused.
+        ctx.log.warn('skv token exchange raced a consumed state; tokens withheld')
+        return NextResponse.json(
+          { error: 'Connector state already consumed', code: 'CONNECTOR_STATE_CONSUMED' },
+          { status: 409 },
+        )
+      }
       if (tokens.refresh_token) {
         await ctx.supabase
           .from('connector_connections')
@@ -68,29 +99,32 @@ export const POST = withConnectorAuth('connect.skv', async (request, ctx) => {
       return tokenResponse(tokens)
     }
 
-    // refresh: rotate the ledger's handle + refresh hashes to the new pair.
-    // Two literal payloads (no runtime-built object) so the no-phantom-columns
-    // scanner can resolve the columns.
+    // refresh: ownership FIRST. The presented refresh token must hash to an
+    // ACTIVE ledger row under the presenting key before the broker spends
+    // Arcim's client secret on it; without this the route was an open refresh
+    // oracle for any leaked refresh token. Then rotate the ledger's handle +
+    // refresh hashes to the new pair. Two literal payloads (no runtime-built
+    // object) so the no-phantom-columns scanner can resolve the columns.
     const { refresh_token } = parsed.data
+    const oldRefreshHash = hashHandle(refresh_token)
+    const owned = await findByRefreshHash(ctx.supabase, { keyId: ctx.key.id, refreshHash: oldRefreshHash })
+    if (!owned) {
+      return NextResponse.json({ error: 'Unknown connection for this key', code: 'CONNECTOR_NOT_OWNED' }, { status: 404 })
+    }
     const tokens = await refreshSkvToken(refresh_token)
     const newHandleHash = tokens.access_token ? hashHandle(tokens.access_token) : null
     const lastUsedAt = new Date().toISOString()
-    const oldRefreshHash = hashHandle(refresh_token)
     if (tokens.refresh_token) {
       await ctx.supabase
         .from('connector_connections')
         .update({ handle_hash: newHandleHash, last_used_at: lastUsedAt, refresh_hash: hashHandle(tokens.refresh_token) })
-        .eq('connector_key_id', ctx.key.id)
-        .eq('service', 'skatteverket')
-        .eq('refresh_hash', oldRefreshHash)
+        .eq('id', owned.id)
         .eq('status', 'active')
     } else {
       await ctx.supabase
         .from('connector_connections')
         .update({ handle_hash: newHandleHash, last_used_at: lastUsedAt })
-        .eq('connector_key_id', ctx.key.id)
-        .eq('service', 'skatteverket')
-        .eq('refresh_hash', oldRefreshHash)
+        .eq('id', owned.id)
         .eq('status', 'active')
     }
     return tokenResponse(tokens)

@@ -10,9 +10,9 @@ vi.mock('@/lib/connect/hosted/with-connector-auth', () => ({
   withConnectorAuth: (_o: string, h: (r: Request, c: unknown) => Promise<Response>) => (r: Request) =>
     h(r, { requestId: 't', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, supabase: {}, key }),
 }))
-const hh = vi.hoisted(() => ({ budget: vi.fn(), count: vi.fn(), pending: vi.fn() }))
+const hh = vi.hoisted(() => ({ budget: vi.fn(), count: vi.fn(), deletePending: vi.fn(), pending: vi.fn() }))
 vi.mock('@/lib/connect/hosted/upstream-budget', () => ({ reserveUpstream: (...a: unknown[]) => hh.budget(...a) }))
-vi.mock('@/lib/connect/hosted/ledger', () => ({ countActiveConnections: (...a: unknown[]) => hh.count(...a), createPendingConnection: (...a: unknown[]) => hh.pending(...a) }))
+vi.mock('@/lib/connect/hosted/ledger', () => ({ countHeldConnections: (...a: unknown[]) => hh.count(...a), deletePendingConnectionById: (...a: unknown[]) => hh.deletePending(...a), createPendingConnection: (...a: unknown[]) => hh.pending(...a) }))
 vi.mock('@/lib/connect/hosted/state', () => ({ signConnectorState: () => 'ck1.signed' }))
 vi.mock('@/lib/connect/upstreams/skatteverket-oauth', () => ({
   buildSkvAuthorizeUrl: (redirectUri: string, state: string) => `https://skv/authorize?redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`,

@@ -50,7 +50,11 @@ export function extractConnectorKey(request: Request): string | null {
  * before a path is persisted for metering. Literal route words (sessions,
  * accounts, balances, aspsps, ...) survive, so the metric keys stay useful.
  */
-const OPAQUE_SEGMENT = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,}|[A-Za-z0-9_-]{20,})$/i
+// The 10+-digit rule covers Swedish identity numbers riding in SKV data-proxy
+// paths (personnummer 10/12 digits, orgnr 10, redovisare12 16+orgnr): they are
+// personal data of the instance's downstream clients and must never rest in
+// metering. Period segments (YYYYMM, 6 digits) survive for metric granularity.
+const OPAQUE_SEGMENT = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,}|[A-Za-z0-9_-]{20,}|\d{10,})$/i
 
 export function redactEndpoint(pathname: string): string {
   return pathname

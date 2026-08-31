@@ -122,6 +122,27 @@ export async function findPendingByState(
   return (data as LedgerRow | null) ?? null
 }
 
+/**
+ * The ACTIVE row whose refresh-token hash matches, under the presenting key.
+ * Ownership precondition for the SKV refresh exchange: without it the broker
+ * was an open refresh oracle for any leaked refresh token.
+ */
+export async function findByRefreshHash(
+  supabase: SupabaseClient,
+  params: { keyId: string; refreshHash: string },
+): Promise<LedgerRow | null> {
+  const { data, error } = await supabase
+    .from('connector_connections')
+    .select('id, connector_key_id, service, company_ref, provider, account_uids, status')
+    .eq('connector_key_id', params.keyId)
+    .eq('service', 'skatteverket')
+    .eq('refresh_hash', params.refreshHash)
+    .eq('status', 'active')
+    .maybeSingle()
+  if (error) throw new Error(`ledger refresh lookup failed: ${error.message}`)
+  return (data as LedgerRow | null) ?? null
+}
+
 /** Activate a pending connection (found by its signed pending_state) with the live handle + accounts. */
 export async function activateByPendingState(
   supabase: SupabaseClient,
