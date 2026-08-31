@@ -146,6 +146,12 @@ on top; its accuracy is tracked separately by the backtest scripts).
   2025-2026 (marked `fresh: true`) are reported as their own subscore next
   to stable law: whether a model knows THIS YEAR's rates is a different
   question from whether it knows VAT.
+- **Run-to-run variance is measured and disclosed.** A k=3 repeat study on
+  a 12-task booking subsample (`results/variance/`) found aggregate pass
+  rates moving up to 25 pp between identical runs for one model
+  (Claude Sonnet 5: 100/92/75%) while others held within 0-8 pp. Single-run
+  pass@1 therefore carries run noise on top of sampling noise; another
+  reason the tie groups, not the raw ordering, are the citable result.
 - **Verdicts.** Each model receives a revisor-style opinion on
   confidence-gated unattended booking, from published criteria:
   **tillstyrks** requires booking >= 85%, coverage@99% >= 50%, reasoning
