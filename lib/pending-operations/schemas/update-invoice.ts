@@ -23,6 +23,8 @@ const InvoiceChangesSchema = z
     delivery_date: isoDate.nullable().optional(),
     your_reference: z.string().optional(),
     our_reference: z.string().optional(),
+    // Fakturamärkning: buyer-required marking, separate from your_reference.
+    invoice_marking: z.string().max(200).optional(),
     items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required').optional(),
     // Replaces the whole bag; {} clears all tags.
     default_dimensions: DimensionsBagSchema.optional(),

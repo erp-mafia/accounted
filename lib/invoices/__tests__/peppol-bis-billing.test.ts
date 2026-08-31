@@ -259,6 +259,71 @@ describe('generatePeppolBisBillingInvoice', () => {
     )
   })
 
+  it('prefers invoice_marking over your_reference for BT-10 BuyerReference', () => {
+    const input = makeValidInput()
+    input.invoice = makeInvoice({ ...input.invoice, invoice_marking: 'KST 4711' })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<cbc:BuyerReference>KST 4711</cbc:BuyerReference>')
+  })
+
+  it('accepts a marking-only invoice (no your_reference) as buyer reference', () => {
+    const input = makeValidInput()
+    input.invoice = makeInvoice({
+      ...input.invoice,
+      your_reference: null,
+      invoice_marking: 'PO-2026-17',
+    })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<cbc:BuyerReference>PO-2026-17</cbc:BuyerReference>')
+  })
+
+  it('renders a per-line discount as a BG-27 allowance with net LineExtensionAmount', () => {
+    const input = makeValidInput()
+    // 2 × 100 = 200 gross, 10% discount = 20, net 180, VAT 25% on net = 45.
+    input.items = [
+      makeItem({ discount_percent: 10, line_total: 180, vat_amount: 45 }),
+    ]
+    input.invoice = makeInvoice({
+      ...input.invoice,
+      subtotal: 180,
+      vat_amount: 45,
+      total: 225,
+      remaining_amount: 225,
+    })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<cbc:LineExtensionAmount currencyID="SEK">180.00</cbc:LineExtensionAmount>')
+    expect(result.xml).toContain('<cbc:ChargeIndicator>false</cbc:ChargeIndicator>')
+    expect(result.xml).toContain('<cbc:AllowanceChargeReasonCode>95</cbc:AllowanceChargeReasonCode>')
+    expect(result.xml).toContain('<cbc:MultiplierFactorNumeric>10</cbc:MultiplierFactorNumeric>')
+    expect(result.xml).toContain('<cbc:Amount currencyID="SEK">20.00</cbc:Amount>')
+    expect(result.xml).toContain('<cbc:BaseAmount currencyID="SEK">200.00</cbc:BaseAmount>')
+    // The undiscounted unit price stays in cac:Price (BT-146).
+    expect(result.xml).toContain('<cbc:PriceAmount currencyID="SEK">100</cbc:PriceAmount>')
+  })
+
+  it('rejects a discounted line whose stored total is not net of the discount', () => {
+    const input = makeValidInput()
+    input.items = [makeItem({ discount_percent: 10, line_total: 200, vat_amount: 50 })]
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.issues.map(({ code }) => code)).toContain('LINE_TOTAL_MISMATCH')
+  })
+
   it('rejects credit notes and self-billed invoices in the generation layer', () => {
     for (const invoice of [
       makeInvoice({
