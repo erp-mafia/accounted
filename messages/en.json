@@ -582,6 +582,13 @@
   "settings": {
     "group_profile": "Profile",
     "section_name": "Name",
+    "digest_group": "Notifications",
+    "digest_label": "New to bookkeep",
+    "digest_description": "A daily email when new bank transactions or inbox documents are waiting to be booked. Counts only, never amounts.",
+    "digest_switch_label": "Daily summary by email",
+    "digest_enabled_toast": "Daily summary enabled",
+    "digest_disabled_toast": "Daily summary disabled",
+    "digest_save_failed": "Could not save the setting",
     "name_label": "Your name",
     "name_description": "Used when we address you and shown as the contact person on some documents.",
     "name_placeholder": "First name Last name",
