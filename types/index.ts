@@ -2895,6 +2895,7 @@ export interface NotificationSettings {
   receipt_extracted_enabled: boolean
   receipt_matched_enabled: boolean
   missing_underlag_enabled: boolean
+  email_digest_enabled: boolean
   created_at: string
   updated_at: string
 }
@@ -2912,6 +2913,7 @@ export type NotificationType =
   | 'missing_underlag'
   | 'skv_kvittens'
   | 'skv_connection_expired'
+  | 'bookkeeping_digest'
 
 // Notification log entry
 export interface NotificationLog {
@@ -2922,7 +2924,7 @@ export interface NotificationLog {
   reference_id: string
   days_before: number
   sent_at: string
-  delivery_status: 'sent' | 'delivered' | 'failed'
+  delivery_status: 'pending' | 'sent' | 'delivered' | 'failed'
 }
 
 // ============================================================
