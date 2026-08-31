@@ -352,7 +352,7 @@ The cron sidecar calls `/api/connector/sync/cron` hourly (it is listed in `docke
 curl -sf -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/connector/sync/cron
 ```
 
-The proxied connector services themselves (bank, Skatteverket, lookup, migration through `app.gnubok.se/api/connect/*`) ship in a following release; until then the key is validated and the grants are written, nothing more.
+The bank proxy (`app.gnubok.se/api/connect/bank/*`) is live server-side with this release; the Skatteverket broker and the instance-side client wiring that makes the proxies carry traffic ship in following releases. Until that wiring lands, the key is validated and the grants are written, nothing more.
 
 ### Connector subscription (self-hosted instances)
 

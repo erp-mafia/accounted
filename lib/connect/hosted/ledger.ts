@@ -43,6 +43,43 @@ export async function countActiveConnections(
   return count ?? 0
 }
 
+/**
+ * Pending rows count toward quota only while their consent window is open:
+ * the signed connector state expires after 15 minutes, so an abandoned
+ * consent stops reserving capacity once its state can no longer activate it.
+ */
+export const PENDING_QUOTA_WINDOW_MS = 15 * 60 * 1000
+
+/**
+ * Rows currently holding or reserving quota for (key, service, company):
+ * active connections plus fresh pending reservations. Used by the /auth
+ * quota check both before insert (fast reject) and after insert (the
+ * reservation re-count that closes the concurrent-auth race).
+ */
+export async function countHeldConnections(
+  supabase: SupabaseClient,
+  keyId: string,
+  service: ConnectorService,
+  companyRef: string,
+  now: Date = new Date(),
+): Promise<number> {
+  const freshPendingSince = new Date(now.getTime() - PENDING_QUOTA_WINDOW_MS).toISOString()
+  const { count, error } = await supabase
+    .from('connector_connections')
+    .select('id', { count: 'exact', head: true })
+    .eq('connector_key_id', keyId)
+    .eq('service', service)
+    .eq('company_ref', companyRef)
+    .or(`status.eq.active,and(status.eq.pending,created_at.gte.${freshPendingSince})`)
+  if (error) throw new Error(`ledger count failed: ${error.message}`)
+  return count ?? 0
+}
+
+/** Roll back a just-created pending reservation (lost the quota re-count). */
+export async function deletePendingConnectionById(supabase: SupabaseClient, id: string): Promise<void> {
+  await supabase.from('connector_connections').delete().eq('id', id).eq('status', 'pending')
+}
+
 export async function createPendingConnection(
   supabase: SupabaseClient,
   params: { keyId: string; service: ConnectorService; companyRef: string; provider: string | null; pendingState: string },

@@ -17,7 +17,8 @@ vi.mock('@/lib/connect/upstreams/enable-banking-jwt', () => ({ getAuthorizationH
 const h = vi.hoisted(() => ({
   budget: vi.fn(),
   ledger: {
-    countActiveConnections: vi.fn(),
+    countHeldConnections: vi.fn(),
+    deletePendingConnectionById: vi.fn(),
     createPendingConnection: vi.fn(),
     activateByPendingState: vi.fn(),
     findByHandle: vi.fn(),
@@ -81,7 +82,8 @@ describe('bank proxy', () => {
   })
 
   it('POST /auth rewrites redirect + state, checks quota, records a pending row', async () => {
-    ledger.countActiveConnections.mockResolvedValue(0)
+    ledger.countHeldConnections.mockResolvedValue(0)
+    ledger.createPendingConnection.mockResolvedValue('p1')
     ebOk({ url: 'https://bank.example/consent', authorization_id: 'a1' })
     const res = await POST(req('POST', '/auth', {
       aspsp: { name: 'SEB', country: 'SE' },
@@ -103,11 +105,22 @@ describe('bank proxy', () => {
   })
 
   it('POST /auth 403s when the per-company quota is reached', async () => {
-    ledger.countActiveConnections.mockResolvedValue(1)
+    ledger.countHeldConnections.mockResolvedValue(1)
     const res = await POST(req('POST', '/auth', { aspsp: { name: 'SEB', country: 'SE' }, redirect_url: 'https://bokforing.example.se/cb', state: 's' }))
     expect(res.status).toBe(403)
     expect(await res.json()).toMatchObject({ code: 'CONNECTOR_QUOTA_EXCEEDED', limit: 1 })
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('POST /auth rolls back its own reservation when the post-insert re-count exceeds the limit (concurrent race)', async () => {
+    // Two concurrent /auth calls both pre-count 0; the re-count after insert
+    // sees both reservations and the loser deletes its own row.
+    ledger.countHeldConnections.mockResolvedValueOnce(0).mockResolvedValueOnce(2)
+    ledger.createPendingConnection.mockResolvedValue('p-race')
+    const res = await POST(req('POST', '/auth', { aspsp: { name: 'SEB', country: 'SE' }, redirect_url: 'https://bokforing.example.se/cb', state: 's' }))
+    expect(res.status).toBe(403)
+    expect((await res.json()).code).toBe('CONNECTOR_QUOTA_EXCEEDED')
+    expect(ledger.deletePendingConnectionById).toHaveBeenCalledWith(expect.anything(), 'p-race')
   })
 
   it('POST /auth 400s without the company header', async () => {
@@ -148,6 +161,22 @@ describe('bank proxy', () => {
     const res = await DELETE(req('DELETE', '/sessions/sess-z'))
     expect(res.status).toBe(204)
     expect(ledger.revokeByHandle).toHaveBeenCalledWith(expect.anything(), { keyId: 'key-1', service: 'bank', handle: 'sess-z' })
+  })
+
+  it('DELETE /sessions/{id} keeps the ledger row on a transient upstream error', async () => {
+    ledger.findByHandle.mockResolvedValueOnce({ id: 'l4' })
+    fetchMock.mockResolvedValueOnce(new Response('upstream boom', { status: 502 }))
+    const res = await DELETE(req('DELETE', '/sessions/sess-w'))
+    expect(res.status).toBe(502)
+    expect(ledger.revokeByHandle).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-https EB base URL before sending the JWT', async () => {
+    process.env.ENABLE_BANKING_API_URL = 'http://api.enablebanking.com'
+    ledger.findByHandle.mockResolvedValueOnce({ id: 'l5' })
+    await expect(GET(req('GET', '/aspsps'))).rejects.toThrow(/must be https/)
+    expect(fetchMock).not.toHaveBeenCalled()
+    process.env.ENABLE_BANKING_API_URL = 'https://api.enablebanking.com'
   })
 
   it('returns 429 with Retry-After when the global budget is exhausted', async () => {
