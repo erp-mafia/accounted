@@ -190,7 +190,7 @@ export async function HemPanesSection({
   // the worklist count is the list's length (it used to scan the same rows
   // twice). Everything else runs in the same wave.
   const suggestedMatchesPromise = listSuggestedMatches(supabase, companyId, SUGGESTED_MATCH_SCAN_CAP)
-  const [worklist, suggestedMatches, resumeItems, { data: bankConnections }, postedEntries] =
+  const [worklist, suggestedMatches, resumeItems, bankConnectionsRes, postedEntries] =
     await Promise.all([
       // Pending-work counts come from lib/worklist: the same source as the
       // sidebar badges, so the numbers can never diverge.
@@ -210,6 +210,11 @@ export async function HemPanesSection({
   // bookkeeping that its ledger is blank, so errors degrade to the normal copy.
   const emptyLedger = setupOpen && !postedEntries.error && (postedEntries.count || 0) === 0
 
+  const bankConnections = bankConnectionsRes.data
+  // Same degrade-on-error rule as emptyLedger: a failed fetch must NOT tell a
+  // connected company that no bank is connected, so errors read as connected.
+  const hasActiveBankConnection = !!bankConnectionsRes.error || (bankConnections ?? []).length > 0
+
   // Same day-math as the bank_connection_expiring notice predicate
   // (lib/notices/categories.ts): the Bevaka row and the notice can never
   // disagree on the threshold.
@@ -225,6 +230,7 @@ export async function HemPanesSection({
         suggestedMatches={suggestedMatches.slice(0, 5)}
         expiringBankConnections={expiringBankConnections}
         emptyLedger={emptyLedger}
+        hasActiveBankConnection={hasActiveBankConnection}
       />
       <ResumePane items={resumeItems} />
     </div>

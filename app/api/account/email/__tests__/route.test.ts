@@ -104,12 +104,13 @@ describe('POST /api/account/email', () => {
     expect(String(options.emailRedirectTo)).toMatch(/\/auth\/callback$/)
   })
 
-  it('short-circuits a repeat request for the already-pending address', async () => {
+  it('short-circuits a repeat request while the pending mails are fresh', async () => {
     const { updateUser } = mockUserClient({
       user: {
         id: 'user-1',
         email: 'old@testbrand.example',
         new_email: 'pending@testbrand.example',
+        email_change_sent_at: new Date(Date.now() - 60_000).toISOString(),
       } as { id: string; email?: string },
     })
 
@@ -124,6 +125,47 @@ describe('POST /api/account/email', () => {
     expect(status).toBe(200)
     expect(body.data?.pending_email).toBe('pending@testbrand.example')
     expect(updateUser).not.toHaveBeenCalled()
+  })
+
+  it('re-sends when the pending change is stale (expired-link recovery)', async () => {
+    const { updateUser } = mockUserClient({
+      user: {
+        id: 'user-1',
+        email: 'old@testbrand.example',
+        new_email: 'pending@testbrand.example',
+        email_change_sent_at: new Date(
+          Date.now() - 2 * 60 * 60 * 1000,
+        ).toISOString(),
+      } as { id: string; email?: string },
+    })
+
+    const req = createMockRequest('/api/account/email', {
+      method: 'POST',
+      body: { email: 'pending@testbrand.example' },
+    })
+    const { status } = await parseJsonResponse(await POST(req))
+
+    expect(status).toBe(200)
+    expect(updateUser).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-sends when the pending change has no sent timestamp', async () => {
+    const { updateUser } = mockUserClient({
+      user: {
+        id: 'user-1',
+        email: 'old@testbrand.example',
+        new_email: 'pending@testbrand.example',
+      } as { id: string; email?: string },
+    })
+
+    const req = createMockRequest('/api/account/email', {
+      method: 'POST',
+      body: { email: 'pending@testbrand.example' },
+    })
+    const { status } = await parseJsonResponse(await POST(req))
+
+    expect(status).toBe(200)
+    expect(updateUser).toHaveBeenCalledTimes(1)
   })
 
   it('returns 409 when the address already belongs to another account', async () => {

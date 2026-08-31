@@ -238,6 +238,46 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     }
   }
 
+  // Draft-only payment-date edit from the header meta line, via the same
+  // internal PATCH the run has always supported. Returns success so the
+  // header can snap its input back to the server value on failure.
+  async function handleUpdatePaymentDate(date: string): Promise<boolean> {
+    setActionLoading('payment_date')
+    try {
+      const res = await fetch(`/api/salary/runs/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payment_date: date }),
+      })
+      if (res.ok) {
+        // Optimistic: the PATCH returns the updated run row.
+        const payload = await res.json().catch(() => null)
+        if (payload?.data) {
+          setRun(prev => (prev ? { ...prev, ...payload.data } : prev))
+        }
+        toast({ title: t('toast_payment_date_updated') })
+        loadRun() // background reconcile - not awaited
+        return true
+      }
+      const result = await res.json().catch(() => ({}))
+      toast({
+        title: t('toast_status_failed'),
+        description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+        variant: 'destructive',
+      })
+      return false
+    } catch (err) {
+      toast({
+        title: t('toast_status_failed'),
+        description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
+        variant: 'destructive',
+      })
+      return false
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
   // Approval is an authorization step. Missing bank details are an *overridable*
   // block (SALARY_APPROVE_BANK_DETAILS_MISSING) - rather than dead-ending on a
   // 400 toast, we surface a confirm dialog and re-approve with ?force=true when
@@ -790,6 +830,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         onDownloadAgi={handleDownloadAgi}
         onDelete={handleDelete}
         onCorrect={handleCorrect}
+        onUpdatePaymentDate={handleUpdatePaymentDate}
       />
 
       {/* The one attention sentence on the page: an empty declaration will be
