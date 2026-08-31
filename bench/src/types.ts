@@ -24,6 +24,10 @@ export interface TaskBase {
   // Why the gold answer is what it is, with a legal reference where relevant.
   rationale: string
   law_ref?: string
+  // Contamination canary (BIG-bench convention); carried by every task file.
+  canary?: string
+  // Marks tasks about rules that changed 2025 or later (regelverksfarskhet).
+  fresh?: boolean
 }
 
 // ---------------------------------------------------------------------------

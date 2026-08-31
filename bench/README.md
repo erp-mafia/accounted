@@ -123,6 +123,29 @@ on top; its accuracy is tracked separately by the backtest scripts).
 - **Reliability (ledger-agent), pass^k.** Each agent task runs k=3 times;
   reliability is the share of tasks solved on EVERY attempt. An agent that is
   rerun monthly is only as good as its worst month.
+- **Paired significance, not CI-overlap.** Following Anthropic's "Adding
+  Error Bars to Evals" (arXiv:2411.00640), model comparisons use exact
+  McNemar tests on paired task outcomes. The published ranking is grouped
+  into statistical ties by leader-chaining (a model joins the group above it
+  while McNemar vs the group leader gives p >= 0.05); a simplification of a
+  compact letter display, stated as such. At v1.3's n=53 booking tasks, the
+  top NINE models are one tie group: differences under ~8 points are noise
+  at this size, which is said on the page rather than hidden, and is the
+  standing argument for growing the task set.
+- **Task discrimination audit.** Every task's point-biserial correlation
+  with model total scores is published in the aggregate (the IRT-lite item
+  audit; see arXiv:2505.15055). Negative discrimination (better models do
+  worse) is the signature of defective gold: booking-040 was retired this
+  way (r = -0.51), applied to all models equally by the curation-safe
+  aggregator.
+- **Strict and lenient dual scoring (booking).** Exact-gold-account accuracy
+  is reported next to acceptable-set accuracy (the SQuAD EM-vs-F1 pattern),
+  so convention-following and defensible-alternative booking are visible
+  separately.
+- **Regelverksfarskhet (reasoning).** The tasks about rules that changed in
+  2025-2026 (marked `fresh: true`) are reported as their own subscore next
+  to stable law: whether a model knows THIS YEAR's rates is a different
+  question from whether it knows VAT.
 - **Verdicts.** Each model receives a revisor-style opinion on
   confidence-gated unattended booking, from published criteria:
   **tillstyrks** requires booking >= 85%, coverage@99% >= 50%, reasoning

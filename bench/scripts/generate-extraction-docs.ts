@@ -17,6 +17,15 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
 
+// Contamination canary (BIG-bench convention): read from the committed
+// CANARY.txt so regenerated gold keeps carrying it.
+const CANARY = fs
+  .readFileSync(
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'tasks', 'CANARY.txt'),
+    'utf8',
+  )
+  .trim()
+
 const OUT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -614,6 +623,7 @@ async function main() {
     const t = totals(spec)
     tasks.push({
       id: spec.id,
+      canary: CANARY,
       suite: 'extraction',
       data_class: 'public',
       difficulty: spec.difficulty,

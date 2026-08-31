@@ -92,6 +92,55 @@ function reliability(records: RunRecord[]): { value: number; k: number } | null 
   return { value: Math.round((allPass / multi.length) * 1000) / 1000, k }
 }
 
+// Exact McNemar test on paired task outcomes (Anthropic, "Adding Error Bars
+// to Evals": compare models on paired differences, not overlapping CIs).
+// Returns the two-sided exact binomial p-value over discordant pairs.
+function mcnemarP(discA: number, discB: number): number {
+  const n = discA + discB
+  if (n === 0) return 1
+  const k = Math.min(discA, discB)
+  // exact binomial tail via logs (n stays small; doubles are fine)
+  let tail = 0
+  for (let i = 0; i <= k; i++) {
+    let logC = 0
+    for (let j = 0; j < i; j++) logC += Math.log(n - j) - Math.log(j + 1)
+    tail += Math.exp(logC - n * Math.LN2)
+  }
+  return Math.min(1, 2 * tail)
+}
+
+// Statistical tie groups per suite: walking the ranking top-down, a model
+// joins the current group while McNemar vs the group's leader is not
+// significant (p >= 0.05); a significant difference starts a new group.
+// Leader-chaining is a simplification of a compact letter display and is
+// documented as such in the README.
+function tieGroups(
+  ranking: string[],
+  passByTaskModel: Map<string, Map<string, boolean>>,
+): string[][] {
+  const groups: string[][] = []
+  for (const model of ranking) {
+    const current = groups[groups.length - 1]
+    if (!current) {
+      groups.push([model])
+      continue
+    }
+    const leader = current[0]
+    let a = 0
+    let b = 0
+    for (const perModel of passByTaskModel.values()) {
+      const pl = perModel.get(leader)
+      const pm = perModel.get(model)
+      if (pl === undefined || pm === undefined) continue
+      if (pl && !pm) a++
+      if (pm && !pl) b++
+    }
+    if (mcnemarP(a, b) >= 0.05) current.push(model)
+    else groups.push([model])
+  }
+  return groups
+}
+
 function wilson(x: number, n: number, z = 1): { p: number; lo: number; hi: number } {
   if (n === 0) return { p: 0, lo: 0, hi: 0 }
   const phat = x / n
@@ -144,6 +193,7 @@ function suiteExtras(
   suite: SuiteId,
   records: RunRecord[],
   segments?: Map<string, 'underlag' | 'bank_only'>,
+  freshIds?: Set<string>,
 ): Record<string, unknown> {
   if (suite === 'booking') {
     const accountAcc =
@@ -171,6 +221,9 @@ function suiteExtras(
     }
     return {
       accountAccuracy: round3(accountAcc),
+      strictAccountAccuracy: round3(
+        records.filter((r) => r.score.exactAccount === true).length / records.length,
+      ),
       vatAccuracy: round3(vatAcc),
       ece: ece(calibration),
       coverage95: coverageAtPrecision(
@@ -193,8 +246,17 @@ function suiteExtras(
     const calibration = records
       .filter((r) => typeof r.score.confidence === 'number')
       .map((r) => ({ confidence: r.score.confidence as number, correct: r.pass }))
+    const fresh = records.filter((r) => freshIds?.has(r.taskId))
+    const stable = records.filter((r) => !freshIds?.has(r.taskId))
     return {
       ece: ece(calibration),
+      // Regelverksfarskhet: rules that changed 2025 or later, vs stable law.
+      freshness: fresh.length
+        ? { n: fresh.length, pass: fresh.filter((r) => r.pass).length }
+        : null,
+      stablePass: stable.length
+        ? round3(stable.filter((r) => r.pass).length / stable.length)
+        : null,
       parseFailures: records.filter((r) => r.score.parseFailed === true).length,
     }
   }
@@ -243,6 +305,9 @@ function main() {
   const bookingSegments = new Map(
     (suiteTasks.get('booking') as BookingTask[]).map((t) => [t.id, bookingSegment(t)]),
   )
+  const freshIds = new Set(
+    (suiteTasks.get('reasoning') ?? []).filter((t) => t.fresh).map((t) => t.id),
+  )
 
   for (const suite of suites) {
     // Per-task outcome matrix: which model passed which task.
@@ -270,6 +335,32 @@ function main() {
         segment: suite === 'booking' ? bookingSegments.get(task.id) : undefined,
         results,
       })
+    }
+    // Task discrimination (point-biserial vs each model's suite total): the
+    // IRT-lite audit. Negative values mean better models do WORSE on the
+    // task, the signature of defective gold; those go to human review.
+    {
+      const totals = new Map<string, number>()
+      for (const row of matrix) {
+        for (const [m, v] of Object.entries(row.results as Record<string, number | null>)) {
+          if (v != null) totals.set(m, (totals.get(m) ?? 0) + v)
+        }
+      }
+      for (const row of matrix) {
+        const xs: [number, number][] = []
+        for (const [m, v] of Object.entries(row.results as Record<string, number | null>)) {
+          if (v != null && totals.has(m)) xs.push([v, totals.get(m)!])
+        }
+        if (xs.length < 5) continue
+        const n = xs.length
+        const mx = xs.reduce((s2, [x]) => s2 + x, 0) / n
+        const my = xs.reduce((s2, [, y2]) => s2 + y2, 0) / n
+        const cov = xs.reduce((s2, [x, y2]) => s2 + (x - mx) * (y2 - my), 0) / n
+        const sx = Math.sqrt(xs.reduce((s2, [x]) => s2 + (x - mx) ** 2, 0) / n)
+        const sy = Math.sqrt(xs.reduce((s2, [, y2]) => s2 + (y2 - my) ** 2, 0) / n)
+        ;(row as Record<string, unknown>).disc =
+          sx > 0 && sy > 0 ? Math.round((cov / (sx * sy)) * 100) / 100 : null
+      }
     }
     ;(leaderboard.taskMatrix as Record<string, unknown>)[suite] = matrix
 
@@ -308,11 +399,33 @@ function main() {
         avgDurationMs: Math.round(
           records.reduce((s, r) => s + r.durationMs, 0) / records.length,
         ),
-        extras: suiteExtras(suite, records, suite === 'booking' ? bookingSegments : undefined),
+        extras: suiteExtras(
+          suite,
+          records,
+          suite === 'booking' ? bookingSegments : undefined,
+          suite === 'reasoning' ? freshIds : undefined,
+        ),
       })
     }
     rows.sort((a, b) => b.passRate - a.passRate)
     ;(leaderboard.suites as Record<string, unknown>)[suite] = rows
+
+    // Statistical tie groups over the ranking (paired McNemar vs group leader).
+    {
+      const passByTask = new Map<string, Map<string, boolean>>()
+      for (const row of matrix) {
+        const perModel = new Map<string, boolean>()
+        for (const [m, v] of Object.entries(row.results as Record<string, number | null>)) {
+          if (v != null) perModel.set(m, v >= 0.999)
+        }
+        passByTask.set(row.id as string, perModel)
+      }
+      ;(leaderboard.tieGroups ??= {} as Record<string, unknown>)
+      ;(leaderboard.tieGroups as Record<string, unknown>)[suite] = tieGroups(
+        rows.map((r) => r.model),
+        passByTask,
+      )
+    }
   }
 
   // Verdict per model, revisor-style, from published criteria (README).
