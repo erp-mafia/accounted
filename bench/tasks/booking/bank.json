@@ -1,0 +1,526 @@
+[
+  {
+    "id": "booking-101",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Bank feed only: Google Workspace from Ireland, no receipt attached",
+    "rationale": "Ingen faktura bifogad: modellen måste veta att Google Ireland fakturerar svenska företag med omvänd betalningsskyldighet. Kostnad 5420/6540 (eller underlagskontot 4535).",
+    "law_ref": "ML 6 kap. 34 §",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "IT-konsultbolag"
+      },
+      "transaction": {
+        "date": "2026-06-02",
+        "amount": -1352.0,
+        "currency": "SEK",
+        "counterpart": "GOOGLE IRELAND LTD",
+        "description": "GOOGLE*WORKSPACE"
+      }
+    },
+    "gold": {
+      "account": "5420",
+      "acceptable_accounts": [
+        "6540",
+        "4535"
+      ],
+      "vat_treatment": "reverse_charge_services"
+    }
+  },
+  {
+    "id": "booking-102",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Bank feed only: Meta ads, no receipt attached",
+    "rationale": "FACEBK-dragning från Meta Ireland: annonsering med omvänd betalningsskyldighet måste kännas igen på motparten.",
+    "law_ref": "ML 6 kap. 34 §",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "E-handelsbolag"
+      },
+      "transaction": {
+        "date": "2026-05-28",
+        "amount": -4200.0,
+        "currency": "SEK",
+        "counterpart": "META PLATFORMS IRELAND",
+        "description": "FACEBK ADS *K92BXQ"
+      }
+    },
+    "gold": {
+      "account": "5910",
+      "acceptable_accounts": [
+        "5900",
+        "5970",
+        "4535"
+      ],
+      "vat_treatment": "reverse_charge_services"
+    }
+  },
+  {
+    "id": "booking-103",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Bank feed only: AWS infrastructure, no receipt attached",
+    "rationale": "AWS EMEA SARL (Luxemburg) fakturerar utan moms: omvänd betalningsskyldighet, kostnad IT-tjänster.",
+    "law_ref": "ML 6 kap. 34 §",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "SaaS-bolag"
+      },
+      "transaction": {
+        "date": "2026-06-03",
+        "amount": -2315.0,
+        "currency": "SEK",
+        "counterpart": "AWS EMEA SARL",
+        "description": "AMAZON WEB SERVICES"
+      }
+    },
+    "gold": {
+      "account": "6540",
+      "acceptable_accounts": [
+        "5420",
+        "4535"
+      ],
+      "vat_treatment": "reverse_charge_services"
+    }
+  },
+  {
+    "id": "booking-104",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Bank feed only: Adobe subscription, no receipt attached",
+    "rationale": "Adobe Systems Software Ireland: programvarulicens med omvänd betalningsskyldighet.",
+    "law_ref": "ML 6 kap. 34 §",
+    "input": {
+      "company": {
+        "entity_type": "enskild_firma",
+        "vat_registered": true,
+        "accounting_method": "cash",
+        "business": "Grafisk formgivare"
+      },
+      "transaction": {
+        "date": "2026-04-15",
+        "amount": -649.0,
+        "currency": "SEK",
+        "counterpart": "ADOBE SYSTEMS SOFTWARE IRELAND",
+        "description": "ADOBE CREATIVE CLOUD"
+      }
+    },
+    "gold": {
+      "account": "5420",
+      "acceptable_accounts": [
+        "6540",
+        "4535"
+      ],
+      "vat_treatment": "reverse_charge_services"
+    }
+  },
+  {
+    "id": "booking-106",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Bank feed only: train ticket",
+    "rationale": "SJ är persontransport: 6 % moms måste kunnas utan kvitto.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Managementkonsult"
+      },
+      "transaction": {
+        "date": "2026-05-14",
+        "amount": -486.0,
+        "currency": "SEK",
+        "counterpart": "SJ AB",
+        "description": "SJ BILJETT STHLM-MALMO"
+      }
+    },
+    "gold": {
+      "account": "5810",
+      "acceptable_accounts": [
+        "5800",
+        "5890"
+      ],
+      "vat_treatment": "domestic_6"
+    }
+  },
+  {
+    "id": "booking-107",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Bank feed only: public transport card for business travel",
+    "rationale": "SL-biljetter är persontransport, 6 % moms.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Redovisningsbyrå, konsulter reser till kunder"
+      },
+      "transaction": {
+        "date": "2026-04-01",
+        "amount": -990.0,
+        "currency": "SEK",
+        "counterpart": "STORSTOCKHOLMS LOKALTRAFIK",
+        "description": "SL 30-DAGARSKORT tjänsteresor"
+      }
+    },
+    "gold": {
+      "account": "5810",
+      "acceptable_accounts": [
+        "5800",
+        "5890"
+      ],
+      "vat_treatment": "domestic_6"
+    }
+  },
+  {
+    "id": "booking-108",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Bank feed only: hotel night",
+    "rationale": "Hotellogi har 12 % moms; kost och logi 5830.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Säljbolag"
+      },
+      "transaction": {
+        "date": "2026-03-19",
+        "amount": -1790.0,
+        "currency": "SEK",
+        "counterpart": "SCANDIC HOTELS",
+        "description": "SCANDIC CROWN GBG, 1 natt tjänsteresa"
+      }
+    },
+    "gold": {
+      "account": "5830",
+      "acceptable_accounts": [
+        "5800",
+        "5890",
+        "5831"
+      ],
+      "vat_treatment": "domestic_12"
+    }
+  },
+  {
+    "id": "booking-109",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Bank feed only: insurance premium",
+    "rationale": "Försäkringspremie är momsfri; 6310.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Logistikbolag"
+      },
+      "transaction": {
+        "date": "2026-01-28",
+        "amount": -1250.0,
+        "currency": "SEK",
+        "counterpart": "TRYGG-HANSA",
+        "description": "FÖRETAGSFÖRSÄKRING JAN"
+      }
+    },
+    "gold": {
+      "account": "6310",
+      "vat_treatment": "no_vat"
+    }
+  },
+  {
+    "id": "booking-110",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Bank feed only: bank charges",
+    "rationale": "Bankavgifter är momsfria finansiella tjänster; 6570.",
+    "input": {
+      "company": {
+        "entity_type": "enskild_firma",
+        "vat_registered": true,
+        "accounting_method": "cash",
+        "business": "Fotograf"
+      },
+      "transaction": {
+        "date": "2026-06-30",
+        "amount": -250.0,
+        "currency": "SEK",
+        "counterpart": "SEB",
+        "description": "PRIS INTERNETBANK FÖRETAG"
+      }
+    },
+    "gold": {
+      "account": "6570",
+      "vat_treatment": "no_vat"
+    }
+  },
+  {
+    "id": "booking-111",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Bank feed only: fuel, company runs passenger cars",
+    "rationale": "Säljbolag med tjänstebilar (personbilar): drivmedel 5611, 25 % moms fullt avdragsgill.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Säljbolag med tre tjänstebilar (personbilar)"
+      },
+      "transaction": {
+        "date": "2026-05-11",
+        "amount": -812.0,
+        "currency": "SEK",
+        "counterpart": "CIRCLE K",
+        "description": "CIRCLE K STHLM DRIVMEDEL"
+      }
+    },
+    "gold": {
+      "account": "5611",
+      "acceptable_accounts": [
+        "5610"
+      ],
+      "vat_treatment": "domestic_25"
+    }
+  },
+  {
+    "id": "booking-112",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Bank feed only: fuel, company runs a light truck",
+    "rationale": "Byggfirma med servicebil (lätt lastbil): drivmedel hör till 5621, inte 5611. Kontovalet styrs av fordonstypen i företagskontexten.",
+    "input": {
+      "company": {
+        "entity_type": "enskild_firma",
+        "vat_registered": true,
+        "accounting_method": "cash",
+        "business": "Bygghantverkare med servicebil (lätt lastbil)"
+      },
+      "transaction": {
+        "date": "2026-04-22",
+        "amount": -950.0,
+        "currency": "SEK",
+        "counterpart": "OKQ8",
+        "description": "OKQ8 UPPSALA DIESEL"
+      }
+    },
+    "gold": {
+      "account": "5621",
+      "acceptable_accounts": [
+        "5620"
+      ],
+      "vat_treatment": "domestic_25"
+    }
+  },
+  {
+    "id": "booking-113",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Bank feed only: mobile subscription",
+    "rationale": "Telia-autogiro: mobiltelefoni 6212, 25 % moms.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "IT-konsultbolag"
+      },
+      "transaction": {
+        "date": "2026-06-28",
+        "amount": -623.75,
+        "currency": "SEK",
+        "counterpart": "TELIA SVERIGE AB",
+        "description": "AUTOGIRO TELIA FÖRETAG"
+      }
+    },
+    "gold": {
+      "account": "6212",
+      "acceptable_accounts": [
+        "6210",
+        "6230"
+      ],
+      "vat_treatment": "domestic_25"
+    }
+  },
+  {
+    "id": "booking-114",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Bank feed only: gym membership for staff wellness",
+    "rationale": "Företaget är kund hos SATS (företagsavtal) och fakturan bär 6 % moms på motionstjänster; personalkostnad 7699/7690. Skiljer sig från friskvårdsbidrag mot den anställdes eget kvitto, där momsen inte lyfts.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Redovisningsbyrå med företagsavtal hos gymkedja: företaget faktureras direkt för de anställdas träningskort"
+      },
+      "transaction": {
+        "date": "2026-02-01",
+        "amount": -549.0,
+        "currency": "SEK",
+        "counterpart": "SATS SVERIGE AB",
+        "description": "SATS FÖRETAGSAVTAL TRÄNINGSKORT"
+      }
+    },
+    "gold": {
+      "account": "7699",
+      "acceptable_accounts": [
+        "7690"
+      ],
+      "vat_treatment": "domestic_6"
+    }
+  },
+  {
+    "id": "booking-115",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Bank feed only: payment to the tax account",
+    "rationale": "Inbetalning till skattekontot bokförs mot 1630 (avräkning skatter och avgifter), ingen moms. Preliminärskatten omförs sedan till 2518.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "IT-konsultbolag"
+      },
+      "transaction": {
+        "date": "2026-05-12",
+        "amount": -24000.0,
+        "currency": "SEK",
+        "counterpart": "SKATTEVERKET",
+        "description": "INBETALNING SKATTEKONTO"
+      }
+    },
+    "gold": {
+      "account": "1630",
+      "acceptable_accounts": [
+        "2518",
+        "2510",
+        "2850"
+      ],
+      "vat_treatment": "no_vat"
+    }
+  },
+  {
+    "id": "booking-116",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Bank feed only: Fora premiums",
+    "rationale": "Fora fakturerar avtalsförsäkringar (AMF m.m.): 7570 arbetsmarknadsförsäkringar, momsfritt.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Byggentreprenör med kollektivavtal"
+      },
+      "transaction": {
+        "date": "2026-03-27",
+        "amount": -3850.0,
+        "currency": "SEK",
+        "counterpart": "FORA AB",
+        "description": "FORA FÖRSÄKRINGAR KV1"
+      }
+    },
+    "gold": {
+      "account": "7570",
+      "acceptable_accounts": [
+        "7571",
+        "7590"
+      ],
+      "vat_treatment": "no_vat"
+    }
+  },
+  {
+    "id": "booking-117",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Bank feed only: Bolagsverket filing fee",
+    "rationale": "Bolagsverkets ärendeavgifter är momsfria och avdragsgilla: 6991 (övriga externa kostnader, avdragsgilla).",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Fastighetsbolag"
+      },
+      "transaction": {
+        "date": "2026-02-09",
+        "amount": -1400.0,
+        "currency": "SEK",
+        "counterpart": "BOLAGSVERKET",
+        "description": "ÄRENDEAVGIFT ÄNDRINGSANMÄLAN"
+      }
+    },
+    "gold": {
+      "account": "6991",
+      "acceptable_accounts": [
+        "6990",
+        "6950",
+        "6490"
+      ],
+      "vat_treatment": "no_vat"
+    }
+  },
+  {
+    "id": "booking-118",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Bank feed only: office furnishings under the asset threshold",
+    "rationale": "IKEA-köp för kontoret på 3 200 kr: förbrukningsinventarier 5410, 25 % moms.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "IT-konsultbolag, inreder kontor"
+      },
+      "transaction": {
+        "date": "2026-01-31",
+        "amount": -3200.0,
+        "currency": "SEK",
+        "counterpart": "IKEA SVERIGE",
+        "description": "IKEA KONTORSINREDNING"
+      }
+    },
+    "gold": {
+      "account": "5410",
+      "acceptable_accounts": [
+        "5411",
+        "6110"
+      ],
+      "vat_treatment": "domestic_25"
+    }
+  }
+]

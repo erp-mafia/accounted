@@ -36,7 +36,7 @@ reverse charge wrong is exactly the distinction we need to see.
 
 | Suite | n | What it measures | Oracle |
 |---|---|---|---|
-| **Booking** | 37 | BAS account + VAT treatment for one bank transaction with company context | Exact match against gold account (plus explicitly listed acceptable alternatives) and a 10-value VAT-treatment enum |
+| **Booking** | 54 | BAS account + VAT treatment for one bank transaction with company context | Exact match against gold account (plus explicitly listed acceptable alternatives) and a 10-value VAT-treatment enum |
 | **Reasoning** | 36 | Swedish VAT / bookkeeping-law knowledge: rutor, deadlines, thresholds, rate changes, correction rules | Deterministic answers (number, date, account, ruta, or one of fixed options) |
 | **Extraction (OCR)** | 12 | Structured fields from rendered Swedish documents: invoices, receipts, credit notes | Per-field exact match after normalization; amounts at 0.01 tolerance; arithmetic invariants hold by construction |
 | **Ledger-agent** | 3 | Multi-turn tool use against a real Postgres ledger: book, correct, settle | End state of the books via SQL assertions; legal invariants enforced by the production database triggers |
@@ -45,6 +45,17 @@ Difficulty tags (`core` / `hard` / `expert`) mark, respectively, everyday
 bookings, the classic error classes (reverse charge, representation, asset
 thresholds, 6/12/25 rate splits), and adversarial cases (a foreign brand
 behind a Swedish reseller, prepayment rate rules, non-registered buyers).
+
+**Evidence segments (booking).** The suite is split by what the model gets
+to see, and reported separately, because the two segments answer different
+questions. *Invoice attached* (35 tasks) includes underlag text, and Swedish
+invoices state the VAT, so the VAT metric there measures evidence READING.
+*Bank feed only* (19 tasks) shows nothing but counterparty, description and
+amount, the common state of löpande bokföring, so the same metric there
+measures domain KNOWLEDGE (does the model know Google Ireland means reverse
+charge, SJ means 6 %). v1.0 published only the blended number and its VAT
+column saturated at 100 %; v1.1 corrected this. A benchmark that cannot say
+what it fixed cannot be trusted about what it measures.
 
 ## Where tasks come from
 
@@ -141,6 +152,35 @@ reliability (pass^k) is future work.
   after adversarial review (for example, the 45xx underlag accounts that the
   SKV 4700 mapping derives rutor from are accepted alongside the natural
   cost accounts for reverse-charge purchases).
+- Curation is versioned and applied to all models equally:
+  `scripts/regrade-booking.ts` re-grades stored answers against current gold
+  without re-spending model calls, and the aggregator only counts records
+  whose task still exists, so a task removed for defective gold drops out of
+  every model's aggregates at once.
+
+## Changelog
+
+**v1.1 (2026-08-31).** Added the bank-feed-only booking segment (18 new
+tasks) after v1.0's VAT column saturated at 100 % via underlag leakage;
+segments now reported separately. Removed one task in review (Apple B2B VAT
+handling is genuinely inconsistent, no defensible single gold); reworded the
+gym/friskvård task to pin who the gym's customer is; extended acceptable
+accounts where model review surfaced equally chart-defensible answers
+(5970 Internetreklam, 5061 Städning, 1211 Maskiner, 6980/6490, 2850, 5831,
+5460). Aggregates now include per-segment metrics and a per-task outcome
+matrix.
+
+**v1.0 (2026-08-31).** First full campaign: 4 suites, 4 models on Bedrock EU.
+
+## External context (published numbers, not measured by us)
+
+For placing these results among public instruments: DualEntry's vendor-run
+US-GAAP benchmark (19 models, 101 ERP tasks) tops out at 79.2 % (Claude
+Opus 4.7) with month-end close at 50 %; Vals AI's Finance Agent v1.1
+(read-only analyst Q&A, 537 tasks) tops out at 64.4 %; tau2-bench (agentic
+dual-control, no finance domain) has Qwen 3.5-397B at 87.9 %. None are
+Swedish, none write against a legally constrained ledger, which is the gap
+this benchmark exists to measure.
 
 ## Disclosure and limitations
 

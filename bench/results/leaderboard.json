@@ -1,48 +1,76 @@
 {
-  "benchVersion": "v1",
-  "generatedAt": "2026-08-31T11:56:07.153Z",
+  "benchVersion": "v1.1",
+  "generatedAt": "2026-08-31T12:09:02.950Z",
   "suites": {
     "booking": [
-      {
-        "model": "claude-sonnet-5",
-        "label": "Claude Sonnet 5",
-        "vendor": "Anthropic",
-        "open_weights": false,
-        "n": 37,
-        "pass": 34,
-        "passRate": 0.919,
-        "wilsonLo": 0.862,
-        "wilsonHi": 0.954,
-        "totalCostUsd": 2.134,
-        "avgCostUsd": 0.05767,
-        "avgTurns": 1.027,
-        "avgDurationMs": 3692,
-        "extras": {
-          "accountAccuracy": 0.946,
-          "vatAccuracy": 0.973,
-          "ece": 0.125,
-          "parseFailures": 0
-        }
-      },
       {
         "model": "claude-opus-5",
         "label": "Claude Opus 5",
         "vendor": "Anthropic",
         "open_weights": false,
-        "n": 37,
-        "pass": 34,
-        "passRate": 0.919,
-        "wilsonLo": 0.862,
-        "wilsonHi": 0.954,
-        "totalCostUsd": 5.142,
-        "avgCostUsd": 0.13898,
+        "n": 54,
+        "pass": 51,
+        "passRate": 0.944,
+        "wilsonLo": 0.904,
+        "wilsonHi": 0.968,
+        "totalCostUsd": 7.508,
+        "avgCostUsd": 0.13904,
         "avgTurns": 1,
-        "avgDurationMs": 2567,
+        "avgDurationMs": 2572,
         "extras": {
-          "accountAccuracy": 0.919,
+          "accountAccuracy": 0.944,
           "vatAccuracy": 1,
-          "ece": 0.048,
-          "parseFailures": 0
+          "ece": 0.08,
+          "parseFailures": 0,
+          "segments": {
+            "underlag": {
+              "n": 35,
+              "pass": 0.943,
+              "accountAccuracy": 0.943,
+              "vatAccuracy": 1
+            },
+            "bank_only": {
+              "n": 19,
+              "pass": 0.947,
+              "accountAccuracy": 0.947,
+              "vatAccuracy": 1
+            }
+          }
+        }
+      },
+      {
+        "model": "claude-sonnet-5",
+        "label": "Claude Sonnet 5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 54,
+        "pass": 48,
+        "passRate": 0.889,
+        "wilsonLo": 0.839,
+        "wilsonHi": 0.925,
+        "totalCostUsd": 3.079,
+        "avgCostUsd": 0.05702,
+        "avgTurns": 1.019,
+        "avgDurationMs": 3434,
+        "extras": {
+          "accountAccuracy": 0.907,
+          "vatAccuracy": 0.981,
+          "ece": 0.117,
+          "parseFailures": 0,
+          "segments": {
+            "underlag": {
+              "n": 35,
+              "pass": 0.914,
+              "accountAccuracy": 0.943,
+              "vatAccuracy": 0.971
+            },
+            "bank_only": {
+              "n": 19,
+              "pass": 0.842,
+              "accountAccuracy": 0.842,
+              "vatAccuracy": 1
+            }
+          }
         }
       },
       {
@@ -50,20 +78,34 @@
         "label": "Claude Sonnet 4.6",
         "vendor": "Anthropic",
         "open_weights": false,
-        "n": 37,
-        "pass": 31,
-        "passRate": 0.838,
-        "wilsonLo": 0.768,
-        "wilsonHi": 0.889,
-        "totalCostUsd": 2.558,
-        "avgCostUsd": 0.06913,
+        "n": 54,
+        "pass": 46,
+        "passRate": 0.852,
+        "wilsonLo": 0.797,
+        "wilsonHi": 0.894,
+        "totalCostUsd": 3.724,
+        "avgCostUsd": 0.06896,
         "avgTurns": 1,
-        "avgDurationMs": 2183,
+        "avgDurationMs": 2004,
         "extras": {
-          "accountAccuracy": 0.838,
-          "vatAccuracy": 1,
-          "ece": 0.052,
-          "parseFailures": 0
+          "accountAccuracy": 0.889,
+          "vatAccuracy": 0.963,
+          "ece": 0.036,
+          "parseFailures": 0,
+          "segments": {
+            "underlag": {
+              "n": 35,
+              "pass": 0.829,
+              "accountAccuracy": 0.829,
+              "vatAccuracy": 1
+            },
+            "bank_only": {
+              "n": 19,
+              "pass": 0.895,
+              "accountAccuracy": 1,
+              "vatAccuracy": 0.895
+            }
+          }
         }
       },
       {
@@ -71,20 +113,34 @@
         "label": "Claude Haiku 4.5",
         "vendor": "Anthropic",
         "open_weights": false,
-        "n": 37,
-        "pass": 22,
-        "passRate": 0.595,
-        "wilsonLo": 0.512,
-        "wilsonHi": 0.672,
-        "totalCostUsd": 0.89,
-        "avgCostUsd": 0.02406,
+        "n": 54,
+        "pass": 31,
+        "passRate": 0.574,
+        "wilsonLo": 0.506,
+        "wilsonHi": 0.639,
+        "totalCostUsd": 1.296,
+        "avgCostUsd": 0.024,
         "avgTurns": 1,
-        "avgDurationMs": 3977,
+        "avgDurationMs": 3880,
         "extras": {
-          "accountAccuracy": 0.595,
-          "vatAccuracy": 1,
-          "ece": 0.348,
-          "parseFailures": 0
+          "accountAccuracy": 0.667,
+          "vatAccuracy": 0.889,
+          "ece": 0.256,
+          "parseFailures": 0,
+          "segments": {
+            "underlag": {
+              "n": 35,
+              "pass": 0.571,
+              "accountAccuracy": 0.571,
+              "vatAccuracy": 1
+            },
+            "bank_only": {
+              "n": 19,
+              "pass": 0.579,
+              "accountAccuracy": 0.842,
+              "vatAccuracy": 0.684
+            }
+          }
         }
       }
     ],
@@ -319,6 +375,1225 @@
           "totalToolCalls": 13,
           "totalToolErrors": 0,
           "invariantRefusals": 0
+        }
+      }
+    ]
+  },
+  "taskMatrix": {
+    "booking": [
+      {
+        "id": "booking-020",
+        "difficulty": "hard",
+        "probe": "EU SaaS under reverse charge (the 2614-vs-5420 production failure class)",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-021",
+        "difficulty": "hard",
+        "probe": "EU ad platform under reverse charge",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-022",
+        "difficulty": "hard",
+        "probe": "Non-EU service still self-assessed under the main rule",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-023",
+        "difficulty": "hard",
+        "probe": "Intra-EU goods acquisition",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-024",
+        "difficulty": "hard",
+        "probe": "Import of goods from outside the EU",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": true,
+          "claude-opus-5": false
+        }
+      },
+      {
+        "id": "booking-025",
+        "difficulty": "hard",
+        "probe": "Domestic reverse charge for construction services",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-026",
+        "difficulty": "hard",
+        "probe": "Client lunch: representation with capped VAT",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-027",
+        "difficulty": "hard",
+        "probe": "Staff Christmas party: internal representation",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-028",
+        "difficulty": "hard",
+        "probe": "Laptop under the half price-base-amount threshold is an expense",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": false,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-029",
+        "difficulty": "hard",
+        "probe": "Machine above the threshold is a fixed asset",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-030",
+        "difficulty": "hard",
+        "probe": "Passenger car lease: only half the VAT is deductible",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-031",
+        "difficulty": "core",
+        "probe": "Fuel for company cars",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-032",
+        "difficulty": "hard",
+        "probe": "Membership fee: non-deductible, no VAT",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-033",
+        "difficulty": "hard",
+        "probe": "Gym membership for staff: wellness benefit at 6 % VAT",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": false,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-034",
+        "difficulty": "core",
+        "probe": "Coffee and fika for the office",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-035",
+        "difficulty": "expert",
+        "probe": "Foreign-brand software bought via Swedish reseller: read the underlag, not the pattern",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-036",
+        "difficulty": "expert",
+        "probe": "Taxi receipt at 6 % VAT",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-037",
+        "difficulty": "hard",
+        "probe": "Restaurant meal on a business trip is NOT representation",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-038",
+        "difficulty": "expert",
+        "probe": "Non-VAT-registered company: VAT is part of the cost",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-039",
+        "difficulty": "hard",
+        "probe": "Consumables for a construction firm",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-040",
+        "difficulty": "expert",
+        "probe": "Recruitment ad on an EU platform",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": false,
+          "claude-opus-5": false
+        }
+      },
+      {
+        "id": "booking-101",
+        "difficulty": "hard",
+        "probe": "Bank feed only: Google Workspace from Ireland, no receipt attached",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-102",
+        "difficulty": "hard",
+        "probe": "Bank feed only: Meta ads, no receipt attached",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": false,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-103",
+        "difficulty": "hard",
+        "probe": "Bank feed only: AWS infrastructure, no receipt attached",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-104",
+        "difficulty": "hard",
+        "probe": "Bank feed only: Adobe subscription, no receipt attached",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-106",
+        "difficulty": "core",
+        "probe": "Bank feed only: train ticket",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-107",
+        "difficulty": "core",
+        "probe": "Bank feed only: public transport card for business travel",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": false,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-108",
+        "difficulty": "core",
+        "probe": "Bank feed only: hotel night",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-109",
+        "difficulty": "core",
+        "probe": "Bank feed only: insurance premium",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-110",
+        "difficulty": "core",
+        "probe": "Bank feed only: bank charges",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-111",
+        "difficulty": "hard",
+        "probe": "Bank feed only: fuel, company runs passenger cars",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-112",
+        "difficulty": "hard",
+        "probe": "Bank feed only: fuel, company runs a light truck",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-113",
+        "difficulty": "core",
+        "probe": "Bank feed only: mobile subscription",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-114",
+        "difficulty": "hard",
+        "probe": "Bank feed only: gym membership for staff wellness",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-115",
+        "difficulty": "hard",
+        "probe": "Bank feed only: payment to the tax account",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-116",
+        "difficulty": "hard",
+        "probe": "Bank feed only: Fora premiums",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-117",
+        "difficulty": "hard",
+        "probe": "Bank feed only: Bolagsverket filing fee",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": false
+        }
+      },
+      {
+        "id": "booking-118",
+        "difficulty": "core",
+        "probe": "Bank feed only: office furnishings under the asset threshold",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": false,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-001",
+        "difficulty": "core",
+        "probe": "Standard domestic service invoice: accounting services",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-002",
+        "difficulty": "core",
+        "probe": "Mobile subscription",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-003",
+        "difficulty": "core",
+        "probe": "Broadband for the office",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-004",
+        "difficulty": "core",
+        "probe": "Office supplies",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-005",
+        "difficulty": "core",
+        "probe": "Swedish SaaS subscription with Swedish VAT",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-006",
+        "difficulty": "core",
+        "probe": "Bank fees are VAT exempt",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-007",
+        "difficulty": "core",
+        "probe": "Business insurance is VAT exempt",
+        "segment": "bank_only",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-008",
+        "difficulty": "core",
+        "probe": "Train ticket at 6 % VAT",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-009",
+        "difficulty": "core",
+        "probe": "Hotel night at 12 % VAT",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-010",
+        "difficulty": "core",
+        "probe": "Electricity for business premises",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-011",
+        "difficulty": "core",
+        "probe": "Cleaning service for the office",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-012",
+        "difficulty": "core",
+        "probe": "Trade literature at 6 % VAT",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-013",
+        "difficulty": "core",
+        "probe": "Legal services",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-014",
+        "difficulty": "core",
+        "probe": "Staff training",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-015",
+        "difficulty": "core",
+        "probe": "Web hosting from a Swedish provider",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "booking-016",
+        "difficulty": "core",
+        "probe": "Postage stamps are VAT exempt",
+        "segment": "underlag",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      }
+    ],
+    "reasoning": [
+      {
+        "id": "reasoning-001",
+        "difficulty": "core",
+        "probe": "2614 maps to ruta 30",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-002",
+        "difficulty": "core",
+        "probe": "Q2 quarterly filing deadline is 17 August",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-003",
+        "difficulty": "core",
+        "probe": "Over 40M SEK forces monthly reporting",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-004",
+        "difficulty": "hard",
+        "probe": "VAT registration exemption threshold since 2025",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-005",
+        "difficulty": "hard",
+        "probe": "Representation schablon for mixed food and alcohol",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-006",
+        "difficulty": "expert",
+        "probe": "Jämkning arithmetic on real property",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-007",
+        "difficulty": "hard",
+        "probe": "Rutor for an EU B2B service purchase",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-008",
+        "difficulty": "hard",
+        "probe": "Rutor for an intra-EU goods acquisition",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-009",
+        "difficulty": "expert",
+        "probe": "Triangulation reporting for the intermediary",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-010",
+        "difficulty": "core",
+        "probe": "Import VAT goes to Skatteverket since 2015",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-011",
+        "difficulty": "expert",
+        "probe": "Prepaid dance event ticket keeps the old rate",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": false,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-012",
+        "difficulty": "hard",
+        "probe": "Temporary food VAT cut from April 2026",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": false,
+          "claude-opus-5": false
+        }
+      },
+      {
+        "id": "reasoning-013",
+        "difficulty": "hard",
+        "probe": "Restaurant serving keeps 12 % after the food cut",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-014",
+        "difficulty": "core",
+        "probe": "Öresavrundning account",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-015",
+        "difficulty": "core",
+        "probe": "Simplified invoice cap",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-016",
+        "difficulty": "core",
+        "probe": "Retention period",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-017",
+        "difficulty": "core",
+        "probe": "Cash receipts booked next business day",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-018",
+        "difficulty": "hard",
+        "probe": "Correction path once the period is locked",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-019",
+        "difficulty": "hard",
+        "probe": "VAT receivable reclassification",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-020",
+        "difficulty": "hard",
+        "probe": "Half price-base-amount expensing threshold",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-021",
+        "difficulty": "core",
+        "probe": "Price base amount 2026",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": false,
+          "claude-opus-5": false
+        }
+      },
+      {
+        "id": "reasoning-022",
+        "difficulty": "hard",
+        "probe": "Audit requirement: 2 of 3 thresholds",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-023",
+        "difficulty": "hard",
+        "probe": "EC sales list electronic deadline",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": false,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-024",
+        "difficulty": "hard",
+        "probe": "Late EC sales list penalty",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-025",
+        "difficulty": "core",
+        "probe": "Standard skattetillägg rate",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-026",
+        "difficulty": "core",
+        "probe": "Cash accounting threshold",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-027",
+        "difficulty": "hard",
+        "probe": "Ruta for EU B2B service sales",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-028",
+        "difficulty": "hard",
+        "probe": "Ruta for exports outside the EU",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-029",
+        "difficulty": "expert",
+        "probe": "Voluntary VAT liability output account",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": false,
+          "claude-opus-5": false
+        }
+      },
+      {
+        "id": "reasoning-030",
+        "difficulty": "expert",
+        "probe": "Profit margin scheme ruta",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": true,
+          "claude-opus-5": false
+        }
+      },
+      {
+        "id": "reasoning-031",
+        "difficulty": "expert",
+        "probe": "Domestic reverse charge threshold for phones",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-032",
+        "difficulty": "hard",
+        "probe": "Representation gift cap",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-033",
+        "difficulty": "hard",
+        "probe": "OSS distance selling threshold",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-034",
+        "difficulty": "hard",
+        "probe": "Monthly deadline: January period",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-035",
+        "difficulty": "expert",
+        "probe": "Monthly deadline: June period lands on 17 August",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "reasoning-036",
+        "difficulty": "core",
+        "probe": "Ruta for intra-EU goods sales",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      }
+    ],
+    "extraction": [
+      {
+        "id": "extraction-001",
+        "difficulty": "core",
+        "probe": "Plain 25 % services invoice with bankgiro and OCR",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "extraction-002",
+        "difficulty": "hard",
+        "probe": "Receipt with mixed 12/25 % VAT and öresavrundning",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "extraction-003",
+        "difficulty": "hard",
+        "probe": "Invoice with three VAT rates (25/12/6)",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "extraction-004",
+        "difficulty": "hard",
+        "probe": "EU reverse-charge invoice in EUR, 0 % VAT, both VAT numbers",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": false,
+          "claude-opus-5": false
+        }
+      },
+      {
+        "id": "extraction-005",
+        "difficulty": "expert",
+        "probe": "Credit note with negative amounts referencing the original invoice",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "extraction-006",
+        "difficulty": "hard",
+        "probe": "Rent invoice with service period (periodisering signal)",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "extraction-007",
+        "difficulty": "core",
+        "probe": "Plusgiro-only supplier: bankgiro must be null",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": false,
+          "claude-sonnet-5": false,
+          "claude-opus-5": false
+        }
+      },
+      {
+        "id": "extraction-008",
+        "difficulty": "core",
+        "probe": "Simple card receipt",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "extraction-009",
+        "difficulty": "hard",
+        "probe": "Many line items: totals must be summed correctly",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "extraction-010",
+        "difficulty": "core",
+        "probe": "Phone bill with negative öresavrundning",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "extraction-011",
+        "difficulty": "hard",
+        "probe": "Large amounts in Swedish grouped format",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "extraction-012",
+        "difficulty": "expert",
+        "probe": "Mixed 6/25 % with both bankgiro and plusgiro",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      }
+    ],
+    "ledger-agent": [
+      {
+        "id": "ledger-001",
+        "difficulty": "hard",
+        "probe": "Book an EU reverse-charge invoice end to end",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "ledger-002",
+        "difficulty": "expert",
+        "probe": "Correct a posted voucher without editing history",
+        "results": {
+          "claude-haiku-4-5": true,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
+        }
+      },
+      {
+        "id": "ledger-003",
+        "difficulty": "hard",
+        "probe": "Period VAT settlement into 2650",
+        "results": {
+          "claude-haiku-4-5": false,
+          "claude-sonnet-4-6": true,
+          "claude-sonnet-5": true,
+          "claude-opus-5": true
         }
       }
     ]

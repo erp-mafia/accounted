@@ -11,8 +11,17 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { MODELS } from './models'
-import type { RunRecord, SuiteId } from './types'
-import { BENCH_ROOT } from './util'
+import type { BookingTask, RunRecord, SuiteId, Task } from './types'
+import { BENCH_ROOT, loadTasks } from './util'
+
+// Booking tasks split into evidence segments: 'underlag' tasks attach
+// invoice/receipt text (which usually states the VAT: the metric there is
+// evidence READING), 'bank_only' tasks show only what a bank feed shows
+// (the metric there is domain KNOWLEDGE). Reported separately because the
+// two questions have different answers.
+function bookingSegment(task: BookingTask): 'underlag' | 'bank_only' {
+  return task.input.transaction.underlag ? 'underlag' : 'bank_only'
+}
 
 function loadAllRecords(): RunRecord[] {
   const dir = path.join(BENCH_ROOT, 'results', 'runs')
@@ -87,7 +96,11 @@ interface SuiteRow {
   extras: Record<string, unknown>
 }
 
-function suiteExtras(suite: SuiteId, records: RunRecord[]): Record<string, unknown> {
+function suiteExtras(
+  suite: SuiteId,
+  records: RunRecord[],
+  segments?: Map<string, 'underlag' | 'bank_only'>,
+): Record<string, unknown> {
   if (suite === 'booking') {
     const accountAcc =
       records.filter((r) => r.score.accountCorrect === true).length / records.length
@@ -98,11 +111,26 @@ function suiteExtras(suite: SuiteId, records: RunRecord[]): Record<string, unkno
         confidence: r.score.confidence as number,
         correct: r.score.accountCorrect === true,
       }))
+    const seg = (name: 'underlag' | 'bank_only') => {
+      const recs = records.filter((r) => segments?.get(r.taskId) === name)
+      if (recs.length === 0) return null
+      return {
+        n: recs.length,
+        pass: round3(recs.filter((r) => r.pass).length / recs.length),
+        accountAccuracy: round3(
+          recs.filter((r) => r.score.accountCorrect === true).length / recs.length,
+        ),
+        vatAccuracy: round3(
+          recs.filter((r) => r.score.vatCorrect === true).length / recs.length,
+        ),
+      }
+    }
     return {
       accountAccuracy: round3(accountAcc),
       vatAccuracy: round3(vatAcc),
       ece: ece(calibration),
       parseFailures: records.filter((r) => r.score.parseFailed === true).length,
+      segments: { underlag: seg('underlag'), bank_only: seg('bank_only') },
     }
   }
   if (suite === 'reasoning') {
@@ -141,15 +169,52 @@ function main() {
   const latest = latestPerKey(loadAllRecords())
   const suites: SuiteId[] = ['booking', 'reasoning', 'extraction', 'ledger-agent']
   const leaderboard: Record<string, unknown> = {
-    benchVersion: 'v1',
+    benchVersion: 'v1.1',
     generatedAt: new Date().toISOString(),
     suites: {},
+    taskMatrix: {},
   }
 
+  const suiteTasks = new Map<SuiteId, Task[]>([
+    ['booking', loadTasks('booking')],
+    ['reasoning', loadTasks('reasoning')],
+    ['extraction', loadTasks('extraction')],
+    ['ledger-agent', loadTasks('ledger-agent')],
+  ])
+  const bookingSegments = new Map(
+    (suiteTasks.get('booking') as BookingTask[]).map((t) => [t.id, bookingSegment(t)]),
+  )
+
   for (const suite of suites) {
+    // Per-task outcome matrix: which model passed which task.
+    const matrix: Record<string, unknown>[] = []
+    for (const task of suiteTasks.get(suite) ?? []) {
+      const results: Record<string, boolean | null> = {}
+      for (const model of MODELS.filter((m) => m.enabled)) {
+        const rec = latest.find(
+          (r) => r.suite === suite && r.taskId === task.id && r.model === model.id,
+        )
+        results[model.id] = rec ? rec.pass : null
+      }
+      matrix.push({
+        id: task.id,
+        difficulty: task.difficulty,
+        probe: task.probe,
+        segment: suite === 'booking' ? bookingSegments.get(task.id) : undefined,
+        results,
+      })
+    }
+    ;(leaderboard.taskMatrix as Record<string, unknown>)[suite] = matrix
+
+    // Only records whose task still exists count: a task removed during
+    // curation (defective gold) drops out of the aggregates for every model
+    // equally, instead of lingering as stale verdicts.
+    const currentIds = new Set((suiteTasks.get(suite) ?? []).map((t) => t.id))
     const rows: SuiteRow[] = []
     for (const model of MODELS) {
-      const records = latest.filter((r) => r.suite === suite && r.model === model.id)
+      const records = latest.filter(
+        (r) => r.suite === suite && r.model === model.id && currentIds.has(r.taskId),
+      )
       if (records.length === 0) continue
       const pass = records.filter((r) => r.pass).length
       const w = wilson(pass, records.length)
@@ -172,7 +237,7 @@ function main() {
         avgDurationMs: Math.round(
           records.reduce((s, r) => s + r.durationMs, 0) / records.length,
         ),
-        extras: suiteExtras(suite, records),
+        extras: suiteExtras(suite, records, suite === 'booking' ? bookingSegments : undefined),
       })
     }
     rows.sort((a, b) => b.passRate - a.passRate)

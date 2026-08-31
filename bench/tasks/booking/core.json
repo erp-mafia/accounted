@@ -260,7 +260,8 @@
       "account": "5830",
       "acceptable_accounts": [
         "5800",
-        "5890"
+        "5890",
+        "5831"
       ],
       "vat_treatment": "domestic_12"
     }
