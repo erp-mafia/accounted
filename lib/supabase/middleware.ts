@@ -14,6 +14,7 @@ import { shouldEnforceMfa } from '@/lib/auth/mfa'
 import { apiPathSkipsMfaGate } from '@/lib/auth/api-mfa-gate'
 import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from '@/i18n/config'
 import { userHasPassword } from '@/lib/auth/has-password'
+import { isEmailOnBrandAllowlist } from '@/lib/auth/brand-signup-gate'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { normalizeHost, resolveBrandByHost } from '@/lib/branding/resolve'
 import {
@@ -355,7 +356,12 @@ async function updateSessionInner(
   // stays the answer for multi-domain company rosters. Exemption: byrå
   // staff who also have canonical-homed companies stay put on the canonical
   // host; the signpost handles per-company homing.
-  const homeOutcome = await resolveHomeDomainOutcome(supabase, user.id, request)
+  const homeOutcome = await resolveHomeDomainOutcome(
+    supabase,
+    user.id,
+    user.email ?? null,
+    request,
+  )
   if (homeOutcome.redirectTo) {
     return NextResponse.redirect(homeOutcome.redirectTo)
   }
@@ -768,6 +774,7 @@ function isAffinityExemptHost(host: string): boolean {
 async function resolveHomeDomainOutcome(
   supabase: ReturnType<typeof createServerClient>,
   userId: string,
+  userEmail: string | null,
   request: NextRequest,
 ): Promise<{ redirectTo: URL | null; cacheOk: boolean }> {
   const stay = { redirectTo: null, cacheOk: false }
@@ -856,6 +863,17 @@ async function resolveHomeDomainOutcome(
     return stay
   }
   if ((clientRows ?? []).length > 0) return { redirectTo: null, cacheOk: true }
+
+  // A signup-allowlisted email stays on the brand host even before any
+  // membership exists: the partner owner between allowlisted signup and team
+  // provisioning. Without this the layout-level exemption in
+  // resolveBrandDomainBounce (lib/auth/brand-signup-gate.ts) is unreachable,
+  // because this redirect runs first. Fail-closed lookup: an allowlist query
+  // error reads as "not allowlisted" and falls through to the platform
+  // redirect, which is the pre-existing behavior.
+  if (userEmail && (await isEmailOnBrandAllowlist(hostBrand.id, userEmail))) {
+    return { redirectTo: null, cacheOk: true }
+  }
 
   const platformUrl = new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://app.gnubok.se')
   if (normalizeHost(platformUrl.hostname) === host) return { redirectTo: null, cacheOk: true }
