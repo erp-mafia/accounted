@@ -88,7 +88,7 @@ This reference compares Sweden's likely trajectory to the mandates already enact
 
 ## Sweden's likely trajectory
 
-Sweden has **20+ years of Peppol/SFTI infrastructure**, B2G mandatory since 2019, and DIGG already accredited as Peppol Authority. There is **zero political appetite** for an Italian-style centralised clearance hub, the existing decentralised infrastructure works, has proven low-friction, and aligns with EU peer countries (Belgium, Norway, Germany).
+Sweden has **20+ years of Peppol/SFTI infrastructure**, B2G mandatory since 2019, and an accredited Peppol Authority (DIGG until 30 June 2026, Upphandlingsmyndigheten since 1 July 2026). There is **zero political appetite** for an Italian-style centralised clearance hub, the existing decentralised infrastructure works, has proven low-friction, and aligns with EU peer countries (Belgium, Norway, Germany).
 
 **Realistic trajectory:**
 

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { makeDocumentAttachment } from '@/tests/helpers'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
@@ -51,6 +51,10 @@ function makeQueryBuilder(result: { data: unknown; error: unknown }) {
 }
 
 describe('MCP model-free document upload tools', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.createPendingDocumentUpload.mockResolvedValue({
@@ -73,6 +77,32 @@ describe('MCP model-free document upload tools', () => {
         supplier: { name: 'Synthetic Supplier AB', orgNumber: null },
         invoice: { number: 'INV-1' },
       },
+    })
+  })
+
+  // Claude Desktop's sandbox only reaches the MCP host: a signed URL on
+  // <project>.supabase.co was refused there (2026-08-21), so the tool hands
+  // out the same-origin /api/storage proxy URL instead.
+  it('serves the upload URL from the app origin when the signed URL points at our Storage host', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://pwxtzglxptnnvjrpixpg.supabase.co')
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.accounted.se')
+    mocks.createPendingDocumentUpload.mockResolvedValue({
+      uploadId,
+      signedUrl:
+        'https://pwxtzglxptnnvjrpixpg.supabase.co/storage/v1/object/upload/sign/documents/co/user/pending/up/invoice.pdf?token=signed',
+      expiresAt: '2026-08-03T12:00:00.000Z',
+    })
+
+    const result = await findTool('gnubok_create_document_upload').execute(
+      { file_name: 'invoice.pdf' },
+      companyId,
+      userId,
+      {} as never,
+    )
+
+    expect(result).toMatchObject({
+      upload_url:
+        'https://app.accounted.se/api/storage/upload/sign/documents/co/user/pending/up/invoice.pdf?token=signed',
     })
   })
 
@@ -129,6 +159,10 @@ describe('MCP model-free document upload tools', () => {
       uploadId,
       'invoice.pdf',
       'application/pdf',
+      undefined,
+      // The inbox item created right after owns extraction; the
+      // document-extraction extension must yield on the uploaded event.
+      { extractionOwner: 'invoice-inbox' },
     )
     expect(inboxInsert.insert).toHaveBeenCalledWith(
       expect.objectContaining({ id: uploadId, document_id: uploadId }),
@@ -172,6 +206,21 @@ describe('MCP model-free document upload tools', () => {
     ]) {
       expect(TOOL_SCOPE_MAP[name]).toBe('transactions:write')
       expect(MCP_TOOL_CAPABILITY_MAP[name]).toBe('ai')
+    }
+  })
+
+  it('declares matched_supplier_id nullable: unmatched suppliers return null (MCP feedback seq 261972)', () => {
+    // Strict clients validate structuredContent against outputSchema; a bare
+    // { type: 'string' } turned every unmatched upload into a client-side
+    // validation error (and tripped the caller's circuit breaker) even though
+    // the upload itself succeeded.
+    for (const name of ['gnubok_complete_document_upload', 'gnubok_upload_document']) {
+      const schema = findTool(name).outputSchema as {
+        properties: Record<string, { type: unknown }>
+        required: string[]
+      }
+      expect(schema.properties.matched_supplier_id.type).toEqual(['string', 'null'])
+      expect(schema.required).not.toContain('matched_supplier_id')
     }
   })
 })

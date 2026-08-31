@@ -3,16 +3,25 @@
 import { useCallback, useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
-import { useTranslations } from 'next-intl'
-import { ShoppingCart } from 'lucide-react'
+import { useLocale, useTranslations } from 'next-intl'
+import { MoreHorizontal, ShoppingCart } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useToast } from '@/components/ui/use-toast'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { WebshopOrder, WebshopStoreSettings } from '@/types'
 
@@ -23,6 +32,31 @@ const CreateInvoiceFromOrderDialog = dynamic(
   () => import('@/components/orders/CreateInvoiceFromOrderDialog'),
   { ssr: false },
 )
+const MarkOrderBookedDialog = dynamic(
+  () => import('@/components/orders/MarkOrderBookedDialog'),
+  { ssr: false },
+)
+const BulkOrderBookingDialog = dynamic(
+  () => import('@/components/orders/BulkOrderBookingDialog'),
+  { ssr: false },
+)
+
+/**
+ * A row can join the bulk sweep exactly when its single-row Bokför button
+ * would render: unbooked, uninvoiced, not marked as booked outside the
+ * integration, and either a refund or a paid order. Legacy-overlap rows stay
+ * selectable on purpose: the server guard decides and the per-order failure
+ * report explains (no dead-end soft guard).
+ */
+function isBulkBookable(order: WebshopOrder, canWrite: boolean): boolean {
+  return (
+    canWrite &&
+    order.journal_entry_id === null &&
+    order.invoice_id === null &&
+    order.manually_booked_at === null &&
+    (order.row_type === 'refund' || order.is_paid)
+  )
+}
 
 interface StoreFacet {
   platform: string
@@ -52,7 +86,9 @@ function tabQuery(tab: StatusTab): string {
 
 export default function OrdersPage() {
   const t = useTranslations('webshop_orders')
+  const errorLocale = useLocale() as ErrorLocale
   const { canWrite } = useCanWrite()
+  const { toast } = useToast()
   const [rows, setRows] = useState<WebshopOrder[]>([])
   const [stores, setStores] = useState<StoreFacet[]>([])
   const [settings, setSettings] = useState<WebshopStoreSettings[]>([])
@@ -66,9 +102,18 @@ export default function OrdersPage() {
   const [page, setPage] = useState(0)
   const [bookingOrder, setBookingOrder] = useState<WebshopOrder | null>(null)
   const [invoicingOrder, setInvoicingOrder] = useState<WebshopOrder | null>(null)
+  const [markingOrder, setMarkingOrder] = useState<WebshopOrder | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // Snapshot of the selection the bulk dialog opened with: the list refresh
+  // after a partial failure clears the live selection, but the dialog must
+  // keep showing its per-order report.
+  const [bulkOrders, setBulkOrders] = useState<WebshopOrder[] | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
+    // A reload changes which rows exist and which are still bookable
+    // (tab/page/store switch, or a completed sweep): start selection over.
+    setSelectedIds(new Set())
     try {
       const storeParam = storeScope ? `&store_scope=${encodeURIComponent(storeScope)}` : ''
       const res = await fetch(
@@ -120,6 +165,52 @@ export default function OrdersPage() {
       ) ?? null,
     [settings],
   )
+
+  // Undo a manual "booked outside the integration" mark: no accounting
+  // objects were created, so this simply returns the row to the to-book list.
+  const unmarkOrder = useCallback(
+    async (order: WebshopOrder) => {
+      try {
+        const res = await fetch(`/api/webshop-orders/${order.id}/mark-booked`, {
+          method: 'DELETE',
+        })
+        const json = await res.json()
+        if (!res.ok || json.error) {
+          toast({
+            title: t('unmark_failed'),
+            description: getErrorMessage(json, {
+              context: 'transaction',
+              statusCode: res.status,
+              locale: errorLocale,
+            }),
+            variant: 'destructive',
+          })
+          return
+        }
+        void load()
+      } catch {
+        toast({ title: t('unmark_failed'), variant: 'destructive' })
+      }
+    },
+    [load, t, toast, errorLocale],
+  )
+
+  const selectableIds = visibleRows
+    .filter((o) => isBulkBookable(o, canWrite))
+    .map((o) => o.id)
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  const openBulkBooking = useCallback(() => {
+    setBulkOrders(rows.filter((o) => selectedIds.has(o.id)))
+  }, [rows, selectedIds])
 
   const tabs: Array<{ key: StatusTab; label: string }> = [
     { key: 'all', label: t('tab_all') },
@@ -195,10 +286,44 @@ export default function OrdersPage() {
           actionHref="/import"
         />
       ) : (
-        <div className="stagger-enter overflow-x-auto">
+        <div className="stagger-enter">
+          {/* Bulkbar (transactions-page pattern): hidden until at least one
+              bookable order is selected via the hover checkboxes. */}
+          {selectedIds.size > 0 && (
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
+              <span className="whitespace-nowrap">
+                <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
+                {t('bulk_selected', { count: selectedIds.size })}
+              </span>
+              <Button size="sm" onClick={openBulkBooking}>
+                {t('bulk_book_selected')}
+              </Button>
+              {selectedIds.size < selectableIds.length && (
+                <button
+                  type="button"
+                  className={QUIET_LINK_CLASS}
+                  onClick={() => setSelectedIds(new Set(selectableIds))}
+                >
+                  {t('bulk_select_all', { count: selectableIds.length })}
+                </button>
+              )}
+              <button
+                type="button"
+                className={QUIET_LINK_CLASS}
+                onClick={() => setSelectedIds(new Set())}
+              >
+                {t('bulk_clear')}
+              </button>
+            </div>
+          )}
+          {/* Negative margin + matching padding: lets the hover-revealed
+              selection checkbox hang into the page margins without being
+              clipped by the overflow container (transactions-page pattern). */}
+          <div className="-mx-5 overflow-x-auto px-5 md:-mx-8 md:px-8">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
+                <th className={cn(TH_CLASS, 'w-0 !p-0')} aria-hidden="true"></th>
                 <th className={TH_CLASS}>{t('col_date')}</th>
                 <th className={TH_CLASS}>{t('col_order')}</th>
                 {multiStore && <th className={TH_CLASS}>{t('col_store')}</th>}
@@ -216,13 +341,19 @@ export default function OrdersPage() {
                   order={order}
                   multiStore={multiStore}
                   canWrite={canWrite}
+                  selectable={isBulkBookable(order, canWrite)}
+                  isSelected={selectedIds.has(order.id)}
+                  onToggleSelect={toggleSelect}
                   onBook={() => setBookingOrder(order)}
                   onInvoice={() => setInvoicingOrder(order)}
+                  onMarkBooked={() => setMarkingOrder(order)}
+                  onUnmark={() => void unmarkOrder(order)}
                   t={t}
                 />
               ))}
             </tbody>
           </table>
+          </div>
           {count > PAGE_SIZE && (
             <div className="mt-4 flex items-center justify-between text-[12.5px] text-muted-foreground">
               <span>
@@ -277,6 +408,20 @@ export default function OrdersPage() {
           }}
         />
       )}
+      {bulkOrders && (
+        <BulkOrderBookingDialog
+          open={!!bulkOrders}
+          onOpenChange={(open) => {
+            if (!open) setBulkOrders(null)
+          }}
+          orders={bulkOrders}
+          settingsFor={settingsFor}
+          onBooked={() => {
+            setSelectedIds(new Set())
+            void load()
+          }}
+        />
+      )}
       {invoicingOrder && (
         <CreateInvoiceFromOrderDialog
           open={!!invoicingOrder}
@@ -290,6 +435,19 @@ export default function OrdersPage() {
           }}
         />
       )}
+      {markingOrder && (
+        <MarkOrderBookedDialog
+          open={!!markingOrder}
+          onOpenChange={(open) => {
+            if (!open) setMarkingOrder(null)
+          }}
+          order={markingOrder}
+          onMarked={() => {
+            setMarkingOrder(null)
+            void load()
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -298,29 +456,68 @@ function OrderRow({
   order,
   multiStore,
   canWrite,
+  selectable,
+  isSelected,
+  onToggleSelect,
   onBook,
   onInvoice,
+  onMarkBooked,
+  onUnmark,
   t,
 }: {
   order: WebshopOrder
   multiStore: boolean
   canWrite: boolean
+  selectable: boolean
+  isSelected: boolean
+  onToggleSelect: (id: string) => void
   onBook: () => void
   onInvoice: () => void
+  onMarkBooked: () => void
+  onUnmark: () => void
   t: ReturnType<typeof useTranslations<'webshop_orders'>>
 }) {
   const isRefund = order.row_type === 'refund'
   const booked = order.journal_entry_id !== null
   const invoiced = order.invoice_id !== null
+  const manuallyMarked = order.manually_booked_at !== null
   // Cross-marked rows (legacy_transaction_id) keep their action buttons: the
   // server guard decides (it allows booking once the feed row is booked-
   // elsewhere-no, ignored-yes) and its 409 message explains what to do.
   // Hiding the button would be a dead-end soft guard.
-  const bookable = canWrite && !booked && !invoiced && (isRefund || order.is_paid)
-  const invoiceable = canWrite && !isRefund && !booked && !invoiced
+  const bookable =
+    canWrite && !booked && !invoiced && !manuallyMarked && (isRefund || order.is_paid)
+  const invoiceable = canWrite && !isRefund && !booked && !invoiced && !manuallyMarked
+  // Secondary actions live in the overflow menu so the cell keeps one text
+  // button (the two-button layout used to overflow the panel width).
+  const markable = canWrite && !booked && !invoiced && !manuallyMarked
+  const unmarkable = canWrite && manuallyMarked
 
   return (
-    <tr className="group transition-colors duration-150 hover:bg-secondary/35">
+    <tr
+      className={cn(
+        'group transition-colors duration-150 hover:bg-secondary/35',
+        isSelected && 'bg-secondary/40',
+      )}
+    >
+      {/* Hover-revealed selection checkbox (transactions-page pattern):
+          zero-width cell, the checkbox hangs in the left page margin so the
+          date column stays where it was. Selected rows keep it visible. */}
+      <td className={cn(TD_CLASS, 'relative w-0 !p-0')}>
+        {selectable && (
+          <Checkbox
+            checked={isSelected}
+            onCheckedChange={() => onToggleSelect(order.id)}
+            aria-label={t('select_order_aria', { number: order.order_number })}
+            className={cn(
+              'absolute -left-5 top-1/2 -translate-y-1/2 transition-opacity duration-150 md:-left-6',
+              isSelected
+                ? 'opacity-100'
+                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100',
+            )}
+          />
+        )}
+      </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
         {formatDate(order.order_date)}
       </td>
@@ -370,15 +567,44 @@ function OrderRow({
           side pushed the table past the panel width and the overflow clip
           swallowed single-button cells. */}
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
-        {bookable ? (
-          <Button variant="outline" size="sm" onClick={onBook}>
-            {t('action_book')}
-          </Button>
-        ) : invoiceable ? (
-          <Button variant="outline" size="sm" onClick={onInvoice}>
-            {t('action_create_invoice')}
-          </Button>
-        ) : null}
+        <div className="flex items-center justify-end gap-1">
+          {bookable ? (
+            <Button variant="outline" size="sm" onClick={onBook}>
+              {t('action_book')}
+            </Button>
+          ) : invoiceable ? (
+            <Button variant="outline" size="sm" onClick={onInvoice}>
+              {t('action_create_invoice')}
+            </Button>
+          ) : null}
+          {(markable || unmarkable) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0"
+                  aria-label={t('row_menu_aria', { number: order.order_number })}
+                >
+                  <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {markable && (
+                  <DropdownMenuItem onSelect={onMarkBooked}>
+                    {t('action_mark_booked')}
+                  </DropdownMenuItem>
+                )}
+                {unmarkable && (
+                  <DropdownMenuItem onSelect={onUnmark}>
+                    {t('action_unmark_booked')}
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
       </td>
     </tr>
   )
@@ -401,6 +627,21 @@ function OrderStatus({
   }
   if (order.journal_entry_id) {
     return <span className="text-xs text-muted-foreground">{t('status_booked')}</span>
+  }
+  // Marked as handled outside the integration: a normal done state, so muted
+  // text, not a chip (convention 5). Links to the referenced verifikat when
+  // the user picked one.
+  if (order.manually_booked_at) {
+    return order.manually_booked_journal_entry_id ? (
+      <Link
+        href={`/bookkeeping/${order.manually_booked_journal_entry_id}`}
+        className="text-xs text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
+      >
+        {t('status_marked_booked')}
+      </Link>
+    ) : (
+      <span className="text-xs text-muted-foreground">{t('status_marked_booked')}</span>
+    )
   }
   if (order.invoice_id) {
     return (

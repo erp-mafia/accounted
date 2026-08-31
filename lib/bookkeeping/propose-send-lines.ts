@@ -9,7 +9,7 @@ import {
   getRevenueAccount,
   getOutputVatAccount,
   InvoiceFxRateMissingError,
-} from './invoice-entries'
+} from './invoice-accounts'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
 import { computeDeduction } from '@/lib/invoices/rot-rut-rules'
 import { roundOre } from '@/lib/money'
@@ -245,6 +245,9 @@ function buildSendLines(
     const deduction = computeDeduction({
       unit_price: item.unit_price,
       quantity: item.quantity,
+      // Net of any line discount: must match the stored deduction_total or
+      // the proposed 1513/1510 split cannot clear.
+      discount_percent: item.discount_percent ?? 0,
       deduction_type: item.deduction_type,
       vat_rate: item.vat_rate,
     })

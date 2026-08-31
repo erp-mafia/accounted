@@ -9,7 +9,7 @@ import {
   DEFAULT_OAUTH_SCOPES,
   type ApiKeyScope,
 } from '@/lib/auth/api-keys'
-import { requireCompanyId } from '@/lib/company/context'
+import { getActiveCompanyId } from '@/lib/company/context'
 
 const ACCESS_TOKEN_TTL_SECONDS = 3600
 
@@ -125,7 +125,10 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
     .lt('created_at', new Date(Date.now() - 10 * 60 * 1000).toISOString())
     .then(() => {})
 
-  const companyId = await requireCompanyId(supabase, payload.userId)
+  // null for an account that has no company yet (signed up from the OAuth
+  // popup, issue #1814). The key is minted unbound; validateApiKey binds it
+  // to the user's first company on the first call after one exists.
+  const companyId = await getActiveCompanyId(supabase, payload.userId)
 
   const { key, hash, prefix } = generateApiKey()
   const refresh = generateRefreshToken()
@@ -164,6 +167,13 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
     })
 
   if (insertError) {
+    // This 500 was silent while api_keys.company_id was NOT NULL and every
+    // companyless signup died here (2026-08-26): always log the DB error.
+    console.error('[mcp-oauth/token] api key insert failed', {
+      code: insertError.code,
+      message: insertError.message,
+      companyless: companyId === null,
+    })
     return NextResponse.json(
       { error: 'server_error', error_description: 'Failed to create API key' },
       { status: 500 }
@@ -211,6 +221,7 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
   })
 
   if (error) {
+    console.error('[mcp-oauth/token] refresh rotation failed', { code: error.code, message: error.message })
     return NextResponse.json(
       { error: 'server_error', error_description: 'Failed to rotate refresh token' },
       { status: 500 }

@@ -115,11 +115,13 @@ export function deriveNextStep(input: NextStepInput): NextStep {
 export type ForvalChip =
   | { kind: 'doc_type'; documentType: 'proforma' | 'delivery_note' }
   | { kind: 'currency'; currency: string }
+  | { kind: 'invoice_date'; date: string }
   | { kind: 'due_days'; days: number; date: string }
   | { kind: 'due_date'; date: string }
   | { kind: 'received'; date: string }
   | { kind: 'delivery'; date: string }
   | { kind: 'your_reference'; reference: string }
+  | { kind: 'invoice_marking'; marking: string }
   | { kind: 'payment_link'; mode: 'auto' | 'manual' }
   | { kind: 'ore_off' }
   | { kind: 'dims'; dims: string }
@@ -133,6 +135,7 @@ export interface ForvalChipsInput {
   receivedDate: string
   deliveryDate: string
   yourReference: string
+  invoiceMarking: string
   paymentLink: 'auto' | 'manual' | null
   oreRounding: boolean
   /** Compact display of the invoice-level default dims, or null when none. */
@@ -152,6 +155,13 @@ export function deriveForvalChips(input: ForvalChipsInput): ForvalChip[] {
     chips.push({ kind: 'doc_type', documentType: input.documentType })
   }
   chips.push({ kind: 'currency', currency: input.currency })
+  // The invoice date always surfaces: it silently defaults to today inside
+  // the collapsed panel, and especially in self-billed mode (where the
+  // counterparty's issue date must be transcribed) an invisible default
+  // registers wrong invoices (issue #1820).
+  if (input.invoiceDate) {
+    chips.push({ kind: 'invoice_date', date: input.invoiceDate })
+  }
   if (input.dueDate) {
     const days = dueDays(input.invoiceDate, input.dueDate)
     if (days !== null && days >= 0) chips.push({ kind: 'due_days', days, date: input.dueDate })
@@ -165,6 +175,9 @@ export function deriveForvalChips(input: ForvalChipsInput): ForvalChip[] {
   }
   if (!input.isSelfBilled && input.yourReference.trim()) {
     chips.push({ kind: 'your_reference', reference: input.yourReference.trim() })
+  }
+  if (!input.isSelfBilled && input.invoiceMarking.trim()) {
+    chips.push({ kind: 'invoice_marking', marking: input.invoiceMarking.trim() })
   }
   if (!input.isSelfBilled && input.paymentLink) {
     chips.push({ kind: 'payment_link', mode: input.paymentLink })

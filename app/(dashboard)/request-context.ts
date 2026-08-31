@@ -1,9 +1,12 @@
 import 'server-only'
 
 import { cache } from 'react'
+import type { User } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
+import { claimsPinned, userFromClaims } from '@/lib/auth/claims'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
+import type { Team } from '@/types'
 
 /**
  * Request-local dashboard auth context. React cache shares the Supabase client
@@ -11,9 +14,27 @@ import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
  */
 export const getDashboardAuthContext = cache(async () => {
   const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  // Local JWT verification first (same pinning + mapping as requireAuth,
+  // lib/auth/claims.ts): the proxy already performed the per-request
+  // revocation check with getUser() before this layout runs, so a second
+  // network round trip to Supabase Auth on every hard load, refresh and
+  // router.refresh() bought nothing. getUser() stays as the authoritative
+  // fallback when claims are missing, unpinned or unverifiable.
+  let user: User | null = null
+  if (typeof supabase.auth.getClaims === 'function') {
+    try {
+      const { data } = await supabase.auth.getClaims()
+      if (data?.claims?.sub && claimsPinned(data.claims)) user = userFromClaims(data.claims)
+    } catch {
+      // Fall through to the network check.
+    }
+  }
+  if (!user) {
+    const {
+      data: { user: fetched },
+    } = await supabase.auth.getUser()
+    user = fetched
+  }
 
   return { supabase, user }
 })
@@ -28,6 +49,34 @@ export const getDashboardCompanyId = cache(async () => {
   return user ? getActiveCompanyId(supabase, user.id) : null
 })
 
+export interface DashboardTeamMembership {
+  team_id: string
+  role: string
+  teams: Team | null
+}
+
+/**
+ * Request-local team memberships with the team row embedded. ALL memberships:
+ * multi-team membership (own personal team + byrå team) is the supported
+ * shape after WL-08; a `.limit(1)` would pick an arbitrary row and could hide
+ * a consultant's byrå membership. Shared between the dashboard layout (byrå
+ * cockpit gate) and the home page (byrå landing redirect), so the byrå check
+ * costs no extra query.
+ */
+export const getDashboardTeamMemberships = cache(
+  async (): Promise<DashboardTeamMembership[]> => {
+    const { supabase, user } = await getDashboardAuthContext()
+    if (!user) return []
+
+    const { data } = await supabase
+      .from('team_members')
+      .select('team_id, role, teams:team_id(*)')
+      .eq('user_id', user.id)
+
+    return (data ?? []) as unknown as DashboardTeamMembership[]
+  },
+)
+
 export const getDashboardSettings = cache(async () => {
   const [{ supabase }, companyId] = await Promise.all([
     getDashboardAuthContext(),
@@ -35,9 +84,13 @@ export const getDashboardSettings = cache(async () => {
   ])
   if (!companyId) return { data: null, error: null }
 
+  // Full row: the layout hands it to the client reference-data cache as the
+  // seed for useCompanySettings (which reads select('*') itself), so the
+  // narrow column list this once carried would have been refetched on the
+  // first mount anyway. The other consumers read a subset of the row.
   return supabase
     .from('company_settings')
-    .select('company_name, onboarding_complete, entity_type, pays_salaries, is_sandbox, dimensions_enabled, mileage_enabled, ore_rounding, initial_setup_path, initial_setup_completed_at, initial_setup_dismissed_at, vat_registered, moms_period')
+    .select('*')
     .eq('company_id', companyId)
     .maybeSingle()
 })

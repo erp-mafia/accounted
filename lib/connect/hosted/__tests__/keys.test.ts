@@ -68,10 +68,18 @@ describe('validateConnectorKey', () => {
     expect(result.ok && result.key.limits).toEqual({ bank_connections_per_company: 1, skv_connections_per_company: 1, sync_min_interval_s: 0 })
   })
 
-  it('maps no row (unknown/revoked) and RPC errors to 401', async () => {
+  it('maps no row (unknown/revoked) to 401, but an RPC error to 503', async () => {
     const { key } = generateConnectorKey()
     expect(await validateConnectorKey(key, supabaseWithRpc({ data: [] }).supabase)).toMatchObject({ ok: false, status: 401 })
-    expect(await validateConnectorKey(key, supabaseWithRpc({ error: { message: 'boom' } }).supabase)).toMatchObject({ ok: false, status: 401 })
+    // NEVER 401 on a database error: the instance sync deletes its whole
+    // connector grant cache on 401/403, so a hosted pooler blip answered as
+    // 401 would destroy a paying instance's 72h offline grace. 503 lands in
+    // the sync's keep-grants branch.
+    expect(await validateConnectorKey(key, supabaseWithRpc({ error: { message: 'boom' } }).supabase)).toMatchObject({
+      ok: false,
+      status: 503,
+      code: 'CONNECTOR_VALIDATION_UNAVAILABLE',
+    })
   })
 
   it('maps a suspended key to 403 and a rate-limited one to 429', async () => {

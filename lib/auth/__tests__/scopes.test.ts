@@ -16,8 +16,20 @@ describe('resolveRequiredScope', () => {
 
   it('resolves :param patterns to a single scope', () => {
     expect(
-      resolveRequiredScope('GET', '/api/v1/companies/8fd5b1f4-1111-2222-3333-444455556666'),
-    ).toBe('companies:read')
+      resolveRequiredScope(
+        'GET',
+        '/api/v1/companies/8fd5b1f4-1111-2222-3333-444455556666/customers/0b6c7d8e-1111-2222-3333-444455556666',
+      ),
+    ).toBe('customers:read')
+  })
+
+  it('resolves the inbox-items stamp verb (previously unregistered: 404 with a valid key)', () => {
+    expect(
+      resolveRequiredScope(
+        'POST',
+        '/api/v1/companies/8fd5b1f4-1111-2222-3333-444455556666/inbox-items/0b6c7d8e-1111-2222-3333-444455556666/stamp',
+      ),
+    ).toBe('documents:write')
   })
 
   it('returns null for unknown paths', () => {

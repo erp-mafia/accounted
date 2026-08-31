@@ -2,7 +2,7 @@
  * Tests for gnubok_get_agent_briefing: session-bootstrap context for the
  * specialized accountant agent over MCP.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { tools } from '../server'
 import { RECOMMENDED_WORKFLOW_LOADOUTS, assertRecommendedLoadoutsValid } from '../recommended-tools'
 import { workflowSkills } from '../skills'
@@ -57,6 +57,8 @@ function mockSupabase(opts: {
   dimensionValueRows?: Array<{ dimension_id: string; code: string; name: string }>
   dimensionRuleRows?: Array<{ account_number: string; rule_type: string; dimension_id: string }>
   dimensionsEnabled?: boolean
+  // skatteverket_tokens rows for the connection-health block. Default: none.
+  skvTokenRows?: Array<{ user_id: string; status: string | null; created_at: string | null }>
   errors?: { profile?: string; memory?: string; atoms?: string }
 }) {
   const profile = opts.profile === undefined ? null : opts.profile
@@ -170,6 +172,9 @@ function mockSupabase(opts: {
       if (table === 'account_dimension_rules') {
         // PR10: the briefing surfaces active rules; default none.
         return chainResolving(opts.dimensionRuleRows ?? [])
+      }
+      if (table === 'skatteverket_tokens') {
+        return chainResolving(opts.skvTokenRows ?? [])
       }
       throw new Error(`Unexpected table in test mock: ${table}`)
     }),
@@ -452,6 +457,107 @@ describe('gnubok_get_agent_briefing tool', () => {
       { type: 'api_key' }
     )) as { dimensions?: { enabled: boolean } }
     expect(result.dimensions?.enabled).toBe(false)
+  })
+})
+
+describe('skatteverket_connection health block', () => {
+  const tool = () => tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+  const originalEnabled = process.env.SKATTEVERKET_ENABLED
+
+  beforeEach(() => {
+    process.env.SKATTEVERKET_ENABLED = 'true'
+  })
+
+  afterEach(() => {
+    if (originalEnabled === undefined) delete process.env.SKATTEVERKET_ENABLED
+    else process.env.SKATTEVERKET_ENABLED = originalEnabled
+  })
+
+  it('omits the block entirely for a company that never connected', async () => {
+    const supabase = mockSupabase({ profile: null, skvTokenRows: [] })
+    const result = (await tool().execute(
+      {},
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' }
+    )) as Record<string, unknown>
+    expect('skatteverket_connection' in result).toBe(false)
+  })
+
+  it('omits the block when the skatteverket extension is disabled, even with a token row', async () => {
+    process.env.SKATTEVERKET_ENABLED = 'false'
+    const supabase = mockSupabase({
+      profile: null,
+      skvTokenRows: [{ user_id: 'user-1', status: 'active', created_at: '2026-08-25T09:12:00Z' }],
+    })
+    const result = (await tool().execute(
+      {},
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' }
+    )) as Record<string, unknown>
+    expect('skatteverket_connection' in result).toBe(false)
+  })
+
+  it('reports an active personal session with its connect time (the ~65 min fuse)', async () => {
+    const supabase = mockSupabase({
+      profile: null,
+      skvTokenRows: [{ user_id: 'user-1', status: 'active', created_at: '2026-08-25T09:12:00Z' }],
+    })
+    const result = (await tool().execute(
+      {},
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' }
+    )) as {
+      skatteverket_connection?: {
+        status: string
+        source: string
+        connected_at?: string | null
+        message?: string
+      }
+    }
+    expect(result.skatteverket_connection).toEqual({
+      status: 'active',
+      source: 'user',
+      connected_at: '2026-08-25T09:12:00Z',
+    })
+  })
+
+  it('reports needs_reconsent with the directive message so the agent warns the user up front', async () => {
+    const supabase = mockSupabase({
+      profile: null,
+      skvTokenRows: [
+        { user_id: 'user-1', status: 'needs_reconsent', created_at: '2026-08-25T08:00:00Z' },
+      ],
+    })
+    const result = (await tool().execute(
+      {},
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' }
+    )) as {
+      skatteverket_connection?: { status: string; source: string; message?: string }
+    }
+    expect(result.skatteverket_connection).toMatchObject({
+      status: 'needs_reconsent',
+      source: 'user',
+    })
+    expect(result.skatteverket_connection?.message).toContain('BankID')
+    expect(result.skatteverket_connection?.message).toContain('ca 1 timme')
+  })
+
+  it('declares the block in the outputSchema as optional (never required)', () => {
+    const output = tool().outputSchema as {
+      properties: Record<string, unknown>
+      required: string[]
+    }
+    expect(output.properties.skatteverket_connection).toBeDefined()
+    expect(output.required).not.toContain('skatteverket_connection')
   })
 })
 

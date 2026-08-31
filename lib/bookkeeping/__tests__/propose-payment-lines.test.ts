@@ -323,6 +323,160 @@ describe('proposePaymentLines: öresavrundning (3740)', () => {
   })
 })
 
+describe('proposePaymentLines: remaining-aware partials (#1717)', () => {
+  it('sub-krona remaining → bank-less öre write-off (Dr 3740 / Cr 1510)', () => {
+    const lines = proposePaymentLines({
+      invoice: {
+        ...makeInvoiceInput({ total: 12500.4 }),
+        paid_amount: 12500,
+        remaining_amount: 0.4,
+      },
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines).toEqual([
+      {
+        account_number: '3740',
+        debit_amount: '0.4',
+        credit_amount: '',
+        line_description: 'Öresavrundning',
+      },
+      {
+        account_number: '1510',
+        debit_amount: '',
+        credit_amount: '0.4',
+        line_description: 'Betalning faktura 2025-001',
+      },
+    ])
+  })
+
+  it('remaining >= 1 kr → clears the remaining, not the total', () => {
+    const lines = proposePaymentLines({
+      invoice: {
+        ...makeInvoiceInput({ total: 12500 }),
+        paid_amount: 5000,
+        remaining_amount: 7500,
+      },
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+      paymentAccount: '1920',
+    })
+
+    expect(lines).toHaveLength(2)
+    expect(lines[0]).toMatchObject({ account_number: '1920', debit_amount: '7500' })
+    expect(lines[1]).toMatchObject({ account_number: '1510', credit_amount: '7500' })
+  })
+
+  it('derives remaining from paid_amount when remaining_amount is absent', () => {
+    const lines = proposePaymentLines({
+      invoice: { ...makeInvoiceInput({ total: 12500.4 }), paid_amount: 12500 },
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines[0]).toMatchObject({ account_number: '3740', debit_amount: '0.4' })
+    expect(lines[1]).toMatchObject({ account_number: '1510', credit_amount: '0.4' })
+  })
+
+  it('fully unpaid invoice keeps the fresh proposal byte-identical (incl. öresavrundning)', () => {
+    const fresh = proposePaymentLines({
+      invoice: makeInvoiceInput({ total: 1234.75 }),
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+      companyOreRounding: true,
+    })
+    const withZeroPaid = proposePaymentLines({
+      invoice: {
+        ...makeInvoiceInput({ total: 1234.75 }),
+        paid_amount: 0,
+        remaining_amount: 1234.75,
+      },
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+      companyOreRounding: true,
+    })
+
+    expect(withZeroPaid).toEqual(fresh)
+    expect(withZeroPaid[2]).toMatchObject({ account_number: '3740' })
+  })
+
+  it('cash method partial keeps the legacy full-invoice proposal', () => {
+    // The server refuses cash partial completion (cashPartialBlockReason), so
+    // a remaining-based cash proposal would only dress up a rejected booking.
+    const lines = proposePaymentLines({
+      invoice: {
+        ...makeInvoiceInput(),
+        paid_amount: 5000,
+        remaining_amount: 7500,
+      },
+      accountingMethod: 'cash',
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '12500' })
+  })
+
+  it('foreign-currency partial keeps the legacy proposal', () => {
+    const lines = proposePaymentLines({
+      invoice: {
+        ...makeInvoiceInput({
+          total: 1000,
+          total_sek: 10000,
+          currency: 'EUR',
+          exchange_rate: 10,
+        }),
+        paid_amount: 500,
+        remaining_amount: 500,
+      },
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '10000' })
+    expect(lines.every((l) => l.account_number !== '3740')).toBe(true)
+  })
+
+  it('ROT/RUT invoice with a partial keeps the deduction-aware proposal', () => {
+    // The outstanding remainder on a ROT/RUT invoice is Skatteverket's share
+    // on 1513, settled by the ROT/RUT payout flow: never proposed as a 1510
+    // clearing here.
+    const lines = proposePaymentLines({
+      invoice: {
+        ...makeInvoiceInput(),
+        deduction_total: 3750,
+        paid_amount: 8750,
+        remaining_amount: 3750,
+      },
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+    })
+
+    expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '8750' })
+    expect(lines[1]).toMatchObject({ account_number: '1510', credit_amount: '8750' })
+  })
+
+  it('write-off lines carry the invoice default dimensions', () => {
+    const bag = { '6': 'P001' }
+    const lines = proposePaymentLines({
+      invoice: {
+        ...makeInvoiceInput({ total: 1000.25 }),
+        paid_amount: 1000,
+        remaining_amount: 0.25,
+        default_dimensions: bag,
+      },
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines).toHaveLength(2)
+    for (const line of lines) {
+      expect(line.dimensions).toEqual(bag)
+      expect(line.dimensions).not.toBe(bag)
+    }
+  })
+})
+
 describe('proposePaymentLines: dimensions propagation (PR7)', () => {
   const bag = { '1': 'KS01', '6': 'P001' }
 

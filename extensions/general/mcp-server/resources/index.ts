@@ -8,6 +8,7 @@ import { vatTreatmentsResource } from './vat-treatments'
 import { attentionResource } from './attention'
 import { ledgerContextResource } from './ledger-context'
 import { bookingPacksResource } from './booking-packs'
+import { reconciliationSummaryResource } from './reconciliation-summary'
 
 export const dataResources: McpResource[] = [
   companyCurrentResource,
@@ -19,6 +20,7 @@ export const dataResources: McpResource[] = [
   attentionResource,
   ledgerContextResource,
   bookingPacksResource,
+  reconciliationSummaryResource,
 ]
 
 export function findResource(uri: string): McpResource | null {

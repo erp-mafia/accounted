@@ -524,6 +524,14 @@ export async function ingestTransactions(
 
   const driftCandidateStoredByBucket = new Map<string, number>()
   if (batchIsImportFeed && scopeDriftShadow) {
+    // Same-feed orphaned-id rows on an INcompatible account are excluded from
+    // the candidates (a genuinely different account on the same company must
+    // never bridge), but they are exactly what a reconnect that minted a NEW
+    // cash_account for the same physical account produces (issue #1709): every
+    // stored twin then sits on the old account and the shadow stays 0 during
+    // the incident it was built to measure. Count them separately, log-only,
+    // so fleet validation can see those incidents.
+    let accountIncompatibleDriftRows = 0
     for (const bucket of [existingMaps.booked, existingMaps.unbookedImported]) {
       for (const [k, entries] of bucket) {
         for (const entry of entries) {
@@ -535,9 +543,20 @@ export async function ingestTransactions(
           const idOrphaned = entry.externalId !== null && !incomingIdSet.has(entry.externalId)
           if (sameFeed && accountCompatible && idOrphaned) {
             driftCandidateStoredByBucket.set(k, (driftCandidateStoredByBucket.get(k) ?? 0) + 1)
+          } else if (sameFeed && idOrphaned) {
+            accountIncompatibleDriftRows++
           }
         }
       }
+    }
+    if (accountIncompatibleDriftRows > 0) {
+      log.info('import dedup shadow: account-incompatible same-feed orphaned ids', {
+        decision: 'same-feed-scope-drift-cross-account',
+        mode: 'shadow',
+        count: accountIncompatibleDriftRows,
+        cashAccountId,
+        batchSource,
+      })
     }
   }
 
@@ -947,6 +966,9 @@ export async function ingestTransactions(
         merchant_name: raw.merchant_name || null,
         reference: raw.reference || null,
         import_source: raw.import_source || null,
+        // Batch link for "undo this import": only the bank-file import paths
+        // pass this; PSD2 sync and MCP rows stay NULL.
+        bank_file_import_id: options?.bankFileImportId ?? null,
         counterparty_iban: raw.counterparty_iban || null,
         counterparty_account: raw.counterparty_account || null,
       })

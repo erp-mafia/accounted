@@ -67,10 +67,11 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'periods.md',
     title: 'Periods and registers',
-    members: ['fiscal-periods', 'accounts', 'compliance', 'dimensions'],
+    members: ['fiscal-periods', 'accounts', 'compliance', 'dimensions', 'skatteverket'],
     blurb:
       'Fiscal periods and their lock/close/year-end lifecycle (async operations), the BAS ' +
-      'chart of accounts, cost-center/project dimensions, and the compliance pre-flight check.',
+      'chart of accounts, cost-center/project dimensions, the compliance pre-flight check, ' +
+      'and reading filed VAT declarations (and beslut) from Skatteverket.',
   },
   {
     file: 'invoices.md',

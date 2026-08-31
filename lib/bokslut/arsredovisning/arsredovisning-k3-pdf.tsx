@@ -1,5 +1,6 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { ArsredovisningData, StatementRow } from './types'
+import { formatPdfKronor } from './pdf-format'
 
 /**
  * K3 årsredovisning PDF template (BFNAR 2012:1).
@@ -160,7 +161,8 @@ const styles = StyleSheet.create({
 })
 
 function fmt(amount: number): string {
-  return Math.round(amount).toLocaleString('sv-SE')
+  // ASCII hyphen for negatives: Helvetica/WinAnsi has no U+2212 glyph.
+  return formatPdfKronor(amount)
 }
 
 /**

@@ -296,6 +296,44 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
     expect(result.error).toBe('Credit notes cannot be recorded as paid.')
   })
 
+  it('surfaces the database reason and code when the transaction UPDATE fails (LINK_TX_DB_ERROR)', async () => {
+    // A customer hit LINK_TX_DB_ERROR reproducibly on certain incoming
+    // payments and could not tell us why: the Postgres message was logged
+    // but dropped on the way to the approver. The dispatcher must carry the
+    // reason, the structured code and the details through.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: 313, date: '2026-05-15' }),
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: JE_UUID,
+        status: 'posted',
+        voucher_series: 'A',
+        voucher_number: 12,
+        entry_date: '2026-05-15',
+      },
+      error: null,
+    })
+    const pgMessage =
+      'new row for relation "transactions" violates check constraint "transactions_is_ignored_no_journal_entry"'
+    enqueue({ data: null, error: { message: pgMessage, code: '23514' } }) // tx UPDATE fails
+    enqueue({ data: null, error: null }) // dispatcher's reject/fail update
+
+    const op = makePendingOp({
+      params: { transaction_id: TX_UUID, journal_entry_id: JE_UUID },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(500)
+    expect(result.code).toBe('LINK_TX_DB_ERROR')
+    expect(result.error).toContain(pgMessage)
+    expect(result.data).toMatchObject({ reason: pgMessage })
+  })
+
   it('returns 409 LINK_TX_INVOICE_RACE when optimistic lock loses', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim

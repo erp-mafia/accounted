@@ -230,6 +230,10 @@ export function CalendarFeedSettings() {
           </SettingsRowEnd>
         </SettingsRow>
 
+        <p className="px-1 pt-2 text-xs text-muted-foreground">
+          {t('google_reminders_note')}
+        </p>
+
         <SettingsRow label={t('create_new_link')} help={t('regen_help')}>
           {/* Live feed stats stay visible: they are state, not instructions */}
           {feed.last_accessed_at && (

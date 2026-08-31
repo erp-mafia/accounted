@@ -24,6 +24,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { cn, formatDate } from '@/lib/utils'
 import { invoiceNumberDisplay } from '@/lib/invoices/display'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
+import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
 const CUSTOMER_TYPE_KEY: Record<CustomerType, string> = {
   individual: 'type_individual',
@@ -201,11 +202,7 @@ export default function CustomerDetailPage({
   }
 
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    )
+    return <DetailPageSkeleton />
   }
 
   if (!customer) return null

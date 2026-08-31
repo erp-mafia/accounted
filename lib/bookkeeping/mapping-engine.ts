@@ -4,6 +4,9 @@ import {
   generateReverseChargeLines,
   generateReverseChargeBasisLines,
 } from './vat-entries'
+// Aliased: this file already has a local resolveSekAmountOrNull(transaction)
+// for account-selection decisions, which refuses when unconvertible.
+import { resolveSekAmount as resolveSekAmountLenient } from './currency-utils'
 import { findMatchingTemplates, buildMappingResultFromTemplate } from './booking-templates'
 import {
   findCounterpartyTemplate,
@@ -90,7 +93,12 @@ export async function evaluateMappingRules(
   // priority rules (which would mis-categorize the outflow as an expense).
   try {
     const transfer = await detectOwnAccountTransfer(supabase, companyId, transaction)
-    if (transfer) {
+    // A "transfer" whose counter leg is the settlement account itself is not a
+    // transfer (debit == credit on one ledger): it happens when the bank stamps
+    // the account's own IBAN as counterparty (interest, fees) and a sibling
+    // cash_accounts row still carries that IBAN (issue #1643). Fall through to
+    // normal categorization instead of proposing a cash ledger as the counter.
+    if (transfer && transfer.counterLedgerAccount !== bankAccount) {
       const isFx =
         (transaction.currency || '').toUpperCase() !==
         (transfer.counterCurrency || '').toUpperCase()
@@ -296,12 +304,15 @@ function matchesRule(rule: MappingRule, transaction: Transaction): boolean {
  * Build a MappingResult from a matched rule
  */
 function buildResult(rule: MappingRule, transaction: Transaction, entityType?: EntityType): MappingResult {
-  // NOTE: this is the amount in the transaction's own currency. It still feeds
-  // the VAT line generation below, which understates ingående moms on non-SEK
-  // rows (a known separate defect, tracked on its own: fixing it changes
-  // posted VAT amounts). The capitalization check below deliberately does not
-  // use it: an account-selection decision must run on a SEK value.
-  const absAmount = Math.abs(transaction.amount)
+  // VAT figures land on journal entry lines, which are always SEK, so they
+  // are derived from the SEK value of the transaction. The LENIENT resolver
+  // is deliberate: buildTransactionEntryLines resolves the gross with the
+  // same ladder, so the VAT lines and the bank leg can never disagree (a
+  // rateless legacy row degrades to today's behavior on both sides instead
+  // of unbalancing the net line). Mirrors buildMappingResultFromCategory.
+  const absSekAmount = Math.abs(resolveSekAmountLenient(
+    transaction.amount, transaction.amount_sek, transaction.currency, transaction.exchange_rate
+  ))
   const isExpense = transaction.amount < 0
 
   let debitAccount = rule.debit_account || (isExpense ? '6991' : '1930')
@@ -355,7 +366,7 @@ function buildResult(rule: MappingRule, transaction: Transaction, entityType?: E
       // FK004. Mapping rules don't carry supplier-country today, so we
       // default to EU services: the most common reverse-charge scenario.
       const rcRate = 0.25
-      const rcLines = generateReverseChargeLines(absAmount, rcRate, false)
+      const rcLines = generateReverseChargeLines(absSekAmount, rcRate, false)
       for (const rcl of rcLines) {
         vatLines.push({
           account_number: rcl.account_number,
@@ -367,7 +378,7 @@ function buildResult(rule: MappingRule, transaction: Transaction, entityType?: E
 
       // Skip basbelopp emission if the rule already books to a basis account.
       if (!/^4[45]\d{2}$/.test(debitAccount)) {
-        const basisLines = generateReverseChargeBasisLines(absAmount, rcRate, 'eu_business')
+        const basisLines = generateReverseChargeBasisLines(absSekAmount, rcRate, 'eu_business')
         for (const bl of basisLines) {
           vatLines.push({
             account_number: bl.account_number,
@@ -382,7 +393,7 @@ function buildResult(rule: MappingRule, transaction: Transaction, entityType?: E
         rule.vat_treatment === 'standard_25' ? 0.25
         : rule.vat_treatment === 'reduced_12' ? 0.12
         : 0.06
-      const vatLine = generateInputVatLine(absAmount, vatRate)
+      const vatLine = generateInputVatLine(absSekAmount, vatRate)
       if (vatLine) {
         vatLines.push({
           account_number: vatLine.account_number,

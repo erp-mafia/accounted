@@ -31,7 +31,7 @@ const SEED_RULES = [
   {
     id: 'sys-4', priority: 20, pattern: 'arbetsgivaravgift,sociala avgifter,agi',
     amount_min: null, amount_max: null, company_type: 'all',
-    counter_account: '2730', counter_account_ef: null,
+    counter_account: '2731', counter_account_ef: null,
     label: 'Arbetsgivaravgifter', active: true, requires_employer: false,
   },
   {
@@ -135,17 +135,19 @@ describe('guessCounterAccount', () => {
     ).toBe('2013')
   })
 
-  it('routes employer payroll taxes to 2730 (clearing/redovisningskonto, not 2731 accrual)', async () => {
+  // 2731 matches the salary module's AVGIFTER_LIABILITY credit so the SKV draw
+  // clears the same account (issue #1870); the accrual account is 2940, not 2731.
+  it('routes employer payroll taxes to 2731 (same account the salary module credits)', async () => {
     const { supabase, enqueue } = makeSupabase()
     enqueue({ data: SEED_RULES })
     expect(
       (await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', 'Arbetsgivaravgifter januari', 'aktiebolag'))?.account,
-    ).toBe('2730')
+    ).toBe('2731')
 
     enqueue({ data: SEED_RULES })
     expect(
       (await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', 'Sociala avgifter Q1', 'aktiebolag'))?.account,
-    ).toBe('2730')
+    ).toBe('2731')
   })
 
   it('routes deducted income tax to 2710 for an aktiebolag', async () => {

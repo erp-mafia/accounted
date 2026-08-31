@@ -21,8 +21,10 @@ import SendInvoiceDialog from '@/components/invoices/SendInvoiceDialog'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
+import { creditConfirmNumber } from '@/lib/invoices/display'
 import type { Invoice, InvoiceItem, Customer } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { InvoiceEditorSkeleton } from '@/components/common/DetailPageSkeleton'
 
 interface InvoiceWithRelations extends Invoice {
   customer: Customer
@@ -97,7 +99,7 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
     }
 
     setInvoice(data as InvoiceWithRelations)
-    setReason(t('reason_default', { number: data.invoice_number ?? '' }))
+    setReason(t('reason_default', { number: creditConfirmNumber(data) ?? '' }))
     setIsLoading(false)
   }
 
@@ -159,11 +161,7 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
   }
 
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    )
+    return <InvoiceEditorSkeleton />
   }
 
   if (!invoice) {
@@ -184,7 +182,11 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
     }
   }
 
-  const confirmMismatch = Boolean(confirmText) && confirmText !== invoice.invoice_number
+  // Self-billed invoices have invoice_number null by design; the confirm
+  // number falls back to the counterparty's external number, the one the
+  // user actually sees on the invoice (issue #1820).
+  const confirmNumber = creditConfirmNumber(invoice)
+  const confirmMismatch = Boolean(confirmText) && confirmText !== confirmNumber
 
   return (
     <div className="space-y-8 stagger-enter">
@@ -217,7 +219,7 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
         </div>
         {/* data-ph-mask: the kicker carries the invoice number */}
         <p data-ph-mask="" className="mt-1 text-sm text-muted-foreground">
-          {t('subtitle', { number: invoice.invoice_number ?? '' })}
+          {t('subtitle', { number: confirmNumber ?? '' })}
         </p>
         <AttnLine className="mt-3">{t('warning_title')}</AttnLine>
       </div>
@@ -225,7 +227,7 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
       {/* Original invoice: read-only context as plain rows */}
       <DetailSection kicker={t('original_card_title')}>
         <DefRow label={t('invoice_number_label')}>
-          <span className="tabular-nums">{invoice.invoice_number}</span>
+          <span className="tabular-nums">{confirmNumber}</span>
         </DefRow>
         <DefRow label={t('date_label')}>
           <span className="tabular-nums">{formatDate(invoice.invoice_date)}</span>
@@ -241,7 +243,7 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
         aside={
           // data-ph-mask: the credit note number derives from the invoice number
           <span data-ph-mask="" className="text-[11px] tabular-nums text-muted-foreground">
-            {t('preview_card_description', { number: invoice.invoice_number ?? '' })}
+            {t('preview_card_description', { number: confirmNumber ?? '' })}
           </span>
         }
       >
@@ -339,15 +341,15 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
         <Label htmlFor="confirm-invoice-number" className="block text-sm font-normal leading-5 text-muted-foreground">
           {t('confirm_card_description_1')}
           {/* data-ph-mask: the invoice number is user data */}
-          <span data-ph-mask="" className="font-mono font-semibold text-foreground">{invoice.invoice_number}</span>
+          <span data-ph-mask="" className="font-mono font-semibold text-foreground">{confirmNumber}</span>
           {t('confirm_card_description_2')}
         </Label>
         <Input
           id="confirm-invoice-number"
           value={confirmText}
           onChange={(e) => setConfirmText(e.target.value)}
-          placeholder={invoice.invoice_number ?? ''}
-          disabled={!invoice.invoice_number}
+          placeholder={confirmNumber ?? ''}
+          disabled={!confirmNumber}
           className={cn(
             // ph-no-capture: the placeholder carries the invoice number, and
             // replay masking covers input values, not attributes.
@@ -367,8 +369,8 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
           onClick={handleSubmit}
           disabled={
             isSubmitting ||
-            !invoice.invoice_number ||
-            confirmText !== invoice.invoice_number ||
+            !confirmNumber ||
+            confirmText !== confirmNumber ||
             !canWrite
           }
           title={!canWrite ? t('viewer_disabled_tooltip') : undefined}

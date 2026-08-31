@@ -10,7 +10,11 @@ const KEY = {
   currentPeriodEnd: '2027-01-01T00:00:00.000Z',
 }
 
-const updateEq = vi.fn()
+type UpdateResult = { error: unknown; data: Array<{ instance_url: string | null }> | null }
+const updateResults: UpdateResult[] = []
+const updateSelect = vi.fn(() => Promise.resolve(updateResults.shift() ?? { error: null, data: [{ instance_url: null }] }))
+const updateIs = vi.fn(() => ({ select: updateSelect }))
+const updateEq = vi.fn(() => ({ is: updateIs, select: updateSelect }))
 const update = vi.fn((_payload: Record<string, unknown>) => ({ eq: updateEq }))
 const from = vi.fn(() => ({ update }))
 const logWarn = vi.fn()
@@ -35,7 +39,7 @@ import { GET, POST } from '../route'
 beforeEach(() => {
   vi.clearAllMocks()
   currentInstanceUrl = null
-  updateEq.mockResolvedValue({ error: null })
+  updateResults.length = 0
 })
 
 describe('GET /api/connect/entitlements', () => {
@@ -96,8 +100,28 @@ describe('POST /api/connect/entitlements', () => {
   })
 
   it('500 when the update fails', async () => {
-    updateEq.mockResolvedValueOnce({ error: { message: 'boom' } })
+    updateResults.push({ error: { message: 'boom' }, data: null })
     const res = await POST(createMockRequest('/api/connect/entitlements', { method: 'POST', body: { active_company_count: 1 } }))
     expect(res.status).toBe(500)
+  })
+
+  // Two concurrent FIRST reports: the pinning update is conditional on
+  // instance_url IS NULL, so the loser affects no row and must surface the
+  // winner's pin instead of its own URL.
+  it('losing the pin race keeps the first pin and reports it back', async () => {
+    updateResults.push({ error: null, data: [] }) // conditional pin: no row matched
+    updateResults.push({ error: null, data: [{ instance_url: 'https://first.example.se' }] }) // counter-only fallback
+    const res = await POST(
+      createMockRequest('/api/connect/entitlements', {
+        method: 'POST',
+        body: { active_company_count: 2, instance_url: 'https://second.example.se' },
+      }),
+    )
+    const { status, body } = await parseJsonResponse<{ data: { instance_url: string | null } }>(res)
+    expect(status).toBe(200)
+    expect(body.data.instance_url).toBe('https://first.example.se')
+    expect(logWarn).toHaveBeenCalled()
+    expect(update).toHaveBeenCalledTimes(2)
+    expect(update.mock.calls[1][0]).not.toHaveProperty('instance_url')
   })
 })

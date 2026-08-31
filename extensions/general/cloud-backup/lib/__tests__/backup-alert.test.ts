@@ -80,8 +80,8 @@ describe('shouldSendBackupAlert', () => {
 })
 
 /**
- * Supabase stub: company_members lookup resolves a member with an email,
- * company_settings resolves a company name.
+ * Supabase stub: the two-step recipient lookup (company_members membership
+ * check, then profiles email), and company_settings resolves a company name.
  */
 function makeSupabase(options: { member?: unknown; companyName?: string | null } = {}) {
   const from = vi.fn().mockImplementation((table: string) => {
@@ -91,14 +91,16 @@ function makeSupabase(options: { member?: unknown; companyName?: string | null }
       maybeSingle: vi.fn().mockImplementation(() => {
         if (table === 'company_members') {
           return Promise.resolve({
-            data:
-              options.member !== undefined
-                ? options.member
-                : { user_id: 'u-1', profiles: { email: 'emil@example.com' } },
+            data: options.member !== undefined ? options.member : { user_id: 'u-1' },
+            error: null,
           })
+        }
+        if (table === 'profiles') {
+          return Promise.resolve({ data: { email: 'emil@example.com' }, error: null })
         }
         return Promise.resolve({
           data: { company_name: options.companyName ?? 'Testbolag AB' },
+          error: null,
         })
       }),
     }

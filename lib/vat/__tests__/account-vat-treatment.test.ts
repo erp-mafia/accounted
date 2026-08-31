@@ -3,6 +3,7 @@ import {
   defaultRateForVatTreatment,
   resolveVatTreatmentRuta,
   suggestVatTreatment,
+  vatTreatmentsForAccountClass,
 } from '../account-vat-treatment'
 
 describe('resolveVatTreatmentRuta', () => {
@@ -27,6 +28,16 @@ describe('resolveVatTreatmentRuta', () => {
     expect(resolveVatTreatmentRuta('reverse_charge_domestic', 5)).toEqual({ box: 'ruta24', side: 'debit' })
     expect(resolveVatTreatmentRuta('export_goods', 4)).toBeNull()
     expect(resolveVatTreatmentRuta('exempt', 4)).toBeNull()
+  })
+
+  it('keeps OSS revenue off the declaration and offers it only for revenue accounts', () => {
+    // Unionsordningen: declared in the OSS declaration, never in a ruta.
+    expect(resolveVatTreatmentRuta('oss', 3)).toBeNull()
+    expect(resolveVatTreatmentRuta('oss', 4)).toBeNull()
+    expect(vatTreatmentsForAccountClass(3)).toContain('oss')
+    expect(vatTreatmentsForAccountClass(3)).not.toContain('reverse_charge_non_eu_services')
+    expect(vatTreatmentsForAccountClass(4)).not.toContain('oss')
+    expect(defaultRateForVatTreatment('oss', 3)).toBeNull()
   })
 })
 
@@ -59,6 +70,20 @@ describe('suggestVatTreatment', () => {
     expect(suggestVatTreatment('6545', 'Inköp tjänster utanför EU 25%')).toEqual({
       treatment: 'reverse_charge_non_eu_services', rate: 0.25,
     })
+  })
+
+  it('recognises OSS labels and leaves momspliktig EU-försäljning for review', () => {
+    // Fortnox has no OSS accounts in its base chart; users name their own
+    // per country and rate ("Försäljning enl. OSS (Spanien 21%)").
+    expect(suggestVatTreatment('3111', 'Försäljning enl. OSS (Spanien 21%)')).toEqual({
+      treatment: 'oss', rate: null,
+    })
+    expect(suggestVatTreatment('3112', 'Försäljning varor unionsordningen Tyskland')).toEqual({
+      treatment: 'oss', rate: null,
+    })
+    // BAS 3106 is Swedish moms below the OSS threshold or OSS above it; a
+    // ruta 35 (momsfri EU-leverans) suggestion is wrong either way.
+    expect(suggestVatTreatment('3106', 'Försäljning varor till annat EU-land, momspliktig')).toBeNull()
   })
 
   it('does not match EU inside an unrelated word', () => {

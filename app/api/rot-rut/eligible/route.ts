@@ -6,11 +6,14 @@ import { listRotRutCandidates } from '@/lib/invoices/rot-rut-service'
 /**
  * GET /api/rot-rut/eligible?type=rot|rut
  *
- * Lists paid invoices carrying a ROT/RUT claim that are NOT yet part of an
- * active begäran om utbetalning, split into:
+ * Lists deduction-carrying invoices for the begäran om utbetalning dialog,
+ * split into:
  *   - eligible: ready for file generation (with the amounts the file will use)
  *   - blocked:  excluded, with the exact blocker (same evaluation as the
- *               generator: what this endpoint approves, the file accepts)
+ *               generator: what this endpoint approves, the file accepts).
+ *               Includes wrong-type invoices (NO_DEDUCTION_OF_TYPE, pointing
+ *               at the other list) and invoices held by an in-flight begäran
+ *               (ALREADY_REQUESTED): nothing drops out silently (#1884).
  */
 export const GET = withRouteContext('rot_rut.eligible', async (request, ctx) => {
   const { supabase, companyId, log, requestId } = ctx

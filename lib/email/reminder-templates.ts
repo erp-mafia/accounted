@@ -1,6 +1,8 @@
-import type { Invoice, Customer, CompanySettings } from '@/types'
+import type { Invoice, Customer, CompanySettings, ReminderTextOverrides } from '@/types'
 import { formatCurrency, formatDate, getCompanyDisplayName, getCompanyPrimaryName } from '@/lib/utils'
 import { getAmountToPay } from '@/lib/invoices/rounding'
+import { companyWithInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
+import { applyPlaceholders, escapeHtml, sanitizeSubjectLine } from './user-text'
 
 /**
  * What the customer was asked to pay on the original invoice: the öre-rounded
@@ -124,6 +126,151 @@ const REMINDER_CONFIG = {
   }
 } as const
 
+export type ReminderLevelKey = 'level_1' | 'level_2' | 'level_3'
+
+function levelKey(reminderLevel: 1 | 2 | 3): ReminderLevelKey {
+  return `level_${reminderLevel}` as ReminderLevelKey
+}
+
+// Placeholder keys available in company-editable reminder texts
+// (company_settings.reminder_text_overrides). Rendered as a legend in the
+// settings UI; kept here rather than in messages/*.json because ICU message
+// syntax treats literal braces as interpolation.
+export const REMINDER_EMAIL_PLACEHOLDER_KEYS = [
+  'fakturanummer',
+  'kundnamn',
+  'förnamn',
+  'företag',
+  'fakturadatum',
+  'förfallodatum',
+  'belopp',
+  'dagar',
+] as const
+
+/**
+ * Default subject/body per reminder level, in placeholder-pattern form.
+ * Single source of truth: the stock mail renders these same patterns through
+ * the same substitution pipeline as company overrides, so the settings-UI
+ * prefill is exactly what goes out and cannot drift from the send path.
+ *
+ * Level 3 is deliberately an inkassovarning (final notice before collection),
+ * as Swedish practice expects: it names the 8-day window and that the claim
+ * is handed to inkasso with added statutory costs (lag 1981:739). TEXT only:
+ * fee and interest math live in the reminder processor and are unaffected by
+ * anything here or in company overrides.
+ *
+ * The stock subject additionally gets ' (inkl. dröjsmålsränta)' appended when
+ * surcharges apply (see generateReminderEmailSubject); an override replaces
+ * the whole line and gets no automatic suffix.
+ */
+export const REMINDER_EMAIL_DEFAULT_TEXTS: Record<
+  ReminderLevelKey,
+  { subject: string; body: string }
+> = {
+  level_1: {
+    subject: 'Vänlig påminnelse: Faktura {fakturanummer} - {belopp}',
+    body:
+      'Vi vill påminna dig om att faktura {fakturanummer} förföll till betalning den {förfallodatum}. '
+      + 'Om du redan har betalat kan du bortse från denna påminnelse.',
+  },
+  level_2: {
+    subject: 'Andra påminnelsen: Faktura {fakturanummer} - {belopp}',
+    body:
+      'Trots vår tidigare påminnelse har vi ännu inte mottagit betalning för faktura {fakturanummer} '
+      + 'som förföll den {förfallodatum}.\n\n'
+      + 'Vi ber dig vänligen att omgående reglera detta belopp för att undvika ytterligare åtgärder.',
+  },
+  level_3: {
+    subject: 'Slutlig påminnelse: Faktura {fakturanummer} - {belopp}',
+    body:
+      'Detta är en slutlig påminnelse och inkassovarning gällande faktura {fakturanummer}.\n\n'
+      + 'Fakturan förföll till betalning den {förfallodatum} och vi har trots tidigare påminnelser '
+      + 'ännu inte mottagit din betalning.\n\n'
+      + 'Om full betalning inte har kommit oss tillhanda inom 8 dagar från detta meddelande '
+      + 'överlämnas fordran till inkasso, vilket medför ytterligare kostnader för dig enligt '
+      + 'lag (1981:739) om ersättning för inkassokostnader m.m.',
+  },
+}
+
+// Values for the fixed placeholder set. {belopp} is the amount to pay incl.
+// surcharges via formatReminderTotalDue, so a foreign-currency invoice with a
+// SEK fee renders the two-amount form here too, never one mixed scalar.
+function buildReminderPlaceholderValues(data: ReminderEmailData): Record<string, string> {
+  const { invoice, customer, company, daysOverdue, interestAmount, reminderFee } = data
+  const fullName = (customer.name || '').trim()
+  const amounts = calculateReminderAmounts({
+    invoiceTotal: reminderPrincipal(invoice, company),
+    interestAmount,
+    reminderFee,
+    currency: invoice.currency,
+  })
+  return {
+    fakturanummer: invoice.invoice_number ?? '',
+    kundnamn: fullName,
+    förnamn: fullName ? fullName.split(' ')[0] : '',
+    företag: getCompanyPrimaryName(company),
+    fakturadatum: formatDate(invoice.invoice_date),
+    förfallodatum: formatDate(invoice.due_date),
+    belopp: formatReminderTotalDue(amounts),
+    dagar: String(daysOverdue),
+  }
+}
+
+interface ResolvedReminderTexts {
+  subject?: string
+  body?: string
+}
+
+// Resolves the company's custom reminder texts for one level. Per-field
+// fallback: missing / non-string / whitespace-only values return undefined
+// and the caller renders the default pattern instead. Returns RAW substituted
+// strings: escaping is the caller's job per output variant (HTML vs text vs
+// subject). Defensive typeof checks: rows can be written outside Zod
+// (scripts, SQL).
+function resolveReminderTexts(
+  company: CompanySettings,
+  reminderLevel: 1 | 2 | 3,
+  values: Record<string, string>,
+): ResolvedReminderTexts {
+  const overrides: ReminderTextOverrides | null | undefined = company.reminder_text_overrides
+  const levelTexts =
+    overrides && typeof overrides === 'object' ? overrides[levelKey(reminderLevel)] : undefined
+  if (!levelTexts || typeof levelTexts !== 'object') return {}
+  const pick = (v: unknown): string | undefined =>
+    typeof v === 'string' && v.trim() !== '' ? applyPlaceholders(v.trim(), values) : undefined
+  return {
+    subject: pick(levelTexts.subject),
+    body: pick(levelTexts.body),
+  }
+}
+
+// Effective body for one level: override if present, else the default
+// pattern, both substituted through the same pipeline.
+function resolveReminderBody(data: ReminderEmailData): string {
+  const values = buildReminderPlaceholderValues(data)
+  const custom = resolveReminderTexts(data.company, data.reminderLevel, values)
+  return (
+    custom.body
+    ?? applyPlaceholders(REMINDER_EMAIL_DEFAULT_TEXTS[levelKey(data.reminderLevel)].body, values)
+  )
+}
+
+// Blank-line separated paragraphs -> <p> blocks; single newlines -> <br>.
+// Escape FIRST so user-authored overrides cannot inject markup. The final
+// level's opening paragraph keeps the red emphasis regardless of override:
+// the inkassovarning must not look like a routine note.
+function reminderBodyToHtml(body: string, reminderLevel: 1 | 2 | 3): string {
+  return body
+    .split(/(?:\r?\n){2,}/)
+    .map((paragraph, index) => {
+      const emphasis =
+        reminderLevel === 3 && index === 0 ? ' color: #dc2626; font-weight: 500;' : ''
+      const html = escapeHtml(paragraph).replace(/\r\n|\r|\n/g, '<br>')
+      return `<p style="margin: 0 0 15px 0;${emphasis}">${html}</p>`
+    })
+    .join('\n        ')
+}
+
 /**
  * Generate HTML email for payment reminder
  */
@@ -131,7 +278,6 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
   const {
     invoice,
     customer,
-    company,
     reminderLevel,
     daysOverdue,
     actionUrl,
@@ -140,6 +286,9 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
     interestDays,
     reminderFee,
   } = data
+  // Payment details follow the invoice currency, same as the invoice email
+  // and PDF: a EUR reminder must never print the SEK account's IBAN.
+  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency)
   const config = REMINDER_CONFIG[reminderLevel]
   const interestRatePercent = (interestRate * 100).toLocaleString('sv-SE', {
     minimumFractionDigits: 0,
@@ -189,31 +338,7 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
           Hej${customer.name ? ` ${customer.name.split(' ')[0]}` : ''},
         </p>
 
-        ${reminderLevel === 1 ? `
-        <p style="margin: 0 0 15px 0;">
-          Vi vill påminna dig om att faktura ${invoice.invoice_number} förföll till betalning den ${formatDate(invoice.due_date)}.
-          Om du redan har betalat kan du bortse från denna påminnelse.
-        </p>
-        ` : reminderLevel === 2 ? `
-        <p style="margin: 0 0 15px 0;">
-          Trots vår tidigare påminnelse har vi ännu inte mottagit betalning för faktura ${invoice.invoice_number}
-          som förföll den ${formatDate(invoice.due_date)}.
-        </p>
-        <p style="margin: 0 0 15px 0;">
-          Vi ber dig vänligen att omgående reglera detta belopp för att undvika ytterligare åtgärder.
-        </p>
-        ` : `
-        <p style="margin: 0 0 15px 0; color: #dc2626; font-weight: 500;">
-          Detta är vår slutliga påminnelse gällande faktura ${invoice.invoice_number}.
-        </p>
-        <p style="margin: 0 0 15px 0;">
-          Fakturan förföll till betalning den ${formatDate(invoice.due_date)} och vi har ännu inte mottagit betalning
-          trots tidigare påminnelser.
-        </p>
-        <p style="margin: 0 0 15px 0;">
-          Om betalning inte inkommer inom 7 dagar kommer ärendet att överlämnas för vidare hantering.
-        </p>
-        `}
+        ${reminderBodyToHtml(resolveReminderBody(data), reminderLevel)}
       </div>
 
       <!-- Invoice Summary Box -->
@@ -357,7 +482,6 @@ export function generateReminderEmailText(data: ReminderEmailData): string {
   const {
     invoice,
     customer,
-    company,
     reminderLevel,
     daysOverdue,
     actionUrl,
@@ -366,6 +490,9 @@ export function generateReminderEmailText(data: ReminderEmailData): string {
     interestDays,
     reminderFee,
   } = data
+  // Payment details follow the invoice currency, same as the invoice email
+  // and PDF: a EUR reminder must never print the SEK account's IBAN.
+  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency)
   const config = REMINDER_CONFIG[reminderLevel]
   const interestRatePercent = (interestRate * 100).toLocaleString('sv-SE', {
     minimumFractionDigits: 0,
@@ -386,17 +513,7 @@ export function generateReminderEmailText(data: ReminderEmailData): string {
 
   text += `Hej${customer.name ? ` ${customer.name.split(' ')[0]}` : ''},\n\n`
 
-  if (reminderLevel === 1) {
-    text += `Vi vill påminna dig om att faktura ${invoice.invoice_number} förföll till betalning den ${formatDate(invoice.due_date)}.\n`
-    text += `Om du redan har betalat kan du bortse från denna påminnelse.\n\n`
-  } else if (reminderLevel === 2) {
-    text += `Trots vår tidigare påminnelse har vi ännu inte mottagit betalning för faktura ${invoice.invoice_number} som förföll den ${formatDate(invoice.due_date)}.\n\n`
-    text += `Vi ber dig vänligen att omgående reglera detta belopp för att undvika ytterligare åtgärder.\n\n`
-  } else {
-    text += `DETTA ÄR VÅR SLUTLIGA PÅMINNELSE\n\n`
-    text += `Fakturan förföll till betalning den ${formatDate(invoice.due_date)} och vi har ännu inte mottagit betalning trots tidigare påminnelser.\n\n`
-    text += `Om betalning inte inkommer inom 7 dagar kommer ärendet att överlämnas för vidare hantering.\n\n`
-  }
+  text += `${resolveReminderBody(data)}\n\n`
 
   text += `Fakturasammanfattning:\n`
   text += `-`.repeat(30) + `\n`
@@ -450,21 +567,25 @@ export function generateReminderEmailText(data: ReminderEmailData): string {
  * the email.
  */
 export function generateReminderEmailSubject(data: ReminderEmailData): string {
-  const { invoice, company, reminderLevel, interestAmount, reminderFee } = data
-  const config = REMINDER_CONFIG[reminderLevel]
+  const { company, reminderLevel, interestAmount, reminderFee } = data
   const hasSurcharges = interestAmount > 0 || reminderFee > 0
 
-  // A SEK fee on a foreign-currency invoice renders as "1 010,00 € + 60 kr":
-  // two amounts in two currencies, never one mixed scalar.
-  const amounts = calculateReminderAmounts({
-    invoiceTotal: reminderPrincipal(invoice, company),
-    interestAmount,
-    reminderFee,
-    currency: invoice.currency,
-  })
-  const suffix = hasSurcharges ? ' (inkl. dröjsmålsränta)' : ''
+  // {belopp} comes from formatReminderTotalDue: a SEK fee on a foreign-currency
+  // invoice renders as "1 010,00 € + 60 kr", two amounts in two currencies,
+  // never one mixed scalar.
+  const values = buildReminderPlaceholderValues(data)
+  const custom = resolveReminderTexts(company, reminderLevel, values)
+  if (custom.subject !== undefined) {
+    // An override owns the whole line: no automatic surcharge suffix.
+    return sanitizeSubjectLine(custom.subject)
+  }
 
-  return `${config.title}: Faktura ${invoice.invoice_number} - ${formatReminderTotalDue(amounts)}${suffix}`
+  const suffix = hasSurcharges ? ' (inkl. dröjsmålsränta)' : ''
+  const stock = applyPlaceholders(
+    REMINDER_EMAIL_DEFAULT_TEXTS[levelKey(reminderLevel)].subject,
+    values,
+  )
+  return sanitizeSubjectLine(`${stock}${suffix}`)
 }
 
 /**

@@ -5,7 +5,12 @@ import { validateVatNumber } from '@/lib/vat/vies-client'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
-import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
+import {
+  looksLikeSwedishPersonalNumber,
+  normalizeReroutedPersonalNumber,
+  orgNumberHoldsPersonalNumber,
+  personalNumberDigits,
+} from '@/lib/customers/personal-number-shape'
 import { isMaskedPersonalNumber } from '@/lib/customers/mask-personal-number'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -107,6 +112,23 @@ export const PATCH = withRouteContext(
       return errorResponseFromCode('CUSTOMER_ORG_NUMBER_IS_PERSONAL', opLog, { requestId })
     }
 
+    // The mirror image for individuals: a personnummer submitted as
+    // org_number is the personnummer in the wrong field. It is stored
+    // encrypted in personal_number and org_number is cleared, same as
+    // CreateCustomerSchema does on create. Next to a DIFFERENT plaintext
+    // personal_number in the same body the two conflict.
+    const reroutedPersonalNumber = orgNumberHoldsPersonalNumber(effectiveType, body.org_number)
+      ? normalizeReroutedPersonalNumber(body.org_number!)
+      : null
+    if (
+      reroutedPersonalNumber
+      && personalNumberSubmitted
+      && body.personal_number
+      && personalNumberDigits(body.personal_number) !== personalNumberDigits(reroutedPersonalNumber)
+    ) {
+      return errorResponseFromCode('CUSTOMER_PERSONAL_NUMBER_CONFLICT', opLog, { requestId })
+    }
+
     const updateData: Record<string, unknown> = {}
     if (body.name !== undefined) updateData.name = body.name
     if (body.customer_type !== undefined) updateData.customer_type = body.customer_type
@@ -126,9 +148,13 @@ export const PATCH = withRouteContext(
     if (body.postal_code !== undefined) updateData.postal_code = body.postal_code
     if (body.city !== undefined) updateData.city = body.city
     if (body.country !== undefined) updateData.country = body.country
-    if (body.org_number !== undefined) updateData.org_number = body.org_number
+    if (body.org_number !== undefined) {
+      updateData.org_number = reroutedPersonalNumber ? null : body.org_number
+    }
     if (body.vat_number !== undefined) updateData.vat_number = body.vat_number
-    if (personalNumberSubmitted) {
+    if (reroutedPersonalNumber && !(personalNumberSubmitted && body.personal_number)) {
+      updateData.personal_number = encryptCustomerPersonalNumber(reroutedPersonalNumber)
+    } else if (personalNumberSubmitted) {
       // Stored as ciphertext; customers_personal_number_check accepts that
       // shape only (20260726110000).
       updateData.personal_number = encryptCustomerPersonalNumber(body.personal_number)

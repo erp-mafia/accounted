@@ -143,9 +143,13 @@ function enqueueHappyPath(opts: {
   })
   // 3. company_settings fetch
   enqueue({ data: { accounting_method: opts.accountingMethod ?? 'accrual' }, error: null })
-  // 4. cash_accounts lookup (only when the transaction is linked to one)
+  // 4. cash_accounts lookup: by id when the transaction is linked to one,
+  // otherwise the currency-fallback listing (issue #1722), empty here so the
+  // 1930 fallback applies.
   if (opts.transaction.cash_account_id) {
     enqueue({ data: { ledger_account: opts.cashAccountLedger ?? '1930' }, error: null })
+  } else {
+    enqueue({ data: [], error: null })
   }
   // 5. supplier_invoices update (CAS)
   enqueue({ data: [{ id: SI_UUID }], error: null })

@@ -69,7 +69,7 @@ vi.mock('@/lib/transactions/inbox-underlag', () => ({
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { withUnusedVoucherAllocation } from '@/lib/bookkeeping/errors'
+import { BookkeepingDatabaseError, withUnusedVoucherAllocation } from '@/lib/bookkeeping/errors'
 import { POST } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -220,10 +220,12 @@ describe('POST /api/v1/.../transactions/{id}/categorize underlag propagation', (
     )
   })
 
-  it('does not propagate on the partial-success path (no journal entry was created)', async () => {
-    const { supabase } = happyPathSupabase()
+  it('refuses the booking and writes nothing when the journal entry cannot be created (issue #1947)', async () => {
+    const { supabase, updates } = happyPathSupabase()
     mockServiceClient.mockReturnValue(supabase)
-    createTxJE.mockRejectedValueOnce(new Error('transient engine failure'))
+    createTxJE.mockRejectedValueOnce(
+      new BookkeepingDatabaseError('commit_entry', 'Cannot write to locked/closed fiscal period "2026"'),
+    )
 
     const res = await POST(
       makeRequest({ is_business: true, category: 'expense_office' }),
@@ -231,8 +233,17 @@ describe('POST /api/v1/.../transactions/{id}/categorize underlag propagation', (
     )
 
     const body = await res.json()
-    expect(body.data.journal_entry_created).toBe(false)
+    expect(res.status).toBe(409)
+    expect(body.error.code).toBe('TX_CATEGORIZE_JOURNAL_ENTRY_FAILED')
+    expect(body.error.details.cause).toBe('BOOKKEEPING_DATABASE_ERROR')
+    expect(body.error.details.message).toBe(
+      'Perioden är låst. Verifikationen kan inte skapas i en stängd eller låst period.',
+    )
+    // The row is untouched: is_business/category stay NULL so it remains in
+    // the unbooked queue instead of vanishing as categorized-but-unbooked.
+    expect(updates.transactions).toBeUndefined()
     expect(propagateUnderlagMock).not.toHaveBeenCalled()
+    expect(reverseEntryMock).not.toHaveBeenCalled()
   })
 
   it('does not propagate when the CAS race is lost (the verifikat was stornoed)', async () => {
@@ -249,8 +260,8 @@ describe('POST /api/v1/.../transactions/{id}/categorize underlag propagation', (
     expect(propagateUnderlagMock).not.toHaveBeenCalled()
   })
 
-  it('returns a race conflict when the guarded update matches no row without creating an entry', async () => {
-    const { supabase } = casRaceSupabase()
+  it('returns NO_OPEN_PERIOD_FOR_DATE and writes nothing when the engine finds no covering period', async () => {
+    const { supabase, updates } = happyPathSupabase()
     mockServiceClient.mockReturnValue(supabase)
     createTxJE.mockResolvedValueOnce(null)
 
@@ -260,9 +271,12 @@ describe('POST /api/v1/.../transactions/{id}/categorize underlag propagation', (
     )
 
     const body = await res.json()
-    expect(res.status).toBe(409)
-    expect(body.error.code).toBe('TX_CATEGORIZE_RACE')
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('NO_OPEN_PERIOD_FOR_DATE')
+    // Refused before the CAS write: no update, no orphan, so no storno.
+    expect(updates.transactions).toBeUndefined()
     expect(reverseEntryMock).not.toHaveBeenCalled()
+    expect(propagateUnderlagMock).not.toHaveBeenCalled()
   })
 
   it('atomically unignores an ignored transaction when categorizing it', async () => {
@@ -377,5 +391,122 @@ describe('POST /api/v1/.../transactions/{id}/categorize CAS race', () => {
     expect(body.error.code).toBe('TX_CATEGORIZE_RACE')
     expect(reverseEntryMock).toHaveBeenCalledTimes(1)
     expect(inserts['voucher_gap_explanations']).toBeUndefined()
+  })
+})
+
+describe('POST /api/v1/.../transactions/{id}/categorize orphaned counter-account guard (#1643)', () => {
+  it('returns TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT for an account_override on a revoked-held twin of the live row', async () => {
+    const { supabase } = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: {
+        data: {
+          id: TX_ID,
+          company_id: COMPANY_ID,
+          date: '2026-05-12',
+          amount: 217.04,
+          currency: 'SEK',
+          merchant_name: 'SEB',
+          cash_account_id: 'ca-live',
+          journal_entry_id: null,
+        },
+        error: null,
+      },
+      company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
+      chart_of_accounts: {
+        data: { account_number: '1931', account_class: 1, is_active: true },
+        error: null,
+      },
+      cash_accounts: [
+        // 1: resolveSettlementAccount reads the row's own ledger (1930).
+        { data: { ledger_account: '1930' }, error: null },
+        // 2: the guard's topology scan: 1931 is held by a revoked connection
+        // and shares the live row's (IBAN, currency): a stale twin.
+        {
+          data: [
+            { id: 'ca-live', ledger_account: '1930', bank_connection_id: 'conn-live', iban: 'SE111', enabled: true, currency: 'SEK' },
+            { id: 'ca-orphan', ledger_account: '1931', bank_connection_id: 'conn-old', iban: 'SE111', enabled: true, currency: 'SEK' },
+          ],
+          error: null,
+        },
+      ],
+      bank_connections: {
+        data: [
+          { id: 'conn-live', status: 'active' },
+          { id: 'conn-old', status: 'revoked' },
+        ],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(
+      makeRequest({ is_business: true, category: 'income_services', account_override: '1931' }),
+      routeParams(),
+    )
+
+    const body = await res.json()
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT')
+    expect(body.error.details.accountNumber).toBe('1931')
+    expect(createTxJE).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/v1/.../transactions/{id}/categorize private marking in a locked period (issue #1661)', () => {
+  function lockedPeriodSupabase() {
+    return makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: {
+        data: {
+          id: TX_ID,
+          company_id: COMPANY_ID,
+          date: '2025-11-12',
+          amount: -349.5,
+          currency: 'SEK',
+          merchant_name: 'SWISH DUBBLETT',
+          cash_account_id: null,
+          journal_entry_id: null,
+        },
+        error: null,
+      },
+      company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: { data: { id: 'period-2025', is_closed: false, locked_at: '2026-01-31T00:00:00Z' }, error: null },
+    })
+  }
+
+  it('answers is_business: false with TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED and suggested_action ignore', async () => {
+    const { supabase, updates } = lockedPeriodSupabase()
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(makeRequest({ is_business: false }), routeParams())
+    const body = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED')
+    expect(body.error.details).toMatchObject({
+      transaction_date: '2025-11-12',
+      reason: 'period_locked_at_set',
+      fiscal_period_id: 'period-2025',
+      suggested_action: 'ignore',
+    })
+    expect(createTxJE).not.toHaveBeenCalled()
+    expect(updates.transactions).toBeUndefined()
+  })
+
+  it('keeps PERIOD_LOCKED (no suggested_action) for a business categorization', async () => {
+    const { supabase, updates } = lockedPeriodSupabase()
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(
+      makeRequest({ is_business: true, category: 'expense_office' }),
+      routeParams(),
+    )
+    const body = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('PERIOD_LOCKED')
+    expect(body.error.details.suggested_action).toBeUndefined()
+    expect(createTxJE).not.toHaveBeenCalled()
+    expect(updates.transactions).toBeUndefined()
   })
 })

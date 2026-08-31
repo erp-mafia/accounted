@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import { openDeferredTab } from '@/lib/browser/deferred-tab'
+import { useBranding } from '@/lib/branding/brand-context'
 
 interface Props {
   documentId: string | null | undefined
@@ -49,6 +50,7 @@ export function TransactionAttachmentIndicator({
 }: Props) {
   const t = useTranslations('tx_underlag')
   const tCommon = useTranslations('common')
+  const { appName } = useBranding()
   const { toast } = useToast()
   const [isLoading, setIsLoading] = useState(false)
 
@@ -72,7 +74,7 @@ export function TransactionAttachmentIndicator({
         tab.close()
         toast({
           title: t('open_failed'),
-          description: tab.blocked ? tCommon('popup_blocked_description') : undefined,
+          description: tab.blocked ? tCommon('popup_blocked_description', { appName }) : undefined,
           variant: 'destructive',
         })
       }

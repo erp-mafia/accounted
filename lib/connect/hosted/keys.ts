@@ -50,11 +50,19 @@ export interface ValidatedConnectorKey {
 export type ConnectorKeyValidation =
   | { ok: true; key: ValidatedConnectorKey }
   | { ok: false; status: 401 | 403 | 429; code: 'CONNECTOR_KEY_INVALID' | 'CONNECTOR_KEY_SUSPENDED' | 'CONNECTOR_RATE_LIMITED'; error: string }
+  | { ok: false; status: 503; code: 'CONNECTOR_VALIDATION_UNAVAILABLE'; error: string }
 
 /**
  * Validate a presented key: format check, RPC lookup (atomic rate-limit
- * increment), status mapping. Never throws on a bad key; a database error
- * maps to 401 (fail closed) and is left to the caller's logger.
+ * increment), status mapping. Never throws on a bad key.
+ *
+ * A database/RPC error maps to 503, NEVER 401: the instance-side sync treats
+ * 401/403 as key revocation and deletes its entire connector grant cache
+ * (lib/connect/instance/sync.ts), so answering a hosted pooler blip with 401
+ * would let a transient hosted incident destroy a paying instance's 72h
+ * offline grace. 503 lands in the sync's keep-grants branch. Only a genuine
+ * empty result (unknown or revoked key) is 401. This deliberately diverges
+ * from the api-keys precedent, where a spurious 401 costs one request.
  */
 export async function validateConnectorKey(
   key: string,
@@ -66,7 +74,15 @@ export async function validateConnectorKey(
   const { data, error } = await supabase.rpc('validate_and_increment_connector_key', {
     p_key_hash: hashConnectorKey(key),
   })
-  if (error || !data || (Array.isArray(data) && data.length === 0)) {
+  if (error) {
+    return {
+      ok: false,
+      status: 503,
+      code: 'CONNECTOR_VALIDATION_UNAVAILABLE',
+      error: 'Connector key validation temporarily unavailable',
+    }
+  }
+  if (!data || (Array.isArray(data) && data.length === 0)) {
     return { ok: false, status: 401, code: 'CONNECTOR_KEY_INVALID', error: 'Invalid connector key' }
   }
   const row = (Array.isArray(data) ? data[0] : data) as {

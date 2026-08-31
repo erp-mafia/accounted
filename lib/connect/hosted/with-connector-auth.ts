@@ -1,8 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger, type Logger } from '@/lib/logger'
-import { CONNECTOR_KEY_HEADER } from '../contract'
+import { CONNECTOR_KEY_HEADER, CONNECTOR_KEY_PREFIX } from '../contract'
 import { validateConnectorKey, type ValidatedConnectorKey } from './keys'
 
 /**
@@ -32,10 +32,17 @@ export interface ConnectorContext {
 type ConnectorHandler = (request: Request, ctx: ConnectorContext) => Promise<NextResponse | Response>
 
 export function extractConnectorKey(request: Request): string | null {
+  // A Bearer value is the connector credential only when it looks like one
+  // (gnubok_ck_ prefix); otherwise it is an UPSTREAM token on a proxied call
+  // and the connector key rides in X-Connector-Key. Hashing the upstream
+  // token instead would 401 every such request. A non-prefixed Bearer with
+  // no X-Connector-Key still falls through to the format check's 401.
   const auth = request.headers.get('authorization')
-  if (auth?.startsWith('Bearer ')) return auth.slice(7).trim() || null
+  const bearer = auth?.startsWith('Bearer ') ? auth.slice(7).trim() || null : null
+  if (bearer?.startsWith(CONNECTOR_KEY_PREFIX)) return bearer
   const header = request.headers.get(CONNECTOR_KEY_HEADER)
-  return header?.trim() || null
+  if (header?.trim()) return header.trim()
+  return bearer
 }
 
 export function withConnectorAuth(
@@ -85,13 +92,23 @@ export function withConnectorAuth(
         return null
       }
     })()
-    const { error: usageError } = await supabase.from('connector_usage_events').insert({
-      connector_key_id: validation.key.id,
-      service,
-      endpoint,
-      status_code: response.status,
-    })
-    if (usageError) log.warn('usage event not recorded', { err: usageError.message })
+    const recordUsage = async (): Promise<void> => {
+      const { error: usageError } = await supabase.from('connector_usage_events').insert({
+        connector_key_id: validation.key.id,
+        service,
+        endpoint,
+        status_code: response.status,
+      })
+      if (usageError) log.warn('usage event not recorded', { err: usageError.message })
+    }
+    try {
+      // Off the response path: the caller should not wait on metering.
+      // Same pattern as lib/webhooks/dispatch-kick.ts.
+      after(() => recordUsage())
+    } catch {
+      // Outside a request scope (unit tests): record inline.
+      await recordUsage()
+    }
 
     return response
   }

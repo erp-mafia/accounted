@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 import { createAuthCode } from '@/lib/auth/oauth-codes'
 import { shouldEnforceMfa } from '@/lib/auth/mfa'
-import { requireCompanyId } from '@/lib/company/context'
+import { getActiveCompanyId } from '@/lib/company/context'
 import { getBranding } from '@/lib/branding/service'
 import { isAllowedRedirectUri } from '@/lib/auth/oauth-allowlist'
 import { resolveDiscoveryBaseUrl } from '@/lib/api/v1/base-url'
@@ -13,6 +13,7 @@ import {
   API_KEY_SCOPES,
   DEFAULT_OAUTH_SCOPES,
   SCOPE_GROUPS,
+  scopeKind,
   validateScopes,
   type ApiKeyScope,
 } from '@/lib/auth/api-keys'
@@ -39,7 +40,8 @@ type ScopeParseResult =
  *
  * Returns:
  *   - { ok, scopes: undefined } when no scope param was supplied: the consent
- *     UI pre-checks DEFAULT_OAUTH_SCOPES (read-only, GDPR Art. 25(2)).
+ *     UI pre-checks ALL_SCOPES (one-click consent; every write is staged for
+ *     approval, and the empty-selection POST fallback stays read-only).
  *   - { ok, scopes: [...] } when at least one valid scope was requested.
  *   - { invalid_scope } when a scope param was supplied but every value was
  *     unknown: refusing the request is safer than silently dropping it back
@@ -114,7 +116,14 @@ function buildLoginRedirect(request: Request): Response {
  * The middleware MFA gate deliberately exempts /api/mcp-oauth/* (the token
  * endpoint is Bearer-only), which makes this route responsible for its own
  * step-up. Returns null when the session is AAL2 (or MFA isn't required),
- * otherwise a redirect to /mfa/verify that returns to this authorize URL.
+ * otherwise a redirect to /mfa/verify (factor enrolled, session still AAL1)
+ * or /mfa/enroll (no factor at all) that returns to this authorize URL.
+ *
+ * The enrollment leg matters for accounts created inside the OAuth popup
+ * (issue #1814): the middleware only forces enrollment once a company exists,
+ * so a brand-new password account would otherwise consent at AAL1 and mint an
+ * MFA-exempt key for an account with no second factor. BankID-linked accounts
+ * are exempt via shouldEnforceMfa, same as everywhere else.
  */
 async function requireAal2(
   supabase: SupabaseClient,
@@ -122,15 +131,28 @@ async function requireAal2(
   request: Request,
 ): Promise<Response | null> {
   if (!shouldEnforceMfa(user)) return null
-  const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
-  if (aal?.nextLevel === 'aal2' && aal?.currentLevel !== 'aal2') {
-    const url = new URL(request.url)
-    const returnTo = `${url.pathname}${url.search}`
-    return NextResponse.redirect(
-      new URL(`/mfa/verify?returnTo=${encodeURIComponent(returnTo)}`, url.origin),
-    )
-  }
-  return null
+  const url = new URL(request.url)
+  const returnTo = `${url.pathname}${url.search}`
+  const stepUp = (page: '/mfa/verify' | '/mfa/enroll') =>
+    NextResponse.redirect(new URL(`${page}?returnTo=${encodeURIComponent(returnTo)}`, url.origin))
+
+  // Only a positive "this session is AAL2" answer lets consent through. A
+  // failed or empty assurance lookup is treated as AAL1 (verify page), never
+  // as "no MFA needed": the alternative would mint an MFA-exempt key on a
+  // transient auth error.
+  const { data: aal, error: aalError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+  if (aalError || !aal) return stepUp('/mfa/verify')
+  if (aal.currentLevel === 'aal2') return null
+  if (aal.nextLevel === 'aal2') return stepUp('/mfa/verify')
+
+  // nextLevel below aal2 should mean no verified factor exists. If one does
+  // exist anyway (inconsistent answer), step up rather than enroll a second
+  // factor. Otherwise enroll: mirrors the middleware gate (lib/supabase/
+  // middleware.ts), which skips zero-company users and so never ran for an
+  // account created inside the popup.
+  const { data: factors } = await supabase.auth.mfa.listFactors()
+  const hasVerifiedFactor = factors?.totp?.some((f) => f.status === 'verified') ?? false
+  return stepUp(hasVerifiedFactor ? '/mfa/verify' : '/mfa/enroll')
 }
 
 function errorRedirect(request: Request, redirectUri: string, state: string | null, error: string, desc: string): Response {
@@ -209,18 +231,32 @@ export async function GET(request: Request) {
     )
   }
 
-  const companyId = await requireCompanyId(supabase, user.id)
+  // null for an account with no company yet (signed up from the OAuth popup,
+  // issue #1814): consent still goes through, the key is minted unbound and
+  // binds itself once the company exists. The page says so instead of
+  // showing a company name.
+  const companyId = await getActiveCompanyId(supabase, user.id)
 
-  // Get company name for the consent page
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('company_name')
-    .eq('company_id', companyId)
-    .single()
-
-  const companyName = settings?.company_name || user.email
+  let companyName: string | null = null
+  if (companyId) {
+    const { data: settings } = await supabase
+      .from('company_settings')
+      .select('company_name')
+      .eq('company_id', companyId)
+      .single()
+    companyName = settings?.company_name || user.email || null
+  }
 
   const appNameLower = escapeHtml(getBranding().appName.toLowerCase())
+
+  const accountRowHtml = companyName
+    ? `<span class="account-label">Företag</span>
+      <span class="account-name">${escapeHtml(companyName)}</span>`
+    : `<span class="account-label">Konto</span>
+      <span class="account-name">${escapeHtml(user.email ?? '')}</span>`
+  const noCompanyNoteHtml = companyId
+    ? ''
+    : `<p class="note">Du har inget företag i ${appNameLower} ännu. Du kan ansluta ändå: skapa företaget i appen så använder anslutningen det automatiskt, utan att du behöver ansluta på nytt.</p>`
 
   // CSP nonce for the inline consent UI controls. A nonce-bound script-src
   // makes the inline block executable while keeping the rest of the page
@@ -240,15 +276,18 @@ export async function GET(request: Request) {
   //   - Client requested specific scopes → ceiling = that set, pre-checked =
   //     that set (RFC 6749 §3.3 strict least-privilege).
   //   - Client passed no scope (or only the legacy `mcp` marker, Claude's
-  //     connector today) → ceiling = ALL_SCOPES so every read/write row
-  //     renders; pre-checked = DEFAULT_OAUTH_SCOPES so only the read rows
-  //     start ticked. The user has to actively tick :write to widen the
-  //     grant. This preserves GDPR Art. 25(2) (defaults are minimal /
-  //     read-only) while still letting the resource owner authorise write
-  //     scopes per RFC 6749 §3.3 ("based on … the resource owner's
-  //     instructions"), which is the whole point of the consent step.
+  //     connector today) → ceiling = ALL_SCOPES and pre-checked = ALL_SCOPES:
+  //     one-click consent (founder decision 2026-08-26; the read-only default
+  //     killed the agent flow with an insufficient-scope dead-end mid-chat).
+  //     The mitigations that make full-by-default defensible: every write is
+  //     STAGED for explicit approval before anything touches the ledger, the
+  //     full scope list stays on the page (collapsed but expandable) with
+  //     every row untickable, the warn line states the staging rule above the
+  //     button, and the grant is revocable under Inställningar › API-nycklar.
+  //     RFC 6749 §3.3 lets the resource owner authorise the set presented;
+  //     the consent is the click on a page that shows exactly that set.
   const grantCeiling = new Set<ApiKeyScope>(parsed.scopes ?? ALL_SCOPES)
-  const preChecked = new Set<ApiKeyScope>(parsed.scopes ?? DEFAULT_OAUTH_SCOPES)
+  const preChecked = new Set<ApiKeyScope>(parsed.scopes ?? ALL_SCOPES)
   const scopeCheckboxesHtml = renderScopeCheckboxes(preChecked, grantCeiling)
 
   // Render consent page
@@ -374,11 +413,54 @@ export async function GET(request: Request) {
       text-align: right;
       word-break: break-word;
     }
+    .note {
+      font-size: 0.8125rem;
+      color: var(--fg-muted);
+      line-height: 1.55;
+      margin: -1rem 0 1.75rem;
+    }
+    .scopes-details {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0 0.875rem;
+      background: var(--surface);
+    }
+    .scopes-details summary {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 0;
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+    }
+    .scopes-details summary::-webkit-details-marker { display: none; }
+    .scopes-details summary:focus-visible {
+      outline: 2px solid var(--ring);
+      outline-offset: 2px;
+      border-radius: 6px;
+    }
+    .scopes-summary-hint {
+      flex: 1;
+      text-align: right;
+      font-size: 0.75rem;
+      color: var(--fg-faint);
+    }
+    .scopes-chevron {
+      width: 14px;
+      height: 14px;
+      color: var(--fg-faint);
+      transition: transform 150ms;
+      flex-shrink: 0;
+    }
+    .scopes-details[open] .scopes-chevron { transform: rotate(90deg); }
+    .scopes-details[open] summary { border-bottom: 1px solid var(--border); }
+    .scopes-details .scope-groups { padding-bottom: 0.5rem; }
     .scopes-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding-bottom: 0.625rem;
+      padding: 0.625rem 0;
       margin-bottom: 0.25rem;
       border-bottom: 1px solid var(--border);
     }
@@ -554,27 +636,33 @@ export async function GET(request: Request) {
   <main class="card" role="main">
     <div class="eyebrow">${appNameLower} · mcp</div>
     <h1>Anslut MCP-klient</h1>
-    <p class="lede">En extern applikation begär åtkomst till ditt ${appNameLower}-konto. Välj vilka behörigheter du vill bevilja.</p>
+    <p class="lede">En extern applikation begär åtkomst till ditt ${appNameLower}-konto. Alla behörigheter är förvalda; varje skrivning kräver ändå ditt godkännande innan den bokförs.</p>
 
     <div class="account">
-      <span class="account-label">Företag</span>
-      <span class="account-name">${escapeHtml(companyName)}</span>
+      ${accountRowHtml}
     </div>
+    ${noCompanyNoteHtml}
 
     <form method="POST" action="${escapeHtml(url.pathname + url.search)}" id="consent-form">
       <input type="hidden" name="scope_binding" value="${escapeHtml(scopeBindingValue)}">
       <input type="hidden" name="scope_binding_sig" value="${escapeHtml(scopeBindingSignature)}">
 
-      <div class="scopes-header">
-        <span class="scopes-title">Behörigheter</span>
-        <div class="scopes-controls">
-          <button type="button" id="select-read">Endast läs</button>
-          <button type="button" id="select-all">Alla</button>
-          <button type="button" id="select-none">Inga</button>
+      <details class="scopes-details">
+        <summary>
+          <span class="scopes-title">Behörigheter</span>
+          <span class="scopes-summary-hint">Alla förvalda &middot; visa och justera</span>
+          <svg class="scopes-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </summary>
+        <div class="scopes-header">
+          <span class="scopes-title">Justera</span>
+          <div class="scopes-controls">
+            <button type="button" id="select-read">Endast läs</button>
+            <button type="button" id="select-all">Alla</button>
+            <button type="button" id="select-none">Inga</button>
+          </div>
         </div>
-      </div>
-
-      <div class="scope-groups">${scopeCheckboxesHtml}</div>
+        <div class="scope-groups">${scopeCheckboxesHtml}</div>
+      </details>
 
       <div class="warn">
         <svg class="warn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
@@ -681,7 +769,9 @@ export async function POST(request: Request) {
     )
   }
 
-  await requireCompanyId(supabase, user.id)
+  // No company check here: the auth code carries only the user id, and the
+  // token endpoint resolves (or leaves unbound) the company when it mints the
+  // key. An account without a company may consent (issue #1814).
 
   // Parse form body
   const formData = await request.formData()
@@ -788,13 +878,10 @@ function renderScopeCheckboxes(
 
   for (const group of SCOPE_GROUPS) {
     const rows: string[] = []
-    if (group.read && ceiling.has(group.read)) {
-      rows.push(scopeRow(group.read, preChecked.has(group.read), 'read'))
-      renderedInGroups.add(group.read)
-    }
-    if (group.write && ceiling.has(group.write)) {
-      rows.push(scopeRow(group.write, preChecked.has(group.write), 'write'))
-      renderedInGroups.add(group.write)
+    for (const scope of group.scopes) {
+      if (!ceiling.has(scope)) continue
+      rows.push(scopeRow(scope, preChecked.has(scope), scopeKind(scope)))
+      renderedInGroups.add(scope)
     }
     if (rows.length > 0) {
       groups.push(
@@ -803,11 +890,11 @@ function renderScopeCheckboxes(
     }
   }
 
+  // Defense in depth: the catalogue test guarantees full group coverage, so
+  // this bucket is empty unless a scope ships without a group.
   const remaining = ALL_SCOPES.filter(s => ceiling.has(s) && !renderedInGroups.has(s))
   if (remaining.length > 0) {
-    const rows = remaining.map((s) =>
-      scopeRow(s, preChecked.has(s), s.endsWith(':write') || s.endsWith(':manage') || s.endsWith(':approve') ? 'write' : 'read')
-    )
+    const rows = remaining.map((s) => scopeRow(s, preChecked.has(s), scopeKind(s)))
     groups.push(
       `<div class="scope-group"><div class="scope-group-title">Övriga</div>${rows.join('')}</div>`
     )

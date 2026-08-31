@@ -34,6 +34,14 @@ export const CAPABILITY = {
   woocommerce_sync: 'woocommerce_sync',
   /** Shopify store sync: orders/refunds imported as a transaction feed. */
   shopify_sync: 'shopify_sync',
+  /**
+   * Invoice email from the company's own verified sending domain (Resend
+   * domain per company). Opt-in: granted manually per company, NOT part of
+   * PAID_CAPABILITIES, so it is never trial-seeded or written by the Stripe
+   * subscription sync. Without the grant the settings section is hidden and
+   * mail keeps leaving from the platform sender.
+   */
+  custom_sender_domain: 'custom_sender_domain',
 } as const
 
 export type CapabilityKey = (typeof CAPABILITY)[keyof typeof CAPABILITY]
@@ -72,9 +80,12 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
  * On a self-host every other capability is always on, and exactly these fall
  * through to the grant lookup: the hourly connector sync writes
  * `source = 'connector'` grants for them from the instance's connector key
- * (see lib/connect/instance). Deliberately NOT part of PAID_CAPABILITIES and
- * NOT seeded by the trial trigger: hosted companies never receive connector
- * grants.
+ * (lib/connect/instance, arriving with the connector-keys stack PR #1748).
+ * A self-host serving an upstream from its OWN credentials holds that
+ * capability outright (see own-credentials.ts): only keyless-and-credential-
+ * less connector capabilities are withheld. Deliberately NOT part of
+ * PAID_CAPABILITIES and NOT seeded by the trial trigger: hosted companies
+ * never receive connector grants.
  */
 export const CONNECTOR_CAPABILITIES: readonly CapabilityKey[] = [
   CAPABILITY.bank_sync,
@@ -98,13 +109,17 @@ export function isConnectorCapability(key: CapabilityKey): boolean {
  * The document upload tools invoke AI (Bedrock document OCR via
  * extractInvoiceFields), so they are gated on CAPABILITY.ai: the same paywall
  * the HTTP inbox upload/attach/retry paths enforce. Without these entries a
- * free-tier API key could trigger paid AI extraction. bank_sync has no MCP
- * tool (bank sync is cron/HTTP only).
+ * free-tier API key could trigger paid AI extraction. bank_sync gates only
+ * gnubok_connect_bank (the onboarding connect link); the sync itself is
+ * cron/HTTP only.
  */
 export const MCP_TOOL_CAPABILITY_MAP: Readonly<Partial<Record<string, CapabilityKey>>> = {
   gnubok_send_invoice: CAPABILITY.email_send,
   gnubok_vat_declaration_submit: CAPABILITY.skatteverket,
   gnubok_agi_submit: CAPABILITY.skatteverket,
+  // Onboarding connect-link tools (issue #1814): gated like the links' targets.
+  gnubok_connect_bank: CAPABILITY.bank_sync,
+  gnubok_connect_skatteverket: CAPABILITY.skatteverket,
   // AI document OCR (Bedrock): the inbox's paid extraction, reachable via MCP.
   gnubok_create_document_upload: CAPABILITY.ai,
   gnubok_complete_document_upload: CAPABILITY.ai,

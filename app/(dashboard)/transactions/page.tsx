@@ -8,7 +8,7 @@ import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -39,6 +39,7 @@ import { getTemplateById, type BookingTemplate } from '@/lib/bookkeeping/booking
 import { resolveQuickReviewDefaults, type ReviewTemplate } from '@/lib/transactions/quick-review-defaults'
 import { isCounterpartyTemplateId, extractCounterpartyId } from '@/lib/bookkeeping/counterparty-templates'
 import { isLibraryTemplateId } from '@/lib/bookkeeping/template-library'
+import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import type {
   TransactionWithInvoice,
   ViewMode,
@@ -67,13 +68,15 @@ import {
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
 } from '@/lib/invoices/matchable-statuses'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
-import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary, CashAccount } from '@/types'
+import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary } from '@/types'
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
+import { fetchMigrationCoverageEnd } from '@/lib/transactions/migration-coverage'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
 import { isWithinBounds, resolvePeriodBounds } from '@/lib/transactions/period-filter'
@@ -326,6 +329,12 @@ export default function TransactionsPage() {
   const [bookingDialogOpen, setBookingDialogOpen] = useState(false)
   const [bookingDialogTransaction, setBookingDialogTransaction] = useState<TransactionWithInvoice | null>(null)
   const [bookingDialogTemplate, setBookingDialogTemplate] = useState<BookingTemplateLibrary | null>(null)
+  // "Andra rader" hand-off: the computed proposal lines from QuickReviewDialog,
+  // prefilled into TransactionBookingDialog for per-line editing.
+  const [bookingDialogProposalLines, setBookingDialogProposalLines] = useState<ProposalLine[] | null>(null)
+  // Account picked from the template picker's "Konton" search results:
+  // prefills the counter line when the manual booking dialog opens.
+  const [bookingDialogAccount, setBookingDialogAccount] = useState<string | null>(null)
 
   // Attach-underlag dialog (tx→doc mirror of the Documents view's matcher)
   const [attachDocTx, setAttachDocTx] = useState<TransactionWithInvoice | null>(null)
@@ -342,6 +351,9 @@ export default function TransactionsPage() {
   // Template picker dialog
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false)
   const [templatePickerTransaction, setTemplatePickerTransaction] = useState<TransactionWithInvoice | null>(null)
+  // The picker renders non-modal (agent sheet stays usable); hand-restore
+  // page modality while it is open. See useDashShellInert in ui/dialog.tsx.
+  useDashShellInert(templatePickerOpen)
 
   // Invoice picker dialog (manual match)
   const [invoicePickerOpen, setInvoicePickerOpen] = useState(false)
@@ -527,7 +539,10 @@ export default function TransactionsPage() {
   }, [companyId])
   // Registered cash accounts (cash_accounts): the account chooser's rows,
   // with PSD2 balances when the bank reports them.
-  const [cashAccounts, setCashAccounts] = useState<CashAccount[]>([])
+  // Registered, enabled cash accounts for the account chooser: session-cached
+  // and seeded by the dashboard layout (lib/reference-data), so the chooser
+  // renders populated on the first paint. Bank sync invalidates the entry.
+  const { cashAccounts } = useCashAccounts({ enabledOnly: true })
 
   const { toast } = useToast()
   const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
@@ -546,10 +561,13 @@ export default function TransactionsPage() {
   // "Kör matchning igen" in the review surface.
   const [rerunningMatch, setRerunningMatch] = useState(false)
 
-  // End of the company's completed SIE-import coverage (latest
-  // fiscal_year_end). Drives the quiet "från perioden före din migrering"
-  // marker on inbox rows: period-based on purpose, it labels which period a
-  // row belongs to, it never suggests a sync skip date (that was #917).
+  // End of the company's SIE-migration data coverage (latest imported
+  // voucher date, see lib/transactions/migration-coverage.ts). Drives the
+  // quiet "från perioden före din migrering" marker on inbox rows: date-based
+  // on purpose, it labels rows the imported bokföring should already cover,
+  // it never suggests a sync skip date (that was #917). Not fiscal_year_end:
+  // for a mid-year migration that is a future date and the marker fired on
+  // every new transaction until New Year.
   const [sieCoverageEnd, setSieCoverageEnd] = useState<string | null>(null)
   useEffect(() => {
     if (!companyId) {
@@ -558,17 +576,9 @@ export default function TransactionsPage() {
     }
     let cancelled = false
     ;(async () => {
-      const { data } = await supabase
-        .from('sie_imports')
-        .select('fiscal_year_end')
-        .eq('company_id', companyId)
-        .eq('status', 'completed')
-        .not('fiscal_year_end', 'is', null)
-        .order('fiscal_year_end', { ascending: false })
-        .limit(1)
-        .maybeSingle()
+      const coverageEnd = await fetchMigrationCoverageEnd(supabase, companyId)
       if (!cancelled) {
-        setSieCoverageEnd((data as { fiscal_year_end?: string } | null)?.fiscal_year_end || null)
+        setSieCoverageEnd(coverageEnd)
       }
     })()
     return () => {
@@ -875,24 +885,6 @@ export default function TransactionsPage() {
 
   const PAGE_SIZE = 200
 
-  // Account chooser rows: the registered, enabled cash accounts. One fetch
-  // per company; balances refresh with the page (bank sync triggers a
-  // router.refresh via the sync toast flow).
-  useEffect(() => {
-    if (!companyId) return
-    let cancelled = false
-    fetch('/api/cash-accounts?enabled_only=true')
-      .then((res) => (res.ok ? res.json() : { data: [] }))
-      .then((json: { data?: CashAccount[] }) => {
-        if (!cancelled) setCashAccounts(json.data ?? [])
-      })
-      .catch(() => {
-        if (!cancelled) setCashAccounts([])
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [companyId])
 
   // Same sequence-guard pattern as fetchGenerationRef: only the newest
   // skattekonto fetch may write rows. A company switch bumps the sequence so a
@@ -1807,6 +1799,29 @@ export default function TransactionsPage() {
                 expectedDuplicateJournalEntryId: candidate.journal_entry_id,
               }),
             candidate,
+          })
+          setProcessingId(null)
+          return { ok: false, journalEntryId: null }
+        }
+        if (result?.error?.code === 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED') {
+          // Issue #1661: a private marking is a real booking (eget uttag /
+          // insättning), so a locked period refuses it. The row being cleared
+          // is usually no affärshändelse at all: offer Ignorera (no verifikat,
+          // allowed in a locked period) on the toast. Interactive escalation,
+          // so it shows for batch rows too: it is the only way forward.
+          const lockedTx = transactions.find((t) => t.id === id)
+          toast({
+            title: t('private_locked_title'),
+            description: getErrorMessage(result, { context: 'transaction', statusCode: response.status }),
+            variant: 'destructive',
+            action: lockedTx ? (
+              <ToastAction
+                altText={t('private_locked_ignore_action')}
+                onClick={() => void handleIgnoreTransaction(lockedTx)}
+              >
+                {t('private_locked_ignore_action')}
+              </ToastAction>
+            ) : undefined,
           })
           setProcessingId(null)
           return { ok: false, journalEntryId: null }
@@ -2990,6 +3005,7 @@ export default function TransactionsPage() {
     setBookingDialogOpen(false)
     setBookingDialogTransaction(null)
     setBookingDialogTemplate(null)
+    setBookingDialogProposalLines(null)
     if (matched) {
       toast({ title: 'Bankhändelsen kopplad', description: 'Ingen ny bokföring skapad.' })
     } else {
@@ -3180,7 +3196,7 @@ export default function TransactionsPage() {
         description: `${successes} transaktioner ignorerade`,
         action: (
           <ToastAction altText="Öppna Bankavstämning" asChild>
-            <Link href="/reports/bank-reconciliation">Bankavstämning</Link>
+            <Link href="/reconciliation">Avstämning</Link>
           </ToastAction>
         ),
       })
@@ -3389,8 +3405,38 @@ export default function TransactionsPage() {
     if (templatePickerTransaction) {
       setBookingDialogTransaction(templatePickerTransaction)
       setBookingDialogTemplate(null)
+      setBookingDialogProposalLines(null)
+      setBookingDialogAccount(null)
       setBookingDialogOpen(true)
     }
+  }
+
+  // "Andra rader" on the proposal view: close the review and reopen the
+  // manual booking dialog prefilled with the exact lines the preview showed.
+  // The transaction comes from the dialog itself (its enriched mirror), not
+  // from quickReview state: an in-dialog SEK-rate backfill lives only on the
+  // enriched row, and the booking dialog stamps the settlement leg's FX
+  // metadata from that row's exchange_rate.
+  function handleEditProposedLines(lines: ProposalLine[], transaction: TransactionWithInvoice) {
+    setQuickReviewOpen(false)
+    setBookingDialogTransaction(transaction)
+    setBookingDialogTemplate(null)
+    setBookingDialogAccount(null)
+    setBookingDialogProposalLines(lines)
+    setBookingDialogOpen(true)
+  }
+
+  // Account picked from the template picker's "Konton" search group
+  // (issue #1877): same route as "Bokför manuellt", with the picked account
+  // prefilled on the counter line of the journal entry form.
+  function handlePickAccount(accountNumber: string) {
+    if (!templatePickerTransaction) return
+    setBookingDialogTransaction(templatePickerTransaction)
+    setBookingDialogTemplate(null)
+    setBookingDialogProposalLines(null)
+    setBookingDialogAccount(accountNumber)
+    setTemplatePickerOpen(false)
+    setBookingDialogOpen(true)
   }
 
   // Complex (multi-leg or otherwise non-convertible) library template picked
@@ -3400,6 +3446,8 @@ export default function TransactionsPage() {
     if (!templatePickerTransaction) return
     setBookingDialogTransaction(templatePickerTransaction)
     setBookingDialogTemplate(raw)
+    setBookingDialogProposalLines(null)
+    setBookingDialogAccount(null)
     setTemplatePickerOpen(false)
     setBookingDialogOpen(true)
   }
@@ -3574,10 +3622,15 @@ export default function TransactionsPage() {
       <TransactionStatusBar onOpenCreateDialog={() => setIsDialogOpen(true)} />
 
 
-      {skvNeedsReconnect && effectiveSourceFilter === 'skatteverket' ? (
-        // Only when the user is actually looking at skattekonto rows: as a
-        // permanent page-wide line it read as noise (feedback 2026-08-14).
-        // The skattekonto page keeps its own reconnect line.
+      {skvNeedsReconnect ? (
+        // Shown on every source filter, not just 'skatteverket'. The original
+        // gate (feedback 2026-08-14) predates the deletion of the
+        // connection-expired email (DECISIONS 2026-08-25), which left the
+        // banner as the ONLY proactive channel a web-only user has for a dead
+        // Skatteverket connection. A filter most users never select is not a
+        // channel, and hiding it is what let a dead connection sit unnoticed
+        // for days. The line is not noise: it renders only while the
+        // connection is actually broken and disappears the moment it works.
         <AttnLine action={{ label: t('skv_reconnect_cta'), href: '/settings/tax' }}>
           {t('skv_reconnect_body')}
         </AttnLine>
@@ -3852,7 +3905,7 @@ export default function TransactionsPage() {
                 className="px-1 pt-3"
                 action={{
                   label: t('recon_attn_action'),
-                  href: '/reports/bank-reconciliation?autorun=1',
+                  href: '/reconciliation?autorun=1',
                 }}
               >
                 {t('recon_attn', { count: selectableInboxIds.length })}
@@ -3900,7 +3953,7 @@ export default function TransactionsPage() {
         <BankSyncNowButton />
         <BankSyncSinceLastVisit />
         <Link
-          href="/reports/bank-reconciliation"
+          href="/reconciliation"
           className="ml-auto transition-colors duration-150 hover:text-foreground"
         >
           Bankavstämning →
@@ -3964,10 +4017,16 @@ export default function TransactionsPage() {
           open
           onOpenChange={(o) => {
             setBookingDialogOpen(o)
-            if (!o) setBookingDialogTemplate(null)
+            if (!o) {
+              setBookingDialogTemplate(null)
+              setBookingDialogProposalLines(null)
+              setBookingDialogAccount(null)
+            }
           }}
           transaction={bookingDialogTransaction}
           preselectedTemplate={bookingDialogTemplate}
+          proposalLines={bookingDialogProposalLines}
+          preselectedAccount={bookingDialogAccount}
           onBooked={handleTransactionBooked}
         />
       )}
@@ -3983,8 +4042,17 @@ export default function TransactionsPage() {
         />
       )}
 
-      {templatePickerOpen && <Dialog open onOpenChange={setTemplatePickerOpen}>
-        <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+      {/* Non-modal so the agent sheet and its trigger stay usable while
+          picking (useDashShellInert above hand-restores page modality).
+          Esc and veil-click still close: the picker holds no user input.
+          Clicks in the assistant don't dismiss: data-agent-ui counts as
+          inside (see DialogContent). */}
+      {templatePickerOpen && <Dialog open onOpenChange={setTemplatePickerOpen} modal={false}>
+        <DialogVeil />
+        {/* Width capped at the space left of a docked sheet (--agent-sheet-w
+            is docked-only) so the picker never clips off-screen left on
+            narrow desktops; sheet closed = the old max-w-lg. */}
+        <DialogContent className="max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Bokför transaktion</DialogTitle>
           </DialogHeader>
@@ -4037,6 +4105,7 @@ export default function TransactionsPage() {
               handleOpenTemplateReview(templatePickerTransaction, templateId)
             }}
             onPickLibraryTemplate={handlePickLibraryTemplate}
+            onSelectAccount={handlePickAccount}
           />
         </DialogContent>
       </Dialog>}
@@ -4118,6 +4187,7 @@ export default function TransactionsPage() {
           counterpartyDefaultDimensions={quickReview?.defaultDimensions ?? null}
           onConfirm={handleQuickReviewConfirm}
           onChangeTemplate={handleChangeTemplate}
+          onEditLines={handleEditProposedLines}
         />
       )}
 

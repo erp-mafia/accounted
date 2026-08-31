@@ -83,6 +83,8 @@ Returns staged operation. User approves in web app → invoice number is allocat
 
 If the user delivered the invoice manually (printed or sent through an external e-invoice provider), use \`gnubok_mark_invoice_as_sent\` instead: same booking effect, no email.
 
+For a customer that requires an e-invoice (B2G, or a buyer that asks for Peppol), see "E-invoicing via Peppol" below: the user sends from the invoice page in the dashboard, gated per company; no MCP tool sends via Peppol yet.
+
 ### Step 5: Record payment
 
 When money arrives in 1930:
@@ -112,9 +114,9 @@ For consumer-targeted services (RUT: städning, RUT) or construction (ROT):
 
 This data goes on the invoice; Accounted's invoice template renders it automatically when set on the customer.
 
-## External e-invoicing (including B2G)
+## E-invoicing via Peppol (including B2G)
 
-Accounted currently creates PDF invoices and can send them by email. It does not generate e-invoice XML or deliver invoices through Peppol. If the customer requires an e-invoice, deliver it through an external e-invoice provider, then use \`gnubok_mark_invoice_as_sent\` to record the delivery and apply the same booking effect without sending another email.
+Accounted sends Peppol BIS Billing 3 e-invoices from the invoice page in the dashboard. Peppol sending is gated per company: the user requests access under Inställningar > Fakturering (Settings > Invoicing) and Accounted's operators enable it; a grant may carry a send cap, and when it is used up the dashboard says so and support raises it. Restrictions: the sending company must be an aktiebolag (enskild firma is refused until GLN identifiers are supported), standard invoices only (no credit notes, no self-billed invoices), the customer must be a Swedish business or organization whose org number is not a personnummer (an enskild firma customer is refused until GLN identifiers are supported), and the invoice must be in SEK with taxable Swedish VAT at 6, 12 or 25 % (no reverse charge, no VAT-exempt sales, no ROT/RUT deductions) and carry Er referens. There is no MCP tool and no v1 API action for Peppol sending yet, so an agent cannot trigger it: tell the user to send from the invoice page. Never tell a user that Accounted lacks Peppol sending; say it is gated per company. A successful dashboard Peppol send issues the invoice itself (number, status, and the verifikat under faktureringsmetoden), so do not mark it as sent afterwards. If the dashboard reports that the invoice was sent via Peppol but could not be marked as sent, call \`gnubok_mark_invoice_as_sent\` on the still-draft invoice to complete the issuance; a number already allocated is reused, never consumed twice. If that invoice already shows as sent, the number and the verifikat exist and only the invoice's link to the verifikat needs repair: do not mark it as sent again (it returns 409), leave the repair to support. If the company has no Peppol access, or is an enskild firma, and the customer requires an e-invoice, deliver it through an external e-invoice provider, then use \`gnubok_mark_invoice_as_sent\` to record the delivery and apply the same booking effect without sending another email.
 
 ## Critical rules
 
@@ -133,18 +135,20 @@ Accounted currently creates PDF invoices and can send them by email. It does not
 - \`gnubok_list_customers\` / \`gnubok_create_customer\`: customer setup
 - \`gnubok_create_invoice\`: stage new invoice
 - \`gnubok_send_invoice\`: email PDF
-- \`gnubok_mark_invoice_as_sent\`: manual delivery
+- \`gnubok_mark_invoice_as_sent\`: manual delivery (also the recovery when a dashboard Peppol send could not mark the invoice as sent)
 - \`gnubok_mark_invoice_as_paid\`: manual payment
 - \`gnubok_match_transaction_to_invoice\`: link bank payment
 - \`gnubok_credit_invoice\`: kreditfaktura (legal undo)
 - \`gnubok_convert_invoice\`: proforma → real invoice
 - \`gnubok_list_invoices\`: find existing invoices
+- \`gnubok_get_invoice\`: one invoice with its lines (article_id, revenue_account, vat_rate); read it before editing
+- \`gnubok_update_invoice\`: edit a draft; \`items\` is a FULL REPLACE, so pass every line back (with \`article_id\`) from \`gnubok_get_invoice\`
 `
 
 export const invoicingRulesSkill: Skill = {
   slug: 'invoicing-rules',
   name: 'Invoicing Rules',
-  summary: 'Mandatory invoice fields (ML 17 kap. 24 §), VAT treatment, ROT/RUT, external e-invoicing, kreditfaktura.',
+  summary: 'Mandatory invoice fields (ML 17 kap. 24 §), VAT treatment, ROT/RUT, Peppol e-invoicing (gated per company), kreditfaktura.',
   tags: ['invoicing', 'vat', 'compliance', 'eu', 'rot-rut'],
   body,
   tier: 'workflow',

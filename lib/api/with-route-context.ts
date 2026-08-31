@@ -136,8 +136,11 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       if (requireWrite) {
         // Delegate to the existing helper so tests that already mock it
         // continue to work. The helper returns its own 403 NextResponse;
-        // we wrap it in our request-id header for traceability.
-        const writeCheck = await requireWritePermission(supabase, user.id)
+        // we wrap it in our request-id header for traceability. The
+        // company id resolved above is handed over so the helper does not
+        // repeat the resolve_active_company round trip (measured ~40 ms p50
+        // on prod) on every write route.
+        const writeCheck = await requireWritePermission(supabase, user.id, { companyId })
         if (!writeCheck.ok) {
           userLog.warn('write permission denied')
           if (!writeCheck.response.headers.get('X-Request-Id')) {

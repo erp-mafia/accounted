@@ -405,3 +405,97 @@ describe('personal_number on customer routes', () => {
     expect(response.status).toBe(404)
   })
 })
+
+// A personnummer submitted as org_number on an individual is the personnummer
+// in the wrong field: stored encrypted in personal_number, org_number left
+// empty, on create and on update alike.
+describe('personnummer submitted as org_number on an individual', () => {
+  const routeParams = { params: Promise.resolve({ id: 'customer-1' }) }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+    captured.insert.length = 0
+    captured.update.length = 0
+    queryResult = { data: null, error: null }
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  it('POST stores it encrypted as personal_number and leaves org_number empty', async () => {
+    queryResult = {
+      data: {
+        id: 'customer-1',
+        name: 'Bertil Bengtsson',
+        customer_type: 'individual',
+        org_number: null,
+        personal_number: encryptPersonnummer(PERSONAL_NUMBER),
+      },
+      error: null,
+    }
+
+    const response = await POST(
+      createMockRequest('/api/customers', {
+        method: 'POST',
+        body: { name: 'Bertil Bengtsson', customer_type: 'individual', org_number: PERSONAL_NUMBER },
+      }),
+      { params: Promise.resolve({}) },
+    )
+
+    const { status, body } = await parseJsonResponse<{ data: { personal_number: string; org_number: string | null } }>(response)
+    expect(status).toBe(200)
+    const inserted = captured.insert[0] as { org_number?: string | null; personal_number?: string | null }
+    expect(inserted.org_number ?? null).toBeNull()
+    expect(inserted.personal_number).toMatch(CIPHERTEXT_SHAPE)
+    expect(decryptPersonnummer(inserted.personal_number!)).toBe(PERSONAL_NUMBER)
+    expect(JSON.stringify(inserted)).not.toContain(PERSONAL_NUMBER)
+    expect(body.data.personal_number).toBe(MASKED)
+  })
+
+  it('PATCH stores it encrypted as personal_number and clears org_number', async () => {
+    queryResult = {
+      data: {
+        id: 'customer-1',
+        customer_type: 'individual',
+        org_number: null,
+        personal_number: encryptPersonnummer(PERSONAL_NUMBER),
+      },
+      error: null,
+    }
+
+    const response = await PATCH(
+      createMockRequest('/api/customers/customer-1', {
+        method: 'PATCH',
+        body: { org_number: PERSONAL_NUMBER },
+      }),
+      routeParams,
+    )
+
+    const { status } = await parseJsonResponse<unknown>(response)
+    expect(status).toBe(200)
+    const updated = captured.update[0] as { org_number?: string | null; personal_number?: string | null }
+    expect(updated.org_number).toBeNull()
+    expect(updated.personal_number).toMatch(CIPHERTEXT_SHAPE)
+    expect(decryptPersonnummer(updated.personal_number!)).toBe(PERSONAL_NUMBER)
+  })
+
+  it('PATCH refuses an org_number that is a different personnummer than personal_number', async () => {
+    queryResult = {
+      data: { id: 'customer-1', customer_type: 'individual' },
+      error: null,
+    }
+
+    const response = await PATCH(
+      createMockRequest('/api/customers/customer-1', {
+        method: 'PATCH',
+        body: { org_number: '19850505-5555', personal_number: PERSONAL_NUMBER },
+      }),
+      routeParams,
+    )
+
+    const { status, body } = await parseJsonResponse<unknown>(response)
+    expect(status).toBe(400)
+    expect(JSON.stringify(body)).toContain('CUSTOMER_PERSONAL_NUMBER_CONFLICT')
+    expect(captured.update).toHaveLength(0)
+  })
+})

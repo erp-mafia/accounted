@@ -731,7 +731,7 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     })
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
-    enqueue({ data: { ledger_account: '1931' }, error: null })
+    enqueue({ data: { ledger_account: '1931' }, error: null }) // resolveSettlementAccount: explicit cash_account_id lookup
     enqueue({ data: tx, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
@@ -764,6 +764,7 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     // categorizeTransactionCore: transaction fetch + company_settings
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     // transaction fetch for the title
     enqueue({ data: tx, error: null })
     // resolveDimensionBags: settings → ensure rpc → dimensions → dimension_values
@@ -820,6 +821,7 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     const tx = makeTransaction({ id: 'tx-1', amount: -500 })
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: tx, error: null })
     enqueue({ data: null, error: null }) // period status layer 1
     enqueue({ data: null, error: null }) // period status layer 2
@@ -951,5 +953,63 @@ describe('gnubok_bulk_book_transactions: dimensions bag', () => {
       ),
     ).rejects.toThrow(/default_dimensions only applies/i)
     expect(supabase.from).not.toHaveBeenCalled()
+  })
+})
+
+describe('gnubok_bulk_book_transactions: approval-queue title', () => {
+  // Feedback seq 261545: "Samlingsverifikation: 1 transaktioner 2026-07-22"
+  // carried no amount, direction or counterparty, so the CEO approving from a
+  // phone could not tell what he was authorising.
+  it('carries direction, amount, currency, date and the lead counterparty', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const inserts = captureInserts(supabase)
+    enqueue({ data: { dimensions_enabled: true }, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: REGISTRY_ROWS, error: null })
+    enqueue({ data: VALUE_ROWS, error: null })
+    enqueue({
+      data: [
+        { id: 'tx-1', amount: -400, currency: 'SEK', date: '2026-05-12', journal_entry_id: null, description: 'NORDNET UTTAG', merchant_name: null },
+        { id: 'tx-2', amount: -600, currency: 'SEK', date: '2026-05-12', journal_entry_id: null, description: 'NORDNET UTTAG', merchant_name: null },
+      ],
+      error: null,
+    })
+    enqueue({
+      data: [
+        { account_number: '4010', account_name: 'Inköp material och varor' },
+        { account_number: '1930', account_name: 'Företagskonto' },
+      ],
+      error: null,
+    })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'op-bulk-title' }, error: null })
+
+    await bulkBookTransactions.execute(
+      {
+        tx_ids: ['tx-1', 'tx-2'],
+        default_dimensions: { '6': 'villa almgren tak' },
+        new_entry: {
+          description: 'Samlingsverifikation material',
+          lines: [
+            { account_number: '4010', debit_amount: 1000, credit_amount: 0, currency: 'SEK', dimensions: { '1': 'KS01' } },
+            { account_number: '1930', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+          ],
+        },
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )
+
+    const staged = inserts.find((i) => i.table === 'pending_operations')
+    expect(staged).toBeDefined()
+    const title = staged!.payload.title as string
+    expect(title).toContain('Samlingsverifikation')
+    expect(title).toContain('1 000,00 SEK')
+    expect(title).toMatch(/^Samlingsverifikation -/)
+    expect(title).toContain('2026-05-12')
+    expect(title).toContain('NORDNET UTTAG')
+    expect(title).toContain('(+1 till)')
   })
 })

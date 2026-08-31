@@ -22,6 +22,7 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { eventBus } from '@/lib/events'
+import { refreshRunYtd } from '@/lib/salary/ytd'
 
 const SalaryRunApproved = z.object({
   id: z.string().uuid(),
@@ -195,6 +196,21 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponseFromCode('SALARY_RUN_APPROVE_NOT_REVIEW', ctx.log, {
         requestId: ctx.requestId,
         details: { reason: 'race' },
+      })
+    }
+
+    // Approval is the first status from which lönebesked can be sent, so the
+    // payslip's "Ackumulerat" snapshot is refreshed here: a run calculated
+    // before an earlier month was authorized still carries a YTD missing
+    // that month. Non-fatal, YTD is display only.
+    const ytdRefresh = await refreshRunYtd(ctx.supabase, {
+      companyId: ctx.companyId!,
+      salaryRunId,
+    })
+    if (!ytdRefresh.ok) {
+      ctx.log.warn('YTD refresh failed after approval', {
+        salaryRunId,
+        message: ytdRefresh.message,
       })
     }
 

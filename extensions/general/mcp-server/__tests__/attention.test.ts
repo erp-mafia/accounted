@@ -22,12 +22,14 @@ const ctx = (supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']) 
 })
 
 /**
- * Enqueues 14 baseline empty results in the order the resource consumes them.
+ * Enqueues 15 baseline empty results in the order the resource consumes them.
  * Tests can override individual slots before invoking by enqueueing in advance.
  */
 function enqueueEmpty(enqueue: (r: { data?: unknown; error?: unknown; count?: number | null }) => void) {
-  // 1. unbookedHead
-  enqueue({ count: 0 })
+  // 1. unbookedIds (every pointer-null business row; the junction-linked
+  //    ones are subtracted by a lookup that runs after slot 15 and only
+  //    when this list is non-empty)
+  enqueue({ data: [] })
   // 2. unbookedSamples
   enqueue({ data: [] })
   // 3. overdueRows
@@ -54,6 +56,10 @@ function enqueueEmpty(enqueue: (r: { data?: unknown; error?: unknown; count?: nu
   enqueue({ data: null })
   // 14. companySettingsRow
   enqueue({ data: null })
+  // 15. unlinked-document candidates. fetchUnlinkedDocuments returns early on
+  // an empty candidate set, so it consumes exactly this one slot; with
+  // candidates it consumes eight more, one per referencing table.
+  enqueue({ data: [] })
 }
 
 describe('Accounted://attention', () => {
@@ -76,7 +82,7 @@ describe('Accounted://attention', () => {
       { id: 't-2', date: today, amount: -200, currency: 'SEK', description: 'Office', merchant_name: 'Clas Ohlson' },
     ]
 
-    enqueue({ count: 2 })            // unbookedHead
+    enqueue({ data: txns.map((t) => ({ id: t.id })) }) // unbookedIds
     enqueue({ data: txns })          // unbookedSamples
     enqueue({ data: [] })            // overdueRows
     enqueue({ count: 0 })            // pendingSupplierHead
@@ -104,12 +110,33 @@ describe('Accounted://attention', () => {
     expect(result.summary).toEqual({ total_items: 2, critical: 0, warning: 1, info: 0 })
   })
 
+  it('does not count a row anchored only through transaction_voucher_links as unbooked (bulk-book, 1:N split)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const today = new Date().toISOString().slice(0, 10)
+    const txns = [
+      { id: 't-split', date: today, amount: -800, currency: 'SEK', description: 'Utlägg', merchant_name: null },
+      { id: 't-open', date: today, amount: -200, currency: 'SEK', description: 'Office', merchant_name: 'Clas Ohlson' },
+    ]
+    enqueue({ data: txns.map((t) => ({ id: t.id })) }) // 1. unbookedIds
+    enqueue({ data: txns })                            // 2. unbookedSamples
+    for (let i = 3; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
+    enqueue({ data: [] })                              // 15. unlinked-document candidates
+    enqueue({ data: [{ transaction_id: 't-split' }] }) // 16. fetchJunctionLinkedTxIds
+
+    const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
+
+    const cat = result.categories.find((c) => c.key === 'unbooked_transactions')
+    expect(cat?.count).toBe(1)
+    expect(cat?.samples.map((s) => s.id)).toEqual(['t-open'])
+    expect(cat?.next?.args).toEqual({ transaction_id: 't-open' })
+  })
+
   it('escalates unbooked transactions to critical when oldest is > 30 days old', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const fortyDaysAgo = new Date(Date.now() - 40 * 86_400_000).toISOString().slice(0, 10)
     const txns = [{ id: 't-old', date: fortyDaysAgo, amount: -100, currency: 'SEK', description: 'X', merchant_name: null }]
 
-    enqueue({ count: 1 })
+    enqueue({ data: [{ id: 't-old' }] })
     enqueue({ data: txns })
     enqueue({ data: [] })
     enqueue({ count: 0 })
@@ -188,6 +215,47 @@ describe('Accounted://attention', () => {
     expect(result.summary.critical).toBe(1)
   })
 
+  it('surfaces documents that nothing references, pointing at the link tool', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // Slots 1-14 empty, then this test's own candidate set in slot 15 and the
+    // eight reference lookups behind it.
+    for (let i = 0; i < 14; i += 1) enqueue({ data: i === 12 || i === 13 ? null : [], count: 0 })
+    enqueue({
+      data: [
+        { id: 'doc-new', file_name: 'kvitto.pdf', mime_type: 'application/pdf', file_size_bytes: 900, upload_source: 'api', created_at: '2026-08-20T00:00:00.000Z' },
+        { id: 'doc-old', file_name: 'faktura.pdf', mime_type: 'application/pdf', file_size_bytes: 900, upload_source: 'file_upload', created_at: '2026-08-01T00:00:00.000Z' },
+      ],
+    })
+    for (let i = 0; i < 8; i += 1) enqueue({ data: [] })
+
+    const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
+    const cat = result.categories.find((c) => c.key === 'unlinked_documents')
+
+    expect(cat).toBeDefined()
+    expect(cat?.count).toBe(2)
+    expect(cat?.severity).toBe('warning')
+    expect(cat?.next?.tool).toBe('gnubok_link_document_to_voucher')
+    // Oldest first, matching every other category's "start with the stalest" hint.
+    expect(cat?.next?.args).toEqual({ document_id: 'doc-old' })
+  })
+
+  it('omits the unlinked-documents category when every candidate is claimed', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    for (let i = 0; i < 14; i += 1) enqueue({ data: i === 12 || i === 13 ? null : [], count: 0 })
+    enqueue({
+      data: [
+        { id: 'doc-1', file_name: 'kvitto.pdf', mime_type: 'application/pdf', file_size_bytes: 900, upload_source: 'api', created_at: '2026-08-20T00:00:00.000Z' },
+      ],
+    })
+    // The first referencing table claims it; the remaining seven return empty.
+    enqueue({ data: [{ document_id: 'doc-1' }] })
+    for (let i = 0; i < 7; i += 1) enqueue({ data: [] })
+
+    const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
+
+    expect(result.categories.find((c) => c.key === 'unlinked_documents')).toBeUndefined()
+  })
+
   it('flags voucher gaps as critical and includes next tool args', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const seriesRows = [{ voucher_series: 'A', fiscal_period_id: 'fp-1' }]
@@ -206,6 +274,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })                     // bankConnRows
     enqueue({ data: null })                   // activePeriodRow
     enqueue({ data: null })                   // companySettingsRow
+    enqueue({ data: [] })                     // unlinked-document candidates
     // Loop body for series 'A':
     enqueue({ data: [{ gap_start: 5, gap_end: 7 }] })  // detect_voucher_gaps RPC
     enqueue({ data: [] })                     // voucher_gap_explanations follow-up
@@ -307,7 +376,7 @@ describe('Accounted://attention', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const today = new Date().toISOString().slice(0, 10)
 
-    enqueue({ count: 1 })                                                  // unbookedHead
+    enqueue({ data: [{ id: 't-1' }] })                                     // unbookedIds
     enqueue({ data: [{ id: 't-1', date: today, amount: -50, currency: 'SEK', description: 'X', merchant_name: null }] })
     enqueue({ data: [] })                                                  // overdueRows
     enqueue({ count: 1 })                                                  // pendingSupplierHead
@@ -328,5 +397,32 @@ describe('Accounted://attention', () => {
       new Set(['unbooked_transactions', 'pending_supplier_invoices', 'deadlines_upcoming'])
     )
     expect(result.summary.total_items).toBe(3)
+  })
+})
+
+describe('Accounted://attention: reconciliation_due', () => {
+  it('adds the category when signed-off accounts have fallen behind the previous month end', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueEmpty(enqueue)
+    // countReconciliationDue: sign-offs (adoption + coverage), cash accounts, skattekonto rows.
+    enqueue({
+      data: [{ account_key: 'skattekonto', through_date: '2020-01-31', reopened_at: null }],
+    })
+    enqueue({ data: [{ id: '11111111-1111-4111-8111-111111111111', iban: null, currency: 'SEK', updated_at: null }] })
+    enqueue({ count: 3 })
+    const out = (await attentionResource.read(ctx(supabase))) as AttentionResponse
+    const cat = out.categories.find((c) => c.key === 'reconciliation_due')
+    expect(cat).toBeDefined()
+    // The bank account and the skattekonto are both due.
+    expect(cat?.count).toBe(2)
+    expect(cat?.next?.resource).toBe('Accounted://reconciliation/summary')
+  })
+
+  it('stays silent for a company that never signed anything off', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueEmpty(enqueue)
+    enqueue({ data: [] })
+    const out = (await attentionResource.read(ctx(supabase))) as AttentionResponse
+    expect(out.categories.find((c) => c.key === 'reconciliation_due')).toBeUndefined()
   })
 })

@@ -7,7 +7,7 @@
     ]
   },
   "naiveOreRound": {
-    "count": 629
+    "count": 622
   },
   "handRolledInvariants": {
     "count": 115
@@ -32,5 +32,9 @@
       "components/salary/NewEmployeeDialog.tsx",
       "components/transactions/InvoiceMatchDialog.tsx"
     ]
+  },
+  "rawReferenceFetch": {
+    "count": 0,
+    "files": []
   }
 }

@@ -12,7 +12,7 @@
  * The route now runs through the withRouteContext wrapper, so we mock its
  * auth/company/write dependencies and inject the Supabase client via requireAuth.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
@@ -132,7 +132,7 @@ describe('POST /api/salary/employees', () => {
   function supabaseWithInsert(returned: Record<string, unknown>) {
     const single = vi.fn(() => Promise.resolve({ data: returned, error: null }))
     const select = vi.fn(() => ({ single }))
-    const insert = vi.fn(() => ({ select }))
+    const insert = vi.fn((_payload: Record<string, unknown>) => ({ select }))
     return { supabase: { from: vi.fn(() => ({ insert })) }, insert }
   }
 
@@ -174,5 +174,151 @@ describe('POST /api/salary/employees', () => {
     // serialized response: mask + last4 would reassemble the identity.
     expect(JSON.stringify(body)).not.toContain(NEW_PNR)
     expect(JSON.stringify(body)).not.toContain('9802')
+  })
+
+  // #1913: the NewEmployeeDialog sends the jämkning beslut on create; pin that
+  // the insert carries it, and that omitting it inserts nulls (no beslut).
+  const CREATE_BASE = {
+    first_name: 'Test',
+    last_name: 'Testsson',
+    personnummer: NEW_PNR,
+    employment_start: '2026-01-01',
+    monthly_salary: 30000,
+    tax_table_number: 34,
+    tax_municipality: 'Stockholm',
+  }
+
+  function postRequest(body: Record<string, unknown>) {
+    return new Request('https://x.test/api/salary/employees', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  }
+
+  it('inserts the jämkning percentage and validity when provided', async () => {
+    const { supabase, insert } = supabaseWithInsert({ id: 'emp-new', personnummer: encryptPersonnummer(NEW_PNR) })
+    authed(supabase)
+
+    const res = await POST(
+      postRequest({
+        ...CREATE_BASE,
+        jamkning_percentage: 12.5,
+        jamkning_valid_from: '2026-01-01',
+        jamkning_valid_to: '2026-12-31',
+      }),
+      params,
+    )
+
+    expect(res.status).toBe(201)
+    expect(insert).toHaveBeenCalledTimes(1)
+    expect(insert.mock.calls[0][0]).toMatchObject({
+      jamkning_percentage: 12.5,
+      jamkning_valid_from: '2026-01-01',
+      jamkning_valid_to: '2026-12-31',
+    })
+  })
+
+  it('inserts null jämkning fields when the body omits them', async () => {
+    const { supabase, insert } = supabaseWithInsert({ id: 'emp-new', personnummer: encryptPersonnummer(NEW_PNR) })
+    authed(supabase)
+
+    const res = await POST(postRequest(CREATE_BASE), params)
+
+    expect(res.status).toBe(201)
+    expect(insert.mock.calls[0][0]).toMatchObject({
+      jamkning_percentage: null,
+      jamkning_valid_from: null,
+      jamkning_valid_to: null,
+    })
+  })
+
+  it('returns 401 when unauthenticated', async () => {
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: null,
+      supabase: null,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    } as never)
+
+    const res = await POST(postRequest(CREATE_BASE), params)
+    expect(res.status).toBe(401)
+  })
+
+  it('returns 400 on a personnummer that fails the checksum, without inserting', async () => {
+    const { supabase, insert } = supabaseWithInsert({ id: 'emp-new' })
+    authed(supabase)
+
+    const res = await POST(postRequest({ ...CREATE_BASE, personnummer: '199001019803' }), params)
+
+    expect(res.status).toBe(400)
+    expect(insert).not.toHaveBeenCalled()
+  })
+
+  // #1996: the route hand-builds the 409 and generic insert-failure 500 bodies
+  // as flat strings (no error.requestId), so the dialog falls back to the
+  // X-Request-Id header for its "Ärende-id" line. Pin that the header is there.
+  describe('insert failures carry X-Request-Id for support correlation', () => {
+    function supabaseWithInsertError(error: { code: string; message: string }) {
+      const single = vi.fn(() => Promise.resolve({ data: null, error }))
+      const select = vi.fn(() => ({ single }))
+      const insert = vi.fn(() => ({ select }))
+      return { from: vi.fn(() => ({ insert })) }
+    }
+
+    it('409 duplicate personnummer: flat error body plus X-Request-Id header', async () => {
+      authed(supabaseWithInsertError({ code: '23505', message: 'duplicate key value' }))
+
+      const res = await POST(postRequest(CREATE_BASE), params)
+
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body.error).toBe('En anställd med detta personnummer finns redan')
+      expect(res.headers.get('X-Request-Id')).toMatch(/^req_/)
+    })
+
+    it('500 generic insert error: flat error body plus X-Request-Id header', async () => {
+      authed(supabaseWithInsertError({ code: '57014', message: 'canceling statement due to statement timeout' }))
+
+      const res = await POST(postRequest(CREATE_BASE), params)
+
+      expect(res.status).toBe(500)
+      const body = await res.json()
+      expect(typeof body.error).toBe('string')
+      expect(res.headers.get('X-Request-Id')).toMatch(/^req_/)
+    })
+  })
+
+  // #1996: the deployment that filed the issue had no PERSONNUMMER_ENCRYPTION_KEY.
+  // The encrypt helper used to throw a bare Error, which the wrapper answered
+  // with the generic INTERNAL_ERROR 500 ("try again later") even though no
+  // retry can ever succeed. It now carries a registry code, so the envelope
+  // names the configuration gap, points at support, and keeps the requestId.
+  describe('missing PERSONNUMMER_ENCRYPTION_KEY in production', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs()
+    })
+
+    it('answers 503 PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED with a requestId and no insert', async () => {
+      vi.stubEnv('NODE_ENV', 'production')
+      vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', '')
+      const { supabase, insert } = supabaseWithInsert({ id: 'emp-new' })
+      authed(supabase)
+
+      const res = await POST(postRequest(CREATE_BASE), params)
+
+      expect(res.status).toBe(503)
+      const body = await res.json()
+      expect(body.error.code).toBe('PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED')
+      expect(body.error.message).toContain('PERSONNUMMER_ENCRYPTION_KEY')
+      expect(body.error.message).toMatch(/Kontakta supporten/)
+      expect(body.error.message_en).toContain('PERSONNUMMER_ENCRYPTION_KEY')
+      expect(body.error.requestId).toMatch(/^req_/)
+      expect(res.headers.get('X-Request-Id')).toBe(body.error.requestId)
+      // The failure happens before the database is touched: nothing to clean up.
+      expect(supabase.from).not.toHaveBeenCalled()
+      expect(insert).not.toHaveBeenCalled()
+      // The personnummer itself must never leak into the error envelope.
+      expect(JSON.stringify(body)).not.toContain(NEW_PNR)
+    })
   })
 })

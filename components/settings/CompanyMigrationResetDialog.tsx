@@ -126,13 +126,6 @@ export function CompanyMigrationResetDialog({
         return t('reset_blocker_sandbox')
       case 'locked_or_closed_periods':
         return t('reset_blocker_periods', { count: blocker.count })
-      case 'journal_entries_exist':
-      case 'non_import_committed_entries':
-        return t('reset_blocker_entries', { count: blocker.count })
-      case 'voucher_sequence_state_exists':
-        return t('reset_blocker_sequences', { count: blocker.count })
-      case 'invoice_records_exist':
-        return t('reset_blocker_invoices', { count: blocker.count })
       case 'authority_submission_detected':
         return t('reset_blocker_filings', { count: blocker.count })
       case 'live_bank_connections':

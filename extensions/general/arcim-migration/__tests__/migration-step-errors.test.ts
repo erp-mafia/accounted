@@ -31,8 +31,12 @@ vi.mock('@/lib/providers/provider-data-fetcher', () => ({
   fetchCompanyInfoDirect: vi.fn(),
   fetchCustomersDirect: vi.fn(),
   fetchSuppliersDirect: vi.fn(),
-  fetchSalesInvoicesDirect: vi.fn(),
-  fetchSupplierInvoicesDirect: vi.fn(),
+  // The orchestrator consumes the HYDRATED variants: mocking only the
+  // Direct ones left the invoice steps calling undefined, which the step's
+  // own try/catch swallowed into a recorded error, so the tests stayed green
+  // while exercising nothing.
+  fetchSalesInvoicesHydrated: vi.fn(),
+  fetchSupplierInvoicesHydrated: vi.fn(),
 }))
 
 vi.mock('@/lib/invoices/bulk-reconcile-supplier-vouchers', () => ({

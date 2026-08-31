@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { AttnLine } from '@/components/ui/attn-line'
+import { SettingsSelect } from '@/components/settings/SettingsRows'
 import { Download, Loader2, CheckCircle2, ExternalLink } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { downloadFile } from '@/lib/browser/download-file'
@@ -15,34 +17,51 @@ import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDateTime } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 
+type PaymentFormat = 'bg_lb' | 'pain001'
+
 interface TaxPaymentPanelProps {
   /** YYYY-MM */
   period: string
   totalTax: number
   totalAvgifter: number
+  paymentFileFormat: string | null
   paymentFileGeneratedAt: string | null
   taxPaidAt: string | null
+  /** company_settings.preferred_payment_format: seeds the format selector. */
+  defaultFormat: PaymentFormat
+  /**
+   * company_settings.bankgiro / iban: the sender account each format requires.
+   * null means missing as of the latest settings fetch (warn up front, the
+   * download would 400); undefined means unknown (settings not loaded).
+   */
+  senderBankgiro?: string | null
+  senderIban?: string | null
   readOnly?: boolean
   onChange?: () => void
 }
 
 /**
- * Generates a Bankgirot LB-fil for paying skatt + arbetsgivaravgifter for an
- * AGI period to Skatteverket Bankgiro 5050-1055 with the company's
- * Skattekontot OCR.
+ * Generates the payment file (Bankgirot LB or ISO 20022 pain.001) for paying
+ * skatt + arbetsgivaravgifter for an AGI period to Skatteverket Bankgiro
+ * 5050-1055 with the company's Skattekontot OCR.
  */
 export function TaxPaymentPanel({
   period,
   totalTax,
   totalAvgifter,
+  paymentFileFormat,
   paymentFileGeneratedAt,
   taxPaidAt,
+  defaultFormat,
+  senderBankgiro,
+  senderIban,
   readOnly,
   onChange,
 }: TaxPaymentPanelProps) {
   const t = useTranslations('salary_payments')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
+  const [format, setFormat] = useState<PaymentFormat>(defaultFormat)
   const [downloading, setDownloading] = useState(false)
   const [marking, setMarking] = useState(false)
   const [paymentDeadline, setPaymentDeadline] = useState<string>('')
@@ -72,12 +91,14 @@ export function TaxPaymentPanel({
     if (downloading || marking) return
     setDownloading(true)
     try {
+      const filename =
+        format === 'pain001' ? `pain001_skatt_${period}.xml` : `bg_lb_skatt_${period}.txt`
       // Bounded, and no file is written unless the server answered 2xx with a
       // complete body: an error envelope saved as bg_lb_skatt_2026-04.txt is a
       // file the user would upload to the bank before discovering it pays no tax.
       const result = await downloadFile({
-        url: `/api/skatteverket/tax-payments/${period}/payment-file`,
-        filename: `bg_lb_skatt_${period}.txt`,
+        url: `/api/skatteverket/tax-payments/${period}/payment-file?format=${format}`,
+        filename,
         locale,
       })
       // Exactly one toast per outcome: TOAST_LIMIT is 1.
@@ -97,7 +118,7 @@ export function TaxPaymentPanel({
     } finally {
       setDownloading(false)
     }
-  }, [period, toast, onChange, t, locale, downloading, marking])
+  }, [period, format, toast, onChange, t, locale, downloading, marking])
 
   const handleMarkPaid = useCallback(async () => {
     if (downloading || marking) return
@@ -128,6 +149,18 @@ export function TaxPaymentPanel({
   }, [period, toast, onChange, t, locale, downloading, marking])
 
   if (totalAmount <= 0) return null
+
+  const FORMAT_LABEL: Record<PaymentFormat, string> = {
+    bg_lb: t('format_bg_lb'),
+    pain001: t('format_pain001'),
+  }
+
+  // The sender account lives in company_settings, not in the Bolagsverket
+  // snapshot shown on the settings overview: say the precondition here,
+  // before the download 400s on it (same logic as PaymentFilePanel).
+  const senderMissing =
+    (format === 'bg_lb' && senderBankgiro === null) ||
+    (format === 'pain001' && senderIban === null)
 
   return (
     <DetailSection
@@ -165,6 +198,9 @@ export function TaxPaymentPanel({
         </DefRow>
         {paymentFileGeneratedAt && (
           <DefRow label={t('tax_file_generated')}>
+            {paymentFileFormat && (
+              <>{FORMAT_LABEL[paymentFileFormat as PaymentFormat] ?? paymentFileFormat} </>
+            )}
             <span className="tabular-nums">{formatDateTime(paymentFileGeneratedAt)}</span>
           </DefRow>
         )}
@@ -173,7 +209,28 @@ export function TaxPaymentPanel({
             <span className="tabular-nums">{formatDateTime(taxPaidAt)}</span>
           </DefRow>
         )}
+        {!readOnly && (
+          <DefRow label={t('format_label')}>
+            <SettingsSelect
+              aria-label={t('format_label')}
+              value={format}
+              onChange={(e) => setFormat(e.target.value as PaymentFormat)}
+              wrapperClassName="-my-1"
+            >
+              <option value="pain001">{FORMAT_LABEL.pain001}</option>
+              <option value="bg_lb">{FORMAT_LABEL.bg_lb}</option>
+            </SettingsSelect>
+          </DefRow>
+        )}
       </div>
+
+      {!readOnly && senderMissing && (
+        <div className="mt-3">
+          <AttnLine action={{ label: t('missing_sender_link'), href: '/settings/invoicing' }}>
+            {format === 'bg_lb' ? t('missing_bankgiro_warning') : t('missing_iban_warning')}
+          </AttnLine>
+        </div>
+      )}
 
       {!readOnly && (
         <div className="mt-3 flex flex-wrap justify-end gap-2">

@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { getCompanyIdsWithCapability } from '@/lib/entitlements/has-capability'
+import { orderByStalestSync } from '@/lib/skatteverket/sync-order'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { syncSkattekonto, SKATTEKONTO_LAST_SYNCED_AT_KEY } from '@/extensions/general/skatteverket/lib/skattekonto-sync'
@@ -146,9 +147,29 @@ export async function GET(request: Request) {
 
   // Limit the eligible work list, not the raw token list. Expired trials and
   // disabled modules must not occupy all 50 positions ahead of paying firms.
-  const entitledWork = work
-    .filter(item => entitledCompanyIds.has(item.companyId))
-    .slice(0, MAX_COMPANIES_PER_RUN)
+  // Within the eligible list, never-synced and longest-ago-synced companies
+  // go first: a fixed order plus a cap starves the tail forever.
+  const eligibleWork = work.filter(item => entitledCompanyIds.has(item.companyId))
+  let lastSyncedAtByCompany = new Map<string, string | null>()
+  try {
+    const rows = await fetchAllRows(
+      ({ from, to }) => supabase
+        .from('extension_data')
+        .select('company_id, value')
+        .eq('extension_id', 'skatteverket')
+        .eq('key', SKATTEKONTO_LAST_SYNCED_AT_KEY)
+        .order('company_id', { ascending: true })
+        .range(from, to),
+    )
+    lastSyncedAtByCompany = new Map(
+      (rows ?? []).map(r => [r.company_id as string, (r.value as string | null) ?? null]),
+    )
+  } catch (error) {
+    console.warn('[skattekonto-sync-cron] last-synced read failed; keeping token order', {
+      message: error instanceof Error ? error.message : String(error),
+    })
+  }
+  const entitledWork = orderByStalestSync(eligibleWork, lastSyncedAtByCompany).slice(0, MAX_COMPANIES_PER_RUN)
 
   console.info('[skattekonto-sync-cron] Work list built', {
     candidates: work.length,

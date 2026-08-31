@@ -1,6 +1,6 @@
 # Arkivplan
 
-**Mall for användare av erp-base**
+**Mall för användare av Accounted**
 Upprättad i enlighet med BFNAR 2013:2 punkt 8.3
 
 ---
@@ -29,11 +29,11 @@ Fyll i de markerade fälten. Radera denna instruktionssektion innan du arkiverar
 
 | Fält | Uppgift |
 |---|---|
-| Programvara | erp-base ([DOMÄN]) |
+| Programvara | Accounted ([DOMÄN, för den molnbaserade tjänsten app.accounted.se]) |
 | Leverantör | [BOLAGSNAMN], org.nr [ORG-NR] |
-| Lagringsplats | Molnbaserad tjänst, data lagrat inom EU (Supabase/AWS) |
-| Åtkomst | Via webbläsare, inloggning med magic link (e-post) |
-| Kontoplan | BAS 2025/2026 (konfigurerad i erp-base) |
+| Lagringsplats | Molnbaserad tjänst, data lagrad inom EU (Supabase på AWS, region eu-north-1, Stockholm) |
+| Åtkomst | Via webbläsare. Inloggning med e-post och lösenord; tvåfaktorsautentisering (TOTP) krävs i den molnbaserade tjänsten. BankID kan kopplas som inloggningsmetod. |
+| Kontoplan | BAS 2026 (konfigurerad i Accounted) |
 
 ## 3. Förteckning över räkenskapsinformation
 
@@ -43,44 +43,48 @@ Tabellen nedan anger vilken räkenskapsinformation som finns, i vilken form den 
 
 | Räkenskapsinformation | Form | Lagringsplats | Arkiveringstid |
 |---|---|---|---|
-| Grundbokföring (registreringsordning) | Elektronisk | erp-base databas | 7 år efter räkenskapsårets utgång |
-| Huvudbokföring (systematisk ordning) | Elektronisk | erp-base databas | 7 år efter räkenskapsårets utgång |
-| Verifikationer (journalposter) | Elektronisk | erp-base databas | 7 år efter räkenskapsårets utgång |
+| Grundbokföring (registreringsordning) | Elektronisk | Accounted databas | 7 år efter räkenskapsårets utgång |
+| Huvudbokföring (systematisk ordning) | Elektronisk | Accounted databas | 7 år efter räkenskapsårets utgång |
+| Verifikationer (journalposter) | Elektronisk | Accounted databas | 7 år efter räkenskapsårets utgång |
+| Rättelselogg (rättelser i samma verifikat: ursprungsvärde, nytt värde, tidpunkt, utförare) | Elektronisk | Accounted databas (oföränderlig logg) | 7 år efter räkenskapsårets utgång |
 
 ### 3.2 Verifikationsunderlag
 
 | Räkenskapsinformation | Form | Lagringsplats | Arkiveringstid | Anmärkning |
 |---|---|---|---|---|
-| Kundfakturor (utgående) | Elektronisk (PDF) | erp-base dokumentarkiv | 7 år | Genereras i erp-base |
-| Leverantörsfakturor (inkommande) | Elektronisk (PDF/bild) | erp-base dokumentarkiv | 7 år | Uppladdade/skannade |
-| Kvitton | Elektronisk (foto/PDF) | erp-base dokumentarkiv | 7 år | Fotograferade via appen |
-| Bankutdrag/kontoutdrag | Elektronisk | erp-base via PSD2-koppling | 7 år | Synkroniserade via Enable Banking |
-| Avtal och övriga underlag | [Elektronisk/Papper] | [erp-base / Fysisk pärm] | 7 år | [Ange var dessa förvaras] |
+| Kundfakturor (utgående) | Elektronisk (PDF) | Accounted dokumentarkiv | 7 år | Genereras i Accounted |
+| Leverantörsfakturor (inkommande) | Elektronisk (PDF/bild) | Accounted dokumentarkiv | 7 år | Uppladdade/skannade |
+| Kvitton | Elektronisk (foto/PDF) | Accounted dokumentarkiv | 7 år | Fotograferade via appen |
+| Bankutdrag/kontoutdrag | Elektronisk | Accounted via PSD2-koppling | 7 år | Synkroniserade via Enable Banking |
+| E-fakturor via Peppol (inkommande) | Elektronisk (UBL-XML, eventuell bifogad PDF) | Accounted dokumentarkiv | 7 år | Mottagna via Peppol-nätverket (accesspunkt Qvalia); originalfilen bevaras oförändrad |
+| Skattekontoutdrag (importerade filer) | Elektronisk (CSV/SKV-fil från Skatteverket) | Accounted databas (transaktionerna samt importlogg med filnamn och kontrollsumma) | 7 år | Importerade under Importera/Exportera, alternativt hämtade via Skatteverket-kopplingen |
+| Avtal och övriga underlag | [Elektronisk/Papper] | [Accounted / Fysisk pärm] | 7 år | [Ange var dessa förvaras] |
 
 ### 3.3 Årsbokslut och årsredovisning
 
 | Räkenskapsinformation | Form | Lagringsplats | Arkiveringstid |
 |---|---|---|---|
-| Resultaträkning | Elektronisk | erp-base rapportmodul | 7 år |
-| Balansräkning | Elektronisk | erp-base rapportmodul | 7 år |
-| Årsredovisning (AB) / Årsbokslut (EF) | [Elektronisk/Papper] | [erp-base / Bolagsverket / Fysisk pärm] | 7 år (10 år rekommenderat) |
-| NE-bilaga (EF) | Elektronisk | erp-base rapportmodul | 7 år |
+| Resultaträkning | Elektronisk | Accounted rapportmodul | 7 år |
+| Balansräkning | Elektronisk | Accounted rapportmodul | 7 år |
+| Årsredovisning (AB) / Årsbokslut (EF) | [Elektronisk/Papper] | [Accounted / Bolagsverket / Fysisk pärm] | 7 år (10 år rekommenderat) |
+| NE-bilaga (EF) | Elektronisk | Accounted rapportmodul | 7 år |
 | SIE-filer (export) | Elektronisk | [Ange var exporterade filer sparas] | 7 år |
+| Säkerhetsbackup (ZIP-arkiv med SIE-filer, rapporter, underlag, register och behandlingshistorik) | Elektronisk | [Ange var exporterade arkiv sparas] | 7 år |
 
 ### 3.4 Skattedeklarationer och momsrapporter
 
 | Räkenskapsinformation | Form | Lagringsplats | Arkiveringstid |
 |---|---|---|---|
-| Momsdeklarationer | Elektronisk | erp-base rapportmodul + Skatteverket | 7 år |
-| SRU-filer | Elektronisk | erp-base rapportmodul | 7 år |
+| Momsdeklarationer | Elektronisk | Accounted rapportmodul + Skatteverket | 7 år |
+| SRU-filer | Elektronisk | Accounted rapportmodul | 7 år |
 | Inkomstdeklaration | [Elektronisk/Papper] | [Skatteverket / Egen kopia] | 7 år |
 
 ### 3.5 Systemdokumentation
 
 | Dokument | Form | Lagringsplats | Arkiveringstid |
 |---|---|---|---|
-| Systemdokumentation | Elektronisk | [erp-base / Egen lagring] | Samma som den räkenskapsinformation den avser |
-| Behandlingshistorik | Elektronisk | erp-base (automatiskt genererad) | Samma som den räkenskapsinformation den avser |
+| Systemdokumentation | Elektronisk | [Accounted / Egen lagring] | Samma som den räkenskapsinformation den avser |
+| Behandlingshistorik | Elektronisk | Accounted (automatiskt genererad) | Samma som den räkenskapsinformation den avser |
 | Denna arkivplan | [Elektronisk/Papper] | [Ange lagringsplats] | Samma som den räkenskapsinformation den avser |
 
 ## 4. Pappersoriginal
@@ -97,9 +101,9 @@ Tabellen nedan anger vilken räkenskapsinformation som finns, i vilken form den 
 
 ## 5. Säkerhetskopiering och redundans
 
-5.1. erp-base sköter automatisk daglig säkerhetskopiering av databasen via Supabase-infrastrukturen.
+5.1. Accounted sköter automatisk daglig säkerhetskopiering av databasen via Supabase-infrastrukturen.
 
-5.2. Kunden rekommenderas att regelbundet exportera SIE4-filer och spara dessa på en separat lagringsplats som kompletterande säkerhetskopia.
+5.2. Kunden rekommenderas att regelbundet ta ut säkerhetsbackupen (ZIP-arkiv under **Importera/Exportera > Exportera > Säkerhetsbackup**, innehåller SIE-filer, rapporter, underlag, register och behandlingshistorik) och spara den på en separat lagringsplats som kompletterande säkerhetskopia.
 
 Kundens kompletterande säkerhetskopiering:
 - Frekvens: [t.ex. månadsvis, kvartalsvis]
@@ -108,17 +112,17 @@ Kundens kompletterande säkerhetskopiering:
 
 ## 6. Åtkomst efter avslutad prenumeration
 
-6.1. Vid uppsägning av erp-base-kontot har Kunden nittio (90) dagar att exportera all räkenskapsinformation i enlighet med Användarvillkoren avsnitt 8.
+6.1. Vid uppsägning av Accounted-kontot har Kunden nittio (90) dagar att exportera all räkenskapsinformation i enlighet med Användarvillkoren avsnitt 8.
 
-6.2. Räkenskapsinformation som omfattas av sjuårig arkiveringsskyldighet bevaras i skrivskyddat läge av erp-base, alternativt tillhandahålls som fullständig dataexport.
+6.2. Räkenskapsinformation som omfattas av sjuårig arkiveringsskyldighet bevaras i skrivskyddat läge av Accounted, alternativt tillhandahålls som fullständig dataexport.
 
 6.3. Det är Kundens ansvar att planera för dataportabilitet och säkerställa tillgång till räkenskapsinformation under hela arkiveringsperioden, oavsett om Tjänsten fortfarande används.
 
 ## 7. Geografisk lagring
 
-7.1. All data i erp-base lagras inom EU/EES via Supabase (AWS-infrastruktur, region eu-central eller eu-west).
+7.1. All data i Accounted lagras inom EU/EES via Supabase (AWS-infrastruktur, region eu-north-1, Stockholm).
 
-7.2. Viss behandling sker hos underbiträden i USA (se Personuppgiftsbiträdesavtalet, avsnitt 6.2) med stöd av EU-U.S. Data Privacy Framework eller standardavtalsklausuler.
+7.2. Maskinell behandling (kategorisering samt avläsning av underlag) sker inom EU via Amazon Bedrock (eu-north-1, Stockholm); datan lämnar inte EU. Underbiträden enligt integritetspolicyn: Supabase (EU, eu-north-1), Vercel (applikationshosting, globalt CDN med EU Data Residency), Enable Banking (EU), Amazon Web Services (AI-inferens, EU, eu-north-1), Resend (e-postleverans, USA) och PostHog (EU, Frankfurt). Det enda underbiträdet som behandlar uppgifter i USA är Resend, med stöd av standardavtalsklausuler (se Personuppgiftsbiträdesavtalet, avsnitt 6.2).
 
 7.3. I enlighet med 7 kap. 3a § BFL får räkenskapsinformation i elektronisk form förvaras i annat EU-land under förutsättning att detta har anmälts till Skatteverket.
 

@@ -23,6 +23,7 @@ import { formatCurrency } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import TheaterCanvas from '@/components/import/TheaterCanvas'
+import { FiscalYearGapNotice } from '@/components/import/FiscalYearGapNotice'
 import type { ImportPreview, ImportResult } from '@/lib/import/types'
 import type { TheaterModel } from '@/lib/import/theater-model'
 
@@ -173,6 +174,9 @@ export default function ImportResultStep({
           </CardHeader>
         </Card>
       )}
+
+      {/* A year missing between the imported ones: say so here, where the next file is one click away. */}
+      {result.success && <FiscalYearGapNotice />}
 
       {/* IB resync notice (prior-year backfill) */}
       {result.success && result.nextPeriodIBResync && (

@@ -301,8 +301,9 @@ describe('foreign-currency invoices: kronor conversion', () => {
     expect(xml).toContain('<ns2:BetaltBelopp>29925</ns2:BetaltBelopp>')
     expect(result.requested_total).toBe(12825)
 
-    // The begäran and the receivable must be the same claim.
-    expect(result.arenden[0].begart_belopp).toBe(Math.round(ledger1513(invoice)))
+    // The begäran and the receivable must be the same claim (whole kronor,
+    // floored: the file may never ask for more than the 1513 fordran).
+    expect(result.arenden[0].begart_belopp).toBe(Math.floor(ledger1513(invoice)))
   })
 
   it('asks for 8 906 kr, not 781, on the 781.25 EUR deduction case', () => {
@@ -409,6 +410,118 @@ describe('eligibility blockers', () => {
     const result = evaluateInvoiceForFile('rut', makeRotInvoice())
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.blocker.code).toBe('NO_DEDUCTION_OF_TYPE')
+  })
+
+  it('NO_DEDUCTION_OF_TYPE points at the other type when the deduction is the other kind', () => {
+    // A rot invoice evaluated as rut must say "this is ROT", not just "no
+    // rut lines": the dialog's empty list gave no pointer at all (#1884).
+    const result = evaluateInvoiceForFile('rut', makeRotInvoice())
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.blocker.message).toContain('ROT')
+      expect(result.blocker.message).toContain('hanteras under ROT')
+    }
+  })
+
+  it('NO_DEDUCTION_OF_TYPE keeps the plain message when no deduction lines exist at all', () => {
+    const items = [makeItem({ deduction_type: null, work_type: null, deduction_amount: 0 })]
+    const result = evaluateInvoiceForFile('rot', makeRotInvoice({}, items))
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.blocker.code).toBe('NO_DEDUCTION_OF_TYPE')
+      expect(result.blocker.message).toBe('Fakturan har inga ROT-rader.')
+    }
+  })
+
+  it('DEDUCTION_TOTAL_MISSING when lines carry a deduction the header never recorded', () => {
+    // Older imports left deduction_total NULL/0 despite deduction lines:
+    // those invoices previously fell out of the candidate query entirely.
+    for (const headerTotal of [0, undefined]) {
+      const result = evaluateInvoiceForFile(
+        'rot',
+        makeRotInvoice({ deduction_total: headerTotal }),
+      )
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.blocker.code).toBe('DEDUCTION_TOTAL_MISSING')
+    }
+  })
+
+  it('DEDUCTION_TOTAL_MISSING wins over NOT_PAID (the missing header is why the status is stuck)', () => {
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({ deduction_total: 0, status: 'partially_paid', remaining_amount: 3000 }),
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.blocker.code).toBe('DEDUCTION_TOTAL_MISSING')
+  })
+
+  it('accepts partially_paid when the customer share is settled (older settlement paths)', () => {
+    // Customer share = total - deduction_total = 9 500; paid_amount covers it
+    // even though the status never flipped to paid.
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({ status: 'partially_paid', remaining_amount: 0, paid_amount: 9500 }),
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.arende.begart_belopp).toBe(3000)
+      expect(result.value.arende.betalnings_datum).toBe('2026-06-20')
+    }
+  })
+
+  it('derives the customer share from header fields, not the stored remaining_amount', () => {
+    // payment-sync's storno path recomputes remaining_amount WITHOUT
+    // subtracting deduction_total (total - paid = 3 000 here), so the stored
+    // column can carry Skatteverkets share. The gate must key on
+    // total - paid_amount - deduction_total = 0 and accept anyway.
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({ status: 'partially_paid', remaining_amount: 3000, paid_amount: 9500 }),
+    )
+    expect(result.ok).toBe(true)
+  })
+
+  // Same formatting as the blocker message (sv-SE uses NBSP thousands
+  // separators, so a typed-out literal would never match).
+  const svAmount = (n: number): string =>
+    n.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+  it('NOT_PAID with the outstanding amount for a genuinely partial payment', () => {
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({ status: 'partially_paid', remaining_amount: 4500, paid_amount: 5000 }),
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.blocker.code).toBe('NOT_PAID')
+      expect(result.blocker.message).toContain('delbetald')
+      expect(result.blocker.message).toContain(`${svAmount(4500)} kr`)
+    }
+  })
+
+  it('reports the TRUE customer share even when remaining_amount is corrupted', () => {
+    // Stored remaining says 7 500 (payment-sync storno formula), but the
+    // customer share outstanding is 12 500 - 5 000 - 3 000 = 4 500: the
+    // message must not tell the user to collect Skatteverkets 3 000 kr.
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({ status: 'partially_paid', remaining_amount: 7500, paid_amount: 5000 }),
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.blocker.code).toBe('NOT_PAID')
+      expect(result.blocker.message).toContain(svAmount(4500))
+      expect(result.blocker.message).not.toContain(svAmount(7500))
+    }
+  })
+
+  it('MISSING_PAYMENT_DATE for a settled partially_paid invoice without paid_at', () => {
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({ status: 'partially_paid', remaining_amount: 0, paid_amount: 9500, paid_at: null }),
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.blocker.code).toBe('MISSING_PAYMENT_DATE')
   })
 
   it('MIXED_DEDUCTION_TYPES when rot and rut lines share an invoice', () => {
@@ -545,6 +658,106 @@ describe('eligibility blockers', () => {
       ]),
     )
     expect(result.ok).toBe(true)
+  })
+
+  it('floors a half-krona deduction instead of manufacturing begärt > betalt', () => {
+    // 100 kr work + 25 kr moms = 125 kr; rut 50 % = 62,50 kr. The file is
+    // whole kronor and the deduction may never exceed the 50 % cap, so the
+    // begäran must ask for 62 (floor), not 63 (half-up), which would exceed
+    // the cap and trip DEDUCTION_EXCEEDS_PAYMENT on a perfectly correct
+    // invoice. Regression for the 2026-08-25 support case.
+    const invoice = makeRotInvoice({}, [
+      makeItem({
+        deduction_type: 'rut',
+        work_type: 'STAD',
+        line_total: 100,
+        vat_amount: 25,
+        deduction_amount: 62.5,
+        labor_hours: 1,
+        housing_designation: null,
+      }),
+    ])
+
+    const evaluated = evaluateInvoiceForFile('rut', invoice)
+    expect(evaluated.ok).toBe(true)
+    if (evaluated.ok) {
+      expect(evaluated.value.arende.pris_for_arbete).toBe(125)
+      expect(evaluated.value.arende.begart_belopp).toBe(62)
+      expect(evaluated.value.arende.betalt_belopp).toBe(63)
+    }
+
+    const xml = buildRotRutFile({
+      type: 'rut',
+      name: 'Halvkrona',
+      invoices: [invoice],
+      today: TODAY,
+    }).xml!
+    expect(xml).toContain('<ns2:PrisForArbete>125</ns2:PrisForArbete>')
+    expect(xml).toContain('<ns2:BetaltBelopp>63</ns2:BetaltBelopp>')
+    expect(xml).toContain('<ns2:BegartBelopp>62</ns2:BegartBelopp>')
+  })
+
+  it('floors a ROT half-öre deduction that the old rounding pushed past the 30 % cap', () => {
+    // 500 kr labor + 125 moms = 625 kr; ROT 30 % = 187,50. Half-up rounding
+    // emitted 188, which exceeded both the statutory cap and the 1513 fordran
+    // (and, unlike the RUT-at-50 % case, passed the begärt > betalt guard).
+    // The floor emits 187/438. Skeptic finding on PR #1910: pins that the fix
+    // deliberately lowers this class of previously-passing ROT files by 1 kr.
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({}, [
+        makeItem({ line_total: 500, vat_amount: 125, deduction_amount: 187.5, labor_hours: 5 }),
+      ]),
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.arende.pris_for_arbete).toBe(625)
+      expect(result.value.arende.begart_belopp).toBe(187)
+      expect(result.value.arende.betalt_belopp).toBe(438)
+    }
+  })
+
+  it('öre-rounds the deduction sum before flooring so float noise cannot drop a krona', () => {
+    // Three öre-level lines summing to exactly 63.00 in FP-land can land at
+    // 62.999999...; the floor must apply to the öre-rounded sum (63), not the
+    // raw float (62).
+    const result = evaluateInvoiceForFile(
+      'rut',
+      makeRotInvoice({}, [
+        makeItem({
+          id: 'i1',
+          deduction_type: 'rut',
+          work_type: 'STAD',
+          line_total: 33.6,
+          vat_amount: 8.4,
+          deduction_amount: 21.0,
+          labor_hours: 1,
+          housing_designation: null,
+        }),
+        makeItem({
+          id: 'i2',
+          deduction_type: 'rut',
+          work_type: 'STAD',
+          line_total: 33.6,
+          vat_amount: 8.4,
+          deduction_amount: 20.99,
+          labor_hours: 1,
+          housing_designation: null,
+        }),
+        makeItem({
+          id: 'i3',
+          deduction_type: 'rut',
+          work_type: 'STAD',
+          line_total: 33.62,
+          vat_amount: 8.41,
+          deduction_amount: 21.01,
+          labor_hours: 1,
+          housing_designation: null,
+        }),
+      ]),
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.arende.begart_belopp).toBe(63)
   })
 
   it('collects blockers per invoice while still emitting eligible ones', () => {

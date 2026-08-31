@@ -53,7 +53,7 @@ async function main(): Promise<void> {
   } catch {
     problems.push('--instance must be a valid https:// URL')
   }
-  if (!Number.isFinite(months) || months <= 0 || months > 120) problems.push('--months must be 1..120')
+  if (!Number.isInteger(months) || months <= 0 || months > 120) problems.push('--months must be an integer 1..120')
   const unknown = scopes.filter((s) => !(CONNECTOR_CAPABILITIES as readonly string[]).includes(s))
   if (unknown.length) problems.push(`unknown scopes: ${unknown.join(', ')} (allowed: ${CONNECTOR_CAPABILITIES.join(', ')})`)
   for (const [name, v] of [['bank-connections-per-company', bankPerCompany], ['skv-connections-per-company', skvPerCompany]] as const) {
@@ -72,7 +72,7 @@ async function main(): Promise<void> {
     process.exit(2)
   }
   const periodEnd = new Date()
-  periodEnd.setUTCMonth(periodEnd.getUTCMonth() + Math.floor(months))
+  periodEnd.setUTCMonth(periodEnd.getUTCMonth() + months)
 
   console.log(`Target:    ${new URL(url).host}`)
   console.log(`Licensee:  ${name} (${org})`)

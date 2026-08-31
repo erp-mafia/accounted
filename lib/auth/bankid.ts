@@ -6,7 +6,6 @@
  */
 
 import crypto from 'crypto'
-import { flagEnabled, isSelfHosted } from '@/lib/env/public-flags'
 
 const ALGORITHM = 'aes-256-gcm'
 
@@ -14,10 +13,11 @@ const ALGORITHM = 'aes-256-gcm'
 // Feature flag
 // ---------------------------------------------------------------------------
 
-export function isBankIdEnabled(): boolean {
-  if (isSelfHosted()) return false
-  return flagEnabled(process.env.NEXT_PUBLIC_BANKID_ENABLED)
-}
+// isBankIdEnabled lives in ./bankid-flags (no Node imports) so the login,
+// register and security-settings client components can read the flag
+// without pulling this module's `crypto` import, and with it the browser
+// crypto polyfill, into their bundles. Re-exported here for server callers.
+export { isBankIdEnabled } from './bankid-flags'
 
 // ---------------------------------------------------------------------------
 // Personnummer hashing (for lookup)
