@@ -112,7 +112,7 @@ import {
 import { PartialCommitError } from '@/lib/pending-operations/errors'
 import { getEmailService } from '@/lib/email/service'
 import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
-import { hasCapability, CAPABILITY_BLOCKED_MESSAGE_SV } from '@/lib/entitlements/has-capability'
+import { hasCapability, capabilityBlockedError } from '@/lib/entitlements/has-capability'
 import { PAID_OPERATION_CAPABILITY_MAP } from '@/lib/entitlements/keys'
 import { exceedsUnattendedLimit } from './unattended-limit'
 import {
@@ -6643,12 +6643,15 @@ async function commitPendingOperationInner(
   //    the trial then approved AFTER the grant expired, regardless of caller
   //    (MCP approve tool or the UI approval path). Checked BEFORE the atomic
   //    claim so a blocked op stays 'pending' and is re-approvable once the
-  //    company subscribes. Self-hosted short-circuits to all-on in hasCapability.
+  //    company subscribes. Self-hosted is all-on in hasCapability except the
+  //    connector capabilities without own credentials (see lib/entitlements).
   const requiredCapability = PAID_OPERATION_CAPABILITY_MAP[pendingOp.operation_type]
   if (requiredCapability && !(await hasCapability(supabase, companyId, requiredCapability))) {
     return {
       status: 'failed',
-      error: CAPABILITY_BLOCKED_MESSAGE_SV,
+      // Via capabilityBlockedError so the self-host variant applies (the
+      // hosted constant upsells a subscription a self-host cannot buy).
+      error: capabilityBlockedError(requiredCapability).message_sv,
       http_status: 403,
       code: 'capability_blocked',
       operation_status: 'pending',

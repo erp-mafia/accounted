@@ -72,6 +72,33 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
 ] as const
 
 /**
+ * Capabilities that a SELF-HOSTED instance cannot provide on its own because
+ * they run on services Accounted operates (the PSD2/AISP bank connection,
+ * the Skatteverket API client, the TIC lookup contract, the migration
+ * gateway). On hosted these follow the normal paywall (bank_sync and
+ * skatteverket are in PAID_CAPABILITIES; org_lookup and migration are free).
+ * On a self-host every other capability is always on, and exactly these fall
+ * through to the grant lookup: the hourly connector sync writes
+ * `source = 'connector'` grants for them from the instance's connector key
+ * (lib/connect/instance, arriving with the connector-keys stack PR #1748).
+ * A self-host serving an upstream from its OWN credentials holds that
+ * capability outright (see own-credentials.ts): only keyless-and-credential-
+ * less connector capabilities are withheld. Deliberately NOT part of
+ * PAID_CAPABILITIES and NOT seeded by the trial trigger: hosted companies
+ * never receive connector grants.
+ */
+export const CONNECTOR_CAPABILITIES: readonly CapabilityKey[] = [
+  CAPABILITY.bank_sync,
+  CAPABILITY.skatteverket,
+  CAPABILITY.org_lookup,
+  CAPABILITY.migration,
+] as const
+
+export function isConnectorCapability(key: CapabilityKey): boolean {
+  return (CONNECTOR_CAPABILITIES as readonly string[]).includes(key)
+}
+
+/**
  * Paid MCP tools → required capability. The MCP/agent path is a paid chokepoint
  * just like the HTTP routes, so the dispatcher gates these the same way it gates
  * API-key scope (see mcp-server `tools/call`). External-service WRITE tools
