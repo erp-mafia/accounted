@@ -242,11 +242,20 @@ export type CoreEvent =
       success: boolean                              // true iff the tool returned without throwing AND was invoked (not denied)
       isError: boolean                              // matches the JSON-RPC tool-result isError flag returned to the client
       errorCode: string | null                      // structured error code from tool-result.toToolError when applicable
-      errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'unknown_tool' | 'test_key_write_blocked' | 'bridge_refused' | null
+      errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'invalid_arguments' | 'unknown_tool' | 'test_key_write_blocked' | 'bridge_refused' | null
                                                     // bridge_refused: gnubok_call_tool was pointed at a write tool, or at nothing.
+                                                    // invalid_arguments: the call never reached the tool because its arguments
+                                                    // were rejected (unknown parameter, malformed company_id). Split out of
+                                                    // company_access_denied, which used to swallow both and send triage
+                                                    // looking for a permissions problem that did not exist.
       errorMessage: string | null                   // human-readable error message (truncated to 500 chars), null on success.
                                                     // Raw material for clustering real agent failures into curated gotchas:
                                                     // errorCode alone can't distinguish "period locked" from "unbalanced".
+      errorDetail: string | null                    // The specific English diagnostic, when message_sv is a generic registry
+                                                    // default that says nothing (VALIDATION_ERROR -> "Förfrågan innehåller
+                                                    // ogiltiga uppgifter."). Null when it would only repeat errorMessage.
+                                                    // Without it a 604-call outage looked identical to a typo in the logs:
+                                                    // the agent was told exactly what was wrong, and we were not.
       requestId: string | number | null             // JSON-RPC request id (helps correlate with client-side logs)
       userId: string
       companyId: string

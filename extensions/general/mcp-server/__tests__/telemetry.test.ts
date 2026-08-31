@@ -119,8 +119,15 @@ interface ToolCalledPayload {
   success: boolean
   isError: boolean
   errorCode: string | null
-  errorKind: 'execution' | 'scope_denied' | 'unknown_tool' | null
+  errorKind:
+    | 'execution'
+    | 'scope_denied'
+    | 'company_access_denied'
+    | 'invalid_arguments'
+    | 'unknown_tool'
+    | null
   errorMessage: string | null
+  errorDetail: string | null
   requestId: string | number | null
   userId: string
   companyId: string
@@ -239,6 +246,71 @@ describe('mcp.tool_called telemetry', () => {
     expect((event.errorMessage as string).length).toBeGreaterThan(0)
     // Scope denial exits before tool.execute() runs.
     expect(event.latencyMs).toBe(0)
+  })
+
+  /**
+   * Regression tests for the 2026-08-25 unknown-parameter rejection.
+   *
+   * That guard is correct and stays. What was wrong is what we RECORDED about
+   * it: one integration sent an unknown parameter to gnubok_get_kpi_report and
+   * was refused 604 times over seven days, and every one of those rows logged
+   * errorKind 'company_access_denied' with the message "Förfrågan innehåller
+   * ogiltiga uppgifter." The caller was told exactly which parameter was
+   * wrong; our own telemetry recorded a permissions problem that never existed.
+   */
+  it('logs an unknown parameter as invalid_arguments, not company_access_denied', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', {
+        name: 'gnubok_get_trial_balance',
+        arguments: { totally_not_a_parameter: 1 },
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.errorCode).toBe('VALIDATION_ERROR')
+    expect(event.errorKind).toBe('invalid_arguments')
+    expect(event.errorKind).not.toBe('company_access_denied')
+  })
+
+  it('records the specific diagnostic in errorDetail when errorMessage is the generic default', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', {
+        name: 'gnubok_get_trial_balance',
+        arguments: { totally_not_a_parameter: 1 },
+      })
+    )
+
+    const event = await eventPromise
+    // Unchanged: the Swedish user-facing message, which for VALIDATION_ERROR
+    // is the registry default and says nothing about the cause.
+    expect(event.errorMessage).toBe('Förfrågan innehåller ogiltiga uppgifter.')
+    // New: what actually went wrong, enough to fix the caller from the log
+    // alone without reading the source.
+    expect(event.errorDetail).toContain('totally_not_a_parameter')
+    expect(event.errorDetail).toContain('gnubok_get_trial_balance')
+  })
+
+  it('leaves errorDetail null when it would only repeat errorMessage', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    // Scope denial: message_sv is already the specific text, so the detail
+    // field adds nothing and must not duplicate the row.
+    await handleMcpRequest(
+      mcpRequest('tools/call', {
+        name: 'gnubok_create_invoice',
+        arguments: { customer_id: 'x', items: [] },
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.errorKind).toBe('scope_denied')
+    if (event.errorDetail !== null && event.errorDetail !== undefined) {
+      expect(event.errorDetail).not.toBe(event.errorMessage)
+    }
   })
 
   it('applies the canonical scope gate to an Accounted alias', async () => {

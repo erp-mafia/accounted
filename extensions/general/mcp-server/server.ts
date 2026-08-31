@@ -20383,8 +20383,14 @@ function emitToolCallTelemetry(payload: {
   success: boolean
   isError: boolean
   errorCode: string | null
-  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'unknown_tool' | 'test_key_write_blocked' | 'bridge_refused' | null
+  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'invalid_arguments' | 'unknown_tool' | 'test_key_write_blocked' | 'bridge_refused' | null
   errorMessage: string | null
+  /**
+   * The specific English diagnostic, passed as `structured.error.message_en`.
+   * Stored only when it differs from errorMessage, so the common case where
+   * message_sv is already the domain message costs nothing.
+   */
+  errorDetail?: string | null
   requestId: string | number | null
   userId: string
   // null/empty while the key's user has no company yet (issue #1814): the
@@ -20411,6 +20417,13 @@ function emitToolCallTelemetry(payload: {
         // validation messages can embed long lists. 500 chars is plenty for
         // clustering failures into gotchas without bloating event_log rows.
         errorMessage: payload.errorMessage ? payload.errorMessage.slice(0, 500) : null,
+        // Only when it adds something. For most domain failures message_sv IS
+        // the specific text and this is null; for the generic registry
+        // defaults it is the difference between a usable log and a shrug.
+        errorDetail:
+          payload.errorDetail && payload.errorDetail !== payload.errorMessage
+            ? payload.errorDetail.slice(0, 500)
+            : null,
         requestId: payload.requestId,
         userId: payload.userId,
         companyId,
@@ -21034,6 +21047,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           errorCode: bridgeError.error.code,
           errorKind: 'bridge_refused',
           errorMessage: bridgeError.error.message_sv,
+          errorDetail: bridgeError.error.message_en,
           requestId: id ?? null,
           userId,
           companyId,
@@ -21097,6 +21111,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           errorCode: scopeError.error.code,
           errorKind: 'scope_denied',
           errorMessage: scopeError.error.message_sv,
+          errorDetail: scopeError.error.message_en,
           requestId: id ?? null,
           userId,
           companyId,
@@ -21161,8 +21176,17 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           success: false,
           isError: true,
           errorCode: structured.error.code,
-          errorKind: 'company_access_denied',
+          // Argument problems are not access problems. Exactly two things in
+          // this try raise VALIDATION_ERROR (the unknown-parameter guard and a
+          // malformed company_id) and neither is a permissions failure. Both
+          // used to log as company_access_denied, which is how 604 rejected
+          // calls read as a tenancy bug for a week.
+          errorKind:
+            structured.error.code === 'VALIDATION_ERROR'
+              ? 'invalid_arguments'
+              : 'company_access_denied',
           errorMessage: structured.error.message_sv,
+          errorDetail: structured.error.message_en,
           requestId: id ?? null,
           userId,
           // Keep denied attempts attributed to the key default. An arbitrary,
@@ -21202,6 +21226,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           errorCode: capError.error.code,
           errorKind: 'capability_denied',
           errorMessage: capError.error.message_sv,
+          errorDetail: capError.error.message_en,
           requestId: id ?? null,
           userId,
           companyId: effectiveCompanyId,
@@ -21243,6 +21268,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             errorCode: blocked.error.code,
             errorKind: 'test_key_write_blocked',
             errorMessage: blocked.error.message_sv,
+            errorDetail: blocked.error.message_en,
             requestId: id ?? null,
             userId,
             companyId: effectiveCompanyId,
@@ -21332,6 +21358,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               errorCode: structured.error.code,
               errorKind: 'execution',
               errorMessage: structured.error.message_sv,
+              errorDetail: structured.error.message_en,
               requestId: id ?? null,
               userId,
               companyId: effectiveCompanyId,
@@ -21424,6 +21451,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           // balanserar inte", "Perioden är låst", …): the text worth
           // clustering when mining failures for gotchas.
           errorMessage: structured.error.message_sv,
+          errorDetail: structured.error.message_en,
           requestId: id ?? null,
           userId,
           companyId: effectiveCompanyId,
