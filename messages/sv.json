@@ -302,9 +302,10 @@
     "login_error_rate_limited": "För många inloggningsförsök. Vänta en stund och försök igen.",
     "login_error_user_banned": "Kontot är avstängt. Kontakta supporten om du tror att det är fel.",
     "login_error_reset_link": "Återställ lösenordet",
-    "continue_with_google": "Fortsätt med Google",
-    "callback_error_title_oauth": "Google-inloggningen fungerade inte",
-    "callback_error_body_oauth": "Inloggningen med Google kunde inte slutföras. Försök igen, eller logga in med e-post och lösenord.",
+    "continue_with_provider": "Fortsätt med {provider}",
+    "saml_no_domain": "SAML är inte konfigurerat. Kontakta din administratör.",
+    "callback_error_title_oauth": "Extern inloggning misslyckades",
+    "callback_error_body_oauth": "Inloggningen med extern tjänst kunde inte slutföras. Försök igen, eller logga in med en annan metod.",
     "session_idle": "Du har varit inaktiv. Logga in igen.",
     "session_absolute": "Sessionen har upphört av säkerhetsskäl.",
     "use_password_instead": "Logga in med e-post i stället",
@@ -342,6 +343,7 @@
     "bankid_resume_continue": "Fortsätt",
     "bankid_resume_hint": "Slutför BankID-identifieringen...",
     "bankid_resume_restart": "Starta om",
+    "no_login_methods": "Inga inloggningsmetoder är tillgängliga på den här installationen. Kontakta din administratör.",
     "terms_prefix": "Genom att logga in godkänner du våra",
     "terms_link": "villkor",
     "terms_and": "och",
@@ -1242,7 +1244,8 @@
     "confirm_email_hint": "Klicka på länken i e-posten för att aktivera ditt konto. Länken är giltig i 24 timmar.",
     "open_webmail_search": "Hitta e-posten i {provider}",
     "open_webmail_inbox": "Öppna {provider}",
-    "back_to_login": "Tillbaka till inloggning"
+    "back_to_login": "Tillbaka till inloggning",
+    "password_signup_unavailable": "Lösenordsregistrering är inte tillgänglig på den här installationen."
   },
   "mfa": {
     "enroll_title": "Aktivera tvåstegsverifiering",

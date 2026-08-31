@@ -36,12 +36,11 @@ import {
 } from '@/lib/auth/consume-invite-cookie'
 import { buildPasswordResetRedirectTo } from '@/lib/domains/trusted-app-origin'
 import { AuthFormError } from '@/components/auth/AuthFormError'
-import { GoogleAuthButton } from '@/components/auth/GoogleAuthButton'
+import { OAuthButton } from '@/components/auth/OAuthButton'
 import {
   TurnstileChallenge,
   type TurnstileChallengeHandle,
 } from '@/components/auth/TurnstileChallenge'
-import { isGoogleAuthEnabled } from '@/lib/auth/google-oauth'
 import {
   captchaTokenOptions,
   isTurnstileSubmissionBlocked,
@@ -54,6 +53,7 @@ import {
   setSessionAuthMethodHint,
   type SessionTimeoutReason,
 } from '@/lib/auth/session-timeout-shared'
+import type { GoTrueAuthSettings } from '@/lib/auth/gotrue-providers'
 
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
 
@@ -69,7 +69,16 @@ const BankIdAuth = dynamic(
  * `initialMethod` comes from the server page reading the method-hint cookie,
  * so a returning password user lands straight on the form with no flash.
  */
-export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | null }) {
+export function LoginClient({
+  initialMethod,
+  authSettings,
+  canUseSaml
+}: {
+  initialMethod: LoginMethod | null
+  authSettings: GoTrueAuthSettings
+  canUseSaml?: boolean
+}) {
+  const { providers, passwordLoginEnabled, registrationEnabled, samlEnabled } = authSettings
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -115,7 +124,6 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   // Per-request brand merged over getBranding() defaults (WL-12): identical
   // values on default hosts, brand values on branded hosts.
   const branding = useBranding()
-  const googleAuthEnabled = isGoogleAuthEnabled()
   const tAuth = useTranslations('auth')
   const tCommon = useTranslations('common')
   const tInvite = useTranslations('invite')
@@ -169,6 +177,38 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
     setFormError(null)
     setResetCaptchaToken(null)
     setShowResetPassword(false)
+  }
+
+  const handleSamlLogin = async () => {
+    setFormError(null)
+    setIsLoading(true)
+    try {
+      const ssoDomain = process.env.NEXT_PUBLIC_SSO_DOMAIN
+      const ssoProviderId = process.env.NEXT_PUBLIC_SSO_PROVIDER_ID
+      const params = ssoProviderId
+        ? { providerId: ssoProviderId }
+        : ssoDomain
+          ? { domain: ssoDomain }
+          : null
+      if (!params) {
+        setFormError({ kind: 'oauth', message: tAuth('saml_no_domain') })
+        return
+      }
+      const { error } = await supabase.auth.signInWithSSO({
+        ...params,
+        options: { redirectTo: `${window.location.origin}/auth/callback?flow=oauth&next=${encodeURIComponent(nextPath)}` },
+      })
+      if (error) {
+        setFormError({ kind: 'oauth', message: getErrorMessage(error, { context: 'auth', locale: errorLocale }) })
+      }
+    } catch (error) {
+      setFormError({
+        kind: 'oauth',
+        message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
+      })
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   // Accept a pending invite, if any, and report a non-definitive failure.
@@ -548,8 +588,14 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   }
 
   const showBankIdChip = method === 'email' && bankIdEnabled
-  const showEmailChip = method === 'bankid'
-  const chipCount = (showBankIdChip ? 1 : 0) + (showEmailChip ? 1 : 0) + (googleAuthEnabled ? 1 : 0)
+  const showEmailChip = method === 'bankid' && passwordLoginEnabled
+  const samlAvailable = samlEnabled && canUseSaml
+  const chipCount = (showBankIdChip ? 1 : 0) + (showEmailChip ? 1 : 0) + providers.length + (samlAvailable ? 1 : 0)
+
+  const hasPrimaryMethod =
+    (method === 'bankid' && bankIdEnabled) ||
+    (method === 'email' && passwordLoginEnabled)
+  const hasSecondaryMethods = chipCount > 0
 
   return (
     <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
@@ -604,14 +650,16 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                 {tAuth('bankid_no_account_greeting', { name: bankIdNoAccount.givenName ?? '' })}
               </p>
               <p className="mt-1 text-muted-foreground">{tAuth('bankid_no_account_body')}</p>
-              <p className="mt-1">
-                <Link
-                  href={registerHref}
-                  className="text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors"
-                >
-                  {tAuth('bankid_no_account_create')}
-                </Link>
-              </p>
+        {passwordLoginEnabled && registrationEnabled && (
+                <p className="mt-1">
+                  <Link
+                    href={registerHref}
+                    className="text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors"
+                  >
+                    {tAuth('bankid_no_account_create')}
+                  </Link>
+                </p>
+              )}
             </div>
           )}
           {bankIdUnavailable && (
@@ -622,9 +670,9 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
           )}
 
           <div key={method} className="animate-fade-in">
-            {method === 'bankid' ? (
+            {method === 'bankid' && bankIdEnabled ? (
               <BankIdAuth mode="login" hero onComplete={handleBankIdComplete} />
-            ) : (
+            ) : method === 'email' && passwordLoginEnabled ? (
               <form onSubmit={handlePasswordLogin} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="email">{tAuth('email_label')}</Label>
@@ -727,10 +775,58 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                   )}
                 </Button>
               </form>
+            ) : (
+              providers.length > 0 ? (
+                <div className="space-y-3">
+                  {providers.map((provider) => (
+                    <OAuthButton
+                      key={provider.id}
+                      provider={provider}
+                      next={nextPath}
+                      onError={(message) => setFormError({ kind: 'oauth', message })}
+                    />
+                  ))}
+                  {samlAvailable && !hasPrimaryMethod && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full h-11 gap-2"
+                      onClick={handleSamlLogin}
+                      disabled={isLoading}
+                    >
+                      {isLoading ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                      )}
+                      {tAuth('continue_with_provider', { provider: 'SAML' })}
+                    </Button>
+                  )}
+                </div>
+              ) : samlAvailable ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full h-11 gap-2"
+                  onClick={handleSamlLogin}
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                  )}
+                  {tAuth('continue_with_provider', { provider: 'SAML' })}
+                </Button>
+              ) : (
+                <p className="text-center text-sm text-muted-foreground">
+                  {tAuth('no_login_methods')}
+                </p>
+              )
             )}
           </div>
 
-          {chipCount > 0 && (
+          {hasPrimaryMethod && hasSecondaryMethods && (
             <>
               <div className="relative my-6">
                 <div className="absolute inset-0 flex items-center">
@@ -760,13 +856,15 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                     BankID
                   </Button>
                 )}
-                {googleAuthEnabled && (
-                  <GoogleAuthButton
+                {providers.map((provider) => (
+                  <OAuthButton
                     compact
+                    key={provider.id}
+                    provider={provider}
                     next={nextPath}
                     onError={(message) => setFormError({ kind: 'oauth', message })}
                   />
-                )}
+                ))}
                 {showEmailChip && (
                   <Button
                     type="button"
@@ -778,20 +876,38 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                     {tAuth('method_email_chip')}
                   </Button>
                 )}
+                {samlAvailable && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 w-full gap-2"
+                    onClick={handleSamlLogin}
+                    disabled={isLoading}
+                  >
+                    {isLoading ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <KeyRound className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    )}
+                    {tAuth('continue_with_provider', { provider: 'SAML' })}
+                  </Button>
+                )}
               </div>
             </>
           )}
         </div>
 
-        <p className="mt-6 text-center text-[13px] text-muted-foreground">
-          {tAuth('login_new_here')}{' '}
-          <Link
-            href={registerHref}
-            className="font-medium text-foreground underline underline-offset-2 hover:opacity-80 transition-opacity"
-          >
-            {tAuth('no_account')}
-          </Link>
-        </p>
+        {passwordLoginEnabled && registrationEnabled && (
+          <p className="mt-6 text-center text-[13px] text-muted-foreground">
+            {tAuth('login_new_here')}{' '}
+            <Link
+              href={registerHref}
+              className="font-medium text-foreground underline underline-offset-2 hover:opacity-80 transition-opacity"
+            >
+              {tAuth('no_account')}
+            </Link>
+          </p>
+        )}
 
         <p className="mt-3 text-center text-xs text-muted-foreground/80 leading-relaxed">
           {tAuth('terms_prefix')}{' '}

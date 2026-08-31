@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { swedishToday, formatCurrency } from '../utils'
+import { swedishToday, formatCurrency, withTimeout } from '../utils'
 
 describe('swedishToday', () => {
   it('formats the date as ISO yyyy-MM-dd with a Swedish weekday', () => {
@@ -41,5 +41,22 @@ describe('formatCurrency', () => {
 
   it('still honours a real currency code', () => {
     expect(formatCurrency(10, 'EUR')).toContain('€')
+  })
+})
+
+describe('withTimeout', () => {
+  it('resolves with the promise value when it settles in time', async () => {
+    const result = await withTimeout(Promise.resolve('ok'), 1000)
+    expect(result).toBe('ok')
+  })
+
+  it('rejects when the promise exceeds the deadline', async () => {
+    const slow = new Promise<string>((resolve) => setTimeout(() => resolve('late'), 200))
+    await expect(withTimeout(slow, 50)).rejects.toThrow('Timeout after 50ms')
+  })
+
+  it('rejects when the promise itself rejects', async () => {
+    const failing = Promise.reject(new Error('boom'))
+    await expect(withTimeout(failing, 1000)).rejects.toThrow('boom')
   })
 })
