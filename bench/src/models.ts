@@ -6,9 +6,13 @@
 // Haiku 4.5 $1/$5). OpenRouter models report their own cost per request
 // (usage.include), which takes precedence over this table when present.
 //
-// Cost is computed at Anthropic first-party list prices regardless of the
-// serving platform (Bedrock partner pricing differs slightly); the cost axis
-// is for cross-model comparability, not invoice reconciliation.
+// Cost convention (v1.3, verified 2026-08-31 against vendor pricing pages):
+// every model is priced at its VENDOR's first-party API list price, standard
+// tier, no cache/batch/promo discounts. Open-weights models without a vendor
+// API are priced at a named serving provider (Fireworks, following Ramp's
+// convention), or the OpenRouter median where Fireworks does not list the
+// model (stated in notes). The cost axis is for cross-model comparability,
+// not invoice reconciliation.
 //
 // `residency` drives the privacy rule: tasks with data_class 'prod-derived'
 // may only run on 'eu-bedrock'. All v1 tasks are 'public' (synthetic), so
@@ -156,9 +160,10 @@ export const MODELS: ModelSpec[] = [
     provider: 'openrouter',
     apiModel: 'deepseek/deepseek-v4-pro-0813',
     vision: false,
-    pricing: { inputPerMTok: 0.66, outputPerMTok: 1.98 },
+    pricing: { inputPerMTok: 0.435, outputPerMTok: 0.87 },
     residency: 'openrouter-various',
     enabled: true,
+    notes: 'Vendor list (DeepSeek API); OpenRouter serves at a markup.',
   },
   {
     id: 'qwen3-8-2-4t',
@@ -183,6 +188,7 @@ export const MODELS: ModelSpec[] = [
     pricing: { inputPerMTok: 0.2, outputPerMTok: 0.7 },
     residency: 'openrouter-various',
     enabled: true,
+    notes: 'No vendor API; not listed at Fireworks; OpenRouter median, stated as such.',
   },
   {
     id: 'kimi-k3',
@@ -204,9 +210,10 @@ export const MODELS: ModelSpec[] = [
     provider: 'openrouter',
     apiModel: 'z-ai/glm-5.3-flash',
     vision: true,
-    pricing: { inputPerMTok: 0.07, outputPerMTok: 0.25 },
+    pricing: { inputPerMTok: 0.15, outputPerMTok: 0.5 },
     residency: 'openrouter-various',
     enabled: true,
+    notes: 'Z.ai list price; the halved launch promo (to 2026-09-09) is not used.',
   },
   {
     id: 'gpt-oss-120b',
@@ -216,9 +223,10 @@ export const MODELS: ModelSpec[] = [
     provider: 'openrouter',
     apiModel: 'openai/gpt-oss-120b',
     vision: false,
-    pricing: { inputPerMTok: 0.04, outputPerMTok: 0.17 },
+    pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
     residency: 'openrouter-various',
     enabled: true,
+    notes: 'No vendor API; priced at Fireworks list (Ramp convention).',
   },
 ]
 

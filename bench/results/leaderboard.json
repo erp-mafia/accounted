@@ -1,6 +1,6 @@
 {
   "benchVersion": "v1.1",
-  "generatedAt": "2026-08-31T19:49:19.394Z",
+  "generatedAt": "2026-08-31T19:51:45.750Z",
   "suites": {
     "booking": [
       {
@@ -317,8 +317,8 @@
         "passRate": 0.868,
         "wilsonLo": 0.815,
         "wilsonHi": 0.908,
-        "totalCostUsd": 0.091,
-        "avgCostUsd": 0.00171,
+        "totalCostUsd": 0.192,
+        "avgCostUsd": 0.00363,
         "avgTurns": 1.019,
         "avgDurationMs": 35710,
         "extras": {
@@ -393,8 +393,8 @@
         "passRate": 0.811,
         "wilsonLo": 0.752,
         "wilsonHi": 0.859,
-        "totalCostUsd": 0.825,
-        "avgCostUsd": 0.01557,
+        "totalCostUsd": 0.523,
+        "avgCostUsd": 0.00986,
         "avgTurns": 1.019,
         "avgDurationMs": 22674,
         "extras": {
@@ -469,8 +469,8 @@
         "passRate": 0.491,
         "wilsonLo": 0.423,
         "wilsonHi": 0.559,
-        "totalCostUsd": 0.042,
-        "avgCostUsd": 0.0008,
+        "totalCostUsd": 0.158,
+        "avgCostUsd": 0.00299,
         "avgTurns": 1.019,
         "avgDurationMs": 18344,
         "extras": {
@@ -739,8 +739,8 @@
         "passRate": 0.611,
         "wilsonLo": 0.528,
         "wilsonHi": 0.688,
-        "totalCostUsd": 0.181,
-        "avgCostUsd": 0.00504,
+        "totalCostUsd": 0.082,
+        "avgCostUsd": 0.00227,
         "avgTurns": 1.056,
         "avgDurationMs": 43252,
         "extras": {
@@ -787,8 +787,8 @@
         "passRate": 0.444,
         "wilsonLo": 0.364,
         "wilsonHi": 0.528,
-        "totalCostUsd": 0.035,
-        "avgCostUsd": 0.00098,
+        "totalCostUsd": 0.071,
+        "avgCostUsd": 0.00197,
         "avgTurns": 1.222,
         "avgDurationMs": 133048,
         "extras": {
@@ -835,8 +835,8 @@
         "passRate": 0.361,
         "wilsonLo": 0.286,
         "wilsonHi": 0.444,
-        "totalCostUsd": 0.003,
-        "avgCostUsd": 0.00008,
+        "totalCostUsd": 0.01,
+        "avgCostUsd": 0.00029,
         "avgTurns": 1,
         "avgDurationMs": 15592,
         "extras": {
@@ -1047,8 +1047,8 @@
         "passRate": 0.833,
         "wilsonLo": 0.701,
         "wilsonHi": 0.914,
-        "totalCostUsd": 0.005,
-        "avgCostUsd": 0.00038,
+        "totalCostUsd": 0.009,
+        "avgCostUsd": 0.00078,
         "avgTurns": 1,
         "avgDurationMs": 16084,
         "extras": {
@@ -1221,8 +1221,8 @@
         "passRate": 1,
         "wilsonLo": 0.9,
         "wilsonHi": 1,
-        "totalCostUsd": 0.438,
-        "avgCostUsd": 0.0487,
+        "totalCostUsd": 0.28,
+        "avgCostUsd": 0.03108,
         "avgTurns": 4.111,
         "avgDurationMs": 53542,
         "extras": {
@@ -1287,8 +1287,8 @@
         "passRate": 0.778,
         "wilsonLo": 0.616,
         "wilsonHi": 0.884,
-        "totalCostUsd": 0.063,
-        "avgCostUsd": 0.00706,
+        "totalCostUsd": 0.135,
+        "avgCostUsd": 0.01496,
         "avgTurns": 4.778,
         "avgDurationMs": 117520,
         "extras": {
@@ -1309,8 +1309,8 @@
         "passRate": 0.667,
         "wilsonLo": 0.5,
         "wilsonHi": 0.8,
-        "totalCostUsd": 0.009,
-        "avgCostUsd": 0.00098,
+        "totalCostUsd": 0.033,
+        "avgCostUsd": 0.00362,
         "avgTurns": 3.111,
         "avgDurationMs": 22660,
         "extras": {
