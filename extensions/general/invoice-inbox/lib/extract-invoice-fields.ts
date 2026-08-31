@@ -159,7 +159,64 @@ export const ExtractionSchema = z.object({
       amount: z.number(),
     })
   ),
+  // Amounts visible on non-invoice documents (bankintyg, avtal, contracts)
+  // that carry no invoice-style total. Matching hint only; never booked.
+  // .catch([]) so a hallucinated shape degrades to "no amounts" instead of
+  // failing the whole document parse; optional so cached raw outputs from
+  // before the field existed still validate.
+  prominentAmounts: z
+    .array(
+      z.object({
+        amount: z.number(),
+        label: z.string().nullable(),
+      })
+    )
+    .catch([])
+    .optional(),
+  // Set by promoteSingleProminentAmount (code, never the model): 'prominent'
+  // means totals.total was copied from the document's single prominent amount
+  // so the user gets one editable TOTALT field. Matching treats such a total
+  // as fallback-grade (discounted, date-guarded, hunt-excluded); a user edit
+  // of totals.total clears it. In the schema so re-validation paths
+  // (PUT /extracted-data, MCP set) don't silently strip the provenance and
+  // launder a printed figure into a full-weight invoice total.
+  totalSource: z.enum(['prominent']).nullable().catch(null).optional(),
 })
+
+/**
+ * Give non-invoice documents one editable amount field.
+ *
+ * A bankintyg or avtal has no "Att betala" total, so the extractor leaves
+ * totals.total null; but when the document shows exactly one distinct amount
+ * there is nothing ambiguous about which figure the user means, and leaving
+ * TOTALT empty while the amount hides in a read-only row read as "extraction
+ * failed" (and made a misread amount uncorrectable). Promote that single
+ * amount into totals.total, stamped totalSource: 'prominent' so matching
+ * keeps treating it as fallback-grade evidence and the fields-PATCH route can
+ * clear the stamp when a human edits the value.
+ *
+ * Multi-amount documents are left alone: picking one silently would invent a
+ * total the document does not have.
+ */
+export function promoteSingleProminentAmount(
+  data: InvoiceExtractionResult
+): InvoiceExtractionResult {
+  if (data.documentKind !== 'other' && data.documentKind !== 'government_letter') return data
+  if (data.totals.total != null) return data
+  const distinct = [
+    ...new Set(
+      (data.prominentAmounts ?? [])
+        .map((a) => a.amount)
+        .filter((a) => Number.isFinite(a) && a !== 0)
+    ),
+  ]
+  if (distinct.length !== 1) return data
+  return {
+    ...data,
+    totals: { ...data.totals, total: distinct[0] },
+    totalSource: 'prominent',
+  }
+}
 
 // Agent-supplied extraction: accountSuggestion is preserved instead of forced
 // to null. Agents (unlike AI extractors) can reliably assign a BAS expense
@@ -222,6 +279,9 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
   },
   "vatBreakdown": [
     { "rate": number, "base": number, "amount": number }   // rate as percent integer, e.g. 25 for 25%
+  ],
+  "prominentAmounts": [
+    { "amount": number, "label": string | null }   // non-invoice documents only, see rules
   ]
 }
 
@@ -245,7 +305,8 @@ Rules:
 - Numbers: parse with the document's locale (Swedish "1 234,56" = 1234.56; English "$1,234.56" = 1234.56). Output as plain JSON numbers.
 - If a field is missing or unreadable, set it to null. Never invent values.
 - lineItems: include every line. Empty array is fine if the document has no itemised lines.
-- vatBreakdown: include one entry per distinct VAT rate. Empty array is fine.`
+- vatBreakdown: include one entry per distinct VAT rate. Empty array is fine.
+- prominentAmounts: ONLY for documents that are NOT invoices or receipts (documentKind "other" or "government_letter") AND where totals.total is null, when the document still displays clear monetary amounts (a price, fee, deposit or paid-in sum: "Engångspris", "Anslutningspris", "Insatt belopp", "Månadspris", "Pris", "Belopp"). Typical sources: bankintyg, bank/account agreements, contracts, statements. One entry per distinct amount, label = the document's own label for it. NEVER include account numbers, org numbers, phone numbers, OCR/reference numbers, dates, percentages, or zero amounts. ALWAYS an empty array for invoices and receipts, including ones whose total is unreadable: never move an invoice total here.`
 
 export function emptyResult(): InvoiceExtractionResult {
   return {
@@ -274,6 +335,7 @@ export function emptyResult(): InvoiceExtractionResult {
     lineItems: [],
     totals: { subtotal: null, vatAmount: null, total: null, roundingAmount: null },
     vatBreakdown: [],
+    prominentAmounts: [],
     confidence: 0,
   }
 }
@@ -484,6 +546,15 @@ const EXTRACTION_JSON_SCHEMA: Record<string, unknown> = {
         required: ['rate', 'base', 'amount'],
       },
     },
+    prominentAmounts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { amount: { type: 'number' }, label: nullable('string') },
+        required: ['amount', 'label'],
+      },
+    },
   },
   required: [
     'documentKind',
@@ -496,6 +567,7 @@ const EXTRACTION_JSON_SCHEMA: Record<string, unknown> = {
     'lineItems',
     'totals',
     'vatBreakdown',
+    'prominentAmounts',
   ],
 }
 
@@ -602,7 +674,7 @@ export async function extractInvoiceFields(
     return {
       // accountSuggestion is null at this point, enforced by the schema's
       // .transform, so no post-validation coercion is needed.
-      data: { ...validated, confidence: 1 },
+      data: promoteSingleProminentAmount({ ...validated, confidence: 1 }),
       rawText,
       model,
     }

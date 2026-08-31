@@ -67,7 +67,7 @@ describe('Turnstile rollout state', () => {
 describe('Turnstile integration contract', () => {
   it('protects every public Supabase Auth flow in scope', () => {
     const login = readRepoFile('app/(auth)/login/login-client.tsx')
-    const register = readRepoFile('app/(auth)/register/page.tsx')
+    const register = readRepoFile('app/(auth)/register/register-client.tsx')
     const sandbox = readRepoFile('app/sandbox/page.tsx')
 
     expect(login).toMatch(

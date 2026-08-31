@@ -805,6 +805,27 @@ export const POST = withRouteContext(
 
     await ensureFiscalPeriod(supabase, user.id, companyId, transaction.date, fiscalYearStartMonth, txLog)
 
+    // Issue #1661: a private marking books eget uttag/insättning, so a locked
+    // period refuses it like any verifikat. Pre-check only for private rows:
+    // the trigger path below would answer with a bare locked-period cause,
+    // while the row the user wants to clear (a duplicate, a PSD2 ghost) is
+    // usually no affärshändelse at all and should be ignored instead. The
+    // response carries suggested_action: 'ignore' for the one-click toast.
+    if (!is_business) {
+      const privateLock = await checkPeriodLock(supabase, companyId, transaction.date)
+      if (privateLock.locked) {
+        return errorResponseFromCode('TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED', txLog, {
+          requestId,
+          details: {
+            transaction_date: transaction.date,
+            reason: privateLock.reason,
+            fiscal_period_id: privateLock.fiscal_period_id,
+            suggested_action: 'ignore',
+          },
+        })
+      }
+    }
+
     let journalEntryCreated = false
     let journalEntryId: string | null = null
     let documentLinkWarning: string | null = null
@@ -863,14 +884,19 @@ export const POST = withRouteContext(
     if (!journalEntryId) {
       const periodLock = await checkPeriodLock(supabase, companyId, transaction.date)
       if (periodLock.locked) {
-        return errorResponseFromCode('PERIOD_LOCKED', txLog, {
-          requestId,
-          details: {
-            transaction_date: transaction.date,
-            reason: periodLock.reason,
-            fiscal_period_id: periodLock.fiscal_period_id,
+        return errorResponseFromCode(
+          is_business ? 'PERIOD_LOCKED' : 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED',
+          txLog,
+          {
+            requestId,
+            details: {
+              transaction_date: transaction.date,
+              reason: periodLock.reason,
+              fiscal_period_id: periodLock.fiscal_period_id,
+              ...(is_business ? {} : { suggested_action: 'ignore' }),
+            },
           },
-        })
+        )
       }
       return errorResponseFromCode('NO_OPEN_PERIOD_FOR_DATE', txLog, {
         requestId,

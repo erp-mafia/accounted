@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 140 endpoints.
+  pagination, scopes), and all 142 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -142,7 +142,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 140 operations. Paths are shown without
+API version `2026-05-12`, 142 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (5)
@@ -255,7 +255,7 @@ POST /companies/{companyId}/documents/{id}/link : Link a document to a journal e
 POST /companies/{companyId}/inbox-items/{id}/stamp : Mark an inbox item as consumed by a journal entry [scope:documents:write risk:low idempotent]
 ```
 
-### Banking (22)
+### Banking (24)
 
 Full detail: [references/banking.md](references/banking.md)
 
@@ -277,6 +277,8 @@ GET /companies/{companyId}/reconciliation/bank/status : Bank-reconciliation heal
 GET /companies/{companyId}/transactions : List transactions for a company [scope:transactions:read risk:low idempotent]
 GET /companies/{companyId}/transactions/{id} : Retrieve a single transaction by id [scope:transactions:read risk:low idempotent]
 POST /companies/{companyId}/transactions/{id}/categorize : Categorize a transaction and create the journal entry [scope:transactions:write risk:medium idempotent dry-run reversible]
+POST /companies/{companyId}/transactions/{id}/ignore : Ignore a bank transaction (no verifikat, allowed in locked periods) [scope:transactions:write risk:low idempotent dry-run reversible]
+DELETE /companies/{companyId}/transactions/{id}/ignore : Restore an ignored bank transaction to the "to book" list [scope:transactions:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/transactions/{id}/match-invoice : Match a positive bank transaction to a customer invoice [scope:transactions:write risk:high idempotent]
 POST /companies/{companyId}/transactions/{id}/match-supplier-invoice : Match a negative bank transaction to a supplier invoice [scope:transactions:write risk:high idempotent]
 POST /companies/{companyId}/transactions/{id}/uncategorize : Reverse the categorization of a transaction (storno + reset) [scope:transactions:write risk:medium idempotent dry-run]

@@ -242,7 +242,19 @@ function timeAgo(iso: string): string {
 }
 
 function pickAmount(item: InboxItem): number | null {
-  return item.extracted_data?.totals?.total ?? null
+  const total = item.extracted_data?.totals?.total
+  if (total != null) return total
+  // Non-invoice documents (bankintyg, avtal) have no total; when exactly one
+  // distinct amount was read off the document, that is the amount to show.
+  // Two or more stay ambiguous and render as no amount.
+  const distinct = [
+    ...new Set(
+      (item.extracted_data?.prominentAmounts ?? [])
+        .map((a) => a.amount)
+        .filter((a) => Number.isFinite(a) && a !== 0),
+    ),
+  ]
+  return distinct.length === 1 ? distinct[0] : null
 }
 
 function pickCurrency(item: InboxItem): string {
@@ -271,14 +283,21 @@ function hasAnyExtractedField(data: InvoiceExtractionResult | null): boolean {
     s?.name || s?.orgNumber || s?.vatNumber || s?.bankgiro || s?.plusgiro ||
     inv?.invoiceNumber || inv?.invoiceDate || inv?.dueDate || inv?.paymentReference ||
     t?.subtotal != null || t?.vatAmount != null || t?.total != null ||
-    (data.lineItems?.length ?? 0) > 0 || (data.vatBreakdown?.length ?? 0) > 0
+    (data.lineItems?.length ?? 0) > 0 || (data.vatBreakdown?.length ?? 0) > 0 ||
+    // Same meaningful-amount predicate as the Belopp row render filter: a
+    // zero-only prominentAmounts list must not count as "found something"
+    // and suppress the retry / upgrade affordances.
+    (data.prominentAmounts ?? []).some((a) => Number.isFinite(a.amount) && a.amount !== 0)
   )
 }
 
 /**
  * The fields the extraction is scored against, in the order a person reads
- * them. Deliberately the same list hasAnyExtractedField checks, so the summary
- * cannot claim a field the "is anything here at all" test does not count.
+ * them. A subset of what hasAnyExtractedField checks (that test also counts
+ * lineItems, vatBreakdown and prominentAmounts), so the "fält ifyllda" counter
+ * never claims a field the "is anything here at all" test does not count: the
+ * reverse can differ, e.g. a bankintyg with only prominentAmounts has fields
+ * but counts 0 here.
  */
 const EXTRACTED_FIELD_ACCESSORS: ((d: InvoiceExtractionResult) => unknown)[] = [
   (d) => d.supplier?.name,
@@ -2893,7 +2912,11 @@ function FieldsRail({
       {/* AI classification: what kind of document this is and how it was
           paid. Read-only context above the editable fields; absent for
           extractions from before the fields existed. */}
-      {(data?.documentKind || data?.payment?.method || data?.pages) && (
+      {(data?.documentKind ||
+        data?.payment?.method ||
+        data?.pages ||
+        (data?.totals?.total == null &&
+          (data?.prominentAmounts ?? []).some((a) => Number.isFinite(a.amount) && a.amount !== 0))) && (
         <div className="border-b px-4 py-3 text-xs space-y-1">
           {data?.documentKind && (
             <div className="flex gap-2">
@@ -2908,6 +2931,30 @@ function FieldsRail({
                 {t(`payment_${data.payment.method}`)}
                 {data.payment.cardLast4 ? ` •• ${data.payment.cardLast4}` : ''}
                 {data.purchaseTime ? ` · ${data.purchaseTime}` : ''}
+              </span>
+            </div>
+          )}
+          {/* Amounts read off a multi-amount non-invoice document (an AGI
+              besked listing lön/skatt/avgifter): no single figure is "the"
+              total, so they show here as context while TOTALT stays empty for
+              the user to settle. Single-amount documents don't render this:
+              their amount is promoted into the editable TOTALT field
+              (promoteSingleProminentAmount), which also hides this row via
+              the totals.total == null condition. Zero amounts are noise
+              ("Totalt månadspris: 0 kr"), same filter as matching applies. */}
+          {data?.totals?.total == null &&
+            (data?.prominentAmounts ?? []).some((a) => Number.isFinite(a.amount) && a.amount !== 0) && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground w-14 shrink-0">{t('prominent_amounts_label')}</span>
+              <span className="tabular-nums">
+                {(data?.prominentAmounts ?? [])
+                  .filter((a) => Number.isFinite(a.amount) && a.amount !== 0)
+                  .map((a) =>
+                    a.label
+                      ? `${a.label}: ${formatCurrency(a.amount, data?.invoice?.currency ?? 'SEK')}`
+                      : formatCurrency(a.amount, data?.invoice?.currency ?? 'SEK'),
+                  )
+                  .join(' · ')}
               </span>
             </div>
           )}

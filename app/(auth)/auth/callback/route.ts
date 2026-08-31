@@ -330,9 +330,9 @@ export async function GET(request: NextRequest) {
   // confirmation must not be framed as a failed password reset. On the PKCE
   // (?code=) path there is no `type`, so recovery is identified by the
   // next=/reset-password marker that resetPasswordForEmail sets, and OAuth
-  // by the flow=oauth marker that GoogleAuthButton puts in redirectTo
-  // (provider denials arrive here with ?error and no code); everything
-  // else defaults to the signup/confirmation framing.
+  // by the flow=oauth marker that OAuthButton puts in redirectTo 
+  // (provider denials arrive here with ?error and no code); everything else 
+  // defaults to the signup/confirmation framing.
   const failedFlow =
     searchParams.get('flow') === 'oauth'
       ? 'oauth'

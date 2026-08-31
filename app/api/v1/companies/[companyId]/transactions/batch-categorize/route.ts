@@ -323,6 +323,30 @@ async function categorizeOne(
   // than a generic INTERNAL_ERROR from the trigger exception.
   const periodLock = await checkPeriodLock(supabase, companyId, transaction.date)
   if (periodLock.locked) {
+    // Issue #1661: a private marking is a real booking (eget uttag /
+    // insättning), so the lock applies, but the row the caller wants to
+    // clear is usually not a business event at all. Name the ignore path
+    // instead of a bare PERIOD_LOCKED so an agent clearing PSD2 ghost rows
+    // out of a closed period is not steered to unlock it.
+    if (!is_business) {
+      return {
+        ok: false,
+        request_index: index,
+        transaction_id: transactionId,
+        error: {
+          code: 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED',
+          message:
+            getErrorEntry('TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED')?.message_sv ??
+            'Perioden är låst. Ignorera raden i stället om den inte är en affärshändelse.',
+          details: {
+            transaction_date: transaction.date,
+            reason: periodLock.reason,
+            fiscal_period_id: periodLock.fiscal_period_id,
+            suggested_action: 'ignore',
+          },
+        },
+      }
+    }
     return {
       ok: false,
       request_index: index,

@@ -3,8 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   buildFortnoxAuthUrl,
   fortnoxConsentScopes,
+  fortnoxScopeFlag,
   FORTNOX_DOCUMENT_SCOPES,
   FORTNOX_DOCUMENT_SCOPES_APPROVED,
+  FORTNOX_ASSET_SCOPES,
+  FORTNOX_ASSET_SCOPES_APPROVED,
 } from '../oauth';
 
 describe('Fortnox OAuth scopes', () => {
@@ -45,6 +48,36 @@ describe('Fortnox OAuth scopes', () => {
     expect(fortnoxConsentScopes({ documents: true })).toContain('connectfile');
     expect(fortnoxConsentScopes()).not.toContain('archive');
     expect(fortnoxConsentScopes()).not.toContain('connectfile');
+  });
+
+  // The env override exists for self-hosted deployments running their own
+  // Fortnox app, whose portal registration differs from hosted's. Unset (or
+  // empty, which is how a commented-out .env line arrives) means the hosted
+  // default; anything but the string "true" is false, so a typo fails toward
+  // not requesting a scope rather than toward invalid_scope at authorize.
+  it('lets env override the hosted scope-approval defaults', () => {
+    expect(fortnoxScopeFlag(undefined, true)).toBe(true);
+    expect(fortnoxScopeFlag(undefined, false)).toBe(false);
+    expect(fortnoxScopeFlag('', true)).toBe(true);
+    expect(fortnoxScopeFlag('true', false)).toBe(true);
+    expect(fortnoxScopeFlag(' true ', false)).toBe(true);
+    expect(fortnoxScopeFlag('false', true)).toBe(false);
+    expect(fortnoxScopeFlag('yes', true)).toBe(false);
+  });
+
+  // The asset register scope is gated on its own portal approval. While the
+  // flag is false, no consent may request it: an unapproved scope in the
+  // authorize request is rejected with invalid_scope BEFORE login (the same
+  // outage mode the document flag above guards against).
+  it('keeps the asset scope out of every consent until the portal approves it', () => {
+    expect(FORTNOX_ASSET_SCOPES).toEqual(['assets']);
+    if (FORTNOX_ASSET_SCOPES_APPROVED) {
+      expect(fortnoxConsentScopes()).toContain('assets');
+      expect(fortnoxConsentScopes({ documents: true })).toContain('assets');
+    } else {
+      expect(fortnoxConsentScopes()).not.toContain('assets');
+      expect(fortnoxConsentScopes({ documents: true })).not.toContain('assets');
+    }
   });
 
   // Even once the portal registration lands, opting in must never cost the

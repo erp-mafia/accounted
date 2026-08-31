@@ -451,3 +451,62 @@ describe('POST /api/v1/.../transactions/{id}/categorize orphaned counter-account
     expect(createTxJE).not.toHaveBeenCalled()
   })
 })
+
+describe('POST /api/v1/.../transactions/{id}/categorize private marking in a locked period (issue #1661)', () => {
+  function lockedPeriodSupabase() {
+    return makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: {
+        data: {
+          id: TX_ID,
+          company_id: COMPANY_ID,
+          date: '2025-11-12',
+          amount: -349.5,
+          currency: 'SEK',
+          merchant_name: 'SWISH DUBBLETT',
+          cash_account_id: null,
+          journal_entry_id: null,
+        },
+        error: null,
+      },
+      company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: { data: { id: 'period-2025', is_closed: false, locked_at: '2026-01-31T00:00:00Z' }, error: null },
+    })
+  }
+
+  it('answers is_business: false with TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED and suggested_action ignore', async () => {
+    const { supabase, updates } = lockedPeriodSupabase()
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(makeRequest({ is_business: false }), routeParams())
+    const body = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED')
+    expect(body.error.details).toMatchObject({
+      transaction_date: '2025-11-12',
+      reason: 'period_locked_at_set',
+      fiscal_period_id: 'period-2025',
+      suggested_action: 'ignore',
+    })
+    expect(createTxJE).not.toHaveBeenCalled()
+    expect(updates.transactions).toBeUndefined()
+  })
+
+  it('keeps PERIOD_LOCKED (no suggested_action) for a business categorization', async () => {
+    const { supabase, updates } = lockedPeriodSupabase()
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(
+      makeRequest({ is_business: true, category: 'expense_office' }),
+      routeParams(),
+    )
+    const body = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('PERIOD_LOCKED')
+    expect(body.error.details.suggested_action).toBeUndefined()
+    expect(createTxJE).not.toHaveBeenCalled()
+    expect(updates.transactions).toBeUndefined()
+  })
+})

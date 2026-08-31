@@ -25,7 +25,10 @@ import path from 'node:path'
  * app/(auth)/reset-password/__tests__/invite-handoff.test.ts and
  * app/invite/[token]/__tests__/invite-cookie.test.ts.
  */
-const SRC = fs.readFileSync(path.resolve(__dirname, '../page.tsx'), 'utf8')
+const SRC = fs.readFileSync(
+  path.resolve(__dirname, '../register-client.tsx'),
+  'utf8',
+)
 
 /** The page source with comment lines dropped, so prose about a pattern is never mistaken for the pattern. */
 const CODE = SRC.split('\n')

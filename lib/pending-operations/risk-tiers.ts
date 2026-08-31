@@ -45,6 +45,12 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // notes-only diff on committed entries and rejects anything more, so the
   // op cannot touch booking data even if tampered with.
   set_voucher_note: 'low',
+  // Ignoring a bank transaction flips transactions.is_ignored and nothing
+  // else: no verifikat, no ledger impact, reversible with the same op
+  // (ignored: false). The DB CHECK transactions_is_ignored_no_journal_entry
+  // and the executor's isTransactionBooked() refusal keep it off booked rows,
+  // so the op cannot hide a booking even if tampered with (issue #1661).
+  ignore_transaction: 'low',
 
   // ── Medium: reversible booking ─────────────────────────────────────
   categorize_transaction: 'medium',
