@@ -354,22 +354,7 @@ curl -sf -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/conne
 
 The **bank** and **Skatteverket** connector proxies are live (`app.gnubok.se/api/connect/bank/*` and `/api/connect/skv/*`): with `bank_sync` / `skatteverket` in your key's scopes, the instance connects a bank through Arcim's PSD2 credentials and files VAT/AGI + syncs skattekonto through Arcim's registered Skatteverket client, while all tokens (the bank session id, the SKV BankID tokens) stay encrypted in the instance's own database. Company lookup and migration through the connector ship in following releases, and so does the instance-side client wiring that makes the bank/Skatteverket clients call the proxies: until that wiring lands, a key is validated and its grants are written, and the services stay unconfigured on the instance. On the instance, Skatteverket still needs `SKATTEVERKET_ENABLED=true` and `SKATTEVERKET_TOKEN_ENCRYPTION_KEY` (the tokens are stored there, so the encryption key is the operator's).
 
-### Connector subscription (self-hosted instances)
-
-Everything a self-hosted instance runs itself is free (AGPL). Four capabilities depend on services only Accounted operates and are therefore gated on a self-host: bank sync (our PSD2/AISP credentials), Skatteverket API submission and skattekonto sync (our API client registration), company lookup (TIC) and migration from Fortnox/Visma/Bokio/Björn Lundén (the migration gateway). A **connector key** unlocks them for every company on the instance; it is priced per active company at parity with hosted and is issued manually by Accounted for now (self-serve later).
-
-```bash
-GNUBOK_CONNECTOR_KEY=gnubok_ck_...            # issued by Accounted, shown once
-# GNUBOK_CONNECT_URL=https://app.gnubok.se   # default: the hosted connector service
-```
-
-The cron sidecar calls `/api/connector/sync/cron` hourly (it is listed in `docker/crontab.self-hosted` only): the instance reports its active company count, the hosted service answers with the key's status and scopes, and the instance writes `capability_grants` rows with `source = 'connector'` that expire after **72 hours** (or three days past the paid period, whichever is sooner). Those rows are the offline cache: a hosted outage shorter than that changes nothing, a revoked or lapsed key freezes the connector capabilities within days, and nothing in the instance phones home for permission to run the bookkeeping. An instance without a key answers `not_configured` and stays unaffected. Check the wiring at any time with `GET /api/connector/status` (any signed-in member; it never returns the key, only its prefix and which upstreams are in connector mode). To run the sync once by hand after pasting the key:
-
-```bash
-curl -sf -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/connector/sync/cron
-```
-
-The **bank** and **Skatteverket** connector proxies are live (`app.gnubok.se/api/connect/bank/*` and `/api/connect/skv/*`): with `bank_sync` / `skatteverket` in your key's scopes, the instance connects a bank through Arcim's PSD2 credentials and files VAT/AGI + syncs skattekonto through Arcim's registered Skatteverket client, while all tokens (the bank session id, the SKV BankID tokens) stay encrypted in the instance's own database. Company lookup and migration through the connector ship in following releases; until each lands, a key is validated and its grants are written, and the unshipped services stay unconfigured. On the instance, Skatteverket still needs `SKATTEVERKET_ENABLED=true` and `SKATTEVERKET_TOKEN_ENCRYPTION_KEY` (the tokens are stored there, so the encryption key is the operator's). The `enable-banking` and `skatteverket` extensions ship in the self-host image; a key with the matching scope switches them from a paywall upsell to working, and an instance without a key simply sees them unconfigured.
+With this release the self-host image also ships the `enable-banking` and `skatteverket` extensions in its preset: without a key (or own credentials) they show the connector upsell instead of being absent, and `GET /api/connector/status` shows the operator how each upstream would be routed. The client wiring that makes a scoped key actually carry bank/Skatteverket traffic still ships in a following release.
 
 ### Push Notifications
 
