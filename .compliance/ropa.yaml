@@ -815,3 +815,41 @@ processing_activities:
       - opt_out_stop_keyword_honored
       - muted_senders_no_content_persistence
       - account_deletion_revokes_and_shreds_whatsapp_link
+
+  - id: documents.own_company_supplier_guard
+    name: Egenbolagskontroll vid dokumentextraktion
+    purpose: >-
+      Jämföra AI-extraherade leverantörsfält mot det egna bolagets namn och
+      organisationsnummer (för enskild firma ett personnummer) så att
+      användarens eget bolag aldrig föreslås som leverantör när modellen läst
+      dokumentets kundblock. Jämförelsen sker i applikationskoden efter
+      extraktionen; identiteten skickas aldrig till AI-modellen och skrivs
+      inte till någon ny lagringsyta.
+    lawful_basis: art_6_1_f
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: supabase
+    data_subjects:
+      - business_owner
+    data_categories:
+      - user.name             # companies.name
+      - user.government_id    # companies.org_number, personnummer för enskild firma
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: >-
+        Transient jämförelse i applikationsprocessen; datat lämnar aldrig
+        befintlig lagring (companies-tabellen) och skickas inte till Bedrock.
+    retention:
+      duration: none
+      basis: transient_in_memory_comparison
+      stored_in: []
+    security_measures:
+      - rls_company_scoped
+      - not_sent_to_model
+      - transient_comparison_no_new_storage
+      - fail_open_to_nulls_on_lookup_error
