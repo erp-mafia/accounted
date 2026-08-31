@@ -1,8 +1,114 @@
 {
   "benchVersion": "v1.1",
-  "generatedAt": "2026-08-31T12:09:02.950Z",
+  "generatedAt": "2026-08-31T13:37:25.724Z",
   "suites": {
     "booking": [
+      {
+        "model": "grok-4-6",
+        "label": "Grok 4.6",
+        "vendor": "xAI",
+        "open_weights": false,
+        "n": 11,
+        "pass": 11,
+        "passRate": 1,
+        "wilsonLo": 0.917,
+        "wilsonHi": 1,
+        "totalCostUsd": 0.43,
+        "avgCostUsd": 0.03912,
+        "avgTurns": 1,
+        "avgDurationMs": 28321,
+        "extras": {
+          "accountAccuracy": 1,
+          "vatAccuracy": 1,
+          "ece": 0.106,
+          "coverage95": 1,
+          "coverage99": 1,
+          "parseFailures": 0,
+          "segments": {
+            "underlag": {
+              "n": 6,
+              "pass": 1,
+              "accountAccuracy": 1,
+              "vatAccuracy": 1
+            },
+            "bank_only": {
+              "n": 5,
+              "pass": 1,
+              "accountAccuracy": 1,
+              "vatAccuracy": 1
+            }
+          }
+        }
+      },
+      {
+        "model": "glm-5-3-flash",
+        "label": "GLM 5.3 Flash",
+        "vendor": "Z.ai",
+        "open_weights": true,
+        "n": 2,
+        "pass": 2,
+        "passRate": 1,
+        "wilsonLo": 0.667,
+        "wilsonHi": 1,
+        "totalCostUsd": 0.006,
+        "avgCostUsd": 0.00276,
+        "avgTurns": 1,
+        "avgDurationMs": 21651,
+        "extras": {
+          "accountAccuracy": 1,
+          "vatAccuracy": 1,
+          "ece": null,
+          "coverage95": null,
+          "coverage99": null,
+          "parseFailures": 0,
+          "segments": {
+            "underlag": {
+              "n": 2,
+              "pass": 1,
+              "accountAccuracy": 1,
+              "vatAccuracy": 1
+            },
+            "bank_only": null
+          }
+        }
+      },
+      {
+        "model": "gemini-3-1-pro",
+        "label": "Gemini 3.1 Pro",
+        "vendor": "Google",
+        "open_weights": false,
+        "n": 38,
+        "pass": 36,
+        "passRate": 0.947,
+        "wilsonLo": 0.898,
+        "wilsonHi": 0.973,
+        "totalCostUsd": 1.093,
+        "avgCostUsd": 0.02875,
+        "avgTurns": 1,
+        "avgDurationMs": 13288,
+        "extras": {
+          "accountAccuracy": 0.947,
+          "vatAccuracy": 1,
+          "ece": 0.01,
+          "coverage95": 0.211,
+          "coverage99": 0.211,
+          "parseFailures": 0,
+          "segments": {
+            "underlag": {
+              "n": 28,
+              "pass": 0.929,
+              "accountAccuracy": 0.929,
+              "vatAccuracy": 1
+            },
+            "bank_only": {
+              "n": 10,
+              "pass": 1,
+              "accountAccuracy": 1,
+              "vatAccuracy": 1
+            }
+          }
+        }
+      },
       {
         "model": "claude-opus-5",
         "label": "Claude Opus 5",
@@ -21,6 +127,8 @@
           "accountAccuracy": 0.944,
           "vatAccuracy": 1,
           "ece": 0.08,
+          "coverage95": 0.87,
+          "coverage99": 0.519,
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -33,6 +141,43 @@
               "n": 19,
               "pass": 0.947,
               "accountAccuracy": 0.947,
+              "vatAccuracy": 1
+            }
+          }
+        }
+      },
+      {
+        "model": "gpt-5-6-luna",
+        "label": "GPT-5.6 Luna",
+        "vendor": "OpenAI",
+        "open_weights": false,
+        "n": 48,
+        "pass": 45,
+        "passRate": 0.938,
+        "wilsonLo": 0.893,
+        "wilsonHi": 0.964,
+        "totalCostUsd": 0.023,
+        "avgCostUsd": 0.00049,
+        "avgTurns": 1,
+        "avgDurationMs": 12526,
+        "extras": {
+          "accountAccuracy": 0.938,
+          "vatAccuracy": 1,
+          "ece": 0.051,
+          "coverage95": 0.833,
+          "coverage99": 0.583,
+          "parseFailures": 0,
+          "segments": {
+            "underlag": {
+              "n": 31,
+              "pass": 0.903,
+              "accountAccuracy": 0.903,
+              "vatAccuracy": 1
+            },
+            "bank_only": {
+              "n": 17,
+              "pass": 1,
+              "accountAccuracy": 1,
               "vatAccuracy": 1
             }
           }
@@ -56,6 +201,8 @@
           "accountAccuracy": 0.907,
           "vatAccuracy": 0.981,
           "ece": 0.117,
+          "coverage95": 0.63,
+          "coverage99": 0.63,
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -68,6 +215,80 @@
               "n": 19,
               "pass": 0.842,
               "accountAccuracy": 0.842,
+              "vatAccuracy": 1
+            }
+          }
+        }
+      },
+      {
+        "model": "deepseek-v4-pro",
+        "label": "DeepSeek V4 Pro",
+        "vendor": "DeepSeek",
+        "open_weights": true,
+        "n": 16,
+        "pass": 14,
+        "passRate": 0.875,
+        "wilsonLo": 0.77,
+        "wilsonHi": 0.936,
+        "totalCostUsd": 0.336,
+        "avgCostUsd": 0.02099,
+        "avgTurns": 1,
+        "avgDurationMs": 29604,
+        "extras": {
+          "accountAccuracy": 0.938,
+          "vatAccuracy": 0.875,
+          "ece": 0.071,
+          "coverage95": 0.813,
+          "coverage99": 0.813,
+          "parseFailures": 0,
+          "segments": {
+            "underlag": {
+              "n": 9,
+              "pass": 0.889,
+              "accountAccuracy": 1,
+              "vatAccuracy": 0.889
+            },
+            "bank_only": {
+              "n": 7,
+              "pass": 0.857,
+              "accountAccuracy": 0.857,
+              "vatAccuracy": 0.857
+            }
+          }
+        }
+      },
+      {
+        "model": "gpt-5-6-terra-pro",
+        "label": "GPT-5.6 Terra Pro",
+        "vendor": "OpenAI",
+        "open_weights": false,
+        "n": 37,
+        "pass": 32,
+        "passRate": 0.865,
+        "wilsonLo": 0.799,
+        "wilsonHi": 0.912,
+        "totalCostUsd": 1.838,
+        "avgCostUsd": 0.04968,
+        "avgTurns": 1,
+        "avgDurationMs": 12591,
+        "extras": {
+          "accountAccuracy": 0.865,
+          "vatAccuracy": 1,
+          "ece": 0.109,
+          "coverage95": 0.27,
+          "coverage99": 0.27,
+          "parseFailures": 0,
+          "segments": {
+            "underlag": {
+              "n": 26,
+              "pass": 0.846,
+              "accountAccuracy": 0.846,
+              "vatAccuracy": 1
+            },
+            "bank_only": {
+              "n": 11,
+              "pass": 0.909,
+              "accountAccuracy": 0.909,
               "vatAccuracy": 1
             }
           }
@@ -91,6 +312,8 @@
           "accountAccuracy": 0.889,
           "vatAccuracy": 0.963,
           "ece": 0.036,
+          "coverage95": 0.537,
+          "coverage99": 0.056,
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -104,6 +327,43 @@
               "pass": 0.895,
               "accountAccuracy": 1,
               "vatAccuracy": 0.895
+            }
+          }
+        }
+      },
+      {
+        "model": "qwen3-8-2-4t",
+        "label": "Qwen3.8 2.4T",
+        "vendor": "Alibaba",
+        "open_weights": true,
+        "n": 8,
+        "pass": 6,
+        "passRate": 0.75,
+        "wilsonLo": 0.575,
+        "wilsonHi": 0.869,
+        "totalCostUsd": 0.289,
+        "avgCostUsd": 0.03614,
+        "avgTurns": 1,
+        "avgDurationMs": 31580,
+        "extras": {
+          "accountAccuracy": 0.75,
+          "vatAccuracy": 1,
+          "ece": 0.171,
+          "coverage95": null,
+          "coverage99": null,
+          "parseFailures": 0,
+          "segments": {
+            "underlag": {
+              "n": 7,
+              "pass": 0.714,
+              "accountAccuracy": 0.714,
+              "vatAccuracy": 1
+            },
+            "bank_only": {
+              "n": 1,
+              "pass": 1,
+              "accountAccuracy": 1,
+              "vatAccuracy": 1
             }
           }
         }
@@ -126,6 +386,8 @@
           "accountAccuracy": 0.667,
           "vatAccuracy": 0.889,
           "ece": 0.256,
+          "coverage95": 0,
+          "coverage99": 0,
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -142,9 +404,65 @@
             }
           }
         }
+      },
+      {
+        "model": "llama-4-maverick",
+        "label": "Llama 4 Maverick",
+        "vendor": "Meta",
+        "open_weights": true,
+        "n": 47,
+        "pass": 25,
+        "passRate": 0.532,
+        "wilsonLo": 0.459,
+        "wilsonHi": 0.603,
+        "totalCostUsd": 0.177,
+        "avgCostUsd": 0.00376,
+        "avgTurns": 1,
+        "avgDurationMs": 12839,
+        "extras": {
+          "accountAccuracy": 0.66,
+          "vatAccuracy": 0.872,
+          "ece": 0.319,
+          "coverage95": 0,
+          "coverage99": 0,
+          "parseFailures": 0,
+          "segments": {
+            "underlag": {
+              "n": 31,
+              "pass": 0.548,
+              "accountAccuracy": 0.613,
+              "vatAccuracy": 0.935
+            },
+            "bank_only": {
+              "n": 16,
+              "pass": 0.5,
+              "accountAccuracy": 0.75,
+              "vatAccuracy": 0.75
+            }
+          }
+        }
       }
     ],
     "reasoning": [
+      {
+        "model": "gpt-5-6-terra-pro",
+        "label": "GPT-5.6 Terra Pro",
+        "vendor": "OpenAI",
+        "open_weights": false,
+        "n": 36,
+        "pass": 34,
+        "passRate": 0.944,
+        "wilsonLo": 0.893,
+        "wilsonHi": 0.972,
+        "totalCostUsd": 0.328,
+        "avgCostUsd": 0.0091,
+        "avgTurns": 1,
+        "avgDurationMs": 12690,
+        "extras": {
+          "ece": 0.046,
+          "parseFailures": 0
+        }
+      },
       {
         "model": "claude-opus-5",
         "label": "Claude Opus 5",
@@ -184,6 +502,63 @@
         }
       },
       {
+        "model": "gpt-5-6-luna",
+        "label": "GPT-5.6 Luna",
+        "vendor": "OpenAI",
+        "open_weights": false,
+        "n": 36,
+        "pass": 31,
+        "passRate": 0.861,
+        "wilsonLo": 0.794,
+        "wilsonHi": 0.909,
+        "totalCostUsd": 0.007,
+        "avgCostUsd": 0.00019,
+        "avgTurns": 1,
+        "avgDurationMs": 12417,
+        "extras": {
+          "ece": 0.129,
+          "parseFailures": 0
+        }
+      },
+      {
+        "model": "gemini-3-1-pro",
+        "label": "Gemini 3.1 Pro",
+        "vendor": "Google",
+        "open_weights": false,
+        "n": 34,
+        "pass": 29,
+        "passRate": 0.853,
+        "wilsonLo": 0.782,
+        "wilsonHi": 0.904,
+        "totalCostUsd": 0.242,
+        "avgCostUsd": 0.00713,
+        "avgTurns": 1,
+        "avgDurationMs": 13323,
+        "extras": {
+          "ece": 0.144,
+          "parseFailures": 0
+        }
+      },
+      {
+        "model": "grok-4-6",
+        "label": "Grok 4.6",
+        "vendor": "xAI",
+        "open_weights": false,
+        "n": 13,
+        "pass": 11,
+        "passRate": 0.846,
+        "wilsonLo": 0.722,
+        "wilsonHi": 0.921,
+        "totalCostUsd": 0.143,
+        "avgCostUsd": 0.011,
+        "avgTurns": 1,
+        "avgDurationMs": 40604,
+        "extras": {
+          "ece": 0.183,
+          "parseFailures": 0
+        }
+      },
+      {
         "model": "claude-sonnet-4-6",
         "label": "Claude Sonnet 4.6",
         "vendor": "Anthropic",
@@ -199,6 +574,63 @@
         "avgDurationMs": 1399,
         "extras": {
           "ece": 0.204,
+          "parseFailures": 0
+        }
+      },
+      {
+        "model": "deepseek-v4-pro",
+        "label": "DeepSeek V4 Pro",
+        "vendor": "DeepSeek",
+        "open_weights": true,
+        "n": 27,
+        "pass": 16,
+        "passRate": 0.593,
+        "wilsonLo": 0.496,
+        "wilsonHi": 0.682,
+        "totalCostUsd": 0.125,
+        "avgCostUsd": 0.00463,
+        "avgTurns": 1,
+        "avgDurationMs": 27440,
+        "extras": {
+          "ece": 0.341,
+          "parseFailures": 0
+        }
+      },
+      {
+        "model": "qwen3-8-2-4t",
+        "label": "Qwen3.8 2.4T",
+        "vendor": "Alibaba",
+        "open_weights": true,
+        "n": 9,
+        "pass": 5,
+        "passRate": 0.556,
+        "wilsonLo": 0.393,
+        "wilsonHi": 0.707,
+        "totalCostUsd": 0.106,
+        "avgCostUsd": 0.01173,
+        "avgTurns": 1,
+        "avgDurationMs": 34340,
+        "extras": {
+          "ece": 0.433,
+          "parseFailures": 0
+        }
+      },
+      {
+        "model": "llama-4-maverick",
+        "label": "Llama 4 Maverick",
+        "vendor": "Meta",
+        "open_weights": true,
+        "n": 36,
+        "pass": 13,
+        "passRate": 0.361,
+        "wilsonLo": 0.286,
+        "wilsonHi": 0.444,
+        "totalCostUsd": 0.003,
+        "avgCostUsd": 0.00007,
+        "avgTurns": 1,
+        "avgDurationMs": 12215,
+        "extras": {
+          "ece": 0.639,
           "parseFailures": 0
         }
       },
@@ -223,6 +655,42 @@
       }
     ],
     "extraction": [
+      {
+        "model": "grok-4-6",
+        "label": "Grok 4.6",
+        "vendor": "xAI",
+        "open_weights": false,
+        "n": 4,
+        "pass": 4,
+        "passRate": 1,
+        "wilsonLo": 0.8,
+        "wilsonHi": 1,
+        "totalCostUsd": 0.038,
+        "avgCostUsd": 0.00954,
+        "avgTurns": 1,
+        "avgDurationMs": 18770,
+        "extras": {
+          "fieldAccuracy": 1
+        }
+      },
+      {
+        "model": "gemini-3-1-pro",
+        "label": "Gemini 3.1 Pro",
+        "vendor": "Google",
+        "open_weights": false,
+        "n": 12,
+        "pass": 11,
+        "passRate": 0.917,
+        "wilsonLo": 0.802,
+        "wilsonHi": 0.968,
+        "totalCostUsd": 0.231,
+        "avgCostUsd": 0.01924,
+        "avgTurns": 1,
+        "avgDurationMs": 13482,
+        "extras": {
+          "fieldAccuracy": 0.995
+        }
+      },
       {
         "model": "claude-haiku-4-5",
         "label": "Claude Haiku 4.5",
@@ -294,6 +762,42 @@
         "extras": {
           "fieldAccuracy": 0.977
         }
+      },
+      {
+        "model": "gpt-5-6-terra-pro",
+        "label": "GPT-5.6 Terra Pro",
+        "vendor": "OpenAI",
+        "open_weights": false,
+        "n": 12,
+        "pass": 10,
+        "passRate": 0.833,
+        "wilsonLo": 0.701,
+        "wilsonHi": 0.914,
+        "totalCostUsd": 0.232,
+        "avgCostUsd": 0.01934,
+        "avgTurns": 1,
+        "avgDurationMs": 12200,
+        "extras": {
+          "fieldAccuracy": 0.977
+        }
+      },
+      {
+        "model": "gpt-5-6-luna",
+        "label": "GPT-5.6 Luna",
+        "vendor": "OpenAI",
+        "open_weights": false,
+        "n": 12,
+        "pass": 10,
+        "passRate": 0.833,
+        "wilsonLo": 0.701,
+        "wilsonHi": 0.914,
+        "totalCostUsd": 0.013,
+        "avgCostUsd": 0.00105,
+        "avgTurns": 1,
+        "avgDurationMs": 12119,
+        "extras": {
+          "fieldAccuracy": 0.991
+        }
       }
     ],
     "ledger-agent": [
@@ -302,19 +806,21 @@
         "label": "Claude Sonnet 4.6",
         "vendor": "Anthropic",
         "open_weights": false,
-        "n": 3,
-        "pass": 3,
+        "n": 9,
+        "pass": 9,
         "passRate": 1,
-        "wilsonLo": 0.75,
+        "wilsonLo": 0.9,
         "wilsonHi": 1,
-        "totalCostUsd": 0.756,
-        "avgCostUsd": 0.25206,
-        "avgTurns": 4,
-        "avgDurationMs": 19475,
+        "totalCostUsd": 2.12,
+        "avgCostUsd": 0.23551,
+        "avgTurns": 3.778,
+        "avgDurationMs": 20152,
         "extras": {
-          "totalToolCalls": 16,
-          "totalToolErrors": 1,
-          "invariantRefusals": 0
+          "totalToolCalls": 49,
+          "totalToolErrors": 3,
+          "invariantRefusals": 0,
+          "reliability": 1,
+          "reliabilityK": 3
         }
       },
       {
@@ -322,19 +828,21 @@
         "label": "Claude Sonnet 5",
         "vendor": "Anthropic",
         "open_weights": false,
-        "n": 3,
-        "pass": 3,
+        "n": 9,
+        "pass": 9,
         "passRate": 1,
-        "wilsonLo": 0.75,
+        "wilsonLo": 0.9,
         "wilsonHi": 1,
-        "totalCostUsd": 0.432,
-        "avgCostUsd": 0.1441,
-        "avgTurns": 3.667,
-        "avgDurationMs": 25952,
+        "totalCostUsd": 1.75,
+        "avgCostUsd": 0.19441,
+        "avgTurns": 4.222,
+        "avgDurationMs": 31461,
         "extras": {
-          "totalToolCalls": 15,
+          "totalToolCalls": 51,
           "totalToolErrors": 0,
-          "invariantRefusals": 0
+          "invariantRefusals": 0,
+          "reliability": 1,
+          "reliabilityK": 3
         }
       },
       {
@@ -342,19 +850,87 @@
         "label": "Claude Opus 5",
         "vendor": "Anthropic",
         "open_weights": false,
+        "n": 9,
+        "pass": 9,
+        "passRate": 1,
+        "wilsonLo": 0.9,
+        "wilsonHi": 1,
+        "totalCostUsd": 6.108,
+        "avgCostUsd": 0.67862,
+        "avgTurns": 5.333,
+        "avgDurationMs": 37095,
+        "extras": {
+          "totalToolCalls": 69,
+          "totalToolErrors": 0,
+          "invariantRefusals": 0,
+          "reliability": 1,
+          "reliabilityK": 3
+        }
+      },
+      {
+        "model": "gpt-5-6-luna",
+        "label": "GPT-5.6 Luna",
+        "vendor": "OpenAI",
+        "open_weights": false,
         "n": 3,
         "pass": 3,
         "passRate": 1,
         "wilsonLo": 0.75,
         "wilsonHi": 1,
-        "totalCostUsd": 1.915,
-        "avgCostUsd": 0.63823,
-        "avgTurns": 5,
-        "avgDurationMs": 44652,
+        "totalCostUsd": 0.018,
+        "avgCostUsd": 0.00609,
+        "avgTurns": 3.667,
+        "avgDurationMs": 12421,
         "extras": {
-          "totalToolCalls": 23,
+          "totalToolCalls": 17,
           "totalToolErrors": 0,
-          "invariantRefusals": 0
+          "invariantRefusals": 0,
+          "reliability": null,
+          "reliabilityK": null
+        }
+      },
+      {
+        "model": "gpt-5-6-terra-pro",
+        "label": "GPT-5.6 Terra Pro",
+        "vendor": "OpenAI",
+        "open_weights": false,
+        "n": 3,
+        "pass": 2,
+        "passRate": 0.667,
+        "wilsonLo": 0.386,
+        "wilsonHi": 0.864,
+        "totalCostUsd": 0.25,
+        "avgCostUsd": 0.08332,
+        "avgTurns": 2.333,
+        "avgDurationMs": 19028,
+        "extras": {
+          "totalToolCalls": 14,
+          "totalToolErrors": 0,
+          "invariantRefusals": 0,
+          "reliability": null,
+          "reliabilityK": null
+        }
+      },
+      {
+        "model": "gemini-3-1-pro",
+        "label": "Gemini 3.1 Pro",
+        "vendor": "Google",
+        "open_weights": false,
+        "n": 3,
+        "pass": 2,
+        "passRate": 0.667,
+        "wilsonLo": 0.386,
+        "wilsonHi": 0.864,
+        "totalCostUsd": 0.187,
+        "avgCostUsd": 0.0623,
+        "avgTurns": 2,
+        "avgDurationMs": 23607,
+        "extras": {
+          "totalToolCalls": 11,
+          "totalToolErrors": 0,
+          "invariantRefusals": 0,
+          "reliability": null,
+          "reliabilityK": null
         }
       },
       {
@@ -362,19 +938,87 @@
         "label": "Claude Haiku 4.5",
         "vendor": "Anthropic",
         "open_weights": false,
+        "n": 9,
+        "pass": 4,
+        "passRate": 0.444,
+        "wilsonLo": 0.293,
+        "wilsonHi": 0.607,
+        "totalCostUsd": 0.614,
+        "avgCostUsd": 0.06818,
+        "avgTurns": 4.222,
+        "avgDurationMs": 12239,
+        "extras": {
+          "totalToolCalls": 47,
+          "totalToolErrors": 2,
+          "invariantRefusals": 1,
+          "reliability": 0,
+          "reliabilityK": 3
+        }
+      },
+      {
+        "model": "grok-4-6",
+        "label": "Grok 4.6",
+        "vendor": "xAI",
+        "open_weights": false,
         "n": 3,
         "pass": 1,
         "passRate": 0.333,
         "wilsonLo": 0.136,
         "wilsonHi": 0.614,
-        "totalCostUsd": 0.2,
-        "avgCostUsd": 0.06678,
-        "avgTurns": 3.333,
-        "avgDurationMs": 11222,
+        "totalCostUsd": 0.063,
+        "avgCostUsd": 0.02093,
+        "avgTurns": 1.333,
+        "avgDurationMs": 12283,
         "extras": {
-          "totalToolCalls": 13,
+          "totalToolCalls": 8,
           "totalToolErrors": 0,
-          "invariantRefusals": 0
+          "invariantRefusals": 0,
+          "reliability": null,
+          "reliabilityK": null
+        }
+      },
+      {
+        "model": "deepseek-v4-pro",
+        "label": "DeepSeek V4 Pro",
+        "vendor": "DeepSeek",
+        "open_weights": true,
+        "n": 3,
+        "pass": 0,
+        "passRate": 0,
+        "wilsonLo": 0,
+        "wilsonHi": 0.25,
+        "totalCostUsd": 0.004,
+        "avgCostUsd": 0.00146,
+        "avgTurns": 0.667,
+        "avgDurationMs": 5684,
+        "extras": {
+          "totalToolCalls": 5,
+          "totalToolErrors": 0,
+          "invariantRefusals": 0,
+          "reliability": null,
+          "reliabilityK": null
+        }
+      },
+      {
+        "model": "qwen3-8-2-4t",
+        "label": "Qwen3.8 2.4T",
+        "vendor": "Alibaba",
+        "open_weights": true,
+        "n": 3,
+        "pass": 0,
+        "passRate": 0,
+        "wilsonLo": 0,
+        "wilsonHi": 0.25,
+        "totalCostUsd": 0.057,
+        "avgCostUsd": 0.01907,
+        "avgTurns": 0.667,
+        "avgDurationMs": 13078,
+        "extras": {
+          "totalToolCalls": 3,
+          "totalToolErrors": 0,
+          "invariantRefusals": 0,
+          "reliability": null,
+          "reliabilityK": null
         }
       }
     ]
@@ -387,10 +1031,20 @@
         "probe": "EU SaaS under reverse charge (the 2614-vs-5420 production failure class)",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": 0,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": 1,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -399,10 +1053,20 @@
         "probe": "EU ad platform under reverse charge",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": 1,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": 1,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -411,10 +1075,20 @@
         "probe": "Non-EU service still self-assessed under the main rule",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": 1,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -423,10 +1097,20 @@
         "probe": "Intra-EU goods acquisition",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": 1,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -435,10 +1119,20 @@
         "probe": "Import of goods from outside the EU",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": true,
-          "claude-opus-5": false
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 0,
+          "gpt-5-6-terra-pro": 0,
+          "gpt-5-6-luna": 0,
+          "gemini-3-1-pro": 0,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": 0,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -447,10 +1141,20 @@
         "probe": "Domestic reverse charge for construction services",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -459,10 +1163,20 @@
         "probe": "Client lunch: representation with capped VAT",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -471,10 +1185,20 @@
         "probe": "Staff Christmas party: internal representation",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 0,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -483,10 +1207,20 @@
         "probe": "Laptop under the half price-base-amount threshold is an expense",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": false,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 0,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 0,
+          "gpt-5-6-luna": 0,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -495,10 +1229,20 @@
         "probe": "Machine above the threshold is a fixed asset",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -507,10 +1251,20 @@
         "probe": "Passenger car lease: only half the VAT is deductible",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -519,10 +1273,20 @@
         "probe": "Fuel for company cars",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -531,10 +1295,20 @@
         "probe": "Membership fee: non-deductible, no VAT",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -543,10 +1317,20 @@
         "probe": "Gym membership for staff: wellness benefit at 6 % VAT",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": false,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 0,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -555,10 +1339,20 @@
         "probe": "Coffee and fika for the office",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -567,10 +1361,20 @@
         "probe": "Foreign-brand software bought via Swedish reseller: read the underlag, not the pattern",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -579,10 +1383,20 @@
         "probe": "Taxi receipt at 6 % VAT",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 0,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -591,10 +1405,20 @@
         "probe": "Restaurant meal on a business trip is NOT representation",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -603,10 +1427,20 @@
         "probe": "Non-VAT-registered company: VAT is part of the cost",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -615,10 +1449,20 @@
         "probe": "Consumables for a construction firm",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -627,10 +1471,20 @@
         "probe": "Recruitment ad on an EU platform",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": false,
-          "claude-opus-5": false
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 0,
+          "claude-opus-5": 0,
+          "gpt-5-6-terra-pro": 0,
+          "gpt-5-6-luna": 0,
+          "gemini-3-1-pro": 0,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -639,10 +1493,20 @@
         "probe": "Bank feed only: Google Workspace from Ireland, no receipt attached",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -651,10 +1515,20 @@
         "probe": "Bank feed only: Meta ads, no receipt attached",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": false,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 0,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -663,10 +1537,20 @@
         "probe": "Bank feed only: AWS infrastructure, no receipt attached",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -675,10 +1559,20 @@
         "probe": "Bank feed only: Adobe subscription, no receipt attached",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": 1,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -687,10 +1581,20 @@
         "probe": "Bank feed only: train ticket",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -699,10 +1603,20 @@
         "probe": "Bank feed only: public transport card for business travel",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": false,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 0,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -711,10 +1625,20 @@
         "probe": "Bank feed only: hotel night",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -723,10 +1647,20 @@
         "probe": "Bank feed only: insurance premium",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -735,10 +1669,20 @@
         "probe": "Bank feed only: bank charges",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -747,10 +1691,20 @@
         "probe": "Bank feed only: fuel, company runs passenger cars",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -759,10 +1713,20 @@
         "probe": "Bank feed only: fuel, company runs a light truck",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": null,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": null,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -771,10 +1735,20 @@
         "probe": "Bank feed only: mobile subscription",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": null,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": null,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -783,10 +1757,20 @@
         "probe": "Bank feed only: gym membership for staff wellness",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 0,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": null,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 0,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -795,10 +1779,20 @@
         "probe": "Bank feed only: payment to the tax account",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": null,
+          "gpt-5-6-luna": null,
+          "gemini-3-1-pro": null,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -807,10 +1801,20 @@
         "probe": "Bank feed only: Fora premiums",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": null,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": null,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -819,10 +1823,20 @@
         "probe": "Bank feed only: Bolagsverket filing fee",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": false
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 0,
+          "gpt-5-6-terra-pro": null,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": null,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -831,10 +1845,20 @@
         "probe": "Bank feed only: office furnishings under the asset threshold",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": false,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 0,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": null,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": null,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -843,10 +1867,20 @@
         "probe": "Standard domestic service invoice: accounting services",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": null,
+          "gpt-5-6-luna": null,
+          "gemini-3-1-pro": null,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -855,10 +1889,20 @@
         "probe": "Mobile subscription",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": null,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": null,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -867,10 +1911,20 @@
         "probe": "Broadband for the office",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": null,
+          "gpt-5-6-luna": null,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -879,10 +1933,20 @@
         "probe": "Office supplies",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": null,
+          "gpt-5-6-luna": null,
+          "gemini-3-1-pro": null,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -891,10 +1955,20 @@
         "probe": "Swedish SaaS subscription with Swedish VAT",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": null,
+          "gpt-5-6-luna": null,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -903,10 +1977,20 @@
         "probe": "Bank fees are VAT exempt",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": null,
+          "gpt-5-6-luna": null,
+          "gemini-3-1-pro": null,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -915,10 +1999,20 @@
         "probe": "Business insurance is VAT exempt",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": null,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": null,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -927,10 +2021,20 @@
         "probe": "Train ticket at 6 % VAT",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": null,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": null,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": 1,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -939,10 +2043,20 @@
         "probe": "Hotel night at 12 % VAT",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": null,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -951,10 +2065,20 @@
         "probe": "Electricity for business premises",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -963,10 +2087,20 @@
         "probe": "Cleaning service for the office",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": null,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -975,10 +2109,20 @@
         "probe": "Trade literature at 6 % VAT",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": null,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": 1,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -987,10 +2131,20 @@
         "probe": "Legal services",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -999,10 +2153,20 @@
         "probe": "Staff training",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": null,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1011,10 +2175,20 @@
         "probe": "Web hosting from a Swedish provider",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": null,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": null,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1023,10 +2197,20 @@
         "probe": "Postage stamps are VAT exempt",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       }
     ],
@@ -1036,10 +2220,20 @@
         "difficulty": "core",
         "probe": "2614 maps to ruta 30",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1047,10 +2241,20 @@
         "difficulty": "core",
         "probe": "Q2 quarterly filing deadline is 17 August",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": null,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": 0,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1058,10 +2262,20 @@
         "difficulty": "core",
         "probe": "Over 40M SEK forces monthly reporting",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": null,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": 1,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1069,10 +2283,20 @@
         "difficulty": "hard",
         "probe": "VAT registration exemption threshold since 2025",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1080,10 +2304,20 @@
         "difficulty": "hard",
         "probe": "Representation schablon for mixed food and alcohol",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 0,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1091,10 +2325,20 @@
         "difficulty": "expert",
         "probe": "Jämkning arithmetic on real property",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 0,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1102,10 +2346,20 @@
         "difficulty": "hard",
         "probe": "Rutor for an EU B2B service purchase",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1113,10 +2367,20 @@
         "difficulty": "hard",
         "probe": "Rutor for an intra-EU goods acquisition",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1124,10 +2388,20 @@
         "difficulty": "expert",
         "probe": "Triangulation reporting for the intermediary",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1135,10 +2409,20 @@
         "difficulty": "core",
         "probe": "Import VAT goes to Skatteverket since 2015",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": 1,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1146,10 +2430,20 @@
         "difficulty": "expert",
         "probe": "Prepaid dance event ticket keeps the old rate",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": false,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 0,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1157,10 +2451,20 @@
         "difficulty": "hard",
         "probe": "Temporary food VAT cut from April 2026",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": false,
-          "claude-opus-5": false
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 0,
+          "claude-opus-5": 0,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 0,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 0,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1168,10 +2472,20 @@
         "difficulty": "hard",
         "probe": "Restaurant serving keeps 12 % after the food cut",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1179,10 +2493,20 @@
         "difficulty": "core",
         "probe": "Öresavrundning account",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1190,10 +2514,20 @@
         "difficulty": "core",
         "probe": "Simplified invoice cap",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1201,10 +2535,20 @@
         "difficulty": "core",
         "probe": "Retention period",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1212,10 +2556,20 @@
         "difficulty": "core",
         "probe": "Cash receipts booked next business day",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1223,10 +2577,20 @@
         "difficulty": "hard",
         "probe": "Correction path once the period is locked",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1234,10 +2598,20 @@
         "difficulty": "hard",
         "probe": "VAT receivable reclassification",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": 1,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1245,10 +2619,20 @@
         "difficulty": "hard",
         "probe": "Half price-base-amount expensing threshold",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": 0,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1256,10 +2640,20 @@
         "difficulty": "core",
         "probe": "Price base amount 2026",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": false,
-          "claude-opus-5": false
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 0,
+          "claude-opus-5": 0,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 0,
+          "gemini-3-1-pro": 0,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": 0,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1267,10 +2661,20 @@
         "difficulty": "hard",
         "probe": "Audit requirement: 2 of 3 thresholds",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 0,
+          "qwen3-8-2-4t": 1,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1278,10 +2682,20 @@
         "difficulty": "hard",
         "probe": "EC sales list electronic deadline",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": false,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 0,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": 0,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1289,10 +2703,20 @@
         "difficulty": "hard",
         "probe": "Late EC sales list penalty",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": 0,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1300,10 +2724,20 @@
         "difficulty": "core",
         "probe": "Standard skattetillägg rate",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1311,10 +2745,20 @@
         "difficulty": "core",
         "probe": "Cash accounting threshold",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 0,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1322,10 +2766,20 @@
         "difficulty": "hard",
         "probe": "Ruta for EU B2B service sales",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": 0,
+          "qwen3-8-2-4t": 0,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1333,10 +2787,20 @@
         "difficulty": "hard",
         "probe": "Ruta for exports outside the EU",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 0,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1344,10 +2808,20 @@
         "difficulty": "expert",
         "probe": "Voluntary VAT liability output account",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": false,
-          "claude-opus-5": false
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 0,
+          "claude-opus-5": 0,
+          "gpt-5-6-terra-pro": 0,
+          "gpt-5-6-luna": 0,
+          "gemini-3-1-pro": 0,
+          "grok-4-6": 0,
+          "deepseek-v4-pro": 0,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1355,10 +2829,20 @@
         "difficulty": "expert",
         "probe": "Profit margin scheme ruta",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": true,
-          "claude-opus-5": false
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 0,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 0,
+          "gemini-3-1-pro": 0,
+          "grok-4-6": 0,
+          "deepseek-v4-pro": 0,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1366,10 +2850,20 @@
         "difficulty": "expert",
         "probe": "Domestic reverse charge threshold for phones",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1377,10 +2871,20 @@
         "difficulty": "hard",
         "probe": "Representation gift cap",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1388,10 +2892,20 @@
         "difficulty": "hard",
         "probe": "OSS distance selling threshold",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1399,10 +2913,20 @@
         "difficulty": "hard",
         "probe": "Monthly deadline: January period",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 0,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 0,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": 1,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1410,10 +2934,20 @@
         "difficulty": "expert",
         "probe": "Monthly deadline: June period lands on 17 August",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 0,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": 1,
+          "qwen3-8-2-4t": 0,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1421,10 +2955,20 @@
         "difficulty": "core",
         "probe": "Ruta for intra-EU goods sales",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": 1,
+          "llama-4-maverick": 0,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       }
     ],
@@ -1434,10 +2978,20 @@
         "difficulty": "core",
         "probe": "Plain 25 % services invoice with bankgiro and OCR",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1445,10 +2999,20 @@
         "difficulty": "hard",
         "probe": "Receipt with mixed 12/25 % VAT and öresavrundning",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1456,10 +3020,20 @@
         "difficulty": "hard",
         "probe": "Invoice with three VAT rates (25/12/6)",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1467,10 +3041,20 @@
         "difficulty": "hard",
         "probe": "EU reverse-charge invoice in EUR, 0 % VAT, both VAT numbers",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": false,
-          "claude-opus-5": false
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 0,
+          "claude-opus-5": 0,
+          "gpt-5-6-terra-pro": 0,
+          "gpt-5-6-luna": 0,
+          "gemini-3-1-pro": 0,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1478,10 +3062,20 @@
         "difficulty": "expert",
         "probe": "Credit note with negative amounts referencing the original invoice",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1489,10 +3083,20 @@
         "difficulty": "hard",
         "probe": "Rent invoice with service period (periodisering signal)",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1500,10 +3104,20 @@
         "difficulty": "core",
         "probe": "Plusgiro-only supplier: bankgiro must be null",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": false,
-          "claude-sonnet-5": false,
-          "claude-opus-5": false
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 0,
+          "claude-sonnet-5": 0,
+          "claude-opus-5": 0,
+          "gpt-5-6-terra-pro": 0,
+          "gpt-5-6-luna": 0,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1511,10 +3125,20 @@
         "difficulty": "core",
         "probe": "Simple card receipt",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1522,10 +3146,20 @@
         "difficulty": "hard",
         "probe": "Many line items: totals must be summed correctly",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1533,10 +3167,20 @@
         "difficulty": "core",
         "probe": "Phone bill with negative öresavrundning",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1544,10 +3188,20 @@
         "difficulty": "hard",
         "probe": "Large amounts in Swedish grouped format",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1555,10 +3209,20 @@
         "difficulty": "expert",
         "probe": "Mixed 6/25 % with both bankgiro and plusgiro",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 1,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": null,
+          "deepseek-v4-pro": null,
+          "qwen3-8-2-4t": null,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       }
     ],
@@ -1568,10 +3232,20 @@
         "difficulty": "hard",
         "probe": "Book an EU reverse-charge invoice end to end",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 1,
+          "deepseek-v4-pro": 0,
+          "qwen3-8-2-4t": 0,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1579,10 +3253,20 @@
         "difficulty": "expert",
         "probe": "Correct a posted voucher without editing history",
         "results": {
-          "claude-haiku-4-5": true,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0.67,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 0,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 0,
+          "grok-4-6": 0,
+          "deepseek-v4-pro": 0,
+          "qwen3-8-2-4t": 0,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       },
       {
@@ -1590,12 +3274,120 @@
         "difficulty": "hard",
         "probe": "Period VAT settlement into 2650",
         "results": {
-          "claude-haiku-4-5": false,
-          "claude-sonnet-4-6": true,
-          "claude-sonnet-5": true,
-          "claude-opus-5": true
+          "claude-haiku-4-5": 0.67,
+          "claude-sonnet-4-6": 1,
+          "claude-sonnet-5": 1,
+          "claude-opus-5": 1,
+          "gpt-5-6-terra-pro": 1,
+          "gpt-5-6-luna": 1,
+          "gemini-3-1-pro": 1,
+          "grok-4-6": 0,
+          "deepseek-v4-pro": 0,
+          "qwen3-8-2-4t": 0,
+          "llama-4-maverick": null,
+          "kimi-k3": null,
+          "glm-5-3-flash": null,
+          "gpt-oss-120b": null
         }
       }
     ]
+  },
+  "verdicts": {
+    "grok-4-6": {
+      "verdict": "ej_bedomd",
+      "coverage99": 1,
+      "coverage95": 1,
+      "booking": 1,
+      "reasoning": 0.846,
+      "agentClean": false
+    },
+    "glm-5-3-flash": {
+      "verdict": "ej_bedomd",
+      "coverage99": 0,
+      "coverage95": 0,
+      "booking": 1,
+      "reasoning": null,
+      "agentClean": false
+    },
+    "gemini-3-1-pro": {
+      "verdict": "tillstyrks_med_reservation",
+      "coverage99": 0.211,
+      "coverage95": 0.211,
+      "booking": 0.947,
+      "reasoning": 0.853,
+      "agentClean": false
+    },
+    "claude-opus-5": {
+      "verdict": "tillstyrks",
+      "coverage99": 0.519,
+      "coverage95": 0.87,
+      "booking": 0.944,
+      "reasoning": 0.889,
+      "agentClean": true
+    },
+    "gpt-5-6-luna": {
+      "verdict": "tillstyrks",
+      "coverage99": 0.583,
+      "coverage95": 0.833,
+      "booking": 0.938,
+      "reasoning": 0.861,
+      "agentClean": true
+    },
+    "claude-sonnet-5": {
+      "verdict": "tillstyrks",
+      "coverage99": 0.63,
+      "coverage95": 0.63,
+      "booking": 0.889,
+      "reasoning": 0.861,
+      "agentClean": true
+    },
+    "deepseek-v4-pro": {
+      "verdict": "ej_bedomd",
+      "coverage99": 0.813,
+      "coverage95": 0.813,
+      "booking": 0.875,
+      "reasoning": 0.593,
+      "agentClean": false
+    },
+    "gpt-5-6-terra-pro": {
+      "verdict": "tillstyrks_med_reservation",
+      "coverage99": 0.27,
+      "coverage95": 0.27,
+      "booking": 0.865,
+      "reasoning": 0.944,
+      "agentClean": false
+    },
+    "claude-sonnet-4-6": {
+      "verdict": "tillstyrks_med_reservation",
+      "coverage99": 0.056,
+      "coverage95": 0.537,
+      "booking": 0.852,
+      "reasoning": 0.722,
+      "agentClean": true
+    },
+    "qwen3-8-2-4t": {
+      "verdict": "ej_bedomd",
+      "coverage99": 0,
+      "coverage95": 0,
+      "booking": 0.75,
+      "reasoning": 0.556,
+      "agentClean": false
+    },
+    "claude-haiku-4-5": {
+      "verdict": "avstyrks",
+      "coverage99": 0,
+      "coverage95": 0,
+      "booking": 0.574,
+      "reasoning": 0.222,
+      "agentClean": false
+    },
+    "llama-4-maverick": {
+      "verdict": "ej_bedomd",
+      "coverage99": 0,
+      "coverage95": 0,
+      "booking": 0.532,
+      "reasoning": 0.361,
+      "agentClean": false
+    }
   }
 }

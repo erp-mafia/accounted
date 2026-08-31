@@ -110,7 +110,10 @@ export async function openrouterChat(spec: ModelSpec, req: ChatRequest): Promise
       },
       body: JSON.stringify(body),
     })
-    if (res.status === 429 || res.status >= 500) {
+    // 402 with in_flight_budget_exhausted is transient (settles as in-flight
+    // requests finish); a hard out-of-credits 402 also lands here and gives
+    // up after the retries with a clear error.
+    if (res.status === 429 || res.status === 402 || res.status >= 500) {
       const retryAfter = Number(res.headers.get('retry-after') ?? '0')
       const backoff = Math.max(retryAfter * 1000, Math.min(60_000, 8000 * 2 ** tryNo))
       await res.text().catch(() => '')

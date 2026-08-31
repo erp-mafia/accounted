@@ -38,6 +38,13 @@ function loadAllRecords(): RunRecord[] {
   return records
 }
 
+// A record whose run never reached the model (rate limit, credit balance,
+// network) is 'not run', never 'failed': counting it as a miss would let the
+// harness's account state impersonate model quality.
+export function isHarnessError(rec: RunRecord): boolean {
+  return rec.score?.harnessError === true
+}
+
 function latestPerKey(records: RunRecord[]): RunRecord[] {
   const byKey = new Map<string, RunRecord>()
   for (const rec of records) {
@@ -245,7 +252,11 @@ function main() {
       const results: Record<string, number | null> = {}
       for (const model of MODELS.filter((m) => m.enabled)) {
         const recs = latest.filter(
-          (r) => r.suite === suite && r.taskId === task.id && r.model === model.id,
+          (r) =>
+            r.suite === suite &&
+            r.taskId === task.id &&
+            r.model === model.id &&
+            !isHarnessError(r),
         )
         results[model.id] =
           recs.length === 0
@@ -269,7 +280,11 @@ function main() {
     const rows: SuiteRow[] = []
     for (const model of MODELS) {
       const records = latest.filter(
-        (r) => r.suite === suite && r.model === model.id && currentIds.has(r.taskId),
+        (r) =>
+          r.suite === suite &&
+          r.model === model.id &&
+          currentIds.has(r.taskId) &&
+          !isHarnessError(r),
       )
       if (records.length === 0) continue
       const pass = records.filter((r) => r.pass).length
@@ -311,6 +326,7 @@ function main() {
   )
   for (const id of allModelIds) {
     const booking = suitesObj['booking']?.find((r) => r.model === id)
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const reasoning = suitesObj['reasoning']?.find((r) => r.model === id)
     const agent = suitesObj['ledger-agent']?.find((r) => r.model === id)
     const cov99 = (booking?.extras.coverage99 as number | null) ?? 0
@@ -318,8 +334,14 @@ function main() {
     const bp = booking?.passRate ?? 0
     const rp = reasoning?.passRate ?? 0
     const agentClean = (agent?.passRate ?? 0) >= 0.999
-    let verdict: 'tillstyrks' | 'tillstyrks_med_reservation' | 'avstyrks' = 'avstyrks'
-    if (bp >= 0.85 && cov99 >= 0.5 && rp >= 0.8 && agentClean) verdict = 'tillstyrks'
+    // No opinion without enough clean evidence: partial runs (rate limits,
+    // credit exhaustion) must not produce verdicts in either direction.
+    const assessed =
+      (booking?.n ?? 0) >= 35 && (reasoning?.n ?? 0) >= 30 && (agent?.n ?? 0) >= 3
+    let verdict: 'tillstyrks' | 'tillstyrks_med_reservation' | 'avstyrks' | 'ej_bedomd' =
+      'avstyrks'
+    if (!assessed) verdict = 'ej_bedomd'
+    else if (bp >= 0.85 && cov99 >= 0.5 && rp >= 0.8 && agentClean) verdict = 'tillstyrks'
     else if (bp >= 0.75 && rp >= 0.6 && (cov99 >= 0.2 || cov95 >= 0.5)) {
       verdict = 'tillstyrks_med_reservation'
     }

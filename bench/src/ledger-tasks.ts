@@ -106,7 +106,16 @@ export const ASSERTIONS: Record<string, (env: TrialEnv) => Promise<AssertionResu
     out.push(assertEq('2645 debit balance (beraknad ingaende moms)', await netBalance(env, '2645'), 2812.5))
     out.push(assertEq('1930 credited with the payment', await netBalance(env, '1930'), -11250))
     out.push(assertEq('cost on a class 4-6 account', await netBalanceLike(env, '^[456]'), 11250))
-    out.push(assertEq('exactly one voucher', await postedEntryCount(env), 1))
+    // One voucher (invoice+payment combined) or two (invoice, then payment
+    // through 2440) are both correct practice; the four balance assertions
+    // above force every other account, 2440 included, to net zero. More than
+    // two vouchers means detours that do not belong in the end state.
+    const vouchers = await postedEntryCount(env)
+    out.push({
+      name: 'at most two vouchers (invoice, optionally separate payment)',
+      pass: vouchers >= 1 && vouchers <= 2,
+      detail: `got ${vouchers}`,
+    })
     return out
   },
 
