@@ -184,9 +184,10 @@ describe('POST /api/import/opening-balance/correct: cascade wiring', () => {
     const { status, body } = await parseJsonResponse<CorrectResponse>(res)
 
     // The base correction is already committed; the response must not flip to
-    // an error the caller would retry (double-correcting the base year).
+    // an error the caller would retry (double-correcting the base year), but
+    // the failure must be visible so the client can tell the user to check.
     expect(status).toBe(200)
     expect(body.data.success).toBe(true)
-    expect(body.data.cascade).toEqual({ corrected: [], skipped: [] })
+    expect(body.data.cascade).toEqual({ corrected: [], skipped: [], failed: true })
   })
 })

@@ -265,12 +265,15 @@ BEGIN
   END IF;
 
   -- A rättelse must change something: striking rows and re-adding an
-  -- identical set is a no-op in disguise.
+  -- identical set is a no-op in disguise. The key includes dimensions (as
+  -- canonical jsonb text) so a dimensions-only rättelse counts as a change
+  -- (CodeRabbit finding on PR #2076; the 20260819 version omitted it).
   SELECT COALESCE(array_agg(k ORDER BY k), '{}'), COALESCE(jsonb_agg(to_jsonb(jel) ORDER BY jel.sort_order), '[]'::jsonb)
     INTO v_struck_keys, v_struck_json
     FROM public.journal_entry_lines jel,
          LATERAL (SELECT jel.account_number || '|' || round(jel.debit_amount, 2)::text || '|'
-                         || round(jel.credit_amount, 2)::text || '|' || COALESCE(jel.line_description, '')) AS key(k)
+                         || round(jel.credit_amount, 2)::text || '|' || COALESCE(jel.line_description, '') || '|'
+                         || COALESCE(jel.dimensions, '{}'::jsonb)::text) AS key(k)
    WHERE jel.journal_entry_id = p_entry_id
      AND jel.id = ANY (v_strike_ids);
 
@@ -280,7 +283,8 @@ BEGIN
       SELECT btrim(l ->> 'account_number') || '|'
              || round(COALESCE((l ->> 'debit_amount')::numeric, 0), 2)::text || '|'
              || round(COALESCE((l ->> 'credit_amount')::numeric, 0), 2)::text || '|'
-             || COALESCE(NULLIF(btrim(COALESCE(l ->> 'line_description', '')), ''), '') AS k
+             || COALESCE(NULLIF(btrim(COALESCE(l ->> 'line_description', '')), ''), '') || '|'
+             || COALESCE(l -> 'dimensions', '{}'::jsonb)::text AS k
         FROM jsonb_array_elements(p_new_lines) AS l
     ) keys;
 

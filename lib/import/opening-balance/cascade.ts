@@ -65,6 +65,12 @@ export interface CascadeSkippedPeriod {
 export interface CascadeResult {
   corrected: CascadeCorrectedPeriod[]
   skipped: CascadeSkippedPeriod[]
+  /**
+   * Set by the ROUTES when the cascade itself blew up before/while running
+   * (log fetch failed, unexpected throw): the base correction stands, no
+   * later year was verified, and the client must tell the user to check.
+   */
+  failed?: boolean
 }
 
 /**

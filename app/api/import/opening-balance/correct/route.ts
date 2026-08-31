@@ -291,7 +291,7 @@ export const POST = withRouteContext(
           })
         } catch (cascadeErr) {
           opLog.error('opening balance cascade failed', cascadeErr as Error)
-          cascadeResult = { corrected: [], skipped: [] }
+          cascadeResult = { corrected: [], skipped: [], failed: true }
         }
       }
 

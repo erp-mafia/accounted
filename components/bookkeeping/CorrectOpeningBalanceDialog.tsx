@@ -36,6 +36,8 @@ interface Props {
 interface CascadeSummary {
   corrected: Array<{ fiscal_period_id: string; period_name: string | null }>
   skipped: Array<{ fiscal_period_id: string; period_name: string | null; reason: string }>
+  /** The cascade itself failed to run: later years are unverified. */
+  failed?: boolean
 }
 
 /** Error codes where the year itself blocks the correction: guide the user
@@ -258,6 +260,10 @@ export default function CorrectOpeningBalanceDialog({
         if (failed.length > 0) {
           const names = failed.map((s) => s.period_name).filter(Boolean).join(', ')
           description += ` ${failed.length} år kunde inte uppdateras och behöver kontrolleras${names ? `: ${names}` : ''}.`
+        }
+        if (cascadeSummary.failed) {
+          description +=
+            ' Uppdateringen av senare räkenskapsår kunde inte genomföras: kontrollera deras ingående balanser.'
         }
       }
 
