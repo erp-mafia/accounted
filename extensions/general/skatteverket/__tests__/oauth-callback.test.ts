@@ -298,3 +298,39 @@ describe('skatteverket OAuth callback', () => {
     expect(mockStoreTokens).not.toHaveBeenCalled()
   })
 })
+
+// Connector branch: a self-hosted instance's SKV consent, started through the
+// /api/connect/skv broker. The callback must NOT exchange the code here; it
+// bounces the browser back to the instance with the code + original state.
+describe('skatteverket OAuth callback: connector branch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.NEXT_PUBLIC_APP_URL = 'https://app.example'
+    process.env.CONNECTOR_STATE_SECRET = 'test-secret'
+  })
+
+  it('redirects a valid connector state back to the instance without exchanging the code', async () => {
+    const { signConnectorState } = await import('@/lib/connect/hosted/state')
+    const signed = signConnectorState({ kid: 'k1', svc: 'skv', ret: 'https://bokforing.example.se/skv/cb', st: 'inst-state', cref: 'company-1' })
+    const route = callbackRoute()
+    const res = await route.handler(callbackRequest(`code=auth-code&state=${encodeURIComponent(signed)}`))
+    expect(res.status).toBe(307)
+    const loc = new URL(res.headers.get('location') as string)
+    expect(loc.origin + loc.pathname).toBe('https://bokforing.example.se/skv/cb')
+    expect(loc.searchParams.get('code')).toBe('auth-code')
+    expect(loc.searchParams.get('state')).toBe('inst-state')
+    expect(loc.searchParams.get('connector_state')).toBe(signed)
+    expect(exchangeCodeForTokens).not.toHaveBeenCalled()
+  })
+
+  it('rejects a connector state for the wrong service', async () => {
+    const { signConnectorState } = await import('@/lib/connect/hosted/state')
+    const signed = signConnectorState({ kid: 'k1', svc: 'bank', ret: 'https://bokforing.example.se/cb', st: 's', cref: 'c' })
+    const route = callbackRoute()
+    const res = await route.handler(callbackRequest(`code=c&state=${encodeURIComponent(signed)}`))
+    expect(res.status).toBe(307)
+    expect(new URL(res.headers.get('location') as string).searchParams.get('connector_error')).toBe('wrong_service')
+    expect(exchangeCodeForTokens).not.toHaveBeenCalled()
+  })
+})
+

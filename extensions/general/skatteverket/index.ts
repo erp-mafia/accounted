@@ -12,6 +12,7 @@ import { TimeoutError } from '@/lib/http/fetch-with-timeout'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { buildAuthorizeUrl, exchangeCodeForTokens, generatePkcePair } from './lib/oauth'
+import { isConnectorState, verifyConnectorState } from '@/lib/connect/hosted/state'
 import { storeTokens, getTokens, deleteTokens, getTokenHealth } from './lib/token-store'
 import { skvRequest, skvRequestWithAuth, SkatteverketAuthError, getSkatteverketEnvironment } from './lib/api-client'
 import { writeSkatteverketAudit } from './lib/audit'
@@ -333,6 +334,27 @@ export const skatteverketExtension: Extension = {
         const code = url.searchParams.get('code')
         const state = url.searchParams.get('state')
         const error = url.searchParams.get('error')
+
+        // Connector branch: a self-hosted instance started this SKV consent
+        // through the /api/connect/skv broker, which registered OUR redirect
+        // uri and a signed connector state. We never exchange the code here
+        // (the instance does, through the broker's /oauth/token): just bounce
+        // the browser back to the instance with the code + its original
+        // state, so no per-instance redirect uri is registered at SKV.
+        if (isConnectorState(state)) {
+          const verified = verifyConnectorState(state as string)
+          if (!verified.ok || verified.payload.svc !== 'skv') {
+            return NextResponse.redirect(`${appUrl}/?connector_error=${encodeURIComponent(verified.ok ? 'wrong_service' : verified.reason)}`)
+          }
+          const ret = new URL(verified.payload.ret)
+          if (error) ret.searchParams.set('error', error)
+          const errorDescription = url.searchParams.get('error_description')
+          if (errorDescription) ret.searchParams.set('error_description', errorDescription)
+          if (code) ret.searchParams.set('code', code)
+          if (verified.payload.st) ret.searchParams.set('state', verified.payload.st)
+          ret.searchParams.set('connector_state', state as string)
+          return NextResponse.redirect(ret.toString())
+        }
 
         // Injection-safety invariants: appUrl comes from NEXT_PUBLIC_APP_URL
         // (deployment configuration, never user input), and jsLiteral

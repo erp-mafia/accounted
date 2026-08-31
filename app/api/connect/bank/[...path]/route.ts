@@ -104,6 +104,8 @@ async function forwardToEb(method: string, path: string, body?: unknown): Promis
     const res = await fetch(`${ebBaseUrl()}${path}`, {
       method,
       signal: controller.signal,
+      // A followed redirect would resend the EB JWT to the redirect target.
+      redirect: 'error',
       headers: {
         Authorization: getAuthorizationHeader(),
         'Content-Type': 'application/json',
