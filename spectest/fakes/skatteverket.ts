@@ -37,6 +37,16 @@ export interface SkvState {
   refreshes: number;
   /** Force the felkod envelope on skattekonto reads (1-5). */
   felkod: number | null;
+  /** Declarations by redovisningsperiod, in the state they have reached. */
+  declarations: Map<
+    string,
+    { stage: "draft" | "locked" | "submitted"; kvittensnummer?: string }
+  >;
+  /**
+   * Findings the kontrollera step returns. Empty means a clean declaration;
+   * an ERROR aborts the chain before anything exists at Skatteverket.
+   */
+  kontroller: Array<{ kod: string; status: "ERROR" | "WARNING"; beskrivning: string }>;
   /** Make the gateway reject with 401, the way a dead consent does. */
   unauthorized: boolean;
 }
@@ -52,6 +62,14 @@ export interface SkvHelpers extends Record<string, unknown> {
   restoreConsent(): void;
   /** How many refresh_token grants were exchanged. */
   refreshes(): number;
+  /** Make the kontrollera step report a finding on the next declaration. */
+  setKontroll(
+    findings: Array<{ kod: string; status: "ERROR" | "WARNING"; beskrivning: string }>,
+  ): void;
+  /** What state a declaration has reached, if any. */
+  declaration(period: string): { stage: string; kvittensnummer?: string } | null;
+  /** Sign a locked declaration, the way the user does at Skatteverket. */
+  sign(period: string): void;
 }
 
 /**
@@ -110,6 +128,8 @@ export const skatteverketFake = defineFake<SkvState, SkvHelpers>({
     refreshes: 0,
     felkod: null,
     unauthorized: false,
+    declarations: new Map(),
+    kontroller: [],
   }),
 
   handler: async (req, state) => {
@@ -222,6 +242,63 @@ export const skatteverketFake = defineFake<SkvState, SkvHelpers>({
       return Response.json(kind === "saldo" ? buildSaldo() : buildTransaktioner());
     }
 
+    // ── Momsdeklaration ──────────────────────────────────────────────
+    // Three steps, in the order vat-submit.ts walks them: kontrollera
+    // validates without saving, utkast saves the draft to Eget utrymme, and
+    // las locks it for signing and hands back a BankID link. inlamnat is the
+    // receipt, which exists only once the user has actually signed.
+    const moms = path.match(
+      /^\/momsdeklaration\/v1\/(kontrollera|utkast|las|inlamnat)\/([^/]+)\/([^/]+)$/,
+    );
+    if (moms) {
+      const [, step, org, period] = moms;
+      state.calls[state.calls.length - 1]!.org = org;
+
+      if (step === "kontrollera") {
+        return Response.json({
+          kontrollResultat: {
+            status: state.kontroller.some((k) => k.status === "ERROR")
+              ? "ERROR"
+              : state.kontroller.length
+                ? "WARNING"
+                : "OK",
+            resultat: state.kontroller,
+          },
+        });
+      }
+
+      if (step === "utkast") {
+        state.declarations.set(period, { stage: "draft" });
+        return Response.json({ kontrollResultat: { status: "OK", resultat: [] } });
+      }
+
+      if (step === "las") {
+        // Locking something that was never drafted is a client bug, and the
+        // real API says so rather than inventing a draft.
+        if (!state.declarations.has(period)) {
+          return Response.json(
+            { felkod: 2, felmeddelande: "Inget utkast att låsa" },
+            { status: 400 },
+          );
+        }
+        state.declarations.set(period, { stage: "locked" });
+        return Response.json({
+          locked: true,
+          signeringsLank: `https://${SKV_OAUTH_HOSTNAME}/signering/${period}`,
+        });
+      }
+
+      // inlamnat: a receipt exists only after signing. Before that the period
+      // is legitimately empty, which is what the kvittens cron polls for.
+      const declared = state.declarations.get(period);
+      if (declared?.stage !== "submitted") return new Response("", { status: 404 });
+      return Response.json({
+        kvittensnummer: declared.kvittensnummer,
+        tidpunkt: new Date().toISOString(),
+        signerare: "198501011234",
+      });
+    }
+
     return new Response("not found", { status: 404 });
   },
 
@@ -240,6 +317,21 @@ export const skatteverketFake = defineFake<SkvState, SkvHelpers>({
     },
     refreshes() {
       return state.refreshes;
+    },
+    setKontroll(findings) {
+      state.kontroller = findings;
+    },
+    declaration(period: string) {
+      const d = state.declarations.get(period);
+      return d ? { ...d } : null;
+    },
+    sign(period: string) {
+      const d = state.declarations.get(period);
+      if (!d) throw new Error(`no declaration for ${period}`);
+      state.declarations.set(period, {
+        stage: "submitted",
+        kvittensnummer: `KV-${period}-1`,
+      });
     },
   }),
 });
