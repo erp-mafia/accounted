@@ -438,6 +438,15 @@ interface ActorContext {
    */
   sessionId?: string | null
   /**
+   * Approval authority for this key in SEK: the largest amount it may commit
+   * with no human in the loop, or null/undefined for unlimited (the default,
+   * and what every key created before this column existed has).
+   *
+   * Only meaningful for `type: 'api_key'`. Read once at auth time so the
+   * ceiling cannot drift mid-request.
+   */
+  unattendedCommitLimit?: number | null
+  /**
    * Distribution-channel marker from `X-Accounted-Client`, the legacy
    * `X-Gnubok-Client`, or the `client` query param (e.g. 'openclaw').
    * Telemetry-only: same trust level as Mcp-Session-Id, never used for auth or
@@ -4905,6 +4914,7 @@ export const tools: McpTool[] = [
         ...(dimensionsBlock ? { dimensions: dimensionsBlock } : {}),
         ...(ledgerDigest ? { ledger_context: ledgerDigest } : {}),
         ...(skvConnection ? { skatteverket_connection: skvConnection } : {}),
+
         // Static per-workflow loadouts (issue #1098): lets a deferred-loading
         // harness batch-load a whole workflow cluster in one call. Validated
         // against the tool registry at module init (assertRecommendedLoadoutsValid).
@@ -19384,6 +19394,12 @@ export const tools: McpTool[] = [
           actor: {
             type: actor?.type === 'api_key' ? 'api_key' : 'user',
             ...(actor?.label ? { label: actor.label } : {}),
+            // Only an api_key actor can carry a ceiling; the ternary above
+            // already collapsed everything else to 'user', for which
+            // exceedsUnattendedLimit returns false regardless.
+            ...(actor?.type === 'api_key'
+              ? { unattendedCommitLimit: actor.unattendedCommitLimit ?? null }
+              : {}),
           },
           ...(userEmail ? { userEmail } : {}),
         }
@@ -20670,6 +20686,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   let apiKeyId: string | undefined
   let apiKeyName: string | undefined
   let keyMode: ApiKeyMode = 'live'
+  let unattendedCommitLimit: number | null = null
   if (token) {
     const authResult = await validateApiKey(token)
     if ('error' in authResult) {
@@ -20685,7 +20702,15 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       }
       return unauthorized()
     }
-    ;({ userId, companyId, scopes: keyScopes, apiKeyId, apiKeyName, mode: keyMode } = authResult)
+    ;({
+      userId,
+      companyId,
+      scopes: keyScopes,
+      apiKeyId,
+      apiKeyName,
+      mode: keyMode,
+      unattendedCommitLimit,
+    } = authResult)
   } else {
     // Anonymous traffic has no key to rate-limit on: per truncated IP instead.
     // No-op without Upstash (self-hosted), like the OAuth register endpoint.
@@ -20717,6 +20742,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         type: 'api_key',
         id: apiKeyId,
         label: apiKeyName ?? 'Unnamed API key',
+        unattendedCommitLimit,
         sessionId,
         client,
       }

@@ -153,6 +153,24 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
 // ─────────────────────────────────────────────────────────────────
 
 const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
+  // An approval-authority refusal, NOT a write failure: the operation is still
+  // staged and a human can approve it in /pending. retryable is set FALSE
+  // explicitly because getStructuredError falls back to isTransientFailure(),
+  // and the message must never contain the words "rate limit": that phrase is
+  // in TRANSIENT_MESSAGE_PATTERNS and would flip a permanent refusal into a
+  // retryable one, which is how agents end up in retry storms.
+  UNATTENDED_COMMIT_LIMIT_EXCEEDED: {
+    httpStatus: 403,
+    message_sv:
+      'Beloppet överstiger vad den här API-nyckeln får bokföra utan mänskligt godkännande. Underlaget ligger kvar och kan godkännas i Accounted.',
+    message_en:
+      'Amount exceeds what this API key may post without human approval. The operation is preserved and can be approved in the app.',
+    retryable: false,
+    remediation: {
+      description:
+        'Do not retry, and do not split the entry into smaller ones: one affärshändelse is one verifikat (BFL 5 kap. 6 §). Ask a human to approve the staged operation in Accounted, or have the key owner raise the limit in API key settings. details.attempted and details.limit carry the numbers.',
+    },
+  },
   ACCOUNTS_NOT_IN_CHART: {
     httpStatus: 400,
     message_sv: 'Konton saknas i kontoplanen.',
