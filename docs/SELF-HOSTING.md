@@ -354,6 +354,8 @@ curl -sf -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/conne
 
 The **bank** and **Skatteverket** connector proxies are live (`app.gnubok.se/api/connect/bank/*` and `/api/connect/skv/*`): with `bank_sync` / `skatteverket` in your key's scopes, the instance connects a bank through Arcim's PSD2 credentials and files VAT/AGI + syncs skattekonto through Arcim's registered Skatteverket client, while all tokens (the bank session id, the SKV BankID tokens) stay encrypted in the instance's own database. Company lookup and migration through the connector ship in following releases, and so does the instance-side client wiring that makes the bank/Skatteverket clients call the proxies: until that wiring lands, a key is validated and its grants are written, and the services stay unconfigured on the instance. On the instance, Skatteverket still needs `SKATTEVERKET_ENABLED=true` and `SKATTEVERKET_TOKEN_ENCRYPTION_KEY` (the tokens are stored there, so the encryption key is the operator's).
 
+With this release the self-host image also ships the `enable-banking` and `skatteverket` extensions in its preset: without a key (or own credentials) they show the connector upsell instead of being absent, and `GET /api/connector/status` shows the operator how each upstream would be routed. The client wiring that makes a scoped key actually carry bank/Skatteverket traffic still ships in a following release.
+
 ### Push Notifications
 
 ```bash

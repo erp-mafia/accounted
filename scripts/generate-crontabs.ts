@@ -61,7 +61,7 @@ const CURL_PREFIX = 'curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_UR
  * Empty, and that is the reviewed answer rather than an oversight:
  *
  *  - Extension endpoints stay in, including extensions the self-hosted preset
- *    does not enable. docker/extensions.self-hosted.json turns on five
+ *    does not enable. docker/extensions.self-hosted.json turns on eight
  *    extensions, but the preset only drives the runtime registry: the
  *    Dockerfile builds the whole app/ tree, so every extension cron route is
  *    compiled into the image either way. And every one of them answers HTTP
@@ -72,7 +72,7 @@ const CURL_PREFIX = 'curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_UR
  *    cadence, and a self-hoster who enables it later does not have to discover
  *    that the schedule was never there. This also matches the pre-existing
  *    intent: the hand-written crontabs already listed enable-banking and
- *    skattekonto, neither of which is in the self-hosted preset.
+ *    skattekonto, both of which are now in the self-hosted preset (unconfigured extensions no-op).
  *  - /api/sandbox/cleanup/cron stays in. The sandbox is a database flag
  *    (company_settings.is_sandbox), not a hosted-only build flag, and the
  *    cleanup_expired_sandbox_users RPC ships in supabase/migrations
