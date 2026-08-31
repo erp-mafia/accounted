@@ -2670,6 +2670,12 @@ export const OpeningBalanceExecuteSchema = z.object({
   })).min(2, 'At least two lines are required for double-entry'),
 })
 
+export const OpeningBalanceCorrectSchema = OpeningBalanceExecuteSchema.extend({
+  // Also apply the correction's per-account delta to subsequent years' linked
+  // IB verifikat (Fortnox/SIE migrations book one IB per imported year).
+  cascade: z.boolean().optional(),
+})
+
 // ============================================================
 // Register import schemas (customers, suppliers)
 // ============================================================

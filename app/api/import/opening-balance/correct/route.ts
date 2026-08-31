@@ -1,14 +1,21 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
-import { OpeningBalanceExecuteSchema } from '@/lib/api/schemas'
+import { OpeningBalanceCorrectSchema } from '@/lib/api/schemas'
 import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import {
   validateOpeningBalanceLines,
   activateMissingAccounts,
   buildOpeningBalanceEntryLines,
+  type OpeningBalanceLine,
 } from '@/lib/import/opening-balance/execute-helpers'
+import {
+  cascadeOpeningBalanceCorrection,
+  computeAccountDeltas,
+  fetchEntryOpeningBalanceLines,
+  type CascadeResult,
+} from '@/lib/import/opening-balance/cascade'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -32,19 +39,26 @@ ensureInitialized()
  * Gated to the safe case only: the period must be open, unlocked, already have
  * opening balances, and have no year-end close on top. Locked/closed periods or
  * periods with a bokslut must be unwound first (assisted): we refuse here.
+ *
+ * With `cascade: true` the same per-account delta is then applied to every
+ * subsequent year's linked IB verifikat (storno + rebook + relink per year;
+ * see lib/import/opening-balance/cascade.ts). SIE migrations book one IB per
+ * imported year, so without the cascade a base-year correction leaves later
+ * years' IB verifikat carrying the stale figures. Uncorrectable years are
+ * skipped and reported in the response, never forced.
  */
 export const POST = withRouteContext(
   'opening_balance.correct',
   async (request, ctx) => {
     const { user, supabase, companyId, log, requestId } = ctx
 
-    const result = await validateBody(request, OpeningBalanceExecuteSchema, {
+    const result = await validateBody(request, OpeningBalanceCorrectSchema, {
       log,
       operation: 'opening_balance.correct',
     })
     if (!result.success) return result.response
 
-    const { fiscal_period_id, lines } = result.data
+    const { fiscal_period_id, lines, cascade } = result.data
     const opLog = log.child({ fiscalPeriodId: fiscal_period_id })
 
     try {
@@ -141,6 +155,13 @@ export const POST = withRouteContext(
           requestId,
           details: { reason: activation.reason },
         })
+      }
+
+      // Cascade needs the ORIGINAL lines to compute the per-account delta,
+      // so fetch them before the old entry is stornoed below.
+      let originalLines: OpeningBalanceLine[] | null = null
+      if (cascade) {
+        originalLines = await fetchEntryOpeningBalanceLines(supabase, companyId!, oldEntryId)
       }
 
       // BFL 5 kap 5§: reference the original verifikat so the correction is
@@ -254,6 +275,26 @@ export const POST = withRouteContext(
         })
       }
 
+      // The base correction is committed at this point. The cascade to later
+      // years is best-effort on top: each year is corrected independently and
+      // an unexpected failure must not turn the whole request into an error
+      // (the base correction cannot be un-done here).
+      let cascadeResult: CascadeResult | null = null
+      if (cascade && originalLines) {
+        try {
+          const deltas = computeAccountDeltas(originalLines, validLines)
+          cascadeResult = await cascadeOpeningBalanceCorrection(supabase, companyId!, user.id, {
+            basePeriodStart: period.period_start,
+            deltas,
+            lockDate,
+            log: opLog,
+          })
+        } catch (cascadeErr) {
+          opLog.error('opening balance cascade failed', cascadeErr as Error)
+          cascadeResult = { corrected: [], skipped: [] }
+        }
+      }
+
       return NextResponse.json({
         data: {
           success: true,
@@ -263,6 +304,7 @@ export const POST = withRouteContext(
           lines_created: validLines.length,
           total_debit: totalDebit,
           total_credit: totalCredit,
+          ...(cascadeResult ? { cascade: cascadeResult } : {}),
         },
       })
     } catch (err) {
