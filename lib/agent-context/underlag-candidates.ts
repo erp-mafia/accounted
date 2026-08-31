@@ -24,11 +24,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   CONVERTED_AMOUNT_TOLERANCE_PERCENT,
+  DATE_TOLERANCE_DAYS,
+  FALLBACK_CONFIDENCE_FACTOR,
   amountVarianceForMatch,
+  bestProminentAmountVariance,
   calculateMatchConfidence,
   calculateMerchantSimilarity,
 } from '@/lib/documents/core-receipt-matcher'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { roundOre } from '@/lib/money'
 import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 
 /**
@@ -62,6 +66,13 @@ export interface UnderlagCandidate {
   currency: string | null
   /** 0-1 from the shared receipt matcher. */
   confidence: number
+  /**
+   * Where the amount signal came from: an invoice-style total, or the
+   * prominent-amounts fallback for non-invoice documents (bankintyg, avtal).
+   * Consumers that act with less human scrutiny (the nightly receipt hunt)
+   * must treat 'prominent' as weaker evidence or exclude it.
+   */
+  amountSource: 'total' | 'prominent'
   /** Swedish reasons the match scored, for display. */
   matchReasons: string[]
   /** Answers already captured for this item, so they travel with it. */
@@ -103,6 +114,11 @@ function extractionSignals(extracted: InvoiceExtractionResult | null | undefined
     total: extracted?.totals?.total ?? null,
     vat: extracted?.totals?.vatAmount ?? null,
     currency: (extracted?.invoice?.currency || 'SEK').toUpperCase(),
+    // Non-invoice documents (bankintyg, avtal) carry no total but often show
+    // the money amount anyway; the extractor lists those here.
+    prominentAmounts: (extracted?.prominentAmounts ?? []).filter(
+      (a) => Number.isFinite(a.amount) && a.amount !== 0,
+    ),
   }
 }
 
@@ -128,11 +144,11 @@ export function scoreUnderlagCandidates(
 
   for (const item of items) {
     const sig = extractionSignals(item.extracted_data)
-    // An extraction with neither a date nor a total carries no signal the
+    // An extraction with neither a date nor any amount carries no signal the
     // matcher can use; scoring it returns noise dressed as confidence.
-    if (!sig.date && sig.total == null) continue
+    if (!sig.date && sig.total == null && sig.prominentAmounts.length === 0) continue
 
-    const amountVariance = amountVarianceForMatch(
+    let amountVariance = amountVarianceForMatch(
       sig.total,
       sig.currency,
       // A SEK value only when someone resolved a rate for this receipt.
@@ -144,6 +160,29 @@ export function scoreUnderlagCandidates(
       txSek,
     )
 
+    const dateVariance = sig.date
+      ? Math.abs((new Date(sig.date).getTime() - txDateMs) / (1000 * 60 * 60 * 24))
+      : Number.POSITIVE_INFINITY
+
+    // A document with no invoice-style total (bankintyg, avtal: documentKind
+    // "other") but visible amounts falls back to the closest prominent
+    // amount. Two guards keep this precision-first: the document's date must
+    // agree within the normal tolerance (an avtal listing 349 kr must not
+    // match every future 349 kr charge from the same counterparty on amount +
+    // merchant alone), and the confidence is discounted below so a fallback
+    // can never present as certainty.
+    const fallbackMatch =
+      sig.total == null && amountVariance == null && dateVariance <= DATE_TOLERANCE_DAYS
+        ? bestProminentAmountVariance(
+            sig.prominentAmounts,
+            sig.currency,
+            tx.amount,
+            txCurrency,
+            txSek,
+          )
+        : null
+    if (fallbackMatch) amountVariance = fallbackMatch.variance
+
     // No comparable amount means no candidate. calculateMatchConfidence drops
     // the amount signal when it cannot normalise the currencies, which leaves
     // date + merchant carrying the whole normalised score: a same-day receipt
@@ -154,21 +193,33 @@ export function scoreUnderlagCandidates(
     // through the picker; they are just not proposed.
     if (amountVariance == null) continue
 
-    const dateVariance = sig.date
-      ? Math.abs((new Date(sig.date).getTime() - txDateMs) / (1000 * 60 * 60 * 24))
-      : Number.POSITIVE_INFINITY
     const similarity = sig.supplier ? calculateMerchantSimilarity(sig.supplier, txMerchant) : 0
 
     // A converted total is judged against the wider bar, because the rate
     // spread is a known error rather than a disagreement about the sum.
-    const converted = sig.currency !== txCurrency && item.sek_total != null
-    const { confidence, matchReasons } = calculateMatchConfidence(
+    const scoredMatch = calculateMatchConfidence(
       dateVariance,
       amountVariance,
       similarity,
       undefined,
-      converted ? CONVERTED_AMOUNT_TOLERANCE_PERCENT : undefined,
+      sig.currency !== txCurrency && item.sek_total != null
+        ? CONVERTED_AMOUNT_TOLERANCE_PERCENT
+        : undefined,
     )
+    let confidence = scoredMatch.confidence
+    let matchReasons = scoredMatch.matchReasons
+    if (fallbackMatch) {
+      confidence = roundOre(confidence * FALLBACK_CONFIDENCE_FACTOR)
+      // Name the figure that matched. A bare "Exakt belopp" would reach the
+      // agent while total_amount stays null: certainty without a number the
+      // agent or the user could check against the document.
+      const label = fallbackMatch.label ? ` (${fallbackMatch.label})` : ''
+      matchReasons = matchReasons.map((reason) =>
+        reason.startsWith('Exakt belopp') || reason.startsWith('Belopp ±')
+          ? `${reason} i dokumentet: ${fallbackMatch.amount.toLocaleString('sv-SE')} ${sig.currency}${label}`
+          : reason,
+      )
+    }
     if (confidence < CANDIDATE_MIN_CONFIDENCE) continue
 
     scored.push({
@@ -180,6 +231,7 @@ export function scoreUnderlagCandidates(
       vat_amount: sig.vat,
       currency: sig.currency,
       confidence,
+      amountSource: fallbackMatch ? 'prominent' : 'total',
       matchReasons,
       channelContext: item.channel_context ?? null,
     })

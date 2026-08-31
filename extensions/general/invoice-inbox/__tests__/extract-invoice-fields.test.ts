@@ -122,6 +122,55 @@ describe('extractInvoiceFields', () => {
     expect(data.confidence).toBe(1)
   })
 
+  it('keeps prominentAmounts from a non-invoice document (bankintyg/avtal)', async () => {
+    mockCreate.mockReturnValueOnce(
+      aiResponse({
+        ...VALID_RESULT,
+        documentKind: 'other',
+        supplier: { ...VALID_RESULT.supplier, name: 'SEB' },
+        invoice: { ...VALID_RESULT.invoice, invoiceNumber: null, currency: 'SEK' },
+        lineItems: [],
+        totals: { subtotal: null, vatAmount: null, total: null },
+        vatBreakdown: [],
+        prominentAmounts: [{ amount: 2500, label: 'Anslutnings-/Engångspris' }],
+      })
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'affarsavtal.pdf',
+    })
+    expect(data.totals.total).toBeNull()
+    expect(data.prominentAmounts).toEqual([
+      { amount: 2500, label: 'Anslutnings-/Engångspris' },
+    ])
+  })
+
+  it('degrades a hallucinated prominentAmounts shape to an empty list, not a parse failure', async () => {
+    mockCreate.mockReturnValueOnce(
+      aiResponse({ ...VALID_RESULT, prominentAmounts: [{ amount: 'tjugofemtusen' }] })
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'f.pdf',
+    })
+    // The rest of the document still parses.
+    expect(data.totals.total).toBe(6.25)
+    expect(data.prominentAmounts).toEqual([])
+  })
+
+  it('validates a cached raw output from before prominentAmounts existed', async () => {
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'f.pdf',
+    })
+    expect(data.totals.total).toBe(6.25)
+    expect(data.prominentAmounts).toBeUndefined()
+  })
+
   it('sends image content for an image upload', async () => {
     mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
     await extractInvoiceFields({

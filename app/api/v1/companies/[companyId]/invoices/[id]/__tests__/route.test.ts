@@ -30,13 +30,14 @@ vi.mock('@supabase/supabase-js', async () => {
 })
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { PATCH as patchInvoice } from '../route'
+import { eventBus } from '@/lib/events'
+import { DELETE as deleteInvoice, PATCH as patchInvoice } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 
 type MockResult = { data?: unknown; error?: unknown }
-type Capture = { table: string; op: 'update' | 'insert'; payload: unknown }
+type Capture = { table: string; op: 'update' | 'insert' | 'delete'; payload: unknown }
 
 /**
  * Per-table result queues (arrays pop in order; single values repeat) plus a
@@ -63,6 +64,12 @@ function makeFlexibleSupabase(
         if (prop === 'update' || prop === 'insert') {
           return (payload: unknown) => {
             captures.push({ table, op: prop, payload })
+            return buildChain(table)
+          }
+        }
+        if (prop === 'delete') {
+          return () => {
+            captures.push({ table, op: 'delete', payload: undefined })
             return buildChain(table)
           }
         }
@@ -364,5 +371,210 @@ describe('PATCH /api/v1/companies/:companyId/invoices/:id', () => {
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+})
+
+function makeDeleteRequest(opts: { idempotencyKey?: boolean; auth?: boolean; dryRun?: boolean; id?: string } = {}) {
+  const headers: Record<string, string> = {}
+  if (opts.auth !== false) headers.Authorization = 'Bearer test-fixture-not-a-real-key'
+  if (opts.idempotencyKey !== false) headers['Idempotency-Key'] = 'idemdele-7777-4abc-8def-1234567890ab'
+  const id = opts.id ?? INVOICE_ID
+  const url = `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${id}${opts.dryRun ? '?dry_run=true' : ''}`
+  return new Request(url, { method: 'DELETE', headers })
+}
+
+describe('DELETE /api/v1/companies/:companyId/invoices/:id', () => {
+  it('returns 401 without a bearer token', async () => {
+    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+
+    const res = await deleteInvoice(
+      makeDeleteRequest({ auth: false }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(401)
+    const body = await res.json()
+    expect(body.error.code).toBe('UNAUTHORIZED')
+  })
+
+  it('returns 400 VALIDATION_ERROR for a non-UUID id', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await deleteInvoice(
+      makeDeleteRequest({ id: 'not-a-uuid' }),
+      detailParams(COMPANY_ID, 'not-a-uuid'),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('rejects a delete without an Idempotency-Key', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await deleteInvoice(
+      makeDeleteRequest({ idempotencyKey: false }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('returns 404 when the invoice does not belong to the company', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        // deleteDraftInvoice fetches via .single(): a foreign or nonexistent
+        // id surfaces as an error result.
+        invoices: { data: null, error: { message: 'Row not found' } },
+      }),
+    )
+
+    const res = await deleteInvoice(makeDeleteRequest(), detailParams(COMPANY_ID, INVOICE_ID))
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('NOT_FOUND')
+  })
+
+  it('returns 409 INVOICE_DELETE_NOT_DRAFT for a sent invoice', async () => {
+    const captures: Capture[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: {
+            data: { ...DRAFT_INVOICE, status: 'sent', invoice_number: '2026-0042' },
+            error: null,
+          },
+        },
+        captures,
+      ),
+    )
+
+    const res = await deleteInvoice(makeDeleteRequest(), detailParams(COMPANY_ID, INVOICE_ID))
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_DELETE_NOT_DRAFT')
+    expect(body.error.details.current_status).toBe('sent')
+    // Nothing was written to the invoice.
+    expect(captures.filter((c) => c.table === 'invoices')).toEqual([])
+  })
+
+  it('hard deletes an unnumbered draft and emits the audit event', async () => {
+    const captures: Capture[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: [
+            { data: DRAFT_INVOICE, error: null }, // fetch: draft, invoice_number null
+            { data: [{ id: INVOICE_ID }], error: null }, // delete().select('id')
+          ],
+        },
+        captures,
+      ),
+    )
+    const emitSpy = vi.spyOn(eventBus, 'emit')
+
+    const res = await deleteInvoice(makeDeleteRequest(), detailParams(COMPANY_ID, INVOICE_ID))
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.deleted).toBe(true)
+    // The event-log handler may add its own event_log insert via the same
+    // mocked service client: scope the assertion to the invoices table.
+    expect(captures.filter((c) => c.table === 'invoices')).toEqual([
+      { table: 'invoices', op: 'delete', payload: undefined },
+    ])
+    // The hard delete leaves no journal trace: the audit event must carry the
+    // EXPLICIT actor from the API-key context (auth.uid() is null here).
+    expect(emitSpy).toHaveBeenCalledWith({
+      type: 'invoice.draft_deleted',
+      payload: { invoiceId: INVOICE_ID, companyId: COMPANY_ID, userId: USER_ID },
+    })
+  })
+
+  it('cancels a numbered draft, retaining the F-series number', async () => {
+    const captures: Capture[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: [
+            { data: { ...DRAFT_INVOICE, invoice_number: '2026-0042' }, error: null }, // fetch
+            { data: [{ id: INVOICE_ID }], error: null }, // update().select('id')
+          ],
+        },
+        captures,
+      ),
+    )
+
+    const res = await deleteInvoice(makeDeleteRequest(), detailParams(COMPANY_ID, INVOICE_ID))
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.cancelled).toBe(true)
+    expect(body.data.invoice_number).toBe('2026-0042')
+    // The row survives as makulerad: an update, never a delete.
+    const update = captures.find((c) => c.table === 'invoices' && c.op === 'update')
+    expect(update).toBeDefined()
+    expect(update!.payload).toMatchObject({ status: 'cancelled' })
+    expect(captures.filter((c) => c.op === 'delete')).toEqual([])
+  })
+
+  it('returns 409 INVOICE_CANCEL_RACE when the draft is finalized concurrently', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: DRAFT_INVOICE, error: null }, // fetch: unnumbered draft
+          { data: [], error: null }, // delete matched 0 rows: finalized meanwhile
+        ],
+      }),
+    )
+
+    const res = await deleteInvoice(makeDeleteRequest(), detailParams(COMPANY_ID, INVOICE_ID))
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_CANCEL_RACE')
+  })
+
+  it('dry-run previews the outcome without writing', async () => {
+    const captures: Capture[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: { data: { ...DRAFT_INVOICE, invoice_number: '2026-0042' }, error: null },
+        },
+        captures,
+      ),
+    )
+
+    const res = await deleteInvoice(
+      makeDeleteRequest({ dryRun: true }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('X-Dry-Run')).toBe('true')
+    const body = await res.json()
+    expect(body.data.dry_run).toBe(true)
+    expect(body.data.preview).toEqual({ cancelled: true, invoice_number: '2026-0042' })
+    expect(captures.filter((c) => c.table === 'invoices')).toEqual([])
   })
 })

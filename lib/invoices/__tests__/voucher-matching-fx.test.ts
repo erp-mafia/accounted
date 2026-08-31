@@ -822,6 +822,184 @@ describe('validateVoucherForInvoiceLink: foreign-currency invoices', () => {
     expect(result.code).toBe('LINK_VOUCHER_CURRENCY_MISMATCH')
   })
 
+  it('settles a plain SEK-booked voucher via the FX fallback (RPC gate mirror)', async () => {
+    // The receivable was booked in kronor (SIE import / manual voucher): the
+    // RPC (migration 20260830140000) now settles this and books the residual
+    // to 7960/3960, so the validator must stop refusing it at stage time.
+    const sekBooked = entry('je-sekbooked', 18, 'Inbetalning', [
+      {
+        id: 'l-sekbooked-ar',
+        account_number: '1510',
+        debit_amount: 0,
+        credit_amount: 11200,
+        currency: 'SEK',
+      },
+      {
+        id: 'l-sekbooked-bank',
+        account_number: '1930',
+        debit_amount: 11200,
+        credit_amount: 0,
+        currency: 'SEK',
+      },
+    ])
+    const { supabase } = createFilteringSupabase({ entries: [sekBooked] })
+
+    const result = await validateVoucherForInvoiceLink(
+      supabase as never,
+      'company-1',
+      eurInvoice() as never,
+      'je-sekbooked'
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // Full-remaining settlement in the invoice currency, like the RPC.
+    expect(result.arCreditAmount).toBe(1000)
+    expect(result.paymentAmount).toBe(1000)
+    expect(result.remainingAfter).toBe(0)
+    expect(result.isFullyPaid).toBe(true)
+    expect(result.arLineCurrency).toBeNull()
+  })
+
+  it('keeps the refusal when the SEK total deviates more than 10% from booked', async () => {
+    // 1000 kr against an 11 500 kr booked receivable: wrong voucher, not FX.
+    const { supabase } = createFilteringSupabase({ entries: [domesticSekVoucher] })
+
+    const result = await validateVoucherForInvoiceLink(
+      supabase as never,
+      'company-1',
+      eurInvoice() as never,
+      'je-sek'
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.code).toBe('LINK_VOUCHER_CURRENCY_MISMATCH')
+    expect(result.details).toMatchObject({ reason: 'fx_deviation_too_large' })
+  })
+
+  it('keeps the refusal when a readable line carries amount_in_currency 0', async () => {
+    // Skeptic counterexample: the EUR-labelled zero line is a readable LINE
+    // whose 50 kr ledger credit is excluded from the SEK sum; engaging the
+    // fallback would understate the settlement. The gate counts lines.
+    const mixedZero = entry('je-mixed-zero', 19, 'Inbetalning', [
+      {
+        id: 'l-mz-sek',
+        account_number: '1510',
+        debit_amount: 0,
+        credit_amount: 950,
+        currency: 'SEK',
+      },
+      {
+        id: 'l-mz-zero',
+        account_number: '1510',
+        debit_amount: 0,
+        credit_amount: 50,
+        currency: 'EUR',
+        amount_in_currency: 0,
+      },
+      {
+        id: 'l-mz-bank',
+        account_number: '1930',
+        debit_amount: 1000,
+        credit_amount: 0,
+        currency: 'SEK',
+      },
+    ])
+    const { supabase } = createFilteringSupabase({ entries: [mixedZero] })
+
+    const result = await validateVoucherForInvoiceLink(
+      supabase as never,
+      'company-1',
+      makeInvoice({
+        id: 'inv-eur-small',
+        invoice_number: 'F-9010',
+        currency: 'EUR',
+        total: 100,
+        total_sek: 1000,
+        exchange_rate: 10,
+        remaining_amount: 100,
+        paid_amount: null,
+        status: 'sent',
+        due_date: '2026-06-30',
+      }) as never,
+      'je-mixed-zero'
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.code).toBe('LINK_VOUCHER_CURRENCY_MISMATCH')
+  })
+
+  it('keeps the refusal on kontantmetoden (no receivable to true up)', async () => {
+    const cashVoucher = entry('je-cash-sek', 20, 'Inbetalning', [
+      {
+        id: 'l-cash-bank',
+        account_number: '1930',
+        debit_amount: 11500,
+        credit_amount: 0,
+        currency: 'SEK',
+      },
+      {
+        id: 'l-cash-rev',
+        account_number: '3001',
+        debit_amount: 0,
+        credit_amount: 11500,
+        currency: 'SEK',
+      },
+    ])
+    const { supabase } = createFilteringSupabase({
+      accountingMethod: 'cash',
+      entries: [cashVoucher],
+    })
+
+    const result = await validateVoucherForInvoiceLink(
+      supabase as never,
+      'company-1',
+      eurInvoice() as never,
+      'je-cash-sek'
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.code).toBe('LINK_VOUCHER_CURRENCY_MISMATCH')
+  })
+
+  it('keeps the refusal when the invoice has no exchange rate', async () => {
+    const sekBooked = entry('je-sekbooked-norate', 25, 'Inbetalning', [
+      {
+        id: 'l-norate-ar',
+        account_number: '1510',
+        debit_amount: 0,
+        credit_amount: 11500,
+        currency: 'SEK',
+      },
+    ])
+    const { supabase } = createFilteringSupabase({ entries: [sekBooked] })
+
+    const result = await validateVoucherForInvoiceLink(
+      supabase as never,
+      'company-1',
+      makeInvoice({
+        id: 'inv-eur-norate',
+        invoice_number: 'F-9011',
+        currency: 'EUR',
+        total: 1000,
+        total_sek: null,
+        exchange_rate: null,
+        remaining_amount: 1000,
+        paid_amount: null,
+        status: 'sent',
+        due_date: '2026-06-30',
+      }) as never,
+      'je-sekbooked-norate'
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.code).toBe('LINK_VOUCHER_CURRENCY_MISMATCH')
+  })
+
   it('selects currency + amount_in_currency off the lines', async () => {
     // The fix is inert if the column list omits them: the sweep has already hit
     // that once, via RPCs that projected neither.
@@ -1056,6 +1234,108 @@ describe('validateVoucherForSupplierInvoiceLink: foreign-currency invoices', () 
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.code).toBe('LINK_SI_VOUCHER_CURRENCY_MISMATCH')
+  })
+
+  it('settles a plain SEK-booked 244x voucher via the FX fallback (RPC gate mirror)', async () => {
+    const sekBooked = entry('je-ap-sekbooked', 26, 'Betalning', [
+      {
+        id: 'l-ap-sekbooked',
+        account_number: '2440',
+        debit_amount: 11200,
+        credit_amount: 0,
+        currency: 'SEK',
+      },
+      {
+        id: 'l-ap-sekbooked-bank',
+        account_number: '1930',
+        debit_amount: 0,
+        credit_amount: 11200,
+        currency: 'SEK',
+      },
+    ])
+    const { supabase } = createFilteringSupabase({ entries: [sekBooked] })
+
+    const result = await validateVoucherForSupplierInvoiceLink(
+      supabase as never,
+      'company-1',
+      eurSupplierInvoice() as never,
+      'je-ap-sekbooked'
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.apDebitAmount).toBe(1000)
+    expect(result.paymentAmount).toBe(1000)
+    expect(result.remainingAfter).toBe(0)
+    expect(result.isFullyPaid).toBe(true)
+    expect(result.apLineCurrency).toBeNull()
+  })
+
+  it('keeps the refusal when a readable 244x line carries amount_in_currency 0', async () => {
+    const mixedZero = entry('je-ap-mixed-zero', 27, 'Betalning', [
+      {
+        id: 'l-apmz-sek',
+        account_number: '2440',
+        debit_amount: 950,
+        credit_amount: 0,
+        currency: 'SEK',
+      },
+      {
+        id: 'l-apmz-zero',
+        account_number: '2440',
+        debit_amount: 50,
+        credit_amount: 0,
+        currency: 'EUR',
+        amount_in_currency: 0,
+      },
+      {
+        id: 'l-apmz-bank',
+        account_number: '1930',
+        debit_amount: 0,
+        credit_amount: 1000,
+        currency: 'SEK',
+      },
+    ])
+    const { supabase } = createFilteringSupabase({ entries: [mixedZero] })
+
+    const result = await validateVoucherForSupplierInvoiceLink(
+      supabase as never,
+      'company-1',
+      makeSupplierInvoice({
+        id: 'sinv-eur-small',
+        supplier_invoice_number: 'L-9010',
+        currency: 'EUR',
+        total: 100,
+        total_sek: 1000,
+        exchange_rate: 10,
+        remaining_amount: 100,
+        paid_amount: 0,
+        status: 'registered',
+        due_date: '2026-06-30',
+        arrival_number: 999999,
+      }) as never,
+      'je-ap-mixed-zero'
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.code).toBe('LINK_SI_VOUCHER_CURRENCY_MISMATCH')
+  })
+
+  it('keeps the refusal when the SEK total deviates more than 10% from booked', async () => {
+    const { supabase } = createFilteringSupabase({ entries: [domesticApVoucher] })
+
+    const result = await validateVoucherForSupplierInvoiceLink(
+      supabase as never,
+      'company-1',
+      eurSupplierInvoice() as never,
+      'je-ap-sek'
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.code).toBe('LINK_SI_VOUCHER_CURRENCY_MISMATCH')
+    expect(result.details).toMatchObject({ reason: 'fx_deviation_too_large' })
   })
 
   it('SEK: the happy path is unchanged', async () => {

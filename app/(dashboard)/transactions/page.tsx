@@ -76,6 +76,7 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary } from '@/types'
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
+import { fetchMigrationCoverageEnd } from '@/lib/transactions/migration-coverage'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
 import { isWithinBounds, resolvePeriodBounds } from '@/lib/transactions/period-filter'
@@ -560,10 +561,13 @@ export default function TransactionsPage() {
   // "Kör matchning igen" in the review surface.
   const [rerunningMatch, setRerunningMatch] = useState(false)
 
-  // End of the company's completed SIE-import coverage (latest
-  // fiscal_year_end). Drives the quiet "från perioden före din migrering"
-  // marker on inbox rows: period-based on purpose, it labels which period a
-  // row belongs to, it never suggests a sync skip date (that was #917).
+  // End of the company's SIE-migration data coverage (latest imported
+  // voucher date, see lib/transactions/migration-coverage.ts). Drives the
+  // quiet "från perioden före din migrering" marker on inbox rows: date-based
+  // on purpose, it labels rows the imported bokföring should already cover,
+  // it never suggests a sync skip date (that was #917). Not fiscal_year_end:
+  // for a mid-year migration that is a future date and the marker fired on
+  // every new transaction until New Year.
   const [sieCoverageEnd, setSieCoverageEnd] = useState<string | null>(null)
   useEffect(() => {
     if (!companyId) {
@@ -572,17 +576,9 @@ export default function TransactionsPage() {
     }
     let cancelled = false
     ;(async () => {
-      const { data } = await supabase
-        .from('sie_imports')
-        .select('fiscal_year_end')
-        .eq('company_id', companyId)
-        .eq('status', 'completed')
-        .not('fiscal_year_end', 'is', null)
-        .order('fiscal_year_end', { ascending: false })
-        .limit(1)
-        .maybeSingle()
+      const coverageEnd = await fetchMigrationCoverageEnd(supabase, companyId)
       if (!cancelled) {
-        setSieCoverageEnd((data as { fiscal_year_end?: string } | null)?.fiscal_year_end || null)
+        setSieCoverageEnd(coverageEnd)
       }
     })()
     return () => {

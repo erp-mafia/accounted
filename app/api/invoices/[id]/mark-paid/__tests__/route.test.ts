@@ -638,6 +638,132 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
   })
 
+  it('accepts the kontantmetoden ROT payment entry: the 1513 leg is not customer money', async () => {
+    // proposeCashLines' own prefill on a ROT invoice: total 124 000, 30 %
+    // deduction 37 200, remaining_amount stored net (86 800). Summing all
+    // debits (124 000) used to trip MATCH_AMOUNT_EXCEEDS_REMAINING by exactly
+    // the deduction, making every ROT/RUT cash invoice un-payable.
+    const invoice = makeInvoice({
+      id: 'inv-1',
+      status: 'sent',
+      subtotal: 99200,
+      vat_amount: 24800,
+      total: 124000,
+      deduction_total: 37200,
+      remaining_amount: 86800,
+    })
+
+    // Fetch invoice
+    enqueue({ data: invoice, error: null })
+    // Fetch company settings
+    enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+    // Update invoice status (CAS guard: returns matched row)
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
+
+    mockFindFiscalPeriod.mockResolvedValue('fp-1')
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-rot' })
+
+    const rotCashLines = [
+      { account_number: '1930', debit_amount: 86800, credit_amount: 0 },
+      { account_number: '1513', debit_amount: 37200, credit_amount: 0 },
+      { account_number: '3001', debit_amount: 0, credit_amount: 99200 },
+      { account_number: '2611', debit_amount: 0, credit_amount: 24800 },
+    ]
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+      method: 'POST',
+      body: { payment_date: '2026-08-29', lines: rotCashLines },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{
+      success: boolean
+      status: string
+      paid_amount: number
+      remaining_amount: number
+      journal_entry_id: string | null
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.status).toBe('paid')
+    expect(body.paid_amount).toBe(86800)
+    expect(body.remaining_amount).toBe(0)
+    expect(body.journal_entry_id).toBe('je-rot')
+    // The verifikat still books the FULL entry including the 1513 leg.
+    expect(mockCreateJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ lines: rotCashLines }),
+    )
+  })
+
+  it('rejects the cash-shaped 1513 lines on a ROT invoice already booked at send', async () => {
+    // 1513 was already debited in the registration entry; a 1513 debit in the
+    // payment lines would double it and double-count revenue + VAT. The
+    // exclusion is gated off for booked invoices, so the gross sum (124 000)
+    // still trips the guard against the net remaining (86 800).
+    const invoice = makeInvoice({
+      id: 'inv-1',
+      status: 'sent',
+      total: 124000,
+      deduction_total: 37200,
+      remaining_amount: 86800,
+      journal_entry_id: 'je-registration',
+    })
+
+    enqueue({ data: invoice, error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+      method: 'POST',
+      body: {
+        lines: [
+          { account_number: '1930', debit_amount: 86800, credit_amount: 0 },
+          { account_number: '1513', debit_amount: 37200, credit_amount: 0 },
+          { account_number: '3001', debit_amount: 0, credit_amount: 99200 },
+          { account_number: '2611', debit_amount: 0, credit_amount: 24800 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect((body.error as unknown as { code: string }).code).toBe('MATCH_AMOUNT_EXCEEDS_REMAINING')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('still rejects when the bank leg alone overpays a ROT invoice', async () => {
+    const invoice = makeInvoice({
+      id: 'inv-1',
+      status: 'sent',
+      total: 124000,
+      deduction_total: 37200,
+      remaining_amount: 86800,
+    })
+
+    enqueue({ data: invoice, error: null })
+
+    // Bank 90 000 exceeds the 86 800 customer share even after the 1513
+    // exclusion: the overpayment guard must still fire.
+    const overpayLines = [
+      { account_number: '1930', debit_amount: 90000, credit_amount: 0 },
+      { account_number: '1513', debit_amount: 37200, credit_amount: 0 },
+      { account_number: '3001', debit_amount: 0, credit_amount: 127200 },
+    ]
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+      method: 'POST',
+      body: { lines: overpayLines },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect((body.error as unknown as { code: string }).code).toBe('MATCH_AMOUNT_EXCEEDS_REMAINING')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('surfaces ocr_exact match_reason when tx reference normalizes to invoice_number', async () => {
     const customer = makeCustomer()
     const invoice = makeInvoice({

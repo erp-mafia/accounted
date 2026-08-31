@@ -525,6 +525,28 @@ describe('updateSession redirect destinations', () => {
       expect(locationOf(await run('/sandbox?next=%2Fsettings%2Ftax'))).toBe(`${ORIGIN}/`)
       expect(locationOf(await run('/auth/callback?next=%2Fsettings%2Ftax'))).toBe(`${ORIGIN}/`)
     })
+
+    // Email-change confirmation links are usually clicked while still logged
+    // in (the change starts in settings), and the completing verify mints a
+    // session before the status page renders. Bouncing either request off the
+    // /auth prefix silently swallowed the confirmation.
+    it('lets an authenticated email-change confirmation reach the callback', async () => {
+      const response = await run('/auth/callback?token_hash=abc&type=email_change')
+      expect(response.status).not.toBe(307)
+      expect(locationOf(response)).toBeNull()
+    })
+
+    it('lets an authenticated user see the email-change status page', async () => {
+      const response = await run('/auth/email-change?status=done')
+      expect(response.status).not.toBe(307)
+      expect(locationOf(response)).toBeNull()
+    })
+
+    it('still bounces other authenticated token types off the callback', async () => {
+      expect(locationOf(await run('/auth/callback?token_hash=abc&type=signup'))).toBe(
+        `${ORIGIN}/`,
+      )
+    })
   })
 
   // ── Sites 2 and 3: MFA step-up and forced enrollment ──────────────────
