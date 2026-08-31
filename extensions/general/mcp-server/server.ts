@@ -4576,11 +4576,6 @@ export const tools: McpTool[] = [
           description:
             'Digest of how this company books things: top-5 counterparty + top-3 supplier patterns, each with an evidence block (seen_12m, agree, share, last_booked) and the rolling window it was computed over. Evidence is historical frequency, NOT permission to auto-book: weigh seen count AND recency, never a ratio alone. OMITTED when not computable. Field-by-field detail, plus account usage, explicit rules, VAT profile and conventions, is in the Accounted://ledger/context resource.',
         },
-        unattended_commit_limit: {
-          type: ['number', 'null'],
-          description:
-            'SEK ceiling this credential may commit unattended; null = none. Over it the commit is refused, the operation stays pending for a human, and splitting the booking to fit is a BFL 5 kap. 6 § violation.',
-        },
         recommended_tools: {
           type: 'array',
           items: { type: 'object' },
@@ -4604,7 +4599,7 @@ export const tools: McpTool[] = [
             'Present only when a Skatteverket connection exists. Carries status ("active" or "needs_reconsent") and the grant detail behind it. needs_reconsent: only a person can fix it (BankID under Inställningar → Skatteverket); warn the user before starting SKV work.',
         },
       },
-      required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory', 'recommended_tools', 'unattended_commit_limit'],
+      required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory', 'recommended_tools'],
     },
     annotations: {
       readOnlyHint: true,
@@ -4612,7 +4607,7 @@ export const tools: McpTool[] = [
       idempotentHint: true,
       openWorldHint: false,
     },
-    async execute(_args, companyId, userId, supabase, actor) {
+    async execute(_args, companyId, userId, supabase) {
       // Dimension registry is best-effort and cheap: one indexed read, skipped
       // output when empty (most companies never register dimensions: lazy
       // seeding means zero rows until first use). Errors never block the
@@ -4919,11 +4914,7 @@ export const tools: McpTool[] = [
         ...(dimensionsBlock ? { dimensions: dimensionsBlock } : {}),
         ...(ledgerDigest ? { ledger_context: ledgerDigest } : {}),
         ...(skvConnection ? { skatteverket_connection: skvConnection } : {}),
-        // Approval authority for THIS credential. Always present, including as
-        // null, so an agent can branch on it without probing: discovering the
-        // ceiling by hitting a 403 mid-booking wastes a staged verifikat and a
-        // round-trip.
-        unattended_commit_limit: actor?.unattendedCommitLimit ?? null,
+
         // Static per-workflow loadouts (issue #1098): lets a deferred-loading
         // harness batch-load a whole workflow cluster in one call. Validated
         // against the tool registry at module init (assertRecommendedLoadoutsValid).
