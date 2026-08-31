@@ -155,6 +155,13 @@ export async function validateApiKey(
       apiKeyName?: string
       scopes: ApiKeyScope[]
       mode: ApiKeyMode
+      /**
+       * SEK ceiling on what this key may commit WITHOUT human approval, or
+       * null for no limit. Null is the only representation of "no limit": a
+       * stored 0 is forbidden by CHECK, because reading absence as 0 would
+       * block every commit for the key.
+       */
+      unattendedCommitLimit: number | null
     }
   | { error: string; status: number }
 > {
@@ -199,7 +206,28 @@ export async function validateApiKey(
     // migration that adds it to the RPC return. Default to 'live' so existing
     // keys behave unchanged.
     mode: (row.mode === 'test' ? 'test' : 'live') as ApiKeyMode,
+    // PostgREST returns numeric as a STRING, so parse explicitly rather than
+    // relying on `>` coercion at the comparison site. Anything unparseable,
+    // absent (a DB that has not run the migration), or non-positive becomes
+    // null, i.e. no limit: this control must fail OPEN. Blocking a company's
+    // month-end because a defence-in-depth read blipped would be far worse
+    // than not enforcing.
+    unattendedCommitLimit: parseUnattendedCommitLimit(row.unattended_commit_limit),
   }
+}
+
+/**
+ * Null unless the value is a finite number strictly greater than zero.
+ *
+ * Written NULL-first on purpose. Never `?? 0`, never `|| 0`, never
+ * `Number(undefined)` (which yields NaN, and NaN comparisons are false, so it
+ * would silently disable the control rather than loudly fail).
+ */
+function parseUnattendedCommitLimit(value: unknown): number | null {
+  if (value === null || value === undefined) return null
+  const parsed = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return null
+  return parsed
 }
 
 /**
