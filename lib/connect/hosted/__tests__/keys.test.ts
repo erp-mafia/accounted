@@ -15,6 +15,7 @@ const ROW = {
   status: 'active',
   current_period_end: '2027-01-01T00:00:00.000Z',
   rate_limited: false,
+  limits: { bank_connections_per_company: 2, skv_connections_per_company: 1, sync_min_interval_s: 3600 },
 }
 
 describe('connector key primitives', () => {
@@ -56,8 +57,15 @@ describe('validateConnectorKey', () => {
         scopes: ['bank_sync', 'skatteverket'],
         status: 'active',
         currentPeriodEnd: '2027-01-01T00:00:00.000Z',
+        limits: { bank_connections_per_company: 2, skv_connections_per_company: 1, sync_min_interval_s: 3600 },
       },
     })
+  })
+
+  it('fills default limits when the RPC returns null limits', async () => {
+    const { key } = generateConnectorKey()
+    const result = await validateConnectorKey(key, supabaseWithRpc({ data: [{ ...ROW, limits: null }] }).supabase)
+    expect(result.ok && result.key.limits).toEqual({ bank_connections_per_company: 1, skv_connections_per_company: 1, sync_min_interval_s: 0 })
   })
 
   it('maps no row (unknown/revoked) to 401, but an RPC error to 503', async () => {

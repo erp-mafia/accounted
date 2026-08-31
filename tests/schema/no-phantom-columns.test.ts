@@ -136,7 +136,10 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // bulk write); the columns it writes are the same five the Stripe grant writer
 // uses literally, so the literal guard already covers them. Merged with main
 // at 389: 390.
-const UNRESOLVED_CEILING = 390
+// 2026-08-31: +1 for lib/connect/hosted/ledger.ts countHeldConnections, whose
+// .or() filter interpolates a computed timestamp (fresh-pending quota window);
+// the columns it references (status, created_at) are literals in the string.
+const UNRESOLVED_CEILING = 391
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change
