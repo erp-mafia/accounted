@@ -173,7 +173,9 @@ on top; its accuracy is tracked separately by the backtest scripts).
   for every model. Provider-billed amounts stay in the raw records but are
   never compared: OpenAI's automatic prompt caching via OpenRouter made one
   model look ~6x cheaper than its list price in v1.2, which is a deployment
-  property, not a model property. Surfaced by founder review; fixed in v1.3.
+  property, not a model property. Prices are each vendor's first-party API
+  list price at standard tier (no cache, batch or promo discounts); sources
+  in `src/models.ts` notes. Surfaced by founder review; fixed in v1.3.
 - **End state, not transcript.** The ledger-agent suite never grades prose.
   The seeded Postgres runs the production schema with every migration
   applied; balance, immutability, voucher sequencing and period locks are the
