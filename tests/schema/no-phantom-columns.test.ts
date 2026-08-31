@@ -131,7 +131,15 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
  * combination is not viable. The field set is pinned by validatePatch and
  * covered by payroll-executors.test.ts; both selects around it are literals.
  */
-const UNRESOLVED_CEILING = 389
+// 2026-08-20: +1 for lib/connect/instance/sync.ts, whose capability_grants
+// upsert is a per-company x per-scope row array built at runtime (one chunked
+// bulk write); the columns it writes are the same five the Stripe grant writer
+// uses literally, so the literal guard already covers them. Merged with main
+// at 389: 390.
+// 2026-08-31: +1 for lib/connect/hosted/ledger.ts countHeldConnections, whose
+// .or() filter interpolates a computed timestamp (fresh-pending quota window);
+// the columns it references (status, created_at) are literals in the string.
+const UNRESOLVED_CEILING = 391
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

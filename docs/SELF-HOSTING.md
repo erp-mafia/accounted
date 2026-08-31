@@ -337,6 +337,40 @@ AUTH_SIGNUPS_DISABLED=true
 
 Set this when you have turned public signup off in GoTrue (`disable_signup`). The invite route then provisions the invitee's account through the auth admin API before writing the invitation, and GoTrue mails its own set-password link via the Supabase SMTP settings; the in-app accept link is still returned to the inviter.
 
+### Connector subscription (self-hosted instances)
+
+Everything a self-hosted instance runs itself is free (AGPL). Four capabilities depend on services only Accounted operates and are therefore gated on a self-host: bank sync (our PSD2/AISP credentials), Skatteverket API submission and skattekonto sync (our API client registration), company lookup (TIC) and migration from Fortnox/Visma/Bokio/Björn Lundén (the migration gateway). A **connector key** unlocks them for every company on the instance; it is priced per active company at parity with hosted and is issued manually by Accounted for now (self-serve later).
+
+```bash
+GNUBOK_CONNECTOR_KEY=gnubok_ck_...            # issued by Accounted, shown once
+# GNUBOK_CONNECT_URL=https://app.gnubok.se   # default: the hosted connector service
+```
+
+The cron sidecar calls `/api/connector/sync/cron` hourly (it is listed in `docker/crontab.self-hosted` only): the instance reports its active company count, the hosted service answers with the key's status and scopes, and the instance writes `capability_grants` rows with `source = 'connector'` that expire after **72 hours** (or three days past the paid period, whichever is sooner). Those rows are the offline cache: a hosted outage shorter than that changes nothing, a revoked or lapsed key freezes the connector capabilities within days, and nothing in the instance phones home for permission to run the bookkeeping. An instance without a key answers `not_configured` and stays unaffected. To run the sync once by hand after pasting the key:
+
+```bash
+curl -sf -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/connector/sync/cron
+```
+
+The bank proxy (`app.gnubok.se/api/connect/bank/*`) is live server-side with this release; the Skatteverket broker and the instance-side client wiring that makes the proxies carry traffic ship in following releases. Until that wiring lands, the key is validated and the grants are written, nothing more.
+
+### Connector subscription (self-hosted instances)
+
+Everything a self-hosted instance runs itself is free (AGPL). Four capabilities depend on services only Accounted operates and are therefore gated on a self-host: bank sync (our PSD2/AISP credentials), Skatteverket API submission and skattekonto sync (our API client registration), company lookup (TIC) and migration from Fortnox/Visma/Bokio/Björn Lundén (the migration gateway). A **connector key** unlocks them for every company on the instance; it is priced per active company at parity with hosted and is issued manually by Accounted for now (self-serve later).
+
+```bash
+GNUBOK_CONNECTOR_KEY=gnubok_ck_...            # issued by Accounted, shown once
+# GNUBOK_CONNECT_URL=https://app.gnubok.se   # default: the hosted connector service
+```
+
+The cron sidecar calls `/api/connector/sync/cron` hourly (it is listed in `docker/crontab.self-hosted` only): the instance reports its active company count, the hosted service answers with the key's status and scopes, and the instance writes `capability_grants` rows with `source = 'connector'` that expire after **72 hours** (or three days past the paid period, whichever is sooner). Those rows are the offline cache: a hosted outage shorter than that changes nothing, a revoked or lapsed key freezes the connector capabilities within days, and nothing in the instance phones home for permission to run the bookkeeping. An instance without a key answers `not_configured` and stays unaffected. To run the sync once by hand after pasting the key:
+
+```bash
+curl -sf -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/connector/sync/cron
+```
+
+The **bank connector** proxy is live (`app.gnubok.se/api/connect/bank/*`): with `bank_sync` in your key's scopes, the instance connects a bank through Arcim's PSD2 credentials while the bank session id and all transaction data stay in the instance's own database. Skatteverket, company lookup and migration through the connector ship in following releases; until each lands, a key is validated and its grants are written, and the unshipped services stay unconfigured.
+
 ### Push Notifications
 
 ```bash
