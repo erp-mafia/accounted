@@ -175,6 +175,29 @@ describe('PATCH /items/:id/fields', () => {
     expect(merged.totalSource).toBe('prominent')
   })
 
+  it('returns 409 when the row changed under the edit (optimistic concurrency)', async () => {
+    // The handler is read-merge-write over the whole jsonb blob; a racing
+    // autosave would otherwise restore stale fields (including a
+    // totalSource stamp a concurrent TOTALT edit had cleared). The update is
+    // conditional on updated_at; zero rows matched surfaces as a 409.
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({
+      data: {
+        id: 'item-1',
+        extracted_data: fullExtraction(),
+        created_supplier_invoice_id: null,
+        updated_at: '2026-08-31T09:00:00Z',
+      },
+    })
+    mock.enqueue({ data: null })
+
+    const ctx = buildCtx(mock.supabase)
+    const res = await fieldsRoute.handler(makeReq({ totals: { total: 2500 } }), ctx)
+    expect(res.status).toBe(409)
+    const { body } = await parseJsonResponse<{ error: string }>(res)
+    expect(body.error).toContain('samtidigt')
+  })
+
   it('refuses once the item became a supplier invoice', async () => {
     const mock = createQueuedMockSupabase()
     mock.enqueue({

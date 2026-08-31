@@ -284,7 +284,10 @@ function hasAnyExtractedField(data: InvoiceExtractionResult | null): boolean {
     inv?.invoiceNumber || inv?.invoiceDate || inv?.dueDate || inv?.paymentReference ||
     t?.subtotal != null || t?.vatAmount != null || t?.total != null ||
     (data.lineItems?.length ?? 0) > 0 || (data.vatBreakdown?.length ?? 0) > 0 ||
-    (data.prominentAmounts?.length ?? 0) > 0
+    // Same meaningful-amount predicate as the Belopp row render filter: a
+    // zero-only prominentAmounts list must not count as "found something"
+    // and suppress the retry / upgrade affordances.
+    (data.prominentAmounts ?? []).some((a) => Number.isFinite(a.amount) && a.amount !== 0)
   )
 }
 
