@@ -191,6 +191,60 @@ describe('webshop_orders financial freeze', () => {
     expect(ok.rowCount).toBe(1)
   })
 
+  it('freezes financial fields while manually marked as booked; unmark restores mutability (#1879, freeze v3)', async () => {
+    const { userId, companyId } = await seedCompany()
+    const rowId = await insertOrderRow({ companyId, userId })
+
+    // Mark as booked outside the integration (what the mark-booked route does).
+    const marked = await getPool().query(
+      `UPDATE public.webshop_orders
+         SET manually_booked_at = now(), manually_booked_by = $2
+       WHERE id = $1`,
+      [rowId, userId],
+    )
+    expect(marked.rowCount).toBe(1)
+
+    // Financial fields are frozen at the DB level while marked.
+    await expect(
+      getPool().query(
+        `UPDATE public.webshop_orders SET total = 600.00 WHERE id = $1`,
+        [rowId],
+      ),
+    ).rejects.toThrow(/financial fields are frozen/i)
+    await expect(
+      getPool().query(
+        `UPDATE public.webshop_orders SET line_items = '[{"name":"x"}]'::jsonb WHERE id = $1`,
+        [rowId],
+      ),
+    ).rejects.toThrow(/financial fields are frozen/i)
+
+    // Safe sync fields still pass (drift flagging keeps working).
+    const safe = await getPool().query(
+      `UPDATE public.webshop_orders
+         SET status = 'completed', remote_changed_after_freeze = true
+       WHERE id = $1`,
+      [rowId],
+    )
+    expect(safe.rowCount).toBe(1)
+
+    // Unmark (the DELETE route) is the escape hatch...
+    const unmark = await getPool().query(
+      `UPDATE public.webshop_orders
+         SET manually_booked_at = NULL, manually_booked_by = NULL,
+             manually_booked_journal_entry_id = NULL
+       WHERE id = $1`,
+      [rowId],
+    )
+    expect(unmark.rowCount).toBe(1)
+
+    // ...after which the row is fully mutable again.
+    const thawed = await getPool().query(
+      `UPDATE public.webshop_orders SET total = 600.00, total_sek = 600.00 WHERE id = $1`,
+      [rowId],
+    )
+    expect(thawed.rowCount).toBe(1)
+  })
+
   it('rejects clearing the journal link once the entry is posted', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const postedId = await insertDraftJournalEntry({

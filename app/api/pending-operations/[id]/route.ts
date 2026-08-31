@@ -176,6 +176,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
         companyId,
         (tx as Transaction).cash_account_id,
         log,
+        (tx as Transaction).currency,
       )
       mapping = applySettlementAccount(mapping, settlementAccount)
     } catch (err) {

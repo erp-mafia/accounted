@@ -2,7 +2,7 @@
 
 # Periods and registers endpoints
 
-Fiscal periods and their lock/close/year-end lifecycle (async operations), the BAS chart of accounts, cost-center/project dimensions, and the compliance pre-flight check.
+Fiscal periods and their lock/close/year-end lifecycle (async operations), the BAS chart of accounts, cost-center/project dimensions, the compliance pre-flight check, and reading filed VAT declarations (and beslut) from Skatteverket.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -38,6 +38,28 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "accounts": [
+      {
+        "account_number": "1930",
+        "account_name": "Företagskonto",
+        "account_class": 1,
+        "account_type": "asset",
+        "normal_balance": "debit",
+        "is_active": true
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -85,6 +107,35 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "type": "year_end_readiness",
+    "ready": false,
+    "findings": [
+      {
+        "severity": "blocker",
+        "code": "YEAR_END_DRAFTS_PRESENT",
+        "message": "3 draft journal entries must be committed or cancelled before year-end.",
+        "details": {
+          "draft_count": 3
+        }
+      }
+    ],
+    "summary": "Period is NOT ready (1 blocker(s)).",
+    "generated_at": "2026-05-12T14:00:00Z",
+    "params": {
+      "fiscal_period_id": "a8f1…"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/dimensions`
@@ -123,6 +174,39 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "dimensions": [
+      {
+        "id": "0e9c…",
+        "sie_dim_no": 1,
+        "name": "Kostnadsställe",
+        "resets_annually": true,
+        "is_system": true,
+        "is_active": true,
+        "sort_order": 10,
+        "values": [
+          {
+            "id": "a8f1…",
+            "code": "BUTIK",
+            "name": "Butiken",
+            "is_active": true,
+            "start_date": null,
+            "end_date": null
+          }
+        ]
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/dimensions/{id}/values`
@@ -151,6 +235,14 @@ Request body:
 { code: string, name: string, is_active?: boolean, start_date?: string, end_date?: string }
 ```
 
+Example request:
+```json
+{
+  "code": "P001",
+  "name": "Villa Almgren tak"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -170,6 +262,26 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "dimension_id": "a8f1…",
+    "code": "P001",
+    "name": "Villa Almgren tak",
+    "is_active": true,
+    "start_date": null,
+    "end_date": null,
+    "created_at": "2026-07-02T12:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -203,6 +315,14 @@ Request body:
 { name?: string, is_active?: boolean, start_date?: string, end_date?: string }
 ```
 
+Example request:
+```json
+{
+  "end_date": "2026-08-31",
+  "is_active": false
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -221,6 +341,25 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "dimension_id": "a8f1…",
+    "code": "P001",
+    "name": "Villa Almgren tak",
+    "is_active": false,
+    "start_date": null,
+    "end_date": "2026-08-31"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -262,6 +401,20 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "deleted": true,
+    "id": "0e9c…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/fiscal-periods`
@@ -295,6 +448,28 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "fiscal_periods": [
+      {
+        "id": "fp_2026",
+        "name": "Räkenskapsår 2026",
+        "period_start": "2026-01-01",
+        "period_end": "2026-12-31",
+        "is_closed": false,
+        "locked_at": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -335,6 +510,21 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "a8f1…",
+    "is_closed": true,
+    "closed_at": "2026-05-12T14:30:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/currency-revaluation`
@@ -362,6 +552,13 @@ Request body:
 { as_of_date?: string }
 ```
 
+Example request:
+```json
+{
+  "as_of_date": "2026-12-31"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -378,6 +575,23 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "operation_id": "0e9c…",
+    "type": "fiscal_periods.currency_revaluation",
+    "status": "succeeded",
+    "poll_url": "/api/v1/operations/0e9c…",
+    "webhook_event": "operation.completed"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -418,6 +632,21 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "a8f1…",
+    "locked_at": "2026-05-12T14:00:00Z",
+    "is_closed": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/opening-balances`
@@ -445,6 +674,13 @@ Request body:
 { next_period_id: string }
 ```
 
+Example request:
+```json
+{
+  "next_period_id": "7b3a…"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -455,6 +691,22 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "opening_entry_id": "4d2a…",
+    "voucher_series": "A",
+    "voucher_number": 1,
+    "next_period_id": "7b3a…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -497,6 +749,77 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "operation_id": "0e9c…",
+    "type": "fiscal_periods.year_end",
+    "status": "succeeded",
+    "poll_url": "/api/v1/operations/0e9c…",
+    "webhook_event": "operation.completed"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/skatteverket/vat-declarations`
+
+**Read a filed momsdeklaration (submitted and/or decided) from Skatteverket.**
+`scope:compliance:read · risk:low · idempotent`
+
+Fetches the momsdeklaration for one period as Skatteverket has it on file: `submitted` is the declaration as filed (SKV /inlamnat), `decided` is Skatteverket's beslut (SKV /beslutat). Either section is null when nothing is on file for the period (or when excluded via ?state=). Query params: period_type (monthly|quarterly|yearly), year, period (1-12 monthly, 1-4 quarterly, 1 yearly), optional state (submitted|decided|both, default both). Requires the company to have an active Skatteverket connection (any member's BankID connection, or a verified ombud grant). Live read against Skatteverket, not a cached copy.
+
+**Use when:** You want to verify what was actually filed for a VAT period, compare a period against last year's filed declaration, or check whether Skatteverket has decided a period.
+**Do not use for:** Computing the declaration from the books (use the VAT report), or filing: submission is a separate BankID-signed flow.
+
+**Pitfalls:**
+- This is a live Skatteverket read: it fails with SKATTEVERKET_NOT_CONNECTED (401) when the company has neither a member's BankID connection (made under Installningar) nor a verified ombud grant, and the response reflects SKV's state, not the books. Personal BankID sessions expire after ~1 hour by design, so an expired connection is normal: ask the user to reconnect; only a person can, so do not retry until they confirm.
+- submitted=null and decided=null with HTTP 200 means "nothing on file for the period": it is not an error.
+- A submitted declaration can lack a beslut for days: poll decided separately rather than assuming both appear together.
+- redovisningsperiod is SKV's YYYYMM format (the period's LAST month): quarterly period 1 is 03, not 01.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: { redovisare: string, redovisningsperiod: string, submitted?: unknown, decided?: unknown },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "redovisare": "165560000167",
+    "redovisningsperiod": "202603",
+    "submitted": {
+      "mervardesskattTillfalle": "2026-04-10"
+    },
+    "decided": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```

@@ -194,6 +194,7 @@ describe('PATCH /api/pending-operations/[id]', () => {
       },
     })
     enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({
       data: {
         id: 'op-1',
@@ -247,6 +248,7 @@ describe('PATCH /api/pending-operations/[id]', () => {
     })
     enqueue({ data: { id: 'tx-1', company_id: 'company-1', amount: -500, currency: 'SEK' } })
     enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: { id: 'op-1', params: {}, preview_data: {}, title: '', status: 'pending' } })
 
     const mapping = {
@@ -338,6 +340,7 @@ describe('PATCH /api/pending-operations/[id]', () => {
     })
     enqueue({ data: { id: 'tx-1', company_id: 'company-1', amount: -415.8, currency: 'SEK' } })
     enqueue({ data: { entity_type: 'enskild_firma' } })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: { id: 'op-1', params: {}, preview_data: {}, title: '', status: 'pending' } })
 
     const res = await PATCH(
@@ -381,6 +384,7 @@ describe('PATCH /api/pending-operations/[id]', () => {
     })
     enqueue({ data: { id: 'tx-1', company_id: 'company-1', amount: -415.8, currency: 'SEK' } })
     enqueue({ data: { entity_type: 'enskild_firma' } })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: { id: 'op-1', params: {}, preview_data: {}, title: '', status: 'pending' } })
 
     const res = await PATCH(
@@ -473,6 +477,7 @@ describe('PATCH /api/pending-operations/[id]', () => {
     })
     enqueue({ data: { id: 'tx-1', amount: -100, currency: 'SEK' } })
     enqueue({ data: { entity_type: 'enskild_firma' } })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     mappingMock.mockReturnValueOnce({
       debit_account: null,
       credit_account: null,

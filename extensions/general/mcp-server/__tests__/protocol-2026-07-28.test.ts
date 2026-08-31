@@ -124,7 +124,9 @@ describe('MCP spec revision 2026-07-28', () => {
     it('decorates results for stateless clients: resultType, serverInfo, freshness', async () => {
       const { result } = await readBody(mcpRequest('tools/list', { _meta: STATELESS_META }))
       expect(result?.resultType).toBe('complete')
-      expect(result?.ttlMs).toBe(3_600_000)
+      // 5 min, not 1 h: the catalog and widgets change with every deploy and a
+      // long client cache made freshly shipped tools flap in and out (E2E #7/#8).
+      expect(result?.ttlMs).toBe(300_000)
       expect(result?.cacheScope).toBe('private')
       const meta = result?._meta as Record<string, Record<string, unknown>>
       expect(meta['io.modelcontextprotocol/serverInfo'].name).toBe('gnubok')
@@ -291,7 +293,9 @@ describe('MCP spec revision 2026-07-28', () => {
     it('adds freshness hints to prompts/list for stateless clients', async () => {
       const { result } = await readBody(mcpRequest('prompts/list', { _meta: STATELESS_META }))
       expect(result?.resultType).toBe('complete')
-      expect(result?.ttlMs).toBe(3_600_000)
+      // 5 min, not 1 h: the catalog and widgets change with every deploy and a
+      // long client cache made freshly shipped tools flap in and out (E2E #7/#8).
+      expect(result?.ttlMs).toBe(300_000)
     })
 
     it('keeps resource-not-found on -32602 (invalid params)', async () => {

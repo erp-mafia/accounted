@@ -19,6 +19,8 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { commitEntry, getNextVoucherNumber } from '@/lib/bookkeeping/engine'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { roundOre } from '@/lib/money'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 
 const JE_RESPONSE_COLUMNS =
@@ -47,6 +49,7 @@ registerEndpoint({
     'Idempotency-Key is mandatory.',
     'Posted entries cannot be edited. Plan the lines carefully or call /correct after commit if you need to change them.',
     'Voucher numbers are sequential within (fiscal_period_id, voucher_series). A commit failure (e.g. period locked between draft creation and commit) does not advance the sequence.',
+    'If the key has an unattended commit limit, an entry above it returns 403 UNATTENDED_COMMIT_LIMIT_EXCEEDED and stays a draft for a human to commit. Do not split it into smaller entries: one affärshändelse is one verifikat (BFL 5 kap. 6 §).',
   ],
   example: {
     response: {
@@ -93,6 +96,59 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         requestId: ctx.requestId,
         details: { field: 'status', message: 'Only draft entries can be committed.', current_status: typed.status },
       })
+    }
+
+    // ── Approval-authority ceiling.
+    //
+    //    The second of the two places an API key posts money (the first is
+    //    commitPendingOperation, for MCP). Placed after the draft-exists and
+    //    status checks and BEFORE commitEntry, so a refusal leaves the draft a
+    //    draft: nothing is destroyed, and the voucher sequence does not move
+    //    (BFL 5 kap. 7 §). The human commits the same draft from the app.
+    //
+    //    Runs before the dry-run branch on purpose. A dry run that reports
+    //    "would post voucher 143" for a commit the key is not allowed to make
+    //    is a lie the agent will act on.
+    //
+    //    Known and accepted: the line sum is read here and the entry is
+    //    committed below, so a concurrent write to the draft's lines between
+    //    the two can post more than the ceiling. Closing that window means
+    //    enforcing inside commit_journal_entry, where a RAISE is swallowed
+    //    into a retryable 500 and, on the MCP path, destroys the staged
+    //    operation. The trade is deliberate and consistent with what this
+    //    control claims to be: a blast-radius cap on a looping or
+    //    prompt-injected agent, NOT a security boundary. A per-entry ceiling
+    //    is already defeated by splitting one entry into several, which needs
+    //    no race at all. The primitive that actually bounds exposure is a
+    //    cumulative rolling-window limit, tracked separately.
+    if (ctx.unattendedCommitLimit !== null) {
+      const lines = await fetchAllRows<{ id: string; debit_amount: number | null }>(
+        ({ from, to }) =>
+          ctx.supabase
+            .from('journal_entry_lines')
+            .select('id, debit_amount')
+            .eq('journal_entry_id', entryId)
+            .order('id')
+            .range(from, to),
+        // The sum is money, so pagination correctness is not optional: a
+        // regressed order would double-count a line and refuse a legitimate
+        // commit. fetch-all.ts documents dedupeBy for exactly this case.
+        { dedupeBy: (r) => r.id },
+      )
+      // Debits equal credits on any entry that can be committed (the balance
+      // trigger enforces it), so the debit side alone is the entry's amount.
+      const attempted = roundOre(lines.reduce((sum, l) => sum + (l.debit_amount ?? 0), 0))
+      if (attempted > ctx.unattendedCommitLimit) {
+        return v1ErrorResponseFromCode('UNATTENDED_COMMIT_LIMIT_EXCEEDED', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            attempted,
+            limit: ctx.unattendedCommitLimit,
+            journal_entry_id: entryId,
+            entry_status: 'draft',
+          },
+        })
+      }
     }
 
     if (ctx.dryRun) {

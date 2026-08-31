@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
 import {
   extractInvoiceFields,
   extractJsonObject,
+  stripOwnCompanyAsSupplier,
+  emptyResult,
 } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 
 // Mock the Bedrock SDK so tests drive the JSON parser without
@@ -120,6 +122,107 @@ describe('extractInvoiceFields', () => {
     expect(data.vatBreakdown).toHaveLength(1)
     expect(data.lineItems).toHaveLength(1)
     expect(data.confidence).toBe(1)
+  })
+
+  it('promotes a single prominent amount into the editable total (bankintyg/avtal)', async () => {
+    // Zero amounts are noise ("Totalt månadspris: 0 kr"), so this document
+    // still has exactly one meaningful figure and it becomes TOTALT.
+    mockCreate.mockReturnValueOnce(
+      aiResponse({
+        ...VALID_RESULT,
+        documentKind: 'other',
+        supplier: { ...VALID_RESULT.supplier, name: 'SEB' },
+        invoice: { ...VALID_RESULT.invoice, invoiceNumber: null, currency: 'SEK' },
+        lineItems: [],
+        totals: { subtotal: null, vatAmount: null, total: null },
+        vatBreakdown: [],
+        prominentAmounts: [
+          { amount: 0, label: 'Totalt månadspris' },
+          { amount: 2500, label: 'Anslutnings-/Engångspris' },
+        ],
+      })
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'affarsavtal.pdf',
+    })
+    expect(data.totals.total).toBe(2500)
+    expect(data.totalSource).toBe('prominent')
+    // The source list is preserved: matching demotes the promoted total back
+    // through it, and re-extraction stays idempotent.
+    expect(data.prominentAmounts).toEqual([
+      { amount: 0, label: 'Totalt månadspris' },
+      { amount: 2500, label: 'Anslutnings-/Engångspris' },
+    ])
+  })
+
+  it('does not promote when the document shows several distinct amounts', async () => {
+    mockCreate.mockReturnValueOnce(
+      aiResponse({
+        ...VALID_RESULT,
+        documentKind: 'government_letter',
+        lineItems: [],
+        totals: { subtotal: null, vatAmount: null, total: null },
+        vatBreakdown: [],
+        prominentAmounts: [
+          { amount: 4568, label: 'Arbetsgivaravgift' },
+          { amount: 8151, label: 'Skatt' },
+        ],
+      })
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'agi-besked.pdf',
+    })
+    expect(data.totals.total).toBeNull()
+    expect(data.totalSource).toBeUndefined()
+  })
+
+  it('never promotes on invoices or receipts', async () => {
+    // A receipt whose total was unreadable must not have a stray printed
+    // figure laundered into its total.
+    mockCreate.mockReturnValueOnce(
+      aiResponse({
+        ...VALID_RESULT,
+        documentKind: 'receipt',
+        totals: { subtotal: null, vatAmount: null, total: null },
+        prominentAmounts: [{ amount: 999, label: 'Pris' }],
+      })
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'kvitto.pdf',
+    })
+    expect(data.totals.total).toBeNull()
+    expect(data.totalSource).toBeUndefined()
+  })
+
+  it('degrades a hallucinated prominentAmounts shape to an empty list, not a parse failure', async () => {
+    mockCreate.mockReturnValueOnce(
+      aiResponse({ ...VALID_RESULT, prominentAmounts: [{ amount: 'tjugofemtusen' }] })
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'f.pdf',
+    })
+    // The rest of the document still parses.
+    expect(data.totals.total).toBe(6.25)
+    expect(data.prominentAmounts).toEqual([])
+  })
+
+  it('validates a cached raw output from before prominentAmounts existed', async () => {
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'f.pdf',
+    })
+    expect(data.totals.total).toBe(6.25)
+    expect(data.prominentAmounts).toBeUndefined()
   })
 
   it('sends image content for an image upload', async () => {
@@ -271,6 +374,80 @@ describe('extractInvoiceFields', () => {
     // passes through unchanged even though it contains valid JSON.
     const oversized = 'x'.repeat(300 * 1024) + JSON.stringify(VALID_RESULT)
     expect(extractJsonObject(oversized)).toBe(oversized)
+  })
+
+  // ── max_tokens truncation retry (2026-08) ──────────────────
+  // Line-item-heavy documents can blow the output cap; the truncated JSON
+  // used to parse to nothing and look like an unreadable document.
+
+  it('retries once with a doubled cap when the output was truncated at max_tokens', async () => {
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: JSON.stringify(VALID_RESULT).slice(0, 40) }],
+        stop_reason: 'max_tokens',
+      })
+      .mockReturnValueOnce(aiResponse(VALID_RESULT))
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'many-line-items.pdf',
+    })
+    expect(mockCreate).toHaveBeenCalledTimes(2)
+    const firstMax = mockCreate.mock.calls[0][0].max_tokens
+    expect(mockCreate.mock.calls[1][0].max_tokens).toBe(firstMax * 2)
+    expect(data.totals.total).toBe(6.25)
+    expect(data.confidence).toBe(1)
+  })
+
+  it('falls back to the empty result when the retry is truncated too', async () => {
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: '{"lineItems":[{"desc' }],
+        stop_reason: 'max_tokens',
+      })
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: '{"lineItems":[{"description":"still cut' }],
+        stop_reason: 'max_tokens',
+      })
+    const { data, rawText } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'many-line-items.pdf',
+    })
+    expect(mockCreate).toHaveBeenCalledTimes(2)
+    expect(rawText).toBe('{"lineItems":[{"description":"still cut')
+    expect(data.totals.total).toBeNull()
+    expect(data.confidence).toBe(0)
+  })
+
+  it('keeps the first response when the retry call itself throws', async () => {
+    // The truncated first answer happens to be complete valid JSON (the flag
+    // can fire on the last token); a throttled retry must not discard it.
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: JSON.stringify(VALID_RESULT) }],
+        stop_reason: 'max_tokens',
+      })
+      .mockRejectedValueOnce(new Error('throttled'))
+    const { data, rawText } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'many-line-items.pdf',
+    })
+    expect(mockCreate).toHaveBeenCalledTimes(2)
+    expect(rawText).toBe(JSON.stringify(VALID_RESULT))
+    expect(data.totals.total).toBe(6.25)
+    expect(data.confidence).toBe(1)
+  })
+
+  it('does not retry when the answer completed under the cap', async () => {
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+    await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'kvitto.pdf',
+    })
+    expect(mockCreate).toHaveBeenCalledTimes(1)
   })
 
   it('returns empty result when AI response fails schema validation', async () => {
@@ -435,6 +612,75 @@ describe('extractInvoiceFields', () => {
     expect(content[0].source.media_type).toBe('image/jpeg')
   })
 
+  // ── Own-company-as-supplier guard (2026-08) ──────────
+
+  it('strips the supplier when the model extracted the receiving company itself', async () => {
+    // A bank agreement's Kunduppgifter block: the model read the customer
+    // (the user's own company) as the issuer.
+    mockCreate.mockReturnValueOnce(
+      aiResponse({
+        ...VALID_RESULT,
+        documentKind: 'other',
+        supplier: {
+          name: 'Testbrand AB',
+          orgNumber: '5566778899',
+          vatNumber: null,
+          address: 'Provgatan 1, 111 11 Teststad',
+          bankgiro: null,
+          plusgiro: null,
+        },
+      })
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'affarsavtal.pdf',
+      ownCompany: { orgNumber: '556677-8899', name: 'Testbrand AB' },
+    })
+    expect(data.supplier).toEqual({
+      name: null,
+      orgNumber: null,
+      vatNumber: null,
+      address: null,
+      bankgiro: null,
+      plusgiro: null,
+    })
+    // Only the supplier block is affected.
+    expect(data.totals.total).toBe(6.25)
+  })
+
+  it('still strips the own company on the image-normalization path (photographed documents)', async () => {
+    // normalizeImageForExtraction rebuilds the input for HEIC/oversized
+    // photos; ownCompany must survive that rebuild or the guard is dead for
+    // exactly the phone-photo documents the fix targets.
+    sharpMock.mockImplementationOnce(() => workingSharpChain(Buffer.from('converted-jpeg')))
+    mockCreate.mockReturnValueOnce(
+      aiResponse({
+        ...VALID_RESULT,
+        supplier: { ...VALID_RESULT.supplier, name: 'Testbrand AB', orgNumber: '5566778899' },
+      })
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.alloc(5 * 1024 * 1024, 1),
+      mimeType: 'image/jpeg',
+      fileName: 'photo-of-avtal.jpg',
+      ownCompany: { orgNumber: '556677-8899', name: 'Testbrand AB' },
+    })
+    expect(data.supplier.name).toBeNull()
+    expect(data.supplier.orgNumber).toBeNull()
+  })
+
+  it('leaves a genuine supplier untouched when ownCompany is passed', async () => {
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'invoice.pdf',
+      ownCompany: { orgNumber: '556677-8899', name: 'Testbrand AB' },
+    })
+    expect(data.supplier.name).toBe('Anthropic, PBC')
+  })
+
   it('does not invoke sharp for normal-sized supported images', async () => {
     mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
     await extractInvoiceFields({
@@ -451,5 +697,130 @@ describe('extractInvoiceFields', () => {
     else delete process.env.AWS_ACCESS_KEY_ID
     if (ORIG_AWS_SECRET_ACCESS_KEY) process.env.AWS_SECRET_ACCESS_KEY = ORIG_AWS_SECRET_ACCESS_KEY
     else delete process.env.AWS_SECRET_ACCESS_KEY
+  })
+})
+
+describe('stripOwnCompanyAsSupplier', () => {
+  function withSupplier(supplier: Partial<ReturnType<typeof emptyResult>['supplier']>) {
+    const base = emptyResult()
+    return { ...base, supplier: { ...base.supplier, ...supplier } }
+  }
+  const strippedSupplier = {
+    name: null,
+    orgNumber: null,
+    vatNumber: null,
+    address: null,
+    bankgiro: null,
+    plusgiro: null,
+  }
+  const own = { orgNumber: '556677-8899', name: 'Testbrand AB' }
+
+  it('matches the org number across hyphen and 12-digit variants', () => {
+    for (const extracted of ['5566778899', '556677-8899', '165566778899', '16556677-8899']) {
+      const result = stripOwnCompanyAsSupplier(
+        withSupplier({ name: 'Något AB', orgNumber: extracted }),
+        own
+      )
+      expect(result.supplier, `orgNumber ${extracted}`).toEqual(strippedSupplier)
+    }
+  })
+
+  it('matches the derived Swedish VAT number (SE<orgnr>01)', () => {
+    // Both the full prefixed form and a bare digits form denote the same
+    // registration: digitsOf strips the SE prefix before comparing.
+    for (const vat of ['SE556677889901', '556677889901', 'SE 556677-8899 01']) {
+      const result = stripOwnCompanyAsSupplier(
+        withSupplier({ name: 'Något AB', vatNumber: vat }),
+        own
+      )
+      expect(result.supplier, `vatNumber ${vat}`).toEqual(strippedSupplier)
+    }
+  })
+
+  it('matches the exact company name case-insensitively', () => {
+    const result = stripOwnCompanyAsSupplier(withSupplier({ name: '  testbrand ab ' }), own)
+    expect(result.supplier).toEqual(strippedSupplier)
+  })
+
+  it('matches a personnummer-form own org number (enskild firma)', () => {
+    // companies.org_number for enskild firma is the owner's personnummer,
+    // often stored in 12-digit century form.
+    const result = stripOwnCompanyAsSupplier(
+      withSupplier({ name: 'Firma X', orgNumber: '550505-5566' }),
+      { orgNumber: '195505055566', name: 'Firma X Enskild' }
+    )
+    expect(result.supplier).toEqual(strippedSupplier)
+  })
+
+  it('lets a provably different org number outvote a name coincidence', () => {
+    // A same-named but distinct entity (foreign registry, generic name) with
+    // its own org number on the document stays a valid supplier.
+    const supplier = {
+      name: 'Testbrand AB',
+      orgNumber: '5029032081',
+      vatNumber: null,
+      address: null,
+      bankgiro: null,
+      plusgiro: null,
+    }
+    expect(stripOwnCompanyAsSupplier(withSupplier(supplier), own).supplier).toEqual(supplier)
+  })
+
+  it('leaves a different supplier alone', () => {
+    const supplier = {
+      name: 'SEB',
+      orgNumber: '5029032081',
+      vatNumber: null,
+      address: null,
+      bankgiro: null,
+      plusgiro: null,
+    }
+    expect(stripOwnCompanyAsSupplier(withSupplier(supplier), own).supplier).toEqual(supplier)
+  })
+
+  it('never matches on an empty own identity (junk cannot match junk)', () => {
+    const result = stripOwnCompanyAsSupplier(
+      withSupplier({ name: 'Något AB', orgNumber: null }),
+      { orgNumber: null, name: null }
+    )
+    expect(result.supplier.name).toBe('Något AB')
+  })
+
+  it('fetchOwnCompanyIdentity degrades to nulls on a reported query error (fail open, logged)', async () => {
+    const { fetchOwnCompanyIdentity } = await import(
+      '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+    )
+    const supabase = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            maybeSingle: () =>
+              Promise.resolve({ data: null, error: new Error('permission denied') }),
+          }),
+        }),
+      }),
+    }
+    await expect(
+      fetchOwnCompanyIdentity(supabase as never, 'company-1')
+    ).resolves.toEqual({ orgNumber: null, name: null })
+  })
+
+  it('is a no-op without ownCompany', () => {
+    const data = withSupplier({ name: 'Testbrand AB', orgNumber: '5566778899' })
+    expect(stripOwnCompanyAsSupplier(data, undefined)).toBe(data)
+  })
+
+  it('preserves every non-supplier field when stripping', () => {
+    const base = withSupplier({ name: 'Testbrand AB' })
+    const data = {
+      ...base,
+      documentKind: 'other' as const,
+      totals: { ...base.totals, total: 2500 },
+      prominentAmounts: [{ amount: 2500, label: 'Engångspris' }],
+    }
+    const result = stripOwnCompanyAsSupplier(data, own)
+    expect(result.documentKind).toBe('other')
+    expect(result.totals.total).toBe(2500)
+    expect(result.prominentAmounts).toEqual([{ amount: 2500, label: 'Engångspris' }])
   })
 })

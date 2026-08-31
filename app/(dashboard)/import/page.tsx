@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
+import { fetchAccounts } from '@/lib/reference-data/fetchers'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
@@ -122,6 +124,7 @@ const AccountMappingStep = dynamic(() => import('@/components/import/AccountMapp
 const ImportReviewStep = dynamic(() => import('@/components/import/ImportReviewStep'), { loading: ImportStepLoading })
 const ImportResultStep = dynamic(() => import('@/components/import/ImportResultStep'), { loading: ImportStepLoading })
 const SIEImportHistory = dynamic(() => import('@/components/import/SIEImportHistory'), { loading: ImportStepLoading })
+const BankFileImportHistory = dynamic(() => import('@/components/import/BankFileImportHistory'), { loading: ImportStepLoading })
 const UnderlagImportWizard = dynamic(() => import('@/components/import/UnderlagImportWizard'), { loading: ImportStepLoading })
 
 // ============================================================
@@ -806,12 +809,9 @@ function SIEImportWizard() {
       setIssues(data.parsed.issues)
       setSieAccounts(data.parsed.accounts)
 
-      const accountsRes = await fetch('/api/bookkeeping/accounts?active=false')
-      if (!accountsRes.ok) {
+      const accounts = await fetchAccounts(false).catch(() => {
         throw new Error('Kunde inte hämta kontoplanen för momsgranskning.')
-      }
-      const accountsData = await accountsRes.json()
-      const accounts = accountsData.data || []
+      })
       setBasAccounts(accounts)
       setMappings(enrichAccountMappingsWithVat(data.mappings, accounts))
 
@@ -985,12 +985,12 @@ function SIEImportWizard() {
       toast({ title: 'Konton skapade', description: `${data.created} nya konton har lagts till i din kontoplan` })
 
       const createdSet = new Set(missingAccounts.map(a => a.number))
-      const accountsRes = await fetch('/api/bookkeeping/accounts?active=false')
-      if (!accountsRes.ok) {
+      // New accounts exist now: refresh every cached chart (pickers app-wide)
+      // and re-read the full chart for the VAT review below.
+      await invalidateReferenceData('ref:accounts')
+      const accounts = await fetchAccounts(false).catch(() => {
         throw new Error('Kunde inte hämta kontoplanen för momsgranskning.')
-      }
-      const accountsData = await accountsRes.json()
-      const accounts = accountsData.data || []
+      })
       setBasAccounts(accounts)
       setMappings(prev => {
         let updated = prev.map(m =>
@@ -1076,6 +1076,9 @@ function SIEImportWizard() {
       }
 
       setStep('result')
+      // An import creates periods and accounts: refresh the session caches so
+      // every picker in the app sees them without a reload.
+      void invalidateReferenceData(['ref:accounts', 'ref:fiscal-periods'])
 
       if (data.result?.success) {
         const created = data.result.journalEntriesCreated
@@ -2325,6 +2328,7 @@ export default function ImportPage() {
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false)
   const [cloudOpen, setCloudOpen] = useState(false)
   const [sieHistoryOpen, setSieHistoryOpen] = useState(false)
+  const [bankFileHistoryOpen, setBankFileHistoryOpen] = useState(false)
   const [userId, setUserId] = useState('')
   const [exportPeriodId, setExportPeriodId] = useState<string | null>(null)
   const [exportExcludeClosing, setExportExcludeClosing] = useState(true)
@@ -2367,6 +2371,20 @@ export default function ImportPage() {
     const viewParam = searchParams.get('view')
     if (viewParam === 'export' || viewParam === 'import') {
       setView(viewParam)
+    }
+    // Deep link from surfaces where a bad import is discovered (e.g. the
+    // voucher list): /import?history=sie lands directly on the fold-open
+    // SIE import history so "Ångra import" is one click away.
+    if (searchParams.get('history') === 'sie') {
+      setView('import')
+      setSieHistoryOpen(true)
+      // The history table renders below ~8 import rows: scroll it into view
+      // (same pattern as the #cloud-backup hash deep link below).
+      setTimeout(() => {
+        document
+          .getElementById('sie-import-history')
+          ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      }, 80)
     }
   }, [isSandbox, searchParams])
 
@@ -2537,10 +2555,21 @@ export default function ImportPage() {
                   expanded={sieHistoryOpen}
                   onClick={() => setSieHistoryOpen((v) => !v)}
                 />
+                <ImportRow
+                  title={t('bankfile_history_title')}
+                  sub={t('bankfile_history_description')}
+                  expanded={bankFileHistoryOpen}
+                  onClick={() => setBankFileHistoryOpen((v) => !v)}
+                />
               </div>
               {sieHistoryOpen && (
-                <div className="mt-6">
+                <div className="mt-6" id="sie-import-history">
                   <SIEImportHistory />
+                </div>
+              )}
+              {bankFileHistoryOpen && (
+                <div className="mt-6">
+                  <BankFileImportHistory />
                 </div>
               )}
               <p className="mt-4 px-1 text-xs leading-5 text-muted-foreground">{t('pgnote')}</p>

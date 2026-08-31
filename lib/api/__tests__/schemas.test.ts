@@ -729,6 +729,79 @@ describe('CreateCustomerSchema', () => {
   })
 })
 
+// Where an individual's personnummer lands (#1707 follow-up). Synthetic
+// personnummer throughout, never a real one.
+describe('CreateCustomerSchema: personnummer placement', () => {
+  it('moves a personnummer-shaped org_number on an individual into personal_number', () => {
+    const result = CreateCustomerSchema.safeParse({
+      name: 'Anna Andersson',
+      customer_type: 'individual',
+      org_number: '19900101-1234',
+    })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.personal_number).toBe('19900101-1234')
+      expect(result.data.org_number).toBeUndefined()
+    }
+  })
+
+  it('strips whitespace from the moved value so it matches the personnummer input forms', () => {
+    const result = CreateCustomerSchema.safeParse({
+      name: 'Anna Andersson',
+      customer_type: 'individual',
+      org_number: '19900101 1234',
+    })
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.personal_number).toBe('199001011234')
+  })
+
+  it('drops org_number when it duplicates personal_number', () => {
+    const result = CreateCustomerSchema.safeParse({
+      name: 'Anna Andersson',
+      customer_type: 'individual',
+      org_number: '199001011234',
+      personal_number: '19900101-1234',
+    })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.personal_number).toBe('19900101-1234')
+      expect(result.data.org_number).toBeUndefined()
+    }
+  })
+
+  it('rejects an org_number that is a different personnummer than personal_number', () => {
+    const result = CreateCustomerSchema.safeParse({
+      name: 'Anna Andersson',
+      customer_type: 'individual',
+      org_number: '19850505-5555',
+      personal_number: '19900101-1234',
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path.join('.') === 'org_number')).toBe(true)
+    }
+  })
+
+  it('still rejects a personnummer-shaped org_number on a business customer', () => {
+    const result = CreateCustomerSchema.safeParse(validCustomer({ org_number: '19900101-1234' }))
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path.join('.') === 'org_number')).toBe(true)
+    }
+  })
+
+  it('leaves a legal-entity organisationsnummer alone on every customer_type', () => {
+    for (const customer_type of ['individual', 'swedish_business'] as const) {
+      const result = CreateCustomerSchema.safeParse({ name: 'X', customer_type, org_number: '556677-8899' })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.org_number).toBe('556677-8899')
+        expect(result.data.personal_number).toBeUndefined()
+      }
+    }
+  })
+})
+
 // ============================================================
 // Supplier schemas
 // ============================================================
@@ -1779,6 +1852,73 @@ describe('UpdateSettingsSchema', () => {
 
     it('rejects a bare string as the column value', () => {
       const result = UpdateSettingsSchema.safeParse({ invoice_email_texts: 'Tack!' })
+      expect(result.success).toBe(false)
+    })
+  })
+
+  describe('reminder_text_overrides', () => {
+    it('accepts a valid nested partial', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        reminder_text_overrides: { level_2: { body: 'Betala nu, tack.' } },
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.reminder_text_overrides).toEqual({
+          level_2: { body: 'Betala nu, tack.' },
+        })
+      }
+    })
+
+    it('accepts all three levels with subject and body', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        reminder_text_overrides: {
+          level_1: { subject: 'Påminnelse: {fakturanummer}', body: 'Vänligen betala.' },
+          level_2: { subject: 'Andra påminnelsen', body: 'Betala omgående.' },
+          level_3: { subject: 'Inkassovarning', body: 'Sista påminnelsen innan inkasso.' },
+        },
+      })
+      expect(result.success).toBe(true)
+    })
+
+    it('accepts null to clear all overrides', () => {
+      const result = UpdateSettingsSchema.safeParse({ reminder_text_overrides: null })
+      expect(result.success).toBe(true)
+      if (result.success) expect(result.data.reminder_text_overrides).toBeNull()
+    })
+
+    it('rejects body over 2000 characters', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        reminder_text_overrides: { level_1: { body: 'x'.repeat(2001) } },
+      })
+      expect(result.success).toBe(false)
+    })
+
+    it('rejects subject over 200 characters', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        reminder_text_overrides: { level_1: { subject: 'x'.repeat(201) } },
+      })
+      expect(result.success).toBe(false)
+    })
+
+    it('rejects a non-string field value', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        reminder_text_overrides: { level_1: { subject: 123 } },
+      })
+      expect(result.success).toBe(false)
+    })
+
+    it('strips unknown keys inside a level object', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        reminder_text_overrides: { level_1: { body: 'Hej', subjct: 'typo' } },
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.reminder_text_overrides).toEqual({ level_1: { body: 'Hej' } })
+      }
+    })
+
+    it('rejects a bare string as the column value', () => {
+      const result = UpdateSettingsSchema.safeParse({ reminder_text_overrides: 'Betala!' })
       expect(result.success).toBe(false)
     })
   })

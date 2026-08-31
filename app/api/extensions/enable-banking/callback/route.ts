@@ -14,6 +14,7 @@ import {
 } from '@/lib/cash-accounts/service'
 import { fanOutSessionRenewal } from '@/extensions/general/enable-banking/lib/session-sharing'
 import { supersedeSiblingConnections } from '@/extensions/general/enable-banking/lib/supersede'
+import { getBankConnectionErrorMessage } from '@/lib/errors/get-error-message'
 import { renderFinalizeShell, renderFinalizeRedirect } from './finalize-page'
 import { isConnectorState, verifyConnectorState } from '@/lib/connect/hosted/state'
 
@@ -105,7 +106,11 @@ export async function GET(request: Request) {
   }
 
   if (error) {
-    const errorMessage = errorDescription || error
+    // Swedish user-facing message carrying the underlying provider error; the
+    // raw code/description stays in the log lines and the audit event below.
+    // Previously the raw provider text was passed through verbatim, which
+    // gave a stuck user nothing to act on (issue #1716).
+    const userMessage = getBankConnectionErrorMessage(error, errorDescription)
     // access_denied is the user cancelling at the bank — an expected outcome,
     // not a runtime error. Only bank-side failures stay at error level.
     const isUserCancel =
@@ -127,7 +132,7 @@ export async function GET(request: Request) {
         // (which stays 'expired' during the round-trip) is also handled.
         const { data: pendingConn } = await supabase
           .from('bank_connections')
-          .select('id, user_id, bank_name, psu_type, status')
+          .select('id, user_id, company_id, bank_name, psu_type, status')
           .eq('oauth_state', state)
           .in('status', ['pending', 'expired', 'error'])
           .single()
@@ -165,8 +170,33 @@ export async function GET(request: Request) {
 
             await supabase
               .from('bank_connections')
-              .update({ status: isSessionExpiry ? 'expired' : 'error', error_message: errorMessage, oauth_state: null })
+              .update({ status: isSessionExpiry ? 'expired' : 'error', error_message: userMessage, oauth_state: null })
               .eq('id', pendingConn.id)
+          }
+
+          // Durable audit trail for the failed attempt (issue #1716): the
+          // fresh-connect row was just deleted and console logs expire, so
+          // event_log is the only place support can later see which attempt
+          // failed with which provider error.
+          try {
+            await eventBus.emit({
+              type: 'bank_connection.consent_denied',
+              payload: {
+                connectionId: pendingConn.id,
+                bankName: pendingConn.bank_name ?? null,
+                psuType: pendingConn.psu_type ?? null,
+                errorCode: error,
+                errorDescription: errorDescription ?? null,
+                priorStatus: pendingConn.status,
+                userId: pendingConn.user_id,
+                companyId: pendingConn.company_id,
+              },
+            })
+          } catch (emitError) {
+            log.error(AUDIT_EMIT_FAILED, emitError as Error, {
+              eventType: 'bank_connection.consent_denied',
+              connectionId: pendingConn.id,
+            })
           }
 
           // Include bank name, error code, and psu_type in the redirect so the
@@ -174,7 +204,7 @@ export async function GET(request: Request) {
           // access_denied, or the Handelsbanken corporate fullmakt steps on
           // server_error for a business connect).
           const params = new URLSearchParams({
-            bank_error: errorMessage,
+            bank_error: userMessage,
             ...(pendingConn.bank_name ? { bank_name: pendingConn.bank_name } : {}),
             bank_error_code: error,
             ...(pendingConn.psu_type ? { psu_type: pendingConn.psu_type } : {}),
@@ -187,18 +217,22 @@ export async function GET(request: Request) {
     }
 
     return NextResponse.redirect(
-      `${baseUrl}/settings/banking?bank_error=${encodeURIComponent(errorMessage)}`
+      `${baseUrl}/settings/banking?bank_error=${encodeURIComponent(userMessage)}`
     )
   }
 
   if (!code || !state) {
-    return NextResponse.redirect(`${baseUrl}/settings/banking?bank_error=missing_parameters`)
+    return NextResponse.redirect(
+      `${baseUrl}/settings/banking?bank_error=${encodeURIComponent(getBankConnectionErrorMessage('missing_parameters'))}`
+    )
   }
 
   // Validate authorization code format
   const codePattern = /^[a-zA-Z0-9._~+\/-]{8,2048}$/
   if (!codePattern.test(code)) {
-    return NextResponse.redirect(`${baseUrl}/settings/banking?bank_error=invalid_code_format`)
+    return NextResponse.redirect(
+      `${baseUrl}/settings/banking?bank_error=${encodeURIComponent(getBankConnectionErrorMessage('invalid_code_format'))}`
+    )
   }
 
   const supabase = await createServiceClient()
@@ -224,7 +258,7 @@ export async function GET(request: Request) {
       hasCode: !!code,
     })
     return NextResponse.redirect(
-      `${baseUrl}/settings/banking?bank_error=${encodeURIComponent('invalid_state')}`
+      `${baseUrl}/settings/banking?bank_error=${encodeURIComponent(getBankConnectionErrorMessage('invalid_state'))}`
     )
   }
 
@@ -237,13 +271,36 @@ export async function GET(request: Request) {
     try {
       return await finalizeConnection(supabase, pendingConnection, code)
     } catch (finalizeError) {
+      const reason =
+        finalizeError instanceof Error ? finalizeError.message : String(finalizeError)
       console.error('[enable-banking] Callback error', {
-        message: finalizeError instanceof Error ? finalizeError.message : String(finalizeError),
+        message: reason,
         stack: finalizeError instanceof Error ? finalizeError.stack : undefined,
         name: finalizeError instanceof Error ? finalizeError.name : undefined,
         state,
         connectionId: pendingConnection.id,
       })
+      // Durable audit trail (issue #1716): the fresh-connect row is deleted by
+      // the cleanup below and console logs expire, so event_log is the only
+      // place support can later see that this attempt failed and why.
+      try {
+        await eventBus.emit({
+          type: 'bank_connection.finalize_failed',
+          payload: {
+            connectionId: pendingConnection.id,
+            bankName: pendingConnection.bank_name ?? null,
+            reason,
+            priorStatus: pendingConnection.status,
+            userId: pendingConnection.user_id,
+            companyId: pendingConnection.company_id,
+          },
+        })
+      } catch (emitError) {
+        log.error(AUDIT_EMIT_FAILED, emitError as Error, {
+          eventType: 'bank_connection.finalize_failed',
+          connectionId: pendingConnection.id,
+        })
+      }
       return cleanupFailedFinalize(supabase, pendingConnection)
     }
   })()
@@ -352,12 +409,23 @@ async function finalizeConnection(
   // carried sibling scope onto an account whose own scope is NOT explicit.
   const priorScopeByIban = new Map<string, { scope: string; explicit: boolean }>()
   const priorScopeByUid = new Map<string, { scope: string; explicit: boolean }>()
+  // The user's earlier sync choice per account ("Synkas ej" = enabled:false)
+  // must survive a renewal: a deselected private card that comes back
+  // pre-checked lands its transactions in the company's books the moment the
+  // user saves the picker with defaults. Matched by uid first (exact resource
+  // identity; one session can list the same IBAN twice, e.g. one resource per
+  // balance type), then by IBAN for ASPSPs that mint new uids on re-auth.
+  const priorEnabledByIban = new Map<string, boolean>()
+  const priorEnabledByUid = new Map<string, boolean>()
   for (const prior of priorAccounts) {
     const priorIban = normalizeIban(prior.iban)
     const priorScope = prior.dedup_scope || priorIban || prior.uid
     const priorEntry = { scope: priorScope, explicit: Boolean(prior.dedup_scope) }
     if (priorIban && !priorScopeByIban.has(priorIban)) priorScopeByIban.set(priorIban, priorEntry)
     if (!priorScopeByUid.has(prior.uid)) priorScopeByUid.set(prior.uid, priorEntry)
+    const priorEnabled = prior.enabled !== false
+    if (priorIban && !priorEnabledByIban.has(priorIban)) priorEnabledByIban.set(priorIban, priorEnabled)
+    if (!priorEnabledByUid.has(prior.uid)) priorEnabledByUid.set(prior.uid, priorEnabled)
   }
 
   const accountsMetadata: StoredAccount[] = accounts.map((account: AccountInfo) => {
@@ -367,10 +435,14 @@ async function finalizeConnection(
       iban: account.account_id?.iban,
       name: account.name || account.product,
       currency: account.currency,
-      // Default to enabled. The user is presented with a picker
-      // immediately after this callback to uncheck unwanted accounts
-      // before any transactions are fetched.
-      enabled: true,
+      // Carry the user's earlier choice for an account we have seen before;
+      // only genuinely new accounts default to enabled. The picker shown
+      // right after this callback pre-checks from this flag, and no
+      // transactions are fetched before the user saves it.
+      enabled:
+        priorEnabledByUid.get(account.uid) ??
+        (normalizedIban ? priorEnabledByIban.get(normalizedIban) : undefined) ??
+        true,
       // Pin the external_id account scope at first ingest so it survives
       // re-authorizations. Byte-identical to the derivation lib/sync.ts
       // applied before this field existed (normalized IBAN, else uid).
@@ -381,6 +453,67 @@ async function finalizeConnection(
         account.uid,
     }
   })
+
+  // The maps above leave one corner open (issue #1709): a NO-IBAN account
+  // whose uid changed on an in-place reconnect matches neither by IBAN nor by
+  // uid, so its scope regenerates, every historical external_id changes, and
+  // the whole history re-imports as fresh unbooked rows. Pair such accounts by
+  // elimination, but only when the pairing is unambiguous: per currency,
+  // EXACTLY ONE prior account left unclaimed (no new account matched it via
+  // IBAN or uid) and EXACTLY ONE new account with a fresh scope, and neither
+  // side carries an IBAN. Anything else keeps the fresh-scope behavior. The
+  // asymmetry is deliberate: a wrong pairing can at worst skip a new
+  // transaction whose account+date+amount+occurrence all collide with an old
+  // row, while a missed pairing re-imports the full history unbooked.
+  const pairedPriorUidByNewUid = new Map<string, string>()
+  if (priorAccounts.length > 0) {
+    const newIbans = new Set<string>()
+    const newUids = new Set<string>()
+    for (const account of accountsMetadata) {
+      const normalizedIban = normalizeIban(account.iban)
+      if (normalizedIban) newIbans.add(normalizedIban)
+      newUids.add(account.uid)
+    }
+    const unclaimedPriorsByCurrency = new Map<string, StoredAccount[]>()
+    for (const prior of priorAccounts) {
+      const priorIban = normalizeIban(prior.iban)
+      if ((priorIban && newIbans.has(priorIban)) || newUids.has(prior.uid)) continue
+      const currency = (prior.currency || '').toUpperCase()
+      const bucket = unclaimedPriorsByCurrency.get(currency)
+      if (bucket) bucket.push(prior)
+      else unclaimedPriorsByCurrency.set(currency, [prior])
+    }
+    const freshScopeByCurrency = new Map<string, StoredAccount[]>()
+    for (const account of accountsMetadata) {
+      const normalizedIban = normalizeIban(account.iban)
+      const matchedPrior =
+        (normalizedIban ? priorScopeByIban.has(normalizedIban) : false) ||
+        priorScopeByUid.has(account.uid)
+      if (matchedPrior) continue
+      const currency = (account.currency || '').toUpperCase()
+      const bucket = freshScopeByCurrency.get(currency)
+      if (bucket) bucket.push(account)
+      else freshScopeByCurrency.set(currency, [account])
+    }
+    for (const [currency, unclaimed] of unclaimedPriorsByCurrency) {
+      const fresh = freshScopeByCurrency.get(currency) ?? []
+      if (unclaimed.length !== 1 || fresh.length !== 1) continue
+      const prior = unclaimed[0]
+      const survivor = fresh[0]
+      if (normalizeIban(prior.iban) || normalizeIban(survivor.iban)) continue
+      survivor.dedup_scope = prior.dedup_scope || prior.uid
+      // The pairing is an identity claim, so the user's earlier sync choice
+      // travels with it: a deselected account must not come back pre-checked.
+      survivor.enabled = prior.enabled !== false
+      pairedPriorUidByNewUid.set(survivor.uid, prior.uid)
+      console.log('[enable-banking] Paired no-IBAN account across a uid change', {
+        connectionId: pendingConnection.id,
+        currency,
+        priorUid: prior.uid,
+        newUid: survivor.uid,
+      })
+    }
+  }
 
   // Stay in 'pending_selection' until the user confirms which accounts to sync.
   // The cron and manual sync routes both skip this status, so no transactions
@@ -494,20 +627,49 @@ async function finalizeConnection(
   // the user already chose instead of overflowing into the next free slots.
   const { data: mirroredRows } = await supabase
     .from('cash_accounts')
-    .select('external_uid, ledger_account')
+    .select('id, external_uid, ledger_account')
     .eq('company_id', updatedConnection.company_id)
     .eq('bank_connection_id', updatedConnection.id)
-  const existingLedgerByUid = new Map(
-    ((mirroredRows ?? []) as Array<{ external_uid: string; ledger_account: string }>).map(
-      (r) => [r.external_uid, r.ledger_account],
+  const mirroredByUid = new Map(
+    ((mirroredRows ?? []) as Array<{ id: string; external_uid: string; ledger_account: string }>).map(
+      (r) => [r.external_uid, r],
     ),
   )
-  const assignedLedgers = new Set<string>(existingLedgerByUid.values())
+  // Only ledgers still claimed by a uid the bank returned in THIS session
+  // block the resolver. A row whose uid the ASPSP retired on re-auth (SEB
+  // mints new uids on every renewal) is exactly the row the IBAN match must
+  // promote; seeding its ledger into the exclude set made the resolver reject
+  // its own IBAN hit and allocate a fresh 19xx slot per renewal, so the chart
+  // grew a dead sub-account each time. Stale ledgers are still safe from the
+  // allocator: findFreeLedgerAccount skips every ledger a cash_accounts row
+  // holds, whatever its uid.
+  const sessionUids = new Set(accountsMetadata.map((a) => a.uid))
+  const assignedLedgers = new Set<string>(
+    [...mirroredByUid.values()]
+      .filter((row) => sessionUids.has(row.external_uid))
+      .map((row) => row.ledger_account),
+  )
   let accountsDataDirty = carriedScopeDirty
 
   for (const account of accountsMetadata) {
-    let targetLedger = existingLedgerByUid.get(account.uid)
+    let targetLedger = mirroredByUid.get(account.uid)?.ledger_account
     let reuseCashAccountId: string | null = null
+    if (!targetLedger) {
+      // A paired no-IBAN account (uid change on an in-place reconnect) reuses
+      // this connection's own row for the retired uid: same ledger, same row
+      // id. upsertFromPsd2 promotes the named row in place, re-keying it to
+      // the new uid, so transactions.cash_account_id links survive and the
+      // content-dedup account guard in lib/transactions/ingest.ts keeps
+      // matching. Without this the resolver would see the old row as a live
+      // claim and allocate an overflow 19xx slot plus a NEW cash_accounts row,
+      // which is the second half of issue #1709.
+      const pairedPriorUid = pairedPriorUidByNewUid.get(account.uid)
+      const pairedRow = pairedPriorUid ? mirroredByUid.get(pairedPriorUid) : undefined
+      if (pairedRow && !assignedLedgers.has(pairedRow.ledger_account)) {
+        targetLedger = pairedRow.ledger_account
+        reuseCashAccountId = pairedRow.id
+      }
+    }
     if (!targetLedger) {
       const resolved = await resolvePsd2LedgerAccount(
         supabase,

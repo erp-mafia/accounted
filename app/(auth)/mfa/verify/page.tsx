@@ -11,6 +11,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { Loader2, ShieldCheck, LogOut } from 'lucide-react'
 import { SupportLink } from '@/components/ui/support-link'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import { resolvePostLoginDestination } from '@/lib/company/post-login-landing'
 import {
   consumeInviteCookie,
   INVITE_PROBLEM_MESSAGE_KEYS,
@@ -151,7 +152,12 @@ function MfaVerifyContent() {
         return
       }
 
-      router.push(returnTo)
+      // Hosted byrå staff hit MFA before any dashboard, so the cockpit
+      // landing (WL-14) resolves here too: only when no explicit step-up
+      // destination was requested. Everyone else keeps returnTo/'/' exactly
+      // as before (the helper degrades to '/' on any failure). The session
+      // is AAL2 at this point, so the /api MFA gate passes.
+      router.push(returnTo === '/' ? await resolvePostLoginDestination() : returnTo)
       router.refresh()
     } catch {
       toast({

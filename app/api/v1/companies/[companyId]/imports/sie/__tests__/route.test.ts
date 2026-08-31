@@ -184,4 +184,17 @@ describe('POST /imports/sie', () => {
     expect(res.status).toBe(400)
     expect(executeSIEImportMock).not.toHaveBeenCalled()
   })
+
+  it('passes openingBalanceSeries through and leaves it undefined by default (issue #1882)', async () => {
+    await callRoute({ openingBalanceSeries: 'K' })
+    let options = executeSIEImportMock.mock.calls[0][5] as Record<string, unknown>
+    expect(options.openingBalanceSeries).toBe('K')
+
+    executeSIEImportMock.mockClear()
+    await callRoute()
+    options = executeSIEImportMock.mock.calls[0][5] as Record<string, unknown>
+    // Undefined lets executeSIEImport pick a series the file's own vouchers
+    // do not use, instead of a hardcoded default that could collide.
+    expect(options.openingBalanceSeries).toBeUndefined()
+  })
 })

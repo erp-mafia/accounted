@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -12,10 +12,13 @@ import {
 import { SettingsGroup } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
-import { Plus, Lock, Unlock, Loader2 } from 'lucide-react'
+import { useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
+import { Plus, Lock, Unlock, Loader2, Eraser } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import type { FiscalPeriod } from '@/types'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
+import { FiscalYearResetDialog } from '@/components/settings/FiscalYearResetDialog'
 import { suggestSeedDate } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -38,36 +41,28 @@ export function FiscalYearsManager() {
   const { toast } = useToast()
   const { role } = useCompany()
   const { dialogProps, confirm } = useDestructiveConfirm()
-  const [periods, setPeriods] = useState<FiscalPeriod[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [hasError, setHasError] = useState(false)
+  // Session-cached registry (lib/reference-data): the same list every
+  // picker renders, so a lock/unlock/reset here is visible everywhere the
+  // moment the cache is invalidated below.
+  const { periods, isLoading, error: periodsError } = useFiscalPeriods()
+  const hasError = !!periodsError && periods.length === 0
   const [dialogOpen, setDialogOpen] = useState(false)
   const [mutatingId, setMutatingId] = useState<string | null>(null)
+  const [resetTarget, setResetTarget] = useState<FiscalPeriod | null>(null)
 
   // Only owners/admins may change a period's lock state. The API enforces this
   // too (requireWrite); this just hides controls a viewer/member can't use.
   const canManage = role === 'owner' || role === 'admin'
 
-  const fetchPeriods = useCallback(async () => {
-    try {
-      const res = await fetch('/api/bookkeeping/fiscal-periods')
-      if (!res.ok) throw new Error('fetch failed')
-      const { data } = await res.json()
-      setPeriods((data as FiscalPeriod[]) || [])
-      setHasError(false)
-    } catch {
-      setHasError(true)
-    } finally {
-      setIsLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { fetchPeriods() }, [fetchPeriods])
+  const refreshPeriods = useCallback(() => invalidateReferenceData('ref:fiscal-periods'), [])
 
   // Newest first: matches the API's ordering and reads most-recent-at-top.
   const sorted = [...periods].sort((a, b) => b.period_start.localeCompare(a.period_start))
 
-  async function runLockAction(period: FiscalPeriod, action: 'lock' | 'unlock') {
+  async function runLockAction(
+    period: FiscalPeriod,
+    action: 'lock' | 'unlock' | 'reopen-external',
+  ) {
     setMutatingId(period.id)
     try {
       const res = await fetch(`/api/bookkeeping/fiscal-periods/${period.id}/${action}`, {
@@ -79,8 +74,15 @@ export function FiscalYearsManager() {
         // saknar bokföring", which tells the user exactly what to fix first.
         throw new Error(body?.error?.message || t('fy_action_error'))
       }
-      toast({ title: action === 'lock' ? t('fy_lock_success') : t('fy_unlock_success') })
-      await fetchPeriods()
+      toast({
+        title:
+          action === 'lock'
+            ? t('fy_lock_success')
+            : action === 'unlock'
+              ? t('fy_unlock_success')
+              : t('fy_reopen_success'),
+      })
+      await refreshPeriods()
     } catch (err) {
       toast({
         title: t('fy_action_error'),
@@ -114,6 +116,21 @@ export function FiscalYearsManager() {
     if (ok) await runLockAction(period, 'unlock')
   }
 
+  // Undo "klarmarkera" (year marked as closed in a previous bookkeeping
+  // system). Only offered while the closed state still comes from that mark:
+  // a year closed by a real year-end run keeps its closing entry and stays
+  // closed here.
+  async function handleReopen(period: FiscalPeriod) {
+    const ok = await confirm({
+      title: t('fy_reopen_confirm_title'),
+      description: t('fy_reopen_confirm_body', { name: period.name }),
+      confirmLabel: t('fy_action_reopen'),
+      cancelLabel: t('fy_confirm_cancel'),
+      variant: 'warning',
+    })
+    if (ok) await runLockAction(period, 'reopen-external')
+  }
+
   return (
     <SettingsGroup label={t('fy_heading')} help={t('fy_help')}>
       {isLoading ? (
@@ -130,6 +147,8 @@ export function FiscalYearsManager() {
         sorted.map((p) => {
           const status = periodStatus(p)
           const isMutating = mutatingId === p.id
+          const closedExternally = status === 'closed' && p.closed_externally === true
+          const canReopen = canManage && closedExternally && !p.closing_entry_id
           return (
             <div key={p.id} className="flex items-center gap-3 border-b border-border px-1 py-3">
               <div className="min-w-0 flex-1">
@@ -142,7 +161,9 @@ export function FiscalYearsManager() {
                 {status === 'open' ? (
                   <span className="text-xs text-muted-foreground">{t('fy_status_open')}</span>
                 ) : (
-                  <Badge variant={STATUS_VARIANT[status]}>{t(`fy_status_${status}`)}</Badge>
+                  <Badge variant={STATUS_VARIANT[status]}>
+                    {closedExternally ? t('fy_status_closed_external') : t(`fy_status_${status}`)}
+                  </Badge>
                 )}
                 {canManage && status === 'open' && (
                   <Button
@@ -162,6 +183,18 @@ export function FiscalYearsManager() {
                     )}
                   </Button>
                 )}
+                {canManage && status === 'open' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-destructive hover:text-destructive"
+                    disabled={isMutating}
+                    onClick={() => setResetTarget(p)}
+                  >
+                    <Eraser className="mr-1.5 h-4 w-4" />
+                    {t('fy_action_reset')}
+                  </Button>
+                )}
                 {canManage && status === 'locked' && (
                   <Button
                     variant="outline"
@@ -176,6 +209,24 @@ export function FiscalYearsManager() {
                       <>
                         <Unlock className="mr-1.5 h-4 w-4" />
                         {t('fy_action_unlock')}
+                      </>
+                    )}
+                  </Button>
+                )}
+                {canReopen && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-muted-foreground hover:text-foreground"
+                    disabled={isMutating}
+                    onClick={() => handleReopen(p)}
+                  >
+                    {isMutating ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <>
+                        <Unlock className="mr-1.5 h-4 w-4" />
+                        {t('fy_action_reopen')}
                       </>
                     )}
                   </Button>
@@ -205,8 +256,20 @@ export function FiscalYearsManager() {
         onOpenChange={setDialogOpen}
         entryDate={suggestSeedDate(periods, new Date().toISOString().split('T')[0])}
         periods={periods}
-        onCreated={fetchPeriods}
+        onCreated={refreshPeriods}
       />
+
+      {resetTarget && (
+        <FiscalYearResetDialog
+          periodId={resetTarget.id}
+          periodName={resetTarget.name}
+          open={resetTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) setResetTarget(null)
+          }}
+          onReset={refreshPeriods}
+        />
+      )}
 
       <DestructiveConfirmDialog {...dialogProps} />
     </SettingsGroup>

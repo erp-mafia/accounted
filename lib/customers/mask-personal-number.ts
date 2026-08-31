@@ -7,6 +7,8 @@
  * half lives in lib/customers/protect-personal-number.ts, which is server-only.
  */
 
+import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
+
 /**
  * Placeholder used when a stored personal_number cannot be decrypted
  * (corrupted ciphertext, a value written under a different
@@ -54,6 +56,13 @@ export function isMaskedPersonalNumber(value: unknown): boolean {
 export const PERSONAL_NUMBER_INPUT_RE = /^(?:(?:\d{6}|\d{8})[-+]?\d{4}|\*{8}-(?:\d{4}|\?{4}))$/
 
 /**
+ * The plaintext half alone: the four accepted written forms of a personnummer
+ * (YYMMDD-XXXX, YYMMDD+XXXX, YYYYMMDD-XXXX, or the 10/12 digits). What a create
+ * path accepts.
+ */
+export const PERSONAL_NUMBER_PLAINTEXT_RE = /^(?:\d{6}|\d{8})[-+]?\d{4}$/
+
+/**
  * Display a personal identity number without exposing birth date or full ID.
  *
  * Already-masked input is returned unchanged: the API masks on read, so a
@@ -66,4 +75,31 @@ export function maskCustomerPersonalNumber(value: string | null | undefined): st
   if (isMaskedPersonalNumber(value)) return value
   const last4 = value.replace(/\D/g, '').slice(-4)
   return last4.length === 4 ? `********-${last4}` : null
+}
+
+/**
+ * The identifier a customer LIST may show for a row, never a raw personnummer.
+ *
+ * Business rows show org_number (Bolagsverket-public). Individual rows show
+ * the masked personal_number; a legacy individual row that still carries its
+ * personnummer in org_number (written before the write paths started moving
+ * it, see lib/customers/personal-number-shape.ts) shows that value masked the
+ * same way instead of raw. Callers pass rows whose personal_number is already
+ * the API's masked form or a plaintext value; ciphertext must be masked
+ * server-side first (maskStoredCustomerPersonalNumber).
+ */
+export function customerListIdentifier(row: {
+  customer_type?: string | null
+  org_number?: string | null
+  personal_number?: string | null
+}): string {
+  if (row.customer_type !== 'individual') {
+    return row.org_number || row.personal_number || ''
+  }
+  if (row.personal_number) return maskCustomerPersonalNumber(row.personal_number) ?? ''
+  const orgNumber = row.org_number || ''
+  if (orgNumber && looksLikeSwedishPersonalNumber(orgNumber)) {
+    return maskCustomerPersonalNumber(orgNumber) ?? ''
+  }
+  return orgNumber
 }

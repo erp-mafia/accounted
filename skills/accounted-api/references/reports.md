@@ -39,6 +39,21 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "as_of_date": "2026-05-31",
+    "customers": [],
+    "totals": {}
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/reports/avgifter-basis`
@@ -73,20 +88,36 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "year": 2026,
+    "employees": [],
+    "totals": {}
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/reports/balance-sheet`
 
-**Balance sheet (balansräkning) for a fiscal period.**
+**Balance sheet (balansräkning) for a fiscal period or as of a custom date.**
 `scope:reports:read · risk:low · idempotent`
 
-Returns assets / liabilities / equity grouped into BAS sections, with the period's opening and closing balances. Sums match the income statement for the same period; the closing equity flows into next period's opening balance.
+Returns assets / liabilities / equity grouped into BAS sections, with the period's opening and closing balances. Optional `as_of` (alias for `to_date`, YYYY-MM-DD inside the fiscal period) returns the balance position at that date, e.g. the latest month-end for bank reporting. Sums match the income statement for the same period; the closing equity flows into next period's opening balance.
 
-**Use when:** You need the company's balance position at period end: typically for management reporting, year-end review, or the K2/K3 årsredovisning uppställningsform.
+**Use when:** You need the company's balance position at period end or at a custom date: typically management reporting, year-end review, or the K2/K3 årsredovisning uppställningsform.
 **Do not use for:** Per-account drill-down (use /reports/general-ledger). Net result for the period (use /reports/income-statement).
 
 **Pitfalls:**
-- `period_id` is required.
+- `period_id` is required; `as_of` (alias: `to_date`, pass at most one) is optional and must lie within that fiscal period. `from_date` is not accepted: a balance sheet is a cumulative position, not a flow over a window.
+- Unknown query parameters are rejected with VALIDATION_ERROR, not silently ignored.
 - Balance sheet equity includes the period's computed result: recalculation happens on every call, so a freshly-posted entry is reflected immediately (no caching).
 
 | Parameter | In | Type | Required | Notes |
@@ -106,6 +137,48 @@ Response `200`:
   }
 }
 ```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "period": {
+      "start": "2026-01-01",
+      "end": "2026-12-31"
+    },
+    "sections": [],
+    "totals": {}
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/reports/balance-sheet/pdf`
+
+**Balance sheet (balansräkning) as a PDF.**
+`scope:reports:read · risk:low · idempotent`
+
+Renders the balansräkning as application/pdf, byte-equivalent to the dashboard export. Optional `as_of` (alias for `to_date`, YYYY-MM-DD inside the fiscal period) returns the balance position at that date, e.g. the latest month-end for bank reporting. Refuses to render when tillgångar and eget kapital + skulder differ by a full krona or more.
+
+**Use when:** You need a presentable PDF of the balance position at period end or a custom date: bank requests, board packs, or sharing outside Accounted.
+**Do not use for:** Machine-readable figures (use the JSON endpoint without /pdf). The formal K2/K3 årsredovisning document (use the year-end flow).
+
+**Pitfalls:**
+- `period_id` is required; `as_of` (alias: `to_date`, pass at most one) is optional and must lie within that fiscal period. `from_date` is not accepted: a balance sheet is a cumulative position, not a flow over a window.
+- Unknown query parameters are rejected with VALIDATION_ERROR, not silently ignored.
+- An unbalanced balansräkning (>= 1 kr difference) returns REPORT_GENERATION_FAILED instead of a PDF: fix the imbalance first.
+- The PDF is marked "utkast": it is a working report, not a fastställd årsredovisning.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200` (`application/pdf`).
 
 ---
 
@@ -137,6 +210,20 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "is_continuous": true,
+    "discrepancies": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -176,20 +263,35 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "period": {},
+    "accounts": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/reports/income-statement`
 
-**Income statement (resultatrapport) for a fiscal period.**
+**Income statement (resultatrapport) for a fiscal period or a custom date range.**
 `scope:reports:read · risk:low · idempotent`
 
-Returns the period's revenue and expenses grouped by BAS class with subtotals (gross margin, operating result, net result). The net result flows into the balance-sheet equity for the same period.
+Returns the period's revenue and expenses grouped by BAS class with subtotals (gross margin, operating result, net result). Optional `from_date` / `to_date` (YYYY-MM-DD, inside the fiscal period) narrow the report to a custom range, e.g. January 1 to July 31 for month-end bank reporting. The net result flows into the balance-sheet equity for the same period.
 
-**Use when:** You need the company's profit/loss for a period: month-end management reporting, K2/K3 årsredovisning resultaträkning, or feeding KPI dashboards.
+**Use when:** You need the company's profit/loss for a period or partial period: month-end management reporting, K2/K3 årsredovisning resultaträkning, or feeding KPI dashboards.
 **Do not use for:** Per-account drill (use /reports/general-ledger). VAT figures (use /reports/vat-declaration). Balance position (use /reports/balance-sheet).
 
 **Pitfalls:**
-- `period_id` is required.
+- `period_id` is required; `from_date`/`to_date` are optional and must lie within that fiscal period.
+- Unknown query parameters are rejected with VALIDATION_ERROR, not silently ignored.
 - Net result on the income statement equals the period's equity-line delta on the balance sheet: they're derived from the same posted entries.
 
 | Parameter | In | Type | Required | Notes |
@@ -209,6 +311,48 @@ Response `200`:
   }
 }
 ```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "period": {
+      "start": "…",
+      "end": "…"
+    },
+    "sections": [],
+    "grossMargin": 0,
+    "netResult": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/reports/income-statement/pdf`
+
+**Income statement (resultaträkning) as a PDF.**
+`scope:reports:read · risk:low · idempotent`
+
+Renders the resultaträkning as application/pdf, byte-equivalent to the dashboard export. Optional `from_date` / `to_date` (YYYY-MM-DD, inside the fiscal period) narrow the report to a custom range. The filename carries the effective date range and an "utkast" suffix (the document is a working report, not a signed årsredovisning).
+
+**Use when:** You need a presentable PDF of the profit/loss for a period or partial period: bank requests, board packs, or sharing outside Accounted.
+**Do not use for:** Machine-readable figures (use the JSON endpoint without /pdf). The formal K2/K3 årsredovisning document (use the year-end flow).
+
+**Pitfalls:**
+- `period_id` is required; `from_date`/`to_date` are optional and must lie within that fiscal period.
+- Unknown query parameters are rejected with VALIDATION_ERROR, not silently ignored.
+- The PDF is marked "utkast": it is a working report, not a fastställd årsredovisning.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200` (`application/pdf`).
 
 ---
 
@@ -241,6 +385,20 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "period": {},
+    "entries": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -278,6 +436,20 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "period": {},
+    "months": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/reports/salary-journal`
@@ -310,6 +482,21 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "year": 2026,
+    "employees": [],
+    "totals": {}
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -372,6 +559,21 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "as_of_date": "2026-05-31",
+    "suppliers": [],
+    "totals": {}
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/reports/trial-balance`
@@ -412,6 +614,31 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "rows": [
+      {
+        "account": "1930",
+        "account_name": "Företagskonto",
+        "opening_balance": 100000,
+        "period_debit": 25000,
+        "period_credit": 18000,
+        "closing_balance": 107000
+      }
+    ],
+    "totalDebit": 25000,
+    "totalCredit": 25000,
+    "isBalanced": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `GET /api/v1/companies/{companyId}/reports/vacation-liability`
@@ -442,6 +669,21 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "year": 2026,
+    "employees": [],
+    "total_liability": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -478,6 +720,43 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "period_type": "monthly",
+    "year": 2026,
+    "period": 4,
+    "rutor": {
+      "ruta05": 0,
+      "ruta10": 0,
+      "ruta11": 0,
+      "ruta12": 0,
+      "ruta20": 0,
+      "ruta21": 0,
+      "ruta22": 0,
+      "ruta23": 0,
+      "ruta24": 0,
+      "ruta30": 0,
+      "ruta31": 0,
+      "ruta32": 0,
+      "ruta39": 0,
+      "ruta40": 0,
+      "ruta48": 0,
+      "ruta50": 0,
+      "ruta60": 0,
+      "ruta61": 0,
+      "ruta62": 0,
+      "ruta49": 0
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```

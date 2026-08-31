@@ -16,6 +16,7 @@ import { OPUS_MODEL } from '@/lib/agent/composer/client'
 import { ensureTicSnapshot } from '@/lib/agent/composer/tic-fetch'
 import type { AtomSelection } from '@/lib/agent/composer/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { withTimeout } from '@/lib/utils'
 
 const BodySchema = z.object({
   company_id: z.string().uuid().optional(),
@@ -294,24 +295,3 @@ export async function POST(request: Request) {
     },
   })
 }
-
-// Run a promise against a wall-clock budget. The underlying work continues to
-// completion on the server when the budget elapses: we just stop waiting for
-// it. For Anthropic calls that's fine: a slow Opus turn finishing later still
-// warms its own cache.
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timeout after ${ms}ms`)), ms)
-    promise.then(
-      (v) => {
-        clearTimeout(timer)
-        resolve(v)
-      },
-      (e) => {
-        clearTimeout(timer)
-        reject(e)
-      },
-    )
-  })
-}
-

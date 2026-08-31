@@ -35,7 +35,7 @@ These are short enough to inline; the references expand each.
 
 **Network:** Peppol four-corner (C1 sender → C2 sending AP → C3 receiving AP → C4 receiver). AS4 v2.0 over HTTPS. SMP discovery via NAPTR/SHA-256 (migrated from CNAME/MD5 in 2025). PKI: G3 only after end-2025. SMP servers must run on port 443 from **1 February 2026**.
 
-**Authority:** DIGG is Sweden's Peppol Authority, regulator under Lag 2018:1277. **DIGG's Peppol-ID: `0007:2021006883`. Skatteverket: `0007:2021005448`.** Per regeringsbeslut Fi2025/01826, Peppol functions transfer to **Upphandlingsmyndigheten on 1 July 2026**; DIGG merges into PTS by 1 January 2027. SFTI ESAP 6 (EDIFACT) was removed 1 July 2025; Svefaktura is deprecated.
+**Authority:** **Upphandlingsmyndigheten is Sweden's Peppol Authority since 1 July 2026** (regeringsbeslut Fi2025/01826 moved e-handel and Peppol out of DIGG; DIGG merges into PTS by 1 January 2027). Contact **peppol@uhmynd.se**; `digg.se/digitala-tjanster/peppol` now redirects. OpenPeppol's own Sweden country profile is stale and still names Digg. Lag 2018:1277 is the B2G mandate. **DIGG's Peppol-ID: `0007:2021006883`. Skatteverket: `0007:2021005448`.** SFTI ESAP 6 (EDIFACT) was removed 1 July 2025; Svefaktura is deprecated.
 
 **Identifier formats:** Swedish orgnr → `schemeID="0007"`, 10 digits no dash. Swedish VAT ID → `SE` + 10 digits + `01` (e.g. `SE556732100001`), prefix mandatory (BR-CO-9). For sole proprietors **DIGG recommends GLN (`0088`) over personnummer (`0007`) for GDPR**.
 
@@ -53,4 +53,4 @@ When answering questions in this domain:
 - For UBL fragments, output real, valid XML with full namespaces and example values, not pseudocode.
 - For build-vs-buy or vendor selection, give numbers, €/SEK, monthly minimums, per-document costs, certification fee tiers, break-even volume, not adjectives.
 - When a regulatory date is involved, distinguish (a) hard EU deadline, (b) currently-known Swedish proposal, (c) speculation. The user is technically sophisticated and is making product decisions; mistaking speculation for binding fact is the worst possible failure mode.
-- Be willing to say "the spec is currently in flux", Peppol BIS 4.0 / PINT convergence, the DIGG → Upphandlingsmyndigheten / PTS reorganisation, the Dir. 2026:9 outcome, and the post-ViDA national mandate landscape are all moving targets in 2026-2027.
+- Be willing to say "the spec is currently in flux", Peppol BIS 4.0 / PINT convergence, the completed DIGG → Upphandlingsmyndigheten handover and the pending DIGG → PTS merger, the Dir. 2026:9 outcome, and the post-ViDA national mandate landscape are all moving targets in 2026-2027.

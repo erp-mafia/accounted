@@ -105,6 +105,12 @@ export async function resolveReadAuth(
 export interface CompanyTokenUser {
   userId: string
   needsReconsent: boolean
+  /**
+   * When the serving row was issued (last consent or refresh; storeTokens is
+   * DELETE + INSERT). Personal SKV sessions live ~65 minutes from this time,
+   * so consumers (the agent briefing) can reason about likely expiry.
+   */
+  createdAt: string | null
 }
 
 /**
@@ -141,8 +147,11 @@ export async function findCompanyTokenUser(
     return null
   }
 
-  const rows = ((data ?? []) as Array<{ user_id: string | null; status: string | null }>).filter(
-    (row): row is { user_id: string; status: string | null } => typeof row.user_id === 'string'
+  const rows = (
+    (data ?? []) as Array<{ user_id: string | null; status: string | null; created_at: string | null }>
+  ).filter(
+    (row): row is { user_id: string; status: string | null; created_at: string | null } =>
+      typeof row.user_id === 'string'
   )
   if (rows.length === 0) return null
 
@@ -154,5 +163,6 @@ export async function findCompanyTokenUser(
   return {
     userId: pick.user_id,
     needsReconsent: pick.status === 'needs_reconsent',
+    createdAt: pick.created_at ?? null,
   }
 }

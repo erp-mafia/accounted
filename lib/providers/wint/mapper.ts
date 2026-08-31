@@ -131,7 +131,9 @@ export function mapWintToSalesInvoice(raw: Record<string, unknown>): SalesInvoic
   });
 
   const legalMonetaryTotal: LegalMonetaryTotalDto = {
-    lineExtensionAmount: amount(totalTax != null ? round2(total - totalTax) : total, currency),
+    // Undefined rather than `total` when WINT omits the tax total: reporting
+    // the gross as the net is what makes an invoice read as 0 kr VAT.
+    lineExtensionAmount: totalTax != null ? amount(round2(total - totalTax), currency) : undefined,
     taxInclusiveAmount: amount(total, currency),
     payableAmount: amount(total, currency),
   };

@@ -1,5 +1,6 @@
 import type { TransactionCategory, MappingResult, VatJournalLine, Transaction, EntityType, VatTreatment } from '@/types'
 import { getVatRate, generateReverseChargeLines } from './vat-entries'
+import { resolveSekAmount } from './currency-utils'
 import { roundOre } from '@/lib/money'
 
 /**
@@ -227,6 +228,14 @@ export function getCategoryAccountMapping(
  * without VAT. Zero is rejected: a document with no moms is an exempt supply
  * and must be booked with vat_treatment "exempt" so the momsdeklaration sees
  * the correct classification, not a rate-bearing treatment minus its VAT line.
+ *
+ * Currency: `vatAmountOverride` is denominated in the TRANSACTION's currency,
+ * exactly like `transaction.amount` (it is the figure printed on the underlag).
+ * All journal entry lines are SEK, so every VAT figure here goes through the
+ * same SEK resolution buildTransactionEntryLines applies to the gross. Before
+ * this, a 15.87 USD override validated against the USD gross but posted as
+ * 15.87 kr: the entry balanced (the net line absorbed the difference), so
+ * nothing downstream could detect the wrong 26xx figure.
  */
 export function buildMappingResultFromCategory(
   category: TransactionCategory,
@@ -243,6 +252,16 @@ export function buildMappingResultFromCategory(
   // Calculate VAT if applicable using the resolved treatment from mapping
   const treatment = mapping.vatTreatment as VatTreatment | null
   const hasVatOverride = vatAmountOverride !== undefined && vatAmountOverride !== null
+
+  // Journal entry lines are SEK; transaction.amount is in transaction.currency.
+  // The lenient resolver (not the OrNull sibling) is deliberate: it must agree
+  // with buildTransactionEntryLines, which nets these VAT lines against the
+  // same resolution of the gross. Disagreeing resolvers would unbalance the
+  // net line; agreeing ones keep legacy rateless rows exactly as before.
+  const absAmount = Math.abs(transaction.amount)
+  const absSekAmount = Math.abs(resolveSekAmount(
+    transaction.amount, transaction.amount_sek, transaction.currency, transaction.exchange_rate
+  ))
 
   if (hasVatOverride) {
     // Treatment compatibility first: an invalid override on reverse_charge is
@@ -262,14 +281,18 @@ export function buildMappingResultFromCategory(
         'For a document with no moms, use vat_treatment "exempt" instead of vat_amount 0.'
       )
     }
-    const grossAmount = Math.abs(transaction.amount)
     // 25% is the highest Swedish VAT rate, so rate-extraction at 25% bounds
-    // any legitimate document VAT: even on mixed-rate receipts.
-    const maxVat = roundOre(grossAmount * 0.25 / 1.25)
+    // any legitimate document VAT: even on mixed-rate receipts. The bound and
+    // the override share the transaction's currency (both come off the
+    // underlag), so the comparison stays in that currency.
+    const maxVat = roundOre(absAmount * 0.25 / 1.25)
     if (vatAmountOverride > maxVat) {
+      const currencyTag = transaction.currency && transaction.currency !== 'SEK'
+        ? ` ${transaction.currency}` : ''
       throw new Error(
-        `vat_amount ${vatAmountOverride} exceeds the maximum possible Swedish VAT on ${grossAmount} ` +
-        `(${maxVat} at 25%). Check the underlag: the override must be the document's actual moms.`
+        `vat_amount ${vatAmountOverride} exceeds the maximum possible Swedish VAT on ${absAmount}${currencyTag} ` +
+        `(${maxVat}${currencyTag} at 25%). vat_amount is denominated in the transaction's currency, like belopp. ` +
+        `Check the underlag: the override must be the document's actual moms.`
       )
     }
   }
@@ -277,9 +300,10 @@ export function buildMappingResultFromCategory(
   if (isBusiness && treatment) {
     const vatRate = getVatRate(treatment)
     if (treatment === 'reverse_charge' && transaction.amount < 0) {
-      // EU reverse charge: fiktiv moms (offsetting entries)
-      const absAmount = Math.abs(transaction.amount)
-      const rcLines = generateReverseChargeLines(absAmount)
+      // EU reverse charge: fiktiv moms (offsetting entries), 25% of the SEK
+      // value: an EUR invoice's fiktiv moms posted off the EUR figure would
+      // understate 2614/2645 by the exchange rate.
+      const rcLines = generateReverseChargeLines(absSekAmount)
       for (const rcl of rcLines) {
         vatLines.push({
           account_number: rcl.account_number,
@@ -289,10 +313,14 @@ export function buildMappingResultFromCategory(
         })
       }
     } else if (vatRate > 0) {
-      const grossAmount = Math.abs(transaction.amount)
+      // Override: scale from transaction currency to SEK by the same ratio
+      // the gross resolved at (amount_sek embeds the bank's actual settlement
+      // rate, so a plain exchange_rate multiply could disagree with the gross
+      // line). absAmount > 0 is guaranteed here: a positive override on a
+      // zero-amount transaction already failed the maxVat bound above.
       const vatAmount = hasVatOverride
-        ? roundOre(vatAmountOverride as number)
-        : roundOre(grossAmount * vatRate / (1 + vatRate))
+        ? roundOre((vatAmountOverride as number) * (absSekAmount / absAmount))
+        : roundOre(absSekAmount * vatRate / (1 + vatRate))
 
       if (vatAmount > 0 && transaction.amount < 0 && mapping.vatDebitAccount) {
         // Expense: Ingående moms (deductible VAT)

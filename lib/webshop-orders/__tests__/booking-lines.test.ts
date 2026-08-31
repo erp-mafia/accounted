@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   buildOrderBookingLines,
   fallbackVatBreakdown,
+  orderBookingDescription,
   resolveBookingWarnings,
   resolvePaymentAccount,
   DEFAULT_PAYMENT_ACCOUNT,
@@ -259,6 +260,74 @@ describe('buildOrderBookingLines', () => {
     expect(sumDebits(lines)).toBe(sumCredits(lines))
   })
 
+  it('routes revenue per rate through a revenue template, VAT untouched', () => {
+    const lines = buildOrderBookingLines({
+      order: makeOrder({
+        total: 612,
+        total_tax: 87,
+        total_sek: 612,
+        vat_breakdown: [
+          { rate: 25, net: 300, tax: 75 },
+          { rate: 12, net: 100, tax: 12 },
+          { rate: 6, net: 100, tax: 6 },
+          { rate: 0, net: 19, tax: 0 },
+        ],
+      }),
+      settings,
+      revenueAccounts: { 25: '3041', 12: '3042', 6: '3043', 0: '3100' },
+    })
+    expect(lineFor(lines, '3041')?.credit_amount).toBe(300)
+    expect(lineFor(lines, '3042')?.credit_amount).toBe(100)
+    expect(lineFor(lines, '3043')?.credit_amount).toBe(100)
+    expect(lineFor(lines, '3100')?.credit_amount).toBe(19)
+    // The default accounts must not appear when every rate is templated.
+    for (const account of ['3001', '3002', '3003', '3004']) {
+      expect(lineFor(lines, account)).toBeUndefined()
+    }
+    // VAT accounts are always derived from the rate, never templated.
+    expect(lineFor(lines, '2611')?.credit_amount).toBe(75)
+    expect(lineFor(lines, '2621')?.credit_amount).toBe(12)
+    expect(lineFor(lines, '2631')?.credit_amount).toBe(6)
+    expect(sumDebits(lines)).toBe(sumCredits(lines))
+  })
+
+  it('falls back to the default revenue account for rates not in the template', () => {
+    const lines = buildOrderBookingLines({
+      order: makeOrder({
+        total: 537,
+        total_tax: 87,
+        total_sek: 537,
+        vat_breakdown: [
+          { rate: 25, net: 300, tax: 75 },
+          { rate: 12, net: 100, tax: 12 },
+        ],
+      }),
+      settings,
+      revenueAccounts: { 25: '3041' },
+    })
+    expect(lineFor(lines, '3041')?.credit_amount).toBe(300)
+    expect(lineFor(lines, '3002')?.credit_amount).toBe(100)
+    expect(sumDebits(lines)).toBe(sumCredits(lines))
+  })
+
+  it('mirrors refunds through the revenue template (debit the chosen account)', () => {
+    const lines = buildOrderBookingLines({
+      order: makeOrder({
+        row_type: 'refund',
+        total: -500,
+        total_tax: -100,
+        total_sek: -500,
+        vat_breakdown: [{ rate: 25, net: 400, tax: 100 }],
+      }),
+      settings,
+      revenueAccounts: { 25: '3041' },
+    })
+    expect(lineFor(lines, '1930')).toMatchObject({ debit_amount: 0, credit_amount: 500 })
+    expect(lineFor(lines, '3041')).toMatchObject({ debit_amount: 400, credit_amount: 0 })
+    expect(lineFor(lines, '2611')).toMatchObject({ debit_amount: 100, credit_amount: 0 })
+    expect(sumDebits(lines)).toBe(sumCredits(lines))
+  })
+
   it('throws when a non-SEK order has no resolved SEK amount', () => {
     expect(() =>
       buildOrderBookingLines({
@@ -309,5 +378,48 @@ describe('resolveBookingWarnings', () => {
         customer_country: 'DK',
       }),
     ).toEqual(['foreign_vat'])
+  })
+})
+
+describe('orderBookingDescription', () => {
+  it('labels an order with its payment method', () => {
+    expect(
+      orderBookingDescription({
+        row_type: 'order',
+        order_number: '1001',
+        payment_method: 'swish',
+        payment_method_title: 'Swish',
+      }),
+    ).toBe('Order 1001 (Swish)')
+  })
+
+  it('falls back to the raw method key, then to no method', () => {
+    expect(
+      orderBookingDescription({
+        row_type: 'order',
+        order_number: '1001',
+        payment_method: 'swish',
+        payment_method_title: null,
+      }),
+    ).toBe('Order 1001 (swish)')
+    expect(
+      orderBookingDescription({
+        row_type: 'order',
+        order_number: '1001',
+        payment_method: null,
+        payment_method_title: null,
+      }),
+    ).toBe('Order 1001')
+  })
+
+  it('labels refunds without the method', () => {
+    expect(
+      orderBookingDescription({
+        row_type: 'refund',
+        order_number: '1001',
+        payment_method: 'swish',
+        payment_method_title: 'Swish',
+      }),
+    ).toBe('Återbetalning order 1001')
   })
 })

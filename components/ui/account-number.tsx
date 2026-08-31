@@ -1,6 +1,9 @@
 'use client'
 
+import { useMemo } from 'react'
 import { getAccountDescription, type AccountType } from '@/lib/bookkeeping/account-descriptions'
+import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
+import { useAccounts } from '@/lib/reference-data/hooks'
 import {
   Tooltip,
   TooltipTrigger,
@@ -41,8 +44,24 @@ export function AccountNumber({
   size = 'default',
   className,
 }: AccountNumberProps) {
+  // Loads the BAS chart chunk after mount and re-renders once names and
+  // descriptions for non-hardcoded accounts are available.
+  useBasReference()
+  // Inactive accounts included: historical verifikat keep referencing them
+  // long after they leave the active chart.
+  const { accounts } = useAccounts(false)
+  const companyName = useMemo(
+    () => accounts.find((a) => a.account_number === number)?.account_name,
+    [accounts, number],
+  )
   const desc = getAccountDescription(number)
-  const displayName = desc?.name ?? name
+  // The company's own account name wins over the BAS reference name: a chart
+  // row is user-editable data and must never be visually overridden by our
+  // hardcoded copy. Call sites that already know the row pass `name`; the
+  // rest (verifikat views) fall back to the shared reference-data cache, so
+  // off-catalog accounts (e.g. SIE-imported 1580) still get their names.
+  // The tooltip still shows the BAS name as reference.
+  const displayName = name || companyName || desc?.name
 
   const numberElement = (
     <span

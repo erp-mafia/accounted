@@ -88,7 +88,7 @@ Many AP rejections happen post-send when the receiver's MLR comes back hours lat
 - **Storecove peppolvalidator.com**, error code lookup.
 - **EC DG GROW eInvoicing validator**, https://itb.ec.europa.eu/invoice
 - **Norwegian validator**, https://anskaffelser.no/verktoy/validator (also useful for Sweden).
-- **DIGG testbädd**, https://www.digg.se/digitala-tjanster/peppol/peppol-testbadd
+- **SFTI Validex**, https://sfti.validex.net/ (DIGG's Peppol testbädd was discontinued in the 2026 handover)
 
 ## Build vs buy, the economic break-even
 
@@ -157,7 +157,7 @@ This hybrid is the dominant strategy:
 
 - Become Candidate Service Provider (AP-only) with OpenPeppol (~€4,400 one-off + €3,350/year ongoing).
 - Pass Conformance Test Suite.
-- Sign Service Provider Agreement with DIGG (free).
+- Sign the Peppol Service Provider Agreement with Upphandlingsmyndigheten (free: SP Agreement clause 14.3 forbids a Peppol Authority from charging).
 - Migrate to native Oxalis-NG receive.
 - Marketing message: "your customers email PDFs, your suppliers send Peppol e-invoices, both arrive in your inbox."
 
@@ -200,6 +200,6 @@ The window to build with this advantage is the next **18-24 months** before incu
 - Phive-rules: https://github.com/phax/phive-rules
 - peppol-bis-invoice-3: https://github.com/OpenPEPPOL/peppol-bis-invoice-3
 - Storecove docs: https://www.storecove.com/docs/
-- DIGG Peppol testbädd: https://www.digg.se/digitala-tjanster/peppol/peppol-testbadd
+- SFTI Validex verification service: https://sfti.validex.net/
 - Peppol Testbed: https://peppol.org/tools-support/testbed/
 - OpenPeppol membership: https://peppol.eu/who-is-who/openpeppol-membership/

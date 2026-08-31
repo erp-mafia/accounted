@@ -57,7 +57,7 @@ export function CalendarDayCell({
         !isCurrentMonth && 'bg-muted/30 text-muted-foreground',
         isToday && 'bg-primary/5',
         hasOverdue && 'border-l-2 border-l-destructive',
-        !hasOverdue && hasActionNeeded && 'border-l-2 border-l-orange-500'
+        !hasOverdue && hasActionNeeded && 'border-l-2 border-l-warning'
       )}
     >
       <div className={cn(
@@ -113,7 +113,7 @@ export function CalendarDayCell({
           {deadlinesByStatus.action_needed > 0 && (
             <div className="flex items-center gap-1">
               <div className={cn('w-2 h-2 rounded-sm', STATUS_COLORS.action_needed.dot)} />
-              <span className="text-xs text-orange-700 truncate">
+              <span className="text-xs text-warning-foreground truncate">
                 {deadlinesByStatus.action_needed} åtgärd
               </span>
             </div>

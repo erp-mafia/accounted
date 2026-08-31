@@ -122,7 +122,7 @@ For a new Swedish accounting/fintech product, the practical menu:
 
 ## Authoritative source list
 
-- DIGG Peppol traffic stats: https://www.digg.se/digitala-tjanster/peppol/statistik-fran-peppolnatverket-
+- Swedish Peppol traffic stats: https://www.upphandlingsmyndigheten.se/digitalisering-och-e-handel/peppol/statistik-fran-peppolnatverket/
 - Visma Autoinvoice docs: https://documentation.autoinvoice.visma.com/
 - Fortnox API: https://developer.fortnox.se/
 - Pagero compliance pages: https://www.pagero.com/compliance/regulatory-updates/sweden

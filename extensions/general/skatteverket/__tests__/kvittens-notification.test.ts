@@ -56,12 +56,14 @@ function makeSupabase(opts: {
       },
       maybeSingle: async () => {
         if (table === 'notification_log') return { data: opts.alreadyRow ?? null, error: null }
+        // Two-step recipient lookup (lib/notifications/member-email): the
+        // membership check first, then the profile email.
         if (table === 'company_members') {
-          const member =
-            opts.member === undefined
-              ? { user_id: 'user-1', profiles: { email: 'user@example.com' } }
-              : opts.member
+          const member = opts.member === undefined ? { user_id: 'user-1' } : opts.member
           return { data: member, error: null }
+        }
+        if (table === 'profiles') {
+          return { data: { email: 'user@example.com' }, error: null }
         }
         return { data: null, error: null }
       },

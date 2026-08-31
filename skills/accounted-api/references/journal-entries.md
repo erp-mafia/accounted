@@ -41,6 +41,30 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "id": "0e9c…",
+      "fiscal_period_id": "a8f1…",
+      "voucher_series": "A",
+      "voucher_number": 142,
+      "entry_date": "2026-05-12",
+      "description": "Levfaktura 2026-1234, Office Depot AB (ankomstnr 42)",
+      "status": "posted",
+      "source_type": "supplier_invoice_registered",
+      "created_at": "2026-05-13T15:00:00Z"
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12",
+    "next_cursor": null
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/journal-entries`
@@ -79,6 +103,29 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "fiscal_period_id": "a8f1…",
+  "entry_date": "2026-05-12",
+  "description": "Bankavgift maj 2026",
+  "lines": [
+    {
+      "account_number": "6570",
+      "debit_amount": 50,
+      "credit_amount": 0,
+      "line_description": "Bankavgift"
+    },
+    {
+      "account_number": "1930",
+      "debit_amount": 0,
+      "credit_amount": 50,
+      "line_description": "Företagskonto"
+    }
+  ]
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -104,6 +151,22 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "status": "draft",
+    "voucher_series": "A",
+    "voucher_number": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -160,6 +223,37 @@ Response `200`:
 }
 ```
 
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "voucher_series": "A",
+    "voucher_number": 142,
+    "entry_date": "2026-05-12",
+    "status": "posted",
+    "lines": [
+      {
+        "account_number": "6570",
+        "debit_amount": 50,
+        "credit_amount": 0,
+        "sort_order": 0
+      },
+      {
+        "account_number": "1930",
+        "debit_amount": 0,
+        "credit_amount": 50,
+        "sort_order": 1
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
 ---
 
 ### `POST /api/v1/companies/{companyId}/journal-entries/{id}/commit`
@@ -176,6 +270,7 @@ Atomically advances the voucher series and flips the draft to posted. The vouche
 - Idempotency-Key is mandatory.
 - Posted entries cannot be edited. Plan the lines carefully or call /correct after commit if you need to change them.
 - Voucher numbers are sequential within (fiscal_period_id, voucher_series). A commit failure (e.g. period locked between draft creation and commit) does not advance the sequence.
+- If the key has an unattended commit limit, an entry above it returns 403 UNATTENDED_COMMIT_LIMIT_EXCEEDED and stays a draft for a human to commit. Do not split it into smaller entries: one affärshändelse is one verifikat (BFL 5 kap. 6 §).
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -192,6 +287,23 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "voucher_series": "A",
+    "voucher_number": 143,
+    "status": "posted",
+    "entry_date": "2026-05-12"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -229,6 +341,26 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "lines": [
+    {
+      "account_number": "6570",
+      "debit_amount": 75,
+      "credit_amount": 0,
+      "line_description": "Bankavgift (rättad)"
+    },
+    {
+      "account_number": "1930",
+      "debit_amount": 0,
+      "credit_amount": 75,
+      "line_description": "Företagskonto"
+    }
+  ]
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -246,6 +378,24 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "reversal_id": "4d2a…",
+    "corrected_id": "7b3a…",
+    "original_id": "0e9c…",
+    "voucher_series": "A",
+    "reversal_voucher_number": 144,
+    "corrected_voucher_number": 145
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -278,6 +428,13 @@ Request body:
 { reversal_date?: string, allow_deep_chain?: boolean }
 ```
 
+Example request:
+```json
+{
+  "reversal_date": "2026-05-13"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -295,6 +452,24 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "reversal_id": "4d2a…",
+    "original_id": "0e9c…",
+    "voucher_series": "A",
+    "voucher_number": 144,
+    "entry_date": "2026-05-13",
+    "status": "posted"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -328,6 +503,31 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "journal_entries": [
+    {
+      "fiscal_period_id": "a8f1…",
+      "entry_date": "2026-05-12",
+      "description": "Bankavgift",
+      "lines": [
+        {
+          "account_number": "6570",
+          "debit_amount": 50,
+          "credit_amount": 0
+        },
+        {
+          "account_number": "1930",
+          "debit_amount": 0,
+          "credit_amount": 50
+        }
+      ]
+    }
+  ]
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -341,6 +541,33 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "results": [
+      {
+        "ok": true,
+        "request_index": 0,
+        "data": {
+          "id": "0e9c…",
+          "status": "draft"
+        }
+      }
+    ],
+    "summary": {
+      "total": 1,
+      "succeeded": 1,
+      "failed": 0
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -377,6 +604,17 @@ Request body:
 }
 ```
 
+Example request:
+```json
+{
+  "fiscal_period_id": "a8f1…",
+  "voucher_series": "A",
+  "gap_start": 142,
+  "gap_end": 145,
+  "explanation": "Migration from previous bookkeeping system on 2026-05-12: series A148-onwards corresponds to the new Accounted numbering; numbers A142-A145 were assigned in the legacy system to manual paper vouchers archived offline (BFL 7 kap retention applies). Paper vouchers are stored in the company archive under reference 2026-PAPER-Q2."
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -395,6 +633,22 @@ Response `200`:
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "voucher_series": "A",
+    "gap_start": 142,
+    "gap_end": 145
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```

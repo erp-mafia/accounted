@@ -69,15 +69,8 @@ import { appendQuestionHistory, updateItemContext } from './item-context'
 
 const log = createLogger('whatsapp-inbox/process-inbound')
 
-/** Chat intake accepts what phones actually produce. Narrower than the upload
- *  allowlist on purpose: WhatsApp transcodes photos to JPEG, so HEIC never
- *  arrives, and everything else gets the M15 nudge. */
-export const CHAT_ALLOWED_MIME_TYPES: ReadonlySet<string> = new Set([
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'application/pdf',
-])
+export { CHAT_ALLOWED_MIME_TYPES } from './chat-mime'
+import { CHAT_ALLOWED_MIME_TYPES, normalizeChatMime } from './chat-mime'
 
 /** M17 is sent at most once per this window per sender, not once per file. */
 const RATE_LIMIT_NOTICE_WINDOW_MS = 10 * 60 * 1000
@@ -154,6 +147,8 @@ async function loadLink(
   return (data as WhatsAppPhoneLink | null) ?? null
 }
 
+/** Live membership: a pin or default pointing at an ARCHIVED company must not
+ *  receive receipts (same filter shape as lib/supabase/middleware.ts). */
 async function isMember(
   supabase: SupabaseClient,
   userId: string,
@@ -161,9 +156,10 @@ async function isMember(
 ): Promise<boolean> {
   const { data } = await supabase
     .from('company_members')
-    .select('company_id')
+    .select('company_id, companies!inner(archived_at)')
     .eq('user_id', userId)
     .eq('company_id', companyId)
+    .is('companies.archived_at', null)
     .limit(1)
     .maybeSingle()
   return data != null
@@ -283,8 +279,29 @@ interface ResolvedCompany {
 }
 
 /**
+ * True when a company question is still open on the conversation, in any of
+ * the shapes it survives in: the awaiting_company state, the options behind a
+ * digit answer (kept past the 48h TTL for a late reply), or the company
+ * pending_question. Once the sender resolves as 'single' none of them can be
+ * answered any more.
+ */
+function hasDeadCompanyQuestion(conversation: WhatsAppConversation): boolean {
+  const context = getContext(conversation)
+  return (
+    conversation.state === 'awaiting_company' ||
+    (context.company_options?.length ?? 0) > 0 ||
+    context.pending_question?.type === 'company'
+  )
+}
+
+/**
  * Conversation pin (live + still a member, sliding 8h) -> default company
  * (still a member) -> sole membership -> null (ask).
+ *
+ * Every membership here means a NON-ARCHIVED company: an archived one is not
+ * a place receipts can go, and counting it made a sender with one live
+ * company look multi-company (#1589), so they were asked a question Meta
+ * refused to deliver.
  *
  * Returns 'transient_error' when the membership query FAILED: a DB blip must
  * not read as "no memberships", which used to park the rows behind an
@@ -325,8 +342,9 @@ async function resolveCompanyTarget(
 
   const { data: memberships, error: membershipsError } = await supabase
     .from('company_members')
-    .select('company_id')
+    .select('company_id, companies!inner(archived_at)')
     .eq('user_id', link.user_id)
+    .is('companies.archived_at', null)
   if (membershipsError) {
     log.warn('membership query failed during company resolution; will retry', {
       error: membershipsError.message,
@@ -457,7 +475,7 @@ async function processMediaMessage(
       : await getOrCreateConversation(supabase, link.id)
 
     // ── MIME allowlist (before staging: never park junk) ───
-    const mime = (row.media_mime ?? '').split(';')[0].trim().toLowerCase()
+    const mime = normalizeChatMime(row.media_mime)
     if (!CHAT_ALLOWED_MIME_TYPES.has(mime)) {
       await sendText(supabase, { to, body: copy.m15Unsupported(), template: TEMPLATE.m15Unsupported, ...replyBase })
       await markStatus(supabase, row.id, 'skipped', {
@@ -518,6 +536,55 @@ async function processMediaMessage(
       return { kind: 'media_staged', conversationId: conversation.id }
     }
     const companyId = resolved.companyId
+
+    if (resolved.via === 'single' && conversation) {
+      // Receipts parked behind an earlier company question can never be
+      // answered now: the sender's other memberships are archived (or gone),
+      // so that question will not be asked again, and the sole live company
+      // is unambiguous by construction. Re-open them so they file here
+      // instead of expiring at Meta. Same guarded idiom as applyCompanyChoice;
+      // the re-run resolves them as 'single' on its own. default/pin
+      // resolution deliberately does not drain: those choices the user can
+      // still change, so the open question there is not dead.
+      const { data: parked } = await supabase
+        .from('whatsapp_messages')
+        .update({ processing_status: 'received', error_message: null })
+        .eq('conversation_id', conversation.id)
+        .eq('processing_status', 'skipped')
+        .eq('error_message', STAGED_AWAITING_COMPANY)
+        .select('id')
+      const parkedIds = ((parked ?? []) as { id: string }[]).map((r) => r.id)
+      if (parkedIds.length > 0) {
+        log.info('re-opened receipts parked behind an unaskable company question', {
+          conversationId: conversation.id,
+          count: parkedIds.length,
+        })
+        kickInboundProcessing(parkedIds)
+      }
+      // The question itself is as dead as the rows behind it. Left in place,
+      // state 'awaiting_company' turns every typed word into a company_retry
+      // that re-offers the archived company, swallows 'byt', and keeps
+      // finalizeBurst from asking anything about the drained receipts until
+      // the 48h TTL sweep. Guarded and re-checked against fresh state, so a
+      // concurrent worker that already cleared it is a no-op, and only the
+      // company question is touched: a representation/context question that
+      // opened in between stays.
+      if (hasDeadCompanyQuestion(conversation)) {
+        await updateConversation(supabase, conversation, (current, currentContext) => {
+          if (!hasDeadCompanyQuestion(current)) return null
+          const nextContext: ConversationContext = { ...currentContext }
+          delete nextContext.company_options
+          if (nextContext.pending_question?.type === 'company') delete nextContext.pending_question
+          return {
+            state: current.state === 'awaiting_company' ? 'idle' : current.state,
+            context: nextContext,
+          }
+        })
+        log.info('cleared the dead company question on a single-company conversation', {
+          conversationId: conversation.id,
+        })
+      }
+    }
 
     // ── Per-company intake quota (ack-and-drop, never retryable) ──
     const limit = await checkInboxUploadRateLimit(supabase, companyId)

@@ -68,10 +68,13 @@ export default function SuppliersPage() {
   async function fetchSuppliers() {
     if (!company) return
     setIsLoading(true)
+    // Archived suppliers (v1 API soft-delete) are kept for retention but are
+    // not part of the roster: same filter as /api/suppliers and the v1 list.
     const { data, error } = await supabase
       .from('suppliers')
       .select('*')
       .eq('company_id', company.id)
+      .is('archived_at', null)
       .order('name', { ascending: true })
 
     if (error) {

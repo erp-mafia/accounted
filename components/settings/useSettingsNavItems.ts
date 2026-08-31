@@ -1,9 +1,24 @@
 'use client'
 
+import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+
+/**
+ * Byrå settings scope: settings opened from the cockpit carry ?ctx=byra
+ * (links in the user menu / mobile nav). In that scope only account-level
+ * and byrå-level sections show: everything company-scoped (bokföring, skatt,
+ * fakturering, mallar, ...) is edited from inside the client company, never
+ * from the cockpit. Honored only for byrå team members; cosmetic only, the
+ * section pages keep their own auth.
+ */
+export function useByraSettingsScope(): boolean {
+  const searchParams = useSearchParams()
+  const { byraTeam } = useCompany()
+  return searchParams.get('ctx') === 'byra' && !!byraTeam
+}
 
 export type SettingsGroupKey = 'account' | 'company' | 'accounting' | 'sales' | 'tools'
 
@@ -34,8 +49,9 @@ const GROUP_ORDER: SettingsGroupKey[] = ['account', 'company', 'accounting', 'sa
  * availability from the generated enabled-extensions set.
  */
 export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: SettingsNavGroup[] } {
-  const { company, isSandbox } = useCompany()
+  const { company, isSandbox, byraTeam } = useCompany()
   const { identity } = useAgentSheet()
+  const byraScope = useByraSettingsScope()
   const t = useTranslations('settings_nav')
 
   const hasCompany = !!company
@@ -49,7 +65,13 @@ export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: Setti
   // Importera/Exportera. Team stays hidden (show:false) until enabled.
   const defs: Array<SettingsNavItem & { show: boolean }> = [
     { id: 'account', href: '/settings/account', label: t('account'), group: 'account', show: true },
-    { id: 'billing', href: '/settings/billing', label: t('billing'), group: 'account', show: true },
+    // Byrå scope: members & roles is the one byrå-level section; billing is
+    // company-scoped (team-billed byråer have no per-company subscription).
+    { id: 'team', href: '/settings/team', label: t('team'), group: 'account', show: byraScope },
+    // Varumärke (WL-17): byrå owner/admin edits the brand logo; members see
+    // nothing (the section would be read-only noise for them).
+    { id: 'brand', href: '/settings/brand', label: t('brand'), group: 'account', show: byraScope && !!byraTeam && (byraTeam.role === 'owner' || byraTeam.role === 'admin') },
+    { id: 'billing', href: '/settings/billing', label: t('billing'), group: 'account', show: !byraScope },
     { id: 'company', href: '/settings/company', label: t('company'), group: 'company', show: hasCompany },
     { id: 'bookkeeping', href: '/settings/bookkeeping', label: t('bookkeeping'), group: 'accounting', show: hasCompany },
     { id: 'tax', href: '/settings/tax', label: t('tax'), group: 'accounting', show: hasCompany },
@@ -68,6 +90,9 @@ export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: Setti
 
   const items: SettingsNavItem[] = defs
     .filter((d) => d.show)
+    // Byrå scope hides every company-scoped section: those are edited from
+    // inside the client company where it is obvious WHICH company they hit.
+    .filter((d) => !byraScope || d.group === 'account')
     .map(({ show: _show, ...item }) => item)
 
   const groupLabels: Record<SettingsGroupKey, string> = {

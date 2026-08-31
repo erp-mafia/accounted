@@ -14,10 +14,13 @@ export type CompanyRole = 'owner' | 'admin' | 'member' | 'viewer'
 export type TeamRole = 'owner' | 'admin' | 'member'
 export type MemberSource = 'direct' | 'team'
 
-// Team (consulting firm grouping)
+// Team (consulting firm grouping). 'personal' teams are the implicit
+// one-per-user grouping; 'byra' teams are ops-created accounting-firm
+// tenants (WL-08) with invites, a brand, and cockpit access.
 export interface Team {
   id: string
   name: string
+  kind: 'personal' | 'byra'
   created_by: string
   created_at: string
   updated_at: string
@@ -81,10 +84,6 @@ export type CompanyMigrationResetBlockerCode =
   | 'migration_window_expired'
   | 'sandbox_company'
   | 'locked_or_closed_periods'
-  | 'journal_entries_exist'
-  | 'non_import_committed_entries'
-  | 'voucher_sequence_state_exists'
-  | 'invoice_records_exist'
   | 'authority_submission_detected'
   | 'live_bank_connections'
   | 'imports_in_progress'
@@ -115,6 +114,53 @@ export interface CompanyMigrationResetRpcResult {
   replacement_company_id?: string
   archived_at?: string
   counts?: CompanyMigrationResetEligibility['counts']
+}
+
+// Fiscal-year reset (issue #1883): guarded hard-delete of one OPEN fiscal
+// year's vouchers. Mirrors the migration-reset envelope shapes above.
+export type FiscalYearResetBlockerCode =
+  | 'period_closed'
+  | 'period_locked'
+  | 'company_lock_date'
+  | 'year_end_state'
+  | 'arsredovisning_state'
+  | 'next_year_dependency'
+  | 'vat_declared'
+  | 'agi_declared'
+  | 'rot_rut_state'
+  | 'cross_year_reference'
+
+export interface FiscalYearResetBlocker {
+  code: FiscalYearResetBlockerCode
+  count?: number
+  date?: string
+}
+
+export interface FiscalYearResetEligibility {
+  eligible: boolean
+  blockers: FiscalYearResetBlocker[]
+  period: {
+    id: string
+    name: string
+    period_start: string
+    period_end: string
+  }
+  counts: {
+    vouchers: number
+    documents_to_detach: number
+  }
+}
+
+export interface FiscalYearResetRpcResult {
+  ok: boolean
+  code?: string
+  eligible?: boolean
+  blockers?: FiscalYearResetBlocker[]
+  period?: FiscalYearResetEligibility['period']
+  counts?: FiscalYearResetEligibility['counts']
+  deleted?: number
+  detached_documents?: number
+  period_name?: string
 }
 
 // User preferences (cross-company)
@@ -320,6 +366,24 @@ export interface InvoiceEmailTexts {
   en?: InvoiceEmailTextOverrides
 }
 
+// Editable reminder email texts per reminder level (Swedish only, matching
+// the reminder templates). Missing / whitespace-only fields fall back to the
+// defaults in lib/email/reminder-templates.ts (REMINDER_EMAIL_DEFAULT_TEXTS).
+// Supports the fixed placeholder set {fakturanummer} {kundnamn} {förnamn}
+// {företag} {fakturadatum} {förfallodatum} {belopp} {dagar}. TEXT only:
+// reminder fee and interest math are unaffected (Lag 1981:739 caps the
+// påminnelseavgift at 60 kr; the 450 kr förseningsersättning is out of scope).
+export interface ReminderTextOverride {
+  subject?: string
+  body?: string
+}
+
+export interface ReminderTextOverrides {
+  level_1?: ReminderTextOverride
+  level_2?: ReminderTextOverride
+  level_3?: ReminderTextOverride
+}
+
 export type InvoiceFontFamily =
   | 'Helvetica'
   | 'Times-Roman'
@@ -498,6 +562,8 @@ export interface CompanySettings {
   reminder_days_level_1: number
   reminder_days_level_2: number
   reminder_days_level_3: number
+  // Editable reminder email texts per level. null = all defaults.
+  reminder_text_overrides: ReminderTextOverrides | null
 
   // Reminder surcharges (dröjsmålsränta + lagstadgad påminnelseavgift)
   reminder_fee_enabled: boolean
@@ -524,6 +590,12 @@ export interface CompanySettings {
   // Körjournal (mileage log): UI-visibility toggle only, never load-bearing
   // for correctness. The nav row also shows when mileage_trips rows exist.
   mileage_enabled: boolean
+
+  // Data analysis consent (migration 20260828120000): when true, the
+  // company's bookkeeping outcomes may be read across companies to evaluate
+  // and improve automatic booking. Default false, enforced server-side
+  // (lib/company/data-analysis.ts); the UI only mirrors it.
+  data_analysis_opt_in: boolean
 
   // Salary payments (migration 20260508120000 + 20260703190000).
   // preferred_payment_format defaults to 'pain001' — Bankgirot Lön is
@@ -744,6 +816,12 @@ export interface Transaction {
 
   // Import tracking
   import_source: string | null
+  // The bank_file_imports batch that inserted this row (bank-file CSV/CAMT
+  // import paths only). NULL for PSD2/manual/MCP rows and rows imported
+  // before migration 20260820071500. Scope key for undo_bank_file_import.
+  // Optional like the other late-added columns: older fixtures/readers
+  // predate it.
+  bank_file_import_id?: string | null
   reference: string | null  // OCR number, Bankgiro reference
 
   // Counterparty identification from PSD2 (creditor for outflows, debtor for
@@ -761,7 +839,10 @@ export interface Transaction {
 }
 
 // Bank File Import (tracking table for file-based imports)
-export type BankFileImportStatus = 'pending' | 'processing' | 'completed' | 'failed'
+// 'undone' = the batch's unbooked transactions were bulk-deleted via
+// undo_bank_file_import; a re-import of the same file reuses the row
+// (upsert on company_id + file_hash) and moves it back to 'processing'.
+export type BankFileImportStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'undone'
 
 export interface BankFileImport {
   id: string
@@ -1186,6 +1267,11 @@ export interface Invoice {
   // Reference
   your_reference: string | null
   our_reference: string | null
+  // Fakturamärkning: buyer-required marking (cost center, project, PO label),
+  // separate from your_reference (Er referens = contact person). Printed on
+  // the PDF and mapped to Peppol BT-10 BuyerReference when set. Optional in
+  // TS for pre-migration fixtures.
+  invoice_marking?: string | null
 
   // Optional online payment link (pasted by the user, e.g. a Stripe Payment
   // Link). Rendered as a "Betala online" button in the invoice email and as a
@@ -1350,7 +1436,12 @@ export interface InvoiceItem {
   // Price
   unit_price: number
 
-  // Calculated
+  // Percentage discount on the line (0-100). line_total and vat_amount are
+  // stored NET of this discount (lib/invoices/line-amounts.ts). Optional in
+  // TS for pre-migration fixtures; treat undefined the same as 0.
+  discount_percent?: number
+
+  // Calculated (net of discount_percent)
   line_total: number
 
   // Per-line VAT
@@ -1627,6 +1718,8 @@ export interface CreateInvoiceInput {
   document_type?: InvoiceDocumentType
   your_reference?: string
   our_reference?: string
+  /** Fakturamärkning: buyer-required marking, separate from your_reference. */
+  invoice_marking?: string
   notes?: string
   /** Optional https link where the customer can pay online (e.g. a Stripe Payment Link). */
   payment_link_url?: string
@@ -1650,6 +1743,8 @@ export interface CreateInvoiceItemInput {
   quantity: number
   unit: string
   unit_price: number
+  /** Percentage discount on the line (0-100). Omitted/null = 0. */
+  discount_percent?: number | null
   vat_rate?: number
   /** Source article (optional). Free-text lines omit it. */
   article_id?: string | null
@@ -2441,6 +2536,9 @@ export type PendingOperationType =
   // Stream 1 Phase 1: invoice operations beyond simple create/send
   | 'credit_invoice'
   | 'convert_invoice'
+  // Draft-only invoice removal: unnumbered drafts hard delete, numbered
+  // drafts are makulerade (number retained). Non-drafts are refused.
+  | 'delete_draft_invoice'
   // Draft-only invoice edit (items full-replace); sent/booked stays immutable,
   // correction is a kreditfaktura.
   | 'update_invoice'
@@ -2456,6 +2554,10 @@ export type PendingOperationType =
   // Notes-only annotation on a verifikat: the immutability trigger's carve-out
   // (migration 20260608120000) makes this legal even on posted entries.
   | 'set_voucher_note'
+  // Ignore / restore a bank transaction that is not an affärshändelse (PSD2
+  // ghost row, duplicate, never-executed transfer). Writes no verifikat, so a
+  // locked or closed period does not block it (issue #1661).
+  | 'ignore_transaction'
   // Bokslut: planenlig avskrivning (one journal entry per asset)
   | 'post_annual_depreciation'
   // Payroll: salary run creation + AGI declaration
@@ -2479,6 +2581,19 @@ export type PendingOperationType =
   | 'bulk_book_inbox_items'
   // PR #614: link a single bank tx to an already-posted verifikat (no new JE)
   | 'link_transaction_journal_entry'
+  // Account-keyed reconciliation (bank accounts + skattekonto): link outside
+  // rows to existing verifikat / clear such a link. No ledger writes.
+  | 'reconciliation_match'
+  | 'reconciliation_unmatch'
+  // Sign-off "avstämt t.o.m. <datum>" on one account (account_reconciliations row).
+  | 'reconciliation_signoff'
+  // Book the remainder of a bank selection as a fee/interest/rounding verifikat and link it.
+  | 'reconciliation_residual'
+  // Book synced skattekonto rows as posted verifikat (1630 + rule-matched
+  // counter account), same helper as the HTTP bokfor-batch route. The
+  // single-row op stores { transaction_id }; the batch op stores { ids }.
+  | 'book_skattekonto_row'
+  | 'book_skattekonto_rows'
   // PR5: Skatteverket filing via MCP. Commit = "send for BankID signing"
   // (returns a signing link); the user's signature in the browser files it.
   | 'submit_vat_declaration'
@@ -2493,6 +2608,14 @@ export type PendingOperationType =
   // employee master data (1.8; personnummer encrypted at staging), and
   // cutover opening balances for mid-year migrations (2.4).
   | 'update_payslip_line'
+  // Set THIS RUN's base salary for one employee (salary_run_employees.
+  // monthly_salary, draft only). The per-run column is what the engine reads;
+  // the employee master's fixed salary stays untouched (variable owner pay).
+  | 'set_run_salary'
+  // Draft-only salary-run header edit (payment_date / voucher_series /
+  // notes), same field set as the v1 PATCH; payment_date is the future
+  // booking entry date.
+  | 'update_salary_run'
   | 'register_absence'
   | 'create_employee'
   | 'update_employee'
@@ -2772,6 +2895,7 @@ export interface NotificationSettings {
   receipt_extracted_enabled: boolean
   receipt_matched_enabled: boolean
   missing_underlag_enabled: boolean
+  email_digest_enabled: boolean
   created_at: string
   updated_at: string
 }
@@ -2789,6 +2913,7 @@ export type NotificationType =
   | 'missing_underlag'
   | 'skv_kvittens'
   | 'skv_connection_expired'
+  | 'bookkeeping_digest'
 
 // Notification log entry
 export interface NotificationLog {
@@ -2799,7 +2924,7 @@ export interface NotificationLog {
   reference_id: string
   days_before: number
   sent_at: string
-  delivery_status: 'sent' | 'delivered' | 'failed'
+  delivery_status: 'pending' | 'sent' | 'delivered' | 'failed'
 }
 
 // ============================================================
@@ -2913,7 +3038,7 @@ export interface SIEAccountMapping {
 // receipt ack) but AI extraction has not landed yet; extracted_data is NULL
 // until the deferred worker (or the sweep cron) flips it to 'received'.
 export type InboxItemStatus = 'received' | 'processing' | 'error'
-export type InboxItemSource = 'email' | 'upload' | 'whatsapp'
+export type InboxItemSource = 'email' | 'upload' | 'whatsapp' | 'mail_hunt' | 'peppol'
 
 export type CompanyInboxStatus = 'active' | 'deprecated' | 'blocked'
 
@@ -2949,6 +3074,31 @@ export interface CompanyInboundDomain {
   status: CompanyInboundDomainStatus
   resend_domain_id: string | null
   dns_records: InboundDomainDnsRecord[] | null
+  verified_at: string | null
+  last_checked_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type CompanySendingDomainStatus = 'pending' | 'verified' | 'failed'
+
+// A DNS record the user must publish to verify their custom sending domain
+// (verbatim from the Resend domains API; same shape as the inbound records).
+export type SendingDomainDnsRecord = InboundDomainDnsRecord
+
+// Opt-in per-company sender identity for invoice email. Only a row with
+// status = 'verified' AND enabled = true changes the From header; everything
+// else falls back to the platform sender.
+export interface CompanySendingDomain {
+  id: string
+  company_id: string
+  domain: string
+  status: CompanySendingDomainStatus
+  sender_local_part: string
+  sender_name: string | null
+  enabled: boolean
+  resend_domain_id: string | null
+  dns_records: SendingDomainDnsRecord[] | null
   verified_at: string | null
   last_checked_at: string | null
   created_at: string
@@ -3003,7 +3153,15 @@ export interface InboxChannelContext {
    * everything else on this type belongs to the WhatsApp branch and is absent
    * on them.
    */
-  channel: 'whatsapp' | 'mail_hunt'
+  channel: 'whatsapp' | 'mail_hunt' | 'peppol'
+  /** Set by lib/invoices/peppol-inbox-delivery.ts: provenance of a received e-invoice. */
+  peppol_provider?: string | null
+  /** The provider's id for the received document (Qvalia integrationId). */
+  peppol_document_id?: string | null
+  peppol_document_type?: 'Invoice' | 'CreditNote' | null
+  peppol_sender_endpoint?: string | null
+  /** Archived exact UBL XML, when the inbox document is a rendering (embedded PDF) instead. */
+  peppol_xml_document_id?: string | null
   /** Set by lib/receipt-hunt/ingest.ts: which mailbox the receipt came out of. */
   mail_mailbox?: string | null
   mail_provider?: 'gmail' | 'microsoft' | null
@@ -3608,6 +3766,7 @@ export type AuditAction =
   | 'SECURITY_EVENT'
   | 'INTEGRITY_FAILURE'
   | 'COMMITTED_AT_OVERRIDE'
+  | 'RESET_SNAPSHOT'
 
 export interface AuditLogEntry {
   id: string
@@ -4061,6 +4220,11 @@ export interface IngestOptions {
   /** Only INSERT transactions + dedup. Skip reconciliation, invoice matching,
    * supplier matching, and auto-categorization. For viewer imports. */
   rawInsertOnly?: boolean
+  /** The bank_file_imports batch id to stamp on every inserted row
+   * (transactions.bank_file_import_id). Set by the bank-file import paths
+   * so "undo this import" can scope its bulk delete to exactly this batch.
+   * Omitted by every other caller (PSD2 sync, MCP): those rows stay NULL. */
+  bankFileImportId?: string
 }
 
 /** Result of the transaction ingestion pipeline */
@@ -4163,6 +4327,11 @@ export interface WebshopOrder {
   legacy_transaction_id: string | null
   /** Financial delta arrived from the store after booking froze this row. */
   remote_changed_after_freeze: boolean
+  /** User marked the row as booked/handled outside the integration. */
+  manually_booked_at: string | null
+  manually_booked_by: string | null
+  /** Optional informational reference to the existing verifikat. */
+  manually_booked_journal_entry_id: string | null
   created_at: string
   updated_at: string
 }
@@ -4241,10 +4410,20 @@ export interface InvoiceExtractionResult {
     roundingAmount?: number | null
   }
   vatBreakdown: VatBreakdownItem[]
+  // Amounts visible on non-invoice documents (bankintyg, avtal, contracts)
+  // with no invoice-style total. Matching hint only, never booked. Optional:
+  // extractions from before the field existed lack it.
+  prominentAmounts?: ProminentAmount[]
+  // 'prominent' = totals.total was promoted from the document's single
+  // prominent amount (promoteSingleProminentAmount), not read off an invoice.
+  // Matching treats such a total as fallback-grade; cleared when a user edits
+  // totals.total.
+  totalSource?: 'prominent' | null
   confidence: number
   suggestedTemplateId?: string
   // Set by the caller (not the model) when a long PDF was sliced before
-  // extraction: fields were read from the first `analyzed` of `total` pages.
+  // extraction: fields were read from `analyzed` of `total` pages (the first
+  // pages plus the last, where totals usually sit).
   pages?: { total: number; analyzed: number }
 }
 
@@ -4262,6 +4441,12 @@ export interface VatBreakdownItem {
   rate: number
   base: number
   amount: number
+}
+
+/** One amount printed on a non-invoice document, with the document's own label. */
+export interface ProminentAmount {
+  amount: number
+  label: string | null
 }
 
 // KPI Report

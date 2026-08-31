@@ -35,6 +35,12 @@ describe('getStructuredError', () => {
     expect(result.remediation?.tool).toBe('gnubok_lock_period')
   })
 
+  it('maps an over-long reason to VALIDATION_ERROR with a specific Swedish message', () => {
+    const result = getStructuredError(new Error('reason must be 500 characters or fewer'))
+    expect(result.code).toBe('VALIDATION_ERROR')
+    expect(result.message_sv).toBe('Motiveringen får vara högst 500 tecken.')
+  })
+
   it('infers PERIOD_HAS_UNBOOKED_TRANSACTIONS from Swedish lock-error message', () => {
     const result = getStructuredError(
       new Error('Kan inte låsa period: 3 affärstransaktion(er) saknar bokföring.')

@@ -1241,13 +1241,146 @@ export async function reverseEntry(
   // as bokförd forever, and has no re-booking affordance: the agent paths
   // (lib/pending-operations/commit.ts) already did this manually after every
   // reverseEntry call; the dashboard reverse route did not.
+  //
+  // The worklist's "unbooked" predicate is is_business IS NULL (see
+  // lib/worklist/types.ts), not journal_entry_id IS NULL, so clearing only the
+  // link left the stornoed row invisible in Att bokföra and in the nav badge
+  // (#1950) while the storno dialog (reverse_warning) promised the return.
+  // The engine therefore resets the same triple the uncategorize paths write
+  // (is_business, category, journal_entry_id), plus reconciliation_method:
+  // it describes how the link was made, and the link is gone (the koppla-bort
+  // path in lib/reconciliation/bank-reconciliation.ts resets it the same way).
   const { error: unlinkError } = await supabase
     .from('transactions')
-    .update({ journal_entry_id: null })
+    .update({
+      journal_entry_id: null,
+      is_business: null,
+      category: null,
+      reconciliation_method: null,
+    })
     .eq('company_id', companyId)
     .eq('journal_entry_id', entryId)
   if (unlinkError) {
     log.error('failed to unlink transactions from reversed entry', unlinkError, { entryId })
+  }
+
+  // Same promise, second anchor. Bulk-booked rows (bulk_book_transactions RPC)
+  // and residual verifikat (lib/reconciliation/residual.ts) anchor bank lines
+  // through transaction_voucher_links; for a samlingsverifikat with N>1 rows
+  // that junction is the ONLY anchor (journal_entry_id stays NULL), so the
+  // UPDATE above matches nothing and all N rows keep is_business = true
+  // against a status='reversed' entry. The link rows go the way koppla-bort
+  // removes them, and a row returns to Att bokföra only when no anchor is
+  // left: a residual booking keeps the main verifikat in journal_entry_id
+  // while its junction row points at the small residual verifikat, and
+  // stornoing the residual must not put a still-booked row back in the list.
+  const { data: junctionRows, error: junctionReadError } = await supabase
+    .from('transaction_voucher_links')
+    .select('transaction_id')
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', entryId)
+  if (junctionReadError) {
+    log.error('failed to read voucher links of reversed entry', junctionReadError, { entryId })
+  } else if (junctionRows && junctionRows.length > 0) {
+    const junctionTxIds = [
+      ...new Set((junctionRows as Array<{ transaction_id: string }>).map((r) => r.transaction_id)),
+    ]
+    const { error: junctionDeleteError } = await supabase
+      .from('transaction_voucher_links')
+      .delete()
+      .eq('company_id', companyId)
+      .eq('journal_entry_id', entryId)
+    if (junctionDeleteError) {
+      log.error('failed to delete voucher links of reversed entry', junctionDeleteError, { entryId })
+    } else {
+      const { data: remainingRows, error: remainingError } = await supabase
+        .from('transaction_voucher_links')
+        .select('transaction_id, role, allocated_amount')
+        .eq('company_id', companyId)
+        .in('transaction_id', junctionTxIds)
+      if (remainingError) {
+        log.error('failed to read remaining voucher links after storno', remainingError, {
+          entryId,
+        })
+      } else {
+        const remainingByTx = new Map<string, Array<{ role: string; allocated_amount: number }>>()
+        for (const row of (remainingRows ?? []) as Array<{
+          transaction_id: string
+          role?: string | null
+          allocated_amount?: number | string | null
+        }>) {
+          const rows = remainingByTx.get(row.transaction_id) ?? []
+          rows.push({ role: row.role ?? 'bank_line', allocated_amount: Number(row.allocated_amount ?? 0) })
+          remainingByTx.set(row.transaction_id, rows)
+        }
+        // A row split over several verifikat (1:N, lib/reconciliation/
+        // bank-reconciliation.ts linkTransactionToVouchers) is anchored by
+        // 'bank_line' slices that sum to its amount. Reversing one of them
+        // leaves a partial anchor: the row would read as booked while the
+        // ledger no longer explains it, and the reconciliation difference
+        // would move by the reversed slice with nothing to act on. Such a
+        // row goes back to Att bokföra whole: the surviving slices are
+        // dropped (their vouchers surface as unmatched again) and the row is
+        // released like a bulk-booked one. Rows whose remaining anchors
+        // still sum to the amount (bulk-book, one row per transaction) or
+        // include a non-bank_line anchor (a residual booking) are untouched.
+        const partialSplitIds: string[] = []
+        const candidates = junctionTxIds.filter((id) => (remainingByTx.get(id) ?? []).length > 0)
+        if (candidates.length > 0) {
+          const { data: txRows, error: txReadError } = await supabase
+            .from('transactions')
+            .select('id, amount, journal_entry_id')
+            .eq('company_id', companyId)
+            .in('id', candidates)
+          if (txReadError) {
+            log.error('failed to read split transactions after storno', txReadError, { entryId })
+          } else {
+            for (const tx of (txRows ?? []) as Array<{
+              id: string
+              amount: number | string | null
+              journal_entry_id: string | null
+            }>) {
+              if (tx.journal_entry_id) continue
+              const rows = remainingByTx.get(tx.id) ?? []
+              if (!rows.every((r) => r.role === 'bank_line')) continue
+              const anchored = rows.reduce((sum, r) => sum + r.allocated_amount, 0)
+              if (Math.abs(Math.round((anchored - Number(tx.amount ?? 0)) * 100) / 100) > 0.005) {
+                partialSplitIds.push(tx.id)
+              }
+            }
+          }
+        }
+        if (partialSplitIds.length > 0) {
+          const { error: partialDeleteError } = await supabase
+            .from('transaction_voucher_links')
+            .delete()
+            .eq('company_id', companyId)
+            .in('transaction_id', partialSplitIds)
+          if (partialDeleteError) {
+            log.error('failed to drop the surviving slices of a split transaction after storno', partialDeleteError, {
+              entryId,
+            })
+          }
+        }
+        const stillAnchored = new Set(
+          [...remainingByTx.keys()].filter((id) => !partialSplitIds.includes(id)),
+        )
+        const releaseIds = junctionTxIds.filter((id) => !stillAnchored.has(id))
+        if (releaseIds.length > 0) {
+          const { error: releaseError } = await supabase
+            .from('transactions')
+            .update({ is_business: null, category: null, reconciliation_method: null })
+            .eq('company_id', companyId)
+            .in('id', releaseIds)
+            .is('journal_entry_id', null)
+          if (releaseError) {
+            log.error('failed to release junction-linked transactions of reversed entry', releaseError, {
+              entryId,
+            })
+          }
+        }
+      }
+    }
   }
 
   // Same hazard one table over: a period whose opening_balance_entry_id still

@@ -1,14 +1,21 @@
 import { NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { createServiceClient } from '@/lib/supabase/server'
 import { requireCompanyId } from '@/lib/company/context'
 import { isStripeConfigured } from '@/lib/stripe/client'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
+import { getTeamAgreement, type TeamAgreement } from '@/lib/entitlements/team-agreement'
 
 /**
  * Billing status for the client-rendered billing section (which lives inside the
  * settings modal Dialog and can't read the DB server-side). Returns whether the
  * company is paying, whether Stripe checkout is configured, and the trial expiry
  * (for the days-left urgency banner). Read-only.
+ *
+ * WL-10: a non-paying company covered by its byrå team's agreement (active
+ * team-scoped manual grant) additionally gets `teamAgreement: { teamName }`,
+ * which the settings surface renders as "Ingår i <byråns namn>s avtal"
+ * instead of the upgrade pitch. Additive field: absent for everyone else.
  */
 export async function GET() {
   const { user, supabase, error } = await requireAuth()
@@ -30,6 +37,7 @@ export async function GET() {
 
   let isPaying = false
   let trialEndsAt: string | null = null
+  let teamAgreement: TeamAgreement | null = null
   if (companyId) {
     const { data: sub } = await supabase
       .from('company_subscriptions')
@@ -53,7 +61,21 @@ export async function GET() {
       .limit(1)
       .maybeSingle()
     trialEndsAt = (trial as { expires_at: string | null } | null)?.expires_at ?? null
+
+    // Team entitlement (WL-10): only consulted when the company isn't paying
+    // on its own subscription. Service client by necessity: end clients are
+    // not members of the byrå team, so RLS hides the team and its grants
+    // from the user's session.
+    if (!isPaying) {
+      teamAgreement = await getTeamAgreement(createServiceClient(), companyId)
+    }
   }
 
-  return NextResponse.json({ isPaying, configured: isStripeConfigured(), trialEndsAt, isDemo })
+  return NextResponse.json({
+    isPaying,
+    configured: isStripeConfigured(),
+    trialEndsAt,
+    isDemo,
+    ...(teamAgreement ? { teamAgreement } : {}),
+  })
 }

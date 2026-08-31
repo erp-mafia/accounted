@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { EmailService, SendEmailOptions, SendEmailResult } from '@/lib/email/service'
+import { getSenderForCompany } from '@/lib/email/brand-sender'
 import { deleteDocument, uploadDocument } from '@/lib/core/documents/document-service'
 import { createServiceClient } from '@/lib/supabase/server'
 import type { InvoiceDelivery } from '@/types'
@@ -25,6 +26,8 @@ export interface TrackedInvoiceEmailInput {
   bcc?: string | string[]
   replyTo?: string
   fromName?: string
+  /** Company's own verified sender (resolveInvoiceSender); platform sender when absent. */
+  from?: SendEmailOptions['from']
   subject: string
   html: string
   text: string
@@ -84,6 +87,7 @@ export async function sendTrackedInvoiceEmail(
     bcc,
     replyTo,
     fromName,
+    from,
     subject,
     html,
     text,
@@ -142,6 +146,12 @@ export async function sendTrackedInvoiceEmail(
     )
   }
 
+  // Brand mail (WL-13): the invoice mail keeps the COMPANY as the displayed
+  // sender exactly as today, but rides the brand's verified sender domain
+  // when the company's team has one. No brand, or an unverified sender
+  // domain, leaves the From header byte-identical to before.
+  const brandSender = await getSenderForCompany(companyId)
+
   const emailOptions: SendEmailOptions = {
     to,
     cc,
@@ -151,6 +161,10 @@ export async function sendTrackedInvoiceEmail(
     text,
     replyTo,
     fromName,
+    ...(brandSender.fromAddress ? { fromAddress: brandSender.fromAddress } : {}),
+    // The company's own verified sender wins over the brand address
+    // (buildFromHeader gives `from` precedence).
+    from,
     attachments: [
       {
         filename,

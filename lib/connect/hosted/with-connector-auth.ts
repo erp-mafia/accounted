@@ -1,8 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger, type Logger } from '@/lib/logger'
-import { CONNECTOR_KEY_HEADER } from '../contract'
+import { CONNECTOR_KEY_HEADER, CONNECTOR_KEY_PREFIX } from '../contract'
 import { validateConnectorKey, type ValidatedConnectorKey } from './keys'
 
 /**
@@ -32,10 +32,34 @@ export interface ConnectorContext {
 type ConnectorHandler = (request: Request, ctx: ConnectorContext) => Promise<NextResponse | Response>
 
 export function extractConnectorKey(request: Request): string | null {
+  // A Bearer value is the connector credential only when it looks like one
+  // (gnubok_ck_ prefix); otherwise it is an UPSTREAM token on a proxied call
+  // and the connector key rides in X-Connector-Key. Hashing the upstream
+  // token instead would 401 every such request. A non-prefixed Bearer with
+  // no X-Connector-Key still falls through to the format check's 401.
   const auth = request.headers.get('authorization')
-  if (auth?.startsWith('Bearer ')) return auth.slice(7).trim() || null
+  const bearer = auth?.startsWith('Bearer ') ? auth.slice(7).trim() || null : null
+  if (bearer?.startsWith(CONNECTOR_KEY_PREFIX)) return bearer
   const header = request.headers.get(CONNECTOR_KEY_HEADER)
-  return header?.trim() || null
+  if (header?.trim()) return header.trim()
+  return bearer
+}
+
+/**
+ * Opaque path segments (UUIDs, long hex, long base64url tokens) become ':id'
+ * before a path is persisted for metering. Literal route words (sessions,
+ * accounts, balances, aspsps, ...) survive, so the metric keys stay useful.
+ */
+const OPAQUE_SEGMENT = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,}|[A-Za-z0-9_-]{20,})$/i
+
+export function redactEndpoint(pathname: string): string {
+  return pathname
+    .split('/')
+    // A percent-encoded segment is opaque too: URL.pathname does not decode,
+    // so an encoded handle would otherwise slip the pattern while the route
+    // decodes and uses it.
+    .map((segment) => (OPAQUE_SEGMENT.test(segment) || segment.includes('%') ? ':id' : segment))
+    .join('/')
 }
 
 export function withConnectorAuth(
@@ -77,21 +101,35 @@ export function withConnectorAuth(
     }
     response.headers.set('X-Request-Id', requestId)
 
-    // Metering: one row per request, never on the critical path.
+    // Metering: one row per request, never on the critical path. The path is
+    // REDACTED first: proxied paths carry the EB session id / account uid as
+    // segments, and the whole ledger design is that those handles never rest
+    // hosted-side (connector_connections stores sha256 only). Persisting the
+    // raw pathname would put the cleartext handle in connector_usage_events.
     const endpoint = (() => {
       try {
-        return new URL(request.url).pathname
+        return redactEndpoint(new URL(request.url).pathname)
       } catch {
         return null
       }
     })()
-    const { error: usageError } = await supabase.from('connector_usage_events').insert({
-      connector_key_id: validation.key.id,
-      service,
-      endpoint,
-      status_code: response.status,
-    })
-    if (usageError) log.warn('usage event not recorded', { err: usageError.message })
+    const recordUsage = async (): Promise<void> => {
+      const { error: usageError } = await supabase.from('connector_usage_events').insert({
+        connector_key_id: validation.key.id,
+        service,
+        endpoint,
+        status_code: response.status,
+      })
+      if (usageError) log.warn('usage event not recorded', { err: usageError.message })
+    }
+    try {
+      // Off the response path: the caller should not wait on metering.
+      // Same pattern as lib/webhooks/dispatch-kick.ts.
+      after(() => recordUsage())
+    } catch {
+      // Outside a request scope (unit tests): record inline.
+      await recordUsage()
+    }
 
     return response
   }

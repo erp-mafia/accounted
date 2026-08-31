@@ -92,7 +92,7 @@ export function CalendarWeekView({
                 <div
                   key={invoice.id}
                   className={cn(
-                    'text-xs p-1 mb-1 rounded truncate',
+                    'text-xs p-1 mb-1 rounded-sm truncate',
                     isInvoiceOverdue(invoice)
                       ? 'bg-destructive/20 text-destructive'
                       : 'bg-primary/20 text-primary'
@@ -111,7 +111,7 @@ export function CalendarWeekView({
                 <div
                   key={deadline.id}
                   className={cn(
-                    'text-xs p-1 mb-1 rounded truncate',
+                    'text-xs p-1 mb-1 rounded-sm truncate',
                     isDeadlineOverdue(deadline)
                       ? 'bg-destructive/20 text-destructive'
                       : 'bg-warning/20 text-warning-foreground'

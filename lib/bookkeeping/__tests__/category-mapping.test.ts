@@ -246,6 +246,77 @@ describe('buildMappingResultFromCategory vat_amount override (underlagets faktis
   })
 })
 
+describe('buildMappingResultFromCategory foreign currency (VAT lines are SEK)', () => {
+  // MCP feedback seq 254607: a 79.34 USD Stripe payment with 15.87 USD moms
+  // validated the override against the USD gross but posted 15.87 kr to 2611.
+  // The entry still balanced (the revenue line absorbed the difference), so
+  // the wrong 26xx figure was undetectable downstream. All journal lines are
+  // SEK: every figure derived from transaction.amount must convert the same
+  // way buildTransactionEntryLines converts the gross.
+  it('converts a vat_amount override on USD income to SEK (Fabian/Stripe case)', () => {
+    const tx = makeTransaction({ amount: 79.34, currency: 'USD', exchange_rate: 9.51 })
+    const result = buildMappingResultFromCategory(
+      'income_services', tx, true, 'enskild_firma', 'standard_25', 15.87,
+    )
+
+    expect(result.vat_lines).toHaveLength(1)
+    expect(result.vat_lines[0].account_number).toBe('2611')
+    // gross SEK = round(79.34 * 9.51) = 754.52; 15.87 * 754.52 / 79.34 = 150.92
+    expect(result.vat_lines[0].credit_amount).toBe(150.92)
+  })
+
+  it('derives auto VAT from the SEK gross, not the foreign amount', () => {
+    const tx = makeTransaction({ amount: 100, currency: 'USD', amount_sek: 1000 })
+    const result = buildMappingResultFromCategory(
+      'income_services', tx, true, 'enskild_firma', 'standard_25',
+    )
+
+    expect(result.vat_lines).toHaveLength(1)
+    expect(result.vat_lines[0].credit_amount).toBe(200) // not 20
+  })
+
+  it('scales the override by amount_sek when present (bank settlement rate wins)', () => {
+    // amount_sek embeds the bank's actual settlement; exchange_rate would give
+    // a different figure. The override must scale by the same value the gross
+    // line resolves to, or the entry lines disagree internally.
+    const tx = makeTransaction({ amount: 100, currency: 'USD', amount_sek: 950, exchange_rate: 10 })
+    const result = buildMappingResultFromCategory(
+      'income_services', tx, true, 'enskild_firma', 'standard_25', 20,
+    )
+
+    expect(result.vat_lines[0].credit_amount).toBe(190)
+  })
+
+  it('books reverse-charge fiktiv moms off the SEK value for an EUR expense', () => {
+    const tx = makeTransaction({ amount: -1000, currency: 'EUR', exchange_rate: 11 })
+    const result = buildMappingResultFromCategory(
+      'expense_software', tx, true, 'enskild_firma', 'reverse_charge',
+    )
+
+    const debitLine = result.vat_lines.find((l) => l.account_number === '2645')
+    const creditLine = result.vat_lines.find((l) => l.account_number === '2614')
+    expect(debitLine!.debit_amount).toBe(2750) // 25% of 11 000 kr, not of 1 000 EUR
+    expect(creditLine!.credit_amount).toBe(2750)
+  })
+
+  it('still bounds the override in the transaction currency and names it', () => {
+    const tx = makeTransaction({ amount: 100, currency: 'USD', amount_sek: 1000 })
+    // max Swedish VAT on 100 USD gross is 20 USD; 25 exceeds it even though
+    // 25 would be far below the SEK bound.
+    expect(() =>
+      buildMappingResultFromCategory('income_services', tx, true, 'enskild_firma', 'standard_25', 25),
+    ).toThrow(/exceeds the maximum possible Swedish VAT on 100 USD/)
+  })
+
+  it('keeps SEK transactions byte-identical (regression)', () => {
+    const tx = makeTransaction({ amount: -415.8 })
+    const result = buildMappingResultFromCategory(
+      'expense_representation', tx, true, 'enskild_firma', 'reduced_12', 42.43,
+    )
+    expect(result.vat_lines[0].debit_amount).toBe(42.43)
+  })
+})
+
 describe('buildMappingResultFromCategory returns non-empty accounts', () => {
   const allCategories: TransactionCategory[] = [
     'income_services',

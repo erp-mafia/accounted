@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, use } from 'react'
+import { useState, useEffect, useCallback, useRef, use } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
@@ -54,12 +54,13 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { fetchDimensions, type DimensionDto } from '@/components/dimensions/types'
+import { useDimensions } from '@/lib/reference-data/hooks'
 import { DetailPager } from '@/components/common/DetailPager'
 import { listContextKey } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
+import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
 // Snapshot of a struck line, as stored in journal_entry_rattelse_log.
 type StruckLineSnapshot = {
@@ -81,8 +82,13 @@ type RattelseLogRow = {
   struck_lines: StruckLineSnapshot[] | null
   added_lines: StruckLineSnapshot[] | null
   actor: string | null
+  // Resolved server-side from profiles (rattelse-log route); null when the
+  // actor is unknown or the lookup failed.
+  actor_label: string | null
   created_at: string
 }
+
+type PeriodStatus = 'open' | 'locked' | 'closed'
 
 /**
  * Human "who committed this" line from the committed_actor_* snapshot
@@ -136,6 +142,16 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [showStrikeLines, setShowStrikeLines] = useState(false)
   const [showCorrectMetadata, setShowCorrectMetadata] = useState(false)
   const [rattelseLog, setRattelseLog] = useState<RattelseLogRow[]>([])
+  // Lock state of the period covering entry_date, from the period-status
+  // preview endpoint. Gates the visible "Stryk rader" button: inline rättelse
+  // only applies while the period is open, so the promoted button hides
+  // (and the ⋯ item stays) whenever the status is anything else or unknown.
+  const [periodStatus, setPeriodStatus] = useState<PeriodStatus | null>(null)
+  // Monotonic id of the latest fetchData run. The period-status fetch is not
+  // awaited, and fetchData re-runs on every id change and after every dialog
+  // success, so an earlier response can resolve last; only the response that
+  // belongs to the most recent run may set periodStatus.
+  const periodStatusRequestRef = useRef(0)
   const [showEdit, setShowEdit] = useState(false)
   const [showRecordate, setShowRecordate] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -159,7 +175,10 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // Dimension registry, fetched once when any line carries a dimensions map:
   // used to resolve display names for the per-line dimension text ('KS: Butik');
   // it falls back to raw codes when the fetch fails or a code is unregistered.
-  const [registryDims, setRegistryDims] = useState<DimensionDto[] | null>(null)
+  // Dimension names for tagged lines, from the session-cached registry
+  // (lib/reference-data); null until it is there, raw codes render meanwhile.
+  const { dimensions } = useDimensions()
+  const registryDims = dimensions.length > 0 ? dimensions : null
   // Tier-2 retro-tagging (dimensions plan PR6): pencil on posted lines opens
   // the audited retag dialog; the log renders as a history section below.
   // Both render only when dimensions are enabled for the company.
@@ -169,21 +188,6 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [retagLog, setRetagLog] = useState<
     { id: string; line_id: string; old_dimensions: Record<string, string>; new_dimensions: Record<string, string>; reason: string; created_at: string }[]
   >([])
-
-  useEffect(() => {
-    if (registryDims !== null) return
-    const entryLines = (entry?.lines || []) as JournalEntryLine[]
-    if (!entryLines.some((l) => l.dimensions && Object.keys(l.dimensions).length > 0)) return
-    let cancelled = false
-    fetchDimensions()
-      .then((dims) => {
-        if (!cancelled) setRegistryDims(dims)
-      })
-      .catch(() => {/* display-only, raw codes are fine */})
-    return () => {
-      cancelled = true
-    }
-  }, [entry, registryDims])
 
   const fetchData = useCallback(async () => {
     setIsLoading(true)
@@ -212,6 +216,26 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       setEntry(data.entry)
       setChain(data.chain)
       setIsLastInSeries(data.is_last_in_series ?? false)
+      // Period lock state for the entry's date, best-effort and not awaited
+      // (the page paints without it): the endpoint fails closed (a lookup
+      // failure reads as 'locked'), and a missing answer just keeps the
+      // strike button in the ⋯ menu only.
+      setPeriodStatus(null)
+      const periodRequest = ++periodStatusRequestRef.current
+      void fetch(
+        `/api/bookkeeping/fiscal-periods/period-status?date=${encodeURIComponent(data.entry.entry_date)}`,
+      )
+        .then(async (periodRes) => {
+          if (!periodRes.ok) return
+          const { data: period } = await periodRes.json()
+          // A newer fetchData has run since; its own response owns the state.
+          if (periodRequest !== periodStatusRequestRef.current) return
+          const status = period?.status
+          setPeriodStatus(status === 'open' || status === 'locked' || status === 'closed' ? status : null)
+        })
+        .catch(() => {
+          if (periodRequest === periodStatusRequestRef.current) setPeriodStatus(null)
+        })
       // Underlag references (linked invoices), best-effort; the verifikat still
       // renders if this fails, it just falls back to documents-only.
       if (refsRes.ok) {
@@ -356,12 +380,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   }, [fetchData])
 
   if (isLoading) {
-    return (
-      <div className="flex flex-col items-center justify-center py-24">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground mb-3" />
-        <p className="text-sm text-muted-foreground">{t('loading')}</p>
-      </div>
-    )
+    return <DetailPageSkeleton />
   }
 
   if (error || !entry) {
@@ -413,13 +432,20 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const struckDisplayLines = rattelseLog
     .filter((r) => r.rattelse_type === 'lines')
     .flatMap((r) =>
-      (r.struck_lines ?? []).map((s) => ({ ...s, struck_at: r.created_at }))
+      (r.struck_lines ?? []).map((s) => ({ ...s, struck_at: r.created_at, struck_by: r.actor_label }))
     )
+
+  // The struck marker beside a struck row: who and when at a glance, the
+  // date alone when the actor could not be resolved.
+  const struckMarker = (s: { struck_at: string; struck_by: string | null }) =>
+    s.struck_by
+      ? t('struck_marker_by', { date: formatDate(s.struck_at), actor: s.struck_by })
+      : t('struck_marker', { date: formatDate(s.struck_at) })
 
   // Live and struck lines interleaved by original position.
   const displayRows: Array<
     | { kind: 'live'; line: JournalEntryLine }
-    | { kind: 'struck'; line: StruckLineSnapshot & { struck_at: string } }
+    | { kind: 'struck'; line: StruckLineSnapshot & { struck_at: string; struck_by: string | null } }
   > = [
     ...lines.map((l) => ({ kind: 'live' as const, line: l })),
     ...struckDisplayLines.map((s) => ({ kind: 'struck' as const, line: s })),
@@ -506,6 +532,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const showActions = entry.status === 'posted' || entry.status === 'draft'
   const showDelete = entry.status === 'draft' || isLastInSeries
   const showRattelseGroup = canCorrect && !isOpeningBalance
+  // Inline rättelse is the normal correction path while the period is open,
+  // so "Stryk rader" is promoted to a visible secondary button there (#1554:
+  // a user who never opens the ⋯ menu concluded the feature did not exist).
+  // The ⋯ item stays, so the menu remains the complete action list.
+  const showStrikeButton = showRattelseGroup && canInlineRattelse && periodStatus === 'open'
 
   const underlagAside = (() => {
     if (attachmentCount === 0 && references.length === 0) {
@@ -547,6 +578,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           <div className="flex flex-wrap items-center gap-3">
             {/* data-ph-mask: the title carries the voucher number */}
             <h1 data-ph-mask="" className="font-display text-2xl leading-8 tracking-tight">{title}</h1>
+            {/* Convention 7: which correction track applies when, behind the "?" */}
+            <HelpPopover>
+              <p>{t('help_rattelse_tracks_open')}</p>
+              <p className="mt-2">{t('help_rattelse_tracks_locked')}</p>
+            </HelpPopover>
             <JournalEntryStatusBadge entry={entry} showStatus={entry.status !== 'posted'} />
             {rattelseLog.length > 0 && (
               <Badge variant="outline" title={t('rattelse_history_title')}>
@@ -590,6 +626,17 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               >
                 {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Pencil className="mr-2 h-4 w-4" />}
                 {t('correct_opening_balances')}
+              </Button>
+            )}
+            {showStrikeButton && (
+              <Button
+                variant="outline"
+                onClick={() => setShowStrikeLines(true)}
+                disabled={!canWrite}
+                title={!canWrite ? t('read_only_tooltip') : undefined}
+              >
+                {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Scissors className="mr-2 h-4 w-4" />}
+                {t('strike_lines')}
               </Button>
             )}
 
@@ -790,9 +837,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                       <span className="line-through decoration-muted-foreground/70">
                         {s.line_description || ''}
                       </span>
-                      <span className="ml-2 text-xs">
-                        {t('struck_marker', { date: formatDate(s.struck_at) })}
-                      </span>
+                      <span data-ph-mask="" className="ml-2 text-xs">{struckMarker(s)}</span>
                     </td>
                     <td className={cn(TD_CLASS, 'text-right tabular-nums whitespace-nowrap line-through decoration-muted-foreground/70')}>
                       {Number(s.debit_amount) > 0 && fmtAmount(s.debit_amount)}
@@ -868,7 +913,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                     {s.line_description && (
                       <p className="truncate text-xs line-through decoration-muted-foreground/70">{s.line_description}</p>
                     )}
-                    <p className="text-xs">{t('struck_marker', { date: formatDate(s.struck_at) })}</p>
+                    <p data-ph-mask="" className="text-xs">{struckMarker(s)}</p>
                   </div>
                   <div className="shrink-0 text-right tabular-nums line-through decoration-muted-foreground/70">
                     {Number(s.debit_amount) > 0 && <p>{fmtAmount(s.debit_amount)} D</p>}
@@ -979,7 +1024,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
             {rattelseLog.map((row) => (
               <li key={row.id} className="py-2">
                 <div className="flex items-center justify-between gap-3">
-                  <span className="tabular-nums text-muted-foreground">{formatDate(row.created_at)}</span>
+                  {/* data-ph-mask: the actor label is a person's e-mail or name */}
+                  <span data-ph-mask="" className="text-muted-foreground">
+                    <span className="tabular-nums">{formatDate(row.created_at)}</span>
+                    {row.actor_label ? ` · ${row.actor_label}` : ''}
+                  </span>
                   <span className="text-xs text-muted-foreground">
                     {row.rattelse_type === 'metadata' ? t('rattelse_kind_metadata') : t('rattelse_kind_lines')}
                   </span>

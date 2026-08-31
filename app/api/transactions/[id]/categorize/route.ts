@@ -6,13 +6,16 @@ import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mappi
 import { getTemplateById, buildMappingResultFromTemplate, validateTemplateForEntity } from '@/lib/bookkeeping/booking-templates'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
+import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
+import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { guardCounterLegs } from '@/lib/cash-accounts/service'
 import { upsertCounterpartyTemplate, buildMappingResultFromCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode, getStructuredError } from '@/lib/errors/get-structured-error'
 import {
   DUPLICATE_AMOUNT_TOLERANCE_PCT,
   DUPLICATE_DATE_WINDOW_DAYS,
@@ -59,6 +62,17 @@ async function ensureFiscalPeriod(
     .limit(1)
 
   if (existing && existing.length > 0) return true
+
+  // Pre-FY guard (issue #1825): a date before the company's first fiscal
+  // period must NEVER mint a calendar-year rakenskapsar. Depending on overlap
+  // with the real first period, the upsert below would either bounce off the
+  // no_overlapping_fiscal_periods exclusion constraint (log noise) or silently
+  // create a pre-registration year (legally wrong). Return true and let the
+  // pre-FY clamp in createTransactionJournalEntry book the event on the first
+  // fiscal year's first day. Dates AFTER the latest period (next-year
+  // auto-creation) pass through unchanged.
+  const earliestStart = await getEarliestFiscalPeriodStart(supabase, companyId)
+  if (earliestStart && date < earliestStart) return true
 
   const txDate = new Date(date)
   const txMonth = txDate.getMonth() + 1
@@ -346,6 +360,7 @@ export const POST = withRouteContext(
       companyId!,
       transaction.cash_account_id,
       txLog,
+      transaction.currency,
     )
     mappingResult = applySettlementAccount(mappingResult, settlementAccount)
 
@@ -399,6 +414,29 @@ export const POST = withRouteContext(
           creditAccount: mappingResult.credit_account,
         },
       })
+    }
+
+    // Issue #1643 problem 4: a learned template or transfer proposal must never
+    // book the COUNTER leg onto an orphaned cash-account ledger, or onto a twin
+    // ledger of the transaction's own bank account. Confirming such a proposal
+    // silently drops revenue/expense from the P&L onto a junk balance-sheet
+    // account. A twin that is merely the stale BANK leg of a learned template
+    // is rewritten to the settlement account instead (see guardCounterLegs).
+    {
+      const guarded = await guardCounterLegs(
+        supabase,
+        companyId!,
+        mappingResult,
+        settlementAccount,
+        transaction.cash_account_id,
+      )
+      if (guarded.refusedLedger) {
+        return errorResponseFromCode('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT', txLog, {
+          requestId,
+          details: { accountNumber: guarded.refusedLedger },
+        })
+      }
+      mappingResult = guarded.mappingResult
     }
 
     // Pre-validate every account the engine will resolve. Templates,
@@ -767,9 +805,29 @@ export const POST = withRouteContext(
 
     await ensureFiscalPeriod(supabase, user.id, companyId, transaction.date, fiscalYearStartMonth, txLog)
 
+    // Issue #1661: a private marking books eget uttag/insättning, so a locked
+    // period refuses it like any verifikat. Pre-check only for private rows:
+    // the trigger path below would answer with a bare locked-period cause,
+    // while the row the user wants to clear (a duplicate, a PSD2 ghost) is
+    // usually no affärshändelse at all and should be ignored instead. The
+    // response carries suggested_action: 'ignore' for the one-click toast.
+    if (!is_business) {
+      const privateLock = await checkPeriodLock(supabase, companyId, transaction.date)
+      if (privateLock.locked) {
+        return errorResponseFromCode('TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED', txLog, {
+          requestId,
+          details: {
+            transaction_date: transaction.date,
+            reason: privateLock.reason,
+            fiscal_period_id: privateLock.fiscal_period_id,
+            suggested_action: 'ignore',
+          },
+        })
+      }
+    }
+
     let journalEntryCreated = false
     let journalEntryId: string | null = null
-    let journalEntryError: string | null = null
     let documentLinkWarning: string | null = null
 
     try {
@@ -796,13 +854,58 @@ export const POST = withRouteContext(
       if (err instanceof AccountsNotInChartError) {
         return accountsNotInChartResponse(err)
       }
-      // All errors map to Swedish via getErrorMessage: the raw message is
-      // already logged above and must never reach the user verbatim (issue
-      // #337). The categorization is preserved either way so the user can
-      // still re-book the verifikation manually.
-      journalEntryError = getErrorMessage(err, { context: 'transaction' })
+      // Fail closed (issue #1947): the verifikat IS the booking. Writing
+      // is_business/category without one used to drop the row out of the
+      // canonical worklist predicate in lib/worklist/types.ts (is_business IS
+      // NULL) while it was still unbooked, so it vanished from "Att bokföra"
+      // and the nav badge with no reminder to finish it. Nothing is persisted
+      // when the entry fails: the row stays uncategorized and visible. Both
+      // message locales come from getErrorMessage (sv/en from the same error,
+      // per the errorResponseFromCode contract: provide both or neither); the
+      // raw message is already logged above and must never reach the user
+      // verbatim (issue #337).
+      const structured = getStructuredError(err)
+      return errorResponseFromCode('TX_CATEGORIZE_JOURNAL_ENTRY_FAILED', txLog, {
+        requestId,
+        messageSv: getErrorMessage(err, { context: 'transaction' }),
+        messageEn: getErrorMessage(err, { context: 'transaction', locale: 'en' }),
+        details: { cause: structured.code },
+      })
     }
 
+    // createTransactionJournalEntry returns null (no throw) when
+    // findFiscalPeriod sees no OPEN period covering the date and the pre-FY
+    // clamp does not apply: either no fiscal period exists there at all, or
+    // the covering period exists but is closed (is_closed = true; findFiscalPeriod
+    // filters is_closed = false). Same fail-closed rule either way: refuse
+    // rather than mark the row categorized-but-unbooked. checkPeriodLock tells
+    // the two apart so a closed year answers PERIOD_LOCKED (reason
+    // period_is_closed) instead of claiming the räkenskapsår does not exist.
+    if (!journalEntryId) {
+      const periodLock = await checkPeriodLock(supabase, companyId, transaction.date)
+      if (periodLock.locked) {
+        return errorResponseFromCode(
+          is_business ? 'PERIOD_LOCKED' : 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED',
+          txLog,
+          {
+            requestId,
+            details: {
+              transaction_date: transaction.date,
+              reason: periodLock.reason,
+              fiscal_period_id: periodLock.fiscal_period_id,
+              ...(is_business ? {} : { suggested_action: 'ignore' }),
+            },
+          },
+        )
+      }
+      return errorResponseFromCode('NO_OPEN_PERIOD_FOR_DATE', txLog, {
+        requestId,
+        details: { transaction_date: transaction.date, reason: 'no_fiscal_period' },
+      })
+    }
+
+    // Learning writes (mapping rule, counterparty template) run only after a
+    // posted verifikat, so they never learn from a booking that did not happen.
     // direction_mismatch = a mirrored refund/repayment booking; learning it
     // as a rule would store backwards accounts for the merchant.
     if (is_business && transaction.merchant_name && !mappingResult.direction_mismatch) {
@@ -1014,21 +1117,13 @@ export const POST = withRouteContext(
       },
     })
 
-    if (journalEntryError) {
-      // Categorization stuck but the verifikation didn't make it through.
-      // Surface as a structured warning: the response below carries the
-      // user-facing message in `journal_entry_error`.
-      txLog.warn('partial outcome: journal entry creation failed', {
-        reason: 'journal_entry_creation_failed',
-        message: journalEntryError,
-      })
-    }
-
+    // journal_entry_error is always null here: a failed verifikat now returns
+    // a typed 409 above (issue #1947). The field stays for client compatibility.
     return NextResponse.json({
       success: true,
       journal_entry_created: journalEntryCreated,
       journal_entry_id: journalEntryId,
-      journal_entry_error: journalEntryError,
+      journal_entry_error: null,
       document_link_warning: documentLinkWarning,
       category: finalCategory,
     })

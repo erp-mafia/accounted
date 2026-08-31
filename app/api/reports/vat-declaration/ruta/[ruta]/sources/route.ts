@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server'
 import {
   ACCOUNT_RUTA,
   resolvePeriodDates,
+  VAT_ACCOUNTS,
+  VAT_SETTLEMENT_NET_ACCOUNTS,
 } from '@/lib/reports/vat-declaration'
 import { fetchDynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
 import type { ReportSourceLine } from '@/lib/reports/source-lines'
@@ -151,6 +153,13 @@ export const GET = withRouteContext<{ params: Promise<{ ruta: string }> }>(
     p_start: start,
     p_end: end,
     p_accounts: accountsForRuta,
+    // Settlement-shape detectors, passed exactly as fetchVatAccountTotals
+    // passes them to get_vat_declaration_totals. The drill-down must drop the
+    // same entries the figure drops (posted closing entries, vat_settlement,
+    // the kontantmetod year-end reversals, and anything shaped like a
+    // momsredovisning), or it lists verifikat that are not in the number.
+    p_ruta_accounts: VAT_ACCOUNTS,
+    p_net_accounts: VAT_SETTLEMENT_NET_ACCOUNTS,
     p_cursor_date: cursorDate,
     p_cursor_voucher_number: cursorVoucherNum,
     p_cursor_entry_id: cursorEntryId,

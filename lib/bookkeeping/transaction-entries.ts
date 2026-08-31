@@ -16,6 +16,33 @@ import type {
 
 const log = createLogger('transaction-entries')
 
+interface EarliestFiscalPeriodRow {
+  id: string
+  period_start: string
+  is_closed: boolean
+  locked_at: string | null
+}
+
+/**
+ * The company's earliest fiscal period (full row, closed or not). Used by the
+ * pre-FY clamp in createTransactionJournalEntry below to tell "this date
+ * predates the company's first rakenskapsar" apart from an interior gap.
+ */
+async function findEarliestFiscalPeriod(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<EarliestFiscalPeriodRow | null> {
+  const { data, error } = await supabase
+    .from('fiscal_periods')
+    .select('id, period_start, is_closed, locked_at')
+    .eq('company_id', companyId)
+    .order('period_start', { ascending: true })
+    .limit(1)
+
+  if (error || !data || data.length === 0) return null
+  return data[0] as EarliestFiscalPeriodRow
+}
+
 /**
  * Build the journal entry lines for a bank transaction from a mapping engine
  * result. Single source of truth for the gross→net split: the expense account
@@ -269,10 +296,34 @@ export async function createTransactionJournalEntry(
   // before any period lookup, preserving the original validation order.
   const lines = buildTransactionEntryLines(transaction, mappingResult)
 
-  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, transaction.date)
+  let fiscalPeriodId = await findFiscalPeriod(supabase, companyId, transaction.date)
+  let entryDate = transaction.date
+  let preFyNote: string | null = null
+
   if (!fiscalPeriodId) {
-    log.warn('No open fiscal period found for transaction date:', transaction.date)
-    return null
+    // Pre-FY clamp (issue #1825): a bank event dated before the company's
+    // first rakenskapsar (typically the aktiekapital deposit paid in before
+    // the Bolagsverket registration date) has no covering period, and minting
+    // a pre-registration year for it would be legally wrong. The correct
+    // booking is on the first fiscal year's first day, with the real event
+    // date preserved in the verifikationstext (BFL 5 kap 7 §). The clamp
+    // fires ONLY when the date is strictly before the earliest period AND
+    // that period is open and unlocked; interior gaps, future dates, and a
+    // closed/locked first year keep the old null return.
+    const earliest = await findEarliestFiscalPeriod(supabase, companyId)
+    if (
+      earliest &&
+      transaction.date < earliest.period_start &&
+      !earliest.is_closed &&
+      !earliest.locked_at
+    ) {
+      fiscalPeriodId = earliest.id
+      entryDate = earliest.period_start
+      preFyNote = `Affärshändelse ${transaction.date}, bokförd på räkenskapsårets första dag`
+    } else {
+      log.warn('No open fiscal period found for transaction date:', transaction.date)
+      return null
+    }
   }
 
   // Compose the verifikation's description (verifikationstext). journal_entries
@@ -282,13 +333,14 @@ export async function createTransactionJournalEntry(
   // append when the note isn't already implied by the bank text.
   const trimmedNotes = notes?.trim()
   const baseDescription = (transaction.description ?? '').trim()
-  const composedDescription = trimmedNotes
-    ? `${baseDescription} · ${trimmedNotes}`.trim().replace(/^· /, '').slice(0, 500)
+  const extraParts = [trimmedNotes, preFyNote].filter((p): p is string => !!p)
+  const composedDescription = extraParts.length > 0
+    ? [baseDescription, ...extraParts].filter(Boolean).join(' · ').slice(0, 500)
     : baseDescription
 
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
-    entry_date: transaction.date,
+    entry_date: entryDate,
     description: composedDescription,
     source_type: 'bank_transaction',
     source_id: transaction.id,

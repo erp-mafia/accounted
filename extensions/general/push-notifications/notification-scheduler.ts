@@ -12,6 +12,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NotificationType } from '@/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/types'
 import { sendNotificationToUser, readNotificationSettings } from './notification-sender'
 import {
   createTaxDeadlinePayload,
@@ -214,16 +215,12 @@ export async function sendInvoiceNotifications(
 }
 
 /**
- * Source types that require supporting documents (underlag).
+ * Source types that require supporting documents (underlag). Shared source
+ * of truth (lib/worklist/types.ts) so this cron can never disagree with the
+ * worklist badge (skeptic finding on #1881: a hardcoded copy here missed
+ * webshop_order).
  */
-const NEEDS_ATTACHMENT_SOURCE_TYPES = [
-  'manual',
-  'bank_transaction',
-  'supplier_invoice_registered',
-  'supplier_invoice_paid',
-  'supplier_invoice_cash_payment',
-  'import',
-]
+const NEEDS_ATTACHMENT_SOURCE_TYPES = [...NEEDS_DOC_SOURCE_TYPES]
 
 /**
  * Send missing underlag notifications.

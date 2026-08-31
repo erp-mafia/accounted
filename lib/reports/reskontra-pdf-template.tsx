@@ -5,6 +5,7 @@ import {
   View,
   StyleSheet,
 } from '@react-pdf/renderer'
+import { pdfNumberText } from '@/lib/pdf/number-text'
 import type { CompanySettings } from '@/types'
 
 const styles = StyleSheet.create({
@@ -201,10 +202,14 @@ const styles = StyleSheet.create({
 })
 
 function formatAmount(amount: number): string {
-  return new Intl.NumberFormat('sv-SE', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(amount)
+  // pdfNumberText: Intl's U+2212 has no glyph in the bundled Helvetica/Courier,
+  // so a credit note or overpayment would print unsigned (issue #1982).
+  return pdfNumberText(
+    new Intl.NumberFormat('sv-SE', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount),
+  )
 }
 
 function formatOrgNumber(orgNumber: string): string {

@@ -12,7 +12,7 @@ vi.mock('@/lib/auth/api-keys', () => ({
   createServiceClientNoCookies: () => ({ from }),
 }))
 
-import { extractConnectorKey, withConnectorAuth } from '../with-connector-auth'
+import { extractConnectorKey, withConnectorAuth, redactEndpoint } from '../with-connector-auth'
 
 const VALID = {
   ok: true,
@@ -36,12 +36,37 @@ beforeEach(() => {
 })
 
 describe('extractConnectorKey', () => {
-  it('reads Bearer first, then X-Connector-Key', () => {
+  it('takes a connector-prefixed Bearer, else X-Connector-Key, else the raw Bearer for the format-check 401', () => {
     expect(extractConnectorKey(req({ authorization: 'Bearer gnubok_ck_a' }))).toBe('gnubok_ck_a')
     expect(extractConnectorKey(req({ 'x-connector-key': 'gnubok_ck_b' }))).toBe('gnubok_ck_b')
+    // A connector-prefixed Bearer is unambiguous and wins.
     expect(extractConnectorKey(req({ authorization: 'Bearer gnubok_ck_a', 'x-connector-key': 'gnubok_ck_b' }))).toBe('gnubok_ck_a')
+    // The proxied-call shape (SKV data proxy): Authorization is the user's
+    // upstream SKV token, X-Connector-Key authenticates the instance. The
+    // connector key MUST win or every such request 401s on a hashed upstream
+    // token.
+    expect(extractConnectorKey(req({ authorization: 'Bearer upstream-skv-token', 'x-connector-key': 'gnubok_ck_b' }))).toBe('gnubok_ck_b')
+    // Non-prefixed Bearer alone still reaches the format check (401).
+    expect(extractConnectorKey(req({ authorization: 'Bearer not-a-connector-key' }))).toBe('not-a-connector-key')
     expect(extractConnectorKey(req())).toBeNull()
     expect(extractConnectorKey(req({ authorization: 'Basic xyz' }))).toBeNull()
+  })
+})
+
+describe('redactEndpoint', () => {
+  it('replaces opaque handle segments with :id so raw EB session ids never rest in metering', () => {
+    expect(redactEndpoint('/api/connect/bank/sessions/8f14e45f-ceea-467f-a8d5-91be6ce7cbc4')).toBe(
+      '/api/connect/bank/sessions/:id',
+    )
+    expect(redactEndpoint('/api/connect/bank/accounts/9a1b2c3d-0000-4111-8222-333344445555/transactions')).toBe(
+      '/api/connect/bank/accounts/:id/transactions',
+    )
+    expect(redactEndpoint('/api/connect/bank/sessions/deadbeefdeadbeefdeadbeef')).toBe('/api/connect/bank/sessions/:id')
+    expect(redactEndpoint('/api/connect/bank/sessions/8f14e45f%2Dceea-467f-a8d5-91be6ce7cbc4')).toBe(
+      '/api/connect/bank/sessions/:id',
+    )
+    expect(redactEndpoint('/api/connect/entitlements')).toBe('/api/connect/entitlements')
+    expect(redactEndpoint('/api/connect/bank/aspsps')).toBe('/api/connect/bank/aspsps')
   })
 })
 

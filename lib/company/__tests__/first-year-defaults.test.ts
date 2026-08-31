@@ -46,6 +46,18 @@ describe('deriveFirstYearDefaults', () => {
     expect(deriveFirstYearDefaults(registered, NOW).isFirstFiscalYear).toBe(false)
   })
 
+  it('extends the window to 18 months when the registry shows no closed period', () => {
+    // Extended first räkenskapsår (BFL 3 kap 3 §): registered 13 months ago
+    // with no annual report filed is still the first year.
+    const registered = NOW - 13 * MONTH_MS
+    expect(
+      deriveFirstYearDefaults(registered, NOW, { noClosedPeriod: true }).isFirstFiscalYear
+    ).toBe(true)
+    expect(
+      deriveFirstYearDefaults(NOW - 19 * MONTH_MS, NOW, { noClosedPeriod: true }).isFirstFiscalYear
+    ).toBe(false)
+  })
+
   it('seeds first_year_start as the 1st of the UTC registration month', () => {
     const registered = new Date('2026-03-14T10:00:00Z').getTime()
     const result = deriveFirstYearDefaults(registered, NOW)

@@ -1,0 +1,488 @@
+{
+  "Invoice": {
+    "$": {
+      "xmlns": "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2",
+      "xmlns:cac": "urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2",
+      "xmlns:cbc": "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2",
+      "xmlns:ccts": "urn:un:unece:uncefact:documentation:2",
+      "xmlns:qdt": "urn:oasis:names:specification:ubl:schema:xsd:QualifiedDatatypes-2",
+      "xmlns:udt": "urn:un:unece:uncefact:data:specification:UnqualifiedDataTypesSchemaModule:2"
+    },
+    "cbc:CustomizationID": [
+      {
+        "_": "urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0"
+      }
+    ],
+    "cbc:ProfileID": [
+      {
+        "_": "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0"
+      }
+    ],
+    "cbc:ID": [
+      {
+        "_": "20267497"
+      }
+    ],
+    "cbc:IssueDate": [
+      {
+        "_": "2026-08-21"
+      }
+    ],
+    "cbc:DueDate": [
+      {
+        "_": "2026-09-20"
+      }
+    ],
+    "cbc:InvoiceTypeCode": [
+      {
+        "_": "380"
+      }
+    ],
+    "cbc:DocumentCurrencyCode": [
+      {
+        "_": "SEK"
+      }
+    ],
+    "cbc:BuyerReference": [
+      {
+        "_": "Test kundreferens"
+      }
+    ],
+    "cac:AccountingSupplierParty": [
+      {
+        "cac:Party": [
+          {
+            "cbc:EndpointID": [
+              {
+                "_": "5567321707",
+                "$": {
+                  "schemeID": "0007"
+                }
+              }
+            ],
+            "cac:PartyName": [
+              {
+                "cbc:Name": [
+                  {
+                    "_": "Qvalia AB"
+                  }
+                ]
+              }
+            ],
+            "cac:PostalAddress": [
+              {
+                "cbc:StreetName": [
+                  {
+                    "_": "Wallingatan 33 3tr"
+                  }
+                ],
+                "cbc:CityName": [
+                  {
+                    "_": "Stockholm"
+                  }
+                ],
+                "cbc:PostalZone": [
+                  {
+                    "_": "11124"
+                  }
+                ],
+                "cac:Country": [
+                  {
+                    "cbc:IdentificationCode": [
+                      {
+                        "_": "SE"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "cac:PartyTaxScheme": [
+              {
+                "cbc:CompanyID": [
+                  {
+                    "_": "SE556732170701"
+                  }
+                ],
+                "cac:TaxScheme": [
+                  {
+                    "cbc:ID": [
+                      {
+                        "_": "VAT"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "cbc:CompanyID": [
+                  {
+                    "_": "Godkänd för F-skatt"
+                  }
+                ],
+                "cac:TaxScheme": [
+                  {
+                    "cbc:ID": [
+                      {
+                        "_": "TAX"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "cac:PartyLegalEntity": [
+              {
+                "cbc:RegistrationName": [
+                  {
+                    "_": "Qvalia AB"
+                  }
+                ],
+                "cbc:CompanyID": [
+                  {
+                    "_": "5567321707"
+                  }
+                ]
+              }
+            ],
+            "cac:Contact": [
+              {
+                "cbc:Name": [
+                  {
+                    "_": "Qvalia AB"
+                  }
+                ],
+                "cbc:Telephone": [
+                  {
+                    "_": "0812010850"
+                  }
+                ],
+                "cbc:ElectronicMail": [
+                  {
+                    "_": "help@qvalia.com"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "cac:AccountingCustomerParty": [
+      {
+        "cac:Party": [
+          {
+            "cbc:EndpointID": [
+              {
+                "_": "5595386219",
+                "$": {
+                  "schemeID": "0007"
+                }
+              }
+            ],
+            "cac:PartyIdentification": [
+              {
+                "cbc:ID": [
+                  {
+                    "_": "5595386219"
+                  }
+                ]
+              }
+            ],
+            "cac:PartyName": [
+              {
+                "cbc:Name": [
+                  {
+                    "_": "Arcim Technology AB"
+                  }
+                ]
+              }
+            ],
+            "cac:PostalAddress": [
+              {
+                "cbc:StreetName": [
+                  {
+                    "_": "Ostermalmsgatan 26A"
+                  }
+                ],
+                "cbc:CityName": [
+                  {
+                    "_": "Stockholm"
+                  }
+                ],
+                "cbc:PostalZone": [
+                  {
+                    "_": "11426"
+                  }
+                ],
+                "cac:Country": [
+                  {
+                    "cbc:IdentificationCode": [
+                      {
+                        "_": "SE"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "cac:PartyTaxScheme": [
+              {
+                "cbc:CompanyID": [
+                  {
+                    "_": "SE559538621901"
+                  }
+                ],
+                "cac:TaxScheme": [
+                  {
+                    "cbc:ID": [
+                      {
+                        "_": "VAT"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "cac:PartyLegalEntity": [
+              {
+                "cbc:RegistrationName": [
+                  {
+                    "_": "Arcim Technology AB"
+                  }
+                ],
+                "cbc:CompanyID": [
+                  {
+                    "_": "5595386219"
+                  }
+                ]
+              }
+            ],
+            "cac:Contact": [
+              {
+                "cbc:Name": [
+                  {
+                    "_": "Test kundreferens"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "cac:PaymentMeans": [
+      {
+        "cbc:PaymentMeansCode": [
+          {
+            "_": "30"
+          }
+        ],
+        "cac:PayeeFinancialAccount": [
+          {
+            "cbc:ID": [
+              {
+                "_": "12344321"
+              }
+            ],
+            "cac:FinancialInstitutionBranch": [
+              {
+                "cbc:ID": [
+                  {
+                    "_": "BBAN"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "cac:TaxTotal": [
+      {
+        "cbc:TaxAmount": [
+          {
+            "_": "12",
+            "$": {
+              "currencyID": "SEK"
+            }
+          }
+        ],
+        "cac:TaxSubtotal": [
+          {
+            "cbc:TaxableAmount": [
+              {
+                "_": "100",
+                "$": {
+                  "currencyID": "SEK"
+                }
+              }
+            ],
+            "cbc:TaxAmount": [
+              {
+                "_": "12",
+                "$": {
+                  "currencyID": "SEK"
+                }
+              }
+            ],
+            "cac:TaxCategory": [
+              {
+                "cbc:ID": [
+                  {
+                    "_": "S"
+                  }
+                ],
+                "cbc:Percent": [
+                  {
+                    "_": "12"
+                  }
+                ],
+                "cac:TaxScheme": [
+                  {
+                    "cbc:ID": [
+                      {
+                        "_": "VAT"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "cac:LegalMonetaryTotal": [
+      {
+        "cbc:LineExtensionAmount": [
+          {
+            "_": "100",
+            "$": {
+              "currencyID": "SEK"
+            }
+          }
+        ],
+        "cbc:TaxExclusiveAmount": [
+          {
+            "_": "100",
+            "$": {
+              "currencyID": "SEK"
+            }
+          }
+        ],
+        "cbc:TaxInclusiveAmount": [
+          {
+            "_": "112",
+            "$": {
+              "currencyID": "SEK"
+            }
+          }
+        ],
+        "cbc:ChargeTotalAmount": [
+          {
+            "_": "0",
+            "$": {
+              "currencyID": "SEK"
+            }
+          }
+        ],
+        "cbc:PayableRoundingAmount": [
+          {
+            "_": "0",
+            "$": {
+              "currencyID": "SEK"
+            }
+          }
+        ],
+        "cbc:PayableAmount": [
+          {
+            "_": "112",
+            "$": {
+              "currencyID": "SEK"
+            }
+          }
+        ]
+      }
+    ],
+    "cac:InvoiceLine": [
+      {
+        "cbc:ID": [
+          {
+            "_": "1"
+          }
+        ],
+        "cbc:InvoicedQuantity": [
+          {
+            "_": "1",
+            "$": {
+              "unitCode": "EA"
+            }
+          }
+        ],
+        "cbc:LineExtensionAmount": [
+          {
+            "_": "100",
+            "$": {
+              "currencyID": "SEK"
+            }
+          }
+        ],
+        "cac:Item": [
+          {
+            "cbc:Name": [
+              {
+                "_": "New test item"
+              }
+            ],
+            "cac:SellersItemIdentification": [
+              {
+                "cbc:ID": [
+                  {
+                    "_": "123789"
+                  }
+                ]
+              }
+            ],
+            "cac:ClassifiedTaxCategory": [
+              {
+                "cbc:ID": [
+                  {
+                    "_": "S"
+                  }
+                ],
+                "cbc:Percent": [
+                  {
+                    "_": "12"
+                  }
+                ],
+                "cac:TaxScheme": [
+                  {
+                    "cbc:ID": [
+                      {
+                        "_": "VAT"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "cac:Price": [
+          {
+            "cbc:PriceAmount": [
+              {
+                "_": "100",
+                "$": {
+                  "currencyID": "SEK"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "integrationId": "a5845a11-4e5a-4700-bca3-e670a6cd8a79"
+}

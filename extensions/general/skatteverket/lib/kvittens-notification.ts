@@ -26,6 +26,7 @@ import { createHash } from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getEmailService } from '@/lib/email/service'
 import { createLogger } from '@/lib/logger'
+import { resolveMemberEmail } from '@/lib/notifications/member-email'
 
 const log = createLogger('skv-kvittens-notification')
 
@@ -170,30 +171,6 @@ async function releaseClaim(
       error: err instanceof Error ? err.message : String(err),
     })
   }
-}
-
-/**
- * The recipient must still be an active member of the company (mirrors the
- * drift-email rule): a token owner who has since been removed from the
- * company must not receive filing confirmations for it.
- */
-async function resolveMemberEmail(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string
-): Promise<string | null> {
-  const { data: member } = await supabase
-    .from('company_members')
-    .select('user_id, profiles!inner(email)')
-    .eq('company_id', companyId)
-    .eq('user_id', userId)
-    .maybeSingle()
-  if (!member) return null
-
-  type ProfileRef = { email?: string | null } | { email?: string | null }[] | null
-  const profiles = (member as { profiles: ProfileRef }).profiles
-  const profile = Array.isArray(profiles) ? profiles[0] : profiles
-  return profile?.email ?? null
 }
 
 function escapeHtml(input: string): string {

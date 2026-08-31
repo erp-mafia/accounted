@@ -49,6 +49,7 @@ registerEndpoint({
     'as_of_date defaults to period_end if omitted.',
   ],
   example: {
+    request: { as_of_date: '2026-12-31' },
     response: {
       data: { operation_id: '0e9c…', type: 'fiscal_periods.currency_revaluation', status: 'succeeded', poll_url: '/api/v1/operations/0e9c…', webhook_event: 'operation.completed' },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },

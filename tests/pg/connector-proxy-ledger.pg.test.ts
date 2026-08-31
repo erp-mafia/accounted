@@ -3,7 +3,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { getPool, withUserContext } from './setup'
 import { insertAuthUser } from './fixtures'
 
-// pg-real for migration 20260820124000: the connection ledger, the global
+// pg-real for migration 20260831200000: the connection ledger, the global
 // upstream budget RPC, and validate v2 returning limits. Service-role-only
 // exposure is asserted the same way as the base connector-keys test.
 

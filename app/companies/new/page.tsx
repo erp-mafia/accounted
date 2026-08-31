@@ -19,18 +19,12 @@ export default async function NewCompanyPage() {
     redirect('/login')
   }
 
-  const { data: teamMembership } = await supabase
-    .from('team_members')
-    .select('team_id')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle()
-
-  let teamId = teamMembership?.team_id
-  if (!teamId) {
-    const { data: newTeamId } = await supabase.rpc('ensure_user_team')
-    teamId = newTeamId
-  }
+  // Deterministic personal-team attachment (WL-08): ensure_user_team returns
+  // the user's PERSONAL team (creating one if missing). The previous bare
+  // `.limit(1)` membership pick could hand a consultant's new private company
+  // to their byrå team; byrå client creation binds its team explicitly via
+  // /companies/new-client instead.
+  const { data: teamId } = await supabase.rpc('ensure_user_team')
   if (!teamId) {
     redirect('/login')
   }

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
@@ -33,7 +34,6 @@ import { ToastAction } from '@/components/ui/toast'
 import { cn, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createClient } from '@/lib/supabase/client'
-import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import {
   ClipboardCheck,
@@ -46,12 +46,14 @@ import {
   MessageSquare,
   AlertTriangle,
   X,
+  ArrowDownUp,
 } from 'lucide-react'
 import type {
   PendingOperation,
   PendingOperationRejectionCategory,
 } from '@/types'
 import { OperationPreview, AccountNamesContext } from '@/components/pending-operations/OperationPreview'
+import { useAccountNamesSource } from '@/components/pending-operations/use-account-names'
 import {
   operationLabel,
   singleActionWarning,
@@ -109,6 +111,7 @@ function getPeriodStatus(op: PendingOperation): PeriodStatusShape | null {
 const GACT_CLASS =
   'inline-flex items-center gap-1.5 rounded-full border px-3.5 py-[5px] text-xs transition-colors duration-150 disabled:pointer-events-none disabled:opacity-50'
 const GACT_OK_CLASS = 'border-success/40 text-success hover:bg-success/10'
+const SORT_ORDER_STORAGE_KEY = 'pending.sortOrder'
 const GACT_NO_CLASS = 'border-destructive/40 text-destructive hover:bg-destructive/10'
 const GACT_NEUTRAL_CLASS =
   'border-border text-muted-foreground hover:bg-secondary/40 hover:text-foreground'
@@ -191,34 +194,6 @@ function formatRelativeTime(dateStr: string): string {
  * names after a switch. A failed fetch leaves the map empty, which shows the
  * bare number rather than a wrong name, and retries on the next mount.
  */
-function useAccountNamesSource(): Record<string, string> {
-  const [names, setNames] = useState<Record<string, string>>({})
-  useEffect(() => {
-    let alive = true
-    void fetch('/api/bookkeeping/accounts')
-      .then((r) => r.json())
-      .then(({ data }) => {
-        if (!alive) return
-        setNames(
-          Object.fromEntries(
-            ((data ?? []) as Array<{ account_number: string; account_name: string }>).map((a) => [
-              a.account_number,
-              a.account_name,
-            ]),
-          ),
-        )
-      })
-      .catch(() => {
-        // Display-only: the number still shows, so a failure is not worth
-        // surfacing as an error the user cannot act on.
-      })
-    return () => {
-      alive = false
-    }
-  }, [])
-  return names
-}
-
 
 /**
  * Inline period-lock banner. Renders when the staged operation touches a
@@ -270,6 +245,28 @@ export default function PendingOperationsPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<ViewTab>('pending')
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
+  // Queue order. Newest first by default; a bokslut batch is approved oldest
+  // first, so the choice is remembered per browser.
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(SORT_ORDER_STORAGE_KEY)
+      if (stored === 'asc' || stored === 'desc') setSortOrder(stored)
+    } catch {
+      // Storage blocked: keep the default.
+    }
+  }, [])
+  const toggleSortOrder = () => {
+    setSortOrder((prev) => {
+      const next = prev === 'desc' ? 'asc' : 'desc'
+      try {
+        window.localStorage.setItem(SORT_ORDER_STORAGE_KEY, next)
+      } catch {
+        // Storage blocked: the toggle still applies for this session.
+      }
+      return next
+    })
+  }
   const [conversationFilter, setConversationFilter] = useState<string | null>(null)
   const [pendingCount, setPendingCount] = useState<number | null>(null)
   // Detail slide-over (convention 13): id rather than the row object, so the
@@ -290,30 +287,15 @@ export default function PendingOperationsPage() {
   const [rejectReason, setRejectReason] = useState('')
   const [isRejecting, setIsRejecting] = useState(false)
   const { toast } = useToast()
-  const company = useCompanyOptional()?.company ?? null
   // Whether the "Bokför utkasten" toast CTA leads anywhere: bulk Bokför on
   // /invoices only selects drafts when the company books at issue. Under
   // kontantmetoden or deferred booking (#967) the CTA would be a dead end,
   // so it stays suppressed (false until settings load: suppressing is the
   // safe direction, the neutral hint sentence still shows).
-  const [invoiceDraftsCtaUseful, setInvoiceDraftsCtaUseful] = useState(false)
-
-  useEffect(() => {
-    if (!company) return
-    let cancelled = false
-    const supabase = createClient()
-    supabase
-      .from('company_settings')
-      .select('accounting_method, defer_invoice_booking')
-      .eq('company_id', company.id)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (!cancelled) setInvoiceDraftsCtaUseful(booksInvoicesOnIssue(data))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [company])
+  // Derived from the session-cached settings row (lib/reference-data); false
+  // until the row is available, suppressing being the safe direction.
+  const { settings: companySettings } = useCompanySettings()
+  const invoiceDraftsCtaUseful = companySettings ? booksInvoicesOnIssue(companySettings) : false
 
   // Read ?conversation= once on mount so deep-links from the agent context
   // strip filter the list automatically.
@@ -354,7 +336,7 @@ export default function PendingOperationsPage() {
     else setIsRefreshing(true)
     try {
       if (activeTab === 'pending') {
-        const res = await fetch('/api/pending-operations?status=pending')
+        const res = await fetch(`/api/pending-operations?status=pending&order=${sortOrder}`)
         // A JSON error body parses fine but carries no data: without this
         // check a failed refresh would blank the list and zero the badge
         // instead of keeping current rows and surfacing the error toast.
@@ -397,7 +379,7 @@ export default function PendingOperationsPage() {
     if (!isCurrent()) return
     setIsLoading(false)
     setIsRefreshing(false)
-  }, [activeTab, toast])
+  }, [activeTab, sortOrder, toast])
 
   useEffect(() => {
     fetchOperations()
@@ -790,6 +772,19 @@ export default function PendingOperationsPage() {
             count: tab === 'pending' ? pendingCount ?? 0 : undefined,
           }))}
         />
+        {activeTab === 'pending' && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-8 gap-1.5 px-2 text-xs text-muted-foreground"
+            onClick={toggleSortOrder}
+            aria-pressed={sortOrder === 'asc'}
+            title={sortOrder === 'asc' ? t('sort_oldest_first') : t('sort_newest_first')}
+          >
+            <ArrowDownUp className="h-3.5 w-3.5" aria-hidden="true" />
+            {sortOrder === 'asc' ? t('sort_oldest_first') : t('sort_newest_first')}
+          </Button>
+        )}
         {/* Quiet cue that a background reconcile is running (post-action or
             realtime): the list itself never swaps to a spinner for it. */}
         {isRefreshing && !isLoading && (
@@ -1130,6 +1125,17 @@ export default function PendingOperationsPage() {
                 <div className="rounded-lg border border-border p-4">
                   <OperationPreview op={detailOp} />
                 </div>
+                {/* The agent's audit-trail note for this operation (the
+                    `notes` tool input): the approver should read why, not
+                    only what. */}
+                {typeof detailOp.params?.notes === 'string' && detailOp.params.notes.trim() !== '' && (
+                  <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
+                    <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                      {t('note_label')}
+                    </p>
+                    <p className="mt-0.5 whitespace-pre-wrap text-xs leading-snug">{detailOp.params.notes}</p>
+                  </div>
+                )}
                 {detailOp.status === 'pending' && singleActionWarning(detailOp.operation_type) && (
                   <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
                     <p className="text-xs leading-snug text-muted-foreground">

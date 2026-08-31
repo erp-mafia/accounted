@@ -7,11 +7,18 @@ import {
   detectExpiringBankConnections,
   detectOtherAccountHint,
   detectSkvDisconnected,
+  detectSkvUnexplained,
 } from './categories'
 
 const log = createLogger('notices')
 
 export interface GetCompanyNoticesOptions {
+  /**
+   * Run the stale-dismissal reap after the response instead of on the read
+   * path (Hem passes Next's `after`). The reap is hygiene: awaiting it made
+   * every Hem render wait for a delete nobody sees.
+   */
+  deferReap?: (task: () => Promise<void>) => void
   /** Caller's user id: Skatteverket connections and dismissals are per user. */
   userId: string
   now?: Date
@@ -36,7 +43,7 @@ export interface GetCompanyNoticesOptions {
 export async function getCompanyNotices(
   supabase: SupabaseClient,
   companyId: string,
-  { userId, now = new Date() }: GetCompanyNoticesOptions,
+  { userId, now = new Date(), deferReap }: GetCompanyNoticesOptions,
 ): Promise<Notice[]> {
   const [candidates, dismissedIds] = await Promise.all([
     Promise.all([
@@ -44,6 +51,7 @@ export async function getCompanyNotices(
       detectSkvDisconnected(supabase, userId, companyId, now),
       detectBackupFailing(supabase, companyId),
       detectExpiringBankConnections(supabase, companyId, now),
+      detectSkvUnexplained(supabase, companyId),
       detectOtherAccountHint(supabase, companyId),
     ]),
     fetchDismissedIds(supabase, companyId, userId),
@@ -60,7 +68,8 @@ export async function getCompanyNotices(
     const category = NOTICE_PRIORITY.find((c) => id.startsWith(`${c}:`))
     return category !== undefined && !byCategory.has(category)
   })
-  await reapStaleDismissals(supabase, companyId, userId, staleIds)
+  if (deferReap) deferReap(() => reapStaleDismissals(supabase, companyId, userId, staleIds))
+  else await reapStaleDismissals(supabase, companyId, userId, staleIds)
 
   return NOTICE_PRIORITY.map((category) => byCategory.get(category)).filter(
     (n): n is Notice => n !== undefined && !dismissedIds.has(n.id),

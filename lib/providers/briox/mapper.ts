@@ -8,6 +8,7 @@ import type {
   CompanyInformationDto,
   AmountType, PartyDto,
 } from '../dto';
+import { readNumber, resolveVatTriple, lineVatFromPercent } from '../amounts';
 
 function amount(value: number | undefined | null, currency: string = 'SEK'): AmountType {
   return { value: value ?? 0, currencyCode: currency };
@@ -19,6 +20,16 @@ function num(value: unknown): number | undefined {
   const n = Number(value);
   return Number.isFinite(n) ? n : undefined;
 }
+
+/**
+ * Briox exposes the ex-VAT amount as `net_amount`, which the list payload has
+ * been observed to omit. It used to fall back to the gross total, making the
+ * derived VAT 0 on any invoice missing the field. The VAT total itself is
+ * spelled inconsistently across Briox's endpoints, so several candidates are
+ * tried; none matching leaves the VAT unknown rather than zero.
+ */
+const BRIOX_NET_KEYS = ['net_amount'] as const;
+const BRIOX_VAT_KEYS = ['vat_amount', 'total_vat', 'vat'] as const;
 
 /**
  * Single source of truth for "is this invoice fully settled?", used by BOTH
@@ -80,21 +91,38 @@ export function mapBrioxToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
   const rows = (raw['rows'] as Record<string, unknown>[] | undefined) ?? [];
   // Line-level amounts arrive from the same string-serializing API as the
   // header amounts: coerce ALL numerics through num(), never blind casts.
-  const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => ({
-    id: String(row['id'] ?? idx + 1),
-    description: row['description'] as string | undefined,
-    quantity: num(row['quantity']),
-    unitCode: row['unit'] as string | undefined,
-    unitPrice: row['price'] != null ? amount(num(row['price']), currency) : undefined,
-    lineExtensionAmount: amount(num(row['total']), currency),
-    taxPercent: num(row['vat_rate']),
-    accountNumber: row['account_number'] != null ? String(row['account_number']) : undefined,
-    articleNumber: row['article_number'] as string | undefined,
-    itemName: row['description'] as string | undefined,
-  }));
+  const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => {
+    const lineNet = num(row['total']);
+    const taxPercent = num(row['vat_rate']);
+    const lineVat = lineNet !== undefined ? lineVatFromPercent(lineNet, taxPercent) : undefined;
+
+    return {
+      id: String(row['id'] ?? idx + 1),
+      description: row['description'] as string | undefined,
+      quantity: num(row['quantity']),
+      unitCode: row['unit'] as string | undefined,
+      unitPrice: row['price'] != null ? amount(num(row['price']), currency) : undefined,
+      lineExtensionAmount: amount(lineNet, currency),
+      taxPercent,
+      // Briox states the rate per row but not the money; the migration needs
+      // the money, because the booking engine sums per-line VAT to post 2611.
+      taxAmount: lineVat !== undefined ? amount(lineVat, currency) : undefined,
+      accountNumber: row['account_number'] != null ? String(row['account_number']) : undefined,
+      articleNumber: row['article_number'] as string | undefined,
+      itemName: row['description'] as string | undefined,
+    };
+  });
+
+  const vat = resolveVatTriple({
+    gross: total,
+    net: readNumber(raw, BRIOX_NET_KEYS),
+    vat: readNumber(raw, BRIOX_VAT_KEYS),
+  });
 
   const legalMonetaryTotal: LegalMonetaryTotalDto = {
-    lineExtensionAmount: amount(num(raw['net_amount']) ?? total, currency),
+    // Undefined when `net_amount` is absent: falling back to the gross records
+    // the whole invoice as its own net, and 0 kr of VAT alongside it.
+    lineExtensionAmount: vat.net !== undefined ? amount(vat.net, currency) : undefined,
     taxInclusiveAmount: amount(total, currency),
     payableAmount: amount(total, currency),
   };
@@ -117,6 +145,7 @@ export function mapBrioxToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
       raw['customer_org_number'] as string | undefined,
     ),
     lines,
+    taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
     paymentStatus,
     paymentTerms: raw['payment_terms'] as string | undefined,
@@ -148,8 +177,16 @@ export function mapBrioxToSupplierInvoice(raw: Record<string, unknown>): Supplie
     accountNumber: row['account_number'] != null ? String(row['account_number']) : undefined,
   }));
 
+  const vat = resolveVatTriple({
+    gross: total,
+    net: readNumber(raw, BRIOX_NET_KEYS),
+    vat: readNumber(raw, BRIOX_VAT_KEYS),
+  });
+
   const legalMonetaryTotal: LegalMonetaryTotalDto = {
-    lineExtensionAmount: amount(num(raw['net_amount']) ?? total, currency),
+    // Undefined when `net_amount` is absent: falling back to the gross records
+    // the whole invoice as its own net, and 0 kr of VAT alongside it.
+    lineExtensionAmount: vat.net !== undefined ? amount(vat.net, currency) : undefined,
     taxInclusiveAmount: amount(total, currency),
     payableAmount: amount(total, currency),
   };
@@ -172,6 +209,7 @@ export function mapBrioxToSupplierInvoice(raw: Record<string, unknown>): Supplie
     ),
     buyer: buildParty(''),
     lines,
+    taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
     paymentStatus,
     ocrNumber: raw['ocr'] as string | undefined,

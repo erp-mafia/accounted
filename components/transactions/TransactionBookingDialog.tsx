@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -16,9 +16,12 @@ import type { AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPi
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import { resolveSekAmount, buildCurrencyMetadata } from '@/lib/bookkeeping/currency-utils'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
-import type { BookingTemplateLibrary, CashAccount } from '@/types'
+import { proposalLinesToFormLines } from '@/lib/bookkeeping/proposal-lines'
+import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
+import type { BookingTemplateLibrary } from '@/types'
 import type { TransactionWithInvoice } from './transaction-types'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
+import { useCashAccounts } from '@/lib/reference-data/hooks'
 
 interface TransactionBookingDialogProps {
   open: boolean
@@ -33,12 +36,25 @@ interface TransactionBookingDialogProps {
     matched?: boolean,
   ) => void
   preselectedTemplate?: BookingTemplateLibrary | null
+  /**
+   * "Andra rader" hand-off from a proposal view (QuickReviewDialog): the
+   * COMPUTED lines the user was shown, prefilled for per-line editing. Takes
+   * precedence over preselectedTemplate. The settlement leg's account is
+   * swapped for the transaction's resolved cash account, same as the
+   * library-template path.
+   */
+  proposalLines?: ProposalLine[] | null
+  /** Account number (string, e.g. '5460') to prefill on the counter line:
+   *  set when the user picked an account from the template picker's "Konton"
+   *  search results. Ignored when a preselectedTemplate is present. */
+  preselectedAccount?: string | null
 }
 
 function buildInitialLines(
   transaction: TransactionWithInvoice,
   bankLineDescription: string,
   bankAccount: string = '1930',
+  counterAccount?: string | null,
 ): FormLine[] {
   const sekAmount = Math.round(Math.abs(resolveSekAmount(
     transaction.amount,
@@ -67,7 +83,7 @@ function buildInitialLines(
   }
 
   const counterLine: FormLine = {
-    account_number: '',
+    account_number: counterAccount ?? '',
     debit_amount: isExpense ? amountStr : '',
     credit_amount: isExpense ? '' : amountStr,
     line_description: '',
@@ -113,45 +129,38 @@ export default function TransactionBookingDialog({
   transaction,
   onBooked,
   preselectedTemplate,
+  proposalLines,
+  preselectedAccount,
 }: TransactionBookingDialogProps) {
   const t = useTranslations('tx_booking_dialog')
   const { toast } = useToast()
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [pickedInboxDocs, setPickedInboxDocs] = useState<AvailableInboxDoc[]>([])
   const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
-  const [bankAccount, setBankAccount] = useState<string | null>(null)
-  const [bankAccountName, setBankAccountName] = useState<string | null>(null)
+  // Settlement account for the bank line: resolved from the session-cached
+  // cash accounts (seeded by the dashboard layout), so the form below mounts
+  // on the first paint instead of after a /api/cash-accounts round trip on
+  // every open. null only while the list is genuinely still loading.
+  const { cashAccounts, isLoading: cashAccountsLoading } = useCashAccounts()
+  const { bankAccount, bankAccountName } = useMemo(() => {
+    if (!transaction || cashAccountsLoading) {
+      return { bankAccount: null as string | null, bankAccountName: null as string | null }
+    }
+    const { account } = resolveAccount(
+      cashAccounts,
+      transaction.cash_account_id ?? null,
+      transaction.currency ?? 'SEK',
+    )
+    // Use the matched account's own name instead of a generic label.
+    const matched =
+      cashAccounts.find((a) => a.id === transaction.cash_account_id) ??
+      cashAccounts.find((a) => a.ledger_account === account)
+    return { bankAccount: account, bankAccountName: matched?.name ?? null }
+  }, [transaction, cashAccounts, cashAccountsLoading])
 
-  useEffect(() => {
-    if (!open || !transaction) return
-    setBankAccount(null)
-    setBankAccountName(null)
-    let cancelled = false
-    fetch('/api/cash-accounts')
-      .then((r) => {
-        if (!r.ok) throw new Error(`cash-accounts fetch failed: ${r.status}`)
-        return r.json()
-      })
-      .then((json) => {
-        if (cancelled) return
-        const accounts = (json.data ?? []) as CashAccount[]
-        const { account } = resolveAccount(
-          accounts,
-          transaction.cash_account_id ?? null,
-          transaction.currency ?? 'SEK',
-        )
-        // Use the matched account's own name instead of a generic label.
-        const matched =
-          accounts.find((a) => a.id === transaction.cash_account_id) ??
-          accounts.find((a) => a.ledger_account === account)
-        setBankAccount(account)
-        setBankAccountName(matched?.name ?? null)
-      })
-      .catch(() => {
-        if (!cancelled) setBankAccount('1930')
-      })
-    return () => { cancelled = true }
-  }, [open, transaction?.id])
+  // Non-modal dialog (see below): page modality is restored by hand so the
+  // agent sheet stays live. See useDashShellInert in components/ui/dialog.tsx.
+  useDashShellInert(open)
 
   if (!transaction) return null
 
@@ -248,8 +257,25 @@ export default function TransactionBookingDialog({
         setInboxPickerOpen(false)
       }
       onOpenChange(o)
-    }}>
-      <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+    }} modal={false}>
+      <DialogVeil />
+      <DialogContent
+        // Width caps at the space left of a docked agent sheet so the form's
+        // right edge, and the Granska button, never end up unreachable under
+        // the sheet (z-60 over z-50). --agent-sheet-w is docked-only, so with
+        // the sheet closed this is exactly the old max-w-6xl.
+        className="max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto"
+        // Non-modal so the agent sheet (fixed z-[60], portaled outside this
+        // dialog) stays interactive beside a booking in progress; a click in
+        // its text field must not count as outside-dismissal. A half-booked
+        // transaction must also survive a stray Escape or backdrop click.
+        // Closing is explicit: the header X. Same convention as
+        // NewInvoiceDialog (which pairs non-modality with the inert effect
+        // above).
+        onEscapeKeyDown={(e) => e.preventDefault()}
+        onPointerDownOutside={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription className="sr-only">
@@ -385,12 +411,19 @@ export default function TransactionBookingDialog({
           <div className="space-y-4">
             {bankAccount !== null && (
               <JournalEntryForm
-                key={`${transaction.id}-${preselectedTemplate?.id ?? 'default'}-${bankAccount}`}
+                key={`${transaction.id}-${proposalLines && proposalLines.length > 0 ? 'proposal' : preselectedTemplate?.id ?? 'default'}-${preselectedAccount ?? 'none'}-${bankAccount}`}
                 embedded
                 initialLines={
-                  preselectedTemplate
-                    ? buildInitialLinesFromTemplate(transaction, preselectedTemplate, bankAccount)
-                    : buildInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount)
+                  proposalLines && proposalLines.length > 0
+                    ? proposalLinesToFormLines(proposalLines, {
+                        settlementAccount: bankAccount,
+                        currency: transaction.currency,
+                        foreignAmount: Math.abs(transaction.amount),
+                        exchangeRate: transaction.exchange_rate,
+                      })
+                    : preselectedTemplate
+                      ? buildInitialLinesFromTemplate(transaction, preselectedTemplate, bankAccount)
+                      : buildInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount, preselectedAccount)
                 }
                 initialDate={transaction.date}
                 initialDescription={transaction.description}

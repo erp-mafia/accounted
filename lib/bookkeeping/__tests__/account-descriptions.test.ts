@@ -14,6 +14,13 @@ describe('account-descriptions', () => {
       expect(getAccountDescription('9999')).toBeUndefined()
       expect(getAccountDescription('')).toBeUndefined()
     })
+
+    it('has no entry for 1580 (removed from BAS; was mislabeled as tax receivable)', () => {
+      // Tax receivables are 1640/1650. Card/coupon receivables moved from
+      // 1580 to 1686. 1580 must stay undefined so a company's own account
+      // name is what renders.
+      expect(getAccountDescription('1580')).toBeUndefined()
+    })
   })
 
   describe('data completeness', () => {

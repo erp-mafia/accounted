@@ -58,8 +58,11 @@ export const POST = withConnectorAuth('connect.entitlements', async (request, ct
   if (pinNow) instanceUrl = report.instance_url ?? null
   const lastSyncedAt = new Date().toISOString()
   // Two literal payloads rather than one built object: the no-phantom-columns
-  // scanner resolves literals only.
-  const { error } = pinNow
+  // scanner resolves literals only. The pinning update additionally filters
+  // on instance_url IS NULL so two concurrent first reports cannot both pin:
+  // the loser's conditional update matches no row and re-reads the winner's
+  // URL below (first-report-wins, later reports never move the pin).
+  const { error, data: pinned } = pinNow
     ? await ctx.supabase
         .from('connector_keys')
         .update({
@@ -68,13 +71,29 @@ export const POST = withConnectorAuth('connect.entitlements', async (request, ct
           instance_url: instanceUrl,
         })
         .eq('id', ctx.key.id)
+        .is('instance_url', null)
+        .select('instance_url')
     : await ctx.supabase
         .from('connector_keys')
         .update({ active_company_count: report.active_company_count, last_synced_at: lastSyncedAt })
         .eq('id', ctx.key.id)
+        .select('instance_url')
   if (error) {
     ctx.log.error('failed to record connector sync', error)
     return NextResponse.json({ error: 'Failed to record sync', code: 'INTERNAL_ERROR' }, { status: 500 })
+  }
+  if (pinNow && (pinned ?? []).length === 0) {
+    // Lost the pin race: record the counters and surface the winner's pin.
+    const { data: existing } = await ctx.supabase
+      .from('connector_keys')
+      .update({ active_company_count: report.active_company_count, last_synced_at: lastSyncedAt })
+      .eq('id', ctx.key.id)
+      .select('instance_url')
+    instanceUrl = (existing?.[0] as { instance_url: string | null } | undefined)?.instance_url ?? null
+    ctx.log.warn('instance_url pin race lost; keeping the first pin', {
+      reported: report.instance_url,
+      pinned: instanceUrl,
+    })
   }
   return NextResponse.json({ data: entitlementsOf(ctx, instanceUrl) })
 })
