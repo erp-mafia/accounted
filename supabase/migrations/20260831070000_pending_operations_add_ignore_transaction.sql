@@ -16,7 +16,7 @@
 --
 -- NOTE on the value list: this constraint is re-created wholesale (the
 -- established pattern here), so the list below is every value of the
--- constraint as left by 20260828160000 PLUS the new value. Dropping any
+-- constraint as left by 20260830160000 (update_salary_run, which built on 20260830150000's delete_draft_invoice and 20260830130000's book_skattekonto_row / book_skattekonto_rows) PLUS the new value. Dropping any
 -- existing value here would silently revoke it.
 --
 -- NOT VALID + separate VALIDATE migration (paired file, same pattern as
@@ -51,6 +51,7 @@ ALTER TABLE public.pending_operations
     'credit_supplier_invoice',
     'credit_invoice',
     'convert_invoice',
+    'delete_draft_invoice',
     'create_transaction',
     'attach_document_to_transaction',
     'create_voucher',
@@ -77,6 +78,7 @@ ALTER TABLE public.pending_operations
     'link_document_to_voucher',
     'update_payslip_line',
     'set_run_salary',
+    'update_salary_run',
     'register_absence',
     'create_employee',
     'update_employee',
@@ -99,5 +101,7 @@ ALTER TABLE public.pending_operations
     'reconciliation_unmatch',
     'reconciliation_signoff',
     'reconciliation_residual',
+    'book_skattekonto_row',
+    'book_skattekonto_rows',
     'ignore_transaction'
   )) NOT VALID;
