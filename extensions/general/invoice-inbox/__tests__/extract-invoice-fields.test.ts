@@ -122,7 +122,9 @@ describe('extractInvoiceFields', () => {
     expect(data.confidence).toBe(1)
   })
 
-  it('keeps prominentAmounts from a non-invoice document (bankintyg/avtal)', async () => {
+  it('promotes a single prominent amount into the editable total (bankintyg/avtal)', async () => {
+    // Zero amounts are noise ("Totalt månadspris: 0 kr"), so this document
+    // still has exactly one meaningful figure and it becomes TOTALT.
     mockCreate.mockReturnValueOnce(
       aiResponse({
         ...VALID_RESULT,
@@ -132,7 +134,10 @@ describe('extractInvoiceFields', () => {
         lineItems: [],
         totals: { subtotal: null, vatAmount: null, total: null },
         vatBreakdown: [],
-        prominentAmounts: [{ amount: 2500, label: 'Anslutnings-/Engångspris' }],
+        prominentAmounts: [
+          { amount: 0, label: 'Totalt månadspris' },
+          { amount: 2500, label: 'Anslutnings-/Engångspris' },
+        ],
       })
     )
     const { data } = await extractInvoiceFields({
@@ -140,10 +145,57 @@ describe('extractInvoiceFields', () => {
       mimeType: 'application/pdf',
       fileName: 'affarsavtal.pdf',
     })
-    expect(data.totals.total).toBeNull()
+    expect(data.totals.total).toBe(2500)
+    expect(data.totalSource).toBe('prominent')
+    // The source list is preserved: matching demotes the promoted total back
+    // through it, and re-extraction stays idempotent.
     expect(data.prominentAmounts).toEqual([
+      { amount: 0, label: 'Totalt månadspris' },
       { amount: 2500, label: 'Anslutnings-/Engångspris' },
     ])
+  })
+
+  it('does not promote when the document shows several distinct amounts', async () => {
+    mockCreate.mockReturnValueOnce(
+      aiResponse({
+        ...VALID_RESULT,
+        documentKind: 'government_letter',
+        lineItems: [],
+        totals: { subtotal: null, vatAmount: null, total: null },
+        vatBreakdown: [],
+        prominentAmounts: [
+          { amount: 4568, label: 'Arbetsgivaravgift' },
+          { amount: 8151, label: 'Skatt' },
+        ],
+      })
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'agi-besked.pdf',
+    })
+    expect(data.totals.total).toBeNull()
+    expect(data.totalSource).toBeUndefined()
+  })
+
+  it('never promotes on invoices or receipts', async () => {
+    // A receipt whose total was unreadable must not have a stray printed
+    // figure laundered into its total.
+    mockCreate.mockReturnValueOnce(
+      aiResponse({
+        ...VALID_RESULT,
+        documentKind: 'receipt',
+        totals: { subtotal: null, vatAmount: null, total: null },
+        prominentAmounts: [{ amount: 999, label: 'Pris' }],
+      })
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'kvitto.pdf',
+    })
+    expect(data.totals.total).toBeNull()
+    expect(data.totalSource).toBeUndefined()
   })
 
   it('degrades a hallucinated prominentAmounts shape to an empty list, not a parse failure', async () => {
