@@ -359,6 +359,7 @@ describe('gnubok_update_invoice: validation and staging', () => {
     expect(result.preview.current_items).toEqual(
       CURRENT_ROWS.map((row) => ({
         ...row,
+        discount_percent: 0,
         deduction_type: null,
         accrual_period_start: null,
         accrual_period_end: null,

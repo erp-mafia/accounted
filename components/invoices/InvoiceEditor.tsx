@@ -37,8 +37,9 @@ import {
 import { sortArticles } from '@/lib/articles/sort'
 import ArticleCombobox from '@/components/invoices/ArticleCombobox'
 import { getAmountToPay } from '@/lib/invoices/rounding'
+import { computeLineNet, hasLineDiscount } from '@/lib/invoices/line-amounts'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
-import { Loader2, X, ArrowLeft, Send, Eye, Landmark, Lock, AlertTriangle, MoreVertical, CalendarClock, Tags, Package, Copy } from 'lucide-react'
+import { Loader2, X, ArrowLeft, Send, Eye, Landmark, Lock, AlertTriangle, MoreVertical, CalendarClock, Tags, Package, Copy, Percent } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -259,6 +260,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       quantity: z.number(),
       unit: z.string(),
       unit_price: z.number(),
+      // Rabatt i procent per rad (⋮ menu). null = no discount.
+      discount_percent: z
+        .number()
+        .min(0, t('validation_discount_range'))
+        .max(100, t('validation_discount_range'))
+        .nullable()
+        .optional(),
       vat_rate: z.number().min(0).max(25),
       // Article linkage (artikelregister). Optional: free-text lines omit them.
       article_id: z.string().nullable().optional(),
@@ -343,6 +351,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       document_type: z.enum(['invoice', 'proforma', 'delivery_note']),
       your_reference: z.string().optional(),
       our_reference: z.string().optional(),
+      invoice_marking: z.string().optional(),
       notes: z.string().optional(),
       // Optional online payment link (pasted from e.g. the Stripe dashboard).
       // https-only: mirrors the server-side CreateInvoiceSchema gate.
@@ -453,6 +462,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     [activeAccounts],
   )
   const [accountOverrideRows, setAccountOverrideRows] = useState<Set<number>>(new Set())
+  // Rabatt per rad: rows whose discount strip is open (⋮ menu), same
+  // lifecycle as the account override above. A stored discount also opens it.
+  const [discountRows, setDiscountRows] = useState<Set<number>>(new Set())
   // Dimension tagging (kostnadsställe/projekt, dimensions PR7). Affordances
   // render only when company_settings.dimensions_enabled: a UI-visibility
   // gate; a draft that already carries bags still round-trips untouched when
@@ -529,6 +541,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           document_type: (initial.document_type ?? 'invoice') as InvoiceDocumentType,
           your_reference: initial.your_reference ?? '',
           our_reference: initial.our_reference ?? '',
+          invoice_marking: initial.invoice_marking ?? '',
           notes: initial.notes ?? '',
           payment_link_url: initial.payment_link_url ?? '',
           payment_link_auto: initial.payment_link_auto ?? true,
@@ -543,6 +556,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             quantity: item.quantity,
             unit: item.unit,
             unit_price: item.unit_price,
+            discount_percent: hasLineDiscount(item.discount_percent) ? item.discount_percent : null,
             vat_rate: item.vat_rate ?? 25,
             article_id: item.article_id ?? null,
             revenue_account: item.revenue_account ?? null,
@@ -568,6 +582,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             document_type: 'invoice' as InvoiceDocumentType,
             your_reference: '',
             our_reference: copyInitial.our_reference,
+            invoice_marking: '',
             notes: copyInitial.notes,
             payment_link_url: '',
             payment_link_auto: true,
@@ -635,6 +650,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const watchReceivedDate = watch('received_date')
   const watchDeliveryDate = watch('delivery_date')
   const watchYourReference = watch('your_reference')
+  const watchInvoiceMarking = watch('invoice_marking')
   const watchPaymentLinkUrl = watch('payment_link_url')
   const watchPaymentLinkAuto = watch('payment_link_auto')
   const watchPersonnummer = watch('deduction_personnummer')
@@ -817,6 +833,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       quantity: 1,
       unit: 'st',
       unit_price: 0,
+      discount_percent: null,
       vat_rate: vatRegistered ? vatRatePlan.defaultRate : 0,
       article_id: null,
       revenue_account: null,
@@ -871,6 +888,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       quantity: 0,
       unit: '',
       unit_price: 0,
+      discount_percent: null,
       vat_rate: 0,
       article_id: null,
       revenue_account: null,
@@ -1101,7 +1119,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   }
 
   const subtotal = watchItems.reduce((sum, item) => {
-    return sum + (item.quantity || 0) * (item.unit_price || 0)
+    return sum + computeLineNet(item.quantity || 0, item.unit_price || 0, item.discount_percent)
   }, 0)
 
   const vatRules = selectedCustomer
@@ -1134,7 +1152,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   let vatAmount = 0
   for (const item of watchItems) {
     const rate = vatRegistered ? (item.vat_rate ?? (vatRules?.rate || 25)) : 0
-    const lineTotal = (item.quantity || 0) * (item.unit_price || 0)
+    const lineTotal = computeLineNet(item.quantity || 0, item.unit_price || 0, item.discount_percent)
     const lineVat = Math.round(lineTotal * rate / 100 * 100) / 100
     vatAmount += lineVat
     const existing = vatByRate.get(rate) || { base: 0, vat: 0 }
@@ -1226,6 +1244,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       const amount = computeDeduction({
         unit_price: item.unit_price || 0,
         quantity: item.quantity || 0,
+        discount_percent: item.discount_percent,
         deduction_type: item.deduction_type,
         // Same rate resolution as the VAT totals loop above: the deduction
         // base is the line total inkl. moms (HUSFL 6-9 §§).
@@ -1304,6 +1323,23 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       })
     } else {
       setAccountOverrideRows((prev) => new Set(prev).add(index))
+    }
+  }
+
+  // Open/close the per-line discount (⋮ menu). Closing clears the value so
+  // the row books at full price again.
+  function toggleDiscount(index: number) {
+    const isOpen = discountRows.has(index) || hasLineDiscount(watchItems[index]?.discount_percent)
+    if (isOpen) {
+      setValue(`items.${index}.discount_percent`, null, { shouldDirty: true, shouldValidate: true })
+      setDiscountRows((prev) => {
+        const next = new Set(prev)
+        next.delete(index)
+        return next
+      })
+    } else {
+      setDiscountRows((prev) => new Set(prev).add(index))
+      window.setTimeout(() => setFocus(`items.${index}.discount_percent`), 0)
     }
   }
 
@@ -1882,6 +1918,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     receivedDate: watchReceivedDate || '',
     deliveryDate: watchDeliveryDate || '',
     yourReference: watchYourReference || '',
+    invoiceMarking: watchInvoiceMarking || '',
     paymentLink: paymentLinkMode,
     oreRounding,
     dims: hasDimensionValues(defaultDims) ? compactDims(defaultDims) : null,
@@ -1904,6 +1941,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         return t('chip_delivery', { date: chip.date })
       case 'your_reference':
         return t('chip_your_reference', { reference: chip.reference })
+      case 'invoice_marking':
+        return t('chip_invoice_marking', { marking: chip.marking })
       case 'payment_link':
         return chip.mode === 'auto' ? t('chip_stripe_auto') : t('chip_payment_link')
       case 'ore_off':
@@ -2156,7 +2195,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         )
                       }
 
-                      const lineTotal = (item?.quantity || 0) * (item?.unit_price || 0)
+                      const lineTotal = computeLineNet(
+                        item?.quantity || 0,
+                        item?.unit_price || 0,
+                        item?.discount_percent,
+                      )
                       const rowErrors = errors.items?.[index]
                       const rowErrorMsg =
                         rowErrors?.description?.message ??
@@ -2166,6 +2209,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       const articleStripOpen = articlePickerRows.has(index)
                       const accountStripOpen =
                         isInvoiceDoc && (accountOverrideRows.has(index) || Boolean(item?.revenue_account))
+                      const discountStripOpen =
+                        discountRows.has(index) || hasLineDiscount(item?.discount_percent)
                       const dimensionStripOpen =
                         dimensionsEnabled &&
                         isInvoiceDoc &&
@@ -2291,6 +2336,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                     <DropdownMenuItem onSelect={() => toggleArticlePicker(index)} className="py-2">
                                       <Package className="h-4 w-4" />
                                       {t('row_menu_pick_article')}
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem onSelect={() => toggleDiscount(index)} className="py-2">
+                                      <Percent className="h-4 w-4" />
+                                      {discountStripOpen
+                                        ? t('row_menu_remove_discount')
+                                        : t('row_menu_add_discount')}
                                     </DropdownMenuItem>
                                     {isInvoiceDoc && (
                                       <>
@@ -2422,6 +2474,59 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                               </div>
                             )}
 
+                            {/* Rabatt strip: opened via the ⋮ menu; a stored
+                                discount keeps it open in edit mode. */}
+                            {discountStripOpen && (
+                              <div className="px-2 pb-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Label
+                                    htmlFor={`invoice-line-discount-${index}`}
+                                    className="text-xs text-muted-foreground"
+                                  >
+                                    {t('discount_label')}
+                                  </Label>
+                                  <div className="flex items-center gap-1">
+                                    <Input
+                                      id={`invoice-line-discount-${index}`}
+                                      type="number"
+                                      step="0.01"
+                                      min={0}
+                                      max={100}
+                                      inputMode="decimal"
+                                      placeholder="0"
+                                      className="h-8 w-24 text-right tabular-nums"
+                                      aria-label={t('discount_label')}
+                                      aria-invalid={Boolean(rowErrors?.discount_percent) || undefined}
+                                      {...register(`items.${index}.discount_percent`, {
+                                        // valueAsNumber turns an emptied field into
+                                        // NaN, which the schema rejects invisibly;
+                                        // same pattern as labor_hours.
+                                        setValueAs: (v) => {
+                                          if (v === '' || v == null) return null
+                                          const n = Number(v)
+                                          return Number.isFinite(n) ? n : null
+                                        },
+                                      })}
+                                    />
+                                    <span className="text-xs text-muted-foreground">%</span>
+                                  </div>
+                                  {hasLineDiscount(item?.discount_percent) && (
+                                    <span className="text-xs tabular-nums text-muted-foreground">
+                                      &minus;{formatCurrency(
+                                        roundOre((item?.quantity || 0) * (item?.unit_price || 0)) - lineTotal,
+                                        watchCurrency,
+                                      )}
+                                    </span>
+                                  )}
+                                </div>
+                                {rowErrors?.discount_percent && (
+                                  <p className="mt-1 text-sm text-destructive">
+                                    {rowErrors.discount_percent.message}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+
                             {/* ROT/RUT-avdrag strip: only when a deduction is
                                 active on this row (chosen via the ⋮ menu). */}
                             {isInvoiceDoc && item?.deduction_type && (
@@ -2482,6 +2587,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                     const amt = computeDeduction({
                                       unit_price: item?.unit_price || 0,
                                       quantity: item?.quantity || 0,
+                                      discount_percent: item?.discount_percent,
                                       deduction_type: item?.deduction_type,
                                       vat_rate: vatRegistered
                                         ? (item?.vat_rate ?? (vatRules?.rate || 25))
@@ -2924,6 +3030,23 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                           />
                         </div>
                       </div>
+                      {/* Fakturamärkning: one buyer-required marking string
+                          (kostnadsställe/projekt/PO), separate from Er
+                          referens. Plain input, never comma-split. */}
+                      <div className={SETTINGS_ROW_CLASS}>
+                        <Label htmlFor="invoice_marking" className="text-[13px] font-normal">
+                          {t('invoice_marking_label')}
+                        </Label>
+                        <div className="w-56">
+                          <Input
+                            id="invoice_marking"
+                            maxLength={200}
+                            placeholder={t('invoice_marking_placeholder')}
+                            className="h-8 text-[13px]"
+                            {...register('invoice_marking')}
+                          />
+                        </div>
+                      </div>
 
                       {/* Online payment link: manual paste or the Stripe auto
                           toggle. Only real invoices; hidden unless the company
@@ -3212,6 +3335,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             total={total}
             yourReference={pendingData?.your_reference}
             ourReference={pendingData?.our_reference}
+            invoiceMarking={pendingData?.invoice_marking}
             notes={pendingData?.notes}
             numberPreview={numberPreview}
             oreRounding={oreRounding}

@@ -168,6 +168,7 @@ import {
   type InvoiceWriteInput,
   type InvoiceWriteItemInput,
 } from '@/lib/invoices/build-invoice-write'
+import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
@@ -1631,6 +1632,7 @@ async function commitCreateInvoice(
   const customerId = params.customer_id as string
   const items = params.items as Array<{
     description: string; quantity: number; unit: string; unit_price: number; vat_rate?: number
+    discount_percent?: number | null
     article_id?: string | null; revenue_account?: string | null
     line_type?: 'product' | 'text'
     dimensions?: Record<string, string>
@@ -1674,7 +1676,12 @@ async function commitCreateInvoice(
   const notVatRegistered = vatSettings?.vat_registered === false
   if (notVatRegistered) for (const item of items) item.vat_rate = 0
 
-  const subtotal = billableItems.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
+  // Line totals net of any per-line discount, same math as the web path
+  // (lib/invoices/line-amounts.ts).
+  const subtotal = billableItems.reduce(
+    (sum, item) => sum + computeLineNet(item.quantity, item.unit_price, item.discount_percent),
+    0,
+  )
 
   let vatAmount = 0
   for (const item of billableItems) {
@@ -1682,7 +1689,11 @@ async function commitCreateInvoice(
     if (!allowedRates.has(itemRate)) {
       return { error: `Momssats ${itemRate}% är inte tillåten för denna kundtyp`, status: 400 }
     }
-    const lineTotal = item.quantity * item.unit_price
+    const discountPercent = item.discount_percent ?? 0
+    if (!(discountPercent >= 0 && discountPercent <= 100)) {
+      return { error: 'Rabatten per rad måste vara mellan 0 och 100 procent', status: 400 }
+    }
+    const lineTotal = computeLineNet(item.quantity, item.unit_price, discountPercent)
     vatAmount += Math.round(lineTotal * itemRate / 100 * 100) / 100
   }
 
@@ -1824,6 +1835,7 @@ async function commitCreateInvoice(
       reverse_charge_text: notVatRegistered ? null : (vatRules.reverseChargeText || null),
       our_reference: (params.our_reference as string) || null,
       your_reference: (params.your_reference as string) || null,
+      invoice_marking: (params.invoice_marking as string) || null,
       notes: (params.notes as string) || null,
       payment_link_url: paymentLinkUrl,
       default_dimensions: defaultDimensions ?? {},
@@ -1846,6 +1858,7 @@ async function commitCreateInvoice(
         quantity: 0,
         unit: '',
         unit_price: 0,
+        discount_percent: 0,
         line_total: 0,
         vat_rate: 0,
         vat_amount: 0,
@@ -1855,7 +1868,8 @@ async function commitCreateInvoice(
       }
     }
     const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
-    const lineTotal = item.quantity * item.unit_price
+    const discountPercent = item.discount_percent ?? 0
+    const lineTotal = computeLineNet(item.quantity, item.unit_price, discountPercent)
     const itemVat = Math.round(lineTotal * itemRate / 100 * 100) / 100
     return {
       invoice_id: invoice.id,
@@ -1865,6 +1879,7 @@ async function commitCreateInvoice(
       quantity: item.quantity,
       unit: item.unit,
       unit_price: item.unit_price,
+      discount_percent: discountPercent,
       line_total: lineTotal,
       vat_rate: itemRate,
       vat_amount: itemVat,
@@ -1942,7 +1957,7 @@ async function commitUpdateInvoice(
   const { data: existing, error: fetchError } = await supabase
     .from('invoices')
     .select(
-      'id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, customer_id, document_type, invoice_date, due_date, delivery_date, currency, your_reference, our_reference, notes, payment_link_url, payment_link_auto, ore_rounding, default_dimensions, deduction_personnummer_encrypted, deduction_personnummer_last4',
+      'id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, customer_id, document_type, invoice_date, due_date, delivery_date, currency, your_reference, our_reference, invoice_marking, notes, payment_link_url, payment_link_auto, ore_rounding, default_dimensions, deduction_personnummer_encrypted, deduction_personnummer_last4',
     )
     .eq('id', invoiceId)
     .eq('company_id', companyId)
@@ -2003,7 +2018,7 @@ async function commitUpdateInvoice(
     const { data: itemRows, error: itemsFetchError } = await supabase
       .from('invoice_items')
       .select(
-        'line_type, description, quantity, unit, unit_price, vat_rate, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions',
+        'line_type, description, quantity, unit, unit_price, discount_percent, vat_rate, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions',
       )
       .eq('invoice_id', invoiceId)
       .order('sort_order', { ascending: true })
@@ -2028,6 +2043,7 @@ async function commitUpdateInvoice(
     currency: existing.currency as Currency,
     your_reference: changes.your_reference ?? existing.your_reference ?? undefined,
     our_reference: changes.our_reference ?? existing.our_reference ?? undefined,
+    invoice_marking: changes.invoice_marking ?? existing.invoice_marking ?? undefined,
     notes: changes.notes ?? existing.notes ?? undefined,
     // Not editable through this operation: fed back so the builder echoes the
     // stored values instead of clearing them.
