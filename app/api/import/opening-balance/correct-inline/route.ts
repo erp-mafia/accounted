@@ -99,31 +99,6 @@ export const POST = withRouteContext(
 
     const entryId = period.opening_balance_entry_id
 
-    // Struck lines' current values, read BEFORE the RPC deletes them: they
-    // are one side of the cascade delta (delta = added minus struck).
-    let struckLines: Array<{ account_number: string; debit_amount: number; credit_amount: number }> = []
-    if (strike_line_ids.length > 0) {
-      const { data: struckRows, error: struckError } = await supabase
-        .from('journal_entry_lines')
-        .select('id, account_number, debit_amount, credit_amount')
-        .eq('journal_entry_id', entryId)
-        .in('id', strike_line_ids)
-
-      if (struckError) {
-        opLog.error('inline IB correction: struck-line fetch failed', new Error(struckError.message))
-        return errorResponseFromCode('OB_CORRECT_FAILED', opLog, {
-          requestId,
-          details: { reason: getUserErrorMessage(struckError) },
-        })
-      }
-
-      struckLines = (struckRows ?? []).map((r) => ({
-        account_number: r.account_number as string,
-        debit_amount: Number(r.debit_amount) || 0,
-        credit_amount: Number(r.credit_amount) || 0,
-      }))
-    }
-
     // Seed standard BAS accounts the replacement lines reference but the
     // chart lacks (same courtesy as the storno flow); unknown numbers fail
     // the RPC's chart check with a clear error.
@@ -178,10 +153,36 @@ export const POST = withRouteContext(
 
     // Base rättelse committed. Cascade is best-effort on top, one inline
     // rättelse per later year; a failure there never errors this request.
+    //
+    // The delta comes from the RPC's OWN rättelse-log row (struck_lines /
+    // added_lines snapshotted inside the RPC transaction), never from a
+    // pre-RPC read: a concurrent edit between a route-side snapshot and the
+    // RPC could otherwise cascade a delta that no longer matches what was
+    // actually committed to the base year.
     let cascadeResult: CascadeResult | null = null
     if (cascade) {
       try {
-        const deltas = computeAccountDeltas(struckLines, new_lines)
+        const logId = (rpcData as { log_id?: string } | null)?.log_id
+        const { data: logRow, error: logError } = await supabase
+          .from('journal_entry_rattelse_log')
+          .select('struck_lines, added_lines')
+          .eq('id', logId)
+          .eq('company_id', companyId)
+          .single()
+        if (logError || !logRow) {
+          throw new Error(`rättelse log fetch failed: ${logError?.message ?? 'not found'}`)
+        }
+
+        const toLines = (raw: unknown) =>
+          ((raw ?? []) as Array<{ account_number: string; debit_amount: number | string; credit_amount: number | string }>).map(
+            (l) => ({
+              account_number: l.account_number,
+              debit_amount: Number(l.debit_amount) || 0,
+              credit_amount: Number(l.credit_amount) || 0,
+            }),
+          )
+
+        const deltas = computeAccountDeltas(toLines(logRow.struck_lines), toLines(logRow.added_lines))
         cascadeResult = await cascadeOpeningBalanceCorrection(supabase, companyId!, user.id, {
           basePeriodStart: period.period_start,
           deltas,

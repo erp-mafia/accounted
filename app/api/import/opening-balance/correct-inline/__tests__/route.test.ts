@@ -140,16 +140,17 @@ describe('POST /api/import/opening-balance/correct-inline', () => {
     expect(body.error?.code).toBe('OB_CORRECT_YEAR_END_EXISTS')
   })
 
-  it('edits in place via the RPC and cascades inline with the struck-vs-new delta', async () => {
+  it('edits in place via the RPC and cascades inline with the delta from the rättelse log', async () => {
     enqueue({ data: openPeriod() }) // period
     enqueue({ data: { bookkeeping_locked_through: null } }) // lock date
     enqueue({ count: 0 }) // year-end check
-    enqueue({
-      data: [
-        { id: LINE_1930, account_number: '1930', debit_amount: 50000, credit_amount: 0 },
-      ],
-    }) // struck lines fetch
     enqueue({ data: { log_id: 'log-1', struck_count: 1, added_count: 1 } }) // RPC
+    enqueue({
+      data: {
+        struck_lines: [{ account_number: '1930', debit_amount: 50000, credit_amount: 0 }],
+        added_lines: [{ account_number: '1930', debit_amount: 55000, credit_amount: 0 }],
+      },
+    }) // rättelse-log fetch (authoritative delta source)
 
     const res = await POST(makeRequest(BODY), ROUTE_PARAMS)
     const { status, body } = await parseJsonResponse<InlineResponse>(res)
@@ -172,7 +173,8 @@ describe('POST /api/import/opening-balance/correct-inline', () => {
       }),
     )
 
-    // Cascade runs in inline mode with delta = new (55000) minus struck (50000).
+    // Cascade runs in inline mode with delta = added (55000) minus struck
+    // (50000), sourced from the RPC's own rättelse-log row.
     expect(mockCascade).toHaveBeenCalledTimes(1)
     const opts = mockCascade.mock.calls[0][3] as {
       basePeriodStart: string
@@ -188,8 +190,7 @@ describe('POST /api/import/opening-balance/correct-inline', () => {
     enqueue({ data: openPeriod() })
     enqueue({ data: { bookkeeping_locked_through: null } })
     enqueue({ count: 0 })
-    enqueue({ data: [{ id: LINE_1930, account_number: '1930', debit_amount: 50000, credit_amount: 0 }] })
-    enqueue({ data: { log_id: 'log-1' } }) // RPC
+    enqueue({ data: { log_id: 'log-1' } }) // RPC; no log fetch without cascade
 
     const res = await POST(
       makeRequest({ ...BODY, cascade: undefined }),
@@ -206,7 +207,6 @@ describe('POST /api/import/opening-balance/correct-inline', () => {
     enqueue({ data: openPeriod() })
     enqueue({ data: { bookkeeping_locked_through: null } })
     enqueue({ count: 0 })
-    enqueue({ data: [{ id: LINE_1930, account_number: '1930', debit_amount: 50000, credit_amount: 0 }] })
     enqueue({ data: null, error: { code: 'P0001', message: 'Verifikationen balanserar inte efter rättelsen (debet 55000, kredit 50000).' } })
 
     const res = await POST(makeRequest(BODY), ROUTE_PARAMS)

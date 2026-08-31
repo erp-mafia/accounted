@@ -324,8 +324,9 @@ export default function CorrectOpeningBalanceDialog({
                 >
                   {guidancePeriod.name || guidancePeriod.period_start.slice(0, 4)}
                 </Link>
-                , det tidigaste öppna året. Då blir saldona rätt framåt; tidigare år är redan
-                deklarerade i ditt förra bokföringsprogram.
+                , det tidigaste öppna året. Då blir saldona rätt framåt. Tidigare, låsta år är
+                normalt redan deklarerade sedan tidigare; behöver ett sådant år ändå rättas
+                måste det först låsas upp.
               </p>
             ) : (
               <p className="text-sm text-muted-foreground">
