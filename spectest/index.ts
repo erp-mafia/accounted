@@ -23,6 +23,7 @@ import { defineEnvironment, type Ctx } from "@specific.dev/spectest";
 import { supabase } from "@specific.dev/spectest/components";
 import { enableBankingFake } from "./fakes/enable-banking";
 import { viesFake } from "./fakes/vies";
+import { skatteverketFake } from "./fakes/skatteverket";
 
 /**
  * The project's own supabase/ folder: config.toml (auth rules, MFA, password
@@ -132,7 +133,11 @@ export const env = defineEnvironment({
 
   // Declared here rather than on the project so ctx.fakes.enableBanking is
   // typed against the helper interface without a cast.
-  fakes: { enableBanking: enableBankingFake, vies: viesFake },
+  fakes: {
+    enableBanking: enableBankingFake,
+    vies: viesFake,
+    skatteverket: skatteverketFake,
+  },
 
   services: {
     supabase: sb.group,
@@ -160,6 +165,23 @@ export const env = defineEnvironment({
         // refuses to fall back to its dev key. Without this, creating an
         // employee 500s.
         PERSONNUMMER_ENCRYPTION_KEY: "e2e-personnummer-key",
+
+        // Skatteverket. No base URLs: the extension's clients already default
+        // to the test environment, which is exactly where the fake answers.
+        // Only the credentials are needed, and they are required rather than
+        // optional: getClientId() and getApiGwClientId() throw without them.
+        // Server-side feature flag, checked as the literal string "true" by
+        // app/api/extensions/ext/[...path]/route.ts. Without it every
+        // Skatteverket route answers 503 EXTENSION_DISABLED.
+        SKATTEVERKET_ENABLED: "true",
+        SKATTEVERKET_OAUTH2_CLIENT_ID: "e2e-skv-oauth-client",
+        SKATTEVERKET_OAUTH2_CLIENT_SECRET: "e2e-skv-oauth-secret",
+        SKATTEVERKET_APIGW_CLIENT_ID: "e2e-skv-apigw-client",
+        SKATTEVERKET_APIGW_CLIENT_SECRET: "e2e-skv-apigw-secret",
+        // Hashed to 32 bytes by token-store.ts, so any string works. The
+        // tokens are stored encrypted at rest; without this the callback
+        // exchanges the code and then throws before persisting.
+        SKATTEVERKET_TOKEN_ENCRYPTION_KEY: "e2e-skv-token-key",
 
         CRON_SECRET: "e2e-cron-secret",
       },
