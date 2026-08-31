@@ -295,7 +295,9 @@ describe('mcp.tool_called telemetry', () => {
     expect(event.errorKind).toBe('scope_denied')
     // Asserted directly rather than behind an `if`: a conditional assertion
     // would also pass on a wrong-but-present value, which is no assertion.
-    expect(typeof event.errorDetail).toBe('string')
+    // And "some other string" is barely stronger, so pin the content that
+    // makes the field worth storing: the scope the caller actually lacks.
+    expect(event.errorDetail).toContain('invoices:write')
     expect(event.errorDetail).not.toBe(event.errorMessage)
   })
 
