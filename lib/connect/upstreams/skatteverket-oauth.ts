@@ -100,7 +100,9 @@ export async function refreshSkvToken(refreshToken: string): Promise<SkvTokenRes
 async function postToken(body: URLSearchParams, timeoutMs: number, description: string): Promise<SkvTokenResponse> {
   const response = await fetchWithTimeout(
     `${skvOauthBaseUrl()}/token`,
-    { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }, body: body.toString() },
+    // redirect 'error': a 307/308 would resend client_secret + code/refresh
+    // token to the redirect target.
+    { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }, body: body.toString(), redirect: 'error' },
     { timeoutMs, description },
   )
   if (!response.ok) {

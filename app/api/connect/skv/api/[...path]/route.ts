@@ -82,6 +82,8 @@ async function handle(request: Request, ctx: ConnectorContext): Promise<Response
     const res = await fetch(url, {
       method,
       signal: controller.signal,
+      // A followed redirect would resend the gateway Client_Secret headers.
+      redirect: 'error',
       headers: {
         Authorization: `Bearer ${token}`,
         ...skvGatewayHeaders(),

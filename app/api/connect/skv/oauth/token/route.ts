@@ -90,11 +90,17 @@ export const POST = withConnectorAuth('connect.skv', async (request, ctx) => {
         )
       }
       if (tokens.refresh_token) {
-        await ctx.supabase
+        // The ledger write must take before the tokens leave: a silently
+        // failed update strands a connection the ledger cannot vouch for.
+        const { error: hashError } = await ctx.supabase
           .from('connector_connections')
           .update({ refresh_hash: hashHandle(tokens.refresh_token) })
           .eq('connector_key_id', ctx.key.id)
           .eq('handle_hash', hashHandle(tokens.access_token))
+        if (hashError) {
+          ctx.log.error('skv ledger refresh-hash write failed; tokens withheld', hashError)
+          return NextResponse.json({ error: 'Ledger update failed', code: 'CONNECTOR_LEDGER_FAILED' }, { status: 502 })
+        }
       }
       return tokenResponse(tokens)
     }
@@ -114,18 +120,23 @@ export const POST = withConnectorAuth('connect.skv', async (request, ctx) => {
     const tokens = await refreshSkvToken(refresh_token)
     const newHandleHash = tokens.access_token ? hashHandle(tokens.access_token) : null
     const lastUsedAt = new Date().toISOString()
-    if (tokens.refresh_token) {
-      await ctx.supabase
-        .from('connector_connections')
-        .update({ handle_hash: newHandleHash, last_used_at: lastUsedAt, refresh_hash: hashHandle(tokens.refresh_token) })
-        .eq('id', owned.id)
-        .eq('status', 'active')
-    } else {
-      await ctx.supabase
-        .from('connector_connections')
-        .update({ handle_hash: newHandleHash, last_used_at: lastUsedAt })
-        .eq('id', owned.id)
-        .eq('status', 'active')
+    // The rotation write must take before the tokens leave: SKV has already
+    // consumed the old refresh token, so a silently failed update would leave
+    // a ledger that can vouch for neither the old nor the new pair.
+    const { error: rotateError } = tokens.refresh_token
+      ? await ctx.supabase
+          .from('connector_connections')
+          .update({ handle_hash: newHandleHash, last_used_at: lastUsedAt, refresh_hash: hashHandle(tokens.refresh_token) })
+          .eq('id', owned.id)
+          .eq('status', 'active')
+      : await ctx.supabase
+          .from('connector_connections')
+          .update({ handle_hash: newHandleHash, last_used_at: lastUsedAt })
+          .eq('id', owned.id)
+          .eq('status', 'active')
+    if (rotateError) {
+      ctx.log.error('skv ledger rotation write failed; tokens withheld', rotateError)
+      return NextResponse.json({ error: 'Ledger update failed', code: 'CONNECTOR_LEDGER_FAILED' }, { status: 502 })
     }
     return tokenResponse(tokens)
   } catch (err) {
