@@ -187,6 +187,13 @@ accounts where model review surfaced equally chart-defensible answers
 5460). Aggregates now include per-segment metrics and a per-task outcome
 matrix.
 
+**v1.2 (2026-08-31).** Cross-vendor board complete: 14 models (4 Claude tiers
+on Bedrock EU, 10 via OpenRouter) with full clean runs, automation coverage,
+pass^3 agent reliability for every model, and verdicts. Harness-error
+quarantine and the verdict evidence gate were added after OpenRouter's
+credit balance poisoned a first campaign; provider marks (simple-icons,
+MIT) shown for identification only.
+
 **v1.0 (2026-08-31).** First full campaign: 4 suites, 4 models on Bedrock EU.
 
 ## External context (published numbers, not measured by us)
