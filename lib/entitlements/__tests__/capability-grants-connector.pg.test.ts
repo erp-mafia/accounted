@@ -3,7 +3,7 @@ import { getPool } from '../../../tests/pg/setup'
 import { seedCompany } from '../../../tests/pg/fixtures'
 import { CONNECTOR_CAPABILITIES, PAID_CAPABILITIES } from '../keys'
 
-// pg-real coverage for migration 20260820122000 (capability_grants.source
+// pg-real coverage for migration 20260831170000 (capability_grants.source
 // accepts 'connector') and the invariant that the trial-seed trigger never
 // hands a hosted company a connector grant.
 
