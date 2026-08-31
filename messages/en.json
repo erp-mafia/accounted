@@ -583,7 +583,7 @@
     "group_profile": "Profile",
     "section_name": "Name",
     "digest_group": "Notifications",
-    "digest_label": "New to bookkeep",
+    "digest_label": "New items to book",
     "digest_description": "A daily email when new bank transactions or inbox documents are waiting to be booked. Counts only, never amounts.",
     "digest_switch_label": "Daily summary by email",
     "digest_enabled_toast": "Daily summary enabled",
