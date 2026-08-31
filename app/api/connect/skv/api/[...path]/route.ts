@@ -37,6 +37,19 @@ function splitPath(request: Request): { service: string; rest: string; query: st
   const [pathPart, ...q] = after.split('?')
   const segments = pathPart.split('/').filter(Boolean)
   if (segments.length === 0) return null
+  // Traversal guard: a '.'/'..' segment (raw or percent-encoded) would let
+  // the proxied URL escape the allowlisted service base once fetch
+  // normalizes it. Decode each segment and reject dot segments and anything
+  // that decodes to contain a path separator.
+  for (const seg of segments) {
+    let decoded: string
+    try {
+      decoded = decodeURIComponent(seg)
+    } catch {
+      return null
+    }
+    if (decoded === '.' || decoded === '..' || decoded.includes('/') || decoded.includes('\\')) return null
+  }
   const [service, ...restSegs] = segments
   return { service, rest: `/${restSegs.join('/')}`, query: q.length ? `?${q.join('?')}` : '' }
 }

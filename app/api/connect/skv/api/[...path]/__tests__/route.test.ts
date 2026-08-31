@@ -41,6 +41,19 @@ beforeEach(() => {
 })
 
 describe('skv data proxy', () => {
+  it('rejects dot-segment traversal, raw and percent-encoded', async () => {
+    // Raw ../ and %2E dot segments are normalized away by the WHATWG URL
+    // parser before the route sees them (they cannot escape past the route
+    // prefix). What survives to splitPath is an encoded separator INSIDE a
+    // segment, which would traverse once the upstream fetch re-normalizes:
+    // those must be rejected here.
+    for (const path of ['/moms/a%2Fb', '/moms/..%2Fx', '/moms/a%5Cb']) {
+      const res = await GET(req('GET', path))
+      expect(res.status, path).toBe(403)
+      expect((await res.json()).code).toBe('CONNECTOR_PATH_NOT_ALLOWED')
+    }
+  })
+
   it('403 without the scope', async () => {
     key = { ...key, scopes: [] }
     expect((await GET(req('GET', '/moms/deklarationer'))).status).toBe(403)
