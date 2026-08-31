@@ -2241,9 +2241,9 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
   PROVIDER_SIE_IMPORT_REQUIRED: {
     httpStatus: 409,
     message_sv:
-      'Bokföringsdata (SIE) måste importeras först. Ladda upp en SIE-fil med kontoplan, ingående balanser och verifikationer innan du hämtar kunder, leverantörer och fakturor från den här leverantören.',
+      'Bokföringsdata (SIE) måste importeras först. Ladda upp en SIE-fil med kontoplan, ingående balanser och verifikationer innan du hämtar kunder, leverantörer, fakturor och anläggningstillgångar från den här leverantören.',
     message_en:
-      'A completed SIE import is required first. Import the SIE file (chart of accounts, opening balances and verifications) before importing customers, suppliers and invoices from this provider.',
+      'A completed SIE import is required first. Import the SIE file (chart of accounts, opening balances and verifications) before importing customers, suppliers, invoices and fixed assets from this provider.',
   },
   PROVIDER_MIGRATE_FAILED: {
     httpStatus: 500,
