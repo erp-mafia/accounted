@@ -582,6 +582,13 @@
   "settings": {
     "group_profile": "Profil",
     "section_name": "Namn",
+    "digest_group": "Aviseringar",
+    "digest_label": "Nytt att bokföra",
+    "digest_description": "Ett dagligt mejl när nya banktransaktioner eller underlag i inkorgen väntar på bokföring. Endast antal, aldrig belopp.",
+    "digest_switch_label": "Daglig sammanfattning via e-post",
+    "digest_enabled_toast": "Daglig sammanfattning aktiverad",
+    "digest_disabled_toast": "Daglig sammanfattning avstängd",
+    "digest_save_failed": "Kunde inte spara inställningen",
     "name_label": "Ditt namn",
     "name_description": "Används när vi tilltalar dig och visas som kontaktperson på vissa underlag.",
     "name_placeholder": "Förnamn Efternamn",
