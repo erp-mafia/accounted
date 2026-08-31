@@ -1543,7 +1543,11 @@
     "step_receipts_channels_no_wa": "Mejl · uppladdning",
     "step_claude_title": "Anslut till Claude",
     "step_claude_description": "Bokför via chatten: släpp kvitton och SIE-filer, stäm av skattekontot och ställ frågor om siffrorna. Allt är redan kopplat.",
-    "step_claude_action": "Anslut till Claude"
+    "step_claude_action": "Anslut till Claude",
+    "step_claude_chatgpt_link": "Använder du ChatGPT?",
+    "step_claude_chatgpt_steps": "I ChatGPT (Plus, Pro eller Business): Inställningar → Appar → Avancerade inställningar → slå på Utvecklarläge. Välj Lägg till anpassad connector, namnge den {appName} och klistra in serveradressen. Starta sedan en ny chatt och be om en genomgång av bokföringen.",
+    "step_claude_chatgpt_copy": "Kopiera serveradress",
+    "step_claude_chatgpt_copied": "Kopierad"
   },
   "tax_assessment_notices": {
     "title": "Slutskattebesked och kvarskatt",
