@@ -38,7 +38,10 @@ async function main(): Promise<void> {
   const name = arg('name') ?? ''
   const instance = arg('instance') ?? ''
   const months = Number(arg('months') ?? '12')
-  const scopes = (arg('scopes') ?? CONNECTOR_CAPABILITIES.join(',')).split(',').map((s) => s.trim()).filter(Boolean)
+  const scopes = (arg('scopes') ?? 'bank_sync,skatteverket').split(',').map((s) => s.trim()).filter(Boolean)
+  const bankPerCompany = Number(arg('bank-connections-per-company') ?? '1')
+  const skvPerCompany = Number(arg('skv-connections-per-company') ?? '1')
+  const syncMinInterval = Number(arg('sync-min-interval') ?? '0')
   const notes = arg('notes') ?? null
 
   const problems: string[] = []
@@ -53,6 +56,10 @@ async function main(): Promise<void> {
   if (!Number.isInteger(months) || months <= 0 || months > 120) problems.push('--months must be an integer 1..120')
   const unknown = scopes.filter((s) => !(CONNECTOR_CAPABILITIES as readonly string[]).includes(s))
   if (unknown.length) problems.push(`unknown scopes: ${unknown.join(', ')} (allowed: ${CONNECTOR_CAPABILITIES.join(', ')})`)
+  for (const [name, v] of [['bank-connections-per-company', bankPerCompany], ['skv-connections-per-company', skvPerCompany]] as const) {
+    if (!Number.isFinite(v) || v < 0 || v > 100) problems.push(`--${name} must be 0..100`)
+  }
+  if (!Number.isFinite(syncMinInterval) || syncMinInterval < 0) problems.push('--sync-min-interval must be >= 0 seconds')
   if (problems.length) {
     console.error(problems.map((p) => `  x ${p}`).join('\n'))
     process.exit(2)
@@ -71,6 +78,7 @@ async function main(): Promise<void> {
   console.log(`Licensee:  ${name} (${org})`)
   console.log(`Instance:  ${new URL(instance).origin}`)
   console.log(`Scopes:    ${scopes.join(', ')}`)
+  console.log(`Limits:    ${bankPerCompany} bank + ${skvPerCompany} SKV connection(s)/company, min sync interval ${syncMinInterval}s`)
   console.log(`Period:    until ${periodEnd.toISOString().slice(0, 10)} (${months} months)`)
   if (!flag('confirm')) {
     console.log('\nDry run. Re-run with --confirm to issue the key.')
@@ -90,6 +98,11 @@ async function main(): Promise<void> {
       scopes,
       status: 'active',
       current_period_end: periodEnd.toISOString(),
+      limits: {
+        bank_connections_per_company: Math.floor(bankPerCompany),
+        skv_connections_per_company: Math.floor(skvPerCompany),
+        sync_min_interval_s: Math.floor(syncMinInterval),
+      },
       notes,
     })
     .select('id')

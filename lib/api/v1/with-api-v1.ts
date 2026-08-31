@@ -48,6 +48,7 @@ import {
   RATE_LIMIT_RETRY_AFTER_SECONDS,
   validateApiKey,
 } from '@/lib/auth/api-keys'
+import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 
 // Per CLAUDE.md: any route that emits events via eventBus must call
 // ensureInitialized() at module level to wire extension event handlers
@@ -499,8 +500,28 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         idempotencyKey,
       }
 
-      // 9. Invoke handler.
-      const response = await handler(workingRequest, ctx, params)
+      // 9. Invoke handler, inside the commit-actor scope.
+      //
+      // commitEntry() reads getActor() as its fallback and forwards it to the
+      // commit_journal_entry RPC, which stamps journal_entries.committed_actor_*
+      // and the audit_log COMMIT row (migration 20260619120000). Wrapping here
+      // rather than threading a parameter means EVERY v1 write is attributed,
+      // including the ones that reach the ledger through a helper several
+      // frames down (reverseEntry, correctEntry, the supplier-invoice paths).
+      //
+      // Before this, runWithActor had exactly ONE production call site, the
+      // pending-operations commit. Everything committing outside that path was
+      // anonymous: on production, 99.8% of storno entries and 100% of
+      // correction entries carried no actor at all, which are precisely the two
+      // sanctioned rättelse paths under BFL 5 kap. 5 § and the place where
+      // "who did this, and when" is a legal question rather than a nicety.
+      //
+      // `api_key` is the honest label for this surface: a gnubok_sk_ bearer
+      // token. The OAuth/MCP surfaces set their own actor and are unaffected.
+      const response = await runWithActor(
+        { type: 'api_key', label: auth.apiKeyName ?? 'Unnamed API key' },
+        () => handler(workingRequest, ctx, params),
+      )
 
       // Signal test mode on every test-key response so integrators can see the
       // request was simulation-only without inspecting the body.
