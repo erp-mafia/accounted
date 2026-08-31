@@ -62,6 +62,9 @@ describe('redactEndpoint', () => {
       '/api/connect/bank/accounts/:id/transactions',
     )
     expect(redactEndpoint('/api/connect/bank/sessions/deadbeefdeadbeefdeadbeef')).toBe('/api/connect/bank/sessions/:id')
+    expect(redactEndpoint('/api/connect/bank/sessions/8f14e45f%2Dceea-467f-a8d5-91be6ce7cbc4')).toBe(
+      '/api/connect/bank/sessions/:id',
+    )
     expect(redactEndpoint('/api/connect/entitlements')).toBe('/api/connect/entitlements')
     expect(redactEndpoint('/api/connect/bank/aspsps')).toBe('/api/connect/bank/aspsps')
   })

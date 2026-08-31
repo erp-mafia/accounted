@@ -55,7 +55,10 @@ const OPAQUE_SEGMENT = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 export function redactEndpoint(pathname: string): string {
   return pathname
     .split('/')
-    .map((segment) => (OPAQUE_SEGMENT.test(segment) ? ':id' : segment))
+    // A percent-encoded segment is opaque too: URL.pathname does not decode,
+    // so an encoded handle would otherwise slip the pattern while the route
+    // decodes and uses it.
+    .map((segment) => (OPAQUE_SEGMENT.test(segment) || segment.includes('%') ? ':id' : segment))
     .join('/')
 }
 
