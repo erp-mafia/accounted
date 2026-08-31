@@ -4,11 +4,9 @@ import { createTestLogger } from '@/lib/logger'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 
-const mockCreateJournalEntry = vi.fn()
-const mockReverseEntry = vi.fn()
+const mockReplaceOpeningBalanceEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/engine', () => ({
-  createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
-  reverseEntry: (...args: unknown[]) => mockReverseEntry(...args),
+  replaceOpeningBalanceEntry: (...args: unknown[]) => mockReplaceOpeningBalanceEntry(...args),
 }))
 
 const mockFetchEntryLines = vi.fn()
@@ -18,8 +16,9 @@ vi.mock('@/lib/bookkeeping/entry-lines', () => ({
 
 import {
   computeAccountDeltas,
-  applyDeltasToLines,
+  buildCascadedLines,
   cascadeOpeningBalanceCorrection,
+  type CascadeSourceLine,
 } from '../cascade'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -32,6 +31,15 @@ const K = (account_number: string, credit_amount: number) => ({
   account_number,
   debit_amount: 0,
   credit_amount,
+})
+const src = (
+  line: { account_number: string; debit_amount: number; credit_amount: number },
+  extra: Partial<CascadeSourceLine> = {},
+): CascadeSourceLine => ({
+  line_description: null,
+  dimensions: null,
+  ...line,
+  ...extra,
 })
 
 describe('computeAccountDeltas', () => {
@@ -68,49 +76,79 @@ describe('computeAccountDeltas', () => {
   })
 })
 
-describe('applyDeltasToLines', () => {
-  it('shifts nets, keeps balance, and sorts by account number', () => {
-    const existing = [D('1930', 80000), K('2099', 80000)]
+describe('buildCascadedLines', () => {
+  it('keeps original lines verbatim (descriptions and dimensions) and appends sorted adjustment lines', () => {
+    const existing = [
+      src(D('1930', 80000), { line_description: 'IB 1930', dimensions: { '1': 'STHLM' } }),
+      src(K('2099', 80000), { line_description: 'IB 2099' }),
+    ]
     const deltas = new Map([
       ['1930', -10000],
       ['1630', 10000],
     ])
 
-    const result = applyDeltasToLines(existing, deltas)
+    const result = buildCascadedLines(existing, deltas)
 
     expect(result).toEqual([
-      D('1630', 10000),
-      D('1930', 70000),
-      K('2099', 80000),
+      {
+        account_number: '1930',
+        debit_amount: 80000,
+        credit_amount: 0,
+        line_description: 'IB 1930',
+        dimensions: { '1': 'STHLM' },
+      },
+      {
+        account_number: '2099',
+        debit_amount: 0,
+        credit_amount: 80000,
+        line_description: 'IB 2099',
+        dimensions: undefined,
+      },
+      {
+        account_number: '1630',
+        debit_amount: 10000,
+        credit_amount: 0,
+        line_description: 'IB-rättelse 1630',
+      },
+      {
+        account_number: '1930',
+        debit_amount: 0,
+        credit_amount: 10000,
+        line_description: 'IB-rättelse 1930',
+      },
     ])
+
     const totalDebit = result.reduce((s, l) => s + l.debit_amount, 0)
     const totalCredit = result.reduce((s, l) => s + l.credit_amount, 0)
     expect(totalDebit).toBe(totalCredit)
   })
 
-  it('flips a debit balance to credit when the delta crosses zero', () => {
-    const existing = [D('1930', 5000), K('2099', 5000)]
+  it('emits a credit adjustment line for a negative delta and drops zero-amount source rows', () => {
+    const existing = [
+      src(D('1930', 5000)),
+      src(K('2099', 5000)),
+      src({ account_number: '1510', debit_amount: 0, credit_amount: 0 }),
+    ]
     const deltas = new Map([
       ['1930', -8000],
       ['2099', 8000],
     ])
 
-    const result = applyDeltasToLines(existing, deltas)
+    const result = buildCascadedLines(existing, deltas)
 
-    expect(result).toEqual([K('1930', 3000), D('2099', 3000)])
-  })
-
-  it('drops accounts whose net becomes zero and adds accounts new to the period', () => {
-    const existing = [D('1630', 10000), D('1930', 40000), K('2099', 50000)]
-    const deltas = new Map([
-      ['1630', -10000],
-      ['1510', 10000],
-    ])
-
-    const result = applyDeltasToLines(existing, deltas)
-
-    expect(result.find((l) => l.account_number === '1630')).toBeUndefined()
-    expect(result.find((l) => l.account_number === '1510')).toEqual(D('1510', 10000))
+    expect(result.map((l) => l.account_number)).toEqual(['1930', '2099', '1930', '2099'])
+    expect(result[2]).toEqual({
+      account_number: '1930',
+      debit_amount: 0,
+      credit_amount: 8000,
+      line_description: 'IB-rättelse 1930',
+    })
+    expect(result[3]).toEqual({
+      account_number: '2099',
+      debit_amount: 8000,
+      credit_amount: 0,
+      line_description: 'IB-rättelse 2099',
+    })
   })
 })
 
@@ -139,9 +177,15 @@ describe('cascadeOpeningBalanceCorrection', () => {
     reset()
     sink.length = 0
     mockFetchEntryLines.mockResolvedValue([
-      { id: 'l1', account_number: '1930', debit_amount: 80000, credit_amount: 0 },
-      { id: 'l2', account_number: '2099', debit_amount: 0, credit_amount: 80000 },
+      { id: 'l1', account_number: '1930', debit_amount: 80000, credit_amount: 0, line_description: 'IB 1930', dimensions: null },
+      { id: 'l2', account_number: '2099', debit_amount: 0, credit_amount: 80000, line_description: 'IB 2099', dimensions: null },
     ])
+    mockReplaceOpeningBalanceEntry.mockResolvedValue({
+      newEntryId: 'ib-new',
+      stornoEntryId: 'ib-storno',
+      newVoucherNumber: 9,
+      stornoVoucherNumber: 10,
+    })
   })
 
   it('returns immediately without queries when there are no deltas', async () => {
@@ -156,7 +200,7 @@ describe('cascadeOpeningBalanceCorrection', () => {
     expect(mockSupabase.from).not.toHaveBeenCalled()
   })
 
-  it('corrects an open later period and skips a closed one', async () => {
+  it('replaces an open later period atomically and skips a closed one', async () => {
     enqueue({
       data: [
         periodRow(),
@@ -164,10 +208,6 @@ describe('cascadeOpeningBalanceCorrection', () => {
       ],
     }) // subsequent periods
     enqueue({ count: 0 }) // year-end check for period-2020
-    enqueue({ error: null }) // relink RPC for period-2020
-
-    mockCreateJournalEntry.mockResolvedValue({ id: 'ib-2020-new' })
-    mockReverseEntry.mockResolvedValue({ id: 'ib-2020-storno' })
 
     const result = await cascadeOpeningBalanceCorrection(supabase, 'company-1', 'user-1', {
       basePeriodStart: '2019-01-01',
@@ -180,7 +220,7 @@ describe('cascadeOpeningBalanceCorrection', () => {
       {
         fiscal_period_id: 'period-2020',
         period_name: '2020',
-        journal_entry_id: 'ib-2020-new',
+        journal_entry_id: 'ib-new',
         reversed_entry_id: 'ib-2020',
       },
     ])
@@ -188,29 +228,28 @@ describe('cascadeOpeningBalanceCorrection', () => {
       { fiscal_period_id: 'period-2021', period_name: '2021', reason: 'closed' },
     ])
 
-    // The corrected entry carries the shifted lines and the BFL reference to
-    // the verifikat being rättat.
-    expect(mockCreateJournalEntry).toHaveBeenCalledWith(
+    // One atomic engine replacement, CAS-guarded on the old entry, carrying
+    // the original lines verbatim plus labelled adjustment lines and the BFL
+    // reference to the verifikat being rättat.
+    expect(mockReplaceOpeningBalanceEntry).toHaveBeenCalledTimes(1)
+    expect(mockReplaceOpeningBalanceEntry).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
       'user-1',
+      'ib-2020',
       expect.objectContaining({
         fiscal_period_id: 'period-2020',
         entry_date: '2020-01-01',
         source_type: 'opening_balance',
+        voucher_series: 'A',
         description: 'Ingående balanser (korrigerade, rättelse av A4)',
         lines: [
-          expect.objectContaining({ account_number: '1630', debit_amount: 10000 }),
-          expect.objectContaining({ account_number: '1930', debit_amount: 70000 }),
+          expect.objectContaining({ account_number: '1930', debit_amount: 80000, line_description: 'IB 1930' }),
           expect.objectContaining({ account_number: '2099', credit_amount: 80000 }),
+          expect.objectContaining({ account_number: '1630', debit_amount: 10000, line_description: 'IB-rättelse 1630' }),
+          expect.objectContaining({ account_number: '1930', credit_amount: 10000, line_description: 'IB-rättelse 1930' }),
         ],
       }),
-    )
-    expect(mockReverseEntry).toHaveBeenCalledTimes(1)
-    expect(mockReverseEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'ib-2020')
-    expect(mockSupabase.rpc).toHaveBeenCalledWith(
-      'replace_period_opening_balance_link',
-      expect.objectContaining({ p_period_id: 'period-2020', p_new_entry_id: 'ib-2020-new' }),
     )
   })
 
@@ -239,8 +278,28 @@ describe('cascadeOpeningBalanceCorrection', () => {
       { fiscal_period_id: 'p-lockdate', period_name: '2021', reason: 'lock_date' },
       { fiscal_period_id: 'p-yearend', period_name: '2022', reason: 'year_end' },
     ])
-    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
-    expect(mockReverseEntry).not.toHaveBeenCalled()
+    expect(mockReplaceOpeningBalanceEntry).not.toHaveBeenCalled()
+  })
+
+  it('fails CLOSED when the year-end lookup errors: the period is skipped, not rewritten', async () => {
+    enqueue({ data: [periodRow()] })
+    enqueue({ count: null, error: { message: 'transient boom' } }) // year-end check fails
+
+    const result = await cascadeOpeningBalanceCorrection(supabase, 'company-1', 'user-1', {
+      basePeriodStart: '2019-01-01',
+      deltas: DELTAS,
+      lockDate: null,
+      log,
+    })
+
+    expect(result.corrected).toEqual([])
+    expect(result.skipped).toEqual([
+      { fiscal_period_id: 'period-2020', period_name: '2020', reason: 'correction_failed' },
+    ])
+    expect(mockReplaceOpeningBalanceEntry).not.toHaveBeenCalled()
+
+    const audit = sink.filter((r) => String(r.msg).includes('cascade correction failed'))
+    expect(audit.length).toBeGreaterThan(0)
   })
 
   it('reports a period without a linked IB verifikat as skipped', async () => {
@@ -256,10 +315,10 @@ describe('cascadeOpeningBalanceCorrection', () => {
     expect(result.skipped).toEqual([
       { fiscal_period_id: 'period-2020', period_name: '2020', reason: 'no_opening_balance' },
     ])
-    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockReplaceOpeningBalanceEntry).not.toHaveBeenCalled()
   })
 
-  it('compensates (stornoes the new entry) and continues when the relink fails', async () => {
+  it('reports a failed replacement as skipped and continues with the next year', async () => {
     enqueue({
       data: [
         periodRow(),
@@ -267,14 +326,16 @@ describe('cascadeOpeningBalanceCorrection', () => {
       ],
     })
     enqueue({ count: 0 }) // year-end check period-2020
-    enqueue({ error: { message: 'relink boom' } }) // relink RPC fails for period-2020
     enqueue({ count: 0 }) // year-end check period-2021
-    enqueue({ error: null }) // relink RPC succeeds for period-2021
 
-    mockCreateJournalEntry
-      .mockResolvedValueOnce({ id: 'ib-2020-new' })
-      .mockResolvedValueOnce({ id: 'ib-2021-new' })
-    mockReverseEntry.mockResolvedValue({ id: 'storno' })
+    mockReplaceOpeningBalanceEntry
+      .mockRejectedValueOnce(new Error('replacement boom')) // period-2020
+      .mockResolvedValueOnce({
+        newEntryId: 'ib-2021-new',
+        stornoEntryId: 'ib-2021-storno',
+        newVoucherNumber: 12,
+        stornoVoucherNumber: 13,
+      })
 
     const result = await cascadeOpeningBalanceCorrection(supabase, 'company-1', 'user-1', {
       basePeriodStart: '2019-01-01',
@@ -290,23 +351,28 @@ describe('cascadeOpeningBalanceCorrection', () => {
       expect.objectContaining({ fiscal_period_id: 'period-2021', journal_entry_id: 'ib-2021-new' }),
     ])
 
-    // period-2020: storno of old (ib-2020) then compensating storno of the new
-    // entry; period-2021: storno of old (ib-2021).
-    expect(mockReverseEntry).toHaveBeenNthCalledWith(1, expect.anything(), 'company-1', 'user-1', 'ib-2020')
-    expect(mockReverseEntry).toHaveBeenNthCalledWith(2, expect.anything(), 'company-1', 'user-1', 'ib-2020-new')
-    expect(mockReverseEntry).toHaveBeenNthCalledWith(3, expect.anything(), 'company-1', 'user-1', 'ib-2021')
+    // The failed period got exactly one atomic attempt (RPC rolls back all of
+    // it); no compensation writes exist in this design.
+    expect(mockReplaceOpeningBalanceEntry).toHaveBeenCalledTimes(2)
+    expect(mockReplaceOpeningBalanceEntry).toHaveBeenNthCalledWith(
+      1, expect.anything(), 'company-1', 'user-1', 'ib-2020', expect.anything(),
+    )
+    expect(mockReplaceOpeningBalanceEntry).toHaveBeenNthCalledWith(
+      2, expect.anything(), 'company-1', 'user-1', 'ib-2021', expect.anything(),
+    )
 
-    // Durable audit trail for the failed year.
     const audit = sink.filter((r) => String(r.msg).includes('cascade correction failed'))
     expect(audit.length).toBeGreaterThan(0)
   })
 
   it('skips a period whose shifted lines no longer validate', async () => {
-    // The period's entire IB nets to zero after the delta: fewer than two
-    // remaining lines → validation refuses, period reported, nothing booked.
+    // The period's IB is a single line pair that the delta exactly cancels,
+    // leaving zero-amount adjustments only... construct instead the <2 lines
+    // case: the source entry is empty (all rows zero), so kept+adjustment
+    // lines fail the P&L/two-line validation via a P&L delta account.
     mockFetchEntryLines.mockResolvedValue([
-      { id: 'l1', account_number: '1930', debit_amount: 10000, credit_amount: 0 },
-      { id: 'l2', account_number: '1630', debit_amount: 0, credit_amount: 10000 },
+      { id: 'l1', account_number: '1930', debit_amount: 10000, credit_amount: 0, line_description: null, dimensions: null },
+      { id: 'l2', account_number: '1630', debit_amount: 0, credit_amount: 10000, line_description: null, dimensions: null },
     ])
     enqueue({ data: [periodRow()] })
     enqueue({ count: 0 }) // year-end check
@@ -314,8 +380,8 @@ describe('cascadeOpeningBalanceCorrection', () => {
     const result = await cascadeOpeningBalanceCorrection(supabase, 'company-1', 'user-1', {
       basePeriodStart: '2019-01-01',
       deltas: new Map([
+        ['3001', 10000],
         ['1930', -10000],
-        ['1630', 10000],
       ]),
       lockDate: null,
       log,
@@ -324,6 +390,6 @@ describe('cascadeOpeningBalanceCorrection', () => {
     expect(result.skipped).toEqual([
       { fiscal_period_id: 'period-2020', period_name: '2020', reason: 'validation_failed' },
     ])
-    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockReplaceOpeningBalanceEntry).not.toHaveBeenCalled()
   })
 })

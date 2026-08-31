@@ -161,10 +161,14 @@ export default function CorrectOpeningBalanceDialog({
       const res = await fetch('/api/import/opening-balance/correct', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        // cascade is ALWAYS sent (default on): if the reference cache has not
+        // loaded yet the checkbox is simply not shown, and omitting the flag
+        // in that window would silently leave later years stale. The server
+        // returns an empty cascade result when no later period exists.
         body: JSON.stringify({
           fiscal_period_id: entry.fiscal_period_id,
           lines,
-          ...(laterPeriodsWithIB.length > 0 ? { cascade } : {}),
+          cascade,
         }),
       })
 
@@ -184,13 +188,25 @@ export default function CorrectOpeningBalanceDialog({
       let description = 'Den gamla IB-verifikationen stornades och en ny bokfördes.'
       if (cascadeSummary) {
         const done = cascadeSummary.corrected.length
-        const skipped = cascadeSummary.skipped.filter((s) => s.reason !== 'no_opening_balance')
+        // Blocked (locked/closed/bokslut) and failed skips are different
+        // situations for the user: blocked is expected and needs no action
+        // here; failed means the year was left untouched and needs a look.
+        const blocked = cascadeSummary.skipped.filter(
+          (s) => s.reason === 'closed' || s.reason === 'locked' || s.reason === 'lock_date' || s.reason === 'year_end',
+        )
+        const failed = cascadeSummary.skipped.filter(
+          (s) => s.reason === 'correction_failed' || s.reason === 'validation_failed',
+        )
         if (done > 0) {
           description += ` ${done} senare räkenskapsår uppdaterades också.`
         }
-        if (skipped.length > 0) {
-          const names = skipped.map((s) => s.period_name).filter(Boolean).join(', ')
-          description += ` ${skipped.length} år kunde inte uppdateras (låsta, stängda eller med bokslut)${names ? `: ${names}` : ''}.`
+        if (blocked.length > 0) {
+          const names = blocked.map((s) => s.period_name).filter(Boolean).join(', ')
+          description += ` ${blocked.length} år hoppades över (låsta, stängda eller med bokslut)${names ? `: ${names}` : ''}.`
+        }
+        if (failed.length > 0) {
+          const names = failed.map((s) => s.period_name).filter(Boolean).join(', ')
+          description += ` ${failed.length} år kunde inte uppdateras och behöver kontrolleras${names ? `: ${names}` : ''}.`
         }
       }
 
@@ -217,7 +233,7 @@ export default function CorrectOpeningBalanceDialog({
     } finally {
       setIsSubmitting(false)
     }
-  }, [state, isSubmitting, entry.fiscal_period_id, laterPeriodsWithIB.length, cascade, toast, onOpenChange, onCorrected])
+  }, [state, isSubmitting, entry.fiscal_period_id, cascade, toast, onOpenChange, onCorrected])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -287,7 +303,9 @@ export default function CorrectOpeningBalanceDialog({
               </span>
               <span className="block text-sm text-muted-foreground">
                 Samma ändring bokförs i senare års ingående balanser så att saldona stämmer
-                framåt. År som är låsta eller har bokslut hoppas över.
+                framåt. År som är låsta eller har bokslut hoppas över. Avser rättelsen ett
+                tidigare års resultat (t.ex. konto 2099) kan en omföring till balanserat
+                resultat fortfarande behöva bokföras som vanligt.
               </span>
             </span>
           </label>

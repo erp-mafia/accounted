@@ -1,11 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
+import type { CreateJournalEntryLineInput } from '@/types'
 import { roundOre } from '@/lib/money'
-import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
+import { replaceOpeningBalanceEntry } from '@/lib/bookkeeping/engine'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import {
   validateOpeningBalanceLines,
-  buildOpeningBalanceEntryLines,
   type OpeningBalanceLine,
 } from './execute-helpers'
 
@@ -16,8 +16,14 @@ import {
  * linked via fiscal_periods.opening_balance_entry_id. Correcting one year's IB
  * therefore leaves every later year's linked IB verifikat carrying the stale
  * figures. This module applies the same per-account delta (corrected minus
- * original) to each subsequent period's IB the BFL-compliant way: storno the
- * old IB verifikat, book a corrected one, relink the period.
+ * original) to each subsequent period's IB the BFL-compliant way, via the
+ * atomic replaceOpeningBalanceEntry engine primitive (one DB transaction owns
+ * the storno, the corrected voucher, and the period pointer swap, with a CAS
+ * on the expected old entry id), so a failure leaves the period untouched.
+ *
+ * The corrected verifikat keeps the original lines verbatim (descriptions and
+ * dimensions included) and appends one adjustment line per changed account,
+ * so years the user never opened stay reviewable line by line.
  *
  * Periods that cannot be touched (closed, locked, behind the company lock
  * date, or with a posted bokslut on top) are skipped and reported, never
@@ -26,6 +32,12 @@ import {
 
 /** Net per-account change of a correction: (new debit-credit) minus (old debit-credit). */
 export type AccountDeltas = Map<string, number>
+
+/** An existing IB line with the fields the rebooked verifikat must preserve. */
+export interface CascadeSourceLine extends OpeningBalanceLine {
+  line_description: string | null
+  dimensions: Record<string, string> | null
+}
 
 export interface CascadeCorrectedPeriod {
   fiscal_period_id: string
@@ -85,42 +97,43 @@ export function computeAccountDeltas(
 }
 
 /**
- * Apply per-account deltas to an existing IB's lines, producing the corrected
- * line set for that period. Nets are computed per account, shifted by the
- * delta, and re-split into debit/credit; zero-net accounts are dropped.
- * Both inputs balance (sum of deltas is zero because both source entries
- * balanced), so the output balances too.
+ * Build the corrected line set for a subsequent period: the existing lines
+ * verbatim (keeping description and dimensions), plus one labelled adjustment
+ * line per delta account. Both the existing entry and the delta set balance
+ * (deltas come from two balanced entries), so the result balances too.
  */
-export function applyDeltasToLines(
-  existingLines: OpeningBalanceLine[],
+export function buildCascadedLines(
+  existingLines: CascadeSourceLine[],
   deltas: AccountDeltas,
-): OpeningBalanceLine[] {
-  const nets = new Map<string, number>()
-  for (const line of existingLines) {
-    const prev = nets.get(line.account_number) ?? 0
-    nets.set(line.account_number, roundOre(prev + (line.debit_amount - line.credit_amount)))
-  }
-  for (const [account, delta] of deltas) {
-    const prev = nets.get(account) ?? 0
-    nets.set(account, roundOre(prev + delta))
-  }
-
-  return [...nets.entries()]
-    .filter(([, net]) => Math.abs(net) >= 0.01)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([account_number, net]) => ({
-      account_number,
-      debit_amount: net > 0 ? net : 0,
-      credit_amount: net < 0 ? roundOre(-net) : 0,
+): CreateJournalEntryLineInput[] {
+  const kept: CreateJournalEntryLineInput[] = existingLines
+    .filter((l) => l.debit_amount > 0 || l.credit_amount > 0)
+    .map((l) => ({
+      account_number: l.account_number,
+      debit_amount: l.debit_amount,
+      credit_amount: l.credit_amount,
+      line_description: l.line_description ?? undefined,
+      dimensions: l.dimensions ?? undefined,
     }))
+
+  const adjustments: CreateJournalEntryLineInput[] = [...deltas.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([account_number, delta]) => ({
+      account_number,
+      debit_amount: delta > 0 ? delta : 0,
+      credit_amount: delta < 0 ? roundOre(-delta) : 0,
+      line_description: `IB-rättelse ${account_number}`,
+    }))
+
+  return [...kept, ...adjustments]
 }
 
-/** Fetch an entry's lines in the OpeningBalanceLine shape, paginated. */
+/** Fetch an entry's lines with the fields a cascaded rebook must preserve. */
 export async function fetchEntryOpeningBalanceLines(
   supabase: SupabaseClient,
   companyId: string,
   entryId: string,
-): Promise<OpeningBalanceLine[]> {
+): Promise<CascadeSourceLine[]> {
   // Two-step entry-lines fetch: verifies company_id ownership on the entry
   // side (defense in depth alongside RLS) and paginates. Same pattern as
   // lib/reports/opening-balances.ts.
@@ -129,9 +142,11 @@ export async function fetchEntryOpeningBalanceLines(
     account_number: string
     debit_amount: number | string
     credit_amount: number | string
+    line_description: string | null
+    dimensions: Record<string, string> | null
   }>({
     supabase,
-    lineColumns: 'id, account_number, debit_amount, credit_amount',
+    lineColumns: 'id, account_number, debit_amount, credit_amount, line_description, dimensions',
     filterEntries: (q: EntryLinesQuery) => q.eq('id', entryId).eq('company_id', companyId),
     attachEntriesAs: null,
   })
@@ -140,6 +155,8 @@ export async function fetchEntryOpeningBalanceLines(
     account_number: r.account_number,
     debit_amount: Number(r.debit_amount) || 0,
     credit_amount: Number(r.credit_amount) || 0,
+    line_description: r.line_description ?? null,
+    dimensions: r.dimensions ?? null,
   }))
 }
 
@@ -167,9 +184,9 @@ export interface CascadeOptions {
 }
 
 /**
- * Storno + rebook + relink each subsequent period's IB with the deltas
- * applied. Each period is independent: a failure in one year is compensated
- * (the freshly booked replacement is stornoed) and reported as skipped, and
+ * Replace each subsequent period's IB with the deltas applied, one atomic
+ * engine replacement per period. Each period is independent: a failure is
+ * reported as skipped (the RPC transaction leaves that period untouched) and
  * the cascade continues with the next year.
  */
 export async function cascadeOpeningBalanceCorrection(
@@ -213,6 +230,18 @@ export async function cascadeOpeningBalanceCorrection(
       })
     }
 
+    const auditFailure = (fields: Record<string, unknown>) => {
+      log.error('audit: opening balance cascade correction failed', {
+        audit: true,
+        event: 'opening_balance.cascade_period_failed',
+        companyId,
+        userId,
+        fiscalPeriodId: period.id,
+        oldEntryId: period.opening_balance_entry_id,
+        ...fields,
+      })
+    }
+
     if (!period.opening_balance_entry_id) {
       // No linked IB verifikat: reports fall back to computing prior balances,
       // which already reflect the base correction. Reported for transparency.
@@ -232,7 +261,9 @@ export async function cascadeOpeningBalanceCorrection(
       continue
     }
 
-    const { count: yearEndCount } = await supabase
+    // Fail CLOSED: a failed lookup must not read as "no bokslut", or the
+    // cascade would rewrite the IB of a period with a posted year-end.
+    const { count: yearEndCount, error: yearEndError } = await supabase
       .from('journal_entries')
       .select('id', { count: 'exact', head: true })
       .eq('company_id', companyId)
@@ -240,6 +271,11 @@ export async function cascadeOpeningBalanceCorrection(
       .eq('source_type', 'year_end')
       .eq('status', 'posted')
 
+    if (yearEndError) {
+      auditFailure({ phase: 'year_end_check_failed', reason: yearEndError.message })
+      skip('correction_failed')
+      continue
+    }
     if ((yearEndCount ?? 0) > 0) {
       skip('year_end')
       continue
@@ -247,24 +283,26 @@ export async function cascadeOpeningBalanceCorrection(
 
     const oldEntryId = period.opening_balance_entry_id
 
-    let correctedLines: OpeningBalanceLine[]
+    let lines: CreateJournalEntryLineInput[]
     try {
       const existingLines = await fetchEntryOpeningBalanceLines(supabase, companyId, oldEntryId)
-      correctedLines = applyDeltasToLines(existingLines, deltas)
+      lines = buildCascadedLines(existingLines, deltas)
     } catch (err) {
-      log.error('opening balance cascade: line fetch failed', {
-        audit: true,
-        event: 'opening_balance.cascade_period_failed',
-        companyId,
-        fiscalPeriodId: period.id,
-        oldEntryId,
+      auditFailure({
+        phase: 'line_fetch_failed',
         reason: err instanceof Error ? err.message : 'unknown',
       })
       skip('correction_failed')
       continue
     }
 
-    const validation = validateOpeningBalanceLines(correctedLines)
+    const validation = validateOpeningBalanceLines(
+      lines.map((l) => ({
+        account_number: l.account_number,
+        debit_amount: l.debit_amount,
+        credit_amount: l.credit_amount,
+      })),
+    )
     if (!validation.ok) {
       skip('validation_failed')
       continue
@@ -280,70 +318,31 @@ export async function cascadeOpeningBalanceCorrection(
       ? `Ingående balanser (korrigerade, rättelse av ${voucherLabel})`
       : 'Ingående balanser (korrigerade)'
 
-    const auditFailure = (fields: Record<string, unknown>) => {
-      log.error('audit: opening balance cascade correction failed', {
-        audit: true,
-        event: 'opening_balance.cascade_period_failed',
-        companyId,
-        userId,
-        fiscalPeriodId: period.id,
-        oldEntryId,
-        ...fields,
-      })
-    }
-
-    // Same create-before-reverse order and compensation pattern as the base
-    // correction: the period must never be left without an opening balance.
-    let newEntry: { id: string }
+    // One RPC transaction: storno the old IB, commit the corrected one, swap
+    // fiscal_periods.opening_balance_entry_id, CAS-guarded on oldEntryId. Any
+    // failure (including a period locked between our pre-check and the write)
+    // rolls the whole period back: no compensation pass, no half states.
     try {
-      newEntry = await createJournalEntry(supabase, companyId, userId, {
+      const replacement = await replaceOpeningBalanceEntry(supabase, companyId, userId, oldEntryId, {
         fiscal_period_id: period.id,
         entry_date: period.period_start,
         description,
         source_type: 'opening_balance',
         voucher_series: 'A',
-        lines: buildOpeningBalanceEntryLines(validation.validLines),
+        lines,
       })
-    } catch (err) {
-      auditFailure({ phase: 'create_failed', reason: err instanceof Error ? err.message : 'unknown' })
-      skip('correction_failed')
-      continue
-    }
-
-    try {
-      await reverseEntry(supabase, companyId, userId, oldEntryId)
-
-      const { error: relinkError } = await supabase.rpc('replace_period_opening_balance_link', {
-        p_company_id: companyId,
-        p_period_id: period.id,
-        p_new_entry_id: newEntry.id,
-      })
-      if (relinkError) {
-        throw new Error(`replace_period_opening_balance_link failed: ${relinkError.message}`)
-      }
 
       result.corrected.push({
         fiscal_period_id: period.id,
         period_name: period.name,
-        journal_entry_id: newEntry.id,
+        journal_entry_id: replacement.newEntryId,
         reversed_entry_id: oldEntryId,
       })
-    } catch (seqErr) {
-      const reason = seqErr instanceof Error ? seqErr.message : 'unknown'
-      auditFailure({ phase: 'sequence_failed', reason, newEntryId: newEntry.id })
-
-      try {
-        await reverseEntry(supabase, companyId, userId, newEntry.id)
-        auditFailure({ phase: 'compensated', reason, newEntryId: newEntry.id })
-      } catch (compErr) {
-        auditFailure({
-          phase: 'compensation_failed',
-          reason,
-          newEntryId: newEntry.id,
-          compensationError: compErr instanceof Error ? compErr.message : 'unknown',
-        })
-      }
-
+    } catch (err) {
+      auditFailure({
+        phase: 'replacement_failed',
+        reason: err instanceof Error ? err.message : 'unknown',
+      })
       skip('correction_failed')
     }
   }
