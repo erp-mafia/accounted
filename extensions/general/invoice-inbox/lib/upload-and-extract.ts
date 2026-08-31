@@ -1,6 +1,6 @@
 import { after } from 'next/server'
 import { uploadDocument } from '@/lib/core/documents/document-service'
-import { extractInvoiceFields, emptyResult } from './extract-invoice-fields'
+import { extractInvoiceFields, emptyResult, fetchOwnCompanyIdentity } from './extract-invoice-fields'
 import { mirrorExtractionToDocument } from './mirror-extraction'
 import { getAiStatus } from '@/lib/ai'
 import { hasCapability } from '@/lib/entitlements/has-capability'
@@ -520,6 +520,7 @@ export async function processArchivedDocument(
         buffer: Buffer.from(slicedBuffer ?? file.buffer),
         mimeType: file.type,
         fileName: file.name,
+        ownCompany: await fetchOwnCompanyIdentity(supabase, companyId),
       })
   const { data: extracted, rawText } = extraction
   if (!skipExtraction && slicedBuffer != null && pageCount != null) {
@@ -660,6 +661,7 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
             buffer: Buffer.from(slicedBuffer ?? job.file.buffer),
             mimeType: job.file.type,
             fileName: job.file.name,
+            ownCompany: await fetchOwnCompanyIdentity(supabase, job.companyId),
           })
           extracted = result.data
           rawText = result.rawText

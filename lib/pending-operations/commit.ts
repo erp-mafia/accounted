@@ -112,8 +112,9 @@ import {
 import { PartialCommitError } from '@/lib/pending-operations/errors'
 import { getEmailService } from '@/lib/email/service'
 import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
-import { hasCapability, CAPABILITY_BLOCKED_MESSAGE_SV } from '@/lib/entitlements/has-capability'
+import { hasCapability, capabilityBlockedError } from '@/lib/entitlements/has-capability'
 import { PAID_OPERATION_CAPABILITY_MAP } from '@/lib/entitlements/keys'
+import { exceedsUnattendedLimit } from './unattended-limit'
 import {
   generateInvoiceEmailHtml,
   generateInvoiceEmailText,
@@ -168,6 +169,7 @@ import {
   type InvoiceWriteInput,
   type InvoiceWriteItemInput,
 } from '@/lib/invoices/build-invoice-write'
+import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
@@ -215,6 +217,11 @@ export interface CommitResult {
   // callers that do not recognize the code fall back to `error`.
   code?: string
   account_numbers?: string[]
+  // The two numbers UNATTENDED_COMMIT_LIMIT_EXCEEDED's remediation refers to,
+  // in SEK. Present only on that code. Without them the agent knows it was
+  // over the ceiling but not by how much, and cannot tell a human what to
+  // raise the limit to.
+  unattended_limit?: { attempted: number; limit: number }
   // Where the pending_operations row landed, independent of `status`:
   // 'pending' means the op was NOT consumed and can be approved again
   // (recoverable refusal: capability, chart accounts, Skatteverket, or an
@@ -1631,6 +1638,7 @@ async function commitCreateInvoice(
   const customerId = params.customer_id as string
   const items = params.items as Array<{
     description: string; quantity: number; unit: string; unit_price: number; vat_rate?: number
+    discount_percent?: number | null
     article_id?: string | null; revenue_account?: string | null
     line_type?: 'product' | 'text'
     dimensions?: Record<string, string>
@@ -1674,7 +1682,12 @@ async function commitCreateInvoice(
   const notVatRegistered = vatSettings?.vat_registered === false
   if (notVatRegistered) for (const item of items) item.vat_rate = 0
 
-  const subtotal = billableItems.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
+  // Line totals net of any per-line discount, same math as the web path
+  // (lib/invoices/line-amounts.ts).
+  const subtotal = billableItems.reduce(
+    (sum, item) => sum + computeLineNet(item.quantity, item.unit_price, item.discount_percent),
+    0,
+  )
 
   let vatAmount = 0
   for (const item of billableItems) {
@@ -1682,7 +1695,14 @@ async function commitCreateInvoice(
     if (!allowedRates.has(itemRate)) {
       return { error: `Momssats ${itemRate}% är inte tillåten för denna kundtyp`, status: 400 }
     }
-    const lineTotal = item.quantity * item.unit_price
+    // Strict typeof: staged params are JSON a tampered client could shape;
+    // a string would coerce past a bare range check but be ignored by the
+    // number-typed totals math, then land in the NUMERIC column anyway.
+    const discountPercent = item.discount_percent ?? 0
+    if (typeof discountPercent !== 'number' || !(discountPercent >= 0 && discountPercent <= 100)) {
+      return { error: 'Rabatten per rad måste vara mellan 0 och 100 procent', status: 400 }
+    }
+    const lineTotal = computeLineNet(item.quantity, item.unit_price, discountPercent)
     vatAmount += Math.round(lineTotal * itemRate / 100 * 100) / 100
   }
 
@@ -1824,6 +1844,7 @@ async function commitCreateInvoice(
       reverse_charge_text: notVatRegistered ? null : (vatRules.reverseChargeText || null),
       our_reference: (params.our_reference as string) || null,
       your_reference: (params.your_reference as string) || null,
+      invoice_marking: (params.invoice_marking as string) || null,
       notes: (params.notes as string) || null,
       payment_link_url: paymentLinkUrl,
       default_dimensions: defaultDimensions ?? {},
@@ -1846,6 +1867,7 @@ async function commitCreateInvoice(
         quantity: 0,
         unit: '',
         unit_price: 0,
+        discount_percent: 0,
         line_total: 0,
         vat_rate: 0,
         vat_amount: 0,
@@ -1855,7 +1877,8 @@ async function commitCreateInvoice(
       }
     }
     const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
-    const lineTotal = item.quantity * item.unit_price
+    const discountPercent = item.discount_percent ?? 0
+    const lineTotal = computeLineNet(item.quantity, item.unit_price, discountPercent)
     const itemVat = Math.round(lineTotal * itemRate / 100 * 100) / 100
     return {
       invoice_id: invoice.id,
@@ -1865,6 +1888,7 @@ async function commitCreateInvoice(
       quantity: item.quantity,
       unit: item.unit,
       unit_price: item.unit_price,
+      discount_percent: discountPercent,
       line_total: lineTotal,
       vat_rate: itemRate,
       vat_amount: itemVat,
@@ -1942,7 +1966,7 @@ async function commitUpdateInvoice(
   const { data: existing, error: fetchError } = await supabase
     .from('invoices')
     .select(
-      'id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, customer_id, document_type, invoice_date, due_date, delivery_date, currency, your_reference, our_reference, notes, payment_link_url, payment_link_auto, ore_rounding, default_dimensions, deduction_personnummer_encrypted, deduction_personnummer_last4',
+      'id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, customer_id, document_type, invoice_date, due_date, delivery_date, currency, your_reference, our_reference, invoice_marking, notes, payment_link_url, payment_link_auto, ore_rounding, default_dimensions, deduction_personnummer_encrypted, deduction_personnummer_last4',
     )
     .eq('id', invoiceId)
     .eq('company_id', companyId)
@@ -2003,7 +2027,7 @@ async function commitUpdateInvoice(
     const { data: itemRows, error: itemsFetchError } = await supabase
       .from('invoice_items')
       .select(
-        'line_type, description, quantity, unit, unit_price, vat_rate, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions',
+        'line_type, description, quantity, unit, unit_price, discount_percent, vat_rate, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions',
       )
       .eq('invoice_id', invoiceId)
       .order('sort_order', { ascending: true })
@@ -2028,6 +2052,7 @@ async function commitUpdateInvoice(
     currency: existing.currency as Currency,
     your_reference: changes.your_reference ?? existing.your_reference ?? undefined,
     our_reference: changes.our_reference ?? existing.our_reference ?? undefined,
+    invoice_marking: changes.invoice_marking ?? existing.invoice_marking ?? undefined,
     notes: changes.notes ?? existing.notes ?? undefined,
     // Not editable through this operation: fed back so the builder echoes the
     // stored values instead of clearing them.
@@ -4553,6 +4578,7 @@ async function commitCreditInvoice(
       reverse_charge_text: original.reverse_charge_text,
       your_reference: original.your_reference,
       our_reference: original.our_reference,
+      invoice_marking: original.invoice_marking ?? null,
       notes: reason || `Krediterar faktura ${original.invoice_number}`,
       credited_invoice_id: id,
       // Dimensions PR7: copy so the reversal nets against the same cells.
@@ -4573,6 +4599,7 @@ async function commitCreditInvoice(
     quantity: number
     unit: string
     unit_price: number
+    discount_percent?: number | null
     line_total: number
     vat_rate?: number
     vat_amount?: number
@@ -4587,6 +4614,8 @@ async function commitCreditInvoice(
     quantity: -Math.abs(item.quantity),
     unit: item.unit,
     unit_price: item.unit_price,
+    // Kreditfakturans face arithmetic must multiply out like the original's.
+    discount_percent: item.discount_percent ?? 0,
     line_total: -Math.abs(item.line_total),
     vat_rate: item.vat_rate ?? 0,
     vat_amount: -(item.vat_amount ? Math.abs(item.vat_amount) : 0),
@@ -6614,15 +6643,53 @@ async function commitPendingOperationInner(
   //    the trial then approved AFTER the grant expired, regardless of caller
   //    (MCP approve tool or the UI approval path). Checked BEFORE the atomic
   //    claim so a blocked op stays 'pending' and is re-approvable once the
-  //    company subscribes. Self-hosted short-circuits to all-on in hasCapability.
+  //    company subscribes. Self-hosted is all-on in hasCapability except the
+  //    connector capabilities without own credentials (see lib/entitlements).
   const requiredCapability = PAID_OPERATION_CAPABILITY_MAP[pendingOp.operation_type]
   if (requiredCapability && !(await hasCapability(supabase, companyId, requiredCapability))) {
     return {
       status: 'failed',
-      error: CAPABILITY_BLOCKED_MESSAGE_SV,
+      // Via capabilityBlockedError so the self-host variant applies (the
+      // hosted constant upsells a subscription a self-host cannot buy).
+      error: capabilityBlockedError(requiredCapability).message_sv,
       http_status: 403,
       code: 'capability_blocked',
       operation_status: 'pending',
+    }
+  }
+
+  // ── Approval-authority ceiling: what this API key may finish unattended.
+  //
+  //    Checked HERE, before the atomic claim, for the same reason the
+  //    capability gate above is: a refused op must stay 'pending' so a human
+  //    can still approve it in /pending. Inside the claim it would fall into
+  //    the generic catch below, which marks the op terminal 'rejected' with no
+  //    code and consumes the staged verifikat, which is unrecoverable: the
+  //    agent must rebuild the whole booking to try again.
+  //
+  //    Cannot fire for a human: exceedsUnattendedLimit requires
+  //    actor.type === 'api_key' AND a positive limit on that key. In-app
+  //    approvals pass {type:'user'}, cron passes 'cron', and the
+  //    cookie-session routes commit with no actor at all.
+  const unattended = exceedsUnattendedLimit({
+    actorType: opts.actor?.type,
+    limit: opts.actor?.unattendedCommitLimit,
+    operationType: pendingOp.operation_type,
+    previewData: pendingOp.preview_data,
+  })
+  if (unattended.exceeded) {
+    return {
+      status: 'failed',
+      error:
+        getErrorEntry('UNATTENDED_COMMIT_LIMIT_EXCEEDED')?.message_sv ??
+        'Beloppet \u00f6verstiger vad den h\u00e4r API-nyckeln f\u00e5r bokf\u00f6ra utan m\u00e4nskligt godk\u00e4nnande.',
+      http_status: 403,
+      code: 'UNATTENDED_COMMIT_LIMIT_EXCEEDED',
+      operation_status: 'pending',
+      unattended_limit: {
+        attempted: unattended.attempted as number,
+        limit: unattended.limit as number,
+      },
     }
   }
 

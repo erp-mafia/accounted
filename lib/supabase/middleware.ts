@@ -42,12 +42,27 @@ import {
 const log = createLogger('proxy')
 
 /**
- * Host-scoped marker that the signed-in user is on their home domain, so the
- * affinity check below costs zero queries on the hot path. Expiry re-runs the
- * check, which bounds staleness after team-membership changes.
+ * Marker that the signed-in user is on their home domain, so the affinity
+ * check below costs zero queries on the hot path. Expiry re-runs the check,
+ * which bounds staleness after team-membership changes.
+ *
+ * The value is scoped to BOTH the user and the host (`userId~host`): a
+ * host-only value let anyone who signed in within the TTL window inherit the
+ * previous user's "this is home" verdict in the same browser, skipping the
+ * brand-host bounce entirely (found via the amnas account-switch repro,
+ * 2026-08-31). A stale host-only cookie from before this change simply never
+ * matches, so the check re-runs and the format migrates itself. The `~`
+ * separator is unreserved under encodeURIComponent AND a legal raw cookie
+ * octet, so the value round-trips byte-identically whether or not the cookie
+ * layer percent-encodes.
  */
 const HOME_DOMAIN_OK_COOKIE = 'gnubok-home-ok'
 const HOME_DOMAIN_OK_MAX_AGE = 15 * 60
+
+/** The `userId~host` value a home-ok cookie must carry to skip the check. */
+function homeDomainOkValue(userId: string, host: string): string {
+  return `${userId}~${host}`
+}
 
 /**
  * Auth proxy entry point. Wraps the real work so every response carries a
@@ -368,7 +383,7 @@ async function updateSessionInner(
   if (homeOutcome.cacheOk) {
     supabaseResponse.cookies.set(
       HOME_DOMAIN_OK_COOKIE,
-      normalizeHost(request.nextUrl.hostname),
+      homeDomainOkValue(user.id, normalizeHost(request.nextUrl.hostname)),
       {
         path: '/',
         httpOnly: true,
@@ -767,9 +782,10 @@ function isAffinityExemptHost(host: string): boolean {
  *      byrå's own client users log in on the byrå domain).
  *   3. Everyone else stays put.
  *
- * `cacheOk` marks a positive "this is home" verdict, cached in a host-scoped
- * cookie by the caller. Query failures fail open with no caching, so a
- * transient error neither locks anyone out nor sticks for a TTL window.
+ * `cacheOk` marks a positive "this is home" verdict, cached by the caller in
+ * a cookie scoped to this user and host. Query failures fail open with no
+ * caching, so a transient error neither locks anyone out nor sticks for a
+ * TTL window.
  */
 async function resolveHomeDomainOutcome(
   supabase: ReturnType<typeof createServerClient>,
@@ -780,7 +796,12 @@ async function resolveHomeDomainOutcome(
   const stay = { redirectTo: null, cacheOk: false }
   const host = normalizeHost(request.nextUrl.hostname)
   if (isAffinityExemptHost(host)) return stay
-  if (request.cookies.get(HOME_DOMAIN_OK_COOKIE)?.value === host) return stay
+  // The cached verdict must belong to THIS user: a host-only match let a
+  // second account signed in within the TTL window ride the first account's
+  // verdict and skip the brand-host bounce.
+  if (request.cookies.get(HOME_DOMAIN_OK_COOKIE)?.value === homeDomainOkValue(userId, host)) {
+    return stay
+  }
 
   // Rule 1: the user's own byrå brand domains (RLS: members read their brand).
   const { data: byraRows, error: byraError } = await supabase

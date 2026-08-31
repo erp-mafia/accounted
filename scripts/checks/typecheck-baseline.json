@@ -1,5 +1,5 @@
 {
-  "totalErrors": 539,
+  "totalErrors": 538,
   "perFile": {
     "app/api/assets/__tests__/id.test.ts": 9,
     "app/api/auth/email-hook/__tests__/route.test.ts": 1,
@@ -67,7 +67,6 @@
     "lib/auth/__tests__/require-write.test.ts": 15,
     "lib/bokslut/__tests__/k3-framework-dispositions.test.ts": 2,
     "lib/bokslut/__tests__/readiness-aggregator.test.ts": 6,
-    "lib/bookkeeping/__tests__/own-account-detector.test.ts": 1,
     "lib/bookkeeping/__tests__/supplier-payment-lines.test.ts": 14,
     "lib/branding/__tests__/public-brand.test.ts": 1,
     "lib/email/__tests__/brand-mail-snapshots.test.ts": 1,

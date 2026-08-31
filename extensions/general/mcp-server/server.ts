@@ -59,6 +59,7 @@ import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
 import { eventBus } from '@/lib/events/bus'
 import { getVatRules, getPermittedVatRates, getArticleVatRateAdoptionSet } from '@/lib/invoices/vat-rules'
 import { validateDeductionLines } from '@/lib/invoices/rot-rut-rules'
+import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { getBranding } from '@/lib/branding/service'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
@@ -266,7 +267,7 @@ import {
 } from '@/lib/core/documents/document-service'
 import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
 import { createHash } from 'node:crypto'
-import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema, AgentExtractionSchema } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema, AgentExtractionSchema, fetchOwnCompanyIdentity } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 import { mirrorExtractionToDocument } from '@/extensions/general/invoice-inbox/lib/mirror-extraction'
 // Skatteverket filing tools (PR5). Cross-extension lib import, same sanctioned
 // pattern as invoice-inbox above: the CI guard only checks lib/, app/api/,
@@ -303,6 +304,8 @@ type StagedInvoiceLineInput = {
   quantity: number
   unit?: string
   unit_price?: number
+  /** Line discount 0-100 (rabatt i procent); totals are computed net of it. */
+  discount_percent?: number
   vat_rate?: number
   article_id?: string
   revenue_account?: string | null
@@ -370,10 +373,21 @@ function resolveInvoiceLineFromArticle(
       quantity: 0,
       unit: '',
       unit_price: 0,
+      discount_percent: 0,
       vat_rate: 0,
     }
   }
   if (!item.quantity || item.quantity <= 0) throw new Error(`Item ${lineNo}: quantity must be positive`)
+  // Strict typeof: a host that skips inputSchema validation could send a
+  // string, which JS comparisons would coerce past a bare range check while
+  // hasLineDiscount (typeof === 'number') then ignores it in the totals.
+  if (
+    item.discount_percent != null &&
+    (typeof item.discount_percent !== 'number' ||
+      !(item.discount_percent >= 0 && item.discount_percent <= 100))
+  ) {
+    throw new Error(`Item ${lineNo}: discount_percent must be a number between 0 and 100`)
+  }
   if (item.article_id && !article) {
     throw new Error(`Item ${lineNo}: article ${item.article_id} not found in this company. Use gnubok_list_articles to find valid IDs.`)
   }
@@ -423,6 +437,15 @@ interface ActorContext {
    * single agent conversation. Not used for auth.
    */
   sessionId?: string | null
+  /**
+   * Approval authority for this key in SEK: the largest amount it may commit
+   * with no human in the loop, or null/undefined for unlimited (the default,
+   * and what every key created before this column existed has).
+   *
+   * Only meaningful for `type: 'api_key'`. Read once at auth time so the
+   * ceiling cannot drift mid-request.
+   */
+  unattendedCommitLimit?: number | null
   /**
    * Distribution-channel marker from `X-Accounted-Client`, the legacy
    * `X-Gnubok-Client`, or the `client` query param (e.g. 'openclaw').
@@ -602,7 +625,12 @@ async function createDocumentInboxItem(
     if (existing) return existing
   }
 
-  const extraction = await extractInvoiceFields({ buffer, mimeType, fileName })
+  const extraction = await extractInvoiceFields({
+    buffer,
+    mimeType,
+    fileName,
+    ownCompany: await fetchOwnCompanyIdentity(supabase, companyId),
+  })
   const { data: extracted } = extraction
   // uploadDocument()/completePendingDocumentUpload() were told this inbox
   // item owns extraction, so the document-extraction extension yielded;
@@ -4886,6 +4914,7 @@ export const tools: McpTool[] = [
         ...(dimensionsBlock ? { dimensions: dimensionsBlock } : {}),
         ...(ledgerDigest ? { ledger_context: ledgerDigest } : {}),
         ...(skvConnection ? { skatteverket_connection: skvConnection } : {}),
+
         // Static per-workflow loadouts (issue #1098): lets a deferred-loading
         // harness batch-load a whole workflow cluster in one call. Validated
         // against the tool registry at module init (assertRecommendedLoadoutsValid).
@@ -6282,6 +6311,7 @@ export const tools: McpTool[] = [
         remaining_amount: { type: ['number', 'null'] },
         your_reference: { type: ['string', 'null'] },
         our_reference: { type: ['string', 'null'] },
+        invoice_marking: { type: ['string', 'null'], description: 'Fakturamärkning (buyer marking), separate from your_reference' },
         notes: { type: ['string', 'null'] },
         default_dimensions: { type: 'object', additionalProperties: { type: 'string' } },
         editable_draft: { type: 'boolean', description: 'true when gnubok_update_invoice can edit it' },
@@ -6298,6 +6328,7 @@ export const tools: McpTool[] = [
               quantity: { type: 'number' },
               unit: { type: 'string' },
               unit_price: { type: 'number' },
+              discount_percent: { type: 'number', description: 'Line discount 0-100; line_total is net of it' },
               line_total: { type: 'number' },
               vat_rate: { type: 'number' },
               vat_amount: { type: 'number' },
@@ -6340,7 +6371,7 @@ export const tools: McpTool[] = [
       const { data: invoice, error } = await supabase
         .from('invoices')
         .select(
-          'id, invoice_number, status, document_type, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
+          'id, invoice_number, status, document_type, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, invoice_marking, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
         )
         .eq('id', invoiceId)
         .eq('company_id', companyId)
@@ -6357,6 +6388,7 @@ export const tools: McpTool[] = [
         quantity: number
         unit: string
         unit_price: number
+        discount_percent: number | null
         line_total: number
         vat_rate: number
         vat_amount: number | null
@@ -6385,6 +6417,7 @@ export const tools: McpTool[] = [
         quantity: row.quantity,
         unit: row.unit,
         unit_price: row.unit_price,
+        discount_percent: row.discount_percent ?? 0,
         line_total: row.line_total,
         vat_rate: row.vat_rate,
         vat_amount: row.vat_amount ?? 0,
@@ -6422,6 +6455,7 @@ export const tools: McpTool[] = [
         remaining_amount: invoice.remaining_amount ?? null,
         your_reference: invoice.your_reference ?? null,
         our_reference: invoice.our_reference ?? null,
+        invoice_marking: invoice.invoice_marking ?? null,
         notes: invoice.notes ?? null,
         default_dimensions: (invoice.default_dimensions as Record<string, string> | null) ?? {},
         editable_draft: isEditableInvoiceDraft(invoice),
@@ -6451,6 +6485,7 @@ export const tools: McpTool[] = [
               quantity: { type: 'number' },
               unit: { type: 'string', description: 'st, tim, dag, mån' },
               unit_price: { type: 'number', description: 'Price per unit excl. VAT' },
+              discount_percent: { type: 'number', description: 'Line discount 0-100 (rabatt); line total and VAT computed net of it' },
               vat_rate: { type: 'number', description: 'VAT rate 0-100 (optional override)' },
               article_id: {
                 type: 'string',
@@ -6478,6 +6513,7 @@ export const tools: McpTool[] = [
         currency: { type: 'string', enum: ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'] },
         our_reference: { type: 'string' },
         your_reference: { type: 'string' },
+        invoice_marking: { type: 'string', description: 'Fakturamärkning (buyer marking/PO label), separate from your_reference; feeds Peppol BuyerReference.' },
         notes: { type: 'string' },
         payment_link_url: {
           type: 'string',
@@ -6598,8 +6634,11 @@ export const tools: McpTool[] = [
       const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated)
       const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
-      // Calculate per-item VAT
-      const subtotal = items.reduce((s, item) => s + item.quantity * item.unit_price, 0)
+      // Calculate per-item VAT (line totals net of any per-line discount)
+      const subtotal = items.reduce(
+        (s, item) => s + computeLineNet(item.quantity, item.unit_price, item.discount_percent),
+        0,
+      )
       let vatAmount = 0
       for (const item of items) {
         const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
@@ -6609,7 +6648,7 @@ export const tools: McpTool[] = [
             `Allowed rates: ${permittedRates.map((r) => r.rate + '%').join(', ')}`
           )
         }
-        const lineTotal = item.quantity * item.unit_price
+        const lineTotal = computeLineNet(item.quantity, item.unit_price, item.discount_percent)
         vatAmount += Math.round(lineTotal * itemRate / 100 * 100) / 100
       }
       const total = subtotal + vatAmount
@@ -6636,6 +6675,7 @@ export const tools: McpTool[] = [
           currency,
           our_reference: (args.our_reference as string) || null,
           your_reference: (args.your_reference as string) || null,
+          invoice_marking: (args.invoice_marking as string) || null,
           notes: (args.notes as string) || null,
           payment_link_url: paymentLinkUrl,
         },
@@ -6644,7 +6684,7 @@ export const tools: McpTool[] = [
           customer_type: customer.customer_type,
           items: stagedItems.map(item => ({
             ...item,
-            line_total: item.quantity * item.unit_price,
+            line_total: computeLineNet(item.quantity, item.unit_price, item.discount_percent),
             vat_rate: item.vat_rate ?? vatRules.rate,
           })),
           subtotal: Math.round(subtotal * 100) / 100,
@@ -17169,6 +17209,7 @@ export const tools: McpTool[] = [
         delivery_date: { type: ['string', 'null'], description: 'YYYY-MM-DD; null clears the delivery date.' },
         your_reference: { type: 'string' },
         our_reference: { type: 'string' },
+        invoice_marking: { type: 'string', description: 'Fakturamärkning (buyer marking/PO label), separate from your_reference.' },
         items: {
           type: 'array',
           items: {
@@ -17178,6 +17219,7 @@ export const tools: McpTool[] = [
               quantity: { type: 'number' },
               unit: { type: 'string', description: 'st, tim, dag, mån' },
               unit_price: { type: 'number', description: 'Price per unit excl. VAT' },
+              discount_percent: { type: 'number', description: 'Line discount 0-100 (rabatt); pass back to keep it, totals computed net of it.' },
               vat_rate: { type: 'number', description: 'VAT rate 0-100 (optional override)' },
               article_id: {
                 type: 'string',
@@ -17254,7 +17296,7 @@ export const tools: McpTool[] = [
       }
 
       const headerChanges: Record<string, unknown> = {}
-      for (const key of ['notes', 'invoice_date', 'due_date', 'delivery_date', 'your_reference', 'our_reference']) {
+      for (const key of ['notes', 'invoice_date', 'due_date', 'delivery_date', 'your_reference', 'our_reference', 'invoice_marking']) {
         if (args[key] !== undefined) headerChanges[key] = args[key]
       }
       if (rawItems === undefined && args.default_dimensions === undefined && Object.keys(headerChanges).length === 0) {
@@ -17359,7 +17401,7 @@ export const tools: McpTool[] = [
               `Allowed rates: ${permittedRates.map((r) => r.rate + '%').join(', ')}`
             )
           }
-          const lineTotal = item.quantity * item.unit_price
+          const lineTotal = computeLineNet(item.quantity, item.unit_price, item.discount_percent)
           subtotal += lineTotal
           vatAmount += roundOre(lineTotal * itemRate / 100)
         }
@@ -17374,6 +17416,7 @@ export const tools: McpTool[] = [
             deductionLines.map((item) => ({
               unit_price: item.unit_price,
               quantity: item.quantity,
+              discount_percent: item.discount_percent ?? 0,
               deduction_type: item.deduction_type ?? null,
               vat_rate: item.vat_rate ?? vatRules.rate,
               labor_hours: item.labor_hours ?? null,
@@ -17416,7 +17459,7 @@ export const tools: McpTool[] = [
         // the property columns are not needed for the preview.
         const { data: currentRows, error: currentError } = await supabase
           .from('invoice_items')
-          .select('line_type, description, quantity, unit, unit_price, line_total, vat_rate, revenue_account, article_id, deduction_type, accrual_period_start, accrual_period_end')
+          .select('line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, revenue_account, article_id, deduction_type, accrual_period_start, accrual_period_end')
           .eq('invoice_id', invoice.id)
           .order('sort_order', { ascending: true })
         if (currentError) throw dbError(currentError)
@@ -17426,6 +17469,7 @@ export const tools: McpTool[] = [
           quantity: row.quantity,
           unit: row.unit,
           unit_price: row.unit_price,
+          discount_percent: row.discount_percent ?? 0,
           line_total: row.line_total,
           vat_rate: row.vat_rate,
           revenue_account: row.revenue_account ?? null,
@@ -19350,6 +19394,12 @@ export const tools: McpTool[] = [
           actor: {
             type: actor?.type === 'api_key' ? 'api_key' : 'user',
             ...(actor?.label ? { label: actor.label } : {}),
+            // Only an api_key actor can carry a ceiling; the ternary above
+            // already collapsed everything else to 'user', for which
+            // exceedsUnattendedLimit returns false regardless.
+            ...(actor?.type === 'api_key'
+              ? { unattendedCommitLimit: actor.unattendedCommitLimit ?? null }
+              : {}),
           },
           ...(userEmail ? { userEmail } : {}),
         }
@@ -20636,6 +20686,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   let apiKeyId: string | undefined
   let apiKeyName: string | undefined
   let keyMode: ApiKeyMode = 'live'
+  let unattendedCommitLimit: number | null = null
   if (token) {
     const authResult = await validateApiKey(token)
     if ('error' in authResult) {
@@ -20651,7 +20702,15 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       }
       return unauthorized()
     }
-    ;({ userId, companyId, scopes: keyScopes, apiKeyId, apiKeyName, mode: keyMode } = authResult)
+    ;({
+      userId,
+      companyId,
+      scopes: keyScopes,
+      apiKeyId,
+      apiKeyName,
+      mode: keyMode,
+      unattendedCommitLimit,
+    } = authResult)
   } else {
     // Anonymous traffic has no key to rate-limit on: per truncated IP instead.
     // No-op without Upstash (self-hosted), like the OAuth register endpoint.
@@ -20683,6 +20742,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         type: 'api_key',
         id: apiKeyId,
         label: apiKeyName ?? 'Unnamed API key',
+        unattendedCommitLimit,
         sessionId,
         client,
       }
@@ -21125,8 +21185,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 
       // Enforce the capability paywall: the MCP/agent path is a paid chokepoint
       // just like the HTTP routes (send_invoice → email_send, the two SKV
-      // submissions → skatteverket). Fail-closed; self-hosted short-circuits to
-      // all-on inside hasCapability. Blocks before any pending op is staged.
+      // submissions → skatteverket). Fail-closed; self-hosted is all-on inside
+      // hasCapability except connector capabilities without own credentials
+      // (see lib/entitlements). Blocks before any pending op is staged.
       const requiredCapability = MCP_TOOL_CAPABILITY_MAP[toolName]
       if (requiredCapability && !(await hasCapability(supabase, tenantId, requiredCapability))) {
         const capError = { error: capabilityBlockedError(requiredCapability) }

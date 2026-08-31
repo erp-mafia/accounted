@@ -331,6 +331,10 @@ function generateRotRutLines(
     const amount = computeDeduction({
       unit_price: side === 'credit' ? Math.abs(item.unit_price) : item.unit_price,
       quantity: side === 'credit' ? Math.abs(item.quantity) : item.quantity,
+      // The deduction base is the NET line total (rabatt reduces what the
+      // customer pays); omitting this books 1513 on the gross while the
+      // stored deduction_total and the Skatteverket claim carry the net.
+      discount_percent: item.discount_percent ?? 0,
       deduction_type: item.deduction_type,
       vat_rate: item.vat_rate,
     })

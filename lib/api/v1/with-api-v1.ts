@@ -92,6 +92,13 @@ export interface ApiV1Context {
   /** Scopes granted to the calling key. */
   scopes: ApiKeyScope[]
   /**
+   * Largest amount in SEK this key may commit with no human approving it, or
+   * null for no ceiling (the default, and what every key predating the column
+   * has). Enforced at the two places an API key can post money: this surface's
+   * journal-entries.commit, and commitPendingOperation for the MCP path.
+   */
+  unattendedCommitLimit: number | null
+  /**
    * test|live. Test keys are simulation-only: the wrapper forces `dryRun` on
    * for every write, so handlers never need to special-case `mode`; they just
    * honor `dryRun` as usual.
@@ -299,6 +306,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           apiKeyId: undefined,
           apiKeyName: undefined,
           scopes: [],
+          unattendedCommitLimit: null,
           mode: 'live',
           supabase: createAnonClient(),
           dryRun: false,
@@ -314,6 +322,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
               apiKeyId: auth.apiKeyId,
               apiKeyName: auth.apiKeyName,
               scopes: auth.scopes,
+              unattendedCommitLimit: auth.unattendedCommitLimit,
               mode: auth.mode,
               supabase: createServiceClientNoCookies(),
             }
@@ -483,6 +492,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         apiKeyId: auth.apiKeyId,
         apiKeyName: auth.apiKeyName,
         scopes: auth.scopes,
+        unattendedCommitLimit: auth.unattendedCommitLimit,
         mode: auth.mode,
         supabase,
         companyId,

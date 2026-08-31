@@ -1,6 +1,6 @@
 import type { Extension } from '@/lib/extensions/types'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { extractInvoiceFields } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { extractInvoiceFields, fetchOwnCompanyIdentity } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 import { getAiStatus } from '@/lib/ai'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -176,6 +176,7 @@ async function extractAndPersist(
       buffer,
       mimeType,
       fileName: (document.file_name as string) || 'document',
+      ownCompany: await fetchOwnCompanyIdentity(supabase, companyId),
     })
     // extractInvoiceFields returns an "empty" result on failure rather than
     // throwing. `skipped` means no model call was made (and why); a null

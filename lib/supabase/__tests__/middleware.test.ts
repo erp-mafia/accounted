@@ -753,7 +753,7 @@ describe('updateSession redirect destinations', () => {
 
       expect(response.status).toBe(200)
       expect(response.headers.get('set-cookie')).toContain(
-        'gnubok-home-ok=arbore.accounted.se',
+        'gnubok-home-ok=user-1~arbore.accounted.se',
       )
     })
 
@@ -769,7 +769,7 @@ describe('updateSession redirect destinations', () => {
       expect(response.status).toBe(200)
       expect(locationOf(response)).toBeNull()
       expect(response.headers.get('set-cookie')).toContain(
-        'gnubok-home-ok=app.gnubok.se',
+        'gnubok-home-ok=user-1~app.gnubok.se',
       )
     })
 
@@ -785,7 +785,7 @@ describe('updateSession redirect destinations', () => {
 
       expect(response.status).toBe(200)
       expect(response.headers.get('set-cookie')).toContain(
-        'gnubok-home-ok=app.gnubok.se',
+        'gnubok-home-ok=user-1~app.gnubok.se',
       )
     })
 
@@ -861,7 +861,7 @@ describe('updateSession redirect destinations', () => {
       expect(response.status).toBe(200)
       expect(locationOf(response)).toBeNull()
       expect(response.headers.get('set-cookie')).toContain(
-        'gnubok-home-ok=arbore.accounted.se',
+        'gnubok-home-ok=user-1~arbore.accounted.se',
       )
       expect(isEmailOnBrandAllowlist).toHaveBeenCalledWith(
         'brand-arbore',
@@ -916,16 +916,40 @@ describe('updateSession redirect destinations', () => {
       }
     })
 
-    it('skips the check while the host-scoped OK cookie is fresh', async () => {
+    it('skips the check while this user\'s OK cookie for this host is fresh', async () => {
       state.byraMemberships = [
         { teams: { kind: 'byra', brands: { domain: 'acount.accounted.se' } } },
       ]
 
       const response = await runAt(ARBORE, '/', {
-        cookie: 'gnubok-home-ok=arbore.accounted.se',
+        cookie: 'gnubok-home-ok=user-1~arbore.accounted.se',
       })
 
       expect(response.status).toBe(200)
+    })
+
+    it('ignores an OK cookie left behind by a DIFFERENT user and still bounces', async () => {
+      // The amnas account-switch repro (2026-08-31): the byrå owner signs in
+      // on the brand host (cookie set), signs out, and a second account with
+      // no ties to the brand signs in within the TTL window. The inherited
+      // host-only verdict skipped the bounce; the user-scoped value must not.
+      state.hostBrand = { teamId: 'team-arbore', id: 'brand-arbore' }
+
+      const response = await runAt(ARBORE, '/', {
+        cookie: 'gnubok-home-ok=user-OTHER~arbore.accounted.se',
+      })
+
+      expect(locationOf(response)).toBe('https://app.gnubok.se/')
+    })
+
+    it('ignores a stale host-only cookie from the pre-user-scoped format', async () => {
+      state.hostBrand = { teamId: 'team-arbore', id: 'brand-arbore' }
+
+      const response = await runAt(ARBORE, '/', {
+        cookie: 'gnubok-home-ok=arbore.accounted.se',
+      })
+
+      expect(locationOf(response)).toBe('https://app.gnubok.se/')
     })
   })
 
