@@ -41,6 +41,10 @@ ALTER TABLE public.api_keys
 -- ONLY as NULL, never as 0.
 ALTER TABLE public.api_keys
   DROP CONSTRAINT IF EXISTS api_keys_unattended_commit_limit_positive;
+-- Added VALIDATED, not NOT VALID: api_keys is 388 rows / 768 kB in production,
+-- so the validating scan is sub-millisecond. The NOT VALID + VALIDATE dance
+-- buys nothing at this size and can leave the constraint permanently unenforced
+-- if the second statement is ever skipped.
 ALTER TABLE public.api_keys
   ADD CONSTRAINT api_keys_unattended_commit_limit_positive
   CHECK (unattended_commit_limit IS NULL OR unattended_commit_limit > 0);

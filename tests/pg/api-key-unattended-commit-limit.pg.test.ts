@@ -40,10 +40,18 @@ describe('api_keys.unattended_commit_limit (pg)', () => {
   }
 
   it('defaults to NULL so pre-existing keys stay unlimited', async () => {
-    const { apiKeyId } = await seedKey()
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    // Deliberately omits the column instead of storing an explicit NULL: this
+    // test exists to pin the DATABASE DEFAULT, and passing NULL in would keep
+    // it green even if the default changed to a positive ceiling, which is the
+    // one change that would silently start blocking every existing key.
     const { rows } = await getPool().query<{ unattended_commit_limit: string | null }>(
-      `SELECT unattended_commit_limit FROM public.api_keys WHERE id = $1`,
-      [apiKeyId],
+      `INSERT INTO public.api_keys
+         (user_id, company_id, key_hash, key_prefix, name, scopes)
+       VALUES ($1, $2, $3, 'gnubok_sk_test', 'Default test key', $4)
+       RETURNING unattended_commit_limit`,
+      [userId, companyId, randomUUID().replaceAll('-', ''), ['reports:read']],
     )
     expect(rows[0]!.unattended_commit_limit).toBeNull()
   })

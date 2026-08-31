@@ -4585,7 +4585,7 @@ export const tools: McpTool[] = [
             'Present only when a Skatteverket connection exists. Carries status ("active" or "needs_reconsent") and the grant detail behind it. needs_reconsent: only a person can fix it (BankID under Inställningar → Skatteverket); warn the user before starting SKV work.',
         },
       },
-      required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory', 'recommended_tools'],
+      required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory', 'recommended_tools', 'unattended_commit_limit'],
     },
     annotations: {
       readOnlyHint: true,
