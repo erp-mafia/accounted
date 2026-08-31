@@ -146,18 +146,41 @@ describe('syncConnectorEntitlements', () => {
     ])
   })
 
-  it('removes every connector grant on 401/403 (freeze-and-retain)', async () => {
-    for (const status of [401, 403]) {
+  it('removes every connector grant on a 401/403 carrying a connector rejection code (freeze-and-retain)', async () => {
+    for (const [status, code] of [[401, 'CONNECTOR_KEY_INVALID'], [403, 'CONNECTOR_KEY_SUSPENDED'], [401, 'CONNECTOR_KEY_MISSING']] as const) {
       const { supabase, upserts, deletes, setDeleteCount } = makeSupabase([C1])
       setDeleteCount(4)
       const result = await syncConnectorEntitlements(supabase, {
         config: CONFIG,
-        fetchImpl: vi.fn().mockResolvedValue(jsonResponse(status, { error: 'Invalid connector key' })),
+        fetchImpl: vi.fn().mockResolvedValue(jsonResponse(status, { error: 'rejected', code })),
         now: NOW,
       })
       expect(result).toMatchObject({ outcome: 'revoked', httpStatus: status, grantsDeleted: 4 })
       expect(upserts).toHaveLength(0)
       expect(deletes[0].filters).toEqual([['eq', 'source', 'connector']])
+    }
+  })
+
+  it('keeps every grant on a 401/403 WITHOUT a connector rejection code (WAF challenge, edge protection, egress proxy)', async () => {
+    // A bare-status 401/403 can come from layers where the hosted app never
+    // ran. Only the hosted route's own rejection code proves revocation;
+    // anything else must not destroy the 72h offline cache.
+    const bodies: Array<[number, () => Response]> = [
+      [403, () => new Response('<html>Attack challenge</html>', { status: 403, headers: { 'content-type': 'text/html' } })],
+      [401, () => new Response('Authentication Required', { status: 401 })],
+      [401, () => jsonResponse(401, { error: 'edge auth', code: 'SOME_OTHER_CODE' })],
+      [403, () => jsonResponse(403, { message: 'forbidden by proxy' })],
+    ]
+    for (const [status, make] of bodies) {
+      const { supabase, upserts, deletes } = makeSupabase([C1])
+      const result = await syncConnectorEntitlements(supabase, {
+        config: CONFIG,
+        fetchImpl: vi.fn().mockResolvedValue(make()),
+        now: NOW,
+      })
+      expect(result).toMatchObject({ outcome: 'server_error', httpStatus: status, grantsDeleted: 0 })
+      expect(upserts).toHaveLength(0)
+      expect(deletes).toHaveLength(0)
     }
   })
 

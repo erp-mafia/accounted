@@ -122,12 +122,39 @@ export async function syncConnectorEntitlements(
   }
 
   if (response.status === 401 || response.status === 403) {
-    const grantsDeleted = await deleteConnectorGrants(supabase, null)
-    log.warn('connector sync: key rejected by hosted service, connector grants removed', {
+    // Delete the grant cache ONLY on a genuine connector rejection, proven by
+    // the hosted route's own JSON body code (with-connector-auth always sends
+    // one). A bare-status 401/403 also comes from layers where the app never
+    // ran: a Vercel WAF challenge page, edge deployment protection, an egress
+    // proxy at the self-host. Trusting the status alone let any of those wipe
+    // a paying instance's 72h offline grace within the hour: the same failure
+    // class as the RPC-error-to-401 mapping, one layer up. Anything without a
+    // known rejection code keeps the grants and expires naturally.
+    let rejectionCode: string | null = null
+    try {
+      const body = (await response.clone().json()) as { code?: string }
+      if (typeof body.code === 'string') rejectionCode = body.code
+    } catch {
+      // Non-JSON body (challenge/error page): not a connector rejection.
+    }
+    const isConnectorRejection =
+      rejectionCode === 'CONNECTOR_KEY_MISSING' ||
+      rejectionCode === 'CONNECTOR_KEY_INVALID' ||
+      rejectionCode === 'CONNECTOR_KEY_SUSPENDED'
+    if (isConnectorRejection) {
+      const grantsDeleted = await deleteConnectorGrants(supabase, null)
+      log.warn('connector sync: key rejected by hosted service, connector grants removed', {
+        httpStatus: response.status,
+        code: rejectionCode,
+        grantsDeleted,
+      })
+      return { outcome: 'revoked', companies: companyIds.length, grantsUpserted: 0, grantsDeleted, httpStatus: response.status }
+    }
+    log.warn('connector sync: 401/403 without a connector rejection code (edge/proxy?), keeping existing grants', {
       httpStatus: response.status,
-      grantsDeleted,
+      code: rejectionCode,
     })
-    return { outcome: 'revoked', companies: companyIds.length, grantsUpserted: 0, grantsDeleted, httpStatus: response.status }
+    return { outcome: 'server_error', companies: companyIds.length, grantsUpserted: 0, grantsDeleted: 0, httpStatus: response.status }
   }
   if (!response.ok) {
     log.warn('connector sync: hosted service error, keeping existing grants', { httpStatus: response.status })
