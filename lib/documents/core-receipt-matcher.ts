@@ -38,6 +38,24 @@ export const CONVERTED_AMOUNT_TOLERANCE_PERCENT = 0.09
 export const MIN_MATCH_CONFIDENCE = 0.4
 
 /**
+ * Flat discount on a confidence scored from a prominentAmounts fallback
+ * (bankintyg, avtal, contracts: no invoice-style total). Such an amount is one
+ * of possibly several figures printed on the document rather than "what the
+ * buyer pays", so an agreement is real evidence but must stay weaker than a
+ * total agreeing.
+ *
+ * A discount FACTOR, deliberately not a reduced amount weight inside
+ * calculateMatchConfidence: the confidence is normalised over the included
+ * weights, so shrinking the amount weight both let a date+amount-only fallback
+ * reach 1.0 ((0.25+0.3)/0.55) and, when the amount DISAGREED, shrank the
+ * penalty so a wrong fallback amount outscored a wrong invoice total
+ * (0.67 vs 0.60). Scoring at full weight and discounting the result keeps
+ * agreement capped below certainty and disagreement at least as damning as it
+ * is for a real total.
+ */
+export const FALLBACK_CONFIDENCE_FACTOR = 0.85
+
+/**
  * Normalize a merchant name for comparison.
  * Removes special characters, Swedish company suffixes, and extra whitespace.
  *
@@ -261,6 +279,55 @@ export function amountVarianceForMatch(
 
   // Cross-currency with no rate → not comparable.
   return null
+}
+
+export interface ProminentAmountMatch {
+  variance: number
+  /** The printed amount that produced the variance. */
+  amount: number
+  /** The document's own label for it ("Insatt belopp", "Engångspris"). */
+  label: string | null
+}
+
+/**
+ * Fallback amount variance for documents with no invoice-style total but one
+ * or more prominent amounts (bankintyg "Insatt belopp", an agreement's
+ * "Engångspris", ...). Tries each amount against the transaction and returns
+ * the smallest variance, or null when none is comparable.
+ *
+ * Same-currency only by construction: prominent amounts never carry a resolved
+ * SEK value, so a cross-currency pair stays incomparable (receiptSek = null in
+ * amountVarianceForMatch) exactly like a cross-currency total without a rate.
+ * Returns the closest amount with its variance and the document's own label.
+ *
+ * Callers must multiply the resulting confidence by
+ * FALLBACK_CONFIDENCE_FACTOR (see its comment for why a factor, not a weight),
+ * and should surface WHICH amount matched: a bare "Exakt belopp" with no
+ * number attached is certainty the reader cannot check.
+ */
+export function bestProminentAmountVariance(
+  amounts: readonly { amount: number; label: string | null }[],
+  receiptCurrency: string,
+  txAmount: number,
+  txCurrency: string,
+  txSek: number,
+): ProminentAmountMatch | null {
+  let best: ProminentAmountMatch | null = null
+  for (const candidate of amounts) {
+    if (!Number.isFinite(candidate.amount)) continue
+    const variance = amountVarianceForMatch(
+      candidate.amount,
+      receiptCurrency,
+      null,
+      txAmount,
+      txCurrency,
+      txSek,
+    )
+    if (variance != null && (best == null || variance < best.variance)) {
+      best = { variance, amount: candidate.amount, label: candidate.label }
+    }
+  }
+  return best
 }
 
 /**

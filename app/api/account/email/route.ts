@@ -12,6 +12,11 @@ const ChangeEmailSchema = z.object({
   email: z.string().trim().toLowerCase().max(320).pipe(z.string().email()),
 })
 
+// How long a pending change is considered fresh enough that re-submitting the
+// same address is a no-op instead of a re-send. Kept well under the token
+// expiry so a user with a dead link can always get new mails.
+const FRESH_PENDING_MS = 30 * 60 * 1000
+
 /**
  * POST /api/account/email
  *
@@ -50,12 +55,24 @@ export async function POST(request: Request) {
   }
 
   // Re-requesting the address that is already awaiting confirmation is a
-  // no-op success rather than another GoTrue round trip (which would re-send
-  // both confirmation mails and eat into the send rate limit). new_email is
-  // absent on the claims-mapped fast path; then GoTrue's own rate limit is
-  // the backstop.
+  // no-op success ONLY while the pending mails are fresh (protects the send
+  // rate limit against double-clicks). Once they are older than that, the
+  // confirmation links may have expired and the user's only recovery path is
+  // re-running the change, so fall through to GoTrue, which restarts the
+  // change and re-sends both mails. new_email/email_change_sent_at are absent
+  // on the claims-mapped fast path; then GoTrue's own rate limit is the
+  // backstop.
   if (user.new_email && email === user.new_email.toLowerCase()) {
-    return NextResponse.json({ data: { ok: true, pending_email: email } })
+    const sentAt = user.email_change_sent_at
+      ? Date.parse(user.email_change_sent_at)
+      : Number.NaN
+    const fresh =
+      Number.isFinite(sentAt) && Date.now() - sentAt < FRESH_PENDING_MS
+    if (fresh) {
+      return NextResponse.json({
+        data: { ok: true, pending_email: email, resent: false },
+      })
+    }
   }
 
   // Trusted-origin resolution, not request.url: behind a proxy request.url
@@ -98,5 +115,7 @@ export async function POST(request: Request) {
 
   log.info('email change requested', { userId: user.id })
 
-  return NextResponse.json({ data: { ok: true, pending_email: email } })
+  return NextResponse.json({
+    data: { ok: true, pending_email: email, resent: true },
+  })
 }

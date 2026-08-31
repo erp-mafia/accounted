@@ -237,6 +237,10 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_bulk_book_transactions:              'transactions:write',
   gnubok_bulk_book_inbox_items:               'transactions:write',
   gnubok_auto_match_period:                   'transactions:write',
+  // Skattekonto row booking writes a verifikat from an outside (SKV) row:
+  // same scope family as reconcile_residual / bulk_book above.
+  gnubok_book_skattekonto_row:                'transactions:write',
+  gnubok_book_skattekonto_rows:               'transactions:write',
   // Customers
   gnubok_list_customers:                  'customers:read',
   gnubok_create_customer:                 'customers:write',
@@ -251,6 +255,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_invoice_deliveries:          'invoices:read',
   gnubok_create_invoice:                  'invoices:write',
   gnubok_update_invoice:                  'invoices:write',
+  gnubok_delete_draft_invoice:            'invoices:write',
   gnubok_send_invoice:                    'invoices:write',
   gnubok_mark_invoice_as_paid:            'invoices:write',
   gnubok_mark_invoice_as_sent:            'invoices:write',
@@ -320,6 +325,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_absence:                    'payroll:read',
   gnubok_update_payslip_line:             'payroll:write',
   gnubok_set_run_salary:                  'payroll:write',
+  gnubok_update_salary_run:               'payroll:write',
   gnubok_register_absence:                'payroll:write',
   gnubok_delete_absence:                  'payroll:write',
   gnubok_create_employee:                 'payroll:write',
