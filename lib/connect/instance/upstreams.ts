@@ -1,4 +1,8 @@
 import { getConnectorConfig } from './config'
+import {
+  hasOwnEnableBankingCredentials,
+  hasOwnSkatteverketCredentials,
+} from '@/lib/entitlements/own-credentials'
 
 /**
  * Instance-side connector routing for the bank and Skatteverket upstreams.
@@ -9,26 +13,18 @@ import { getConnectorConfig } from './config'
  * hosted byte-identical. A self-host that pastes GNUBOK_CONNECTOR_KEY and
  * leaves ENABLE_BANKING_PRIVATE_KEY / SKATTEVERKET_OAUTH2_CLIENT_ID unset gets
  * routed through the hosted proxy instead.
+ *
+ * The own-credentials checks live in lib/entitlements/own-credentials.ts:
+ * they were forward-ported into the entitlement partition (PR #1747) so the
+ * gate and this routing seam can never disagree about what "own credentials"
+ * means. Re-exported here for the instance-side callers.
  */
 
 export const CONNECTOR_COMPANY_HEADER = 'X-Connector-Company'
 export const CONNECTOR_UPSTREAM_AUTH_HEADER = 'X-Connector-Upstream-Authorization'
 export const CONNECTOR_UPSTREAM_CONTENT_TYPE_HEADER = 'X-Connector-Upstream-Content-Type'
 
-/** True when the instance would use its own Enable Banking credentials. */
-export function hasOwnEnableBankingCredentials(): boolean {
-  return !!(
-    process.env.ENABLE_BANKING_PRIVATE_KEY_PRODUCTION ||
-    process.env.ENABLE_BANKING_PRIVATE_KEY ||
-    process.env.ENABLE_BANKING_APP_ID_PRODUCTION ||
-    process.env.ENABLE_BANKING_APP_ID
-  )
-}
-
-/** True when the instance would use its own Skatteverket OAuth client. */
-export function hasOwnSkatteverketCredentials(): boolean {
-  return !!(process.env.SKATTEVERKET_OAUTH2_CLIENT_ID || process.env.SKATTEVERKET_APIGW_CLIENT_ID)
-}
+export { hasOwnEnableBankingCredentials, hasOwnSkatteverketCredentials }
 
 export interface ConnectorUpstream {
   /** Base URL to send upstream requests to (the hosted proxy). */
