@@ -1,0 +1,326 @@
+{
+  "benchVersion": "v1",
+  "generatedAt": "2026-08-31T11:56:07.153Z",
+  "suites": {
+    "booking": [
+      {
+        "model": "claude-sonnet-5",
+        "label": "Claude Sonnet 5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 37,
+        "pass": 34,
+        "passRate": 0.919,
+        "wilsonLo": 0.862,
+        "wilsonHi": 0.954,
+        "totalCostUsd": 2.134,
+        "avgCostUsd": 0.05767,
+        "avgTurns": 1.027,
+        "avgDurationMs": 3692,
+        "extras": {
+          "accountAccuracy": 0.946,
+          "vatAccuracy": 0.973,
+          "ece": 0.125,
+          "parseFailures": 0
+        }
+      },
+      {
+        "model": "claude-opus-5",
+        "label": "Claude Opus 5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 37,
+        "pass": 34,
+        "passRate": 0.919,
+        "wilsonLo": 0.862,
+        "wilsonHi": 0.954,
+        "totalCostUsd": 5.142,
+        "avgCostUsd": 0.13898,
+        "avgTurns": 1,
+        "avgDurationMs": 2567,
+        "extras": {
+          "accountAccuracy": 0.919,
+          "vatAccuracy": 1,
+          "ece": 0.048,
+          "parseFailures": 0
+        }
+      },
+      {
+        "model": "claude-sonnet-4-6",
+        "label": "Claude Sonnet 4.6",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 37,
+        "pass": 31,
+        "passRate": 0.838,
+        "wilsonLo": 0.768,
+        "wilsonHi": 0.889,
+        "totalCostUsd": 2.558,
+        "avgCostUsd": 0.06913,
+        "avgTurns": 1,
+        "avgDurationMs": 2183,
+        "extras": {
+          "accountAccuracy": 0.838,
+          "vatAccuracy": 1,
+          "ece": 0.052,
+          "parseFailures": 0
+        }
+      },
+      {
+        "model": "claude-haiku-4-5",
+        "label": "Claude Haiku 4.5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 37,
+        "pass": 22,
+        "passRate": 0.595,
+        "wilsonLo": 0.512,
+        "wilsonHi": 0.672,
+        "totalCostUsd": 0.89,
+        "avgCostUsd": 0.02406,
+        "avgTurns": 1,
+        "avgDurationMs": 3977,
+        "extras": {
+          "accountAccuracy": 0.595,
+          "vatAccuracy": 1,
+          "ece": 0.348,
+          "parseFailures": 0
+        }
+      }
+    ],
+    "reasoning": [
+      {
+        "model": "claude-opus-5",
+        "label": "Claude Opus 5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 36,
+        "pass": 32,
+        "passRate": 0.889,
+        "wilsonLo": 0.826,
+        "wilsonHi": 0.931,
+        "totalCostUsd": 0.197,
+        "avgCostUsd": 0.00547,
+        "avgTurns": 1,
+        "avgDurationMs": 3061,
+        "extras": {
+          "ece": 0.047,
+          "parseFailures": 0
+        }
+      },
+      {
+        "model": "claude-sonnet-5",
+        "label": "Claude Sonnet 5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 36,
+        "pass": 31,
+        "passRate": 0.861,
+        "wilsonLo": 0.794,
+        "wilsonHi": 0.909,
+        "totalCostUsd": 0.038,
+        "avgCostUsd": 0.00105,
+        "avgTurns": 1,
+        "avgDurationMs": 1735,
+        "extras": {
+          "ece": 0.084,
+          "parseFailures": 0
+        }
+      },
+      {
+        "model": "claude-sonnet-4-6",
+        "label": "Claude Sonnet 4.6",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 36,
+        "pass": 26,
+        "passRate": 0.722,
+        "wilsonLo": 0.642,
+        "wilsonHi": 0.79,
+        "totalCostUsd": 0.053,
+        "avgCostUsd": 0.00147,
+        "avgTurns": 1,
+        "avgDurationMs": 1399,
+        "extras": {
+          "ece": 0.204,
+          "parseFailures": 0
+        }
+      },
+      {
+        "model": "claude-haiku-4-5",
+        "label": "Claude Haiku 4.5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 36,
+        "pass": 8,
+        "passRate": 0.222,
+        "wilsonLo": 0.161,
+        "wilsonHi": 0.298,
+        "totalCostUsd": 0.023,
+        "avgCostUsd": 0.00064,
+        "avgTurns": 1,
+        "avgDurationMs": 1143,
+        "extras": {
+          "ece": 0.694,
+          "parseFailures": 0
+        }
+      }
+    ],
+    "extraction": [
+      {
+        "model": "claude-haiku-4-5",
+        "label": "Claude Haiku 4.5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 12,
+        "pass": 10,
+        "passRate": 0.833,
+        "wilsonLo": 0.701,
+        "wilsonHi": 0.914,
+        "totalCostUsd": 0.04,
+        "avgCostUsd": 0.00332,
+        "avgTurns": 1,
+        "avgDurationMs": 2813,
+        "extras": {
+          "fieldAccuracy": 0.986
+        }
+      },
+      {
+        "model": "claude-sonnet-4-6",
+        "label": "Claude Sonnet 4.6",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 12,
+        "pass": 10,
+        "passRate": 0.833,
+        "wilsonLo": 0.701,
+        "wilsonHi": 0.914,
+        "totalCostUsd": 0.118,
+        "avgCostUsd": 0.0098,
+        "avgTurns": 1,
+        "avgDurationMs": 4179,
+        "extras": {
+          "fieldAccuracy": 0.981
+        }
+      },
+      {
+        "model": "claude-sonnet-5",
+        "label": "Claude Sonnet 5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 12,
+        "pass": 10,
+        "passRate": 0.833,
+        "wilsonLo": 0.701,
+        "wilsonHi": 0.914,
+        "totalCostUsd": 0.114,
+        "avgCostUsd": 0.00948,
+        "avgTurns": 1,
+        "avgDurationMs": 4433,
+        "extras": {
+          "fieldAccuracy": 0.991
+        }
+      },
+      {
+        "model": "claude-opus-5",
+        "label": "Claude Opus 5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 12,
+        "pass": 10,
+        "passRate": 0.833,
+        "wilsonLo": 0.701,
+        "wilsonHi": 0.914,
+        "totalCostUsd": 0.287,
+        "avgCostUsd": 0.02395,
+        "avgTurns": 1,
+        "avgDurationMs": 4239,
+        "extras": {
+          "fieldAccuracy": 0.977
+        }
+      }
+    ],
+    "ledger-agent": [
+      {
+        "model": "claude-sonnet-4-6",
+        "label": "Claude Sonnet 4.6",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 3,
+        "pass": 3,
+        "passRate": 1,
+        "wilsonLo": 0.75,
+        "wilsonHi": 1,
+        "totalCostUsd": 0.756,
+        "avgCostUsd": 0.25206,
+        "avgTurns": 4,
+        "avgDurationMs": 19475,
+        "extras": {
+          "totalToolCalls": 16,
+          "totalToolErrors": 1,
+          "invariantRefusals": 0
+        }
+      },
+      {
+        "model": "claude-sonnet-5",
+        "label": "Claude Sonnet 5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 3,
+        "pass": 3,
+        "passRate": 1,
+        "wilsonLo": 0.75,
+        "wilsonHi": 1,
+        "totalCostUsd": 0.432,
+        "avgCostUsd": 0.1441,
+        "avgTurns": 3.667,
+        "avgDurationMs": 25952,
+        "extras": {
+          "totalToolCalls": 15,
+          "totalToolErrors": 0,
+          "invariantRefusals": 0
+        }
+      },
+      {
+        "model": "claude-opus-5",
+        "label": "Claude Opus 5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 3,
+        "pass": 3,
+        "passRate": 1,
+        "wilsonLo": 0.75,
+        "wilsonHi": 1,
+        "totalCostUsd": 1.915,
+        "avgCostUsd": 0.63823,
+        "avgTurns": 5,
+        "avgDurationMs": 44652,
+        "extras": {
+          "totalToolCalls": 23,
+          "totalToolErrors": 0,
+          "invariantRefusals": 0
+        }
+      },
+      {
+        "model": "claude-haiku-4-5",
+        "label": "Claude Haiku 4.5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 3,
+        "pass": 1,
+        "passRate": 0.333,
+        "wilsonLo": 0.136,
+        "wilsonHi": 0.614,
+        "totalCostUsd": 0.2,
+        "avgCostUsd": 0.06678,
+        "avgTurns": 3.333,
+        "avgDurationMs": 11222,
+        "extras": {
+          "totalToolCalls": 13,
+          "totalToolErrors": 0,
+          "invariantRefusals": 0
+        }
+      }
+    ]
+  }
+}

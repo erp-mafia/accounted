@@ -6,6 +6,10 @@
   "scripts": {
     "setup:extensions": "npx tsx scripts/generate-extension-registry.ts",
     "skills:generate": "npx tsx scripts/generate-skill-bodies.ts",
+    "bench": "npx tsx bench/src/run.ts",
+    "bench:aggregate": "npx tsx bench/src/aggregate.ts",
+    "bench:validate": "npx tsx bench/scripts/validate-tasks.ts",
+    "bench:selftest": "npx tsx bench/scripts/selftest-ledger-env.ts",
     "skills:check": "npx tsx scripts/generate-skill-bodies.ts --check",
     "apiskill:generate": "npx tsx --conditions react-server scripts/api-skill/generate.ts",
     "apiskill:check": "npx tsx --conditions react-server scripts/api-skill/generate.ts --check",

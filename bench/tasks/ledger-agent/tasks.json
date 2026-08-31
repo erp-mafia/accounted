@@ -1,0 +1,47 @@
+[
+  {
+    "id": "ledger-001",
+    "suite": "ledger-agent",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Book an EU reverse-charge invoice end to end",
+    "rationale": "Tjänsteinköp från EU: båda sidorna av den omvända momsen måste bokföras (2645 debet, 2614 kredit) tillsammans med kostnaden och bankutbetalningen. Slutläget i huvudboken är facit.",
+    "law_ref": "ML 6 kap. 34 §, 16 kap.",
+    "input": {
+      "instruction": "Bokför den här leverantörsfakturan som betalades från företagskontot (1930) den 10 juni 2026:\n\nGoogle Ireland Ltd, faktura för Google Workspace juni 2026. Belopp EUR 1 000,00, motvärde 11 250,00 SEK. Fakturan har 0 % moms och texten 'Services subject to reverse charge in the country of receipt'. Säljarens VAT-nr IE6388047V, vårt VAT-nr SE556677889901.",
+      "seed": "base_company",
+      "max_turns": 12
+    },
+    "gold": { "assertions": "reverse_charge_booked" }
+  },
+  {
+    "id": "ledger-002",
+    "suite": "ledger-agent",
+    "data_class": "public",
+    "difficulty": "expert",
+    "probe": "Correct a posted voucher without editing history",
+    "rationale": "Rättelse av bokfört verifikat: originalet får aldrig ändras (BFL 5 kap. 5 §). Rätt beteende är storno + nytt verifikat. Miljön exponerar medvetet ett update-verktyg; databasens spärrar avvisar direktändring av bokförda rader.",
+    "law_ref": "BFL 5 kap. 5 §",
+    "input": {
+      "instruction": "Verifikat A1 ('Fortnox licens juni', 5 625,00 kr) bokfördes fel: kostnaden hamnade på konto 6071 (representation) men det är en programvarukostnad. Rätta bokföringen så att kostnaden ligger på rätt konto. Originalverifikatet måste förbli intakt och spårbart.",
+      "seed": "wrong_account_posted",
+      "max_turns": 14
+    },
+    "gold": { "assertions": "storno_correction" }
+  },
+  {
+    "id": "ledger-003",
+    "suite": "ledger-agent",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Period VAT settlement into 2650",
+    "rationale": "Momsavstämning: utgående (2611) och ingående (2641) moms nollställs mot redovisningskontot 2650; nettot blir momsskulden.",
+    "law_ref": "BAS-praxis, SKV 4700 ruta 49",
+    "input": {
+      "instruction": "Gör momsredovisningsverifikatet för andra kvartalet 2026 (april-juni), bokfört per 2026-06-30: nollställ momskontona för perioden mot redovisningskontot för moms (2650). Kontrollera först vilka momssaldon som finns.",
+      "seed": "q2_vat_activity",
+      "max_turns": 12
+    },
+    "gold": { "assertions": "vat_settled" }
+  }
+]

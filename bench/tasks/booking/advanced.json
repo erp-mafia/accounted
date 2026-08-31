@@ -1,0 +1,687 @@
+[
+  {
+    "id": "booking-020",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "EU SaaS under reverse charge (the 2614-vs-5420 production failure class)",
+    "rationale": "Tjänst från EU-leverantör under huvudregeln: kostnaden på 5420, momsen hanteras med omvänd betalningsskyldighet (2614/2645, ruta 21/30/48). Vanligaste felet är att bokföra som svensk moms eller att låta momskontot karakterisera köpet. BAS-praxis tillåter även underlagskontona 45xx (rutorna härleds från dem i SKV 4700-mappningen), därför accepteras de.",
+    "law_ref": "ML 6 kap. 34 §, 16 kap.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "IT-konsultbolag"
+      },
+      "transaction": {
+        "date": "2026-05-03",
+        "amount": -1352.0,
+        "currency": "SEK",
+        "counterpart": "Google Ireland Ltd",
+        "description": "Google Workspace maj",
+        "underlag": "Google Workspace Business Standard EUR 120,00 (motvärde 1 352,00 SEK). VAT 0 %. 'Services subject to reverse charge in the country of receipt.' Säljarens VAT-nr IE6388047V, köparens VAT-nr SE556677889901."
+      }
+    },
+    "gold": {
+      "account": "5420",
+      "acceptable_accounts": [
+        "6540",
+        "4535"
+      ],
+      "vat_treatment": "reverse_charge_services"
+    }
+  },
+  {
+    "id": "booking-021",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "EU ad platform under reverse charge",
+    "rationale": "Annonsering från Meta Ireland: kostnad 5910, omvänd betalningsskyldighet. BAS-praxis tillåter även underlagskontona 45xx (rutorna härleds från dem i SKV 4700-mappningen), därför accepteras de.",
+    "law_ref": "ML 6 kap. 34 §",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "E-handelsbolag"
+      },
+      "transaction": {
+        "date": "2026-04-30",
+        "amount": -8452.5,
+        "currency": "SEK",
+        "counterpart": "Meta Platforms Ireland Ltd",
+        "description": "Facebook Ads april",
+        "underlag": "Advertising services EUR 750,00 (8 452,50 SEK). VAT 0 %, reverse charge. IE9692928F."
+      }
+    },
+    "gold": {
+      "account": "5910",
+      "acceptable_accounts": [
+        "5900",
+        "4535",
+        "5970"
+      ],
+      "vat_treatment": "reverse_charge_services"
+    }
+  },
+  {
+    "id": "booking-022",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Non-EU service still self-assessed under the main rule",
+    "rationale": "Tjänst från tredjeland (USA) beskattas där köparen finns: samma omvända betalningsskyldighet (ruta 22 i stället för 21). Kostnaden är en IT-tjänst/programvara. BAS-praxis tillåter även underlagskontona 45xx (rutorna härleds från dem i SKV 4700-mappningen), därför accepteras de.",
+    "law_ref": "ML 6 kap. 34 §",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "AI-startup"
+      },
+      "transaction": {
+        "date": "2026-06-01",
+        "amount": -540.0,
+        "currency": "SEK",
+        "counterpart": "OpenAI LLC",
+        "description": "API usage May",
+        "underlag": "OpenAI API usage USD 50.00 (540,00 SEK). No VAT charged."
+      }
+    },
+    "gold": {
+      "account": "5420",
+      "acceptable_accounts": [
+        "6540",
+        "4531"
+      ],
+      "vat_treatment": "reverse_charge_services"
+    }
+  },
+  {
+    "id": "booking-023",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Intra-EU goods acquisition",
+    "rationale": "Varuinköp från EU med VAT-nummer: unionsinternt förvärv. Kostnad på 4515 (25 %-varor), ruta 20/30/48.",
+    "law_ref": "ML 5 kap. 22-25 §§",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Elektroniktillverkare"
+      },
+      "transaction": {
+        "date": "2026-03-18",
+        "amount": -23150.0,
+        "currency": "SEK",
+        "counterpart": "Würth Elektronik GmbH",
+        "description": "Komponentorder 8817",
+        "underlag": "Electronic components EUR 2 050,00 (23 150,00 SEK). Innergemeinschaftliche Lieferung, 0 % USt. DE-VAT DE813496107, buyer VAT SE556677889901."
+      }
+    },
+    "gold": {
+      "account": "4515",
+      "acceptable_accounts": [
+        "4010",
+        "4000"
+      ],
+      "vat_treatment": "reverse_charge_goods"
+    }
+  },
+  {
+    "id": "booking-024",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Import of goods from outside the EU",
+    "rationale": "Import från tredjeland: varukostnaden bokförs som inköp, importmomsen redovisas via momsdeklarationen (ruta 50/60/48) sedan 2015, inte till Tullverket för momsregistrerade.",
+    "law_ref": "ML, importmoms sedan 2015",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Cykelbutik"
+      },
+      "transaction": {
+        "date": "2026-05-14",
+        "amount": -32400.0,
+        "currency": "SEK",
+        "counterpart": "Taipei Cycle Co Ltd",
+        "description": "Order 2210 cykeldelar",
+        "underlag": "Bicycle parts USD 3 000 (32 400,00 SEK). Export invoice, no VAT. Incoterm DAP. Förtullning via DHL."
+      }
+    },
+    "gold": {
+      "account": "4010",
+      "acceptable_accounts": [
+        "4000",
+        "4545"
+      ],
+      "vat_treatment": "import"
+    }
+  },
+  {
+    "id": "booking-025",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Domestic reverse charge for construction services",
+    "rationale": "Byggtjänst mellan byggföretag: omvänd byggmoms. Underentreprenad på 4610, ingen moms på fakturan. BAS-praxis tillåter även underlagskontona 45xx (rutorna härleds från dem i SKV 4700-mappningen), därför accepteras de.",
+    "law_ref": "ML 16 kap. (omvänd byggmoms)",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Byggentreprenör (utför byggtjänster)"
+      },
+      "transaction": {
+        "date": "2026-04-25",
+        "amount": -62500.0,
+        "currency": "SEK",
+        "counterpart": "Eldelen Installation AB",
+        "description": "Faktura 1041 elinstallation etapp 2",
+        "underlag": "Elinstallationsarbeten Brf Eken 62 500,00. Omvänd betalningsskyldighet för byggtjänster gäller. Köparens VAT-nr SE556677889901."
+      }
+    },
+    "gold": {
+      "account": "4610",
+      "acceptable_accounts": [
+        "4600",
+        "4670",
+        "4425"
+      ],
+      "vat_treatment": "reverse_charge_construction"
+    }
+  },
+  {
+    "id": "booking-026",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Client lunch: representation with capped VAT",
+    "rationale": "Extern representation: måltid är inte avdragsgill inkomstskattemässigt sedan 2017 (6072), och momsavdraget är begränsat till underlag om 300 kr/person.",
+    "law_ref": "ML 13 kap. 24-25 §§, IL 16 kap. 2 §",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Managementkonsult"
+      },
+      "transaction": {
+        "date": "2026-05-19",
+        "amount": -896.0,
+        "currency": "SEK",
+        "counterpart": "Restaurang Tranan",
+        "description": "Affärslunch med kund, 2 personer",
+        "underlag": "Lunch 2 kuvert. Mat 800,00 inkl 12 % moms, dryck (öl) 96,00 inkl 25 % moms. Syfte: avtalsdiskussion med kund X."
+      }
+    },
+    "gold": {
+      "account": "6072",
+      "acceptable_accounts": [
+        "6071"
+      ],
+      "vat_treatment": "representation_capped"
+    }
+  },
+  {
+    "id": "booking-027",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Staff Christmas party: internal representation",
+    "rationale": "Personalfest är personalrepresentation: måltidsdelen ej avdragsgill (7632), momsavdrag enligt schablon/tak.",
+    "law_ref": "ML 13 kap. 24-25 §§",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "IT-konsultbolag med 12 anställda"
+      },
+      "transaction": {
+        "date": "2026-01-09",
+        "amount": -14400.0,
+        "currency": "SEK",
+        "counterpart": "Restaurang Hasselbacken",
+        "description": "Julfest personal 12 personer",
+        "underlag": "Julbord 12 kuvert inkl dryck. Mat 12 000 inkl moms 12 %, alkohol 2 400 inkl moms 25 %."
+      }
+    },
+    "gold": {
+      "account": "7632",
+      "acceptable_accounts": [
+        "7631"
+      ],
+      "vat_treatment": "representation_capped"
+    }
+  },
+  {
+    "id": "booking-028",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Laptop under the half price-base-amount threshold is an expense",
+    "rationale": "Dator 14 000 kr exkl moms understiger halvt prisbasbelopp (29 600 kr 2026): förbrukningsinventarie 5410, inte anläggningstillgång.",
+    "law_ref": "IL 18 kap. 4 §; halvt prisbasbelopp 2026 = 29 600 kr",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Arkitektkontor"
+      },
+      "transaction": {
+        "date": "2026-02-06",
+        "amount": -17500.0,
+        "currency": "SEK",
+        "counterpart": "Webhallen",
+        "description": "Bärbar dator till anställd",
+        "underlag": "MacBook Air 14 000,00 exkl moms, moms 25 % 3 500,00."
+      }
+    },
+    "gold": {
+      "account": "5410",
+      "acceptable_accounts": [
+        "5411"
+      ],
+      "vat_treatment": "domestic_25"
+    }
+  },
+  {
+    "id": "booking-029",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Machine above the threshold is a fixed asset",
+    "rationale": "Maskin 85 000 kr exkl moms överstiger halvt prisbasbelopp och har flerårig livslängd: aktiveras som inventarie 1221, kostnadsförs via avskrivningar.",
+    "law_ref": "IL 18 kap., BFNAR",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Snickeri"
+      },
+      "transaction": {
+        "date": "2026-03-02",
+        "amount": -106250.0,
+        "currency": "SEK",
+        "counterpart": "Maskinpartner Sverige AB",
+        "description": "CNC-fräs inkl installation",
+        "underlag": "CNC-maskin 85 000,00 exkl moms, moms 25 % 21 250,00. Beräknad livslängd 8 år."
+      }
+    },
+    "gold": {
+      "account": "1221",
+      "acceptable_accounts": [
+        "1220",
+        "1210",
+        "1211"
+      ],
+      "vat_treatment": "domestic_25"
+    }
+  },
+  {
+    "id": "booking-030",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Passenger car lease: only half the VAT is deductible",
+    "rationale": "Leasing av personbil: 5615, och endast halva momsen är avdragsgill.",
+    "law_ref": "ML 13 kap. 18 §",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Säljbolag"
+      },
+      "transaction": {
+        "date": "2026-05-05",
+        "amount": -5625.0,
+        "currency": "SEK",
+        "counterpart": "Volvo Car Financial Services",
+        "description": "Billeasing maj tjänstebil",
+        "underlag": "Leasingavgift personbil 4 500,00 exkl moms, moms 25 % 1 125,00."
+      }
+    },
+    "gold": {
+      "account": "5615",
+      "acceptable_accounts": [
+        "5610",
+        "5220"
+      ],
+      "vat_treatment": "domestic_25_half_deduction"
+    }
+  },
+  {
+    "id": "booking-031",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Fuel for company cars",
+    "rationale": "Drivmedel för personbil: 5611. Momsen på drivmedel är fullt avdragsgill när bilen används i verksamheten.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Säljbolag"
+      },
+      "transaction": {
+        "date": "2026-05-11",
+        "amount": -1125.0,
+        "currency": "SEK",
+        "counterpart": "OKQ8",
+        "description": "Tankning tjänstebil",
+        "underlag": "Diesel 900,00 exkl moms, moms 25 % 225,00."
+      }
+    },
+    "gold": {
+      "account": "5611",
+      "acceptable_accounts": [
+        "5610"
+      ],
+      "vat_treatment": "domestic_25"
+    }
+  },
+  {
+    "id": "booking-032",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Membership fee: non-deductible, no VAT",
+    "rationale": "Medlemsavgift till branschförening är inte avdragsgill (6982) och momsfri.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Byggentreprenör"
+      },
+      "transaction": {
+        "date": "2026-01-20",
+        "amount": -2500.0,
+        "currency": "SEK",
+        "counterpart": "Byggföretagen",
+        "description": "Medlemsavgift 2026",
+        "underlag": "Medlemsavgift 2 500,00. Momsfri. (Serviceavgift faktureras separat.)"
+      }
+    },
+    "gold": {
+      "account": "6982",
+      "acceptable_accounts": [
+        "6981",
+        "6980"
+      ],
+      "vat_treatment": "no_vat"
+    }
+  },
+  {
+    "id": "booking-033",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Gym membership for staff: wellness benefit at 6 % VAT",
+    "rationale": "Friskvård (gymkort) är en personalvårdsförmån: 7699/7690. Motionstjänster har 6 % moms.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Redovisningsbyrå med 6 anställda"
+      },
+      "transaction": {
+        "date": "2026-02-01",
+        "amount": -3180.0,
+        "currency": "SEK",
+        "counterpart": "SATS Sverige AB",
+        "description": "Gymkort 6 anställda februari",
+        "underlag": "Träningskort 6 st, 3 000,00 exkl moms, moms 6 % 180,00."
+      }
+    },
+    "gold": {
+      "account": "7699",
+      "acceptable_accounts": [
+        "7690"
+      ],
+      "vat_treatment": "domestic_6"
+    }
+  },
+  {
+    "id": "booking-034",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Coffee and fika for the office",
+    "rationale": "Förbrukning för personalen (kaffe, frukt) är en personalkostnad 7690/7699, 12 % moms på livsmedel (25 % före 1 april 2026, 12 %->6 % från 1 april 2026: kaffe köpt i mars har 12 %).",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "IT-konsultbolag"
+      },
+      "transaction": {
+        "date": "2026-03-05",
+        "amount": -560.0,
+        "currency": "SEK",
+        "counterpart": "ICA Maxi",
+        "description": "Kaffe och frukt till kontoret",
+        "underlag": "Kaffe, te, frukt 500,00 exkl moms, moms 12 % 60,00."
+      }
+    },
+    "gold": {
+      "account": "7690",
+      "acceptable_accounts": [
+        "7699",
+        "5460",
+        "4010"
+      ],
+      "vat_treatment": "domestic_12"
+    }
+  },
+  {
+    "id": "booking-035",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "expert",
+    "probe": "Foreign-brand software bought via Swedish reseller: read the underlag, not the pattern",
+    "rationale": "Microsoft-licenser triggar ofta mönstret 'utländsk molntjänst = omvänd moms', men här är säljaren Dustin AB med svensk momsregistrering och svensk moms 25 % på fakturan: domestic_25 med avdrag på 2641. Läs underlaget, inte varumärket.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "SaaS-bolag"
+      },
+      "transaction": {
+        "date": "2026-06-03",
+        "amount": -5625.0,
+        "currency": "SEK",
+        "counterpart": "Dustin AB",
+        "description": "Microsoft 365 årslicens via återförsäljare",
+        "underlag": "Microsoft 365 Business Premium 12 mån, 4 500,00 exkl moms, svensk moms 25 % 1 125,00. Säljare: Dustin AB, org.nr 556237-8785, momsreg SE556237878501."
+      }
+    },
+    "gold": {
+      "account": "5420",
+      "acceptable_accounts": [
+        "6540"
+      ],
+      "vat_treatment": "domestic_25"
+    }
+  },
+  {
+    "id": "booking-036",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "expert",
+    "probe": "Taxi receipt at 6 % VAT",
+    "rationale": "Taxi är persontransport med 6 % moms; resekostnad 5810 (eller 5890/5800). Vanligt fel är 25 %.",
+    "input": {
+      "company": {
+        "entity_type": "enskild_firma",
+        "vat_registered": true,
+        "accounting_method": "cash",
+        "business": "Fotograf"
+      },
+      "transaction": {
+        "date": "2026-04-16",
+        "amount": -318.0,
+        "currency": "SEK",
+        "counterpart": "Taxi Stockholm",
+        "description": "Taxi till kunduppdrag med utrustning",
+        "underlag": "Taxiresa 300,00 exkl moms, moms 6 % 18,00."
+      }
+    },
+    "gold": {
+      "account": "5810",
+      "acceptable_accounts": [
+        "5800",
+        "5890",
+        "5820"
+      ],
+      "vat_treatment": "domestic_6"
+    }
+  },
+  {
+    "id": "booking-037",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Restaurant meal on a business trip is NOT representation",
+    "rationale": "Egen måltid på tjänsteresa är en resekostnad/personalkostnad, inte representation: ingen kund deltar. Kost på tjänsteresa: 5831/5830-serien, moms 12 %. Fällan är 6071/6072.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Managementkonsult"
+      },
+      "transaction": {
+        "date": "2026-04-09",
+        "amount": -224.0,
+        "currency": "SEK",
+        "counterpart": "Restaurang Kometen, Göteborg",
+        "description": "Middag under tjänsteresa, endast egen personal (1 pers)",
+        "underlag": "Middag 200,00 exkl moms, moms 12 % 24,00. Tjänsteresa Göteborg, konsulten själv."
+      }
+    },
+    "gold": {
+      "account": "5830",
+      "acceptable_accounts": [
+        "5831",
+        "5800",
+        "7690",
+        "7699"
+      ],
+      "vat_treatment": "domestic_12"
+    }
+  },
+  {
+    "id": "booking-038",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "expert",
+    "probe": "Non-VAT-registered company: VAT is part of the cost",
+    "rationale": "Företaget är inte momsregistrerat (momsfri verksamhet): ingen ingående moms får lyftas; hela beloppet inkl moms är kostnad. Momsbehandling no_vat trots att fakturan har moms.",
+    "law_ref": "ML 13 kap. 6 § (avdragsrätt förutsätter skattepliktig verksamhet)",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": false,
+        "accounting_method": "invoice",
+        "business": "Tandvårdsklinik (momsfri sjukvård)"
+      },
+      "transaction": {
+        "date": "2026-03-31",
+        "amount": -1250.0,
+        "currency": "SEK",
+        "counterpart": "Kontorsgiganten",
+        "description": "Kontorsmaterial",
+        "underlag": "Kontorsmaterial 1 000,00 exkl moms, moms 25 % 250,00. Att betala 1 250,00."
+      }
+    },
+    "gold": {
+      "account": "6110",
+      "vat_treatment": "no_vat"
+    }
+  },
+  {
+    "id": "booking-039",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "hard",
+    "probe": "Consumables for a construction firm",
+    "rationale": "Verktyg under beloppsgränsen är förbrukningsinventarier 5410 (alternativt 5411 korttidsinventarier).",
+    "input": {
+      "company": {
+        "entity_type": "enskild_firma",
+        "vat_registered": true,
+        "accounting_method": "cash",
+        "business": "Bygghantverkare"
+      },
+      "transaction": {
+        "date": "2026-05-22",
+        "amount": -1500.0,
+        "currency": "SEK",
+        "counterpart": "Bauhaus",
+        "description": "Handverktyg",
+        "underlag": "Borrmaskin och handverktyg 1 200,00 exkl moms, moms 25 % 300,00."
+      }
+    },
+    "gold": {
+      "account": "5410",
+      "acceptable_accounts": [
+        "5411",
+        "5460"
+      ],
+      "vat_treatment": "domestic_25"
+    }
+  },
+  {
+    "id": "booking-040",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "expert",
+    "probe": "Recruitment ad on an EU platform",
+    "rationale": "LinkedIn-annonsering säljs från Irland: omvänd betalningsskyldighet. Kostnaden är annonsering 5910 (rekryteringsannons kan även ses som 7690-personalkostnad; primärt 5910). BAS-praxis tillåter även underlagskontona 45xx (rutorna härleds från dem i SKV 4700-mappningen), därför accepteras de.",
+    "law_ref": "ML 6 kap. 34 §",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Logistikbolag"
+      },
+      "transaction": {
+        "date": "2026-02-14",
+        "amount": -3380.0,
+        "currency": "SEK",
+        "counterpart": "LinkedIn Ireland Unlimited",
+        "description": "Job post februari",
+        "underlag": "Job posting EUR 300,00 (3 380,00 SEK). VAT 0 %, reverse charge. IE9740425P."
+      }
+    },
+    "gold": {
+      "account": "5910",
+      "acceptable_accounts": [
+        "5900",
+        "7690",
+        "6890",
+        "4535",
+        "5970"
+      ],
+      "vat_treatment": "reverse_charge_services"
+    }
+  }
+]

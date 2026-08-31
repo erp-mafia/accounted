@@ -1,0 +1,208 @@
+# Accounted Ledger-Bench
+
+**Evaluating language models on real Swedish accounting work.**
+
+Ledger-Bench is Accounted's internal-first, publicly documented benchmark for
+the tasks an accounting agent actually performs under Swedish law: choosing
+the right BAS account, reading a Swedish invoice, knowing the VAT rules, and
+keeping a real double-entry ledger legal while working. It ranks both closed
+and open-weights models, per task family, on correctness, calibration and
+cost.
+
+Inspired by [Ramp SWE-Bench](https://labs.ramp.com/swebench) (private,
+production-grounded, aggregate-public), [SWE-bench](https://arxiv.org/abs/2310.06770)
+(execution-based scoring) and [tau2-bench](https://arxiv.org/abs/2506.07982)
+(agent environments with real state). None of those measure jurisdiction-real
+accounting: no open, write-capable accounting-agent benchmark existed, so we
+built one on the two expensive assets we already had, a legally compliant
+double-entry schema whose invariants are enforced by database triggers, and a
+test rig that runs it for real.
+
+## Why we built our own
+
+- Public leaderboards saturate and leak into training data; none resemble
+  löpande bokföring under Bokföringslagen.
+- We route real models in production (categorization, extraction, assistants,
+  MCP agents). "Which model do we trust where, and at what cost" is a routing
+  decision we want to re-answer every time a model ships.
+- The definition of a *correct booking* is our domain moat. A benchmark is
+  that definition made executable.
+
+## Task families (suites)
+
+Each suite is scored independently: there is deliberately no single blended
+"Ledger-Bench score", because a model that reads receipts well but books
+reverse charge wrong is exactly the distinction we need to see.
+
+| Suite | n | What it measures | Oracle |
+|---|---|---|---|
+| **Booking** | 37 | BAS account + VAT treatment for one bank transaction with company context | Exact match against gold account (plus explicitly listed acceptable alternatives) and a 10-value VAT-treatment enum |
+| **Reasoning** | 36 | Swedish VAT / bookkeeping-law knowledge: rutor, deadlines, thresholds, rate changes, correction rules | Deterministic answers (number, date, account, ruta, or one of fixed options) |
+| **Extraction (OCR)** | 12 | Structured fields from rendered Swedish documents: invoices, receipts, credit notes | Per-field exact match after normalization; amounts at 0.01 tolerance; arithmetic invariants hold by construction |
+| **Ledger-agent** | 3 | Multi-turn tool use against a real Postgres ledger: book, correct, settle | End state of the books via SQL assertions; legal invariants enforced by the production database triggers |
+
+Difficulty tags (`core` / `hard` / `expert`) mark, respectively, everyday
+bookings, the classic error classes (reverse charge, representation, asset
+thresholds, 6/12/25 rate splits), and adversarial cases (a foreign brand
+behind a Swedish reseller, prepayment rate rules, non-registered buyers).
+
+## Where tasks come from
+
+**Public split (this repository).** Every committed task is synthetic:
+authored from Swedish law (ML 2023:200, SFL 2011:1244, BFL 1999:1078, BFNAR),
+from the BAS 2026 chart, and from anonymized *error classes* we have observed
+in production (for example the reverse-charge booking where a VAT account was
+chosen as the cost account). Suppliers, org numbers and amounts are invented;
+org numbers and OCR references are Luhn-valid but fake. Extraction documents
+are rendered by `bench/scripts/generate-extraction-docs.ts`, and their gold
+labels are emitted from the same constants that rendered the pixels, so
+document and label cannot drift.
+
+Because the repository is public, the public split can eventually leak into
+training data, the same trade-off SWE-bench accepts. Scores on it are
+comparable over time but not contamination-proof.
+
+**Private split (planned, prod-derived).** Replayed real bookings and real
+verified documents, following `scripts/backtest-categorize.ts` (which already
+measures leakage-controlled categorization accuracy against real ledgers).
+Never committed, never published beyond aggregates, and under a hard runner
+rule: `data_class: "prod-derived"` tasks are refused for any provider except
+the EU Bedrock deployment this product already trusts with customer data
+(`bench/src/util.ts`, `assertDataClassAllowed`). This split is the
+contamination-free instrument; the public split is the reproducible one.
+
+## Harness: neutral scaffold
+
+All models run the identical minimal scaffold, in the spirit of Ramp's use of
+mini-swe-agent. We measure models, not our product pipeline (production adds
+deterministic candidate retrieval, self-consistency sampling and calibration
+on top; its accuracy is tracked separately by the backtest scripts).
+
+- Byte-identical prompts per suite for every model. The booking suite's
+  environment is the full BAS 2026 reference chart (1 290 accounts, committed
+  at `tasks/booking/context-accounts.txt`).
+- Vendor-default reasoning settings: no thinking parameters, no temperature
+  overrides where the API rejects them (temperature 0 where the OpenAI-style
+  surface accepts it; recorded per run).
+- Single-call suites allow exactly one retry when the reply contains no
+  parseable JSON object; the retry text is fixed and identical for all
+  models. Parse failures after the retry score zero and are reported.
+- The ledger-agent suite gives every model the same 8 tools (list, read,
+  create-and-commit, a deliberately naive update tool, balances, done) with a
+  turn cap per task. The update tool exists because the database refuses it
+  on posted entries: whether the model respects BFL 5 kap. 5 § or tries to
+  edit history, and whether it recovers from the refusal, is part of what we
+  measure.
+- No server-side fallbacks: a safety refusal scores as a failure for the
+  model that refused.
+- Extraction inputs are committed PNG renders (150 dpi), identical bytes for
+  every model. Models without vision are excluded from that suite only.
+
+## Scoring
+
+- **Headline per suite: pass rate** (booking: account AND VAT treatment
+  correct; reasoning: exact answer; extraction: all gold fields correct;
+  ledger-agent: all end-state assertions hold). Reported with a Wilson score
+  interval at z=1, matching how Ramp reports spread.
+- **Secondary metrics:** booking account-accuracy and VAT-accuracy separately;
+  extraction per-field accuracy; ledger-agent tool errors and invariant
+  refusals; turns; wall-clock.
+- **Calibration is first-class.** Booking and reasoning tasks ask the model
+  for a confidence in [0,1]; we report expected calibration error (ECE, 10
+  bins). An agent that books unattended is only as safe as its calibration:
+  a model that is wrong at stated 0.95 is more dangerous than one that is
+  wrong at stated 0.5. We know of no public leaderboard that ranks this.
+- **Cost per suite** computed from token usage at Anthropic first-party list
+  prices (or the provider-reported request cost for OpenRouter models), as
+  an upper bound without prompt caching.
+- **End state, not transcript.** The ledger-agent suite never grades prose.
+  The seeded Postgres runs the production schema with every migration
+  applied; balance, immutability, voucher sequencing and period locks are the
+  same triggers production runs. TigerBeetle's protocol-aware
+  deterministic-simulation stance, assert invariants from inside the system,
+  transfers directly because the ledger *is* the system under law.
+
+Runs are pass@1. Re-running a task supersedes the earlier record
+(`aggregate.ts` keeps the latest per suite/task/model); repeated-run
+reliability (pass^k) is future work.
+
+## Validity controls
+
+- `bench/scripts/validate-tasks.ts`: every gold account must exist in the
+  committed chart, every VAT enum value must be legal, extraction gold must
+  satisfy its own arithmetic (subtotal + VAT + rounding = total, breakdown
+  sums match), all ids unique.
+- `bench/scripts/selftest-ledger-env.ts`: before any model runs, the
+  environment must *prove it can detect failure*: an unbalanced entry must be
+  refused, a direct update of a posted line must be refused by the triggers,
+  and every assertion program must fail on the untouched seed and pass after
+  a simulated correct solution. A harness that cannot fail is not measuring.
+- Acceptable-alternative accounts are explicit per task and were extended
+  after adversarial review (for example, the 45xx underlag accounts that the
+  SKV 4700 mapping derives rutor from are accepted alongside the natural
+  cost accounts for reverse-charge purchases).
+
+## Disclosure and limitations
+
+- Task author: tasks and gold labels were authored with Claude (Fable 5)
+  against the cited legal references, validated by the scripts above, and are
+  open to review in this repository. When models from the same family are
+  ranked, that is a bias surface the private prod-derived split does not
+  share (its labels come from human bookings). Corrections via PR or issue
+  are welcome and versioned.
+- v1 model coverage runs on the Bedrock EU deployment (Anthropic models).
+  OpenRouter adapters for GPT/Gemini/Llama/Qwen/DeepSeek are implemented and
+  registry slots exist, pending an API key; their slugs must be verified at
+  enable time.
+- The booking suite's single gold account is a convention choice; Swedish
+  practice sometimes admits several defensible accounts. We mitigate with
+  explicit acceptable-lists, and report exact-gold agreement separately.
+- 3 ledger-agent tasks are a probe, not a population. Growing this suite
+  (dual-control interruptions, locked periods, SIE round-trips) is the
+  highest-value expansion.
+
+## Running it
+
+```bash
+# One-time: environment for the ledger-agent suite (real Postgres, all
+# migrations, ports 54329/54330), then prove the oracle works:
+npm run tools:pg:reset
+npx tsx bench/scripts/selftest-ledger-env.ts
+
+# Validate tasks after any edit:
+npx tsx bench/scripts/validate-tasks.ts
+
+# Run:
+npx tsx bench/src/run.ts --suite all --model enabled
+npx tsx bench/src/run.ts --suite booking --model claude-sonnet-5 --limit 5
+
+# Aggregate results into results/leaderboard.json:
+npx tsx bench/src/aggregate.ts
+```
+
+Credentials come from the repo's `.env.local` (AWS keys for Bedrock EU,
+`ANTHROPIC_API_KEY` for first-party models, `OPENROUTER_API_KEY` for the
+rest). Results land as append-only JSONL under `bench/results/runs/`.
+
+## Future work
+
+Grow the ledger-agent suite (dual-control: a simulated user books or locks
+underneath the agent, per tau2-bench); pass^k reliability; the prod-derived
+private split with human-booked gold labels; receipt-to-transaction matching
+as a fifth suite (ground truth: human-attached document links); prompt-cached
+cost reporting; a public results page.
+
+## References
+
+1. Jimenez et al. (2024), *SWE-bench: Can Language Models Resolve Real-world
+   GitHub Issues?*, ICLR 2024.
+2. Ramp, *Ramp SWE-Bench* (labs.ramp.com/swebench): private production tasks,
+   public aggregates, behavioral metrics.
+3. Barres et al. (2025), *tau2-bench: Evaluating Conversational Agents in a
+   Dual-Control Environment*, arXiv:2506.07982.
+4. TigerBeetle, protocol-aware deterministic simulation testing: the design
+   stance that the system's own invariants are the oracle.
+5. Tu et al. (2026), *BenchGuard: Automated Auditing of LLM Agent
+   Benchmarks*, arXiv:2604.24955: benchmarks as coupled artifacts audited
+   jointly, which `validate-tasks.ts` and the self-test implement in
+   miniature.

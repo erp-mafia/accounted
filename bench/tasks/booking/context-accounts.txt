@@ -1,0 +1,1290 @@
+1010 Utvecklingsutgifter
+1011 Balanserade utgifter för forskning och utveckling
+1012 Balanserade utgifter för programvaror
+1018 Ackumulerade nedskrivningar på balanserade utgifter
+1019 Ackumulerade avskrivningar på balanserade utgifter
+1020 Koncessioner m.m.
+1028 Ackumulerade nedskrivningar på koncessioner m.m.
+1029 Ackumulerade avskrivningar på koncessioner m.m.
+1030 Patent
+1038 Ackumulerade nedskrivningar på patent
+1039 Ackumulerade avskrivningar på patent
+1040 Licenser
+1048 Ackumulerade nedskrivningar på licenser
+1049 Ackumulerade avskrivningar på licenser
+1050 Varumärken
+1058 Ackumulerade nedskrivningar på varumärken
+1059 Ackumulerade avskrivningar på varumärken
+1060 Hyresrätter och liknande
+1068 Ackumulerade nedskrivningar på hyresrätter och liknande
+1069 Ackumulerade avskrivningar på hyresrätter och liknande
+1070 Goodwill
+1078 Ackumulerade nedskrivningar på goodwill
+1079 Ackumulerade avskrivningar på goodwill
+1080 Pågående projekt och förskott för immateriella anläggningstillgångar
+1081 Pågående projekt för immateriella anläggningstillgångar
+1088 Förskott för immateriella anläggningstillgångar
+1090 Övriga immateriella anläggningstillgångar
+1092 Tomträtter
+1098 Ackumulerade nedskrivningar på övriga immateriella anläggningstillgångar
+1099 Ackumulerade avskrivningar på övriga immateriella anläggningstillgångar
+1110 Byggnader
+1111 Byggnader på egen mark
+1112 Byggnader på annans mark
+1118 Ackumulerade nedskrivningar på byggnader
+1119 Ackumulerade avskrivningar på byggnader
+1120 Förbättringsutgifter på annans fastighet
+1129 Ackumulerade avskrivningar på förbättringsutgifter på annans fastighet
+1130 Mark
+1140 Tomter och obebyggda markområden
+1150 Markanläggningar
+1158 Ackumulerade nedskrivningar på markanläggningar
+1159 Ackumulerade avskrivningar på markanläggningar
+1180 Pågående nyanläggningar och förskott för byggnader och mark
+1181 Pågående ny-, till- och ombyggnad
+1188 Förskott för byggnader och mark
+1210 Maskiner och andra tekniska anläggningar
+1211 Maskiner och andra tekniska anläggningar i övrigt
+1212 Byggnads- och markinventarier (för produktion)
+1214 Datorer (för produktion)
+1216 Arbetsfordon
+1217 Finansiellt leasade maskiner
+1218 Ackumulerade nedskrivningar på maskiner och andra tekniska anläggningar
+1219 Ackumulerade avskrivningar på maskiner och andra tekniska anläggningar
+1220 Inventarier, verktyg och installationer
+1221 Inventarier, verktyg och installationer i övrigt
+1222 Byggnads- och markinventarier (ej för produktion)
+1224 Datorer (ej för produktion)
+1226 Bilar och transportmedel (ej för produktion)
+1227 Finansiellt leasade inventarier
+1228 Ackumulerade nedskrivningar på inventarier, verktyg och installationer
+1229 Ackumulerade avskrivningar på inventarier, verktyg och installationer
+1230 (Fritt konto för Maskiner och andra tekniska anläggningar)
+1240 (Fritt konto för Maskiner och andra tekniska anläggningar)
+1241 Personbilar
+1242 Lastbilar och andra transportmedel
+1249 Ack. avskrivningar på bilar och andra transportmedel
+1250 (Fritt konto för Inventarier, verktyg och installationer)
+1251 Inventarier
+1259 Ack. avskrivningar på inventarier och verktyg
+1260 (Fritt konto för Inventarier, verktyg och installationer)
+1261 Datorer, bärbara
+1269 Ack. avskrivningar på datorer
+1280 Pågående nyanläggningar och förskott för maskiner respektive inventarier
+1281 Pågående nyanläggningar, maskiner respektive inventarier
+1288 Förskott för maskiner respektive inventarier
+1290 Övriga materiella anläggningstillgångar
+1291 Konst och liknande tillgångar
+1292 Djur som klassificeras som anläggningstillgång
+1298 Ackumulerade nedskrivningar på övriga materiella anläggningstillgångar
+1299 Ackumulerade avskrivningar på övriga materiella anläggningstillgångar
+1310 Andelar i koncernföretag
+1311 Aktier i noterade svenska koncernföretag
+1312 Aktier i onoterade svenska koncernföretag
+1313 Aktier i noterade utländska koncernföretag
+1314 Aktier i onoterade utländska koncernföretag
+1316 Andra andelar i svenska koncernföretag
+1317 Andra andelar i utländska koncernförertag
+1318 Ackumulerade nedskrivningar av andelar i koncernföretag
+1320 Långfristiga fordringar hos koncernföretag
+1321 Långfristiga fordringar hos moderföretag
+1322 Långfristiga fordringar hos dotterföretag
+1323 Långfristiga fordringar hos andra koncernföretag
+1328 Ackumulerade nedskrivningar av långfristiga fordringar hos koncernföretag
+1330 Andelar i intresseföretag och gemensamt styrda företag samt övriga företag som det finns ett ägarintresse i
+1331 Andelar i intresseföretag
+1332 Ackumulerade nedskrivningar av andelar i intresseföretag
+1333 Andelar i gemensamt styrda företag
+1334 Ackumulerade nedskrivningar av andelar i gemensamt styrda företag
+1336 Andelar i övriga företag som det finns ett ägarintresse i
+1337 Ackumulerade nedskrivningar av andelar i övriga företag som det finns ett ägarintresse i
+1340 Långfristiga fordringar hos intresseföretag och gemensamt styrda företag samt övriga företag som det finns ett ägarintresse i
+1341 Långfristiga fordringar hos intresseföretag
+1342 Ackumulerade nedskrivningar av långfristiga fordringar hos intresseföretag
+1343 Långfristiga fordringar hos gemensamt styrda företag
+1344 Ackumulerade nedskrivningar av långfristiga fordringar hos gemensamt styrda företag
+1346 Långfristiga fordringar hos övriga företag som det finns ett ägarintresse i
+1347 Ackumulerade nedskrivningar av långfristiga fordringar hos övriga företag som det finns ett ägarintresse i
+1350 Andra långfristiga värdepappersinnehav
+1351 Andelar i noterade företag
+1352 Andra andelar
+1353 Andelar i bostadsrättsföreningar
+1354 Obligationer
+1356 Andelar i ekonomiska föreningar
+1357 Andelar i handelsbolag
+1358 Ackumulerade nedskrivningar av andra långfristiga värdepappersinnehav
+1360 Lån till delägare eller närstående, långfristig del
+1369 Ackumulerade nedskrivningar av lån till delägare eller närstående, långfristig del
+1370 Uppskjuten skattefordran
+1380 Andra långfristiga fordringar
+1381 Långfristiga reversfordringar
+1382 Långfristiga fordringar hos anställda
+1383 Lämnade depositioner, långfristiga
+1384 Derivat
+1385 Kapitalförsäkring
+1387 Långfristiga kontraktsfordringar
+1388 Långfristiga kundfordringar
+1389 Ackumulerade nedskrivningar av andra långfristiga fordringar
+1410 Lager av råvaror
+1419 Förändring av lager av råvaror
+1420 Lager av tillsatsmaterial och förnödenheter
+1429 Förändring av lager av tillsatsmaterial och förnödenheter
+1440 Produkter i arbete
+1449 Förändring av produkter i arbete
+1450 Lager av färdiga varor
+1459 Förändring av lager av färdiga varor
+1460 Lager av handelsvaror
+1465 Lager av varor VMB
+1466 Nedskrivning av varor VMB
+1467 Lager av varor VMB förenklad
+1469 Förändring av lager av handelsvaror
+1470 Pågående arbeten
+1471 Pågående arbeten, nedlagda kostnader
+1478 Pågående arbeten, fakturering
+1479 Förändring av pågående arbeten
+1480 Förskott för varor och tjänster
+1481 Remburser
+1489 Övriga förskott till leverantörer
+1490 Övriga lagertillgångar
+1491 Lager av värdepapper
+1492 Lager av fastigheter
+1493 Djur som klassificeras som omsättningstillgång
+1510 Kundfordringar
+1511 Kundfordringar
+1512 Belånade kundfordringar (factoring)
+1513 Kundfordringar: delad faktura
+1516 Tvistiga kundfordringar
+1518 Ej reskontraförda kundfordringar
+1519 Nedskrivning av kundfordringar
+1520 Växelfordringar
+1525 Osäkra växelfordringar
+1529 Nedskrivning av växelfordringar
+1530 Kontraktsfordringar
+1531 Kontraktsfordringar
+1532 Belånade kontraktsfordringar
+1536 Tvistiga kontraktsfordringar
+1539 Nedskrivning av kontraktsfordringar
+1550 Konsignationsfordringar
+1560 Kundfordringar hos koncernföretag
+1561 Kundfordringar hos moderföretag
+1562 Kundfordringar hos dotterföretag
+1563 Kundfordringar hos andra koncernföretag
+1568 Ej reskontraförda kundfordringar hos koncernföretag
+1569 Nedskrivning av kundfordringar hos koncernföretag
+1570 Kundfordringar hos intresseföretag, gemensamt styrda företag och övriga företag som det finns ett ägarintresse i
+1571 Kundfordringar hos intresseföretag
+1572 Kundfordringar hos gemensamt styrda företag
+1573 Kundfordringar hos övriga företag som det finns ett ägarintresse i
+1610 Kortfristiga fordringar hos anställda
+1611 Reseförskott
+1612 Kassaförskott
+1613 Övriga förskott
+1614 Tillfälliga lån till anställda
+1619 Övriga fordringar hos anställda
+1620 Upparbetad men ej fakturerad intäkt
+1630 Avräkning för skatter och avgifter (skattekonto)
+1640 Skattefordringar
+1650 Momsfordran
+1660 Kortfristiga fordringar hos koncernföretag
+1661 Kortfristiga fordringar hos moderföretag
+1662 Kortfristiga fordringar hos dotterföretag
+1663 Kortfristiga fordringar hos andra koncernföretag
+1670 Kortfristiga fordringar hos intresseföretag, gemensamt styrda företag och övriga företag som det finns ett ägarintresse i
+1671 Kortfristiga fordringar hos intresseföretag
+1672 Kortfristiga fordringar hos gemensamt styrda företag
+1673 Kortfristiga fordringar hos övriga företag som det finns ett ägarintresse i
+1680 Andra kortfristiga fordringar
+1681 Utlägg för kunder
+1682 Kortfristiga lånefordringar
+1683 Derivat
+1684 Kortfristiga fordringar hos leverantörer
+1685 Kortfristiga fordringar hos delägare eller närstående
+1686 Fordringar för kontokort och kuponger
+1687 Kortfristig del av långfristiga fordringar
+1688 Fordran arbetsmarknadsförsäkringar
+1689 Övriga kortfristiga fordringar
+1690 Fordringar för tecknat men ej inbetalt aktiekapital
+1710 Förutbetalda hyreskostnader
+1720 Förutbetalda leasingavgifter
+1730 Förutbetalda försäkringspremier
+1740 Förutbetalda räntekostnader
+1750 Upplupna hyresintäkter
+1760 Upplupna ränteintäkter
+1770 Tillgångar av kostnadsnatur
+1780 Upplupna avtalsintäkter
+1790 Övriga förutbetalda kostnader och upplupna intäkter
+1810 Andelar i börsnoterade företag
+1820 Obligationer
+1830 Konvertibla skuldebrev
+1860 Andelar i koncernföretag, kortfristigt
+1880 Andra kortfristiga placeringar
+1886 Derivat
+1889 Andelar i övriga företag
+1890 Nedskrivning av kortfristiga placeringar
+1910 Kassa
+1911 Huvudkassa
+1912 Kassa 2
+1913 Kassa 3
+1920 PlusGiro
+1930 Företagskonto
+1940 Övriga bankkonton
+1950 Bankcertifikat
+1960 Koncernkonto moderföretag
+1970 Särskilda bankkonton
+1972 Upphovsmannakonto
+1973 Skogskonto
+1974 Spärrade bankmedel
+1979 Övriga särskilda bankkonton
+1980 Valutakonton
+1990 Redovisningsmedel
+2010 Eget kapital
+2011 Egna varuuttag
+2013 Övriga egna uttag
+2017 Årets kapitaltillskott
+2018 Övriga egna insättningar
+2019 Årets resultat, delägare 1
+2020 Eget kapital
+2021 Egna varuuttag
+2023 Övriga egna uttag
+2027 Årets kapitaltillskott
+2028 Övriga egna insättningar
+2029 Årets resultat, delägare 2
+2030 Eget kapital
+2031 Egna varuuttag
+2033 Övriga egna uttag
+2037 Årets kapitaltillskott
+2038 Övriga egna insättningar
+2039 Årets resultat, delägare 3
+2040 Eget kapital
+2041 Egna varuuttag
+2043 Övriga egna uttag
+2047 Årets kapitaltillskott
+2048 Övriga egna insättningar
+2049 Årets resultat, delägare 4
+2050 Avsättning till expansionsfond
+2060 Eget kapital i ideella föreningar, stiftelser och registrerade trossamfund
+2061 Kapital/stiftelsekapital/grundkapital
+2064 Ackumulerat realisationsresultat
+2065 Fond för verkligt värde
+2066 Värdesäkringsfond
+2067 Balanserat överskott eller underskott
+2068 Överskott eller underskott från föregående år
+2069 Årets resultat
+2070 Ändamålsbestämda medel
+2071 Ändamål 1
+2072 Ändamål 2
+2080 Bundet eget kapital
+2081 Aktiekapital
+2082 Ej registrerat aktiekapital
+2083 Medlemsinsatser
+2084 Förlagsinsatser
+2085 Uppskrivningsfond
+2086 Reservfond
+2087 Bunden överkursfond
+2088 Fond för yttre underhåll
+2089 Fond för utvecklingsutgifter
+2090 Fritt eget kapital
+2091 Balanserad vinst eller förlust
+2092 Mottagna/lämnade koncernbidrag
+2093 Erhållna aktieägartillskott
+2094 Egna aktier
+2095 Fusionsresultat
+2096 Fond för verkligt värde
+2097 Fri överkursfond
+2098 Vinst eller förlust från föregående år
+2099 Årets resultat
+2110 Periodiseringsfonder
+2120 Periodiseringsfond 2020
+2121 Periodiseringsfond 2021
+2122 Periodiseringsfond 2022
+2123 Periodiseringsfond 2023
+2124 Periodiseringsfond 2024
+2125 Periodiseringsfond 2025
+2126 Periodiseringsfond 2026
+2127 Periodiseringsfond 2027
+2129 Periodiseringsfond 2019
+2130 Periodiseringsfond 2020: nr 2
+2131 Periodiseringsfond 2021: nr 2
+2132 Periodiseringsfond 2022: nr 2
+2133 Periodiseringsfond 2023: nr 2
+2134 Periodiseringsfond 2024: nr 2
+2135 Periodiseringsfond 2025: nr 2
+2136 Periodiseringsfond 2026: nr 2
+2137 Periodiseringsfond 2027: nr 2
+2139 Periodiseringsfond 2019: nr 2
+2150 Ackumulerade överavskrivningar
+2151 Ackumulerade överavskrivningar på immateriella anläggningstillgångar
+2152 Ackumulerade överavskrivningar på byggnader och markanläggningar
+2153 Ackumulerade överavskrivningar på maskiner respektive inventarier
+2160 Ersättningsfond
+2161 Ersättningsfond maskiner och inventarier
+2162 Ersättningsfond byggnader och markanläggningar
+2164 Ersättningsfond för djurlager i jordbruk och renskötsel
+2190 Övriga obeskattade reserver
+2196 Lagerreserv
+2199 Övriga obeskattade reserver
+2210 Avsättningar för pensioner enligt tryggandelagen
+2220 Avsättningar för garantier
+2230 Övriga avsättningar för pensioner och liknande förpliktelser
+2240 Avsättningar för uppskjutna skatter
+2250 Övriga avsättningar för skatter
+2252 Avsättningar för tvistiga skatter
+2253 Avsättningar särskild löneskatt, deklarationspost
+2290 Övriga avsättningar
+2310 Obligations- och förlagslån
+2320 Konvertibla lån och liknande
+2321 Konvertibla lån
+2322 Lån förenade med optionsrätt
+2323 Vinstandelslån
+2324 Kapitalandelslån
+2330 Kontokredit
+2340 Byggnadskreditiv
+2350 Andra långfristiga skulder till kreditinstitut
+2351 Fastighetslån, långfristig del
+2355 Långfristiga lån i utländsk valuta från kreditinstitut
+2359 Övriga långfristiga lån från kreditinstitut
+2360 Långfristiga skulder till koncernföretag
+2361 Långfristiga skulder till moderföretag
+2362 Långfristiga skulder till dotterföretag
+2363 Långfristiga skulder till andra koncernföretag
+2370 Långfristiga skulder till intresseföretag, gemensamt styrda företag och övriga företag som det finns ett ägarintresse i
+2371 Långfristiga skulder till intresseföretag
+2372 Långfristiga skulder till gemensamt styrda företag
+2373 Långfristiga skulder till övriga företag som det finns ett ägarintresse i
+2390 Övriga långfristiga skulder
+2391 Avbetalningskontrakt, långfristig del
+2392 Villkorliga långfristiga skulder
+2393 Lån från närstående personer, långfristig del
+2394 Långfristiga leverantörskrediter
+2395 Andra långfristiga lån i utländsk valuta
+2396 Derivat
+2397 Mottagna depositioner, långfristiga
+2399 Övriga långfristiga skulder
+2410 Andra kortfristiga låneskulder till kreditinstitut
+2411 Kortfristiga lån från kreditinstitut
+2412 Byggnadskreditiv, kortfristig del
+2417 Kortfristig del av långfristiga skulder till kreditinstitut
+2419 Övriga kortfristiga skulder till kreditinstitut
+2420 Förskott från kunder
+2421 Ej inlösta presentkort
+2429 Övriga förskott från kunder
+2430 Pågående arbeten
+2431 Pågående arbeten, fakturering
+2438 Pågående arbeten, nedlagda kostnader
+2439 Beräknad förändring av pågående arbeten
+2440 Leverantörsskulder
+2441 Leverantörsskulder
+2443 Konsignationsskulder
+2445 Tvistiga leverantörsskulder
+2448 Ej reskontraförda leverantörsskulder
+2450 Fakturerad men ej upparbetad intäkt
+2460 Leverantörsskulder till koncernföretag
+2461 Leverantörsskulder till moderföretag
+2462 Leverantörsskulder till dotterföretag
+2463 Leverantörsskulder till andra koncernföretag
+2470 Leverantörsskulder till intresseföretag, gemensamt styrda företag och övriga företag som det finns ett ägarintresse i
+2471 Leverantörsskulder till intresseföretag
+2472 Leverantörsskulder till gemensamt styrda företag
+2473 Leverantörsskulder till övriga företag som det finns ett ägarintresse i
+2480 Kontokredit, kortfristig
+2490 Övriga kortfristiga skulder till kreditinstitut, kunder och leverantörer
+2491 Avräkning spelarrangörer
+2492 Växelskulder
+2499 Andra övriga kortfristiga skulder
+2510 Skatteskulder
+2512 Beräknad inkomstskatt
+2513 Beräknad fastighetsskatt/fastighetsavgift
+2514 Beräknad särskild löneskatt på pensionskostnader
+2515 Beräknad avkastningsskatt
+2517 Beräknad utländsk skatt
+2518 Betald F-skatt
+2610 Utgående moms, 25 %
+2611 Utgående moms på försäljning inom Sverige, 25 %
+2612 Utgående moms på egna uttag, 25 %
+2613 Utgående moms för uthyrning, 25 %
+2614 Utgående moms omvänd betalskyldighet, 25 %
+2615 Utgående moms import av varor, 25 %
+2616 Utgående moms VMB 25 %
+2618 Vilande utgående moms, 25 %
+2620 Utgående moms, 12 %
+2621 Utgående moms på försäljning inom Sverige, 12 %
+2622 Utgående moms på egna uttag, 12 %
+2623 Utgående moms för uthyrning, 12 %
+2624 Utgående moms omvänd betalningsskyldighet 12 %
+2625 Utgående moms import av varor, 12 %
+2626 Utgående moms VMB 12 %
+2628 Vilande utgående moms, 12 %
+2630 Utgående moms, 6 %
+2631 Utgående moms på försäljning inom Sverige, 6 %
+2632 Utgående moms på egna uttag, 6 %
+2633 Utgående moms för uthyrning, 6 %
+2634 Utgående moms omvänd betalningsskyldighet, 6 %
+2635 Utgående moms import av varor, 6 %
+2636 Utgående moms VMB 6 %
+2638 Vilande utgående moms, 6 %
+2640 Ingående moms
+2641 Debiterad ingående moms
+2642 Debiterad ingående moms i anslutning till frivillig betalningsskyldighet
+2645 Beräknad ingående moms på förvärv från utlandet
+2646 Ingående moms på uthyrning
+2647 Ingående moms omvänd betalningsskyldighet varor och tjänster i Sverige
+2648 Vilande ingående moms
+2649 Ingående moms, blandad verksamhet
+2650 Redovisningskonto för moms
+2660 Punktskatter
+2670 Utgående moms på försäljning inom EU, OSS
+2710 Personalskatt
+2730 Lagstadgade sociala avgifter och särskild löneskatt
+2731 Avräkning lagstadgade sociala avgifter
+2732 Avräkning särskild löneskatt
+2740 Avtalade sociala avgifter
+2750 Utmätning i lön m.m.
+2760 Semestermedel
+2761 Avräkning semesterlöner
+2762 Semesterlönekassa
+2790 Övriga löneavdrag
+2791 Personalens intressekonto
+2792 Lönsparande
+2793 försäkringspremier
+2794 Fackföreningsavgifter
+2795 Mätnings- och granskningsarvoden
+2799 Övriga löneavdrag
+2810 Avräkning för factoring och belånade kontraktsfordringar
+2811 Avräkning för factoring
+2812 Avräkning för belånade kontraktsfordringar
+2820 Kortfristiga skulder till anställda
+2821 Löneskulder
+2822 Reseräkningar
+2823 Tantiem, gratifikationer
+2829 Övriga kortfristiga skulder till anställda
+2830 Avräkning för annans räkning
+2840 Kortfristiga låneskulder
+2841 Kortfristig del av långfristiga skulder
+2849 Övriga kortfristiga låneskulder
+2850 Avräkning för skatter och avgifter (skattekonto)
+2852 Anståndsbelopp för moms, arbetsgivaravgifter och personalskatt
+2860 Kortfristiga skulder till koncernföretag
+2861 Kortfristiga skulder till moderföretag
+2862 Kortfristiga skulder till dotterföretag
+2863 Kortfristiga skulder till andra koncernföretag
+2870 Kortfristiga skulder till intresseföretag, gemensamt styrda företag och övriga företag som det finns ett ägarintresse i
+2871 Kortfristiga skulder till intresseföretag
+2872 Kortfristiga skulder till gemensamt styrda företag
+2873 Kortfristiga skulder till övriga företag som det finns ett ägarintresse i
+2880 Skuld erhållna bidrag
+2890 Övriga kortfristiga skulder
+2891 Skulder under indrivning
+2892 Inre reparationsfond/underhållsfond
+2893 Skulder till närstående personer, kortfristig del
+2895 Derivat (kortfristiga skulder)
+2897 Mottagna depositioner, kortfristiga
+2898 Outtagen vinstutdelning
+2899 Övriga kortfristiga skulder
+2910 Upplupna löner
+2911 Löneskulder
+2912 Ackordsöverskott
+2919 Övriga upplupna löner
+2920 Upplupna semesterlöner
+2930 Upplupna pensionskostnader
+2931 Upplupna pensionsutbetalningar
+2940 Upplupna lagstadgade sociala och andra avgifter
+2941 Beräknade upplupna lagstadgade sociala avgifter
+2942 Beräknad upplupen särskild löneskatt
+2943 Beräknad upplupen särskild löneskatt på pensionskostnader, deklarationspost
+2944 Beräknad upplupen avkastningsskatt på pensionskostnader
+2950 Upplupna avtalade sociala avgifter
+2951 Upplupna avtalade arbetsmarknadsförsäkringar
+2959 Upplupna avtalade pensionsförsäkringsavgifter, deklarationspost
+2960 Upplupna räntekostnader
+2970 Förutbetalda intäkter
+2971 Förutbetalda hyresintäkter
+2972 Förutbetalda medlemsavgifter
+2979 Övriga förutbetalda intäkter
+2980 Upplupna avtalskostnader
+2990 Övriga upplupna kostnader och förutbetalda intäkter
+2991 Beräknat arvode för bokslut
+2992 Beräknat arvode för revision
+2993 Ospecificerad skuld till leverantörer
+2995 Ej ankomna leverantörsfakturor
+2998 Övriga upplupna kostnader och förutbetalda intäkter
+2999 OBS-konto
+3000 Försäljning inom Sverige
+3001 Försäljning inom Sverige, 25 % moms
+3002 Försäljning inom Sverige, 12 % moms
+3003 Försäljning inom Sverige, 6 % moms
+3004 Försäljning inom Sverige, momsfri
+3100 Försäljning av varor utanför Sverige
+3105 Försäljning varor till land utanför EU
+3106 Försäljning varor till annat EU-land, momspliktig
+3108 Försäljning varor till annat EU-land, momsfri
+3200 Försäljning VMB och omvänd moms
+3211 Försäljning positiv VMB 25 %
+3212 Försäljning negativ VMB 25 %
+3231 Försäljning inom byggsektorn, omvänd betalningsskyldighet moms
+3300 Försäljning av tjänster utanför Sverige
+3305 Försäljning tjänster till land utanför EU
+3308 Försäljning tjänster till annat EU-land
+3400 Försäljning, egna uttag
+3401 Egna uttag momspliktiga, 25 %
+3402 Egna uttag momspliktiga, 12 %
+3403 Egna uttag momspliktiga, 6 %
+3404 Egna uttag, momsfria
+3500 Fakturerade kostnader (gruppkonto)
+3510 Fakturerat emballage
+3511 Fakturerat emballage
+3518 Returnerat emballage
+3520 Fakturerade frakter
+3521 Fakturerade frakter, EU-land
+3522 Fakturerade frakter, export
+3530 Fakturerade tull- och speditionskostnader m.m.
+3540 Faktureringsavgifter
+3541 Faktureringsavgifter, EU-land
+3542 Faktureringsavgifter, export
+3550 Fakturerade resekostnader
+3560 Fakturerade kostnader till koncernföretag
+3561 Fakturerade kostnader till moderföretag
+3562 Fakturerade kostnader till dotterföretag
+3563 Fakturerade kostnader till andra koncernföretag
+3570 Fakturerade kostnader till intresseföretag, gemensamt styrda företag och övriga företag som det finns ett ägarintresse i
+3590 Övriga fakturerade kostnader
+3600 Rörelsens sidointäkter (gruppkonto)
+3610 Försäljning av material
+3611 Försäljning av råmaterial
+3612 Försäljning av skrot
+3613 Försäljning av förbrukningsmaterial
+3619 Försäljning av övrigt material
+3620 Tillfällig uthyrning av personal
+3630 Tillfällig uthyrning av transportmedel
+3670 Intäkter från värdepapper
+3671 Försäljning av värdepapper
+3672 Utdelning från värdepapper
+3679 Övriga intäkter från värdepapper
+3680 Management fees
+3690 Övriga sidointäkter
+3700 Intäktskorrigeringar (gruppkonto)
+3710 Ofördelade intäktsreduktioner
+3730 Lämnade rabatter
+3731 Lämnade kassarabatter
+3732 Lämnade mängdrabatter
+3740 Öres- och kronutjämning
+3750 Punktskatter
+3751 Intäktsförda punktskatter (kreditkonto)
+3752 Skuldförda punktskatter (debetkonto)
+3790 Övriga intäktskorrigeringar
+3800 Aktiverat arbete för egen räkning (gruppkonto)
+3840 Aktiverat arbete (material)
+3850 Aktiverat arbete (omkostnader)
+3870 Aktiverat arbete (personal)
+3900 Övriga rörelseintäkter (gruppkonto)
+3910 Hyres- och arrendeintäkter
+3911 Hyresintäkter
+3912 Arrendeintäkter
+3913 Frivilligt momspliktiga hyresintäkter
+3914 Övriga momspliktiga hyresintäkter
+3920 Provisionsintäkter, licensintäkter och royalties
+3921 Provisionsintäkter
+3922 Licensintäkter och royalties
+3925 Franchiseintäkter
+3940 Orealiserade negativa/positiva värdeförändringar på säkringsinstrument
+3950 Återvunna, tidigare avskrivna kundfordringar
+3960 Valutakursvinster på fordringar och skulder av rörelsekaraktär
+3970 Vinst vid avyttring av immateriella och materiella anläggningstillgångar
+3971 Vinst vid avyttring av immateriella anläggningstillgångar
+3972 Vinst vid avyttring av byggnader och mark
+3973 Vinst vid avyttring av maskiner och inventarier
+3980 Erhållna offentliga bidrag
+3981 Erhållna EU-bidrag
+3985 Erhållna statliga bidrag
+3987 Erhållna kommunala bidrag
+3988 Erhållna offentliga bidrag för personal
+3989 Övriga erhållna offentliga bidrag
+3990 Övriga ersättningar, bidrag och intäkter
+3991 Konfliktersättning
+3992 Erhållna skadestånd
+3993 Erhållna donationer och gåvor
+3994 Försäkringsersättningar
+3995 Erhållet ackord på skulder av rörelsekaraktär
+3996 Erhållna reklambidrag
+3997 Sjuklöneersättning
+3998 Återbäring av överskott från försäkringsföretag
+3999 Övriga rörelseintäkter
+4000 Inköp av handelsvaror (gruppkonto)
+4010 Inköp av handelsvaror i Sverige
+4060 Inköp av handelsvaror i Sverige, omvänd betalningsskyldighet
+4065 Inköp av handelsvaror i Sverige, omvänd betalningsskyldighet, 25 % moms
+4066 Inköp av handelsvaror i Sverige, omvänd betalningsskyldighet, 12 % moms
+4067 Inköp av handelsvaror i Sverige, omvänd betalningsskyldighet, 6 % moms
+4070 Inköp av handelsvaror från annat EU-land
+4075 Inköp av handelsvaror från annat EU-land, 25 % moms
+4076 Inköp av handelsvaror från annat EU-land, 12 % moms
+4077 Inköp av handelsvaror från annat EU-land, 6 % moms
+4078 Inköp av handelsvaror från annat EU-land, momsfri
+4080 Import av handelsvaror
+4085 Import av handelsvaror, 25 % moms
+4086 Import av handelsvaror, 12 % moms
+4087 Import av handelsvaror, 6 % moms
+4090 Erhållna rabatter (Handelsvaror)
+4091 Erhållna kassarabatter (Handelsvaror)
+4092 Erhållna mängdrabatter (inkl. bonus) (Handelsvaror)
+4099 Övriga reduktioner av inköpspriser (Handelsvaror)
+4200 Sålda handelsvaror VMB (gruppkonto)
+4210 Sålda handelsvaror VMB
+4211 Sålda handelsvaror positiv VMB 25 %
+4212 Sålda handelsvaror negativ VMB 25 %
+4300 Inköp av råvaror och material i Sverige (gruppkonto)
+4310 Inköp av råvaror och material i Sverige
+4400 Inköp av råvaror och material, tjänster m.m. i Sverige, omvänd betalningsskyldighet (gruppkonto)
+4410 Inköp av råvaror och material i Sverige, omvänd betalningsskyldighet
+4415 Inköp av råvaror och material i Sverige, omvänd betalningsskyldighet, 25 % moms
+4416 Inköp av råvaror och material i Sverige, omvänd betalningsskyldighet, 12 % moms
+4417 Inköp av råvaror och material i Sverige, omvänd betalningsskyldighet, 6 % moms
+4420 Inköp av tjänster i Sverige, omvänd betalningsskyldighet
+4425 Inköp av tjänster i Sverige, omvänd betalningsskyldighet, 25 % moms
+4426 Inköp av tjänster i Sverige, omvänd betalningsskyldighet, 12 % moms
+4427 Inköp av tjänster i Sverige, omvänd betalningsskyldighet, 6 % moms
+4500 Inköp av råvaror och material, tjänster m.m. från utlandet (gruppkonto)
+4510 Inköp av råvaror och material från annat EU-land
+4515 Inköp av råvaror och material från annat EU-land, 25 %
+4516 Inköp av råvaror och material från annat EU-land, 12 %
+4517 Inköp av råvaror och material från annat EU-land, 6 %
+4518 Inköp av råvaror och material från annat EU-land, momsfri
+4530 Inköp av tjänster m.m. från utlandet
+4531 Inköp av tjänster från ett land utanför EU, 25 % moms
+4532 Inköp av tjänster från ett land utanför EU, 12 % moms
+4533 Inköp av tjänster från ett land utanför EU, 6 % moms
+4535 Inköp av tjänster från annat EU-land, 25 %
+4536 Inköp av tjänster från annat EU-land, 12 %
+4537 Inköp av tjänster från annat EU-land, 6 %
+4538 Inköp av tjänster från annat EU-land, momsfri
+4540 Import av råvaror och material
+4545 Import av råvaror och material, 25 % moms
+4546 Import av råvaror och material, 12 % moms
+4547 Import av råvaror och material, 6 % moms
+4598 Motkonto beräknad omvänd moms
+4600 Inköp av tjänster, underentreprenader och legoarbeten i Sverige (gruppkonto)
+4610 Inköp av tjänster och underentreprenader
+4670 Inköp av legoarbeten
+4700 Reduktion av inköpspriser (gruppkonto)
+4730 Erhållna rabatter (Råvaror och förnödenheter)
+4731 Erhållna kassarabatter (Råvaror och förnödenheter)
+4732 Erhållna mängdrabatter (inkl. bonus) (Råvaror och förnödenheter)
+4739 Övriga reduktioner av inköpspriser (Råvaror och förnödenheter)
+4800 Andra produktionskostnader (gruppkonto)
+4810 Kostnader för energi (Råvaror och förnödenheter)
+4820 Kostnader för drivmedel (Råvaror och förnödenheter)
+4830 Kostnader för resor (Råvaror och förnödenheter)
+4840 Kostnader för hyra av utrustning (Råvaror och förnödenheter)
+4890 Övriga produktionskostnader (Råvaror och förnödenheter)
+4900 Förändring av lager (gruppkonto)
+4910 Förändring av lager av råvaror
+4920 Förändring av lager av tillsatsmaterial och förnödenheter
+4940 Förändring av produkter i arbete
+4944 Förändring av produkter i arbete, material och utlägg
+4945 Förändring av produkter i arbete, omkostnader
+4947 Förändring av produkter i arbete, personalkostnader
+4950 Förändring av lager av färdiga varor
+4960 Förändring av lager av handelsvaror
+4970 Förändring av pågående arbeten, nedlagda kostnader
+4974 Förändring av pågående arbeten, material och utlägg
+4975 Förändring av pågående arbeten, omkostnader
+4977 Förändring av pågående arbeten, personalkostnader
+4980 Förändring av lager av värdepapper (Handelsvaror)
+4981 Sålda värdepappers anskaffningsvärde (Handelsvaror)
+4987 Nedskrivning av värdepapper (Handelsvaror)
+4988 Återföring av nedskrivning av värdepapper (Handelsvaror)
+5000 Lokalkostnader (gruppkonto)
+5010 Lokalhyra
+5011 Hyra för kontorslokaler
+5012 Hyra för garage
+5013 Hyra för lagerlokaler
+5019 Övriga kostnader för lokalhyra
+5020 El
+5030 Värme
+5040 Vatten och avlopp
+5050 Lokaltillbehör
+5060 Städning och renhållning
+5061 Städning
+5062 Sophämtning
+5064 Snöröjning
+5065 Trädgårdsskötsel
+5069 Övriga kostnader för städning och underhåll
+5070 Reparation och underhåll av lokaler
+5090 Övriga lokalkostnader
+5100 Fastighetskostnader (gruppkonto)
+5110 Tomträttsavgäld/arrende
+5120 El
+5130 Värme
+5131 Uppvärmning
+5132 Sotning
+5139 Övriga kostnader för värme
+5140 Vatten och avlopp
+5160 Städning och renhållning
+5161 Städning
+5162 Sophämtning
+5164 Snöröjning
+5165 Trädgårdsskötsel
+5169 Övriga kostnader för städning och renhållning
+5170 Reparation och underhåll av fastighet
+5190 Övriga fastighetskostnader
+5191 Fastighetsskatt/fastighetsavgift
+5192 Fastighetsförsäkringspremier
+5193 Fastighetsskötsel och förvaltning
+5198 Övriga fastighetskostnader
+5200 Hyra av anläggningstillgångar (gruppkonto)
+5210 Hyra av maskiner och andra tekniska anläggningar, ej datorer och fordon
+5220 Hyra av inventarier och verktyg, ej datorer och fordon
+5250 Hyra av datorer
+5290 Hyra av övriga anläggningstillgångar, ej datorer och fordon
+5300 Energikostnader för drift (gruppkonto) (ej råvaror och förnödenheter)
+5310 El för drift (ej råvaror och förnödenheter)
+5320 Gas för drift (ej råvaror och förnödenheter)
+5330 Eldningsolja för drift (ej råvaror och förnödenheter)
+5340 Stenkol och koks för drift (ej råvaror och förnödenheter)
+5350 Torv, träkol, ved, m.m. för drift (ej råvaror och förnödenheter)
+5360 Bensin, fotogen och motorbrännolja för drift (ej råvaror och förnödenheter)
+5370 Fjärrvärme, kyla och ånga för drift (ej råvaror och förnödenheter)
+5380 Vatten för drift (ej råvaror och förnödenheter)
+5390 Övriga energikostnader för drift (ej råvaror och förnödenheter)
+5400 Förbrukningsinventarier och förbrukningsmaterial (gruppkonto)
+5410 Förbrukningsinventarier
+5411 Förbrukningsinv med en livslängd på mer än ett år
+5412 Förbrukningsinv med en livslängd om högst ett år
+5420 Programvaror
+5430 Transportinventarier
+5440 Förbrukningsemballage
+5460 Förbrukningsmaterial
+5480 Arbetskläder och skyddsmaterial
+5500 Reparation och underhåll (gruppkonto)
+5510 Reparation och underhåll av maskiner och andra tekniska anläggningar
+5520 Reparation och underhåll av inventarier, verktyg och datorer m.m.
+5530 Reparation och underhåll byggnads- och markinventarier
+5550 Reparation och underhåll av förbrukningsinventarier
+5580 Underhåll och tvätt av arbetskläder
+5590 Övriga kostnader för reparation och underhåll
+5600 Kostnader för transportmedel (gruppkonto)
+5610 Personbils- och mc-kostnader, m.m.
+5611 Drivmedel för personbilar, mc, m.m.
+5612 Försäkring och skatt för personbilar, mc, m.m.
+5613 Reparation och underhåll av personbilar, mc, m.m.
+5615 Leasing av personbilar, mc, m.m.
+5616 Trängselskatt personbilar
+5619 Övriga kostnader för personbilar och mc, m.m.
+5620 Lastbils- och busskostnader, m.m.
+5621 Drivmedel lastbilar och bussar
+5622 Försäkring och skatt lastbilar och bussar
+5623 Reparation och underhåll lastbilar och bussar
+5625 Leasing lastbilar och bussar
+5626 Trängselskatt lastbilar och bussar
+5629 Övriga lastbils- och busskostnader
+5630 Truckkostnader
+5631 Drivmedel truckar
+5632 Försäkring och skatt truckar
+5633 Reparation och underhåll truckar
+5635 Leasing truckar
+5639 Övriga kostnader för truckar
+5640 Kostnader för arbetsmaskiner
+5641 Drivmedel arbetsmaskiner
+5642 Försäkring och skatt arbetsmaskiner
+5643 Reparation och underhåll arbetsmaskiner
+5645 Leasing arbetsmaskiner
+5646 Trängselskatt arbetsmaskiner
+5649 Övriga kostnader för arbetsmaskiner
+5650 Traktorkostnader
+5651 Drivmedel traktorer
+5652 Försäkring och skatt traktorer
+5653 Reparation och underhåll traktorer
+5655 Leasing traktorer
+5656 Trängselskatt traktorer
+5659 Övriga kostnader för traktorer
+5670 Kostnader för fartyg och luftfartyg
+5671 Drivmedel fartyg och luftfartyg
+5672 Försäkring och skatt fartyg och luftfartyg
+5673 Reparation och underhåll fartyg och luftfartyg
+5675 Leasing fartyg och luftfartyg
+5679 Övriga kostnader för fartyg och luftfartyg
+5680 Kostnader för rälsfordon
+5681 Drivmedel rälsfordon
+5682 Försäkring och skatt rälsfordon
+5683 Reparation och underhåll rälsfordon
+5685 Leasing rälsfordon
+5689 Övriga kostnader för rälsfordon
+5690 Kostnader för övriga transportmedel
+5691 Drivmedel övriga transportmedel
+5692 Försäkring och skatt övriga transportmedel
+5693 Reparation och underhåll övriga transportmedel
+5695 Leasing övriga transportmedel
+5696 Trängselskatt övriga transportmedel
+5699 Övriga kostnader för övriga transportmedel
+5700 Frakter och transporter (gruppkonto)
+5710 Frakter och försäkringar vid varudistribution
+5711 Fraktkostnader
+5712 Försäkringar vid frakter
+5720 Tull- och speditionskostnader m.m.
+5721 Tullkostnader
+5722 Speditionskostnader
+5729 Övriga tull- och speditionskostnader m.m.
+5730 Arbetstransporter
+5790 Övriga kostnader för frakter och transporter
+5800 Resekostnader (gruppkonto)
+5810 Biljetter
+5820 Hyrbilskostnader
+5830 Kost och logi
+5831 Kost och logi i Sverige
+5832 Kost och logi i utlandet
+5890 Övriga resekostnader
+5900 Reklam och PR (gruppkonto)
+5910 Annonsering
+5920 Utomhus- och trafikreklam
+5930 Reklamtrycksaker och direktreklam
+5940 Utställningar och mässor
+5950 Butiksreklam och återförsäljarreklam
+5960 Varuprover, reklamgåvor, presentreklam och tävlingar
+5970 Film-, radio-, TV- och Internetreklam
+5980 Sponsring
+5981 Avdragsgill sponsring
+5982 Ej avdragsgill sponsring
+5990 Övriga kostnader för reklam och PR
+6000 Övriga försäljningskostnader (gruppkonto)
+6010 Kataloger, prislistor m.m.
+6020 Egna facktidskrifter
+6030 Speciella orderkostnader
+6040 Kontokortsavgifter
+6050 Försäljningsprovisioner
+6055 Franchisekostnader
+6059 Övriga försäljningsprovisionskostnader
+6060 Kreditförsäljningskostnader
+6061 Kreditupplysning
+6062 Inkasso och KFM-avgifter
+6063 Kreditförsäkringspremier
+6064 Factoringavgifter
+6069 Övriga kreditförsäljningskostnader
+6070 Representation
+6071 Representation, avdragsgill
+6072 Representation, ej avdragsgill
+6080 Bankgarantier
+6090 Övriga försäljningskostnader
+6100 Kontorsmateriel och trycksaker (gruppkonto)
+6110 Kontorsmateriel
+6150 Trycksaker
+6200 Tele, data och post (gruppkonto)
+6210 Telekommunikation
+6211 Fast telefoni
+6212 Mobiltelefon
+6219 Övriga kostnader för telekommunikation
+6230 Datakommunikation
+6250 Porto
+6290 Övriga tele-, data- och postkostnader
+6300 Företagsförsäkringar och övriga riskkostnader (gruppkonto)
+6310 Företagsförsäkringar
+6320 Självrisker vid skada
+6330 Förluster i pågående arbeten
+6340 Lämnade skadestånd
+6341 Lämnade skadestånd, avdragsgilla
+6342 Lämnade skadestånd, ej avdragsgilla
+6350 Förluster på kundfordringar
+6351 Konstaterade förluster på kundfordringar
+6352 Befarade förluster på kundfordringar
+6360 Garantikostnader
+6361 Förändring av garantiavsättning
+6362 Faktiska garantikostnader
+6370 Kostnader för bevakning och larm
+6380 Förluster på övriga kortfristiga fordringar
+6390 Övriga riskkostnader
+6391 Övriga riskkostnader, avdragsgilla
+6392 Övriga riskkostnader, ej avdragsgilla
+6400 Förvaltningskostnader (gruppkonto)
+6420 Ersättningar till revisor
+6421 Revision
+6422 Revisonsverksamhet utöver revision
+6423 Skatterådgivning: revisor
+6424 Övriga tjänster: revisor
+6430 Management fees
+6440 Årsredovisning och delårsrapporter
+6450 Bolagsstämma/års- eller föreningsstämma
+6490 Övriga förvaltningskostnader
+6500 Övriga externa tjänster (gruppkonto)
+6510 Mätningskostnader
+6520 Ritnings- och kopieringskostnader
+6530 Redovisningstjänster
+6540 IT-tjänster
+6550 Konsultarvoden
+6551 Arkitekttjänster
+6552 Teknisk provning och analys
+6553 Tekniska konsulttjänster
+6554 Finansiell- och övrig ekonomisk rådgivning
+6555 Skatterådgivning inkl. insolvens- och konkursförv.
+6556 Köpta tjänster avseende forskning och utveckling
+6559 Övriga konsultarvoden
+6560 Serviceavgifter till branschorganisationer
+6570 Bankkostnader
+6580 Advokat- och rättegångskostnader
+6590 Övriga externa tjänster
+6700 Särskilt för ideella föreningar och stiftelser (gruppkonto)
+6710 Lämnade bidrag
+6800 Inhyrd personal (gruppkonto)
+6810 Inhyrd produktionspersonal
+6820 Inhyrd lagerpersonal
+6830 Inhyrd transportpersonal
+6840 Inhyrd kontors- och ekonomipersonal
+6850 Inhyrd IT-personal
+6860 Inhyrd marknads- och försäljningspersonal
+6870 Inhyrd restaurang- och butikspersonal
+6880 Inhyrda företagsledare
+6890 Övrig inhyrd personal
+6900 Övriga externa kostnader (gruppkonto)
+6910 Licensavgifter och royalties
+6920 Kostnader för egna patent
+6930 Kostnader för varumärken m.m.
+6940 Kontroll-, provnings- och stämpelavgifter
+6950 Tillsynsavgifter myndigheter
+6970 Tidningar, facklitteratur, m.m.
+6980 Föreningsavgifter
+6981 Föreningsavgifter, avdragsgilla
+6982 Föreningsavgifter, ej avdragsgilla
+6990 Övriga externa kostnader
+6991 Övriga externa kostnader, avdragsgilla
+6992 Övriga externa kostnader, ej avdragsgilla
+6993 Lämnade bidrag och gåvor
+6996 Betald utländsk inkomstskatt
+6997 Obetald utländsk inkomstskatt
+6998 Utländsk moms
+6999 Ingående moms, blandad verksamhet
+7000 Löner till kollektivanställda (gruppkonto)
+7010 Löner till kollektivanställda
+7011 Löner till kollektivanställda
+7012 Vinstandelar till kollektivanställda
+7013 Lön växa-stöd kollektivanställda 10,21 %
+7017 Avgångsvederlag till kollektivanställda
+7018 Bruttolöneavdrag, kollektivanställda
+7019 Upplupna löner och vinstandelar till kollektivanställda
+7030 Löner till kollektivanställda (utlandsanställda)
+7031 Löner till kollektivanställda (utlandsanställda)
+7032 Vinstandelar till kollektivanställda (utlandsanställda)
+7037 Avgångsvederlag till kollektivanställda (utlandsanställda)
+7038 Bruttolöneavdrag, kollektivanställda (utlandsanställda)
+7039 Upplupna löner och vinstandelar till kollektivanställda (utlandsanställda)
+7080 Löner till kollektivanställda för ej arbetad tid
+7081 Sjuklöner till kollektivanställda
+7082 Semesterlöner till kollektivanställda
+7083 Föräldraersättning till kollektivanställda
+7089 Övriga löner till kollektivanställda för ej arbetad tid
+7090 Förändring av semesterlöneskuld
+7200 Löner till tjänstemän och företagsledare (gruppkonto)
+7210 Löner till tjänstemän
+7211 Löner till tjänstemän
+7212 Vinstandelar till tjänstemän
+7213 Lön växa-stöd tjänstemän 10,21 %
+7217 Avgångsvederlag till tjänstemän
+7218 Bruttolöneavdrag, tjänstemän
+7219 Upplupna löner och vinstandelar till tjänstemän
+7220 Löner till företagsledare
+7221 Löner till företagsledare
+7222 Tantiem till företagsledare
+7227 Avgångsvederlag till företagsledare
+7228 Bruttolöneavdrag, företagsledare
+7229 Upplupna löner och tantiem till företagsledare
+7230 Löner till tjänstemän och ftgsledare (utlandsanställda)
+7231 Löner till tjänstemän och ftgsledare (utlandsanställda)
+7232 Vinstandelar till tjänstemän och ftgsledare (utlandsanställda)
+7237 Avgångsvederlag till tjänstemän och ftgsledare (utlandsanställda)
+7238 Bruttolöneavdrag, tjänstemän och ftgsledare (utlandsanställda)
+7239 Upplupna löner och vinstandelar till tjänstemän och ftgsledare (utlandsanställda)
+7240 Styrelsearvoden
+7280 Löner till tjänstemän och företagsledare för ej arbetad tid
+7281 Sjuklöner till tjänstemän
+7282 Sjuklöner till företagsledare
+7283 Föräldraersättning till tjänstemän
+7284 Föräldraersättning till företagsledare
+7285 Semesterlöner till tjänstemän
+7286 Semesterlöner till företagsledare
+7288 Övriga löner till tjänstemän för ej arbetad tid
+7289 Övriga löner till företagsledare för ej arbetad tid
+7290 Förändring av semesterlöneskuld
+7291 Förändring av semesterlöneskuld till tjänstemän
+7292 Förändring av semesterlöneskuld till företagsledare
+7300 Kostnadsersättningar och förmåner (gruppkonto)
+7310 Kontanta extraersättningar
+7311 Ersättningar för sammanträden m.m.
+7312 Ersättningar för förslagsverksamhet och uppfinningar
+7313 Ersättningar för/bidrag till bostadskostnader
+7314 Ersättningar för/bidrag till måltidskostnader
+7315 Ersättningar för/bidrag till resor till och från arbetsplatsen
+7316 Ersättningar för/bidrag till arbetskläder
+7317 Ersättningar för/bidrag till arbetsmaterial och arbetsverktyg
+7318 Felräkningspengar
+7319 Övriga kontanta extraersättningar
+7320 Traktamenten vid tjänsteresa
+7321 Skattefria traktamenten, Sverige
+7322 Skattepliktiga traktamenten, Sverige
+7323 Skattefria traktamenten, utlandet
+7324 Skattepliktiga traktamenten, utlandet
+7330 Bilersättningar
+7331 Skattefria bilersättningar
+7332 Skattepliktiga bilersättningar
+7333 Ersättning för trängselskatt, skattefri
+7350 Ersättningar för föreskrivna arbetskläder
+7370 Representationsersättningar
+7380 Kostnader för förmåner till anställda
+7381 Kostnader för fri bostad
+7382 Kostnader för fria eller subventionerade måltider
+7383 Kostnader för fria resor till och från arbetsplatsen
+7384 Kostnader för fria eller subventionerade arbetskläder
+7385 Kostnader för fri bil
+7386 Subventionerad ränta
+7387 Kostnader för lånedatorer
+7388 Anställdas ersättning för erhållna förmåner
+7389 Övriga kostnader för förmåner
+7390 Övriga kostnadsersättningar och förmåner
+7391 Kostnad för trängselskatteförmån
+7392 Kostnad för förmån av hushållsnära tjänster
+7400 Pensionskostnader (gruppkonto)
+7410 Pensionsförsäkringspremier
+7411 Premier för kollektiva pensionsförsäkringar
+7412 Premier för individuella pensionsförsäkringar
+7420 Förändring av pensionsskuld
+7430 Avdrag för räntedel i pensionskostnad
+7440 Förändring av pensionsstiftelsekapital
+7441 Överföring av medel till pensionsstiftelse
+7448 Gottgörelse från pensionsstiftelse
+7460 Pensionsutbetalningar
+7461 Pensionsutbetalningar till f.d. kollektivanställda
+7462 Pensionsutbetalningar till f.d. tjänstemän
+7463 Pensionsutbetalningar till f.d. företagsledare
+7470 Förvaltnings- och kreditförsäkringsavgifter
+7490 Övriga pensionskostnader
+7500 Sociala och andra avgifter enligt lag och avtal (gruppkonto)
+7510 Arbetsgivaravgifter 31,42 %
+7511 Arbetsgivaravgifter för löner och ersättningar
+7512 Arbetsgivaravgifter för förmånsvärden
+7515 Arbetsgivaravgifter på skattepliktiga kostnadsersättningar
+7516 Arbetsgivaravgifter på arvoden
+7518 Arbetsgivaravgifter på bruttolöneavdrag m.m.
+7519 Arbetsgivaravgifter för semester- och löneskulder
+7530 Särskild löneskatt
+7531 Särskild löneskatt för vissa försäkringsersättningar m.m.
+7532 Särskild löneskatt pensionskostnader, deklarationspost
+7533 Särskild löneskatt för pensionskostnader
+7550 Avkastningsskatt på pensionsmedel
+7551 Avkastningsskatt 15 % försäkringsföretag m.fl. samt avsatt till pensioner
+7552 Avkastningsskatt 15 % utländska pensionsförsäkringar
+7553 Avkastningsskatt 30 % utländska försäkringsföretag m.fl.
+7554 Avkastningsskatt 30 % utländska kapitalförsäkringar
+7570 Premier för arbetsmarknadsförsäkringar
+7571 Arbetsmarknadsförsäkringar
+7572 Arbetsmarknadsförsäkringar pensionsförsäkringspremier, deklarationspost
+7580 Gruppförsäkringspremier
+7581 Grupplivförsäkringspremier
+7582 Gruppsjukförsäkringspremier
+7583 Gruppolycksfallsförsäkringspremier
+7589 Övriga gruppförsäkringspremier
+7590 Övriga sociala och andra avgifter enligt lag och avtal
+7600 Övriga personalkostnader (gruppkonto)
+7610 Utbildning
+7620 Sjuk- och hälsovård
+7621 Sjuk- och hälsovård, avdragsgill
+7622 Sjuk- och hälsovård, ej avdragsgill
+7623 Sjukvårdsförsäkring, ej avdragsgill
+7630 Personalrepresentation
+7631 Personalrepresentation, avdragsgill
+7632 Personalrepresentation, ej avdragsgill
+7650 Sjuklöneförsäkring
+7670 Förändring av personalstiftelsekapital
+7671 Avsättning till personalstiftelse
+7678 Gottgörelse från personalstiftelse
+7690 Övriga personalkostnader
+7691 Personalrekrytering
+7692 Begravningshjälp
+7693 Fritidsverksamhet
+7699 Övriga personalkostnader
+7710 Nedskrivningar av immateriella anläggningstillgångar
+7720 Nedskrivningar av byggnader och mark
+7730 Nedskrivningar av maskiner respektive inventarier
+7731 Nedskrivningar av maskiner och andra tekniska anläggningar
+7732 Nedskrivningar av inventarier, verktyg och installationer
+7733 Nedskrivningar av övriga materiella anläggningstillgångar
+7740 Nedskrivningar av vissa omsättningstillgångar
+7760 Återföring av nedskrivningar av immateriella anläggningstillgångar
+7770 Återföring av nedskrivningar av byggnader och mark
+7780 Återföring av nedskrivningar av maskiner respektive inventarier
+7781 Återföring av nedskrivningar av maskiner och andra tekniska anläggningar
+7782 Återföring av nedskrivningar av inventarier, verktyg och installationer
+7783 Återföring av nedskrivningar av övriga materiella anläggningstillgångar
+7790 Återföring av nedskrivningar av vissa omsättningstillgångar
+7810 Avskrivningar på immateriella anläggningstillgångar
+7811 Avskrivningar på balanserade utgifter
+7812 Avskrivningar på koncessioner m.m.
+7813 Avskrivningar på patent
+7814 Avskrivningar på licenser
+7815 Avskrivningar på varumärken
+7816 Avskrivningar på hyresrätter
+7817 Avskrivningar på goodwill
+7819 Avskrivningar på övriga immateriella anläggningstillgångar
+7820 Avskrivningar på byggnader och markanläggningar
+7821 Avskrivningar på byggnader
+7824 Avskrivningar på markanläggningar
+7829 Avskrivningar på övriga byggnader
+7830 Avskrivningar på maskiner respektive inventarier
+7831 Avskrivningar på maskiner och andra tekniska anläggningar
+7832 Avskrivningar på inventarier, verktyg och installationer
+7836 Avskrivningar på leasade tillgångar
+7839 Avskrivningar på övriga materiella anläggningstillgångar
+7840 Avskrivningar på förbättringsutgifter på annans fastighet
+7940 Orealiserade positiva/negativa värdeförändringar på säkringsinstrument
+7960 Valutakursförluster på fordringar och skulder av rörelsekaraktär
+7970 Förlust vid avyttring av immateriella och materiella anläggningstillgångar
+7971 Förlust vid avyttring av immateriella anläggningstillgångar
+7972 Förlust vid avyttring av byggnader och mark
+7973 Förlust vid avyttring av maskiner och inventarier
+7990 Övriga rörelsekostnader
+8010 Utdelning på andelar i koncernföretag
+8012 Utdelning på andelar i dotterföretag
+8016 Emissionsinsats, koncernföretag
+8020 Resultat vid försäljning av andelar i koncernföretag
+8030 Resultatandelar från handelsbolag (dotterföretag)
+8070 Nedskrivningar av andelar i och långfristiga fordringar hos koncernföretag
+8072 Nedskrivningar av andelar i dotterföretag
+8076 Nedskrivningar av långfristiga fordringar hos moderföretag
+8077 Nedskrivningar av långfristiga fordringar hos dotterföretag
+8080 Återföringar av nedskrivningar av andelar i och långfristiga fordringar hos koncernföretag
+8082 Återföringar av nedskrivningar av andelar i dotterföretag
+8086 Återföringar av nedskrivningar av långfristiga fordringar hos moderföretag
+8087 Återföringar av nedskrivningar av långfristiga fordringar hos dotterföretag
+8110 Utdelningar på andelar i intresseföretag och gemensamt styrda företag samt övriga företag som det finns ett ägarintresse i
+8111 Utdelningar på andelar i intresseföretag
+8112 Utdelningar på andelar i gemensamt styrda företag
+8113 Utdelningar på andelar i övriga företag som det finns ett ägarintresse i
+8116 Emissionsinsats, intresseföretag
+8117 Emissionsinsats, gemensamt styrda företag
+8118 Emissionsinsats, övriga företag som det finns ett ägarintresse i
+8120 Resultat vid försäljning av andelar i intresseföretag och gemensamt styrda företag samt övriga företag som det finns ett ägarintresse i
+8121 Resultat vid försäljning av andelar i intresseföretag
+8122 Resultat vid försäljning av andelar i gemensamt styrda företag
+8123 Resultat vid försäljning av andelar i övriga företag som det finns ett ägarintresse i
+8130 Resultatandelar från handelsbolag (intresseföretag och gemensamt styrda företag samt övriga företag som det finns ett ägarintresse i)
+8131 Resultatandelar från handelsbolag (intresseföretag)
+8132 Resultatandelar från handelsbolag (gemensamt styrda företag)
+8133 Resultatandelar från handelsbolag (övriga företag som det finns ett ägarintresse i)
+8170 Nedskrivningar av andelar i och långfristiga fordringar hos intresseföretag och gemensamt styrda företag samt övriga företag som det finns ett ägarintresse i
+8171 Nedskrivningar av andelar i intresseföretag
+8172 Nedskrivningar av långfristiga fordringar hos intresseföretag
+8173 Nedskrivningar av andelar i gemensamt styrda företag
+8174 Nedskrivningar av långfristiga fordringar hos gemensamt styrda företag
+8176 Nedskrivningar av andelar i övriga företag som det finns ett ägarintresse i
+8177 Nedskrivningar av långfristiga fordringar hos övriga företag som det finns ett ägarintresse i
+8180 Återföringar av nedskrivningar av andelar i och långfristiga fordringar hos intresseföretag och gemensamt styrda företag samt övriga företag som det finns ett ägarintresse i
+8181 Återföringar av nedskrivningar av andelar i intresseföretag
+8182 Återföringar av nedskrivningar av långfristiga fordringar hos intresseföretag
+8183 Återföringar av nedskrivningar av andelar i gemensamt styrda företag
+8184 Återföringar av nedskrivningar av långfristiga fordringar hos gemensamt styrda företag
+8186 Återföringar av nedskrivningar av andelar i övriga företag som det finns ett ägarintresse i
+8187 Återföringar av nedskrivningar av långfristiga fordringar hos övriga företag som det finns ett ägarintresse i
+8210 Utdelningar på andelar i andra företag
+8212 Utdelningar, andra företag
+8216 Insatsemissioner, andra företag
+8220 Resultat vid försäljning av värdepapper i och långfristiga fordringar hos andra företag
+8221 Resultat vid försäljning av andelar i andra företag
+8222 Resultat vid försäljning av långfristiga fordringar hos andra företag
+8223 Resultat vid försäljning av derivat (långfristiga värdepappersinnehav)
+8230 Valutakursdifferenser på långfristiga fordringar
+8231 Valutakursvinster på långfristiga fordringar
+8236 Valutakursförluster på långfristiga fordringar
+8240 Resultatandelar från handelsbolag (andra företag)
+8250 Ränteintäkter från långfristiga fordringar hos och värdepapper i andra företag
+8251 Ränteintäkter från långfristiga fordringar
+8252 Ränteintäkter från övriga värdepapper
+8254 Skattefria ränteintäkter, långfristiga tillgångar
+8255 Avkastningsskatt kapitalplacering
+8260 Ränteintäkter från långfristiga fordringar hos koncernföretag
+8261 Ränteintäkter från långfristiga fordringar hos moderföretag
+8262 Ränteintäkter från långfristiga fordringar hos dotterföretag
+8263 Ränteintäkter från långfristiga fordringar hos andra koncernföretag
+8270 Nedskrivningar av innehav av andelar i och långfristiga fordringar hos andra företag
+8271 Nedskrivningar av andelar i andra företag
+8272 Nedskrivningar av långfristiga fordringar hos andra företag
+8273 Nedskrivningar av övriga värdepapper hos andra företag
+8280 Återföringar av nedskrivningar av andelar i och långfristiga fordringar hos andra företag
+8281 Återföringar av nedskrivningar av andelar i andra företag
+8282 Återföringar av nedskrivningar av långfristiga fordringar hos andra företag
+8283 Återföringar av nedskrivningar av övriga värdepapper i andra företag
+8290 Värdering till verkligt värde, anläggningstillgångar
+8291 Orealiserade värdeförändringar på anläggningstillgångar
+8295 Orealiserade värdeförändringar på derivatinstrument
+8310 Ränteintäkter från omsättningstillgångar
+8311 Ränteintäkter från bank
+8312 Ränteintäkter från kortfristiga placeringar
+8313 Ränteintäkter från kortfristiga fordringar
+8314 Skattefria ränteintäkter
+8317 Ränteintäkter för dold räntekompensation
+8319 Övriga ränteintäkter från omsättningstillgångar
+8320 Värdering till verkligt värde, omsättningstillgångar
+8321 Orealiserade värdeförändringar på omsättningstillgångar
+8325 Orealiserade värdeförändringar på derivatinstrument (oms.-tillg.)
+8330 Valutakursdifferenser på kortfristiga fordringar och placeringar
+8331 Valutakursvinster på kortfristiga fordringar och placeringar
+8336 Valutakursförluster på kortfristiga fordringar och placeringar
+8340 Utdelningar på kortfristiga placeringar
+8350 Resultat vid försäljning av kortfristiga placeringar
+8360 Övriga ränteintäkter från koncernföretag
+8361 Övriga ränteintäkter från moderföretag
+8362 Övriga ränteintäkter från dotterföretag
+8363 Övriga ränteintäkter från andra koncernföretag
+8370 Nedskrivningar av kortfristiga placeringar
+8380 Återföringar av nedskrivningar av kortfristiga placeringar
+8390 Övriga finansiella intäkter
+8400 Räntekostnader (gruppkonto)
+8410 Räntekostnader för långfristiga skulder
+8411 Räntekostnader för obligations-, förlags- och konvertibla lån
+8412 Räntedel i årets pensionskostnad
+8413 Räntekostnader för kontokredit
+8415 Räntekostnader för andra skulder till kreditinstitut
+8417 Räntekostnader för dold räntekompensation m.m.
+8418 Avdragspost för räntesubventioner
+8419 Övriga räntekostnader för långfristiga skulder
+8420 Räntekostnader för kortfristiga skulder
+8421 Räntekostnader till kreditinstitut
+8422 Dröjsmålsräntor för leverantörsskulder
+8423 Räntekostnader för skatter och avgifter
+8424 Räntekostnader byggnadskreditiv
+8429 Övriga räntekostnader för kortfristiga skulder
+8430 Valutakursdifferenser på skulder
+8431 Valutakursvinster på skulder
+8436 Valutakursförluster på skulder
+8440 Erhållna räntebidrag
+8450 Orealiserade värdeförändringar på skulder
+8451 Orealiserade värdeförändringar på skulder
+8455 Orealiserade värdeförändringar på säkringsinstrument
+8460 Räntekostnader till koncernföretag
+8461 Räntekostnader till moderföretag
+8462 Räntekostnader till dotterföretag
+8463 Räntekostnader till andra koncernföretag
+8480 Aktiverade ränteutgifter
+8490 Övriga skuldrelaterade poster
+8491 Erhållet ackord på skulder till kreditinstitut m.m.
+8810 Förändring av periodiseringsfond
+8811 Avsättning till periodiseringsfond
+8819 Återföring från periodiseringsfond
+8820 Mottagna koncernbidrag
+8830 Lämnade koncernbidrag
+8840 Lämnade gottgörelser
+8850 Förändring av överavskrivningar
+8851 Förändring av överavskrivningar, immateriella anläggningstillgångar
+8852 Förändring av överavskrivningar, byggnader och markanläggningar
+8853 Förändring av överavskrivningar, maskiner respektive inventarier
+8860 Förändring av ersättningsfond
+8861 Avsättning till ersättningsfond för inventarier
+8862 Avsättning till ersättningsfond för byggnader och markanläggningar
+8864 Avsättning till ersättningsfond för djurlager i jordbruk och renskötsel
+8865 Ianspråktagande av ersättningsfond för avskrivningar
+8866 Ianspråktagande av ersättningsfond för annat än avskrivningar
+8869 Återföring från ersättningsfond
+8890 Övriga bokslutsdispositioner
+8892 Nedskrivningar av konsolideringskaraktär av anläggningstillgångar
+8896 Förändring av lagerreserv
+8899 Övriga bokslutsdispositioner
+8910 Skatt som belastar årets resultat
+8920 Skatt på grund av ändrad beskattning
+8930 Restituerad skatt
+8940 Uppskjuten skatt
+8980 Övriga skatter
+8990 Resultat
+8999 Årets resultat

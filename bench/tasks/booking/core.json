@@ -1,0 +1,474 @@
+[
+  {
+    "id": "booking-001",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Standard domestic service invoice: accounting services",
+    "rationale": "Redovisningstjänster från svensk leverantör med 25 % moms bokförs på 6530.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "IT-konsultbolag med 4 anställda"
+      },
+      "transaction": {
+        "date": "2026-05-12",
+        "amount": -6250.0,
+        "currency": "SEK",
+        "counterpart": "Siffror & Ordning AB",
+        "description": "Faktura 2201, bokföring april",
+        "underlag": "Redovisningstjänster april 2026. Belopp 5 000,00. Moms 25 % 1 250,00. Att betala 6 250,00."
+      }
+    },
+    "gold": {
+      "account": "6530",
+      "vat_treatment": "domestic_25"
+    }
+  },
+  {
+    "id": "booking-002",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Mobile subscription",
+    "rationale": "Mobiltelefoni bokförs på 6212, standard 25 % moms.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "IT-konsultbolag med 4 anställda"
+      },
+      "transaction": {
+        "date": "2026-05-28",
+        "amount": -623.75,
+        "currency": "SEK",
+        "counterpart": "Telia Sverige AB",
+        "description": "Autogiro mobilabonnemang maj",
+        "underlag": "Mobilabonnemang företaget 499,00 exkl moms, moms 25 % 124,75."
+      }
+    },
+    "gold": {
+      "account": "6212",
+      "acceptable_accounts": [
+        "6210"
+      ],
+      "vat_treatment": "domestic_25"
+    }
+  },
+  {
+    "id": "booking-003",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Broadband for the office",
+    "rationale": "Datakommunikation bokförs på 6230.",
+    "input": {
+      "company": {
+        "entity_type": "enskild_firma",
+        "vat_registered": true,
+        "accounting_method": "cash",
+        "business": "Frilansande grafisk formgivare"
+      },
+      "transaction": {
+        "date": "2026-04-30",
+        "amount": -498.75,
+        "currency": "SEK",
+        "counterpart": "Bahnhof AB",
+        "description": "Bredband kontor april",
+        "underlag": "Fiber 1000/1000 399,00 exkl moms, moms 99,75."
+      }
+    },
+    "gold": {
+      "account": "6230",
+      "vat_treatment": "domestic_25"
+    }
+  },
+  {
+    "id": "booking-004",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Office supplies",
+    "rationale": "Kontorsmateriel bokförs på 6110.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Redovisningsbyrå"
+      },
+      "transaction": {
+        "date": "2026-03-14",
+        "amount": -437.5,
+        "currency": "SEK",
+        "counterpart": "Clas Ohlson",
+        "description": "Kortköp kontorsmaterial",
+        "underlag": "Pärmar, pennor, skrivarpapper. Totalt 437,50 varav moms 87,50."
+      }
+    },
+    "gold": {
+      "account": "6110",
+      "vat_treatment": "domestic_25"
+    }
+  },
+  {
+    "id": "booking-005",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Swedish SaaS subscription with Swedish VAT",
+    "rationale": "Programvara från svensk leverantör: 5420 med 25 % moms. Kontrast mot booking-020 där motsvarande tjänst köps från EU-leverantör med omvänd betalningsskyldighet.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "E-handelsbolag"
+      },
+      "transaction": {
+        "date": "2026-05-02",
+        "amount": -373.75,
+        "currency": "SEK",
+        "counterpart": "Fortnox AB",
+        "description": "Fortnox abonnemang maj",
+        "underlag": "Programlicens 299,00 exkl moms, moms 25 % 74,75."
+      }
+    },
+    "gold": {
+      "account": "5420",
+      "acceptable_accounts": [
+        "6540"
+      ],
+      "vat_treatment": "domestic_25"
+    }
+  },
+  {
+    "id": "booking-006",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Bank fees are VAT exempt",
+    "rationale": "Bankkostnader 6570; finansiella tjänster är momsfria enligt ML 10 kap.",
+    "law_ref": "ML 10 kap.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Bygghantverkare"
+      },
+      "transaction": {
+        "date": "2026-05-31",
+        "amount": -150.0,
+        "currency": "SEK",
+        "counterpart": "SEB",
+        "description": "Pris företagspaket maj"
+      }
+    },
+    "gold": {
+      "account": "6570",
+      "vat_treatment": "no_vat"
+    }
+  },
+  {
+    "id": "booking-007",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Business insurance is VAT exempt",
+    "rationale": "Företagsförsäkringar 6310; försäkringstjänster är momsfria.",
+    "law_ref": "ML 10 kap.",
+    "input": {
+      "company": {
+        "entity_type": "enskild_firma",
+        "vat_registered": true,
+        "accounting_method": "cash",
+        "business": "Snickeri"
+      },
+      "transaction": {
+        "date": "2026-01-10",
+        "amount": -4380.0,
+        "currency": "SEK",
+        "counterpart": "Länsförsäkringar",
+        "description": "Företagsförsäkring 2026"
+      }
+    },
+    "gold": {
+      "account": "6310",
+      "vat_treatment": "no_vat"
+    }
+  },
+  {
+    "id": "booking-008",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Train ticket at 6 % VAT",
+    "rationale": "Persontransport har 6 % moms; biljetter bokförs på 5810.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Managementkonsult"
+      },
+      "transaction": {
+        "date": "2026-04-08",
+        "amount": -742.0,
+        "currency": "SEK",
+        "counterpart": "SJ AB",
+        "description": "Tågbiljett Stockholm-Göteborg tur och retur",
+        "underlag": "Biljett 700,00 exkl moms, moms 6 % 42,00. Resa till kundmöte."
+      }
+    },
+    "gold": {
+      "account": "5810",
+      "acceptable_accounts": [
+        "5800",
+        "5890"
+      ],
+      "vat_treatment": "domestic_6"
+    }
+  },
+  {
+    "id": "booking-009",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Hotel night at 12 % VAT",
+    "rationale": "Logi har 12 % moms; kost och logi på 5830.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Managementkonsult"
+      },
+      "transaction": {
+        "date": "2026-04-09",
+        "amount": -1568.0,
+        "currency": "SEK",
+        "counterpart": "Scandic Hotels",
+        "description": "Hotell 1 natt tjänsteresa Göteborg",
+        "underlag": "Logi 1 400,00 exkl moms, moms 12 % 168,00."
+      }
+    },
+    "gold": {
+      "account": "5830",
+      "acceptable_accounts": [
+        "5800",
+        "5890"
+      ],
+      "vat_treatment": "domestic_12"
+    }
+  },
+  {
+    "id": "booking-010",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Electricity for business premises",
+    "rationale": "El för lokalen är 5020, 25 % moms.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Restaurang"
+      },
+      "transaction": {
+        "date": "2026-02-28",
+        "amount": -2250.0,
+        "currency": "SEK",
+        "counterpart": "Vattenfall AB",
+        "description": "El februari lokalen",
+        "underlag": "Elförbrukning 1 800,00 exkl moms, moms 25 % 450,00."
+      }
+    },
+    "gold": {
+      "account": "5020",
+      "vat_treatment": "domestic_25"
+    }
+  },
+  {
+    "id": "booking-011",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Cleaning service for the office",
+    "rationale": "Städning och renhållning är 5060.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Tandläkarklinik"
+      },
+      "transaction": {
+        "date": "2026-05-30",
+        "amount": -3000.0,
+        "currency": "SEK",
+        "counterpart": "Rena Lokaler Sverige AB",
+        "description": "Lokalstäd maj",
+        "underlag": "Städning kontor 2 400,00 exkl moms, moms 25 % 600,00."
+      }
+    },
+    "gold": {
+      "account": "5060",
+      "vat_treatment": "domestic_25",
+      "acceptable_accounts": [
+        "5061"
+      ]
+    }
+  },
+  {
+    "id": "booking-012",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Trade literature at 6 % VAT",
+    "rationale": "Facklitteratur är 6970; böcker har 6 % moms.",
+    "input": {
+      "company": {
+        "entity_type": "enskild_firma",
+        "vat_registered": true,
+        "accounting_method": "cash",
+        "business": "Advokatbyrå"
+      },
+      "transaction": {
+        "date": "2026-03-22",
+        "amount": -477.0,
+        "currency": "SEK",
+        "counterpart": "Adlibris",
+        "description": "Facklitteratur juridik",
+        "underlag": "2 böcker 450,00 exkl moms, moms 6 % 27,00."
+      }
+    },
+    "gold": {
+      "account": "6970",
+      "vat_treatment": "domestic_6"
+    }
+  },
+  {
+    "id": "booking-013",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Legal services",
+    "rationale": "Advokat- och rättegångskostnader är 6580.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Fastighetsbolag"
+      },
+      "transaction": {
+        "date": "2026-06-02",
+        "amount": -10000.0,
+        "currency": "SEK",
+        "counterpart": "Advokatfirman Nord KB",
+        "description": "Faktura 445 avtalsgranskning",
+        "underlag": "Juridisk rådgivning 8 000,00 exkl moms, moms 25 % 2 000,00."
+      }
+    },
+    "gold": {
+      "account": "6580",
+      "acceptable_accounts": [
+        "6550"
+      ],
+      "vat_treatment": "domestic_25"
+    }
+  },
+  {
+    "id": "booking-014",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Staff training",
+    "rationale": "Utbildning är 7610.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "IT-konsultbolag"
+      },
+      "transaction": {
+        "date": "2026-04-20",
+        "amount": -15000.0,
+        "currency": "SEK",
+        "counterpart": "Informator Utbildning AB",
+        "description": "Kubernetes-kurs 2 anställda",
+        "underlag": "Kursavgift 12 000,00 exkl moms, moms 25 % 3 000,00."
+      }
+    },
+    "gold": {
+      "account": "7610",
+      "vat_treatment": "domestic_25"
+    }
+  },
+  {
+    "id": "booking-015",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Web hosting from a Swedish provider",
+    "rationale": "Webbhotell/domän från svensk leverantör är en IT-tjänst, 6540.",
+    "input": {
+      "company": {
+        "entity_type": "enskild_firma",
+        "vat_registered": true,
+        "accounting_method": "cash",
+        "business": "Webbutvecklare"
+      },
+      "transaction": {
+        "date": "2026-01-15",
+        "amount": -186.25,
+        "currency": "SEK",
+        "counterpart": "Loopia AB",
+        "description": "Webbhotell och domän 12 mån",
+        "underlag": "Webbhotell 149,00 exkl moms, moms 25 % 37,25."
+      }
+    },
+    "gold": {
+      "account": "6540",
+      "acceptable_accounts": [
+        "5420",
+        "6230"
+      ],
+      "vat_treatment": "domestic_25"
+    }
+  },
+  {
+    "id": "booking-016",
+    "suite": "booking",
+    "data_class": "public",
+    "difficulty": "core",
+    "probe": "Postage stamps are VAT exempt",
+    "rationale": "Porto är 6250. Frimärken (samhällsomfattande posttjänst) är momsfria.",
+    "input": {
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Redovisningsbyrå"
+      },
+      "transaction": {
+        "date": "2026-02-11",
+        "amount": -264.0,
+        "currency": "SEK",
+        "counterpart": "PostNord Sverige AB",
+        "description": "Frimärken",
+        "underlag": "Frimärken 24 st. Momsfritt enligt ML (samhällsomfattande posttjänst)."
+      }
+    },
+    "gold": {
+      "account": "6250",
+      "vat_treatment": "no_vat"
+    }
+  }
+]
