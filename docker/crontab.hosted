@@ -47,5 +47,6 @@
 45 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/invoice-inbox/underlag-reconcile/cron
 15 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/bookkeeping/accruals/post-due/cron
 30 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/receipt-hunt/cron
+45 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/notifications/bookkeeping-digest/cron
 */10 * * * *        curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/peppol/inbound/cron
 5,20,35,50 * * * *  curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/peppol/outbound/status/cron
