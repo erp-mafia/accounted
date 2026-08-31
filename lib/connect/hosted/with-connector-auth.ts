@@ -32,10 +32,15 @@ export interface ConnectorContext {
 type ConnectorHandler = (request: Request, ctx: ConnectorContext) => Promise<NextResponse | Response>
 
 export function extractConnectorKey(request: Request): string | null {
+  // X-Connector-Key wins over Authorization: its sole purpose is the proxied
+  // call where Authorization carries an UPSTREAM token (the SKV data proxy
+  // sends both); hashing the upstream token instead would 401 every such
+  // request. Plain hosted calls send only Authorization: Bearer gnubok_ck_.
+  const header = request.headers.get(CONNECTOR_KEY_HEADER)
+  if (header?.trim()) return header.trim()
   const auth = request.headers.get('authorization')
   if (auth?.startsWith('Bearer ')) return auth.slice(7).trim() || null
-  const header = request.headers.get(CONNECTOR_KEY_HEADER)
-  return header?.trim() || null
+  return null
 }
 
 export function withConnectorAuth(

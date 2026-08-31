@@ -36,10 +36,14 @@ beforeEach(() => {
 })
 
 describe('extractConnectorKey', () => {
-  it('reads Bearer first, then X-Connector-Key', () => {
+  it('reads X-Connector-Key first (its whole purpose is Authorization carrying an upstream token), then Bearer', () => {
     expect(extractConnectorKey(req({ authorization: 'Bearer gnubok_ck_a' }))).toBe('gnubok_ck_a')
     expect(extractConnectorKey(req({ 'x-connector-key': 'gnubok_ck_b' }))).toBe('gnubok_ck_b')
-    expect(extractConnectorKey(req({ authorization: 'Bearer gnubok_ck_a', 'x-connector-key': 'gnubok_ck_b' }))).toBe('gnubok_ck_a')
+    // The proxied-call shape (SKV data proxy): Authorization is the user's
+    // upstream SKV token, X-Connector-Key authenticates the instance. The
+    // connector key MUST win or every such request 401s on a hashed upstream
+    // token.
+    expect(extractConnectorKey(req({ authorization: 'Bearer upstream-skv-token', 'x-connector-key': 'gnubok_ck_b' }))).toBe('gnubok_ck_b')
     expect(extractConnectorKey(req())).toBeNull()
     expect(extractConnectorKey(req({ authorization: 'Basic xyz' }))).toBeNull()
   })
