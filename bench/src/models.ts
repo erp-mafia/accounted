@@ -91,13 +91,13 @@ export const MODELS: ModelSpec[] = [
     label: 'Claude Fable 5',
     vendor: 'Anthropic',
     open_weights: false,
-    provider: 'anthropic',
-    apiModel: 'claude-fable-5',
+    provider: 'openrouter',
+    apiModel: 'anthropic/claude-fable-5',
     vision: true,
     pricing: { inputPerMTok: 10, outputPerMTok: 50 },
-    residency: 'anthropic-api',
+    residency: 'openrouter-various',
     enabled: false,
-    notes: 'Not on the Bedrock EU account and the direct API key lacks credits; enable once either exists. Task author disclosure: bench tasks were authored with Claude; see methodology.',
+    notes: 'Runnable via OpenRouter at vendor list ($10/$50); a full sweep costs ~$25, enable after topping up. Task author disclosure: bench tasks were authored with Claude (Fable 5), so its own scores carry the authorship-bias caveat doubly; see methodology.',
   },
 
   // --- OpenRouter models (closed + open weights). Slugs VERIFIED against
