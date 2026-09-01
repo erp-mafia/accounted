@@ -342,8 +342,9 @@ describe('DELETE /api/transactions/[id]/attach-document', () => {
     const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(200)
-    // Nothing was pinned, so there is no inbox back-link to undo.
-    expect(mockSupabase.from.mock.calls.map((c) => c[0])).not.toContain('invoice_inbox_items')
+    // The back-link is cleared even with nothing pinned: a retry after a
+    // partial failure (pin gone, unlink failed) must still clear it.
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([[{ matched_transaction_id: null }]])
   })
 
   it('clears the inbox back-link for the detached document (else booking re-anchors it)', async () => {
@@ -359,23 +360,29 @@ describe('DELETE /api/transactions/[id]/attach-document', () => {
     expect(status).toBe(200)
     expect(findCalls('invoice_inbox_items', 'update')).toEqual([[{ matched_transaction_id: null }]])
     const eqArgs = findCalls('invoice_inbox_items', 'eq')
-    expect(eqArgs).toContainEqual(['document_id', 'doc-1'])
+    // Scoped by transaction (unique index: at most one item points here), not
+    // by the pinned doc, so a stale item from the replace path is cleared too.
     expect(eqArgs).toContainEqual(['matched_transaction_id', 'tx-1'])
     expect(eqArgs).toContainEqual(['company_id', 'company-1'])
+    expect(eqArgs).not.toContainEqual(['document_id', 'doc-1'])
     // Items already consumed by a verifikat are left alone.
     expect(findCalls('invoice_inbox_items', 'is')).toContainEqual(['created_journal_entry_id', null])
   })
 
-  it('tolerates a failing inbox unlink: the pin removal is the primary effect', async () => {
+  it('reports a failing inbox unlink as a partial failure, never as success', async () => {
+    // A stale back-link is the exact defect the detach exists to prevent, so
+    // a 200 here would hide a compliance hazard. The pin is already gone; the
+    // message says so and that a retry is idempotent.
     enqueue({ data: { id: 'tx-1', document_id: 'doc-1' }, error: null }) // tx fetch
     enqueue({ data: { journal_entry_id: null }, error: null }) // doc fetch
     enqueue({ data: null, error: null }) // transactions update
     enqueue({ data: null, error: { message: 'rls denied' } }) // inbox unlink fails
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse<{ data: { document_id: string | null } }>(res)
-    expect(status).toBe(200)
-    expect(body.data.document_id).toBeNull()
+    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    expect(status).toBe(500)
+    expect(body.error).toContain('kopplades loss')
+    expect(body.error).toContain('idempotent')
     expect(spy).toHaveBeenCalledWith(
       '[attach-document] Failed to unlink inbox item:',
       expect.objectContaining({ message: 'rls denied' }),

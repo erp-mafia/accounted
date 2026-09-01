@@ -292,20 +292,32 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     // book / bulk-book runs propagateUnderlagForBookedTransaction, which
     // anchors the DETACHED document onto the new verifikation as immutable
     // underlag (BFL 5 kap 7 §: the verifikat would cite a receipt the user
-    // rejected). Scoped to the previously pinned doc and to items not yet
-    // consumed by a verifikat. Best-effort like the POST side: the pin
-    // removal is the primary effect and stays committed.
-    if (tx.document_id) {
-      const { error: inboxUnlinkErr } = await supabase
-        .from('invoice_inbox_items')
-        .update({ matched_transaction_id: null })
-        .eq('document_id', tx.document_id)
-        .eq('company_id', companyId)
-        .eq('matched_transaction_id', transactionId)
-        .is('created_journal_entry_id', null)
-      if (inboxUnlinkErr) {
-        console.error('[attach-document] Failed to unlink inbox item:', inboxUnlinkErr)
-      }
+    // rejected). Scoped by transaction, not by the pinned doc: the unique
+    // index on matched_transaction_id means at most one item points here, and
+    // a stale item whose doc differs from the pin (replace path) would
+    // re-anchor just the same. Runs even when nothing was pinned, so a retry
+    // after a partial failure below still clears the link. Items already
+    // consumed by a verifikat are left alone.
+    const { error: inboxUnlinkErr } = await supabase
+      .from('invoice_inbox_items')
+      .update({ matched_transaction_id: null })
+      .eq('company_id', companyId)
+      .eq('matched_transaction_id', transactionId)
+      .is('created_journal_entry_id', null)
+    if (inboxUnlinkErr) {
+      // Not best-effort: a stale back-link is the exact defect this detach
+      // exists to prevent, so a "succeeded" response here would hide a
+      // compliance hazard. The pin removal above is committed and stays;
+      // say so, and that a retry is idempotent (mirrors the POST side's
+      // propagation failure).
+      console.error('[attach-document] Failed to unlink inbox item:', inboxUnlinkErr)
+      return NextResponse.json(
+        {
+          error:
+            'Underlaget kopplades loss från transaktionen men inkorgsposten kunde inte släppas. Försök igen: operationen är idempotent.',
+        },
+        { status: 500 },
+      )
     }
 
     return NextResponse.json({ data: { transaction_id: transactionId, document_id: null } })
