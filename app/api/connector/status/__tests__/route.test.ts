@@ -45,6 +45,21 @@ describe('GET /api/connector/status', () => {
     expect(body.data.granted_capabilities).toEqual(['bank_sync'])
   })
 
+  it('is Cache-Control: no-store on both branches', async () => {
+    const selfHost = await GET(createMockRequest('/x'), { params: Promise.resolve({}) })
+    expect(selfHost.headers.get('Cache-Control')).toBe('no-store')
+    selfHosted = false
+    const hosted = await GET(createMockRequest('/x'), { params: Promise.resolve({}) })
+    expect(hosted.headers.get('Cache-Control')).toBe('no-store')
+  })
+
+  it('echoes connect_url without userinfo, query or fragment', async () => {
+    vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_x')
+    vi.stubEnv('GNUBOK_CONNECT_URL', 'https://op:secret@connect.example.se/?token=secret')
+    const { body } = await parseJsonResponse<{ data: { connect_url: string } }>(await GET(createMockRequest('/x'), { params: Promise.resolve({}) }))
+    expect(body.data.connect_url).toBe('https://connect.example.se')
+  })
+
   it('reports own_credentials for an upstream configured directly on the instance', async () => {
     vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_x')
     vi.stubEnv('ENABLE_BANKING_APP_ID', 'app')
