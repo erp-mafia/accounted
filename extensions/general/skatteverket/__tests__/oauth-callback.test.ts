@@ -168,6 +168,7 @@ describe('skatteverket OAuth callback', () => {
       'abc',
       'https://app.example/api/extensions/ext/skatteverket/callback',
       'verifier-1',
+      undefined,
     )
     expect(mockStoreTokens).toHaveBeenCalledWith(
       expect.anything(),
@@ -277,6 +278,42 @@ describe('skatteverket OAuth callback', () => {
     expect(service.inCalls).toHaveLength(1)
     expect(service.inCalls[0]).toEqual(
       expect.arrayContaining(['oauth_state', 'oauth_user_id', 'oauth_code_verifier']),
+    )
+  })
+
+  it('passes a stored connector_state into the exchange and cleans it up (connector-mode instance)', async () => {
+    const service = makeServiceSupabase({ oauth_connector_state: 'signed-cs' })
+    mockCreateServiceClient.mockReturnValue(service as any)
+    mockRefresh.mockResolvedValue({ synced: true, reconciled: 0 } as any)
+
+    const response = await callbackRoute().handler(
+      callbackRequest(`code=abc&state=${STATE}`),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockExchange).toHaveBeenCalledWith(
+      'abc',
+      'https://app.example/api/extensions/ext/skatteverket/callback',
+      'verifier-1',
+      'signed-cs',
+    )
+    // The one-shot connector state must be deleted with the other flow rows.
+    expect(service.inCalls[0]).toEqual(expect.arrayContaining(['oauth_connector_state']))
+  })
+
+  it('falls back to the bounced connector_state query param when no row was stored', async () => {
+    mockRefresh.mockResolvedValue({ synced: true, reconciled: 0 } as any)
+
+    const response = await callbackRoute().handler(
+      callbackRequest(`code=abc&state=${STATE}&connector_state=bounced-cs`),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockExchange).toHaveBeenCalledWith(
+      'abc',
+      'https://app.example/api/extensions/ext/skatteverket/callback',
+      'verifier-1',
+      'bounced-cs',
     )
   })
 
