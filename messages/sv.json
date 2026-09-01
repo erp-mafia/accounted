@@ -918,6 +918,7 @@
     "th_amount": "Belopp",
     "th_remaining": "Kvar att betala",
     "th_status": "Status",
+    "sort_by": "Sortera efter {column}",
     "status_registered": "Registrerad",
     "status_approved": "Godkänd",
     "status_paid": "Betald",

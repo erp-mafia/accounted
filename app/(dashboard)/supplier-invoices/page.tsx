@@ -14,7 +14,7 @@ import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { Plus, FileInput, Lock } from 'lucide-react'
+import { Plus, FileInput, Lock, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react'
 import Link from 'next/link'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -23,6 +23,11 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
+import {
+  sortSupplierInvoiceList,
+  type SupplierInvoiceListSort,
+  type SupplierInvoiceListSortColumn,
+} from '@/lib/supplier-invoices/supplier-invoice-list-sort'
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { FiscalPeriod, SupplierInvoice } from '@/types'
@@ -86,6 +91,59 @@ const TAB_LABEL_KEYS: Record<ListTab, string> = {
   paid: 'tab_paid',
 }
 
+// Same shape as the invoices list header (app/(dashboard)/invoices/page.tsx).
+// Like the verifikat list (and unlike /invoices, which starts unsorted), this
+// list has a meaningful default order (förfallodatum stigande from the API),
+// so the click cycle is tri-state: asc → desc → back to the default.
+interface SortableHeaderProps {
+  label: string
+  sortLabel: string
+  column: SupplierInvoiceListSortColumn
+  sort: SupplierInvoiceListSort | null
+  onSort: (column: SupplierInvoiceListSortColumn) => void
+  className?: string
+  align?: 'left' | 'right'
+}
+
+function SortableHeader({
+  label,
+  sortLabel,
+  column,
+  sort,
+  onSort,
+  className,
+  align = 'left',
+}: SortableHeaderProps) {
+  const active = sort?.column === column
+  const direction = active ? sort.direction : null
+  const SortIcon = direction === 'asc' ? ArrowUp : direction === 'desc' ? ArrowDown : ArrowUpDown
+
+  return (
+    <th
+      className={cn(TH_CLASS, className)}
+      aria-sort={direction === 'asc' ? 'ascending' : direction === 'desc' ? 'descending' : 'none'}
+    >
+      {/* Preflight sets text-transform: none on buttons, which would drop the
+          TH_CLASS uppercase idiom inside the sort control. */}
+      <button
+        type="button"
+        className={cn(
+          '-mx-2 inline-flex min-h-10 items-center gap-1 rounded-sm px-2 uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+          align === 'right' && 'ml-auto justify-end',
+        )}
+        aria-label={sortLabel}
+        onClick={() => onSort(column)}
+      >
+        <span>{label}</span>
+        <SortIcon
+          aria-hidden="true"
+          className={cn('h-3.5 w-3.5 shrink-0', !active && 'text-muted-foreground/60')}
+        />
+      </button>
+    </th>
+  )
+}
+
 export default function SupplierInvoicesPage() {
   const t = useTranslations('supplier_invoices')
   const { canWrite } = useCanWrite()
@@ -97,6 +155,8 @@ export default function SupplierInvoicesPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<ListTab>('all')
   const [searchTerm, setSearchTerm] = useState('')
+  // null = the API's default order (förfallodatum stigande).
+  const [sort, setSort] = useState<SupplierInvoiceListSort | null>(null)
   // Fiscal-year scope (convention 8): null = all years.
   const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
   const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
@@ -207,11 +267,21 @@ export default function SupplierInvoicesPage() {
     return matchesTab && matchesSearch && matchesFy
   })
 
-  // Detail-pager context: the filtered list as rendered, written when the
-  // user navigates into a row.
+  // Tri-state cycle: asc → desc → back to the API default (due date asc).
+  const updateSort = (column: SupplierInvoiceListSortColumn) => {
+    setSort((current) => {
+      if (current?.column !== column) return { column, direction: 'asc' }
+      return current.direction === 'asc' ? { column, direction: 'desc' } : null
+    })
+  }
+
+  const sortedInvoices = sort ? sortSupplierInvoiceList(filteredInvoices, sort) : filteredInvoices
+
+  // Detail-pager context: the list as rendered (filtered + sorted), written
+  // when the user navigates into a row.
   const rememberListContext = () => {
     writeListContext(listContextKey('supplier-invoices', company?.id), {
-      ids: filteredInvoices.map((inv) => inv.id),
+      ids: sortedInvoices.map((inv) => inv.id),
     })
   }
 
@@ -419,18 +489,69 @@ export default function SupplierInvoicesPage() {
             <thead>
               <tr>
                 {canWrite && <th className={cn(TH_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></th>}
-                <th className={cn(TH_CLASS, 'w-full')}>{t('th_supplier')}</th>
-                <th className={TH_CLASS}>{t('th_invoice_number')}</th>
-                <th className={cn(TH_CLASS, 'hidden text-right md:table-cell')}>{t('th_invoice_date')}</th>
-                <th className={cn(TH_CLASS, 'hidden text-right sm:table-cell')}>{t('th_due_date')}</th>
-                <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
-                <th className={cn(TH_CLASS, 'hidden text-right lg:table-cell')}>{t('th_remaining')}</th>
-                <th className={TH_CLASS}>{t('th_status')}</th>
+                <SortableHeader
+                  label={t('th_supplier')}
+                  sortLabel={t('sort_by', { column: t('th_supplier') })}
+                  column="supplier"
+                  sort={sort}
+                  onSort={updateSort}
+                  className="w-full"
+                />
+                <SortableHeader
+                  label={t('th_invoice_number')}
+                  sortLabel={t('sort_by', { column: t('th_invoice_number') })}
+                  column="number"
+                  sort={sort}
+                  onSort={updateSort}
+                />
+                <SortableHeader
+                  label={t('th_invoice_date')}
+                  sortLabel={t('sort_by', { column: t('th_invoice_date') })}
+                  column="invoice_date"
+                  sort={sort}
+                  onSort={updateSort}
+                  className="hidden text-right md:table-cell"
+                  align="right"
+                />
+                <SortableHeader
+                  label={t('th_due_date')}
+                  sortLabel={t('sort_by', { column: t('th_due_date') })}
+                  column="due"
+                  sort={sort}
+                  onSort={updateSort}
+                  className="hidden text-right sm:table-cell"
+                  align="right"
+                />
+                <SortableHeader
+                  label={t('th_amount')}
+                  sortLabel={t('sort_by', { column: t('th_amount') })}
+                  column="amount"
+                  sort={sort}
+                  onSort={updateSort}
+                  className="text-right"
+                  align="right"
+                />
+                <SortableHeader
+                  label={t('th_remaining')}
+                  sortLabel={t('sort_by', { column: t('th_remaining') })}
+                  column="remaining"
+                  sort={sort}
+                  onSort={updateSort}
+                  className="hidden text-right lg:table-cell"
+                  align="right"
+                />
+                <SortableHeader
+                  label={t('th_status')}
+                  sortLabel={t('sort_by', { column: t('th_status') })}
+                  column="status"
+                  sort={sort}
+                  onSort={updateSort}
+                />
                 <th className={cn(TH_CLASS, 'w-[96px]')} aria-hidden="true"></th>
               </tr>
             </thead>
             <tbody className="stagger-enter">
-              {filteredInvoices.map((inv) => {
+              {sortedInvoices.map((inv) => {
                 const chipVariant = STATUS_VARIANTS[inv.status] || 'secondary'
                 const chipLabel =
                   inv.status === 'paid' && inv.paid_at
