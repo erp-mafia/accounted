@@ -18,6 +18,7 @@ import {
   getAllTransactions,
   getAllTransactionsWithRaw,
   convertTransaction,
+  deleteSession,
   probeSessionHealth,
   startAuthorization,
   createSession,
@@ -668,5 +669,75 @@ describe('connector mode', () => {
     expect(url).toContain('enablebanking.com')
     expect(headers['X-Connector-Company']).toBeUndefined()
     expect(headers['Authorization']).toBe('Bearer test-jwt-token')
+  })
+})
+
+/**
+ * Log levels for the two conditions that are expected rather than broken.
+ *
+ * A PSD2 consent that ran out and a session Enable Banking has already dropped
+ * are both handled: the sync flips the connection to 'expired' and asks for a
+ * re-authorization, and the disconnect carries on regardless. Logging them at
+ * error filled the production error panel with events nobody could act on and
+ * buried the genuine ASPSP failures next to them. The thrown errors are
+ * unchanged: only the level moves.
+ */
+describe('expected-condition log levels', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+  let errorSpy: ReturnType<typeof vi.spyOn>
+  let warnSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    fetchSpy.mockRestore()
+    errorSpy.mockRestore()
+    warnSpy.mockRestore()
+  })
+
+  it('logs an expired bank session at warn, and still throws SessionExpiredError', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(JSON.stringify({ code: 'EXPIRED_SESSION' }), { status: 401 })
+    )
+
+    await expect(
+      getAllTransactionsWithRaw('acc-1', '2024-01-01', '2024-12-31')
+    ).rejects.toThrow('Bank session expired')
+
+    expect(warnSpy).toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('still logs a genuine ASPSP failure at error', async () => {
+    // 500 is retried before it gives up; every attempt is the same failure.
+    fetchSpy.mockResolvedValue(new Response('{"message":"internal error"}', { status: 500 }))
+
+    await expect(
+      getAllTransactionsWithRaw('acc-1', '2024-01-01', '2024-12-31')
+    ).rejects.toThrow('Failed to get transactions')
+
+    expect(errorSpy).toHaveBeenCalled()
+  })
+
+  it('logs a session that is already gone at Enable Banking at warn', async () => {
+    fetchSpy.mockResolvedValue(new Response('', { status: 404 }))
+
+    await expect(deleteSession('session-1')).rejects.toThrow('Failed to revoke session')
+
+    expect(warnSpy).toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('still logs an unexpected revoke failure at error', async () => {
+    fetchSpy.mockResolvedValue(new Response('{"message":"boom"}', { status: 500 }))
+
+    await expect(deleteSession('session-1')).rejects.toThrow('Failed to revoke session')
+
+    expect(errorSpy).toHaveBeenCalled()
   })
 })

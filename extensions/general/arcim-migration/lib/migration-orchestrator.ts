@@ -22,7 +22,9 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { MigrationProgress, MigrationResults, MigrationStepError, SkipReasons } from '../types'
 import type { ProviderName } from '@/lib/providers/types'
 import { classifyProviderError } from '@/lib/providers/with-provider-call'
+import { fortnoxErrorMessage } from '@/lib/providers/fortnox/client'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { getProviderResourceForbiddenMessage } from '@/lib/errors/get-error-message'
 import type { CustomerDto, SupplierDto, SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/providers/dto'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
 import { normalizeVatNumber, isValidSwedishVatNumber } from '@/lib/vat/vat-number'
@@ -101,12 +103,41 @@ function chunk<T>(arr: T[], size: number): T[][] {
  * "successful" migration with zero rows (the failure mode that sent a real
  * config issue to the bug tracker). Rethrow so /migrate answers with the
  * structured code and the wizard shows the actual remediation.
+ *
+ * PROVIDER_RESOURCE_FORBIDDEN is deliberately NOT here: it means the grant
+ * answered other calls in this same run and only one register is closed, so
+ * the remaining steps have every chance of succeeding.
  */
 const FATAL_STEP_ERROR_CODES = new Set([
   'PROVIDER_AUTH_EXPIRED',
   'PROVIDER_LICENSE_MISSING',
   'PROVIDER_API_MODULE_INACTIVE',
 ])
+
+/**
+ * What this run has learned about the grant, threaded through the steps so a
+ * later failure can be read in context.
+ */
+interface ProviderRunState {
+  /**
+   * True once any provider fetch in this run has returned data: the access
+   * token provably works, so a 403 after that point is the provider closing
+   * one register, not the grant dying.
+   *
+   * Set it from rows actually returned, never from a fetch that merely
+   * resolved. fetchCustomersDirect and friends answer [] without issuing any
+   * request when the provider needs a company id this consent has none of
+   * (Bokio, Björn Lundén) or does not expose the register at all (WINT
+   * suppliers), and a step that never spoke to the provider proves nothing
+   * about the grant. Reading it as proof would downgrade a genuine auth
+   * expiry on the NEXT step to a non-fatal per-register denial, and the run
+   * would report success with empty sections: exactly what
+   * FATAL_STEP_ERROR_CODES exists to prevent. An empty but real answer only
+   * costs the better message on a later 403, so under-claiming is the safe
+   * direction.
+   */
+  grantProven: boolean
+}
 
 /**
  * Record a failed step on the results so the UI can render it. Non-fatal
@@ -118,13 +149,29 @@ function recordStepError(
   results: MigrationResults,
   step: MigrationStepError['step'],
   err: unknown,
+  runState: ProviderRunState,
 ): void {
-  const code = classifyProviderError(err)
+  // Company information is step 1, so grantProven is false there by
+  // definition. Its 403 is still no proof of a dead grant: the fetch used to
+  // swallow every error and return null, and a grant that really is dead says
+  // so on the next step, which stays fatal. Letting the opening call abort the
+  // run would turn a partial import into no import at all.
+  const grantProven = runState.grantProven || step === 'companyInfo'
+  const code = classifyProviderError(err, { grantProven })
   if (code && FATAL_STEP_ERROR_CODES.has(code)) throw err
 
   const rawMessage = err instanceof Error ? err.message : String(err)
   const entry = code ? getErrorEntry(code) : undefined
-  const message = entry?.message_sv ?? `Leverantören svarade med ett fel: ${rawMessage}`
+  let message: string
+  if (code === 'PROVIDER_RESOURCE_FORBIDDEN') {
+    // The registry cannot hold this copy: the useful half is the provider's
+    // own sentence naming the register, which only the error carries. Fortnox
+    // is the one provider that sends it (fortnoxErrorMessage caps it at 300
+    // chars); the others send an opaque body and get the base message alone.
+    message = getProviderResourceForbiddenMessage(fortnoxErrorMessage(err))
+  } else {
+    message = entry?.message_sv ?? `Leverantören svarade med ett fel: ${rawMessage}`
+  }
 
   results.stepErrors = results.stepErrors ?? []
   results.stepErrors.push({ step, code, message })
@@ -165,6 +212,9 @@ function logFxUnresolved(kind: string, invoiceNumber: string, fx: FxUnresolved):
 export async function executeMigration(options: MigrationOptions): Promise<MigrationResults> {
   const { consentId, companyId, userId, supabase } = options
   const results: MigrationResults = {}
+  // What this run has proven about the grant, read by recordStepError: a 403
+  // once a call has already succeeded is one closed register, not a dead token.
+  const runState: ProviderRunState = { grantProven: false }
   // Every invoice this run inserted, with the booking voucher the provider
   // named for it. Linked to the SIE-imported registration verifikat after both
   // invoice steps (see the registration-link step below).
@@ -183,6 +233,10 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
       try {
         const companyInfo = await fetchCompanyInfoDirect(provider, accessToken, providerCompanyId)
         if (companyInfo) {
+          // A DTO means the provider answered on this token. A null does not:
+          // it also means "no company-information resource for this provider",
+          // which is decided before any request goes out.
+          runState.grantProven = true
           const mapped = mapCompanyInfo(companyInfo)
           const { data: existing } = await supabase
             .from('company_settings')
@@ -228,7 +282,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
       } catch (err) {
         console.error('Failed to import company info:', err)
         results.companyInfo = { imported: false }
-        recordStepError(results, 'companyInfo', err)
+        recordStepError(results, 'companyInfo', err, runState)
       }
     }
 
@@ -244,6 +298,8 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
       emitProgress(options, { status: 'importing', currentStep: 'Importerar kunder...', progress: 20 })
       try {
         const customers = await fetchCustomersDirect(provider, accessToken, providerCompanyId)
+        // Rows, not a resolved promise: see ProviderRunState.grantProven.
+        if (customers.length > 0) runState.grantProven = true
 
         // One bulk read instead of N `.eq('org_number', ...)` lookups.
         type ExistingCustomer = ExistingCustomerMetadata & {
@@ -392,7 +448,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         results.customers = { total: customers.length, imported, updated, skipped, skipReasons, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import customers:', err)
-        recordStepError(results, 'customers', err)
+        recordStepError(results, 'customers', err, runState)
       }
     }
 
@@ -405,6 +461,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
       emitProgress(options, { status: 'importing', currentStep: 'Importerar leverantörer...', progress: 40 })
       try {
         const suppliers = await fetchSuppliersDirect(provider, accessToken, providerCompanyId)
+        if (suppliers.length > 0) runState.grantProven = true
 
         const existingSuppliers = await fetchAllRows<{ id: string; org_number: string | null; name: string | null }>(
           ({ from, to }) =>
@@ -492,7 +549,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         results.suppliers = { total: suppliers.length, imported, skipped, skipReasons, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import suppliers:', err)
-        recordStepError(results, 'suppliers', err)
+        recordStepError(results, 'suppliers', err, runState)
       }
     }
 
@@ -505,6 +562,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         const { invoices, hydration, unhydratedIds } = await fetchSalesInvoicesHydrated(
           provider, accessToken, providerCompanyId,
         )
+        if (invoices.length > 0) runState.grantProven = true
         console.log(`[migration] Sales invoices: ${invoices.length} total`)
 
         // Bulk-load existing invoice numbers once.
@@ -659,6 +717,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         )
         let fxUnresolved = 0
         let vatUnresolved = 0
+        let creditNotesUnlinked = 0
 
         // Phase C: chunk-insert invoices + their line items.
         for (const batch of chunk(ready, INSERT_CHUNK_SIZE)) {
@@ -711,6 +770,9 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
                 + 'imported with gross as subtotal and a null rate.'
               )
             }
+            if (mappedBatch[i].creditNoteUnlinked) {
+              creditNotesUnlinked++
+            }
             imported++
           }
 
@@ -724,10 +786,10 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
         }
 
-        results.salesInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, hydration, errorSample: errorSample ?? undefined }
+        results.salesInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, creditNotesUnlinked, hydration, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import sales invoices:', err)
-        recordStepError(results, 'salesInvoices', err)
+        recordStepError(results, 'salesInvoices', err, runState)
       }
     }
 
@@ -738,6 +800,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         const { invoices, hydration, unhydratedIds } = await fetchSupplierInvoicesHydrated(
           provider, accessToken, providerCompanyId,
         )
+        if (invoices.length > 0) runState.grantProven = true
         console.log(`[migration] Supplier invoices: ${invoices.length} total`)
 
         // Load existing (supplier_invoice_number, supplier_id) pairs once.
@@ -974,7 +1037,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         results.supplierInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, hydration, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import supplier invoices:', err)
-        recordStepError(results, 'supplierInvoices', err)
+        recordStepError(results, 'supplierInvoices', err, runState)
       }
     }
 
@@ -1009,7 +1072,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         )
       } catch (err) {
         console.error('Failed to link registration vouchers:', err)
-        recordStepError(results, 'registrationLinks', err)
+        recordStepError(results, 'registrationLinks', err, runState)
       }
     }
 
@@ -1029,7 +1092,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           results.assets = { total: 0, imported: 0, skipped: 0, scopesMissing: true }
         } else {
           console.error('Failed to import assets:', err)
-          recordStepError(results, 'assets', err)
+          recordStepError(results, 'assets', err, runState)
         }
       }
     }
@@ -1055,7 +1118,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         )
       } catch (err) {
         console.error('Failed to reconcile supplier invoice payments:', err)
-        recordStepError(results, 'reconciliation', err)
+        recordStepError(results, 'reconciliation', err, runState)
       }
     }
 

@@ -116,6 +116,13 @@ export interface InvoiceStepResult {
   skipReasons?: SkipReasons
   fxUnresolved?: number
   vatUnresolved?: number
+  /**
+   * Credit notes imported without a credited_invoice_id. No provider DTO
+   * carries a reference to the invoice being credited, so the link cannot be
+   * resolved at import time; the amounts are reversed and the record is
+   * complete, but the pairing is missing and the user is told so.
+   */
+  creditNotesUnlinked?: number
   hydration?: HydrationReport
   errorSample?: string
 }
