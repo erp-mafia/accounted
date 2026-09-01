@@ -91,9 +91,9 @@ Förenklad faktura (max 4000 SEK inkl moms) has reduced requirements.
 - Kontantmetod: omsättning normalt < 3 MSEK
 - Revisionspliktig (AB): minst 2 av 3: >3 anställda, >1.5 MSEK balansomslutning, >3 MSEK nettoomsättning (two consecutive years)
 
-### System documentation (BFNAR 2013:2 kap 8)
-Bokföringssystem must have:
-1. Systemdokumentation: describes the system, how it works, its controls
-2. Behandlingshistorik: log of changes, who did what, when
+### System documentation (BFL 5 kap 11 §, BFNAR 2013:2 kap 9)
+Bokföringssystem must have (kapitel 8 is arkivering; this is kapitel 9, verified against BFN's consolidated text 2026-08-21):
+1. Systemdokumentation (p. 9.2-9.15): kontoplan, samlingsplan, arkivplan, verifikationsnummerserier, verifieringskedjor, behandlingsregler, informationsflöden
+2. Behandlingshistorik (p. 9.16): every bokföringspost with registreringsdatum, and changes to the system that affect processing (kontoplan, behandlingsregler such as automatkonteringar and percentages, program versions) with dates; p. 9.15 asks the systemdokumentation to say where and how it is produced
 
 Your software must produce or support both. This is not optional.

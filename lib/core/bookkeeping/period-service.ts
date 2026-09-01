@@ -323,7 +323,7 @@ export async function unlockPeriod(
 
   const result = updated as FiscalPeriod
 
-  // BFNAR 2013:2 kap. 8 (behandlingshistorik): unlocking a locked period is a
+  // BFNAR 2013:2 p. 9.16 (behandlingshistorik): unlocking a locked period is a
   // sensitive control change. Persist it to the immutable audit_log (not just
   // event_log, which has 30-day TTL) so an auditor can reconstruct who
   // unlocked which period and when, even years later.
@@ -416,7 +416,7 @@ export async function closePeriod(
  *
  * Sets locked_at too (when missing) so the period carries the full
  * closed+locked state the enforcement triggers and readers expect, and writes
- * the immutable audit_log entry (BFNAR 2013:2 kap. 8: this is a control
+ * the immutable audit_log entry (BFNAR 2013:2 p. 9.16: this is a control
  * decision made by a person, not a year-end run).
  */
 export async function markPeriodClosedExternally(

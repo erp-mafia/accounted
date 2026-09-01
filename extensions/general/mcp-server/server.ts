@@ -187,7 +187,7 @@ import {
   projectToolInputSchema,
   resolveMcpCompanyContext,
 } from './company-routing'
-import { findUnknownArgKeys, listArgKeys } from './arg-guard'
+import { findUnknownArgKeys, listArgKeys, shortestExampleFor } from './arg-guard'
 import { findSupplierCandidates, type SupplierRow } from './supplier-candidates'
 import {
   matchSupplierByIdentity,
@@ -1461,13 +1461,20 @@ const PAGINATION_PROPS = {
   next_offset: { type: 'number', description: 'Offset for the next page (omitted on last page)' },
 } as const
 
+// Declared loosely on purpose. Every field here is transmitted once per
+// staged-write tool, and there are 58 of them in the default catalog, so a
+// character in this constant costs 58 characters of every agent's context.
+// `additionalProperties: false` stays: staging.test.ts pins the next hint as a
+// closed shape, and a guard whose reason is not in front of me is not a guard
+// to loosen for 420 tokens. Only args' redundant `additionalProperties: true`
+// went, which is the JSON Schema default anyway.
 const NEXT_ACTION_HINT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
     description: { type: 'string' },
     tool: { type: 'string' },
-    args: { type: 'object', additionalProperties: true },
+    args: { type: 'object' },
     resource: { type: 'string' },
   },
   required: ['description'],
@@ -1477,7 +1484,7 @@ const STAGED_OPERATION_SCHEMA = {
   type: 'object',
   properties: {
     staged: { type: 'boolean' },
-    operation_id: { type: 'string', description: 'UUID of the staged operation, present once persisted' },
+    operation_id: { type: 'string', description: 'Staged operation UUID, once persisted' },
     risk_level: { type: 'string', enum: ['low', 'medium', 'high'] },
     actor: { type: 'object' },
     dry_run: { type: 'boolean' },
@@ -1485,14 +1492,13 @@ const STAGED_OPERATION_SCHEMA = {
     message: { type: 'string' },
     approve: { type: 'object' },
     preview: { type: 'object' },
+    // Shape carried in prose rather than declared: the same three properties
+    // spelled out as JSON Schema cost 58x what one sentence costs, and the
+    // model reads the sentence either way. Same reason actor/approve/preview
+    // above have always been bare objects.
     period_status: {
       type: 'object',
-      description: 'Fiscal period covering the affärshändelse date. Use to detect locked/closed periods without a round-trip.',
-      properties: {
-        period_id: { type: ['string', 'null'] },
-        status: { type: 'string', enum: ['open', 'locked', 'closed'] },
-        lock_date: { type: ['string', 'null'] },
-      },
+      description: 'Period of the affärshändelse: period_id, status (open|locked|closed), lock_date. Detects a locked period without a round-trip.',
     },
     next: NEXT_ACTION_HINT_SCHEMA,
   },
@@ -3616,7 +3622,24 @@ export const tools: McpTool[] = [
       type: 'object',
       properties: {
         connected: { type: 'boolean' },
-        connections: { type: 'array', items: { type: 'object' } },
+        connections: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              connection_id: { type: 'string' },
+              bank: { type: ['string', 'null'] },
+              status: { type: 'string' },
+              since: { type: 'string' },
+              // Semantics live in the instructions string (runtime output), not
+              // here: every byte of this schema is charged against the
+              // tools/list context-budget ceiling (payload-size.bench.test.ts).
+              last_synced_at: { type: ['string', 'null'] },
+              consent_expires: { type: ['string', 'null'] },
+              error_message: { type: ['string', 'null'] },
+            },
+          },
+        },
         connect_url: { type: 'string' },
         instructions: { type: 'string' },
       },
@@ -3632,12 +3655,20 @@ export const tools: McpTool[] = [
     async execute(args, companyId, _userId, supabase) {
       const { data, error } = await supabase
         .from('bank_connections')
-        .select('id, bank_name, status, created_at')
+        .select('id, bank_name, status, created_at, last_synced_at, consent_expires, error_message')
         .eq('company_id', companyId)
         .in('status', ['pending', 'pending_selection', 'active', 'expired', 'error'])
         .order('created_at', { ascending: false })
       if (error) throw error
-      const connections = (data ?? []) as Array<{ id: string; bank_name: string | null; status: string; created_at: string }>
+      const connections = (data ?? []) as Array<{
+        id: string
+        bank_name: string | null
+        status: string
+        created_at: string
+        last_synced_at: string | null
+        consent_expires: string | null
+        error_message: string | null
+      }>
       const active = connections.filter((c) => c.status === 'active')
       // A named bank deep-links straight into that bank's consent (the page
       // auto-starts it; unknown names fall back to the prefilled picker).
@@ -3652,11 +3683,14 @@ export const tools: McpTool[] = [
           bank: c.bank_name,
           status: c.status,
           since: c.created_at,
+          last_synced_at: c.last_synced_at,
+          consent_expires: c.consent_expires,
+          error_message: c.error_message,
         })),
         connect_url: connectUrl,
         instructions:
           active.length > 0
-            ? 'At least one bank is connected and syncing. To add another bank, give the user the connect_url.'
+            ? 'At least one bank is connected and syncing. Check last_synced_at on each connection: older than 36 hours means transactions and balances may be STALE; warn the user before building on them. A null last_synced_at right after connecting is normal (the first sync lands within a minute). Match the remedy to the cause: status expired/error or consent_expires near or past needs BankID re-authorisation via the connect_url; a stale last_synced_at while status is active usually means the subscription lapsed or every account is deselected, so point the user to Installningar -> Bank instead of re-authorising. To add another bank, give the user the connect_url.'
             : (requestedBank
                 ? ''
                 : 'BETTER LINK AVAILABLE: if you know (or can ask) which bank the company uses, call this tool again with bank=<name>; the link then opens that bank\'s consent directly instead of a picker. ') +
@@ -5358,6 +5392,14 @@ export const tools: McpTool[] = [
         idempotency_key: { type: 'string', description: 'Optional UUID to dedupe retries: a replayed call returns the already-staged operation instead of staging twice.' },
       },
       required: ['transaction_id', 'category'],
+      // The two combinations the prose above describes and callers still get
+      // wrong: an account_override without an explicit vat_treatment (books
+      // GROSS, no moms line), and representation without deltagare + syfte.
+      examples: [
+        { transaction_id: '3f1a...', category: 'expense_office' },
+        { transaction_id: '3f1a...', category: 'expense_other', account_override: '4600', vat_treatment: 'standard_25' },
+        { transaction_id: '3f1a...', category: 'expense_representation', notes: 'Anna Andersson (Acme AB), kundmöte om ramavtal' },
+      ],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: {
@@ -6961,6 +7003,10 @@ export const tools: McpTool[] = [
       properties: {
         period_id: { type: 'string', description: 'Fiscal period UUID (default: most recent)' },
       },
+      // period_id is the whole surface. Callers have shipped `metric` here for
+      // days at a time (604 rejected calls, 2026-08-24 to 08-31): the empty
+      // object is the example that says there is nothing else to pass.
+      examples: [{}, { period_id: '7c2b...' }],
     },
     outputSchema: { type: 'object' },
     annotations: {
@@ -9237,6 +9283,12 @@ export const tools: McpTool[] = [
         group_by_dimension: { type: 'string', description: 'Aggregate by SIE dimension number (e.g. "6" = projekt) from each line\'s dimensions bag; untagged → "(utan dimension)". Mutually exclusive with group_by.' },
         limit: { type: 'number', minimum: 1, maximum: 500, description: 'Max lines returned 1-500 (default 100); totals/groups still cover the full match set.' },
       },
+      // Two shapes that cover most ad-hoc questions: an account range over a
+      // period, and a free-text hunt. status defaults to 'all' on purpose.
+      examples: [
+        { account_from: '4000', account_to: '4999', date_from: '2026-01-01', date_to: '2026-03-31' },
+        { text: 'Kjell', status: 'posted' },
+      ],
     },
     outputSchema: {
       type: 'object',
@@ -18187,6 +18239,19 @@ export const tools: McpTool[] = [
         },
       },
       required: ['entry_date', 'description', 'lines'],
+      // Balance is the rule agents break: sum(debit) === sum(credit), and the
+      // moms leg is its own line on its own BAS account, never folded in.
+      examples: [
+        {
+          entry_date: '2026-03-31',
+          description: 'Kontorsmaterial Kjell & Company',
+          lines: [
+            { account_number: '6110', debit_amount: 400 },
+            { account_number: '2641', debit_amount: 100 },
+            { account_number: '1930', credit_amount: 500 },
+          ],
+        },
+      ],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -19350,6 +19415,9 @@ export const tools: McpTool[] = [
         },
       },
       required: ['operation_id'],
+      // confirmed is not optional for a high-risk operation: without it the
+      // approval is refused, which reads to an agent as a permissions problem.
+      examples: [{ operation_id: '9a44...' }, { operation_id: '9a44...', confirmed: true }],
     },
     outputSchema: {
       type: 'object',
@@ -21181,10 +21249,14 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // VALIDATION_ERROR envelope, never as a half-applied call.
         const unknownArgKeys = findUnknownArgKeys(tool.inputSchema as Record<string, unknown>, toolArgs)
         if (unknownArgKeys.length > 0) {
+          // Name the shape, not just the mistake: a caller that already sent a
+          // wrong key has no way to guess the right one from a key list alone.
+          const example = shortestExampleFor(tool.inputSchema as Record<string, unknown>)
           throw codedError(
             'VALIDATION_ERROR',
             `Unknown parameter${unknownArgKeys.length > 1 ? 's' : ''} ${unknownArgKeys.map((k) => `"${k}"`).join(', ')} for ${requestedToolName}. ` +
-              `Valid parameters: ${listArgKeys(tool.inputSchema as Record<string, unknown>).join(', ') || '(none)'}. Unknown keys are rejected, not ignored.`,
+              `Valid parameters: ${listArgKeys(tool.inputSchema as Record<string, unknown>).join(', ') || '(none)'}. Unknown keys are rejected, not ignored.` +
+              (example ? ` A working call looks like: ${example}` : ''),
           )
         }
 

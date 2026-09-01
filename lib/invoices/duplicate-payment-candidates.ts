@@ -141,7 +141,7 @@ export async function findDuplicatePaymentCandidatesForInvoice(
     // compared raw (a raw compare reads 1 000 kr as 1 000 EUR). Same-currency
     // rows are still swept. Logged for the same reason the supplier-side twin
     // logs it: an unevaluated candidate set is not a clean "no duplicate", and
-    // the gap must be visible in behandlingshistorik (BFNAR 2013:2 kap 8)
+    // the gap must be visible in behandlingshistorik (BFNAR 2013:2 p. 9.16)
     // rather than pass silently.
     log.warn('duplicate-payment guard: cross-currency candidates not evaluated', {
       reason: 'invoice_missing_sek_value',

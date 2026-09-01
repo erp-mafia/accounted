@@ -45,7 +45,7 @@ import {
 } from '@/lib/documents/link-documents'
 import { formatCurrency } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
-import { formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
+import { formatVoucher, resolveDefaultSeriesForSource, VOUCHER_SERIES_PRESETS } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveFxLineSlot } from '@/lib/bookkeeping/fx-line-slot'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -193,6 +193,11 @@ export default function JournalEntryForm({
   // effect below.
   const seriesMapRef = useRef<Record<string, string> | null>(null)
   const defaultSeriesRef = useRef<string>('A')
+  // Series letters this company has configured beyond the fixed presets. The
+  // dropdown is a closed list, so anything already in use (a legacy letter, an
+  // override in the per-source-type map) has to stay selectable: otherwise the
+  // Select would render blank on a value it does not offer.
+  const [configuredSeries, setConfiguredSeries] = useState<string[]>([])
   // Mirror of effectiveSourceType for the settings-fetch callback: if a template
   // routed the source type before /api/settings resolved, the late callback must
   // re-apply the series for the ROUTED type, not the mount-time base (otherwise
@@ -274,6 +279,18 @@ export default function JournalEntryForm({
     setVoucherSeries(perSource !== 'A' ? perSource : defaultSeriesRef.current || 'A')
   }, [])
 
+  // The series picker: the fixed Swedish presets first, then any letter this
+  // company already uses (settings map, global default, or the series a draft
+  // was saved with) so no existing value falls out of the list.
+  const seriesOptions = useMemo(() => {
+    const options = VOUCHER_SERIES_PRESETS.map((p) => ({ letter: p.letter, label: p.label }))
+    const seen = new Set(options.map((o) => o.letter))
+    const extras = [...configuredSeries, voucherSeries]
+      .filter((letter) => /^[A-Z]$/.test(letter) && !seen.has(letter) && seen.add(letter))
+      .sort()
+    return [...options, ...extras.map((letter) => ({ letter, label: '' }))]
+  }, [configuredSeries, voucherSeries])
+
   useEffect(() => {
     loadBasCatalog().then(setCatalog).catch(() => {/* search degrades to the active chart */})
   }, [])
@@ -289,6 +306,16 @@ export default function JournalEntryForm({
     seriesMapRef.current =
       (companySettings.default_voucher_series_per_source_type as Record<string, string> | null) ?? null
     defaultSeriesRef.current = companySettings.default_voucher_series || 'A'
+    setConfiguredSeries(
+      Array.from(
+        new Set(
+          [
+            ...Object.values(seriesMapRef.current || {}),
+            defaultSeriesRef.current,
+          ].filter((v): v is string => typeof v === 'string' && /^[A-Z]$/.test(v)),
+        ),
+      ),
+    )
     if (!embedded && !editEntryId) {
       applySeriesForSourceType(effectiveSourceTypeRef.current)
     }
@@ -621,6 +648,28 @@ export default function JournalEntryForm({
     if (fill <= 0) return
     updateLine(index, side === 'debit' ? 'debit_amount' : 'credit_amount', fill.toFixed(2))
   }
+
+  // Tabbing (or clicking) into an untouched amount proposes the outstanding
+  // difference, so the closing row of a moms-split voucher fills itself. The
+  // proposal is pre-selected: typing replaces it, which keeps a multi-row split
+  // exactly as fast as before. Guards: the row must already have an account (so
+  // you can tab through the trailing blank row), both amounts must still be
+  // empty (never overwrite a typed figure), and the difference must belong on
+  // this side.
+  const handleAmountFocus =
+    (index: number, side: 'debit' | 'credit') =>
+    (e: React.FocusEvent<HTMLInputElement>) => {
+      const target = e.currentTarget
+      const line = lines[index]
+      if (!line || !line.account_number) return
+      if (line.debit_amount || line.credit_amount) return
+      const diff = computeBalancingDiff(index)
+      const fill = side === 'debit' ? diff : -diff
+      if (fill <= 0) return
+      updateLine(index, side === 'debit' ? 'debit_amount' : 'credit_amount', fill.toFixed(2))
+      // Select after the controlled re-render has written the value.
+      requestAnimationFrame(() => target.select())
+    }
 
   // Move focus to a row's input. Deferred a frame so it runs after any
   // re-render (e.g. the auto-appended trailing row). offsetParent is null for
@@ -1362,24 +1411,26 @@ export default function JournalEntryForm({
             />
           </div>
           {!embedded && (
-            <div className="w-16">
+            // Closed list, not free text: the letters carry fixed meanings
+            // (A = redovisning, B = kundfakturor, ...) and a typo here silently
+            // starts a new series with its own number sequence.
+            <div className="w-full sm:w-72">
               <Label className="text-xs text-muted-foreground">{t('series')}</Label>
-              <Input
-                value={voucherSeries}
-                onChange={(e) => {
-                  const v = e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(-1)
-                  setVoucherSeries(v)
-                }}
-                onFocus={(e) => {
-                  const target = e.target
-                  setTimeout(() => target.select(), 0)
-                }}
-                onBlur={() => {
-                  if (!voucherSeries) setVoucherSeries('A')
-                }}
-                className="mt-1 h-8 text-center font-mono"
-                maxLength={1}
-              />
+              <Select value={voucherSeries} onValueChange={(v) => setVoucherSeries(v)}>
+                <SelectTrigger className="mt-1 h-8">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {seriesOptions.map((option) => (
+                    <SelectItem key={option.letter} value={option.letter}>
+                      <span className="font-mono">{option.letter}</span>
+                      {option.label && (
+                        <span className="ml-2 text-muted-foreground">{option.label}</span>
+                      )}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           )}
         </div>
@@ -1594,6 +1645,7 @@ export default function JournalEntryForm({
                   value={line.debit_amount}
                   onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
                   onKeyDown={handleAmountKeyDown(index, 'debit')}
+                  onFocus={handleAmountFocus(index, 'debit')}
                   onDoubleClick={() => handleFillBalance(index, 'debit')}
                   title={t('fill_balance_tooltip')}
                   placeholder="0,00"
@@ -1611,6 +1663,7 @@ export default function JournalEntryForm({
                   value={line.credit_amount}
                   onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
                   onKeyDown={handleAmountKeyDown(index, 'credit')}
+                  onFocus={handleAmountFocus(index, 'credit')}
                   onDoubleClick={() => handleFillBalance(index, 'credit')}
                   title={t('fill_balance_tooltip')}
                   placeholder="0,00"
@@ -1748,6 +1801,7 @@ export default function JournalEntryForm({
                     value={line.debit_amount}
                     onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
                     onKeyDown={handleAmountKeyDown(index, 'debit')}
+                    onFocus={handleAmountFocus(index, 'debit')}
                     onDoubleClick={() => handleFillBalance(index, 'debit')}
                     title={t('fill_balance_tooltip')}
                     placeholder="0,00"
@@ -1764,6 +1818,7 @@ export default function JournalEntryForm({
                     value={line.credit_amount}
                     onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
                     onKeyDown={handleAmountKeyDown(index, 'credit')}
+                    onFocus={handleAmountFocus(index, 'credit')}
                     onDoubleClick={() => handleFillBalance(index, 'credit')}
                     title={t('fill_balance_tooltip')}
                     placeholder="0,00"

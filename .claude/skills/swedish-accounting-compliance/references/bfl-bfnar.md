@@ -213,7 +213,7 @@ A company is "större" if it exceeds at least 2 of 3 for each of the last 2 year
 
 ## 12. Systemdokumentation and behandlingshistorik
 
-### Systemdokumentation (BFNAR 2013:2 kap 8)
+### Systemdokumentation (BFNAR 2013:2 kap 9, punkt 9.1-9.15; kap 8 is arkivering)
 Must describe:
 - The bokföringssystem and how it works
 - The kontoplan used
@@ -223,8 +223,8 @@ Must describe:
 - Backup routines
 - Integration with other systems
 
-### Behandlingshistorik
-Must log:
+### Behandlingshistorik (BFNAR 2013:2 punkt 9.16; BFL 5 kap 11 §)
+Must log (and show registreringsdatum for every bokföringspost):
 - Automated processing (batch jobs, automated bokföring)
 - Changes to system settings that affect bokföring
 - User actions (who booked what, when)

@@ -128,6 +128,7 @@ import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
+import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import {
   exceedsInvoiceEmailRecipientLimit,
   invoiceEmailRecipientCount,
@@ -2205,7 +2206,7 @@ async function commitMarkInvoicePaid(
   } else {
     // allow_duplicate=true bypassed the duplicate-payment guard. The decision
     // to book a payment over a possible existing one must leave a durable
-    // behandlingshistorik record (BFNAR 2013:2 kap 8) so an auditor can see why
+    // behandlingshistorik record (BFNAR 2013:2 p. 9.16) so an auditor can see why
     // the duplicate was allowed. Re-detect to capture the dismissed candidate;
     // best-effort, never blocks the payment. Payload stays PII-safe
     // (ids/amounts/dates only: no customer or merchant name).
@@ -2478,6 +2479,15 @@ async function commitSendInvoice(
     }
   }
 
+  if (!hasRequiredSellerVatNumber(company as CompanySettings, invoice as Invoice)) {
+    return {
+      error:
+        getErrorEntry('INVOICE_SEND_VAT_NUMBER_MISSING')?.message_sv
+        ?? 'Momsregistreringsnummer saknas i företagsinställningarna.',
+      status: 400,
+    }
+  }
+
   const recipients = resolveInvoiceEmailRecipients({
     to: customer.email,
     configuredCc: company.invoice_email_cc_addresses,
@@ -2711,7 +2721,7 @@ async function commitMarkInvoiceSent(
 
   const { data: settings, error: settingsError } = await supabase
     .from('company_settings')
-    .select('accounting_method, defer_invoice_booking, entity_type, invoice_payment_accounts, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic')
+    .select('accounting_method, defer_invoice_booking, entity_type, invoice_payment_accounts, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, vat_registered, vat_number')
     .eq('company_id', companyId)
     .single()
 
@@ -2722,6 +2732,15 @@ async function commitMarkInvoiceSent(
       error:
         getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')?.message_sv
         ?? 'Betalningskonto saknas för fakturans valuta.',
+      status: 400,
+    }
+  }
+
+  if (!hasRequiredSellerVatNumber(settings as CompanySettings, invoice as Invoice)) {
+    return {
+      error:
+        getErrorEntry('INVOICE_SEND_VAT_NUMBER_MISSING')?.message_sv
+        ?? 'Momsregistreringsnummer saknas i företagsinställningarna.',
       status: 400,
     }
   }
