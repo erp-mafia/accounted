@@ -28,6 +28,9 @@ export interface TaskBase {
   canary?: string
   // Marks tasks about rules that changed 2025 or later (regelverksfarskhet).
   fresh?: boolean
+  // Authored and validated, but not yet run by every model, so not yet part
+  // of the board. See loadTasks().
+  staged?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -61,6 +64,10 @@ export const VAT_TREATMENTS: VatTreatment[] = [
 
 export interface BookingTask extends TaskBase {
   suite: 'booking'
+  // The money moves INTO the account and it is still not revenue: a supplier
+  // credit note, a refund from the tax account, capital put in by the owner.
+  // Declared so an ordinary expense with a mistyped sign still fails review.
+  inflow?: boolean
   input: {
     company: {
       entity_type: 'aktiebolag' | 'enskild_firma'

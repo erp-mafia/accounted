@@ -40,6 +40,10 @@ function parseArgs(): Args {
     const i = argv.indexOf(flag)
     return i >= 0 && argv[i + 1] ? argv[i + 1] : null
   }
+  // Staged tasks are excluded from every suite loader by default; --staged
+  // opts a run in, which is how a new batch gets its first full pass before
+  // being unstaged. Set as an env var so each suite's own loadTasks() sees it.
+  if (argv.includes('--staged')) process.env.BENCH_INCLUDE_STAGED = '1'
   const suite = (get('--suite') ?? 'all') as Args['suite']
   const modelArg = get('--model') ?? 'enabled'
   const models =

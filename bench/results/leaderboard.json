@@ -1,6 +1,6 @@
 {
   "benchVersion": "v1.6",
-  "generatedAt": "2026-09-01T14:31:16.783Z",
+  "generatedAt": "2026-09-01T15:20:43.052Z",
   "suites": {
     "booking": [
       {
@@ -375,59 +375,6 @@
         }
       },
       {
-        "model": "claude-sonnet-5",
-        "label": "Claude Sonnet 5",
-        "vendor": "Anthropic",
-        "open_weights": false,
-        "n": 52,
-        "pass": 46,
-        "passRate": 0.885,
-        "wilsonLo": 0.833,
-        "wilsonHi": 0.922,
-        "totalCostUsd": 2.966,
-        "avgCostUsd": 0.05704,
-        "avgTurns": 1.019,
-        "avgDurationMs": 3385,
-        "extras": {
-          "accountAccuracy": 0.904,
-          "strictAccountAccuracy": 0.673,
-          "strictPass": 0.673,
-          "vatAccuracy": 0.981,
-          "ece": 0.131,
-          "coverage95": 0.654,
-          "coverage99": 0.654,
-          "coverage95Evidence": {
-            "coverage": 0.654,
-            "selected": 34,
-            "errors": 0,
-            "precisionLo": 0.898,
-            "threshold": 0.8
-          },
-          "coverage99Evidence": {
-            "coverage": 0.654,
-            "selected": 34,
-            "errors": 0,
-            "precisionLo": 0.898,
-            "threshold": 0.8
-          },
-          "parseFailures": 0,
-          "segments": {
-            "underlag": {
-              "n": 33,
-              "pass": 0.909,
-              "accountAccuracy": 0.939,
-              "vatAccuracy": 0.97
-            },
-            "bank_only": {
-              "n": 19,
-              "pass": 0.842,
-              "accountAccuracy": 0.842,
-              "vatAccuracy": 1
-            }
-          }
-        }
-      },
-      {
         "model": "claude-sonnet-4-6",
         "label": "Claude Sonnet 4.6",
         "vendor": "Anthropic",
@@ -529,6 +476,59 @@
               "pass": 0.947,
               "accountAccuracy": 0.947,
               "vatAccuracy": 1
+            }
+          }
+        }
+      },
+      {
+        "model": "claude-sonnet-5",
+        "label": "Claude Sonnet 5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 52,
+        "pass": 44,
+        "passRate": 0.846,
+        "wilsonLo": 0.79,
+        "wilsonHi": 0.89,
+        "totalCostUsd": 2.912,
+        "avgCostUsd": 0.05599,
+        "avgTurns": 1,
+        "avgDurationMs": 3511,
+        "extras": {
+          "accountAccuracy": 0.846,
+          "strictAccountAccuracy": 0.615,
+          "strictPass": 0.615,
+          "vatAccuracy": 0.981,
+          "ece": 0.056,
+          "coverage95": 0.212,
+          "coverage99": 0.212,
+          "coverage95Evidence": {
+            "coverage": 0.212,
+            "selected": 11,
+            "errors": 0,
+            "precisionLo": 0.741,
+            "threshold": 0.88
+          },
+          "coverage99Evidence": {
+            "coverage": 0.212,
+            "selected": 11,
+            "errors": 0,
+            "precisionLo": 0.741,
+            "threshold": 0.88
+          },
+          "parseFailures": 0,
+          "segments": {
+            "underlag": {
+              "n": 33,
+              "pass": 0.879,
+              "accountAccuracy": 0.879,
+              "vatAccuracy": 1
+            },
+            "bank_only": {
+              "n": 19,
+              "pass": 0.789,
+              "accountAccuracy": 0.789,
+              "vatAccuracy": 0.947
             }
           }
         }
@@ -645,20 +645,20 @@
         "vendor": "Anthropic",
         "open_weights": false,
         "n": 52,
-        "pass": 30,
-        "passRate": 0.577,
-        "wilsonLo": 0.508,
-        "wilsonHi": 0.643,
-        "totalCostUsd": 1.248,
-        "avgCostUsd": 0.02401,
+        "pass": 29,
+        "passRate": 0.558,
+        "wilsonLo": 0.488,
+        "wilsonHi": 0.625,
+        "totalCostUsd": 1.253,
+        "avgCostUsd": 0.0241,
         "avgTurns": 1,
-        "avgDurationMs": 3858,
+        "avgDurationMs": 3945,
         "extras": {
           "accountAccuracy": 0.673,
           "strictAccountAccuracy": 0.442,
-          "strictPass": 0.365,
-          "vatAccuracy": 0.885,
-          "ece": 0.25,
+          "strictPass": 0.346,
+          "vatAccuracy": 0.865,
+          "ece": 0.245,
           "coverage95": 0,
           "coverage99": 0,
           "coverage95Evidence": {
@@ -685,9 +685,9 @@
             },
             "bank_only": {
               "n": 19,
-              "pass": 0.579,
+              "pass": 0.526,
               "accountAccuracy": 0.842,
-              "vatAccuracy": 0.684
+              "vatAccuracy": 0.632
             }
           }
         }
@@ -1728,7 +1728,7 @@
         "results": {
           "claude-haiku-4-5": 0,
           "claude-sonnet-4-6": 1,
-          "claude-sonnet-5": 1,
+          "claude-sonnet-5": 0,
           "claude-opus-5": 1,
           "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
@@ -1742,7 +1742,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.74
+        "disc": 0.61
       },
       {
         "id": "booking-022",
@@ -1766,7 +1766,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.62
+        "disc": 0.61
       },
       {
         "id": "booking-023",
@@ -1814,7 +1814,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.1
+        "disc": 0.05
       },
       {
         "id": "booking-025",
@@ -1846,7 +1846,7 @@
         "probe": "Client lunch: representation with capped VAT",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": 1,
+          "claude-haiku-4-5": 0,
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
@@ -1862,7 +1862,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.27
+        "disc": 0.47
       },
       {
         "id": "booking-027",
@@ -1870,7 +1870,7 @@
         "probe": "Staff Christmas party: internal representation",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": 0,
+          "claude-haiku-4-5": 1,
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 0,
           "claude-opus-5": 1,
@@ -1886,7 +1886,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.4
+        "disc": 0.16
       },
       {
         "id": "booking-028",
@@ -1910,7 +1910,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.48
+        "disc": 0.49
       },
       {
         "id": "booking-029",
@@ -1958,7 +1958,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.62
+        "disc": 0.61
       },
       {
         "id": "booking-031",
@@ -2006,7 +2006,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.33
+        "disc": 0.32
       },
       {
         "id": "booking-033",
@@ -2016,7 +2016,7 @@
         "results": {
           "claude-haiku-4-5": 0,
           "claude-sonnet-4-6": 0,
-          "claude-sonnet-5": 0,
+          "claude-sonnet-5": 1,
           "claude-opus-5": 1,
           "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 0,
@@ -2062,7 +2062,7 @@
         "probe": "Foreign-brand software bought via Swedish reseller: read the underlag, not the pattern",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": 1,
+          "claude-haiku-4-5": 0,
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
@@ -2078,7 +2078,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.37
+        "disc": 0.56
       },
       {
         "id": "booking-036",
@@ -2102,7 +2102,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.26
+        "disc": 0.25
       },
       {
         "id": "booking-038",
@@ -2126,7 +2126,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.52
+        "disc": 0.51
       },
       {
         "id": "booking-039",
@@ -2198,7 +2198,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.57
+        "disc": 0.61
       },
       {
         "id": "booking-103",
@@ -2246,7 +2246,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.62
+        "disc": 0.61
       },
       {
         "id": "booking-106",
@@ -2270,7 +2270,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.28
+        "disc": 0.3
       },
       {
         "id": "booking-107",
@@ -2294,7 +2294,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.12
+        "disc": 0.16
       },
       {
         "id": "booking-108",
@@ -2328,7 +2328,7 @@
         "results": {
           "claude-haiku-4-5": 1,
           "claude-sonnet-4-6": 1,
-          "claude-sonnet-5": 1,
+          "claude-sonnet-5": 0,
           "claude-opus-5": 1,
           "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
@@ -2342,7 +2342,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.62
+        "disc": 0.41
       },
       {
         "id": "booking-110",
@@ -2366,7 +2366,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.84
+        "disc": 0.82
       },
       {
         "id": "booking-111",
@@ -2374,7 +2374,7 @@
         "probe": "Bank feed only: fuel, company runs passenger cars",
         "segment": "bank_only",
         "results": {
-          "claude-haiku-4-5": 1,
+          "claude-haiku-4-5": 0,
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
@@ -2390,7 +2390,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.84
+        "disc": 0.96
       },
       {
         "id": "booking-112",
@@ -2414,7 +2414,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.52
+        "disc": 0.51
       },
       {
         "id": "booking-113",
@@ -2424,7 +2424,7 @@
         "results": {
           "claude-haiku-4-5": 0,
           "claude-sonnet-4-6": 1,
-          "claude-sonnet-5": 1,
+          "claude-sonnet-5": 0,
           "claude-opus-5": 1,
           "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
@@ -2438,7 +2438,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.4
+        "disc": 0.27
       },
       {
         "id": "booking-114",
@@ -2462,7 +2462,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.41
+        "disc": 0.39
       },
       {
         "id": "booking-115",
@@ -2534,7 +2534,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.21
+        "disc": 0.2
       },
       {
         "id": "booking-118",
@@ -2544,7 +2544,7 @@
         "results": {
           "claude-haiku-4-5": 0,
           "claude-sonnet-4-6": 1,
-          "claude-sonnet-5": 0,
+          "claude-sonnet-5": 1,
           "claude-opus-5": 1,
           "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
@@ -2558,7 +2558,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.69
+        "disc": 0.79
       },
       {
         "id": "booking-001",
@@ -2582,7 +2582,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.52
+        "disc": 0.51
       },
       {
         "id": "booking-002",
@@ -2654,7 +2654,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.84
+        "disc": 0.82
       },
       {
         "id": "booking-005",
@@ -2678,7 +2678,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.52
+        "disc": 0.51
       },
       {
         "id": "booking-006",
@@ -2702,7 +2702,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.84
+        "disc": 0.82
       },
       {
         "id": "booking-007",
@@ -2726,7 +2726,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.52
+        "disc": 0.51
       },
       {
         "id": "booking-008",
@@ -2736,7 +2736,7 @@
         "results": {
           "claude-haiku-4-5": 1,
           "claude-sonnet-4-6": 1,
-          "claude-sonnet-5": 1,
+          "claude-sonnet-5": 0,
           "claude-opus-5": 1,
           "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
@@ -2750,7 +2750,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.62
+        "disc": 0.41
       },
       {
         "id": "booking-009",
@@ -2774,7 +2774,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.74
+        "disc": 0.75
       },
       {
         "id": "booking-010",
@@ -2798,7 +2798,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.62
+        "disc": 0.61
       },
       {
         "id": "booking-011",
@@ -2894,7 +2894,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.74
+        "disc": 0.75
       },
       {
         "id": "booking-015",
@@ -2902,7 +2902,7 @@
         "probe": "Web hosting from a Swedish provider",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": 0,
+          "claude-haiku-4-5": 1,
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
@@ -2918,7 +2918,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.96
+        "disc": 0.82
       },
       {
         "id": "booking-016",
@@ -2942,7 +2942,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.52
+        "disc": 0.51
       }
     ],
     "reasoning": [
@@ -4135,9 +4135,9 @@
         "gpt-5-6-luna",
         "grok-4-6",
         "kimi-k3",
-        "claude-sonnet-5",
         "claude-sonnet-4-6",
-        "glm-5-3-flash"
+        "glm-5-3-flash",
+        "claude-sonnet-5"
       ],
       [
         "deepseek-v4-pro",
@@ -4245,7 +4245,7 @@
           "pass": false,
           "account": "1261",
           "vat": "domestic_25",
-          "confidence": 0.92,
+          "confidence": 0.95,
           "accountCorrect": false,
           "vatCorrect": true
         },
@@ -4265,9 +4265,9 @@
           "label": "Claude Sonnet 5",
           "vendor": "Anthropic",
           "pass": false,
-          "account": "1220",
+          "account": "1261",
           "vat": "domestic_25",
-          "confidence": 0.75,
+          "confidence": 0.8,
           "accountCorrect": false,
           "vatCorrect": true
         },
@@ -4406,247 +4406,50 @@
       ]
     },
     {
-      "id": "booking-118",
-      "probe": "Bank feed only: office furnishings under the asset threshold",
-      "difficulty": "core",
+      "id": "booking-027",
+      "probe": "Staff Christmas party: internal representation",
+      "difficulty": "hard",
       "company": {
         "entity_type": "aktiebolag",
         "vat_registered": true,
         "accounting_method": "invoice",
-        "business": "IT-konsultbolag, inreder kontor"
+        "business": "IT-konsultbolag med 12 anställda"
       },
       "transaction": {
-        "date": "2026-01-31",
-        "amount": -3200,
+        "date": "2026-01-09",
+        "amount": -14400,
         "currency": "SEK",
-        "counterpart": "IKEA SVERIGE",
-        "description": "IKEA KONTORSINREDNING"
+        "counterpart": "Restaurang Hasselbacken",
+        "description": "Julfest personal 12 personer",
+        "underlag": "Julbord 12 kuvert inkl dryck. Mat 12 000 inkl moms 12 %, alkohol 2 400 inkl moms 25 %."
       },
       "gold": {
-        "account": "5410",
-        "acceptable_accounts": [
-          "5411",
-          "6110"
-        ],
-        "vat_treatment": "domestic_25"
+        "account": "7632",
+        "acceptable_accounts": [],
+        "vat_treatment": "representation_capped"
       },
-      "rationale": "IKEA-köp för kontoret på 3 200 kr: förbrukningsinventarier 5410, 25 % moms.",
-      "law_ref": null,
+      "rationale": "Personalfest är personalrepresentation: måltidsdelen ej avdragsgill (7632), momsavdrag enligt schablon/tak. 7631 (avdragsgill personalrepresentation) godtas inte: avdragsrätten för representationsmåltider slopades 2017 och gäller bara enklare förtäring och kringkostnader, inte en julbordsmåltid om 1 200 kr per person.",
+      "law_ref": "ML 13 kap. 24-25 §§",
       "answers": [
         {
           "model": "claude-haiku-4-5",
           "label": "Claude Haiku 4.5",
           "vendor": "Anthropic",
-          "pass": false,
-          "account": "1220",
-          "vat": "domestic_25",
-          "confidence": 0.85,
-          "accountCorrect": false,
-          "vatCorrect": true
-        },
-        {
-          "model": "claude-sonnet-4-6",
-          "label": "Claude Sonnet 4.6",
-          "vendor": "Anthropic",
           "pass": true,
-          "account": "5410",
-          "vat": "domestic_25",
-          "confidence": 0.72,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "claude-sonnet-5",
-          "label": "Claude Sonnet 5",
-          "vendor": "Anthropic",
-          "pass": false,
-          "account": "1220",
-          "vat": "domestic_25",
-          "confidence": 0.6,
-          "accountCorrect": false,
-          "vatCorrect": true
-        },
-        {
-          "model": "claude-opus-5",
-          "label": "Claude Opus 5",
-          "vendor": "Anthropic",
-          "pass": true,
-          "account": "5410",
-          "vat": "domestic_25",
+          "account": "7632",
+          "vat": "representation_capped",
           "confidence": 0.75,
           "accountCorrect": true,
           "vatCorrect": true
         },
         {
-          "model": "claude-fable-5",
-          "label": "Claude Fable 5",
-          "vendor": "Anthropic",
-          "pass": true,
-          "account": "5410",
-          "vat": "domestic_25",
-          "confidence": 0.9,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "gpt-5-6-terra-pro",
-          "label": "GPT-5.6 Terra Pro",
-          "vendor": "OpenAI",
-          "pass": true,
-          "account": "5410",
-          "vat": "domestic_25",
-          "confidence": 0.78,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "gpt-5-6-luna",
-          "label": "GPT-5.6 Luna",
-          "vendor": "OpenAI",
-          "pass": true,
-          "account": "5410",
-          "vat": "domestic_25",
-          "confidence": 0.88,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "gemini-3-1-pro",
-          "label": "Gemini 3.1 Pro",
-          "vendor": "Google",
-          "pass": true,
-          "account": "5410",
-          "vat": "domestic_25",
-          "confidence": 0.95,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "grok-4-6",
-          "label": "Grok 4.6",
-          "vendor": "xAI",
-          "pass": true,
-          "account": "5411",
-          "vat": "domestic_25",
-          "confidence": 0.82,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "deepseek-v4-pro",
-          "label": "DeepSeek V4 Pro",
-          "vendor": "DeepSeek",
-          "pass": true,
-          "account": "5410",
-          "vat": "domestic_25",
-          "confidence": 0.7,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "qwen3-8-2-4t",
-          "label": "Qwen3.8 2.4T",
-          "vendor": "Alibaba",
-          "pass": true,
-          "account": "5410",
-          "vat": "domestic_25",
-          "confidence": 0.65,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "llama-4-maverick",
-          "label": "Llama 4 Maverick",
-          "vendor": "Meta",
-          "pass": false,
-          "account": "1221",
-          "vat": "domestic_25",
-          "confidence": 0.9,
-          "accountCorrect": false,
-          "vatCorrect": true
-        },
-        {
-          "model": "kimi-k3",
-          "label": "Kimi K3",
-          "vendor": "Moonshot",
-          "pass": false,
-          "account": "1251",
-          "vat": "domestic_25",
-          "confidence": 0.72,
-          "accountCorrect": false,
-          "vatCorrect": true
-        },
-        {
-          "model": "glm-5-3-flash",
-          "label": "GLM 5.3 Flash",
-          "vendor": "Z.ai",
-          "pass": true,
-          "account": "5410",
-          "vat": "domestic_25",
-          "confidence": 0.7,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "gpt-oss-120b",
-          "label": "GPT-OSS-120B",
-          "vendor": "OpenAI",
-          "pass": false,
-          "account": "1220",
-          "vat": "domestic_25",
-          "confidence": 0.73,
-          "accountCorrect": false,
-          "vatCorrect": true
-        }
-      ]
-    },
-    {
-      "id": "booking-031",
-      "probe": "Fuel for company cars",
-      "difficulty": "core",
-      "company": {
-        "entity_type": "aktiebolag",
-        "vat_registered": true,
-        "accounting_method": "invoice",
-        "business": "Säljbolag"
-      },
-      "transaction": {
-        "date": "2026-05-11",
-        "amount": -1125,
-        "currency": "SEK",
-        "counterpart": "OKQ8",
-        "description": "Tankning tjänstebil",
-        "underlag": "Diesel 900,00 exkl moms, moms 25 % 225,00."
-      },
-      "gold": {
-        "account": "5611",
-        "acceptable_accounts": [
-          "5610"
-        ],
-        "vat_treatment": "domestic_25"
-      },
-      "rationale": "Drivmedel för personbil: 5611. Momsen på drivmedel är fullt avdragsgill när bilen används i verksamheten.",
-      "law_ref": null,
-      "answers": [
-        {
-          "model": "claude-haiku-4-5",
-          "label": "Claude Haiku 4.5",
-          "vendor": "Anthropic",
-          "pass": false,
-          "account": "5621",
-          "vat": "domestic_25",
-          "confidence": 0.95,
-          "accountCorrect": false,
-          "vatCorrect": true
-        },
-        {
           "model": "claude-sonnet-4-6",
           "label": "Claude Sonnet 4.6",
           "vendor": "Anthropic",
           "pass": true,
-          "account": "5611",
-          "vat": "domestic_25",
-          "confidence": 0.9,
+          "account": "7632",
+          "vat": "representation_capped",
+          "confidence": 0.85,
           "accountCorrect": true,
           "vatCorrect": true
         },
@@ -4654,11 +4457,11 @@
           "model": "claude-sonnet-5",
           "label": "Claude Sonnet 5",
           "vendor": "Anthropic",
-          "pass": true,
-          "account": "5611",
-          "vat": "domestic_25",
-          "confidence": 0.85,
-          "accountCorrect": true,
+          "pass": false,
+          "account": "7630",
+          "vat": "representation_capped",
+          "confidence": 0.72,
+          "accountCorrect": false,
           "vatCorrect": true
         },
         {
@@ -4666,9 +4469,9 @@
           "label": "Claude Opus 5",
           "vendor": "Anthropic",
           "pass": true,
-          "account": "5611",
-          "vat": "domestic_25",
-          "confidence": 0.93,
+          "account": "7632",
+          "vat": "representation_capped",
+          "confidence": 0.82,
           "accountCorrect": true,
           "vatCorrect": true
         },
@@ -4676,11 +4479,11 @@
           "model": "claude-fable-5",
           "label": "Claude Fable 5",
           "vendor": "Anthropic",
-          "pass": true,
-          "account": "5611",
-          "vat": "domestic_25",
-          "confidence": 0.9,
-          "accountCorrect": true,
+          "pass": false,
+          "account": "7631",
+          "vat": "representation_capped",
+          "confidence": 0.95,
+          "accountCorrect": false,
           "vatCorrect": true
         },
         {
@@ -4688,9 +4491,9 @@
           "label": "GPT-5.6 Terra Pro",
           "vendor": "OpenAI",
           "pass": true,
-          "account": "5611",
-          "vat": "domestic_25",
-          "confidence": 0.97,
+          "account": "7632",
+          "vat": "representation_capped",
+          "confidence": 0.9,
           "accountCorrect": true,
           "vatCorrect": true
         },
@@ -4698,11 +4501,11 @@
           "model": "gpt-5-6-luna",
           "label": "GPT-5.6 Luna",
           "vendor": "OpenAI",
-          "pass": true,
-          "account": "5611",
-          "vat": "domestic_25",
-          "confidence": 0.93,
-          "accountCorrect": true,
+          "pass": false,
+          "account": "7631",
+          "vat": "representation_capped",
+          "confidence": 0.98,
+          "accountCorrect": false,
           "vatCorrect": true
         },
         {
@@ -4710,8 +4513,8 @@
           "label": "Gemini 3.1 Pro",
           "vendor": "Google",
           "pass": true,
-          "account": "5611",
-          "vat": "domestic_25",
+          "account": "7632",
+          "vat": "representation_capped",
           "confidence": 0.95,
           "accountCorrect": true,
           "vatCorrect": true
@@ -4720,22 +4523,22 @@
           "model": "grok-4-6",
           "label": "Grok 4.6",
           "vendor": "xAI",
-          "pass": true,
-          "account": "5611",
-          "vat": "domestic_25",
-          "confidence": 0.9,
-          "accountCorrect": true,
+          "pass": false,
+          "account": "7631",
+          "vat": "representation_capped",
+          "confidence": 0.82,
+          "accountCorrect": false,
           "vatCorrect": true
         },
         {
           "model": "deepseek-v4-pro",
           "label": "DeepSeek V4 Pro",
           "vendor": "DeepSeek",
-          "pass": true,
-          "account": "5611",
-          "vat": "domestic_25",
-          "confidence": 0.95,
-          "accountCorrect": true,
+          "pass": false,
+          "account": "7630",
+          "vat": "representation_capped",
+          "confidence": 0.78,
+          "accountCorrect": false,
           "vatCorrect": true
         },
         {
@@ -4743,10 +4546,10 @@
           "label": "Qwen3.8 2.4T",
           "vendor": "Alibaba",
           "pass": false,
-          "account": "5611",
-          "vat": "domestic_25_half_deduction",
-          "confidence": 0.78,
-          "accountCorrect": true,
+          "account": "",
+          "vat": "",
+          "confidence": null,
+          "accountCorrect": false,
           "vatCorrect": false
         },
         {
@@ -4754,9 +4557,9 @@
           "label": "Llama 4 Maverick",
           "vendor": "Meta",
           "pass": false,
-          "account": "5601",
-          "vat": "domestic_25",
-          "confidence": 1,
+          "account": "6071",
+          "vat": "representation_capped",
+          "confidence": 0.9,
           "accountCorrect": false,
           "vatCorrect": true
         },
@@ -4764,10 +4567,205 @@
           "model": "kimi-k3",
           "label": "Kimi K3",
           "vendor": "Moonshot",
+          "pass": false,
+          "account": "7632",
+          "vat": "no_vat",
+          "confidence": 0.85,
+          "accountCorrect": true,
+          "vatCorrect": false
+        },
+        {
+          "model": "glm-5-3-flash",
+          "label": "GLM 5.3 Flash",
+          "vendor": "Z.ai",
+          "pass": false,
+          "account": "7631",
+          "vat": "domestic_12",
+          "confidence": 0.6,
+          "accountCorrect": false,
+          "vatCorrect": false
+        },
+        {
+          "model": "gpt-oss-120b",
+          "label": "GPT-OSS-120B",
+          "vendor": "OpenAI",
+          "pass": false,
+          "account": "6072",
+          "vat": "no_vat",
+          "confidence": 0.97,
+          "accountCorrect": false,
+          "vatCorrect": false
+        }
+      ]
+    },
+    {
+      "id": "booking-026",
+      "probe": "Client lunch: representation with capped VAT",
+      "difficulty": "hard",
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Managementkonsult"
+      },
+      "transaction": {
+        "date": "2026-05-19",
+        "amount": -896,
+        "currency": "SEK",
+        "counterpart": "Restaurang Tranan",
+        "description": "Affärslunch med kund, 2 personer",
+        "underlag": "Lunch 2 kuvert. Mat 800,00 inkl 12 % moms, dryck (öl) 96,00 inkl 25 % moms. Syfte: avtalsdiskussion med kund X."
+      },
+      "gold": {
+        "account": "6072",
+        "acceptable_accounts": [
+          "6071"
+        ],
+        "vat_treatment": "representation_capped"
+      },
+      "rationale": "Extern representation: måltid är inte avdragsgill inkomstskattemässigt sedan 2017 (6072), och momsavdraget är begränsat till underlag om 300 kr/person.",
+      "law_ref": "ML 13 kap. 24-25 §§, IL 16 kap. 2 §",
+      "answers": [
+        {
+          "model": "claude-haiku-4-5",
+          "label": "Claude Haiku 4.5",
+          "vendor": "Anthropic",
+          "pass": false,
+          "account": "6070",
+          "vat": "representation_capped",
+          "confidence": 0.92,
+          "accountCorrect": false,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-sonnet-4-6",
+          "label": "Claude Sonnet 4.6",
+          "vendor": "Anthropic",
           "pass": true,
-          "account": "5611",
-          "vat": "domestic_25",
+          "account": "6072",
+          "vat": "representation_capped",
+          "confidence": 0.85,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-sonnet-5",
+          "label": "Claude Sonnet 5",
+          "vendor": "Anthropic",
+          "pass": true,
+          "account": "6072",
+          "vat": "representation_capped",
+          "confidence": 0.72,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-opus-5",
+          "label": "Claude Opus 5",
+          "vendor": "Anthropic",
+          "pass": true,
+          "account": "6071",
+          "vat": "representation_capped",
+          "confidence": 0.9,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-fable-5",
+          "label": "Claude Fable 5",
+          "vendor": "Anthropic",
+          "pass": true,
+          "account": "6072",
+          "vat": "representation_capped",
+          "confidence": 0.85,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "gpt-5-6-terra-pro",
+          "label": "GPT-5.6 Terra Pro",
+          "vendor": "OpenAI",
+          "pass": true,
+          "account": "6071",
+          "vat": "representation_capped",
+          "confidence": 0.96,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "gpt-5-6-luna",
+          "label": "GPT-5.6 Luna",
+          "vendor": "OpenAI",
+          "pass": true,
+          "account": "6071",
+          "vat": "representation_capped",
+          "confidence": 0.98,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "gemini-3-1-pro",
+          "label": "Gemini 3.1 Pro",
+          "vendor": "Google",
+          "pass": true,
+          "account": "6072",
+          "vat": "representation_capped",
           "confidence": 0.95,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "grok-4-6",
+          "label": "Grok 4.6",
+          "vendor": "xAI",
+          "pass": true,
+          "account": "6071",
+          "vat": "representation_capped",
+          "confidence": 0.86,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "deepseek-v4-pro",
+          "label": "DeepSeek V4 Pro",
+          "vendor": "DeepSeek",
+          "pass": true,
+          "account": "6072",
+          "vat": "representation_capped",
+          "confidence": 0.9,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "qwen3-8-2-4t",
+          "label": "Qwen3.8 2.4T",
+          "vendor": "Alibaba",
+          "pass": false,
+          "account": "",
+          "vat": "",
+          "confidence": null,
+          "accountCorrect": false,
+          "vatCorrect": false
+        },
+        {
+          "model": "llama-4-maverick",
+          "label": "Llama 4 Maverick",
+          "vendor": "Meta",
+          "pass": true,
+          "account": "6071",
+          "vat": "representation_capped",
+          "confidence": 1,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "kimi-k3",
+          "label": "Kimi K3",
+          "vendor": "Moonshot",
+          "pass": true,
+          "account": "6072",
+          "vat": "representation_capped",
+          "confidence": 0.92,
           "accountCorrect": true,
           "vatCorrect": true
         },
@@ -4775,11 +4773,11 @@
           "model": "glm-5-3-flash",
           "label": "GLM 5.3 Flash",
           "vendor": "Z.ai",
-          "pass": true,
-          "account": "5611",
-          "vat": "domestic_25",
-          "confidence": 0.92,
-          "accountCorrect": true,
+          "pass": false,
+          "account": "6070",
+          "vat": "representation_capped",
+          "confidence": 0.95,
+          "accountCorrect": false,
           "vatCorrect": true
         },
         {
@@ -4787,9 +4785,9 @@
           "label": "GPT-OSS-120B",
           "vendor": "OpenAI",
           "pass": false,
-          "account": "4820",
-          "vat": "domestic_25",
-          "confidence": 0.97,
+          "account": "6070",
+          "vat": "representation_capped",
+          "confidence": 0.78,
           "accountCorrect": false,
           "vatCorrect": true
         }
@@ -4853,14 +4851,6 @@
       "reasoning": 0.694,
       "agentClean": true
     },
-    "claude-sonnet-5": {
-      "verdict": "tillstyrks",
-      "coverage99": 0.654,
-      "coverage95": 0.654,
-      "booking": 0.885,
-      "reasoning": 0.861,
-      "agentClean": true
-    },
     "claude-sonnet-4-6": {
       "verdict": "tillstyrks_med_reservation",
       "coverage99": 0.058,
@@ -4876,6 +4866,14 @@
       "booking": 0.865,
       "reasoning": 0.444,
       "agentClean": false
+    },
+    "claude-sonnet-5": {
+      "verdict": "tillstyrks_med_reservation",
+      "coverage99": 0.212,
+      "coverage95": 0.212,
+      "booking": 0.846,
+      "reasoning": 0.861,
+      "agentClean": true
     },
     "deepseek-v4-pro": {
       "verdict": "avstyrks",
@@ -4897,7 +4895,7 @@
       "verdict": "avstyrks",
       "coverage99": 0,
       "coverage95": 0,
-      "booking": 0.577,
+      "booking": 0.558,
       "reasoning": 0.222,
       "agentClean": false
     },

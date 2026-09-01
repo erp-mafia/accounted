@@ -209,6 +209,45 @@ Runs are pass@1. Re-running a task supersedes the earlier record
 (`aggregate.ts` keeps the latest per suite/task/model); repeated-run
 reliability (pass^k) is future work.
 
+## Staged tasks: how the suite grows without breaking the board
+
+A task is only comparable once every model has answered it. Adding one to a
+live suite would leave some models measured on 52 items and others on 77, and
+the paired McNemar tests behind the tie groups need both models to have seen
+the same tasks. So new work lands with `staged: true`: excluded from every
+suite loader and therefore from the board, but validated and reviewed like any
+other task. `--staged` (or `BENCH_INCLUDE_STAGED=1`) opts a run in; the batch
+is unstaged in one move once the full board has run it.
+
+The v2 batch (25 tasks) exists because a coverage profile of the 52 published
+tasks showed the suite was narrower than its name: **every task was an
+expense**, every amount was in SEK, and nothing touched payroll, the tax
+account, financial items, or a company that is not VAT-registered. The
+expansion covers withdrawals and deposits in an enskild firma, non-registered
+buyers, VAT-exempt insurance and bank services, tax-account payments and
+refunds, salary and employer's contributions, pensions and special payroll
+tax, loan interest and amortisation, exchange differences, congestion tax,
+and a supplier credit note. `validate-tasks.ts` previously rejected any
+positive amount outright, which encoded the same assumption; genuine inflows
+that are still not revenue now declare `inflow: true` and are checked for the
+opposite mistake.
+
+A two-tier smoke test (one strong model, one weak) runs before a batch is
+proposed for the board, to catch defective gold cheaply: of the first 26,
+seven needed review, four were acceptance lists that were too narrow
+(7211 for salaries, 7411 for collective pensions, 2417/2841 for the current
+portion of a loan), two were tasks under-specified enough that the model's
+answer was fair, and one was a real model error. One task was retired: its
+bank row was the net salary payment, so answering 1930 was defensible and the
+probe did not measure what it claimed.
+
+**Revenue is still missing, and needs a decision.** The booking suite's VAT
+enum is purchase-side only, with no value for output VAT, so sales tasks
+cannot be expressed without either extending the enum (which changes the
+prompt for every model and invalidates the current board) or adding a
+separate revenue suite. The second is the better fit for a benchmark that
+already scores each suite independently, and neither has been done.
+
 ## Validity controls
 
 - `bench/scripts/validate-tasks.ts`: every gold account must exist in the

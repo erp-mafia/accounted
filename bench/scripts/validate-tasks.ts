@@ -13,7 +13,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { loadTasks, BENCH_ROOT } from '../src/util'
+import { loadAllTasks as loadTasks, BENCH_ROOT } from '../src/util'
 import { VAT_TREATMENTS } from '../src/types'
 import type {
   BookingTask,
@@ -46,9 +46,18 @@ for (const t of booking) {
   if (!(VAT_TREATMENTS as string[]).includes(t.gold.vat_treatment)) {
     problem(`${t.id}: unknown vat_treatment ${t.gold.vat_treatment}`)
   }
-  if (t.input.transaction.amount >= 0 && !t.probe.includes('inbetalning')) {
-    // Purchases are outflows; a positive amount is almost certainly a typo.
-    problem(`${t.id}: expected negative amount, got ${t.input.transaction.amount}`)
+  if (t.input.transaction.amount === 0) {
+    problem(`${t.id}: transaction amount is zero`)
+  }
+  // Most bookings are outflows, so an unmarked positive amount is almost
+  // certainly a sign typo. Genuine inflows that are still not revenue (a
+  // supplier credit note, a tax-account refund, money put in by the owner)
+  // declare `inflow: true` and are checked for the opposite mistake.
+  if (t.input.transaction.amount > 0 && t.inflow !== true) {
+    problem(`${t.id}: positive amount ${t.input.transaction.amount} without inflow: true`)
+  }
+  if (t.input.transaction.amount < 0 && t.inflow === true) {
+    problem(`${t.id}: marked inflow: true but amount is ${t.input.transaction.amount}`)
   }
 }
 console.log(`booking: ${booking.length} tasks`)

@@ -57,7 +57,15 @@ export function extractJsonObject(text: string): Record<string, unknown> | null 
   return null
 }
 
-export function loadTasks<T extends Task>(suite: string): T[] {
+// Staged tasks are authored and validated but not yet part of the board.
+//
+// A task only becomes comparable once EVERY model has answered it: adding one
+// to a live suite would leave some models measured on 52 items and others on
+// 112, and the paired McNemar tests that produce the tie groups need both
+// models to have seen the same tasks. So new work lands with `staged: true`,
+// is validated and reviewed like any other task, and is unstaged in one move
+// after a full run. Pass includeStaged (or BENCH_INCLUDE_STAGED=1) to run them.
+export function loadTasks<T extends Task>(suite: string, includeStaged = false): T[] {
   const dir = path.join(BENCH_ROOT, 'tasks', suite)
   const files = fs
     .readdirSync(dir)
@@ -74,7 +82,14 @@ export function loadTasks<T extends Task>(suite: string): T[] {
     if (ids.has(t.id)) throw new Error(`Duplicate task id ${t.id} in suite ${suite}`)
     ids.add(t.id)
   }
-  return tasks
+  const wantStaged = includeStaged || process.env.BENCH_INCLUDE_STAGED === '1'
+  return wantStaged ? tasks : tasks.filter((t) => t.staged !== true)
+}
+
+// Every task on disk, staged or not. For validation and review tooling, which
+// must check work that has not been run yet.
+export function loadAllTasks<T extends Task>(suite: string): T[] {
+  return loadTasks<T>(suite, true)
 }
 
 // Privacy rule: prod-derived task data may only be sent to the EU Bedrock
