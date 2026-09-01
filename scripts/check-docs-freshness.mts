@@ -40,6 +40,7 @@ ModuleCtor._load = function (request: string, ...rest: unknown[]) {
 let errors!: typeof import('@/lib/docs/content/errors')
 let reference!: typeof import('@/lib/docs/content/reference')
 let connectClaude!: typeof import('@/lib/docs/content/connect-claude')
+let anslutClaude!: typeof import('@/lib/docs/content/anslut-claude')
 let changelog!: typeof import('@/lib/docs/content/changelog')
 let versioning!: typeof import('@/lib/docs/content/versioning')
 let webhooks!: typeof import('@/lib/docs/content/webhooks')
@@ -48,6 +49,7 @@ try {
   errors = await import('@/lib/docs/content/errors')
   reference = await import('@/lib/docs/content/reference')
   connectClaude = await import('@/lib/docs/content/connect-claude')
+  anslutClaude = await import('@/lib/docs/content/anslut-claude')
   changelog = await import('@/lib/docs/content/changelog')
   versioning = await import('@/lib/docs/content/versioning')
   webhooks = await import('@/lib/docs/content/webhooks')
@@ -100,6 +102,7 @@ function buildExpectedPages(): PageCheck[] {
     { path: 'reference.md', expected: buildReferenceOverviewMd() },
     { path: 'errors.md', expected: buildErrorReferenceMd() },
     { path: 'connect-claude.md', expected: connectClaude.CONNECT_CLAUDE_MD },
+    { path: 'anslut-claude.md', expected: anslutClaude.ANSLUT_CLAUDE_MD },
     { path: 'changelog.md', expected: changelog.CHANGELOG_MD },
     { path: 'versioning.md', expected: versioning.VERSIONING_MD },
     { path: 'webhooks.md', expected: webhooks.WEBHOOKS_MD },

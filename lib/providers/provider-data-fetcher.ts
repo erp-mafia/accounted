@@ -74,60 +74,77 @@ async function blPaginate<T>(
 
 // ── Public fetch functions ──────────────────────────────────────────
 
+/**
+ * Company information straight from the provider.
+ *
+ * Throws whatever the provider client threw. It used to catch everything and
+ * return null, which made a Visma company whose api_standard module is off
+ * look like a company with no details: the preview answered 200 with
+ * companyInfo: null and its classify-and-rethrow remediation was unreachable
+ * code. Callers decide what is soft (the preview keeps transient failures
+ * soft, the migration records a step error). `null` still means "nothing to
+ * fetch here" (no resource config, or no provider company id), never "the
+ * call failed".
+ */
 export async function fetchCompanyInfoDirect(
   provider: ProviderName,
   accessToken: string,
   providerCompanyId?: string,
 ): Promise<CompanyInformationDto | null> {
-  try {
-    if (provider === 'fortnox') {
-      const config = FORTNOX_RESOURCE_CONFIGS[ResourceType.CompanyInformation]!;
-      const response = await fortnoxClient.get<Record<string, unknown>>(accessToken, config.listEndpoint);
-      const data = response[config.detailKey];
-      return data ? config.mapper(data as Record<string, unknown>) as CompanyInformationDto : null;
-    }
-
-    if (provider === 'visma') {
-      const config = VISMA_RESOURCE_CONFIGS[ResourceType.CompanyInformation]!;
-      const response = await vismaClient.get<Record<string, unknown>>(accessToken, config.listEndpoint);
-      return config.mapper(response) as CompanyInformationDto;
-    }
-
-    if (provider === 'briox') {
-      const config = BRIOX_RESOURCE_CONFIGS[ResourceType.CompanyInformation]!;
-      const response = await brioxClient.get<Record<string, unknown>>(accessToken, config.listEndpoint);
-      return config.mapper(response) as CompanyInformationDto;
-    }
-
-    if (provider === 'bokio') {
-      const config = BOKIO_RESOURCE_CONFIGS[ResourceType.CompanyInformation];
-      if (!config || !providerCompanyId) return null;
-      const response = await bokioClient.getCompany<Record<string, unknown>>(accessToken, providerCompanyId);
-      return response ? config.mapper(response) as CompanyInformationDto : null;
-    }
-
-    if (provider === 'bjornlunden') {
-      const config = BL_RESOURCE_CONFIGS[ResourceType.CompanyInformation]!;
-      if (!providerCompanyId) return null;
-      const response = await bjornLundenClient.get<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
-      return config.mapper(response) as CompanyInformationDto;
-    }
-
-    if (provider === 'wint') {
-      // The WINT token is company-scoped: GET /api/Auth describes the company
-      // the token opens, no providerCompanyId needed on the request.
-      const config = WINT_RESOURCE_CONFIGS[ResourceType.CompanyInformation]!;
-      const response = await wintClient.get<Record<string, unknown>>(accessToken, config.listEndpoint);
-      return config.mapper(response) as CompanyInformationDto;
-    }
-
-    return null;
-  } catch (error) {
-    console.error(`[provider-data-fetcher] Failed to fetch company info from ${provider}:`, error);
-    return null;
+  if (provider === 'fortnox') {
+    const config = FORTNOX_RESOURCE_CONFIGS[ResourceType.CompanyInformation]!;
+    const response = await fortnoxClient.get<Record<string, unknown>>(accessToken, config.listEndpoint);
+    const data = response[config.detailKey];
+    return data ? config.mapper(data as Record<string, unknown>) as CompanyInformationDto : null;
   }
+
+  if (provider === 'visma') {
+    const config = VISMA_RESOURCE_CONFIGS[ResourceType.CompanyInformation]!;
+    const response = await vismaClient.get<Record<string, unknown>>(accessToken, config.listEndpoint);
+    return config.mapper(response) as CompanyInformationDto;
+  }
+
+  if (provider === 'briox') {
+    const config = BRIOX_RESOURCE_CONFIGS[ResourceType.CompanyInformation]!;
+    const response = await brioxClient.get<Record<string, unknown>>(accessToken, config.listEndpoint);
+    return config.mapper(response) as CompanyInformationDto;
+  }
+
+  if (provider === 'bokio') {
+    const config = BOKIO_RESOURCE_CONFIGS[ResourceType.CompanyInformation];
+    if (!config || !providerCompanyId) return null;
+    const response = await bokioClient.getCompany<Record<string, unknown>>(accessToken, providerCompanyId);
+    return response ? config.mapper(response) as CompanyInformationDto : null;
+  }
+
+  if (provider === 'bjornlunden') {
+    const config = BL_RESOURCE_CONFIGS[ResourceType.CompanyInformation]!;
+    if (!providerCompanyId) return null;
+    const response = await bjornLundenClient.get<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
+    return config.mapper(response) as CompanyInformationDto;
+  }
+
+  if (provider === 'wint') {
+    // The WINT token is company-scoped: GET /api/Auth describes the company
+    // the token opens, no providerCompanyId needed on the request.
+    const config = WINT_RESOURCE_CONFIGS[ResourceType.CompanyInformation]!;
+    const response = await wintClient.get<Record<string, unknown>>(accessToken, config.listEndpoint);
+    return config.mapper(response) as CompanyInformationDto;
+  }
+
+  return null;
 }
 
+/**
+ * List fetches. Every one of them can answer `[]` WITHOUT issuing a request:
+ * Bokio and Björn Lundén key their list endpoints on a provider company id
+ * this consent may not carry, WINT has no supplier register, and Bokio's
+ * supplier 404 is swallowed on purpose. So an empty array means "nothing to
+ * import", never "the provider answered nothing", and callers must not read a
+ * resolved promise as proof that the access token works (see the migration
+ * orchestrator's ProviderRunState.grantProven, which counts rows instead).
+ * A failed request still throws; only genuinely absent resources return [].
+ */
 export async function fetchCustomersDirect(
   provider: ProviderName,
   accessToken: string,

@@ -49,6 +49,7 @@ import {
 import Link from 'next/link'
 import { cn, formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
 import { QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
 import { StartCard } from '@/components/dashboard/StartCard'
 import EditKonteringDialog from '@/components/extensions/general/EditKonteringDialog'
@@ -1130,16 +1131,23 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     }
   }, [fetchItems, selectedId, toast])
 
-  const toggleSelected = useCallback((id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }, [])
+  // Ranges walk the rendered inbox rows in order. Optimistic upload
+  // placeholders render no checkbox, so they stay out of the range: their
+  // temp-* ids are not server rows and must never reach a bulk action.
+  const range = useRangeSelect({
+    visibleIds: filteredItems.filter((item) => !item.isPlaceholder).map((item) => item.id),
+    selectedIds,
+    setSelectedIds,
+  })
+  const toggleSelected = useCallback(
+    (id: string, extend?: boolean) => range.toggle(id, extend),
+    [range],
+  )
 
-  const clearSelection = useCallback(() => setSelectedIds(new Set()), [])
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set())
+    range.resetAnchor()
+  }, [range])
 
   // The selected rows, and how many of them can actually be bulk-booked
   // (matched to a transaction and not yet booked). Drives the "Bokför valda"
@@ -1757,7 +1765,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                       selected={item.id === selectedId}
                       onClick={() => handleSelect(item.id)}
                       isChecked={selectedIds.has(item.id)}
-                      onToggleChecked={() => toggleSelected(item.id)}
+                      onToggleChecked={(extend) => toggleSelected(item.id, extend)}
                       anyChecked={selectedIds.size > 0}
                     />
                   ))}
@@ -2124,12 +2132,15 @@ function InboxRow({
   selected: boolean
   onClick: () => void
   isChecked: boolean
-  onToggleChecked: () => void
+  onToggleChecked: (extend?: boolean) => void
   /** True when bulk-select mode is active anywhere in the list: keeps the
       checkbox visible (otherwise it's hover-only on desktop). */
   anyChecked: boolean
 }) {
   const t = useTranslations('inbox_workspace')
+  // Radix' onCheckedChange carries no mouse event: the preceding click records
+  // whether shift was held, for range selection.
+  const shiftHeld = useRef(false)
   const amount = pickAmount(item)
   const supplierName = pickSupplierName(item)
   const invoiceDate = pickInvoiceDate(item)
@@ -2167,7 +2178,7 @@ function InboxRow({
       {!isPlaceholder && (
         <div
           className={cn(
-            'flex items-center pl-2.5 pr-1.5 transition-opacity',
+            'flex select-none items-center pl-2.5 pr-1.5 transition-opacity',
             // Solid on touch (pointer-coarse) or when any selection is active;
             // otherwise muted-but-visible at rest. focus-within because this
             // wraps the checkbox rather than being it.
@@ -2179,7 +2190,10 @@ function InboxRow({
         >
           <Checkbox
             checked={isChecked}
-            onCheckedChange={onToggleChecked}
+            onClick={(e) => {
+              shiftHeld.current = e.shiftKey
+            }}
+            onCheckedChange={() => onToggleChecked(shiftHeld.current)}
             aria-label="Markera post"
             className="h-3.5 w-3.5 border-foreground"
           />

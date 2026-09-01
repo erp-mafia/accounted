@@ -899,6 +899,27 @@ export function AccountPickerDialog({
                         {account.iban.replace(/(.{4})/g, '$1 ').trim()}
                       </p>
                     )}
+                    {/* The callback found this IBAN already booked by another
+                        of the user's companies (one consent can cover several
+                        companies' accounts at e.g. SEB). Unchecked by default;
+                        naming the claimant is what stops a reflexive
+                        select-all from booking it here too. */}
+                    {account.claimed_by_company_id && (
+                      <p className="text-xs text-muted-foreground">
+                        Synkas redan i{' '}
+                        <span data-ph-mask="">
+                          {account.claimed_by_company_name || 'ett annat bolag'}
+                        </span>
+                      </p>
+                    )}
+                    {/* Carried deselection: the user said "Synkas ej" to this
+                        IBAN on another connection. An unexplained unchecked
+                        box reads as a glitch; a silent one hides a sync gap. */}
+                    {!account.claimed_by_company_id && account.deselected_elsewhere && (
+                      <p className="text-xs text-muted-foreground">
+                        Tidigare bortvald: markera för att synka i detta bolag
+                      </p>
+                    )}
                   </div>
                   {account.balance !== undefined && (
                     <p className="text-sm font-medium tabular-nums shrink-0">

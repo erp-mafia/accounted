@@ -374,4 +374,63 @@ describe('getAccountStatus', () => {
     expect(s.unexplained_difference).toBe(0)
     expect(s.bank).toMatchObject({ bank_transaction_total: 122288 })
   })
+
+  it('exposes the bank-reported balance from cash_accounts on the bank kind (F7)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: cashAccount(ID_A, {
+        balance: 125430.5,
+        available_balance: 123930.5,
+        balance_updated_at: '2026-08-20T05:12:00Z',
+      }),
+    })
+    bankStatusMock.mockResolvedValue(bankStatus({ difference: -46, unexplained_difference: 0 }))
+    enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } })
+
+    const s = await getAccountStatus(supabase as never, COMPANY, bankAccountKey(ID_A), { today: '2026-08-20' })
+    if (!s) throw new Error('expected status')
+    // external_balance stays null for bank: sign-off persists it into
+    // account_reconciliations and bokslutsbilagor computes closing - external
+    // from that row, so a today-balance on a balansdag sign-off would print a
+    // phantom differens. The reported balance lives only in the bank block.
+    expect(s.external_balance).toBeNull()
+    expect(s.difference).toBe(-46)
+    expect(s.unexplained_difference).toBe(0)
+    expect(s.bank).toMatchObject({
+      bank_reported_balance: 125430.5,
+      bank_reported_available_balance: 123930.5,
+      bank_balance_updated_at: '2026-08-20T05:12:00Z',
+    })
+  })
+
+  it('leaves external_balance null on the bank kind when no balance was ever synced', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: cashAccount(ID_A, { balance: null, available_balance: null, balance_updated_at: null }) })
+    bankStatusMock.mockResolvedValue(bankStatus())
+    enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } })
+
+    const s = await getAccountStatus(supabase as never, COMPANY, bankAccountKey(ID_A), { today: '2026-08-20' })
+    if (!s) throw new Error('expected status')
+    expect(s.external_balance).toBeNull()
+    expect(s.bank).toMatchObject({
+      bank_reported_balance: null,
+      bank_reported_available_balance: null,
+      bank_balance_updated_at: null,
+    })
+  })
+
+  it('suppresses a stored balance that has no timestamp (age unknown = unusable)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: cashAccount(ID_A, { balance: 500, available_balance: 400, balance_updated_at: null }) })
+    bankStatusMock.mockResolvedValue(bankStatus())
+    enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } })
+
+    const s = await getAccountStatus(supabase as never, COMPANY, bankAccountKey(ID_A), { today: '2026-08-20' })
+    if (!s) throw new Error('expected status')
+    expect(s.bank).toMatchObject({
+      bank_reported_balance: null,
+      bank_reported_available_balance: null,
+      bank_balance_updated_at: null,
+    })
+  })
 })

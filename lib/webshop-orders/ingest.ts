@@ -3,7 +3,11 @@ import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { roundOre as round } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
 import type { Currency, WebshopOrder } from '@/types'
-import type { WebshopOrderUpsert, WebshopOrderUpsertResult } from './types'
+import type {
+  WebshopOrderRemovalResult,
+  WebshopOrderUpsert,
+  WebshopOrderUpsertResult,
+} from './types'
 
 const log = createLogger('webshop-orders/ingest')
 
@@ -446,6 +450,118 @@ export async function upsertWebshopOrders(
         for (const row of (insertedRows ?? []) as Array<{ id: string; external_id: string }>) {
           knownIds.set(row.external_id, row.id)
         }
+      }
+    }
+  }
+
+  return result
+}
+
+/**
+ * Delete rows the store no longer considers money events (WooCommerce
+ * 'failed' payment attempts: user report, failed checkouts sat forever as
+ * unbookable "Ej betald" rows). The freeze boundary applies to deletes as it
+ * does to updates, application-side here because the table has no
+ * delete-protection trigger:
+ *
+ * - a frozen row (booked / invoiced / manually marked) is never deleted;
+ * - a paid row is never deleted: money moved at some point, and a paid row
+ *   is also the only kind that can have refund children (parent_order_id
+ *   cascades, so deleting one could take a booked refund row with it);
+ * - a cross-marked row (legacy_transaction_id) is never deleted: the order
+ *   may be booked via the retired transactions feed without any freeze
+ *   column set on this row;
+ * - every guard is repeated ON THE DELETE STATEMENT itself, not only on the
+ *   candidate select (skeptic finding): a row booked between the select and
+ *   the delete must survive, exactly like the conditional booking claim in
+ *   book-order.ts. The frozen-child veto select below is defense in depth
+ *   on top of the is_paid guard.
+ */
+export async function removeWebshopOrders(
+  supabase: SupabaseClient,
+  companyId: string,
+  externalIds: string[],
+): Promise<WebshopOrderRemovalResult> {
+  const result: WebshopOrderRemovalResult = { removed: 0, errors: 0 }
+  if (externalIds.length === 0) return result
+
+  const recordError = (err: unknown) => {
+    result.errors += 1
+    if (!result.firstError) {
+      const anyErr = err as { message?: string; code?: string | null }
+      result.firstError = {
+        message: anyErr?.message ?? String(err),
+        code: anyErr?.code ?? null,
+      }
+    }
+  }
+
+  for (const batch of chunk(externalIds, CHUNK_SIZE)) {
+    const { data: candidates, error: candidateError } = await supabase
+      .from('webshop_orders')
+      .select('id')
+      .eq('company_id', companyId)
+      .in('external_id', batch)
+      .eq('is_paid', false)
+      .is('journal_entry_id', null)
+      .is('invoice_id', null)
+      .is('manually_booked_at', null)
+      .is('legacy_transaction_id', null)
+    if (candidateError) {
+      recordError(candidateError)
+      continue
+    }
+    const candidateIds = ((candidates ?? []) as Array<{ id: string }>).map((r) => r.id)
+    if (candidateIds.length === 0) continue
+
+    const { data: frozenChildren, error: childError } = await supabase
+      .from('webshop_orders')
+      .select('parent_order_id')
+      .eq('company_id', companyId)
+      .in('parent_order_id', candidateIds)
+      .or('journal_entry_id.not.is.null,invoice_id.not.is.null,manually_booked_at.not.is.null')
+    if (childError) {
+      recordError(childError)
+      continue
+    }
+    const vetoedParents = new Set(
+      ((frozenChildren ?? []) as Array<{ parent_order_id: string }>).map(
+        (r) => r.parent_order_id,
+      ),
+    )
+    const deletableIds = candidateIds.filter((id) => !vetoedParents.has(id))
+    if (deletableIds.length === 0) continue
+
+    const { data: deletedRows, error: deleteError } = await supabase
+      .from('webshop_orders')
+      .delete()
+      .eq('company_id', companyId)
+      .in('id', deletableIds)
+      .eq('is_paid', false)
+      .is('journal_entry_id', null)
+      .is('invoice_id', null)
+      .is('manually_booked_at', null)
+      .is('legacy_transaction_id', null)
+      .select('id')
+    if (deleteError) {
+      recordError(deleteError)
+      log.warn('webshop order removal batch failed', {
+        companyId,
+        batchSize: deletableIds.length,
+        code: (deleteError as { code?: string }).code,
+      })
+    } else {
+      const deletedIds = ((deletedRows ?? []) as Array<{ id: string }>).map((r) => r.id)
+      result.removed += deletedIds.length
+      if (deletedIds.length > 0) {
+        // Hard delete of financial staging rows: the log is the only record
+        // of what was removed and by which process (compliance finding, ISO
+        // A.8.10), since pre-bokföring rows carry no behandlingshistorik.
+        log.info('webshop order rows removed (store reports order failed)', {
+          companyId,
+          deletedIds,
+          requestedExternalIds: batch,
+        })
       }
     }
   }

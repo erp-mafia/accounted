@@ -14,6 +14,7 @@ function makeCashAccount(overrides: Partial<CashAccount> = {}): CashAccount {
     currency: 'SEK',
     ledger_account: '1930',
     balance: null,
+    available_balance: null,
     balance_updated_at: null,
     enabled: true,
     is_primary: true,

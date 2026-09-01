@@ -13,11 +13,13 @@ vi.stubEnv('ENABLE_BANKING_API_URL', 'https://api.test.com')
 
 import {
   getASPSPs,
+  getAccountBalance,
   getAccountBalances,
   getAccountTransactions,
   getAllTransactions,
   getAllTransactionsWithRaw,
   convertTransaction,
+  deleteSession,
   probeSessionHealth,
   startAuthorization,
   createSession,
@@ -49,6 +51,97 @@ describe('api-client', () => {
       )
 
       await expect(getAccountBalances('acc-1')).rejects.toThrow('Aborted')
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Balance-type selection
+  // -------------------------------------------------------------------------
+  describe('getAccountBalance', () => {
+    function balancesResponse(balances: unknown[]): Response {
+      return new Response(JSON.stringify({ balances }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    it('returns booked (closingBooked) plus available (interimAvailable) from one response', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'interimAvailable', balance_amount: { amount: '900.50', currency: 'SEK' } },
+          { balance_type: 'closingBooked', balance_amount: { amount: '1000.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result).toEqual({ amount: 1000, date: '2026-09-01', available: 900.5 })
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('accepts ISO 20022 codes (CLBD/ITAV) case-insensitively', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'ITAV', balance_amount: { amount: '450.25', currency: 'SEK' } },
+          { balance_type: 'CLBD', balance_amount: { amount: '500.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result?.amount).toBe(500)
+      expect(result?.available).toBe(450.25)
+    })
+
+    it('returns available: null when the bank reports no available type', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'closingBooked', balance_amount: { amount: '1000.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result).toEqual({ amount: 1000, date: '2026-09-01', available: null })
+    })
+
+    it('falls back to the first balance for booked, never to an available type by preference', async () => {
+      // Only an unknown type: the pre-existing first-entry fallback applies.
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'somethingElse', balance_amount: { amount: '42.00', currency: 'SEK' }, reference_date: '2026-08-31' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result).toEqual({ amount: 42, date: '2026-08-31', available: null })
+    })
+
+    it('prefers interimBooked (ITBD) over the generic first-entry fallback', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'somethingElse', balance_amount: { amount: '1.00', currency: 'SEK' } },
+          { balance_type: 'ITBD', balance_amount: { amount: '3.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result?.amount).toBe(3)
+    })
+
+    it('returns null (never a fabricated 0) when the bank reports no balances at all', async () => {
+      fetchSpy.mockResolvedValueOnce(balancesResponse([]))
+      const result = await getAccountBalance('acc-1')
+      expect(result).toBeNull()
+    })
+
+    it('prefers expected over the first entry when closingBooked is missing', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'other', balance_amount: { amount: '1.00', currency: 'SEK' } },
+          { balance_type: 'expected', balance_amount: { amount: '2.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result?.amount).toBe(2)
     })
   })
 
@@ -668,5 +761,75 @@ describe('connector mode', () => {
     expect(url).toContain('enablebanking.com')
     expect(headers['X-Connector-Company']).toBeUndefined()
     expect(headers['Authorization']).toBe('Bearer test-jwt-token')
+  })
+})
+
+/**
+ * Log levels for the two conditions that are expected rather than broken.
+ *
+ * A PSD2 consent that ran out and a session Enable Banking has already dropped
+ * are both handled: the sync flips the connection to 'expired' and asks for a
+ * re-authorization, and the disconnect carries on regardless. Logging them at
+ * error filled the production error panel with events nobody could act on and
+ * buried the genuine ASPSP failures next to them. The thrown errors are
+ * unchanged: only the level moves.
+ */
+describe('expected-condition log levels', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+  let errorSpy: ReturnType<typeof vi.spyOn>
+  let warnSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    fetchSpy.mockRestore()
+    errorSpy.mockRestore()
+    warnSpy.mockRestore()
+  })
+
+  it('logs an expired bank session at warn, and still throws SessionExpiredError', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(JSON.stringify({ code: 'EXPIRED_SESSION' }), { status: 401 })
+    )
+
+    await expect(
+      getAllTransactionsWithRaw('acc-1', '2024-01-01', '2024-12-31')
+    ).rejects.toThrow('Bank session expired')
+
+    expect(warnSpy).toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('still logs a genuine ASPSP failure at error', async () => {
+    // 500 is retried before it gives up; every attempt is the same failure.
+    fetchSpy.mockResolvedValue(new Response('{"message":"internal error"}', { status: 500 }))
+
+    await expect(
+      getAllTransactionsWithRaw('acc-1', '2024-01-01', '2024-12-31')
+    ).rejects.toThrow('Failed to get transactions')
+
+    expect(errorSpy).toHaveBeenCalled()
+  })
+
+  it('logs a session that is already gone at Enable Banking at warn', async () => {
+    fetchSpy.mockResolvedValue(new Response('', { status: 404 }))
+
+    await expect(deleteSession('session-1')).rejects.toThrow('Failed to revoke session')
+
+    expect(warnSpy).toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('still logs an unexpected revoke failure at error', async () => {
+    fetchSpy.mockResolvedValue(new Response('{"message":"boom"}', { status: 500 }))
+
+    await expect(deleteSession('session-1')).rejects.toThrow('Failed to revoke session')
+
+    expect(errorSpy).toHaveBeenCalled()
   })
 })
