@@ -388,6 +388,59 @@ describe('mcp.tool_called telemetry', () => {
     expect(event.latencyMs).toBeGreaterThanOrEqual(0)
   })
 
+  describe('errorCause: machine vocabulary for the unmapped residue (#2051)', () => {
+    /**
+     * 65.1% of real-agent errors in the 30 days before #2027 were
+     * UNKNOWN_ERROR, whose errorMessage is the constant "Något gick fel.
+     * Försök igen." and whose errorDetail is the English constant: nothing to
+     * cluster on. errorCause carries errorCauseTag(err): the SQLSTATE or coded
+     * error code, else the error's class name. Protocol vocabulary only,
+     * because a raw driver message can quote row values from a constraint
+     * violation and belongs in the server log, never in event_log.
+     */
+    it('records the error class name when execute() dies unmapped', async () => {
+      const eventPromise = captureNextToolCalledEvent()
+
+      // Valid call for the key's reports:read scope; the harness supabase is a
+      // bare vi.fn() mock, so execute() dies on it. Exactly the shape that
+      // used to log UNKNOWN_ERROR with the constant message and nothing else.
+      await handleMcpRequest(
+        mcpRequest('tools/call', { name: 'gnubok_get_trial_balance', arguments: {} })
+      )
+
+      const event = await eventPromise
+      expect(event.errorKind).toBe('execution')
+      expect(event.errorCause).toBe('TypeError')
+    })
+
+    it('stays null for a plain Error: the class name "Error" is noise, not vocabulary', async () => {
+      const eventPromise = captureNextToolCalledEvent()
+
+      // gnubok_load_skill throws `new Error("Skill not found: ...")`.
+      await handleMcpRequest(
+        mcpRequest('tools/call', { name: 'gnubok_load_skill', arguments: { slug: 'definitely-does-not-exist' } })
+      )
+
+      const event = await eventPromise
+      expect(event.errorKind).toBe('execution')
+      expect(event.errorCause).toBeNull()
+    })
+
+    it('stays null on success and on pre-execution denials', async () => {
+      const successPromise = captureNextToolCalledEvent()
+      await handleMcpRequest(mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }))
+      expect((await successPromise).errorCause).toBeNull()
+
+      const deniedPromise = captureNextToolCalledEvent()
+      await handleMcpRequest(
+        mcpRequest('tools/call', { name: 'gnubok_create_invoice', arguments: { customer_id: 'x', items: [] } })
+      )
+      const denied = await deniedPromise
+      expect(denied.errorKind).toBe('scope_denied')
+      expect(denied.errorCause).toBeNull()
+    })
+  })
+
   it('does NOT block the JSON-RPC response on telemetry: even if a handler throws', async () => {
     // Register a handler that throws synchronously. The bus already isolates
     // failures via Promise.allSettled, so the response should still arrive.
