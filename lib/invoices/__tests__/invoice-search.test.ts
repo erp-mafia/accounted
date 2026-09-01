@@ -54,6 +54,17 @@ describe('matchesInvoiceSearch', () => {
     expect(matchesInvoiceSearch(invoice, '262')).toBe(true)
   })
 
+  it('finds credit notes by magnitude (stored totals are negative)', () => {
+    const creditNote = { ...invoice, subtotal: -14000, total: -17500 }
+    expect(matchesInvoiceSearch(creditNote, '17500')).toBe(true)
+    expect(matchesInvoiceSearch(creditNote, '14 000')).toBe(true)
+    expect(matchesInvoiceSearch(creditNote, '-17500')).toBe(true)
+  })
+
+  it('does not let a zero term match rows with missing amounts', () => {
+    expect(matchesInvoiceSearch({ subtotal: null, total: null }, '0')).toBe(false)
+  })
+
   it('handles empty terms and missing fields', () => {
     expect(matchesInvoiceSearch(invoice, '')).toBe(true)
     expect(matchesInvoiceSearch({}, 'x')).toBe(false)

@@ -6306,7 +6306,7 @@ export const tools: McpTool[] = [
         ...(offset === 0 ? { invoice_register_coverage: coverage } : {}),
         ...(coverage.has_pre_register_invoices && coverage.covers_from
           ? {
-              coverage_note: `Fakturaregistret täcker fr.o.m. ${coverage.covers_from}. Det finns bokförda verifikat med kundfordringar (1510/1513) före det datumet: äldre kundfakturor kan ligga som verifikat utanför registret (t.ex. efter en migrering) och syns inte i detta svar. Sök i journalen (gnubok_query_journal) för perioden före ${coverage.covers_from}.`,
+              coverage_note: `Äldsta fakturan i fakturaregistret är daterad ${coverage.covers_from}. Det finns bokförda verifikat med kundfordringar (1510/1513) före det datumet: äldre kundfakturor kan ligga som verifikat utanför registret (t.ex. efter en migrering) och syns inte i detta svar. Sök i journalen (gnubok_query_journal) för perioden före ${coverage.covers_from}.`,
             }
           : {}),
       }

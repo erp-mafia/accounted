@@ -23,6 +23,7 @@ Cursor-paginated invoice list ordered by created_at DESC, id ASC (newest-registe
 - Credit notes appear with status=credited and a credited_invoice_id field on the detail endpoint.
 - Ordering is by created_at (registration time), not invoice_date. Backdated invoices therefore appear where they were created, not where their date falls: filter on ?date_from / ?date_to when you care about the business date.
 - Cursor pagination: pass ?cursor=<next_cursor> from the previous response. A stale or tampered cursor is ignored and the first page is returned again.
+- The register only contains invoices created in Accounted. A company migrated or backfilled mid-year has real customer invoices that exist only as journal entries and are NOT in this list. Check meta.coverage: when has_pre_register_invoices is true, treat periods before covers_from as not answered by this endpoint (query journal entries instead).
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -37,7 +38,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -67,7 +69,11 @@ Example response `200`:
   "meta": {
     "request_id": "req_…",
     "api_version": "2026-05-12",
-    "next_cursor": null
+    "next_cursor": null,
+    "coverage": {
+      "covers_from": "2026-07-19",
+      "has_pre_register_invoices": true
+    }
   }
 }
 ```
@@ -170,7 +176,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -241,7 +248,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -340,7 +348,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -393,7 +402,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -464,7 +474,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -549,7 +560,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -613,7 +625,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -724,7 +737,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -816,7 +830,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```

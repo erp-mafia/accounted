@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { hasPreRegisterArInPeriod } from '@/lib/invoices/invoice-register-coverage'
 
 export interface ARReconciliationResult {
   ar_ledger_total: number
@@ -21,6 +22,17 @@ export interface ARReconciliationResult {
    * than a true reconciliation break.
    */
   unconverted_fx_count: number
+  /**
+   * True when posted non-invoice-engine AR debit verifikat dated before the
+   * register's first invoice exist IN THIS PERIOD (migrated/backfilled
+   * invoice history). Only then may a renderer offer "migration" as an
+   * explanation for the difference: pre-boundary activity settled in an
+   * earlier period contributes nothing to this period's balance, and
+   * offering it anyway would cushion a genuine felbokning.
+   * Optional so report fixtures elsewhere stay valid; generateARReconciliation
+   * always sets it.
+   */
+  pre_register_ar_in_period?: boolean
 }
 
 /**
@@ -113,6 +125,16 @@ export async function generateARReconciliation(
 
   const difference = Math.round((arLedgerTotal - account1510Balance) * 100) / 100
 
+  // Coverage context for the difference. Non-fatal: a failed lookup degrades
+  // to "no explanation offered" (the helper returns false on failure), which
+  // leaves the red badge standing unqualified rather than excused.
+  let preRegisterArInPeriod = false
+  try {
+    preRegisterArInPeriod = await hasPreRegisterArInPeriod(supabase, companyId, periodId)
+  } catch {
+    // keep false
+  }
+
   return {
     ar_ledger_total: Math.round(arLedgerTotal * 100) / 100,
     account_1510_balance: Math.round(account1510Balance * 100) / 100,
@@ -123,5 +145,6 @@ export async function generateARReconciliation(
     // Avstämd: the user must fix the underlying data first.
     is_reconciled: Math.abs(difference) < 0.01 && unconvertedFxCount === 0,
     unconverted_fx_count: unconvertedFxCount,
+    pre_register_ar_in_period: preRegisterArInPeriod,
   }
 }

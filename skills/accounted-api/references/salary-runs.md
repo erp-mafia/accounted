@@ -35,7 +35,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -140,7 +141,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -220,7 +222,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -318,7 +321,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -391,7 +395,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -458,7 +463,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -537,7 +543,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -597,7 +604,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -680,7 +688,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -776,7 +785,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -861,7 +871,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -983,7 +994,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1047,7 +1059,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1155,7 +1168,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1228,7 +1242,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```

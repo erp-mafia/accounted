@@ -21,17 +21,24 @@ export interface SearchableInvoice {
   total?: number | string | null
 }
 
-/** Parse "14 000", "17 500,50", "17500.50" → number; null when not an amount. */
+/**
+ * Parse "14 000", "17 500,50", "17500.50", "-17500" → magnitude (absolute
+ * value); null when not an amount. \s covers NBSP/thin-NBSP thousand
+ * separators from sv-SE formatting. Sign is discarded: credit notes store
+ * negative totals, and a user searching a belopp thinks in magnitudes.
+ */
 export function parseAmountTerm(term: string): number | null {
   const compact = term.replace(/\s/g, '').replace(',', '.')
-  if (!/^\d+(\.\d{1,2})?$/.test(compact)) return null
+  if (!/^-?\d+(\.\d{1,2})?$/.test(compact)) return null
   const value = Number(compact)
-  return Number.isFinite(value) ? value : null
+  return Number.isFinite(value) ? Math.abs(value) : null
 }
 
 const amountEquals = (candidate: number | string | null | undefined, target: number): boolean => {
+  if (candidate == null || candidate === '') return false
   const value = Number(candidate)
-  return Number.isFinite(value) && Math.abs(value - target) < 0.005
+  // Magnitude comparison so 17500 finds the -17500 kreditfaktura row too.
+  return Number.isFinite(value) && Math.abs(Math.abs(value) - target) < 0.005
 }
 
 export function matchesInvoiceSearch(invoice: SearchableInvoice, rawTerm: string): boolean {
