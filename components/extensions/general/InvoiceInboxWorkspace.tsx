@@ -1841,13 +1841,18 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   beside it reads 50. */}
               {searchTerm.trim() !== ''
                 ? `Inga träffar på ”${searchTerm.trim()}”.`
-                : filter === 'todo'
-                  ? 'Inget att åtgärda; allt är bearbetat.'
-                  : filter === 'portal'
-                    ? 'Inga köp väntar på en faktura från en portal.'
-                    : filter === 'missing'
-                      ? 'Varje köp har sitt underlag.'
-                      : 'Inga poster matchar filtret.'}
+                : kindFilter !== 'all'
+                  // Same trap as the search term: "allt är bearbetat" would be
+                  // false while the status trigger above still counts rows the
+                  // type menu is hiding.
+                  ? t('empty_no_kind_hits')
+                  : filter === 'todo'
+                    ? 'Inget att åtgärda; allt är bearbetat.'
+                    : filter === 'portal'
+                      ? 'Inga köp väntar på en faktura från en portal.'
+                      : filter === 'missing'
+                        ? 'Varje köp har sitt underlag.'
+                        : 'Inga poster matchar filtret.'}
             </div>
           ) : (
             <ul>
@@ -2881,6 +2886,7 @@ function FieldsRail({
   const hasAi = useCapability(CAPABILITY.ai)
   const { appName } = useBranding()
   const data = item.extracted_data
+  const resolvedKind = resolveInboxKind(item)
   const [proposal, setProposal] = useState<SuggestedBooking | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   // A proposal belongs to one item; carrying it to the next would offer the
@@ -3042,16 +3048,18 @@ function FieldsRail({
       {/* AI classification: what kind of document this is and how it was
           paid. Read-only context above the editable fields; absent for
           extractions from before the fields existed. */}
-      {(data?.documentKind ||
+      {(resolvedKind ||
         data?.payment?.method ||
         data?.pages ||
         (data?.totals?.total == null &&
           (data?.prominentAmounts ?? []).some((a) => Number.isFinite(a.amount) && a.amount !== 0))) && (
         <div className="border-b px-4 py-3 text-xs space-y-1">
-          {data?.documentKind && (
+          {/* Same resolution as the list row (sender's +lev / +ver hint first,
+              then the AI), so the pane never contradicts the badge. */}
+          {resolvedKind && (
             <div className="flex gap-2">
               <span className="text-muted-foreground w-14 shrink-0">{t('doc_kind_label')}</span>
-              <span>{t(`doc_kind_${data.documentKind}`)}</span>
+              <span>{t(`doc_kind_${resolvedKind}`)}</span>
             </div>
           )}
           {data?.payment?.method && (

@@ -3588,6 +3588,7 @@
     "kind_filter_all": "All types",
     "kind_filter_supplier_invoice": "Supplier invoices",
     "kind_filter_underlag": "Receipts and other",
+    "empty_no_kind_hits": "No items of that type here. Pick All types to see the rest.",
     "address_plus_hint": "Add +lev before the @ for supplier invoices and +ver for receipts: {lev} or {ver}",
     "payment_label": "Paid with",
     "payment_card": "Card",

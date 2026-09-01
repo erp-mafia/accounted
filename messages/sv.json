@@ -3588,6 +3588,7 @@
     "kind_filter_all": "Alla typer",
     "kind_filter_supplier_invoice": "Leverantörsfakturor",
     "kind_filter_underlag": "Underlag",
+    "empty_no_kind_hits": "Inga poster av den typen här. Välj Alla typer för att se resten.",
     "address_plus_hint": "Skriv +lev före @ för leverantörsfakturor och +ver för underlag: {lev} eller {ver}",
     "payment_label": "Betalsätt",
     "payment_card": "Kort",
