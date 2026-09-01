@@ -11,10 +11,19 @@
 -- marked with source_recurring_line_id so recalculation replaces derived rows
 -- without touching manual ones.
 
+-- Same-company integrity by construction (the dimensions pattern): the
+-- composite FK below binds employee_id to the row's company_id, so an
+-- RLS-authorized member of one company can never point a recurring line at
+-- another company's employee (IDOR guard, CWE-639).
+ALTER TABLE public.employees
+  ADD CONSTRAINT employees_id_company_id_key UNIQUE (id, company_id);
+
 CREATE TABLE public.employee_recurring_lines (
   id          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   employee_id uuid NOT NULL REFERENCES public.employees(id) ON DELETE CASCADE,
   company_id  uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
+  FOREIGN KEY (employee_id, company_id)
+    REFERENCES public.employees(id, company_id) ON DELETE CASCADE,
   user_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
 
   -- Reuses existing salary_line_items item types; no CHECK expansion needed
