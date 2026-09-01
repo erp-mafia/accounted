@@ -37,6 +37,7 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 // AI behavior. On the free build (document-extraction disabled) we keep the
 // upload functional but drop the "AI:n läser dokumentet" promise.
 const HAS_AI_EXTRACTION = ENABLED_EXTENSION_IDS.has('document-extraction')
+import { BrandMark } from '@/components/ui/brand-mark'
 import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { TransactionWithInvoice, CategorizeHandler } from './transaction-types'
@@ -318,6 +319,12 @@ export default function TransactionInboxCard({
             painting over the Belopp column. */}
         <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
           <span className="row-collapsible flex min-w-0 items-center gap-2">
+            {/* Identity precedence mirrors normalizeMerchantKey()
+                (lib/transactions/category-suggestions.ts): merchant_name when
+                the feed carried one, else the raw descriptor. `description` is
+                a user-editable working title, so keying the mark on it would
+                change the icon on rename. */}
+            <BrandMark label={transaction.merchant_name ?? originalName ?? transaction.description} />
             <span className="truncate">{transaction.description}</span>
             <TransactionAttachmentIndicator documentId={attachedDocumentId} />
             {/* The markers below are desktop-only (hidden md:*): on mobile

@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { BrandMark } from '@/components/ui/brand-mark'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { useToast } from '@/components/ui/use-toast'
 import { Plus, Building2, Lock } from 'lucide-react'
@@ -228,13 +229,16 @@ export default function SuppliersPage() {
                       onClick={() => router.push(`/suppliers/${supplier.id}`)}
                     >
                       <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
-                        <Link
-                          href={`/suppliers/${supplier.id}`}
-                          className="block truncate hover:underline"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {supplier.name}
-                        </Link>
+                        <span className="flex min-w-0 items-center gap-2">
+                          <BrandMark label={supplier.name} />
+                          <Link
+                            href={`/suppliers/${supplier.id}`}
+                            className="block truncate hover:underline"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {supplier.name}
+                          </Link>
+                        </span>
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
                         {t(SUPPLIER_TYPE_KEYS[supplier.supplier_type])}
