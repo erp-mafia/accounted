@@ -733,6 +733,7 @@ export default function PendingOperationsPage() {
             disabled={isBulkCommitting || isRejecting}
             onClick={() => {
               setSelectedIds(new Set(bulkEligibleIds))
+              range.resetAnchor()
               setShowBulkDialog(true)
             }}
           >

@@ -1131,9 +1131,11 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     }
   }, [fetchItems, selectedId, toast])
 
-  // Ranges walk the rendered inbox rows in order.
+  // Ranges walk the rendered inbox rows in order. Optimistic upload
+  // placeholders render no checkbox, so they stay out of the range: their
+  // temp-* ids are not server rows and must never reach a bulk action.
   const range = useRangeSelect({
-    visibleIds: filteredItems.map((item) => item.id),
+    visibleIds: filteredItems.filter((item) => !item.isPlaceholder).map((item) => item.id),
     selectedIds,
     setSelectedIds,
   })

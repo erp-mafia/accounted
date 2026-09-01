@@ -85,6 +85,20 @@ describe('applyRangeSelection', () => {
     expect(sorted(next)).toEqual(['d'])
   })
 
+  it('degrades to a plain toggle when the selection was cleared', () => {
+    // The anchor row is still on screen, but the user cleared the selection
+    // (clear button, filter change, finished bulk action). Extending from it
+    // would sweep in rows they never picked.
+    const next = applyRangeSelection({
+      selectedIds: new Set(),
+      visibleIds: VISIBLE,
+      anchorId: 'a',
+      targetId: 'e',
+      extend: true,
+    })
+    expect(sorted(next)).toEqual(['e'])
+  })
+
   it('degrades to a plain toggle when the anchor is no longer visible', () => {
     // The anchor row was filtered away or is on another page.
     const next = applyRangeSelection({
@@ -98,8 +112,9 @@ describe('applyRangeSelection', () => {
   })
 
   it('follows the rendered order, not the id order', () => {
+    // The anchor is always a row the user just clicked, so it is selected.
     const next = applyRangeSelection({
-      selectedIds: new Set(),
+      selectedIds: new Set(['e']),
       visibleIds: ['e', 'd', 'c', 'b', 'a'],
       anchorId: 'e',
       targetId: 'c',
@@ -108,14 +123,14 @@ describe('applyRangeSelection', () => {
     expect(sorted(next)).toEqual(['c', 'd', 'e'])
   })
 
-  it('selects just the row when anchor and target are the same', () => {
+  it('unselects just the row when anchor and target are the same', () => {
     const next = applyRangeSelection({
-      selectedIds: new Set(),
+      selectedIds: new Set(['c']),
       visibleIds: VISIBLE,
       anchorId: 'c',
       targetId: 'c',
       extend: true,
     })
-    expect(sorted(next)).toEqual(['c'])
+    expect(sorted(next)).toEqual([])
   })
 })

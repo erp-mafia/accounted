@@ -19,6 +19,13 @@ import { useCallback, useRef } from 'react'
  * `visibleIds` must be the rendered order. When the anchor is missing (first
  * click, or the anchor scrolled out of the current filter/page) a shift-click
  * degrades to a plain toggle, which is what every mail client does.
+ *
+ * An EMPTY selection also counts as having no anchor: every list clears the
+ * selection from several places (a clear button, a filter change, a finished
+ * bulk action), and a range measured from a row the user can no longer see
+ * selected would sweep in dozens of rows they never picked. Anchoring on the
+ * selection rather than on the clear call sites keeps that true for clear
+ * paths nobody remembered to wire up.
  */
 export function applyRangeSelection({
   selectedIds,
@@ -36,7 +43,8 @@ export function applyRangeSelection({
   const next = new Set(selectedIds)
   const shouldSelect = !selectedIds.has(targetId)
 
-  const anchorIndex = anchorId === null ? -1 : visibleIds.indexOf(anchorId)
+  const anchorIndex =
+    anchorId === null || selectedIds.size === 0 ? -1 : visibleIds.indexOf(anchorId)
   const targetIndex = visibleIds.indexOf(targetId)
 
   if (!extend || anchorIndex === -1 || targetIndex === -1) {
