@@ -154,7 +154,7 @@ export async function appendProcessingHistory(
  * Same append, on a caller-supplied service-role client. For standalone
  * scripts (e.g. scripts/backfill-inbox-booked-underlag.ts) that cannot build
  * the Next-bound service client but must still write behandlingshistorik
- * through the one shared row shape and PII validation (BFNAR 2013:2 kap 8:
+ * through the one shared row shape and PII validation (BFNAR 2013:2 p. 9.16:
  * the change log has to reconcile across writers, so scripts never hand-roll
  * the insert).
  */

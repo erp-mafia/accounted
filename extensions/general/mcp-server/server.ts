@@ -187,7 +187,7 @@ import {
   projectToolInputSchema,
   resolveMcpCompanyContext,
 } from './company-routing'
-import { findUnknownArgKeys, listArgKeys } from './arg-guard'
+import { findUnknownArgKeys, listArgKeys, shortestExampleFor } from './arg-guard'
 import { findSupplierCandidates, type SupplierRow } from './supplier-candidates'
 import {
   matchSupplierByIdentity,
@@ -5392,6 +5392,14 @@ export const tools: McpTool[] = [
         idempotency_key: { type: 'string', description: 'Optional UUID to dedupe retries: a replayed call returns the already-staged operation instead of staging twice.' },
       },
       required: ['transaction_id', 'category'],
+      // The two combinations the prose above describes and callers still get
+      // wrong: an account_override without an explicit vat_treatment (books
+      // GROSS, no moms line), and representation without deltagare + syfte.
+      examples: [
+        { transaction_id: '3f1a...', category: 'expense_office' },
+        { transaction_id: '3f1a...', category: 'expense_other', account_override: '4600', vat_treatment: 'standard_25' },
+        { transaction_id: '3f1a...', category: 'expense_representation', notes: 'Anna Andersson (Acme AB), kundmöte om ramavtal' },
+      ],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: {
@@ -6995,6 +7003,10 @@ export const tools: McpTool[] = [
       properties: {
         period_id: { type: 'string', description: 'Fiscal period UUID (default: most recent)' },
       },
+      // period_id is the whole surface. Callers have shipped `metric` here for
+      // days at a time (604 rejected calls, 2026-08-24 to 08-31): the empty
+      // object is the example that says there is nothing else to pass.
+      examples: [{}, { period_id: '7c2b...' }],
     },
     outputSchema: { type: 'object' },
     annotations: {
@@ -9271,6 +9283,12 @@ export const tools: McpTool[] = [
         group_by_dimension: { type: 'string', description: 'Aggregate by SIE dimension number (e.g. "6" = projekt) from each line\'s dimensions bag; untagged → "(utan dimension)". Mutually exclusive with group_by.' },
         limit: { type: 'number', minimum: 1, maximum: 500, description: 'Max lines returned 1-500 (default 100); totals/groups still cover the full match set.' },
       },
+      // Two shapes that cover most ad-hoc questions: an account range over a
+      // period, and a free-text hunt. status defaults to 'all' on purpose.
+      examples: [
+        { account_from: '4000', account_to: '4999', date_from: '2026-01-01', date_to: '2026-03-31' },
+        { text: 'Kjell', status: 'posted' },
+      ],
     },
     outputSchema: {
       type: 'object',
@@ -18221,6 +18239,19 @@ export const tools: McpTool[] = [
         },
       },
       required: ['entry_date', 'description', 'lines'],
+      // Balance is the rule agents break: sum(debit) === sum(credit), and the
+      // moms leg is its own line on its own BAS account, never folded in.
+      examples: [
+        {
+          entry_date: '2026-03-31',
+          description: 'Kontorsmaterial Kjell & Company',
+          lines: [
+            { account_number: '6110', debit_amount: 400 },
+            { account_number: '2641', debit_amount: 100 },
+            { account_number: '1930', credit_amount: 500 },
+          ],
+        },
+      ],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -19384,6 +19415,9 @@ export const tools: McpTool[] = [
         },
       },
       required: ['operation_id'],
+      // confirmed is not optional for a high-risk operation: without it the
+      // approval is refused, which reads to an agent as a permissions problem.
+      examples: [{ operation_id: '9a44...' }, { operation_id: '9a44...', confirmed: true }],
     },
     outputSchema: {
       type: 'object',
@@ -21215,10 +21249,14 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // VALIDATION_ERROR envelope, never as a half-applied call.
         const unknownArgKeys = findUnknownArgKeys(tool.inputSchema as Record<string, unknown>, toolArgs)
         if (unknownArgKeys.length > 0) {
+          // Name the shape, not just the mistake: a caller that already sent a
+          // wrong key has no way to guess the right one from a key list alone.
+          const example = shortestExampleFor(tool.inputSchema as Record<string, unknown>)
           throw codedError(
             'VALIDATION_ERROR',
             `Unknown parameter${unknownArgKeys.length > 1 ? 's' : ''} ${unknownArgKeys.map((k) => `"${k}"`).join(', ')} for ${requestedToolName}. ` +
-              `Valid parameters: ${listArgKeys(tool.inputSchema as Record<string, unknown>).join(', ') || '(none)'}. Unknown keys are rejected, not ignored.`,
+              `Valid parameters: ${listArgKeys(tool.inputSchema as Record<string, unknown>).join(', ') || '(none)'}. Unknown keys are rejected, not ignored.` +
+              (example ? ` A working call looks like: ${example}` : ''),
           )
         }
 
