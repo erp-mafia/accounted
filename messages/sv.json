@@ -5602,7 +5602,8 @@
     "vat_review_confirm_all": "Bekräfta alla föreslagna ({count})",
     "vat_review_filter": "{count} momskoder att granska",
     "vat_treatment_column": "Momskod",
-    "vat_treatment_confirm": "Bekräfta"
+    "vat_treatment_confirm": "Bekräfta",
+    "vat_treatment_confirm_help": "Godkänn momskoden för raden så räknas den som granskad. Ändra momskod eller momssats först om förslaget inte stämmer."
   },
   "dimensions": {
     "new_value": "Nytt värde",
