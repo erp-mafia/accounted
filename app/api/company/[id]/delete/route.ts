@@ -143,44 +143,68 @@ export async function POST(
   // reconnecting the store from any new company with no user-reachable
   // disconnect. Same status flip as the manual disconnect paths, secrets
   // nulled. Non-fatal: the archive already happened, but never silent.
-  const connectionTables: Array<{ table: string; clear: Record<string, null> }> = [
+  // .neq('revoked') rather than pending/active: 'error'-state rows also
+  // carry credentials and are just as unreachable after the archive. Each
+  // update carries its payload as an object literal so the phantom-column
+  // scanner can resolve every column.
+  const revokes = [
     {
       table: 'woocommerce_connections',
-      clear: {
-        consumer_key_encrypted: null,
-        consumer_secret_encrypted: null,
-        oauth_state: null,
-      },
+      result: await service
+        .from('woocommerce_connections')
+        .update({
+          status: 'revoked',
+          disconnected_at: archivedAt,
+          consumer_key_encrypted: null,
+          consumer_secret_encrypted: null,
+          oauth_state: null,
+        })
+        .eq('company_id', companyId)
+        .neq('status', 'revoked')
+        .select('id'),
     },
     {
       table: 'shopify_connections',
-      clear: { client_id_encrypted: null, client_secret_encrypted: null },
+      result: await service
+        .from('shopify_connections')
+        .update({
+          status: 'revoked',
+          disconnected_at: archivedAt,
+          client_id_encrypted: null,
+          client_secret_encrypted: null,
+        })
+        .eq('company_id', companyId)
+        .neq('status', 'revoked')
+        .select('id'),
     },
-    { table: 'stripe_connections', clear: { oauth_state: null } },
+    {
+      table: 'stripe_connections',
+      result: await service
+        .from('stripe_connections')
+        .update({
+          status: 'revoked',
+          disconnected_at: archivedAt,
+          oauth_state: null,
+        })
+        .eq('company_id', companyId)
+        .neq('status', 'revoked')
+        .select('id'),
+    },
   ]
-  for (const { table, clear } of connectionTables) {
-    // .neq('revoked') rather than pending/active: 'error'-state rows also
-    // carry credentials and are just as unreachable after the archive.
-    const { data: revoked, error: revokeError } = await service
-      .from(table)
-      .update({ status: 'revoked', disconnected_at: archivedAt, ...clear })
-      .eq('company_id', companyId)
-      .neq('status', 'revoked')
-      .select('id')
-    if (revokeError) {
+  for (const { table, result } of revokes) {
+    if (result.error) {
       log.error('Failed to revoke store connections on company archive', {
         companyId,
         table,
-        error: revokeError.message,
+        error: result.error.message,
       })
       continue
     }
-    if (!revoked || revoked.length === 0) continue
     // Credential revocation is a compliance-critical mutation: audit it like
     // the archive itself (the tables have no auto-audit trigger). Non-fatal,
     // same doctrine as the archive's own audit write below.
-    const { error: revokeAuditError } = await service.from('audit_log').insert(
-      revoked.map((row) => ({
+    for (const row of (result.data ?? []) as Array<{ id: string }>) {
+      const { error: revokeAuditError } = await service.from('audit_log').insert({
         user_id: user.id,
         company_id: companyId,
         action: 'UPDATE',
@@ -189,14 +213,14 @@ export async function POST(
         actor_id: user.id,
         new_state: { status: 'revoked', disconnected_at: archivedAt },
         description: `Store connection revoked on company archive: ${company.name}`,
-      })),
-    )
-    if (revokeAuditError) {
-      log.error('Failed to write audit_log rows for connection revocation', {
-        companyId,
-        table,
-        error: revokeAuditError.message,
       })
+      if (revokeAuditError) {
+        log.error('Failed to write audit_log row for connection revocation', {
+          companyId,
+          table,
+          error: revokeAuditError.message,
+        })
+      }
     }
   }
 

@@ -320,13 +320,13 @@ describe('POST /api/company/[id]/delete', () => {
     )
     expect(status).toBe(200)
 
-    // One audit insert per connection table, each an array of per-row entries.
+    // One audit insert per revoked connection row.
     for (const table of [
       'woocommerce_connections',
       'shopify_connections',
       'stripe_connections',
     ]) {
-      expect(insertSpy).toHaveBeenCalledWith([
+      expect(insertSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'UPDATE',
           table_name: table,
@@ -335,7 +335,7 @@ describe('POST /api/company/[id]/delete', () => {
           user_id: 'user-1',
           new_state: expect.objectContaining({ status: 'revoked' }),
         }),
-      ])
+      )
     }
   })
 
@@ -363,11 +363,11 @@ describe('POST /api/company/[id]/delete', () => {
     expect(status).toBe(200)
     expect(updateSpies.companies).toHaveBeenCalled()
     // No audit rows for the failed table, but the other tables still processed.
-    expect(insertSpy).not.toHaveBeenCalledWith([
+    expect(insertSpy).not.toHaveBeenCalledWith(
       expect.objectContaining({ table_name: 'woocommerce_connections' }),
-    ])
-    expect(insertSpy).toHaveBeenCalledWith([
+    )
+    expect(insertSpy).toHaveBeenCalledWith(
       expect.objectContaining({ table_name: 'shopify_connections' }),
-    ])
+    )
   })
 })
