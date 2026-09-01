@@ -1,6 +1,7 @@
 import { type SupabaseClient } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { toRedovisare12 } from '@/lib/invariants/org-number'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('skatteverket-connection-store')
@@ -258,6 +259,59 @@ export async function listConnections(environment: SkvEnvironment): Promise<SkvC
     })
     return []
   }
+}
+
+/**
+ * Org numbers (12-digit redovisare form) claimed by MORE than one live
+ * (non-archived) company. Org-number reuse is allowed in the product and
+ * tenant isolation is the boundary, but the ombud path binds Skatteverket's
+ * system-credential access to an org number: while two tenants claim the
+ * same one, neither may be marked granted, or a tenant that typed a victim's
+ * public org number would inherit the victim's grant. Verify, deep link and
+ * the nightly sync all consult this.
+ */
+export async function findContestedOrgNumbers(): Promise<Set<string>> {
+  const client = getServiceClient()
+  type SettingsRow = { company_id: string; org_number: string | null; entity_type: string | null }
+  type ArchivedRow = { id: string }
+  const [settings, archived] = await Promise.all([
+    fetchAllRows<SettingsRow>(({ from, to }) =>
+      client
+        .from('company_settings')
+        .select('company_id, org_number, entity_type')
+        .not('org_number', 'is', null)
+        .order('company_id', { ascending: true })
+        .range(from, to)
+    ),
+    fetchAllRows<ArchivedRow>(({ from, to }) =>
+      client
+        .from('companies')
+        .select('id')
+        .not('archived_at', 'is', null)
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
+  ])
+  const archivedIds = new Set(archived.map((row) => row.id))
+  const claimants = new Map<string, number>()
+  for (const row of settings) {
+    if (!row.org_number || archivedIds.has(row.company_id)) continue
+    let redovisare: string
+    try {
+      redovisare = toRedovisare12(row.org_number, row.entity_type === 'enskild_firma' ? 'enskild_firma' : 'aktiebolag')
+    } catch {
+      continue
+    }
+    claimants.set(redovisare, (claimants.get(redovisare) ?? 0) + 1)
+  }
+  const contested = new Set<string>()
+  for (const [orgNumber, count] of claimants) if (count > 1) contested.add(orgNumber)
+  return contested
+}
+
+/** True when more than one live company claims this 12-digit org number. */
+export async function isOrgNumberContested(orgNumber: string): Promise<boolean> {
+  return (await findContestedOrgNumbers()).has(orgNumber)
 }
 
 /** Test hook: reset the memoized service client. */

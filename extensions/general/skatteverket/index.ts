@@ -27,7 +27,12 @@ import {
 import { submitVatDeclarationChain } from './lib/vat-submit'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { getSystemAuthMode, isSystemAuthConfigured, getOmbudOrgNumber, getSystemCertInfo } from './lib/system-auth/config'
-import { getConnection, markConnectionRevoked, recordProbeResult } from './lib/connection-store'
+import {
+  getConnection,
+  isOrgNumberContested,
+  markConnectionRevoked,
+  recordProbeResult,
+} from './lib/connection-store'
 import { currentSkvEnvironment, resolveReadAuth } from './lib/resolve-auth'
 import { probeCompanyGrants } from './lib/grant-probe'
 import { formatRedovisare } from '@/lib/skatteverket/format'
@@ -185,6 +190,26 @@ const AGI_WRITE_ROLES = new Set(['owner', 'admin', 'member'])
  */
 async function requireSkvCapability(ctx: ExtensionContext): Promise<NextResponse | null> {
   return requireCapability(ctx.supabase, ctx.companyId, CAPABILITY.skatteverket)
+}
+
+/**
+ * The ombud path binds Skatteverket system-credential access to an org
+ * number, and org numbers are public and tenant-editable. While more than
+ * one live company claims the same one, no company may verify a grant or
+ * mint a deep link on it: a tenant that typed a victim's number must never
+ * inherit the victim's grant. Returns the 409 to send, or null when clear.
+ */
+async function contestedOrgNumberResponse(orgNumber: string): Promise<NextResponse | null> {
+  if (!(await isOrgNumberContested(orgNumber))) return null
+  return NextResponse.json(
+    {
+      error:
+        'Organisationsnumret används av fler än ett företag i Accounted. ' +
+        'Kontakta support för att aktivera ombudsanslutningen.',
+      code: 'ORG_NUMBER_CONTESTED',
+    },
+    { status: 409 }
+  )
 }
 
 /**
@@ -811,6 +836,9 @@ export const skatteverketExtension: Extension = {
           settings.entity_type as 'enskild_firma' | 'aktiebolag'
         )
 
+        const contestedForVerify = await contestedOrgNumberResponse(orgNumber)
+        if (contestedForVerify) return contestedForVerify
+
         try {
           const result = await probeCompanyGrants(ctx.companyId, orgNumber, ctx.userId)
           await writeSkatteverketAudit(ctx, {
@@ -873,6 +901,9 @@ export const skatteverketExtension: Extension = {
           settings.org_number as string,
           settings.entity_type as 'enskild_firma' | 'aktiebolag'
         )
+
+        const contestedForLink = await contestedOrgNumberResponse(orgNumber)
+        if (contestedForLink) return contestedForLink
 
         try {
           const link = await createUtseOmbudDeepLink(orgNumber, OMBUD_ROLE_KEYS)

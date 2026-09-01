@@ -26,9 +26,11 @@ vi.mock('@/extensions/general/skatteverket/lib/resolve-auth', () => ({
 
 const mockListConnections = vi.fn()
 const mockRecordProbeResult = vi.fn()
+const mockContested = vi.fn(async (): Promise<Set<string>> => new Set())
 vi.mock('@/extensions/general/skatteverket/lib/connection-store', () => ({
   listConnections: (...a: unknown[]) => mockListConnections(...a),
   recordProbeResult: (...a: unknown[]) => mockRecordProbeResult(...a),
+  findContestedOrgNumbers: () => mockContested(),
 }))
 
 const mockListOmbudGrants = vi.fn()
@@ -86,6 +88,7 @@ beforeEach(() => {
   mockConfigured.mockReturnValue(true)
   mockListConnections.mockResolvedValue([])
   mockRecordProbeResult.mockResolvedValue({ id: 'conn' })
+  mockContested.mockResolvedValue(new Set())
   mockListOmbudGrants.mockResolvedValue([])
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -252,6 +255,36 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
     expect(body).toMatchObject({ guardTripped: true, guardReason: 'mass_downgrade', revoked: 0, skipped: 3, granted: 1, unchanged: 1 })
     expect(mockRecordProbeResult).toHaveBeenCalledTimes(1)
     expect(recordedFor('c-new')[0]).toMatchObject({ lasombud: { status: 'granted' } })
+  })
+
+  it('never grants on a contested org number (two live companies claim it), even with a row and a register grant', async () => {
+    mockListConnections.mockResolvedValue([
+      connection('c-victim', '165560000000', 'unknown', 'unknown', 'pending'),
+      connection('c-twin', '165560000000', 'unknown', 'unknown', 'pending'),
+      connection('c-clear', '165570000000', 'unknown', 'unknown', 'pending'),
+    ])
+    mockContested.mockResolvedValue(new Set(['165560000000']))
+    mockListOmbudGrants.mockResolvedValue([JLO('165560000000'), MOMS('165560000000'), JLO('165570000000')])
+
+    const body = await (await GET(request())).json()
+
+    expect(body).toMatchObject({ contested: 2, granted: 1 })
+    expect(mockRecordProbeResult).toHaveBeenCalledTimes(1)
+    expect(recordedFor('c-clear')[0]).toMatchObject({ lasombud: { status: 'granted' } })
+    expect(recordedFor('c-victim')).toHaveLength(0)
+    expect(recordedFor('c-twin')).toHaveLength(0)
+  })
+
+  it('a huvudman listed with only unrecognised role codes is neither granted nor denied (pinning problem)', async () => {
+    mockListConnections.mockResolvedValue([connection('c-1', '165560000000')])
+    mockListOmbudGrants.mockResolvedValue([
+      { huvudman: '165560000000', roll: 'ZZ9', rollbeskrivning: 'Läsombud, juridisk person', giltigFrom: '2026-07-19' },
+    ])
+
+    const body = await (await GET(request())).json()
+
+    expect(body).toMatchObject({ unrecognized: 1, revoked: 0, denied: 0, guardTripped: false })
+    expect(mockRecordProbeResult).not.toHaveBeenCalled()
   })
 
   it('mass-downgrade guard needs at least three planned downgrades', async () => {

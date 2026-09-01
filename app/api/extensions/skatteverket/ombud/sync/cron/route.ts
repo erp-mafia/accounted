@@ -6,6 +6,7 @@ import { extensionRegistry } from '@/lib/extensions/registry'
 import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/skatteverket/lib/system-auth/config'
 import { currentSkvEnvironment } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import {
+  findContestedOrgNumbers,
   listConnections,
   recordProbeResult,
   type GrantStatus,
@@ -50,10 +51,11 @@ export const MASS_DOWNGRADE_MAX_SHARE = 0.5
  *
  *   - only rows that already exist are touched. A row exists because a
  *     member of that company pressed Verifiera or minted the deep link: the
- *     tenant's explicit opt-in. Rows are never created here, so a second
- *     tenant registered under the same org number (org-number reuse is
- *     allowed, tenant isolation is the boundary) gains nothing from a grant
- *     it did not ask for,
+ *     tenant's explicit opt-in. Rows are never created here,
+ *   - an org number claimed by more than one live company is contested:
+ *     no row on it is granted or changed (org-number reuse is allowed and
+ *     org numbers are public, so a tenant that typed a victim's number must
+ *     not inherit the victim's grant; see findContestedOrgNumbers),
  *   - rows marked 'revoked' by the tenant's own "Koppla från" stay revoked
  *     until a member re-verifies; a still-standing grant at Skatteverket is
  *     not permission to switch the row back on,
@@ -110,7 +112,8 @@ export async function GET(request: Request) {
   }
 
   const rows = (await listConnections(environment)).filter((row) => row.status !== 'revoked')
-  const decisions = planDecisions(rows, grants, today)
+  const contested = await findContestedOrgNumbers()
+  const decisions = planDecisions(rows, grants, today, contested)
 
   const grantedNow = rows.filter(isAnyGranted).length
   const fullDowngrades = decisions.filter((d) => d.kind === 'downgrade').length
@@ -129,7 +132,7 @@ export async function GET(request: Request) {
     })
   }
 
-  const counts = { granted: 0, denied: 0, revoked: 0, unchanged: 0, failed: 0, skipped: 0 }
+  const counts = { granted: 0, denied: 0, revoked: 0, unchanged: 0, contested: 0, unrecognized: 0, failed: 0, skipped: 0 }
   for (const decision of decisions) {
     if (Date.now() - startedAt > TIME_BUDGET_MS) {
       counts.skipped += 1
@@ -137,6 +140,14 @@ export async function GET(request: Request) {
     }
     if (decision.kind === 'downgrade' && guardTripped) {
       counts.skipped += 1
+      continue
+    }
+    if (decision.kind === 'contested') {
+      counts.contested += 1
+      continue
+    }
+    if (decision.kind === 'unrecognized') {
+      counts.unrecognized += 1
       continue
     }
     if (decision.kind === 'unchanged') {
@@ -177,6 +188,10 @@ function isAnyGranted(row: SkvCompanyConnection): boolean {
 
 type Decision =
   | { kind: 'unchanged'; row: SkvCompanyConnection }
+  /** More than one live company claims this org number: nobody gets granted on it. */
+  | { kind: 'contested'; row: SkvCompanyConnection }
+  /** The register lists roles we cannot name (codes unpinned/renamed): never a denial. */
+  | { kind: 'unrecognized'; row: SkvCompanyConnection }
   | {
       /** 'record' updates from the register; 'downgrade' is a granted row that would lose every grant. */
       kind: 'record' | 'downgrade'
@@ -193,11 +208,22 @@ type Decision =
 export function planDecisions(
   rows: SkvCompanyConnection[],
   grants: Map<string, HuvudmanGrantSummary>,
-  today: string
+  today: string,
+  contested: Set<string> = new Set()
 ): Decision[] {
   const decisions: Decision[] = []
   for (const row of rows) {
+    if (contested.has(row.org_number)) {
+      decisions.push({ kind: 'contested', row })
+      continue
+    }
     const summary = grants.get(row.org_number)
+    if (summary && summary.roles.length > 0 && !summary.recognized) {
+      // Same rule as probeViaOmbudsregister: unknown role codes are a
+      // pinning problem on our side, not a company withdrawing anything.
+      decisions.push({ kind: 'unrecognized', row })
+      continue
+    }
     const lasombud: GrantStatus = summary?.lasombud ? 'granted' : 'denied'
     const momsOmbud: GrantStatus = summary?.moms_ombud ? 'granted' : 'denied'
     const detail = summary

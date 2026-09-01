@@ -18,9 +18,14 @@ vi.mock('../lib/ombud-client', async (importOriginal) => {
 })
 
 const mockRecordProbeResult = vi.fn()
+const mockContested = vi.fn(async (_orgNumber: string) => false)
 vi.mock('../lib/connection-store', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>
-  return { ...actual, recordProbeResult: (...a: unknown[]) => mockRecordProbeResult(...a) }
+  return {
+    ...actual,
+    recordProbeResult: (...a: unknown[]) => mockRecordProbeResult(...a),
+    isOrgNumberContested: (orgNumber: string) => mockContested(orgNumber),
+  }
 })
 
 const mockWriteAudit = vi.fn()
@@ -92,6 +97,7 @@ beforeEach(() => {
   process.env.SKATTEVERKET_SYSTEM_AUTH_MECHANISM = 'stub'
   mockRequireCapability.mockResolvedValue(null)
   mockRecordProbeResult.mockResolvedValue({ id: 'conn-1', status: 'pending' })
+  mockContested.mockResolvedValue(false)
   mockWriteAudit.mockResolvedValue(undefined)
   mockCreateDeepLink.mockResolvedValue({
     djuplank: 'https://sso.skatteverket.se/ombud?x=1',
@@ -160,6 +166,16 @@ describe('POST /system-connection/deeplink', () => {
       expect.anything(),
       expect.objectContaining({ endpoint: 'system-connection/deeplink', agRegistreradId: '165560000000', outcome: 'ok' })
     )
+  })
+
+  it('409 ORG_NUMBER_CONTESTED when another live company claims the same org number: no link, no row', async () => {
+    mockContested.mockResolvedValue(true)
+    const res = await findRoute().handler(request(), makeContext())
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ code: 'ORG_NUMBER_CONTESTED' })
+    expect(mockContested).toHaveBeenCalledWith('165560000000')
+    expect(mockCreateDeepLink).not.toHaveBeenCalled()
+    expect(mockRecordProbeResult).not.toHaveBeenCalled()
   })
 
   it('500 when the opt-in row cannot be stored: the link is not handed out', async () => {
