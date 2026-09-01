@@ -394,15 +394,23 @@ export default function ExpenseClaimsPage() {
   // answer is a valid answer, and a stale response for an edited description
   // is dropped.
   const [aiSuggestedIds, setAiSuggestedIds] = useState<string[]>([])
+  const [aiPending, setAiPending] = useState(false)
   const aiRequestKey = useRef<string | null>(null)
   useEffect(() => {
     const desc = description.trim()
     const chooserVisible = creating && step === 2 && bookingMode === 'choose'
-    if (!chooserVisible || desc.length < 2 || localRecommendedIds.length > 0 || chooserPool.length === 0) return
+    if (!chooserVisible || desc.length < 2 || localRecommendedIds.length > 0 || chooserPool.length === 0) {
+      setAiPending(false)
+      return
+    }
     const key = desc.toLocaleLowerCase('sv-SE')
     if (aiRequestKey.current === key) return
+    setAiPending(true)
     const timer = setTimeout(() => {
       aiRequestKey.current = key
+      // Drop suggestions for the previous description: the loading row is
+      // clearer than silently swapping lines under the user's cursor.
+      setAiSuggestedIds((prev) => (prev.length ? [] : prev))
       fetch('/api/expense-claims/suggest-template', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -422,6 +430,9 @@ export default function ExpenseClaimsPage() {
           setAiSuggestedIds(json?.data?.template_ids ?? [])
         })
         .catch(() => {})
+        .finally(() => {
+          if (aiRequestKey.current === key) setAiPending(false)
+        })
     }, 600)
     return () => clearTimeout(timer)
   }, [creating, step, bookingMode, description, parsedAmount, localRecommendedIds, chooserPool])
@@ -434,10 +445,12 @@ export default function ExpenseClaimsPage() {
         item.name.toLocaleLowerCase('sv-SE').includes(q) ||
         item.description.toLocaleLowerCase('sv-SE').includes(q),
     )
-    if (q) return { recommended: [], recent: [], all: pool.slice(0, 30) }
+    if (q) return { recommended: [], recent: [], all: pool.slice(0, 30), recommendedSource: null }
     const byId = new Map(pool.map((item) => [item.id, item]))
     // The keyword matcher wins; the AI route only fills in when it drew blank.
-    const sourceIds = localRecommendedIds.length > 0 ? localRecommendedIds : aiSuggestedIds
+    const recommendedSource: 'local' | 'ai' | null =
+      localRecommendedIds.length > 0 ? 'local' : aiSuggestedIds.length > 0 ? 'ai' : null
+    const sourceIds = recommendedSource === 'local' ? localRecommendedIds : aiSuggestedIds
     const recommended = sourceIds
       .map((id) => byId.get(id))
       .filter((item): item is ChooserItem => Boolean(item))
@@ -449,7 +462,7 @@ export default function ExpenseClaimsPage() {
       .slice(0, 3)
     for (const item of recent) taken.add(item.id)
     const all = pool.filter((item) => !taken.has(item.id)).slice(0, 30)
-    return { recommended, recent, all }
+    return { recommended, recent, all, recommendedSource }
   }, [chooserPool, templateSearch, localRecommendedIds, aiSuggestedIds])
 
   /** Bokio's semantic: the template picks the account/type, the country picks
@@ -1241,14 +1254,47 @@ export default function ExpenseClaimsPage() {
                     <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                   </button>
                   <div className="max-h-[340px] space-y-3 overflow-y-auto">
+                    {!templateSearch.trim() && (templateSections.recommended.length > 0 || aiPending) && (
+                      <div className="space-y-1">
+                        <p className="flex items-center gap-2 px-3 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          {t('templates_recommended')}
+                          {templateSections.recommendedSource === 'ai' && !aiPending && (
+                            <span className="flex items-center gap-1">
+                              <Sparkles className="h-3 w-3" aria-hidden="true" />
+                              {t('templates_ai_badge')}
+                            </span>
+                          )}
+                          {aiPending && <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />}
+                        </p>
+                        {aiPending && templateSections.recommended.length === 0 ? (
+                          <p className="px-3 py-2.5 text-sm text-muted-foreground">{t('templates_ai_loading')}</p>
+                        ) : (
+                          templateSections.recommended.map((tpl) => (
+                            <button
+                              key={tpl.id}
+                              type="button"
+                              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-secondary/35"
+                              onClick={() => chooseTemplate(tpl)}
+                            >
+                              <span className="flex-1">
+                                <span className="block text-sm font-medium">{tpl.name}</span>
+                                {tpl.description && (
+                                  <span className="block text-xs leading-snug text-muted-foreground">{tpl.description}</span>
+                                )}
+                              </span>
+                              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    )}
                     {([
-                      ['templates_recommended', templateSections.recommended],
                       ['templates_recent', templateSections.recent],
                       ['templates_all', templateSections.all],
                     ] as const).map(([labelKey, list]) =>
                       list.length === 0 ? null : (
                         <div key={labelKey} className="space-y-1">
-                          {(templateSections.recommended.length > 0 || templateSections.recent.length > 0) && (
+                          {(templateSections.recommended.length > 0 || templateSections.recent.length > 0 || aiPending) && (
                             <p className="px-3 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                               {t(labelKey)}
                             </p>
@@ -1272,7 +1318,8 @@ export default function ExpenseClaimsPage() {
                         </div>
                       ),
                     )}
-                    {templateSections.recommended.length === 0 &&
+                    {!aiPending &&
+                      templateSections.recommended.length === 0 &&
                       templateSections.recent.length === 0 &&
                       templateSections.all.length === 0 && (
                         <p className="px-3 py-4 text-sm text-muted-foreground">{t('no_templates_found')}</p>

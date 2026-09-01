@@ -7896,6 +7896,8 @@
     "book_manually_help": "Välj konto och land själv, eller redigera raderna fritt.",
     "no_templates_found": "Inga mallar matchar sökningen.",
     "templates_recommended": "Rekommenderade",
+    "templates_ai_badge": "AI-förslag",
+    "templates_ai_loading": "AI föreslår mallar utifrån beskrivningen …",
     "templates_recent": "Senast använda",
     "templates_all": "Alla mallar",
     "seller_country_se": "Sverige",
