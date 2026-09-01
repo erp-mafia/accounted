@@ -1,4 +1,8 @@
 import type { Instrumentation } from 'next'
+// Imported by exact path rather than through the `@/lib/observability` barrel:
+// this file's module graph is loaded in every runtime Next boots, and the
+// predicate is a dependency-free pure function.
+import { isClientDisconnectError } from '@/lib/observability/is-client-disconnect'
 
 export async function register() {
   // Instrumentation hook: currently a no-op.
@@ -23,8 +27,17 @@ export async function register() {
  * instrumentation-client.ts), which is what links a server error back to the
  * user's session replay. Absent that header the error is still captured, just
  * unattributed.
+ *
+ * A client that navigated away mid-stream is filtered out first: see
+ * `isClientDisconnectError`. Next reports those through this hook even though
+ * the response itself succeeded, and they are not exceptions. Next still
+ * writes its own stderr line for them, so they stay visible in Vercel's
+ * runtime-error table; what this drops is the false entry in Error Tracking
+ * and the awaited flush it would cost a healthy request.
  */
 export const onRequestError: Instrumentation.onRequestError = async (err, request) => {
+  if (isClientDisconnectError(err)) return
+
   try {
     const { getPostHogServer, flushAnalytics } = await import('@/lib/analytics/posthog-server')
     const posthog = getPostHogServer()
