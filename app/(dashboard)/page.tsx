@@ -5,6 +5,9 @@ import DashboardContent from '@/components/dashboard/DashboardContent'
 import { ChecklistSkeleton, PanesSkeleton } from '@/components/dashboard/HemSkeletons'
 import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
 import { isCockpitLandingRole } from '@/lib/company/home-domain'
+import { OAUTH_MCP_KEY_NAME } from '@/lib/auth/api-keys'
+import { claudeStepDone } from '@/lib/onboarding/checklist'
+import { createServiceClient } from '@/lib/supabase/server'
 import {
   getDashboardAuthContext,
   getDashboardCompanyId,
@@ -71,7 +74,22 @@ export default async function DashboardPage() {
 
   const now = new Date()
 
-  const [settingsRes, { data: profile }, agentProfile, { count: skatteverketTokenCount }] =
+  // Service role for the OAuth-key count below: api_keys' SELECT policy is
+  // company_id IN user_company_ids() (20260330130000), so through the user
+  // client a key minted companyless (company_id NULL, the connect-before-
+  // signup flow) or bound to a company the user has since archived or left is
+  // invisible, and the step would stay open for exactly the user who just
+  // connected. The query filters on user_id explicitly, so no other user's
+  // rows are reachable.
+  const serviceClient = await createServiceClient()
+
+  const [
+    settingsRes,
+    { data: profile },
+    agentProfile,
+    { count: skatteverketTokenCount },
+    { count: oauthKeyCount, error: oauthKeyError },
+  ] =
     await Promise.all([
       getDashboardSettings(),
       // First name for the greeting.
@@ -80,6 +98,18 @@ export default async function DashboardPage() {
       // The Skatteverket promo below the panes needs this flag in the shell;
       // the checklist section reads it again for its own step (cheap head count).
       supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('user_id', user.id).eq('company_id', companyId),
+      // The checklist's "Anslut till Claude" step is done when the MCP OAuth
+      // token route has minted a key for this user (claudeStepDone). Keyed on
+      // the user, not the company: the Claude connection follows the person,
+      // and the key's company_id is whatever was active at sign-in (or null
+      // for a companyless signup), so a company filter would miss real
+      // connections. Revoked rows do not count.
+      serviceClient
+        .from('api_keys')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .eq('name', OAUTH_MCP_KEY_NAME)
+        .is('revoked_at', null),
     ])
 
   // A FAILED settings read must not masquerade as "onboarding not done":
@@ -89,6 +119,12 @@ export default async function DashboardPage() {
   const { data: settings, error: settingsError } = settingsRes
   if (settingsError) {
     throw new Error(`company_settings fetch failed: ${settingsError.message}`)
+  }
+  // Same rule for the OAuth-key count: a failed query answers count null,
+  // which claudeStepDone would read as "never connected" and re-open the
+  // Claude step for a connected user. Surface it instead of guessing.
+  if (oauthKeyError) {
+    throw new Error(`api_keys count failed: ${oauthKeyError.message}`)
   }
 
   // If onboarding is not complete, redirect to onboarding. Exception: a byrå
@@ -110,6 +146,7 @@ export default async function DashboardPage() {
   }
 
   const agentBuilt = Boolean(agentProfile?.verified_at)
+  const hasMcpKey = claudeStepDone({ oauthKeyCount })
   const userFirstName = profile?.full_name?.trim().split(/\s+/)[0] ?? null
   const initialSetup = {
     path: settings.initial_setup_path ?? null,
@@ -137,7 +174,7 @@ export default async function DashboardPage() {
             userId={user.id}
             now={now}
             initialSetup={initialSetup}
-            agentBuilt={agentBuilt}
+            hasMcpKey={hasMcpKey}
             vatRegistered={settings.vat_registered}
             momsPeriod={settings.moms_period ?? null}
           />

@@ -1555,7 +1555,9 @@
     "step_claude_chatgpt_link": "Använder du ChatGPT?",
     "step_claude_chatgpt_steps": "I ChatGPT (Plus, Pro eller Business): Inställningar → Appar → Avancerade inställningar → slå på Utvecklarläge. Välj Lägg till anpassad connector, namnge den {appName} och klistra in serveradressen. Starta sedan en ny chatt och be om en genomgång av bokföringen.",
     "step_claude_chatgpt_copy": "Kopiera serveradress",
-    "step_claude_chatgpt_copied": "Kopierad"
+    "step_claude_chatgpt_copied": "Kopierad",
+    "step_claude_expectation": "Claude listar verktygen direkt. Första riktiga frågan öppnar en inloggning: godkänn den och ställ frågan igen.",
+    "step_claude_guide_link": "Guide: anslut Claude steg för steg"
   },
   "tax_assessment_notices": {
     "title": "Slutskattebesked och kvarskatt",
@@ -2839,7 +2841,7 @@
     "copy_failed": "Kunde inte kopiera. Markera texten ovan och kopiera manuellt.",
     "connect_mcp_title": "Anslut MCP-klient",
     "connect_to_claude": "Anslut till Claude",
-    "connect_to_claude_help": "Öppnar claude.ai med adressen ifylld. Du granskar och godkänner där; ingen API-nyckel behövs. Kräver att din instans går att nå från internet.",
+    "connect_to_claude_help": "Öppnar claude.ai med adressen ifylld. Du granskar och godkänner där; ingen API-nyckel behövs. Kräver att din instans går att nå från internet. Claude listar verktygen direkt; första riktiga frågan öppnar en inloggning, godkänn den och ställ frågan igen.",
     "other_clients": "Andra klienter: Claude Code, Cursor, plugin",
     "claude_ai_manual": "claude.ai (manuellt)",
     "works_with_ai": "Fungerar med Claude, ChatGPT och andra AI-assistenter.",

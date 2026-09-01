@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import {
   generateApiKey,
   DEFAULT_SCOPES,
+  OAUTH_MCP_KEY_NAME,
   validateScopes,
   findStageApproveConflict,
 } from '@/lib/auth/api-keys'
@@ -66,6 +67,17 @@ export const POST = withRouteContext(
       }
     } catch {
       // Empty body: use defaults.
+    }
+
+    // The OAuth token route's key name is the marker the Hem checklist reads
+    // as "connected to Claude" (there is no source column). A hand-minted key
+    // with that name would tick the step without any connection, so the name
+    // is reserved for the OAuth path.
+    if (name.trim() === OAUTH_MCP_KEY_NAME) {
+      return errorResponseFromCode('VALIDATION_ERROR', log, {
+        requestId,
+        details: { field: 'name', reason: 'reserved', reserved: OAUTH_MCP_KEY_NAME },
+      })
     }
 
     // Both live and test keys bind to the active company. A test key is

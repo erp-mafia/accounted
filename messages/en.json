@@ -1555,7 +1555,9 @@
     "step_claude_chatgpt_link": "Using ChatGPT?",
     "step_claude_chatgpt_steps": "In ChatGPT (Plus, Pro or Business): Settings → Apps → Advanced settings → turn on Developer mode. Choose Add custom connector, name it {appName} and paste the server address. Then start a new chat and ask for a walkthrough of your books.",
     "step_claude_chatgpt_copy": "Copy server address",
-    "step_claude_chatgpt_copied": "Copied"
+    "step_claude_chatgpt_copied": "Copied",
+    "step_claude_expectation": "Claude lists the tools straight away. The first real question opens a login prompt: approve it and ask again.",
+    "step_claude_guide_link": "Guide: connect Claude step by step"
   },
   "tax_assessment_notices": {
     "title": "Final tax notices and remaining tax",
@@ -2839,7 +2841,7 @@
     "copy_failed": "Could not copy. Select the text above and copy it manually.",
     "connect_mcp_title": "Connect MCP client",
     "connect_to_claude": "Connect to Claude",
-    "connect_to_claude_help": "Opens claude.ai with the URL prefilled. You review and confirm there; no API key needed. Your instance must be reachable from the internet.",
+    "connect_to_claude_help": "Opens claude.ai with the URL prefilled. You review and confirm there; no API key needed. Your instance must be reachable from the internet. Claude lists the tools straight away; the first real question opens a login prompt, approve it and ask again.",
     "other_clients": "Other clients: Claude Code, Cursor, plugin",
     "claude_ai_manual": "claude.ai (manual)",
     "works_with_ai": "Works with Claude, ChatGPT, and other AI assistants.",
