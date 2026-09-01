@@ -26,7 +26,7 @@ import { useBranding } from '@/lib/branding/brand-context'
 // capability in lib/entitlements/keys.ts (ai, bank_sync, skatteverket,
 // email_send, stripe_payments, woocommerce_sync + shopify_sync as one
 // "webshop" item). Keep in step with PAID_CAPABILITIES when a key is added.
-const UNLOCK_KEYS = ['unlock_ai', 'unlock_bank', 'unlock_skv', 'unlock_email', 'unlock_payments', 'unlock_webshop'] as const
+const UNLOCK_KEYS = ['unlock_ai', 'unlock_bank', 'unlock_skv', 'unlock_email', 'unlock_payments', 'unlock_webshop', 'unlock_users'] as const
 
 // Mirrors the checkout route's deferred-first-charge condition (Stripe's 48h
 // trial_end floor plus clock margin). Above this, checkout collects the card

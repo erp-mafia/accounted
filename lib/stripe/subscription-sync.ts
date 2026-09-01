@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type Stripe from 'stripe'
-import { PAID_CAPABILITIES } from '@/lib/entitlements/keys'
+import { CAPABILITY, PAID_CAPABILITIES } from '@/lib/entitlements/keys'
 import type { BillingPlan } from './client'
 
 /**
@@ -104,11 +104,28 @@ export async function applySubscriptionState(
   } else {
     // Freeze-and-retain: drop only the stripe grants. Trial/comp grants (if any)
     // are untouched; data and tokens are never deleted.
+    //
+    // multi_user is the one exception to the delete: its 20-day grace window
+    // hangs on "the newest grant EXPIRED less than 20 days ago"
+    // (lib/entitlements/multi-user-state.ts), so a deleted row would freeze a
+    // churned payer's non-owner members instantly, with no countdown banner
+    // and no owner mail. Expiring the row NOW anchors the grace exactly at
+    // the cancellation, and the grace cron's start-mail window picks it up.
+    // Only a still-active row is expired: a re-delivered cancel event days
+    // later must not slide the grace anchor (and the mail window) forward.
     await supabase
       .from('capability_grants')
       .delete()
       .eq('company_id', state.companyId)
       .eq('source', 'stripe')
+      .neq('capability_key', CAPABILITY.multi_user)
+    await supabase
+      .from('capability_grants')
+      .update({ expires_at: new Date().toISOString() })
+      .eq('company_id', state.companyId)
+      .eq('source', 'stripe')
+      .eq('capability_key', CAPABILITY.multi_user)
+      .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
   }
 }
 

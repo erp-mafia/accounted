@@ -6,6 +6,8 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { CAPABILITY } from '@/lib/entitlements/keys'
+import { getMultiUserState } from '@/lib/entitlements/multi-user'
 import { getEmailService } from '@/lib/email/service'
 import { getSenderForCompany, getBaseUrlForBrand } from '@/lib/email/brand-sender'
 import {
@@ -68,6 +70,24 @@ export const POST = withRouteContext(
 
     if (!callerMembership || !['owner', 'admin'].includes(callerMembership.role)) {
       return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
+    }
+
+    // Multi-user seat gate: inviting more people requires the multi_user
+    // capability (paid plan or trial). A company in its post-lapse grace
+    // window may still invite (its people were promised 20 undisturbed
+    // days); only the frozen state blocks. Same envelope shape as
+    // capabilityBlockedResponse so the UI upsells consistently.
+    const multiUserAccess = await getMultiUserState(serviceClient, companyId)
+    if (multiUserAccess.state === 'frozen') {
+      return NextResponse.json(
+        {
+          error: 'Bjud in fler personer med betald plan.',
+          error_en: 'Invite more people with a paid plan.',
+          capability_blocked: true,
+          capability: CAPABILITY.multi_user,
+        },
+        { status: 403 },
+      )
     }
 
     const validation = await validateBody(request, InviteSchema, {

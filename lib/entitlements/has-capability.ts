@@ -1,8 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { isSelfHosted } from '@/lib/env/public-flags'
-import { PAID_CAPABILITIES, isConnectorCapability, type CapabilityKey } from './keys'
+import { CAPABILITY, PAID_CAPABILITIES, isConnectorCapability, type CapabilityKey } from './keys'
 import { hasOwnCredentialsFor } from './own-credentials'
+import {
+  computeMultiUserState,
+  type MultiUserAccess,
+  type MultiUserGrantRow,
+} from './multi-user-state'
 
 /**
  * Entitlement gate: the single primitive behind the paywall ("non-payer loses
@@ -377,6 +382,14 @@ export interface CompanyEntitlements {
    * entitlementState is 'trial_expired'. Drives the expired-trial notice.
    */
   trialExpiredAt: string | null
+  /**
+   * Multi-user access state (entitled / grace / frozen) derived from the same
+   * multi_user grant rows, with the end of the 20-day grace window while in
+   * grace. Drives the countdown banner and the invite upsell; the server-side
+   * dormancy enforcement recomputes it independently (lib/entitlements/
+   * multi-user.ts and the resolve_active_company_gated RPC).
+   */
+  multiUser: MultiUserAccess
 }
 
 /** company_subscriptions.status values that count as a live subscription. */
@@ -441,11 +454,18 @@ export async function getCompanyEntitlements(
       trialEndsAt: null,
       entitlementState: 'paid',
       trialExpiredAt: null,
+      multiUser: { state: 'entitled', graceEndsAt: null },
     }
   }
   // Fail-closed: never interpolate a non-UUID.
   if (!isUuid(companyId)) {
-    return { capabilities: [], trialEndsAt: null, entitlementState: 'none', trialExpiredAt: null }
+    return {
+      capabilities: [],
+      trialEndsAt: null,
+      entitlementState: 'none',
+      trialExpiredAt: null,
+      multiUser: { state: 'frozen', graceEndsAt: null },
+    }
   }
   // Self-hosted: every local capability is held outright; only the connector
   // capabilities among the paid keys are read from grants (written with
@@ -505,11 +525,18 @@ export async function getCompanyEntitlements(
   let latestTrialExpiry: string | null = null
   let hasActiveNonTrialGrant = false
   let hasActiveConnectorGrant = false
+  // multi_user rows feed the derived grace/frozen state below; the rows are
+  // already in this read (multi_user is a PAID key), so the state costs no
+  // extra query. Self-host never reaches this (multi_user is held outright).
+  const multiUserRows: MultiUserGrantRow[] = []
   for (const g of grants ?? []) {
     const row = g as { capability_key: string; expires_at: string | null; source: string | null }
     // Self-host: a trial-seeded (or any non-connector) row never unlocks a
     // connector capability; see connectorGrantsOnly().
     if (selfHosted && row.source !== 'connector') continue
+    if (row.capability_key === CAPABILITY.multi_user) {
+      multiUserRows.push({ expires_at: row.expires_at })
+    }
     if (
       row.source === 'trial' &&
       row.expires_at &&
@@ -536,6 +563,8 @@ export async function getCompanyEntitlements(
       trialEndsAt: null,
       entitlementState: hasActiveConnectorGrant ? 'paid' : 'none',
       trialExpiredAt: null,
+      // multi_user is a local capability: a self-host is never seat-gated.
+      multiUser: { state: 'entitled', graceEndsAt: null },
     }
   }
   // Paying/comped companies are not "on trial" even if the seeded trial rows
@@ -560,11 +589,16 @@ export async function getCompanyEntitlements(
     entitlementState = 'none'
   }
 
+  const multiUser = computeMultiUserState(multiUserRows, now)
+
   if (entitled.size === 0) {
-    return { capabilities: [], trialEndsAt: null, entitlementState, trialExpiredAt }
+    return { capabilities: [], trialEndsAt: null, entitlementState, trialExpiredAt, multiUser }
   }
 
-  // Subtract any explicitly-disabled (enablement axis).
+  // Subtract any explicitly-disabled (enablement axis). multi_user is exempt
+  // from the config axis by design (see lib/entitlements/multi-user-state.ts),
+  // but it is also never written to company_capability_config, so the plain
+  // subtraction stays correct for the capabilities list.
   for (const c of configs ?? []) {
     entitled.delete((c as { capability_key: string }).capability_key)
   }
@@ -574,6 +608,7 @@ export async function getCompanyEntitlements(
     trialEndsAt,
     entitlementState,
     trialExpiredAt,
+    multiUser,
   }
 }
 
