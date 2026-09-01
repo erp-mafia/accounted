@@ -71,7 +71,7 @@ Example response `200`:
     "api_version": "2026-05-12",
     "next_cursor": null,
     "coverage": {
-      "covers_from": "2026-07-19",
+      "covers_from": "2026-05-01",
       "has_pre_register_invoices": true
     }
   }

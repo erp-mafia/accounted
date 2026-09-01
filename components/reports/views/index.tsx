@@ -3448,7 +3448,7 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
                   reconciliation.pre_register_ar_in_period &&
                   ledger.register_coverage?.covers_from && (
                     <p className="text-xs text-muted-foreground">
-                      Perioden innehåller verifikat med kundfordringar före {formatDate(ledger.register_coverage.covers_from)} som inte ligger i fakturaregistret (t.ex. efter en migrering): differensen kan bero på det. Kontrollera huvudboken på <AccountNumber number="1510" /> innan du letar felbokning.
+                      Perioden innehåller verifikat med kundfordringar före {formatDate(ledger.register_coverage.covers_from)} som inte ligger i fakturaregistret (t.ex. efter en migrering): differensen kan bero på det. Kontrollera huvudboken på <AccountNumber number="1510" /> och <AccountNumber number="1513" /> innan du letar felbokning.
                     </p>
                   )}
               </div>

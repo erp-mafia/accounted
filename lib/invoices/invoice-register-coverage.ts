@@ -31,12 +31,13 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  */
 export interface InvoiceRegisterCoverage {
   /**
-   * Earliest non-draft invoice_date in the register, i.e. where
-   * register-backed answers start being complete. Drafts are excluded: a
-   * backdated draft would move the boundary and suppress the disclosure for
-   * exactly the period it exists to cover. Null when the register is empty
-   * (the empty state already routes the user to migration) OR when the
-   * lookup failed: null always means "unknown", never "complete".
+   * Earliest invoice_date of a real, non-draft invoice in the register, i.e.
+   * where register-backed answers start being complete. Drafts, proformas
+   * and delivery notes are excluded: a backdated one would move the boundary
+   * and suppress the disclosure for exactly the period it exists to cover.
+   * Null when the register is empty (the empty state already routes the
+   * user to migration) OR when the lookup failed: null always means
+   * "unknown", never "complete".
    */
   covers_from: string | null
   /**
@@ -59,8 +60,20 @@ export const NO_INVOICE_REGISTER_COVERAGE: InvoiceRegisterCoverage = {
  * Pre-boundary AR debits from these are the register's own bookkeeping, not
  * evidence of register-external invoices.
  */
-const INVOICE_ENGINE_SOURCE_TYPES =
-  '("invoice_created","invoice_paid","invoice_cash_payment","credit_note","reminder_fee","rot_rut_payout","storno","correction")'
+export const INVOICE_ENGINE_SOURCE_TYPES = [
+  'invoice_created',
+  'invoice_paid',
+  'invoice_cash_payment',
+  'credit_note',
+  'reminder_fee',
+  'rot_rut_payout',
+  'storno',
+  'correction',
+] as const
+
+/** PostgREST `in` literal for the NOT-IN filter. */
+const INVOICE_ENGINE_SOURCE_TYPES_FILTER =
+  '(' + INVOICE_ENGINE_SOURCE_TYPES.map((t) => `"${t}"`).join(',') + ')'
 
 const AR_ACCOUNTS = ['1510', '1513']
 
@@ -84,7 +97,7 @@ async function probePreRegisterArDebits(
     .eq('company_id', companyId)
     .eq('status', 'posted')
     .lt('entry_date', coversFrom)
-    .not('source_type', 'in', INVOICE_ENGINE_SOURCE_TYPES)
+    .not('source_type', 'in', INVOICE_ENGINE_SOURCE_TYPES_FILTER)
     .in('journal_entry_lines.account_number', AR_ACCOUNTS)
     .gt('journal_entry_lines.debit_amount', 0)
   if (fiscalPeriodId) query = query.eq('fiscal_period_id', fiscalPeriodId)
@@ -103,6 +116,9 @@ export async function fetchInvoiceRegisterCoverage(
     .select('invoice_date')
     .eq('company_id', companyId)
     .neq('status', 'draft')
+    // Proformas and delivery notes are not register invoices (no AR posting);
+    // an early one would move the boundary without covering anything.
+    .eq('document_type', 'invoice')
     .order('invoice_date', { ascending: true })
     .limit(1)
     .maybeSingle()

@@ -20,6 +20,7 @@ Returns the customer-receivable ledger as of `as_of_date` (defaults to today). E
 **Pitfalls:**
 - `as_of_date` is optional; format `YYYY-MM-DD`. Defaults to today (UTC).
 - Only invoices in `sent`/`overdue`/`partially_paid` status appear. Drafts and credited invoices are excluded.
+- The ledger is built from the invoice register only. `data.register_coverage` ({ covers_from, has_pre_register_invoices }) discloses when posted AR verifikat predate the register's earliest invoice (migrated or backfilled invoice history): those receivables are NOT in this ledger. When has_pre_register_invoices is true, treat periods before covers_from as unanswered here and query journal entries on 1510/1513 instead.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

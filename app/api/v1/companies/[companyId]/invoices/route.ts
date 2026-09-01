@@ -183,7 +183,7 @@ registerEndpoint({
         request_id: 'req_…',
         api_version: '2026-05-12',
         next_cursor: null,
-        coverage: { covers_from: '2026-07-19', has_pre_register_invoices: true },
+        coverage: { covers_from: '2026-05-01', has_pre_register_invoices: true },
       },
     },
   },

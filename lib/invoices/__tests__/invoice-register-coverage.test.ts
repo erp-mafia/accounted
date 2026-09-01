@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   fetchInvoiceRegisterCoverage,
   hasPreRegisterArInPeriod,
+  INVOICE_ENGINE_SOURCE_TYPES,
   NO_INVOICE_REGISTER_COVERAGE,
 } from '../invoice-register-coverage'
 
@@ -25,6 +28,7 @@ describe('fetchInvoiceRegisterCoverage', () => {
     // Drafts must not anchor the boundary: a backdated draft would suppress
     // the disclosure for exactly the period it exists to cover.
     expect(findCall('invoices', 'neq')).toEqual(['status', 'draft'])
+    expect(findCalls('invoices', 'eq')).toContainEqual(['document_type', 'invoice'])
   })
 
   it('flags pre-register invoices when a posted non-engine AR debit predates the first invoice', async () => {
@@ -127,5 +131,31 @@ describe('hasPreRegisterArInPeriod', () => {
     enqueue({ data: null, error: null })
 
     expect(await hasPreRegisterArInPeriod(client, 'company-1', 'period-1')).toBe(false)
+  })
+})
+
+describe('INVOICE_ENGINE_SOURCE_TYPES', () => {
+  // Maintenance guard (Swedish compliance review, PR #2122): every source_type
+  // the invoice engine and its correction paths write must be excluded from
+  // the pre-register probe, or the engine's own AR debits would be read as
+  // evidence of register-external invoices. Scans the writers instead of
+  // trusting the list.
+  it('covers every source_type the invoice engine writes', () => {
+    const writers = [
+      'lib/bookkeeping/invoice-entries.ts',
+      'lib/bookkeeping/reminder-fee-entries.ts',
+      'lib/bookkeeping/rot-rut-entries.ts',
+      'lib/core/bookkeeping/storno-service.ts',
+    ]
+    const written = new Set<string>()
+    for (const rel of writers) {
+      const src = readFileSync(join(process.cwd(), rel), 'utf8')
+      for (const m of src.matchAll(/source_type: '([a-z_]+)'/g)) written.add(m[1])
+    }
+    expect(written.size).toBeGreaterThan(0)
+    const missing = [...written].filter(
+      (t) => !(INVOICE_ENGINE_SOURCE_TYPES as readonly string[]).includes(t),
+    )
+    expect(missing).toEqual([])
   })
 })

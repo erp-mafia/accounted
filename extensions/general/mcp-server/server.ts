@@ -6261,7 +6261,24 @@ export const tools: McpTool[] = [
         offset: { type: 'integer', minimum: 0, description: 'Number of results to skip for pagination (default 0)' },
       },
     },
-    outputSchema: paginatedSchema('invoices', { type: 'object' }),
+    outputSchema: {
+      ...paginatedSchema('invoices', { type: 'object' }),
+      properties: {
+        ...paginatedSchema('invoices', { type: 'object' }).properties,
+        invoice_register_coverage: {
+          type: 'object',
+          description: 'Invoice-register coverage boundary. First page only.',
+          properties: {
+            covers_from: { type: ['string', 'null'], description: 'Earliest real invoice date in the register; null = unknown or empty' },
+            has_pre_register_invoices: { type: 'boolean', description: 'Posted non-engine AR debit verifikat exist before covers_from' },
+          },
+        },
+        coverage_note: {
+          type: 'string',
+          description: 'Swedish guidance, present only when has_pre_register_invoices is true: older invoices may exist only as journal entries',
+        },
+      },
+    },
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
