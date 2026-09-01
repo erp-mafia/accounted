@@ -19,7 +19,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -510,10 +510,8 @@ function OrderRow({
             onCheckedChange={() => onToggleSelect(order.id)}
             aria-label={t('select_order_aria', { number: order.order_number })}
             className={cn(
-              'absolute -left-5 top-1/2 -translate-y-1/2 transition-opacity duration-150 md:-left-6',
-              isSelected
-                ? 'opacity-100'
-                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100',
+              'absolute -left-5 top-1/2 -translate-y-1/2 border-foreground duration-150 md:-left-6',
+              isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
             )}
           />
         )}

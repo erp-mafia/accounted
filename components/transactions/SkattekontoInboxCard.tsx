@@ -4,7 +4,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AlertCircle, Landmark, Link2, Loader2 } from 'lucide-react'
@@ -76,7 +76,7 @@ export default function SkattekontoInboxCard({
       // removal window.
       inert={isExiting || undefined}
     >
-      {/* Hover-revealed selection checkbox (concept .cb) */}
+      {/* Always-visible selection checkbox (concept .cb) */}
       {/* Zero-width cell: the checkbox hangs in the left page margin so
           the date column can sit flush with the page edge. */}
       <td className={cn(TD_CLASS, 'relative w-0 !p-0')}>
@@ -86,10 +86,8 @@ export default function SkattekontoInboxCard({
             onCheckedChange={() => onToggleSelect?.(row.id)}
             aria-label={t('select_row')}
             className={cn(
-              'absolute -left-5 top-1/2 -translate-y-1/2 transition-opacity duration-150 md:-left-6',
-              isSelected
-                ? 'opacity-100'
-                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+              'absolute -left-5 top-1/2 -translate-y-1/2 border-foreground duration-150 md:-left-6',
+              isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
             )}
           />
         )}
