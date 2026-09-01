@@ -34,6 +34,7 @@ import {
   fetchReceivingEmail,
   fetchInboundAttachment,
   extractLocalPartForDomain,
+  kindHintFromTag,
   parseRecipients,
   isEmailReceivedEvent,
   ResendSignatureError,
@@ -599,7 +600,7 @@ export const invoiceInboxExtension: Extension = {
             email_received_at, email_body_text, error_message,
             created_supplier_invoice_id,
             matched_transaction_id, created_journal_entry_id,
-            resend_email_id, extraction_skipped, channel_context
+            resend_email_id, extraction_skipped, channel_context, kind_hint
           `)
           .eq('company_id', ctx.companyId)
           .order('created_at', { ascending: false })
@@ -1784,7 +1785,12 @@ export const invoiceInboxExtension: Extension = {
         let companyId: string | null = null
         let sharedInboxStatus: string | null = null
 
-        const localPart = extractLocalPartForDomain(to, domain)
+        const sharedRecipient = extractLocalPartForDomain(to, domain)
+        const localPart = sharedRecipient?.localPart ?? null
+        // Sender-declared kind from the +lev / +ver tag on the shared
+        // address. Only the shared domain carries tags; custom domains are
+        // catch-all and stay unhinted.
+        const kindHint = kindHintFromTag(sharedRecipient?.tag)
         if (localPart) {
           const { data: inbox } = await serviceSupabase
             .from('company_inboxes')
@@ -1943,6 +1949,7 @@ export const invoiceInboxExtension: Extension = {
                   messageId: message_id,
                   bodyText,
                   resendEmailId: email_id,
+                  kindHint,
                 }
               )
               return NextResponse.json(
@@ -1963,6 +1970,7 @@ export const invoiceInboxExtension: Extension = {
             email_received_at: created_at,
             email_body_text: bodyText,
             resend_email_id: email_id,
+            kind_hint: kindHint,
             error_message: 'Email had no attachments',
             raw_email_payload: { messageId: message_id },
           })
@@ -2059,6 +2067,7 @@ export const invoiceInboxExtension: Extension = {
                       bodyText,
                       resendEmailId: email_id,
                       resendAttachmentId: att.id,
+                      kindHint,
                     }
                   )
                   results.push({ attachment_id: att.id, inbox_item_id: innerBodyResult.inbox_item_id })
@@ -2103,6 +2112,7 @@ export const invoiceInboxExtension: Extension = {
                     bodyText,
                     resendEmailId: email_id,
                     resendAttachmentId: innerId,
+                    kindHint,
                   }
                 )
                 results.push({ attachment_id: innerId, inbox_item_id: innerResult.inbox_item_id })
@@ -2142,6 +2152,7 @@ export const invoiceInboxExtension: Extension = {
                 bodyText,
                 resendEmailId: email_id,
                 resendAttachmentId: att.id,
+                kindHint,
               }
             )
             results.push({ attachment_id: att.id, inbox_item_id: result.inbox_item_id })
