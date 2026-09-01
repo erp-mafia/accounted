@@ -14,9 +14,10 @@ vi.mock('../lib/api-client', () => ({
 
 vi.mock('@/lib/webshop-orders/ingest', () => ({
   upsertWebshopOrders: vi.fn(),
+  removeWebshopOrders: vi.fn(),
 }))
 
-import { upsertWebshopOrders } from '@/lib/webshop-orders/ingest'
+import { removeWebshopOrders, upsertWebshopOrders } from '@/lib/webshop-orders/ingest'
 import type { WebshopOrderUpsert } from '@/lib/webshop-orders/types'
 import { encryptCredential } from '../lib/credentials'
 import {
@@ -28,6 +29,7 @@ import {
   mapRefundToWebshopRow,
   orderImports,
   orderIsPaid,
+  orderRemoves,
   syncWooCommerceOrders,
   wooOrderExternalId,
   wooRefundExternalId,
@@ -146,6 +148,7 @@ beforeEach(() => {
   listOrdersPage.mockResolvedValue([])
   listOrderRefunds.mockResolvedValue([])
   vi.mocked(upsertWebshopOrders).mockResolvedValue({ ...emptyUpsertResult })
+  vi.mocked(removeWebshopOrders).mockResolvedValue({ removed: 0, errors: 0 })
 })
 
 describe('frozen external_id formats', () => {
@@ -176,12 +179,22 @@ describe('frozen external_id formats', () => {
   })
 })
 
-describe('orderImports / orderIsPaid', () => {
-  it('every non-trash status imports, paid or not', () => {
+describe('orderImports / orderRemoves / orderIsPaid', () => {
+  it('every status except trash and failed imports, paid or not', () => {
     expect(orderImports(makeOrder())).toBe(true)
     expect(orderImports(makeOrder({ status: 'pending', date_paid_gmt: null }))).toBe(true)
     expect(orderImports(makeOrder({ status: 'refunded' }))).toBe(true)
     expect(orderImports(makeOrder({ status: 'trash' }))).toBe(false)
+    expect(orderImports(makeOrder({ status: 'failed', date_paid_gmt: null }))).toBe(false)
+  })
+
+  it('only unpaid failed orders trigger removal of an existing row', () => {
+    expect(orderRemoves(makeOrder({ status: 'failed', date_paid_gmt: null }))).toBe(true)
+    // A failed order that was at some point paid keeps its row: money moved.
+    expect(orderRemoves(makeOrder({ status: 'failed' }))).toBe(false)
+    expect(orderRemoves(makeOrder({ status: 'trash', date_paid_gmt: null }))).toBe(false)
+    expect(orderRemoves(makeOrder())).toBe(false)
+    expect(orderRemoves(makeOrder({ status: 'cancelled' }))).toBe(false)
   })
 
   it('is_paid follows date_paid', () => {
@@ -561,6 +574,57 @@ describe('syncWooCommerceOrders', () => {
     expect(listOrderRefunds).not.toHaveBeenCalled()
     const [, , , rows] = vi.mocked(upsertWebshopOrders).mock.calls[0]
     expect((rows as WebshopOrderUpsert[])[0]).toMatchObject({ is_paid: false })
+  })
+
+  it('removes the existing row of a failed order instead of importing it', async () => {
+    const { client, updates } = makeSupabaseMock()
+    listOrdersPage.mockResolvedValueOnce([
+      makeOrder({
+        status: 'failed',
+        date_paid_gmt: null,
+        // A stray refunds stub must not trigger a refund fetch for a
+        // non-importing order.
+        refunds: [{ id: 9, reason: '', total: '-100.00' }],
+      }),
+    ])
+    vi.mocked(removeWebshopOrders).mockResolvedValueOnce({ removed: 1, errors: 0 })
+
+    const summary = await syncWooCommerceOrders(client, makeConnection())
+
+    expect(summary).toMatchObject({ fetched: 1, inserted: 0, removed: 1, errors: 0 })
+    expect(upsertWebshopOrders).not.toHaveBeenCalled()
+    expect(listOrderRefunds).not.toHaveBeenCalled()
+    expect(removeWebshopOrders).toHaveBeenCalledWith(client, 'company-1', [
+      'woo_shop.example.se_order_1042',
+    ])
+    // The removal is complete work: the cursor advances normally.
+    const cursors = cursorUpdates(updates)
+    expect(cursors).toHaveLength(1)
+    expect(cursors[0].values.last_order_synced_at).toBe('2026-08-01T09:05:00.000Z')
+  })
+
+  it('neither imports nor removes a paid order the store reports as failed', async () => {
+    const { client } = makeSupabaseMock()
+    listOrdersPage.mockResolvedValueOnce([makeOrder({ status: 'failed' })])
+
+    const summary = await syncWooCommerceOrders(client, makeConnection())
+
+    expect(summary).toMatchObject({ fetched: 1, inserted: 0, removed: 0, errors: 0 })
+    expect(upsertWebshopOrders).not.toHaveBeenCalled()
+    expect(removeWebshopOrders).not.toHaveBeenCalled()
+  })
+
+  it('holds the cursor below a page whose removal reported errors', async () => {
+    const { client, updates } = makeSupabaseMock()
+    listOrdersPage.mockResolvedValueOnce([makeOrder({ status: 'failed', date_paid_gmt: null })])
+    vi.mocked(removeWebshopOrders).mockResolvedValueOnce({ removed: 0, errors: 1 })
+
+    const summary = await syncWooCommerceOrders(client, makeConnection())
+
+    expect(summary.errors).toBe(1)
+    const cursors = cursorUpdates(updates)
+    expect(cursors).toHaveLength(1)
+    expect(cursors[0].values.last_order_synced_at).toBe('2026-08-01T09:04:59.000Z')
   })
 
   it('holds the cursor below an order whose refund fetch failed', async () => {

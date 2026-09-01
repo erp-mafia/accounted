@@ -279,6 +279,7 @@ describe('woocommerce extension routes', () => {
         inserted: 4,
         updated: 0,
         unchanged: 0,
+        removed: 0,
         frozenFlagged: 0,
         crossMarked: 0,
         errors: 0,
