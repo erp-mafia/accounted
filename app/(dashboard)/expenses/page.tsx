@@ -1212,11 +1212,12 @@ export default function ExpenseClaimsPage() {
                   )}
                   <tr>
                     <td className={TD_CLASS}>
-                      <span className="inline-flex items-center gap-1.5">
-                        <Lock className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
-                        {liabilityAccount}{' '}
-                        <span className="text-muted-foreground">{accountName(liabilityAccount)}</span>
-                      </span>
+                      <Lock
+                        className="mr-1.5 inline h-3.5 w-3.5 align-[-2px] text-muted-foreground"
+                        aria-hidden="true"
+                      />
+                      {liabilityAccount}{' '}
+                      <span className="text-muted-foreground">{accountName(liabilityAccount)}</span>
                     </td>
                     <td className={`${TD_CLASS} text-right`} />
                     <td className={`${TD_CLASS} text-right tabular-nums`}>
