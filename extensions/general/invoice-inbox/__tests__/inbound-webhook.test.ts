@@ -631,9 +631,11 @@ describe('POST /inbound', () => {
     expect(stored).toContain('<div>Faktura 123: 500 kr</div>')
   })
 
-  it('still rejects attachment types outside the email allowlist', async () => {
-    vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
-    const { supabase, enqueue } = createQueuedMockSupabase()
+  it('still rejects attachment types outside the email allowlist, keeping the sender kind hint on the error row', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(
+      mockReceivedEvent({ to: ['acme-ab-x7f2+ver@arcim.io'] }) as never,
+    )
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
     enqueue({ data: { created_by: 'user-owner-1' } })
     enqueue({ data: null }) // per-attachment dup check finds nothing
@@ -642,7 +644,7 @@ describe('POST /inbound', () => {
     vi.mocked(fetchReceivingEmail).mockResolvedValue({
       object: 'email',
       id: 'em_123',
-      to: ['acme-ab-x7f2@arcim.io'],
+      to: ['acme-ab-x7f2+ver@arcim.io'],
       from: 'billing@supplier.com',
       created_at: '2026-04-20T10:00:00Z',
       subject: 'Zip',
@@ -671,5 +673,10 @@ describe('POST /inbound', () => {
     expect(res.status).toBe(200)
     expect(body.data.results[0].error).toBe('Unsupported type application/zip')
     expect(uploadAndExtract).not.toHaveBeenCalled()
+
+    // The rejected row still carries what the sender said (#2129), so it can
+    // be found under the Underlag filter like any other inbox item.
+    const rejection = calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')
+    expect(rejection?.args[0]).toMatchObject({ status: 'error', kind_hint: 'receipt' })
   })
 })

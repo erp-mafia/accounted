@@ -2005,6 +2005,7 @@ export const invoiceInboxExtension: Extension = {
               email_body_text: bodyText,
               resend_email_id: email_id,
               resend_attachment_id: attachmentId,
+              kind_hint: kindHint,
               error_message: reason.slice(0, 500),
               raw_email_payload: {
                 messageId: message_id,

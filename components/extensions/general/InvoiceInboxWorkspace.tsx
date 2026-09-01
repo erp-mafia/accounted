@@ -1841,10 +1841,11 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   beside it reads 50. */}
               {searchTerm.trim() !== ''
                 ? `Inga träffar på ”${searchTerm.trim()}”.`
-                : kindFilter !== 'all'
+                : kindFilter !== 'all' && filter !== 'missing' && filter !== 'portal'
                   // Same trap as the search term: "allt är bearbetat" would be
                   // false while the status trigger above still counts rows the
-                  // type menu is hiding.
+                  // type menu is hiding. Purchase lists ignore the type menu,
+                  // so a leftover kind filter must not speak for them.
                   ? t('empty_no_kind_hits')
                   : filter === 'todo'
                     ? 'Inget att åtgärda; allt är bearbetat.'
