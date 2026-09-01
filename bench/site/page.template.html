@@ -192,6 +192,7 @@
   table.lb th.sortable.on { color: var(--ink); }
   .cellv { display: inline-flex; align-items: center; gap: 10px; justify-content: flex-end; }
   .cellv b { font-weight: 600; color: var(--ink); min-width: 46px; }
+  .cellv .cnt { font-family: "Geist Mono",monospace; font-size: 10.5px; color: var(--faint); min-width: 40px; text-align: right; }
   .mini { width: 46px; height: 4px; border-radius: 999px; background: var(--secondary); overflow: hidden; }
   .mini i { display: block; height: 100%; border-radius: 999px; background: var(--sage); }
   .legendline { font-size: 12px; color: var(--faint); margin-top: 12px; max-width: none; }
@@ -495,7 +496,7 @@
         <div class="mrow"><dt>Context</dt><dd>Closest public benchmarks: <a href="https://www.dualentry.com/accounting-ai-benchmark">DualEntry</a> tops out at 79.2% (US-GAAP, month-end close 50%), <a href="https://www.vals.ai/benchmarks/finance_agent">Vals Finance Agent</a> at 64.4%, <a href="https://taubench.com">τ²-bench</a> at 87.9%. None Swedish, none write-capable against a legally constrained ledger.</dd></div>
         <div class="mrow"><dt>Statistics</dt><dd>Wilson ±1σ intervals on every rate; paired <strong>McNemar exact tests</strong> group the ranking into statistical ties (models inside a group cannot be distinguished at p&lt;0.05, marked by rules in the table); every task carries a published <strong>discrimination index</strong> (point-biserial), and tasks with negative discrimination are retired in review, applied to all models equally. A k=3 repeat study found single-run pass rates moving up to 25 pp between identical runs for one model; the tie groups, not the raw order, are the citable result.</dd></div>
       <div class="mrow"><dt>Contamination</dt><dd>Every task file carries a <strong>canary string</strong> (BIG-bench convention) so future training-data filters can exclude it, and the public split's exposure is stated rather than hidden. The prod-derived private split is the contamination-free instrument.</dd></div>
-      <div class="mrow"><dt>Cost</dt><dd>Measured tokens at each vendor's first-party list price, standard tier, no cache, batch or promotional discounts; open-weights models without a vendor API are priced at a named serving provider. <strong>What this cost is:</strong> the price of running these tasks through the neutral scaffold, where every booking ships the entire 1 290-account BAS chart as context, roughly 18 000 to 27 000 input tokens per task. Input therefore dominates, and the cost ranking is close to the input-price ranking. <strong>What it is not:</strong> the price of booking a transaction in production, where a retrieval step puts perhaps twenty candidate accounts in front of the model instead of all of them, and caching applies. Read it as a comparable price of the same work, not as an invoice. <strong>Per correct</strong> divides it by the strict pass rate, because a model that fails cheaply is not cheap. One artefact worth knowing: <strong>GPT-5.6 Terra Pro reports about four times the input tokens of GPT-5.6 Luna on the identical prompt</strong> (76 630 against 18 122), so the Pro tier evidently runs several internal passes and is billed for each. Its cost is what you would pay; its token count is not a prompt-size comparison.</dd></div>
+      <div class="mrow"><dt>Cost</dt><dd>Measured tokens at each vendor's first-party list price, standard tier, no cache, batch or promotional discounts; open-weights models without a vendor API are priced at a named serving provider. <strong>What this cost is:</strong> the price of running these tasks through the neutral scaffold, where every booking ships the entire 1 290-account BAS chart as context, roughly 18 000 to 27 000 input tokens per task. Input therefore dominates, and the cost ranking is close to the input-price ranking. <strong>What it is not:</strong> the price of booking a transaction in production, where a retrieval step puts perhaps twenty candidate accounts in front of the model instead of all of them, and caching applies. Read it as a comparable price of the same work, not as an invoice. <strong>Per correct</strong> divides it by the strict pass rate, because a model that fails cheaply is not cheap. In units a practitioner buys: booking a thousand transactions costs about <strong>$3 with GPT-OSS-120B, $4 with GLM 5.3 Flash, $57 with Claude Sonnet 5 and $279 with Claude Fable 5</strong>; per thousand <em>correct</em> bookings that becomes $14, $7, $95 and $389, which reorders them, because the cheapest model here is right half the time. A cheaper model can also cost more than a dearer one: Qwen3.8 lists at $2/$6 against Opus 5's $5/$25 yet costs six times as much per reasoning task, because it spends about 5 700 output tokens per answer on hidden thinking where Opus spends 300. One artefact worth knowing: <strong>GPT-5.6 Terra Pro reports about four times the input tokens of GPT-5.6 Luna on the identical prompt</strong> (76 630 against 18 122), so the Pro tier evidently runs several internal passes and is billed for each. Its cost is what you would pay; its token count is not a prompt-size comparison.</dd></div>
       <div class="mrow"><dt>Disclosure</dt><dd>Tasks authored with Claude against cited law, machine-validated, public for review. Provider marks are their owners' trademarks, shown for identification only.</dd></div>
       </dl>
     </section>
@@ -684,8 +685,8 @@
   const SUITES = [
     { id: 'booking', label: 'Booking', legend: '<b>Pass</b> account and VAT both right · <b>Strict</b> the single gold account and the right VAT, with no credit for defensible alternatives · <b>Auto@99%</b> share auto-bookable at 99% precision, gated on stated confidence · <b>ECE</b> calibration error, 0 = perfect · <b>Cost</b> per task · a horizontal rule separates statistical tie groups (paired McNemar, p<0.05)' },
     { id: 'reasoning', label: 'Reasoning', legend: '<b>Pass</b> exact deterministic answer · <b>Fresh rules</b> the six tasks on rules that changed in 2025-2026 · <b>ECE</b> calibration error, lower is better · <b>Cost</b> per task · rules separate statistical tie groups' },
-    { id: 'extraction', label: 'Extraction', legend: '<b>Pass</b> every field on the document right · <b>Fields</b> mean per-field accuracy · <b>Cost</b> per task · <b>Per correct</b> cost of one fully correct document · models without vision are absent' },
-    { id: 'ledger-agent', label: 'Ledger-agent', legend: '<b>Pass</b> all end-state assertions hold on the real ledger · <b>Pass^k</b> share of tasks solved on EVERY repeat attempt · <b>Turns</b> model turns used · <b>Cost</b> per task · <b>Per correct</b> cost of one solved task' },
+    { id: 'extraction', label: 'Extraction', legend: '<b>Pass</b> every field on the document right, all-or-nothing across 12 documents, so most models land on the same 10/12 · <b>Fields</b> mean per-field accuracy, the more informative number here: nearly every model reads 98% of fields correctly and loses the document on one OCR reference or one öre · <b>Cost</b> per task · <b>Per correct</b> cost of one fully correct document · models without vision are absent' },
+    { id: 'ledger-agent', label: 'Ledger-agent', legend: '<b>Pass</b> all end-state assertions hold on the real ledger · <b>Pass^k</b> share of tasks solved on EVERY repeat attempt · <b>Turns</b> model turns used · <b>Cost</b> per task · <b>Per correct</b> cost of one solved task · this suite is 3 tasks run 3 times each, a probe rather than a population: treat 100% as \'did not fail these three\', not as a general claim' },
   ];
   const fmtPct1 = (x) => (x * 100).toFixed(1) + '%';
   const fmtPct0 = (x) => (x * 100).toFixed(0) + '%';
@@ -754,9 +755,12 @@
   const tableEl = document.getElementById('lbtable');
   const legendEl = document.getElementById('legend');
 
-  function passCell(p) {
+  // A percentage on 12 or 53 tasks reads better with the raw count beside it:
+  // "83.3%" is opaque, "10/12" is not.
+  function passCell(p, solved, n) {
     const w = Math.max(0, Math.min(1, p)) * 100;
-    return `<span class="cellv"><b>${fmtPct1(p)}</b><span class="mini"><i style="width:${w}%"></i></span></span>`;
+    const count = solved != null ? `<span class="cnt">${solved}/${n}</span>` : '';
+    return `<span class="cellv"><b>${fmtPct1(p)}</b>${count}<span class="mini"><i style="width:${w}%"></i></span></span>`;
   }
 
   function headerCols() {
@@ -776,23 +780,26 @@
     // acceptance lists.
     const rate = active === 'booking' && e.strictPass != null ? e.strictPass : p;
     const perCorrect = rate > 0 ? fmtUsd(perTask(r) / rate) : '—';
+    const solved = s ? Math.round(s.pass * s.n) : r.pass;
+    const total = s ? s.n : r.n;
+    const pc = passCell(p, solved, total);
     if (active === 'booking') {
       if (segment === 'all') {
-        return [passCell(p),
+        return [pc,
           e.strictPass == null ? '—' : fmtPct0(e.strictPass),
           e.coverage99 == null ? '—' : fmtPct0(e.coverage99),
           e.ece == null ? '—' : e.ece.toFixed(2), cost, perCorrect];
       }
       const konto = s ? s.accountAccuracy : e.accountAccuracy;
       const moms = s ? s.vatAccuracy : e.vatAccuracy;
-      return [passCell(p), fmtPct0(konto ?? 0), fmtPct0(moms ?? 0), cost];
+      return [pc, fmtPct0(konto ?? 0), fmtPct0(moms ?? 0), cost];
     }
     if (active === 'reasoning') {
       const fr = e.freshness;
-      return [passCell(p), fr ? `${fr.pass}/${fr.n}` : '—', e.ece == null ? '—' : e.ece.toFixed(2), cost, perCorrect];
+      return [pc, fr ? `${fr.pass}/${fr.n}` : '—', e.ece == null ? '—' : e.ece.toFixed(2), cost, perCorrect];
     }
-    if (active === 'extraction') return [passCell(p), fmtPct0(e.fieldAccuracy ?? 0), cost, perCorrect];
-    return [passCell(p), e.reliability == null ? '—' : fmtPct0(e.reliability), r.avgTurns.toFixed(1), cost, perCorrect];
+    if (active === 'extraction') return [pc, fmtPct1(e.fieldAccuracy ?? 0), cost, perCorrect];
+    return [pc, e.reliability == null ? '—' : fmtPct0(e.reliability), r.avgTurns.toFixed(1), cost, perCorrect];
   }
 
   function renderBoard() {
@@ -903,8 +910,14 @@
   function drawScatter(rows) {
     const svg = document.getElementById('scatter');
     const W = 900, H = 440, m = { l: 64, r: 80, t: 26, b: 52 };
-    const maxCost = Math.max(...rows.map(perTask), 0.001) * 1.28;
-    const x = (c) => m.l + (c / maxCost) * (W - m.l - m.r);
+    // Cost spans ~100x across the field, so a linear axis buries two thirds of
+    // the models against the left edge. Log scale, with decade ticks.
+    const costsAll = rows.map(perTask).filter((c) => c > 0);
+    const minCost = Math.min(...costsAll, 0.002) / 1.7;
+    const maxCost = Math.max(...costsAll, 0.01) * 1.7;
+    const lg = (c) => Math.log10(Math.max(c, minCost));
+    const span = lg(maxCost) - lg(minCost) || 1;
+    const x = (c) => m.l + ((lg(c) - lg(minCost)) / span) * (W - m.l - m.r);
     const y = (p) => H - m.b - p * (H - m.t - m.b);
     let out = '';
     for (let gy = 0; gy <= 4; gy++) {
@@ -912,11 +925,12 @@
       out += `<line class="grid" x1="${m.l}" y1="${y(p)}" x2="${W-m.r}" y2="${y(p)}"></line>`;
       out += `<text x="${m.l-10}" y="${y(p)+4}" text-anchor="end">${gy*25}%</text>`;
     }
-    for (const f of [0.25, 0.5, 0.75, 1]) {
-      const t = f * maxCost;
-      out += `<text x="${x(t)}" y="${H-m.b+18}" text-anchor="middle">${t >= 1 ? '$'+t.toFixed(2) : '$'+t.toFixed(3)}</text>`;
+    for (const t of [0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1]) {
+      if (t < minCost || t > maxCost) continue;
+      out += `<line class="grid" x1="${x(t)}" y1="${y(0)}" x2="${x(t)}" y2="${y(1)}"></line>`;
+      out += `<text x="${x(t)}" y="${H-m.b+18}" text-anchor="middle">$${t >= 1 ? t.toFixed(0) : t.toFixed(t < 0.01 ? 3 : 2)}</text>`;
     }
-    out += `<text x="${(W-m.r+m.l)/2}" y="${H-8}" text-anchor="middle">cost per task, vendor list price (average)</text>`;
+    out += `<text x="${(W-m.r+m.l)/2}" y="${H-8}" text-anchor="middle">cost per task, vendor list price (log scale)</text>`;
     // Quadrants: median cost and median pass rate divide the field. The
     // top-left is where a model is both accurate and cheap.
     const costs = rows.map(perTask).sort((a, b) => a - b);
@@ -1061,8 +1075,18 @@
       const rows = ids.length === 0
         ? '<span class="none">none</span>'
         : ids.map((id) => {
-            const cov = byModel[id].coverage99;
-            return `<span>${markFor(vendorOf(id))}${short(labelOf(id))}<span class="cov">${cov != null ? Math.round(cov*100) + '% auto' : ''}</span></span>`;
+            const v = byModel[id];
+            // For an unassessed model, name the suite that is missing rather
+            // than leaving a top-of-board model looking mysteriously excluded.
+            let right = v.coverage99 != null && g.key === 'tillstyrks'
+              ? `${Math.round(v.coverage99 * 100)}% auto` : '';
+            if (g.key === 'ej_bedomd') {
+              const missing = SUITES
+                .filter((s) => !modelRow(s.id, id))
+                .map((s) => s.label.toLowerCase());
+              right = missing.length ? `no ${missing.join(', ')} run` : 'incomplete run';
+            }
+            return `<span>${markFor(vendorOf(id))}${short(labelOf(id))}<span class="cov">${right}</span></span>`;
           }).join('');
       return `<div class="vcard ${g.cls}"><h5><span class="dot"></span>${g.title}</h5>` +
         `<p class="vsv">${g.sv}</p><p class="vdesc">${g.desc}</p><div class="rows">${rows}</div></div>`;
