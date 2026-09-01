@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { isSelfHosted } from '@/lib/env/public-flags'
 import { CAPABILITY } from './keys'
-import { isBypassedFor } from './has-capability'
 import {
   computeMultiUserState,
   isMembershipDormant,
@@ -26,9 +26,19 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * capability: an AGPL operator's own instance is never seat-gated) and under
  * the dev bypass; FORCE_PAYWALL flips it on in dev like every other gate.
  * Callers use this to pick the gated resolution RPC vs the plain one.
+ *
+ * Deliberately NOT delegated to has-capability's isBypassedFor: multi_user is
+ * never a connector capability, so the logic reduces to these env reads, and
+ * standing alone keeps this module import-light (it is called from the Edge
+ * middleware on every request, and several test suites partially mock
+ * has-capability without expecting resolution paths to pull it in).
  */
 export function isMultiUserEnforced(): boolean {
-  return !isBypassedFor(CAPABILITY.multi_user)
+  if (isSelfHosted()) return false
+  if (process.env.FORCE_PAYWALL === 'true') return true
+  const bypassed =
+    process.env.NODE_ENV === 'development' || process.env.DISABLE_PAYWALL === 'true'
+  return !bypassed
 }
 
 /**
@@ -53,7 +63,20 @@ export async function getMultiUserState(
 ): Promise<MultiUserAccess> {
   if (!isMultiUserEnforced()) return { state: 'entitled', graceEndsAt: null }
   if (!UUID_RE.test(companyId)) return { state: 'frozen', graceEndsAt: null }
+  try {
+    return await resolveMultiUserState(supabase, companyId, options)
+  } catch {
+    // Fail OPEN on ANY unexpected throw (a client without .rpc, a network
+    // exception): a broken read must never lock people out of their books.
+    return { state: 'entitled', graceEndsAt: null }
+  }
+}
 
+async function resolveMultiUserState(
+  supabase: SupabaseClient,
+  companyId: string,
+  options: { teamId?: string | null },
+): Promise<MultiUserAccess> {
   const { data: rpcData, error: rpcError } = await supabase.rpc('company_multi_user_state', {
     p_company_id: companyId,
     p_grace_days: MULTI_USER_GRACE_DAYS,

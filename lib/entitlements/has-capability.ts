@@ -72,7 +72,7 @@ function isDevBypass(): boolean {
  *                     the remaining connector capabilities behave like hosted
  *                     (dev bypass, FORCE_PAYWALL, otherwise the grant lookup).
  */
-export function isBypassedFor(key: CapabilityKey): boolean {
+function isBypassedFor(key: CapabilityKey): boolean {
   if (isSelfHosted() && (!isConnectorCapability(key) || hasOwnCredentialsFor(key))) return true
   return isDevBypass()
 }
