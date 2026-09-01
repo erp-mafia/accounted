@@ -86,15 +86,52 @@ describe('onboarding connect-link tools', () => {
     expect(named.instructions).not.toContain('BETTER LINK AVAILABLE')
   })
 
-  it('bank: reports an active connection', async () => {
+  it('bank: reports an active connection with freshness fields', async () => {
     const { from } = listClient([
-      { id: 'c1', bank_name: 'Swedbank', status: 'active', created_at: '2026-08-01T00:00:00Z' },
+      {
+        id: 'c1',
+        bank_name: 'Swedbank',
+        status: 'active',
+        created_at: '2026-08-01T00:00:00Z',
+        last_synced_at: '2026-08-30T05:00:00Z',
+        consent_expires: '2026-11-01T00:00:00Z',
+        error_message: null,
+      },
     ])
     const result = (await bankTool.execute({}, COMPANY_ID, 'user-1', { from } as never)) as Record<string, unknown>
     expect(result.connected).toBe(true)
     expect(result.connections).toEqual([
-      { connection_id: 'c1', bank: 'Swedbank', status: 'active', since: '2026-08-01T00:00:00Z' },
+      {
+        connection_id: 'c1',
+        bank: 'Swedbank',
+        status: 'active',
+        since: '2026-08-01T00:00:00Z',
+        last_synced_at: '2026-08-30T05:00:00Z',
+        consent_expires: '2026-11-01T00:00:00Z',
+        error_message: null,
+      },
     ])
+    expect(result.instructions).toContain('last_synced_at')
+  })
+
+  it('bank: surfaces the error_message and null sync stamp on a dead connection', async () => {
+    const { from } = listClient([
+      {
+        id: 'c2',
+        bank_name: 'SEB',
+        status: 'expired',
+        created_at: '2026-05-01T00:00:00Z',
+        last_synced_at: null,
+        consent_expires: '2026-07-15T00:00:00Z',
+        error_message: 'Bankkopplingen behöver förnyas.',
+      },
+    ])
+    const result = (await bankTool.execute({}, COMPANY_ID, 'user-1', { from } as never)) as Record<string, unknown>
+    expect(result.connected).toBe(false)
+    const rows = result.connections as Array<Record<string, unknown>>
+    expect(rows[0].last_synced_at).toBeNull()
+    expect(rows[0].consent_expires).toBe('2026-07-15T00:00:00Z')
+    expect(rows[0].error_message).toBe('Bankkopplingen behöver förnyas.')
   })
 
   it('skatteverket: hands out the authorize link when enabled and not connected', async () => {
