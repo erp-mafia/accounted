@@ -86,7 +86,7 @@ const STATUS_VARIANT: Record<ExpenseClaim['status'], 'secondary' | 'success'> = 
 
 const OWNER_VALUE = 'owner'
 const NO_RECEIPT_VALUE = 'none'
-type VatMode = 'domestic' | 'reverse_eu' | 'reverse_noneu' | 'no_vat'
+type SellerCountry = 'se' | 'eu' | 'noneu'
 interface BookingRow {
   key: number
   account: string
@@ -145,10 +145,13 @@ export default function ExpenseClaimsPage() {
   const [vatAmount, setVatAmount] = useState('')
   const [currency, setCurrency] = useState('SEK')
   const [expenseAccount, setExpenseAccount] = useState('5410')
-  // Step 2 booking editor: VAT mode drives the generated rows; any manual
-  // edit or applied template freezes them into `bookingRows`.
-  const [vatMode, setVatMode] = useState<VatMode>('domestic')
+  // Step 2 booking editor (the Bokio model): one owner of the rows at a
+  // time. Seller country + cost account generate them, OR an applied
+  // template owns them, OR a manual edit freezes them into `bookingRows`.
+  const [sellerCountry, setSellerCountry] = useState<SellerCountry>('se')
+  const [appliedTemplate, setAppliedTemplate] = useState<string | null>(null)
   const [bookingRows, setBookingRows] = useState<BookingRow[] | null>(null)
+  const [showRowEditor, setShowRowEditor] = useState(false)
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
   const [claimant, setClaimant] = useState(OWNER_VALUE)
   const [ownerName, setOwnerName] = useState('')
@@ -264,11 +267,13 @@ export default function ExpenseClaimsPage() {
   const parsedVat = parseFloat(vatAmount) || 0
   const netAmount = Math.max(0, parsedAmount - parsedVat)
 
-  // Rows generated from the VAT mode (claim currency). Reverse charge books
-  // the gross as basis and adds the 2614/2645 pair; the receipt VAT field
-  // only feeds the domestic 2641 row.
+  // Seller country resolves the VAT mechanics (the Bokio model): Sweden
+  // books the receipt VAT on 2641; EU / outside EU books the gross as
+  // reverse-charge basis on the ruta-bearing account with the 2614/2645 pair.
+  const basisAccount =
+    sellerCountry === 'se' ? expenseAccount : sellerCountry === 'eu' ? '4535' : '4531'
   const generatedRows = useMemo<BookingRow[]>(() => {
-    if (vatMode === 'domestic') {
+    if (sellerCountry === 'se') {
       return [
         { key: nextRowKey(), account: expenseAccount, debit: netAmount.toFixed(2), credit: '' },
         ...(parsedVat > 0
@@ -276,16 +281,13 @@ export default function ExpenseClaimsPage() {
           : []),
       ]
     }
-    if (vatMode === 'no_vat') {
-      return [{ key: nextRowKey(), account: expenseAccount, debit: parsedAmount.toFixed(2), credit: '' }]
-    }
     const rc = roundOre(parsedAmount * 0.25)
     return [
-      { key: nextRowKey(), account: expenseAccount, debit: parsedAmount.toFixed(2), credit: '' },
+      { key: nextRowKey(), account: basisAccount, debit: parsedAmount.toFixed(2), credit: '' },
       { key: nextRowKey(), account: '2645', debit: rc.toFixed(2), credit: '' },
       { key: nextRowKey(), account: '2614', debit: '', credit: rc.toFixed(2) },
     ]
-  }, [vatMode, expenseAccount, netAmount, parsedAmount, parsedVat])
+  }, [sellerCountry, basisAccount, expenseAccount, netAmount, parsedAmount, parsedVat])
 
   const editorRows = bookingRows ?? generatedRows
   const rowSum = (side: 'debit' | 'credit') => sumOre(editorRows.map((r) => parseFloat(r[side]) || 0))
@@ -298,12 +300,10 @@ export default function ExpenseClaimsPage() {
     return /^[0-9]{4}$/.test(r.account) && (d > 0) !== (c > 0)
   })
 
-  const applyVatMode = (mode: VatMode) => {
-    setVatMode(mode)
+  const applyCountry = (country: SellerCountry) => {
+    setSellerCountry(country)
+    setAppliedTemplate(null)
     setBookingRows(null)
-    // Suggest the ruta-bearing basis account when entering a reverse mode.
-    if (mode === 'reverse_eu' && !expenseAccount.startsWith('45')) setExpenseAccount('4535')
-    if (mode === 'reverse_noneu' && !expenseAccount.startsWith('45')) setExpenseAccount('4531')
   }
 
   const editRow = (key: number, patch: Partial<BookingRow>) => {
@@ -319,12 +319,16 @@ export default function ExpenseClaimsPage() {
     setBookingRows([...base, { key: nextRowKey(), account: '', debit: '', credit: '' }])
   }
 
-  /** Booking templates: drop the template's money leg (19xx or the claim's
-   *  liability account): the locked liability row below carries it. */
-  const applyBookingTemplate = (templateLines: FormLine[]) => {
+  /** Applying a template makes it the owner of the rows. Its money leg
+   *  (kassa/fordran/leverantörsskuld or the claim's liability) is dropped:
+   *  the locked liability row below carries the settlement. */
+  const applyBookingTemplate = (templateLines: FormLine[], name: string) => {
     setBookingRows(
       templateLines
-        .filter((l) => !l.account_number.startsWith('19') && l.account_number !== liabilityAccount)
+        .filter(
+          (l) =>
+            !/^(15|19|24)/.test(l.account_number) && l.account_number !== liabilityAccount,
+        )
         .map((l) => ({
           key: nextRowKey(),
           account: l.account_number,
@@ -332,6 +336,11 @@ export default function ExpenseClaimsPage() {
           credit: l.credit_amount || '',
         })),
     )
+    setAppliedTemplate(name)
+  }
+  const clearTemplate = () => {
+    setAppliedTemplate(null)
+    setBookingRows(null)
   }
 
   const templateSeedLines = useMemo(
@@ -377,8 +386,10 @@ export default function ExpenseClaimsPage() {
     setClaimant(OWNER_VALUE)
     setInboxChoice(NO_RECEIPT_VALUE)
     setUpload({ phase: 'idle' })
-    setVatMode('domestic')
+    setSellerCountry('se')
+    setAppliedTemplate(null)
     setBookingRows(null)
+    setShowRowEditor(false)
     setShowSaveTemplate(false)
     setStep(1)
     setCreating(false)
@@ -1033,40 +1044,70 @@ export default function ExpenseClaimsPage() {
               {/* Step 2: VAT mode + templates + an editable verifikat grid.
                   The liability row is locked: the payout flow reimburses
                   exactly the claim gross from that account. */}
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label>{t('form_vat_mode')}</Label>
-                  <Select value={vatMode} onValueChange={(v) => applyVatMode(v as VatMode)}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="domestic">{t('vat_mode_domestic')}</SelectItem>
-                      <SelectItem value="reverse_eu">{t('vat_mode_reverse_eu')}</SelectItem>
-                      <SelectItem value="reverse_noneu">{t('vat_mode_reverse_noneu')}</SelectItem>
-                      <SelectItem value="no_vat">{t('vat_mode_none')}</SelectItem>
-                    </SelectContent>
-                  </Select>
+              {appliedTemplate ? (
+                <div className="flex items-center gap-2">
+                  <Badge variant="secondary" className="gap-1.5 py-1 pl-2 pr-1 font-normal">
+                    {t('template_applied', { name: appliedTemplate })}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-5 w-5"
+                      aria-label={t('clear_template')}
+                      onClick={clearTemplate}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </Badge>
                 </div>
-                <div className="space-y-2">
-                  <Label>{t('form_expense_account')}</Label>
-                  <AccountCombobox
-                    value={expenseAccount}
-                    accounts={accounts}
-                    onChange={(v) => {
-                      setExpenseAccount(v)
-                      setBookingRows(null)
-                    }}
-                  />
+              ) : (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>{t('form_seller_country')}</Label>
+                    <Select value={sellerCountry} onValueChange={(v) => applyCountry(v as SellerCountry)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="se">{t('seller_country_se')}</SelectItem>
+                        <SelectItem value="eu">{t('seller_country_eu')}</SelectItem>
+                        <SelectItem value="noneu">{t('seller_country_noneu')}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {sellerCountry === 'se' ? (
+                    <div className="space-y-2">
+                      <Label>{t('form_expense_account')}</Label>
+                      <AccountCombobox
+                        value={expenseAccount}
+                        accounts={accounts}
+                        onChange={(v) => {
+                          setExpenseAccount(v)
+                          setBookingRows(null)
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <Label>{t('form_expense_account')}</Label>
+                      <p className="flex min-h-10 items-center text-sm text-muted-foreground">
+                        {basisAccount} {accountName(basisAccount)}
+                      </p>
+                    </div>
+                  )}
                 </div>
-              </div>
-              {(vatMode === 'reverse_eu' || vatMode === 'reverse_noneu') && (
+              )}
+              {!appliedTemplate && sellerCountry !== 'se' && (
                 <p className="text-xs text-muted-foreground">
-                  {vatMode === 'reverse_eu' ? t('vat_mode_reverse_eu_hint') : t('vat_mode_reverse_noneu_hint')}
+                  {sellerCountry === 'eu' ? t('seller_country_eu_hint') : t('seller_country_noneu_hint')}
                 </p>
               )}
               <div className="flex flex-wrap items-center gap-2">
-                <BookingTemplatePicker defaultAmount={parsedAmount || undefined} onApply={applyBookingTemplate} />
+                <BookingTemplatePicker
+                  defaultAmount={parsedAmount || undefined}
+                  excludeCategories={['salary', 'year_end', 'vat', 'tax_account', 'private_transfer']}
+                  onApply={(lines, name) => applyBookingTemplate(lines, name)}
+                />
                 <Button
                   type="button"
                   variant="outline"
@@ -1075,6 +1116,14 @@ export default function ExpenseClaimsPage() {
                   disabled={templateSeedLines.length < 2}
                 >
                   {t('save_as_template')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowRowEditor((v) => !v)}
+                >
+                  {showRowEditor ? t('hide_row_editor') : t('edit_rows')}
                 </Button>
               </div>
 
@@ -1088,49 +1137,65 @@ export default function ExpenseClaimsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {editorRows.map((row) => (
-                    <tr key={row.key}>
-                      <td className={`${TD_CLASS} pr-2`}>
-                        <AccountCombobox
-                          value={row.account}
-                          accounts={accounts}
-                          onChange={(v) => editRow(row.key, { account: v })}
-                        />
-                      </td>
-                      <td className={`${TD_CLASS} text-right`}>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          className="text-right tabular-nums"
-                          value={row.debit}
-                          onChange={(e) => editRow(row.key, { debit: e.target.value, credit: '' })}
-                        />
-                      </td>
-                      <td className={`${TD_CLASS} text-right`}>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          className="text-right tabular-nums"
-                          value={row.credit}
-                          onChange={(e) => editRow(row.key, { credit: e.target.value, debit: '' })}
-                        />
-                      </td>
-                      <td className={TD_CLASS}>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7"
-                          aria-label={t('remove_row')}
-                          onClick={() => removeRow(row.key)}
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
+                  {editorRows.map((row) =>
+                    showRowEditor ? (
+                      <tr key={row.key}>
+                        <td className={`${TD_CLASS} pr-2`}>
+                          <AccountCombobox
+                            value={row.account}
+                            accounts={accounts}
+                            onChange={(v) => editRow(row.key, { account: v })}
+                          />
+                        </td>
+                        <td className={`${TD_CLASS} text-right`}>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            className="text-right tabular-nums"
+                            value={row.debit}
+                            onChange={(e) => editRow(row.key, { debit: e.target.value, credit: '' })}
+                          />
+                        </td>
+                        <td className={`${TD_CLASS} text-right`}>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            className="text-right tabular-nums"
+                            value={row.credit}
+                            onChange={(e) => editRow(row.key, { credit: e.target.value, debit: '' })}
+                          />
+                        </td>
+                        <td className={TD_CLASS}>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            aria-label={t('remove_row')}
+                            onClick={() => removeRow(row.key)}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </td>
+                      </tr>
+                    ) : (
+                      <tr key={row.key}>
+                        <td className={TD_CLASS}>
+                          {row.account}{' '}
+                          <span className="text-muted-foreground">{accountName(row.account)}</span>
+                        </td>
+                        <td className={`${TD_CLASS} text-right tabular-nums`}>
+                          {row.debit && `${row.debit} ${currency}`}
+                        </td>
+                        <td className={`${TD_CLASS} text-right tabular-nums`}>
+                          {row.credit && `${row.credit} ${currency}`}
+                        </td>
+                        <td className={TD_CLASS} />
+                      </tr>
+                    ),
+                  )}
                   <tr>
                     <td className={TD_CLASS}>
                       <span className="inline-flex items-center gap-1.5">
@@ -1147,10 +1212,12 @@ export default function ExpenseClaimsPage() {
                   </tr>
                   <tr>
                     <td className={`${TD_CLASS} font-medium`}>
-                      <Button type="button" variant="ghost" size="sm" className="-ml-2" onClick={addRow}>
-                        <Plus className="mr-1 h-3.5 w-3.5" />
-                        {t('add_row')}
-                      </Button>
+                      {showRowEditor && (
+                        <Button type="button" variant="ghost" size="sm" className="-ml-2" onClick={addRow}>
+                          <Plus className="mr-1 h-3.5 w-3.5" />
+                          {t('add_row')}
+                        </Button>
+                      )}
                     </td>
                     <td className={`${TD_CLASS} text-right font-medium tabular-nums`}>
                       {totalDebit.toFixed(2)}

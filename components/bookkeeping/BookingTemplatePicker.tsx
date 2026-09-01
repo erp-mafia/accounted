@@ -23,6 +23,8 @@ interface Props {
   /** Prefill the "total amount" field when the caller already knows it (e.g.
    *  booking from an underlag with a known total). The user can still edit it. */
   defaultAmount?: number
+  /** Hide whole categories (e.g. the expense flow hides income templates). */
+  excludeCategories?: BookingTemplateCategory[]
 }
 
 const SCOPE_ICONS = {
@@ -31,7 +33,7 @@ const SCOPE_ICONS = {
   company: Building2,
 } as const
 
-export default function BookingTemplatePicker({ onApply, entityType, defaultAmount }: Props) {
+export default function BookingTemplatePicker({ onApply, entityType, defaultAmount, excludeCategories }: Props) {
   const { toast } = useToast()
   const [open, setOpen] = useState(false)
   // Session-cached (lib/reference-data): the list is there on the first
@@ -60,6 +62,9 @@ export default function BookingTemplatePicker({ onApply, entityType, defaultAmou
     // Templates hidden for this company (opt-in via the settings panel)
     // never surface in the picker; only settings shows them, for restore.
     let result = templates.filter((t) => !t.is_hidden)
+    if (excludeCategories?.length) {
+      result = result.filter((t) => !excludeCategories.includes(t.category))
+    }
 
     // Filter by entity type
     if (entityType) {
@@ -82,7 +87,7 @@ export default function BookingTemplatePicker({ onApply, entityType, defaultAmou
     }
 
     return result
-  }, [templates, entityType, selectedCategory, search])
+  }, [templates, entityType, selectedCategory, search, excludeCategories])
 
   // Unique categories present in visible templates. Built from the
   // hidden-filtered list so a category whose templates are all hidden does
