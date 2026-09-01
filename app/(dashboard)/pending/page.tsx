@@ -11,6 +11,7 @@ import { DataListEmpty, DataListLoading } from '@/components/ui/data-list'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { CHECKBOX_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import {
   SlideOver,
   SlideOverContent,
@@ -277,6 +278,9 @@ export default function PendingOperationsPage() {
   const [showCommitDialog, setShowCommitDialog] = useState(false)
   const [isCommitting, setIsCommitting] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // Radix' onCheckedChange carries no mouse event: the preceding click records
+  // whether shift was held, for range selection.
+  const shiftHeld = useRef(false)
   const [showBulkDialog, setShowBulkDialog] = useState(false)
   const [isBulkCommitting, setIsBulkCommitting] = useState(false)
   // Reject dialog state: separate from the generic destructive-confirm so we
@@ -643,13 +647,15 @@ export default function PendingOperationsPage() {
   const pendingTotal = filteredOperations.filter((op) => op.status === 'pending').length
   const excludedFromBulk = pendingTotal - bulkEligible.length
 
-  function toggleSelected(id: string) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  // Ranges walk the bulk-eligible operations in rendered order.
+  const range = useRangeSelect({
+    visibleIds: bulkEligibleIds,
+    selectedIds,
+    setSelectedIds,
+  })
+
+  function toggleSelected(id: string, extend?: boolean) {
+    range.toggle(id, extend)
   }
 
   function toggleSelectAll() {
@@ -658,6 +664,7 @@ export default function PendingOperationsPage() {
     } else {
       setSelectedIds(new Set(bulkEligibleIds))
     }
+    range.resetAnchor()
   }
 
   // "Approve all of this type": find ops with the same operation_type that are bulk-eligible
@@ -666,6 +673,7 @@ export default function PendingOperationsPage() {
       .filter((op) => op.operation_type === operationType)
       .map((op) => op.id)
     setSelectedIds(new Set(ids))
+    range.resetAnchor()
   }
 
   // Group counts for type-quick-action buttons (only show if 2+ of same type pending)
@@ -725,6 +733,7 @@ export default function PendingOperationsPage() {
             disabled={isBulkCommitting || isRejecting}
             onClick={() => {
               setSelectedIds(new Set(bulkEligibleIds))
+              range.resetAnchor()
               setShowBulkDialog(true)
             }}
           >
@@ -999,13 +1008,16 @@ export default function PendingOperationsPage() {
                 >
                   {/* Always-visible selection checkbox (concept .cb) */}
                   <span
-                    className="w-[18px] shrink-0 pt-1.5"
+                    className="w-[18px] shrink-0 select-none pt-1.5"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {canBulkSelect && (
                       <Checkbox
                         checked={isSelected}
-                        onCheckedChange={() => toggleSelected(op.id)}
+                        onClick={(e) => {
+                          shiftHeld.current = e.shiftKey
+                        }}
+                        onCheckedChange={() => toggleSelected(op.id, shiftHeld.current)}
                         aria-label={t('select_operation_aria')}
                         className={cn(
                           'border-foreground duration-150',
