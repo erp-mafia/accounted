@@ -2,10 +2,71 @@
 
 # Banking endpoints
 
-Bank transactions (ingest, categorize, match against invoices), cash accounts with the bank-reported balance, bank reconciliation runs, and file imports (SIE, bank statements).
+Bank transactions (ingest, categorize, match against invoices), cash accounts with the bank-reported balance, PSD2 connection health (sync freshness, consent expiry), bank reconciliation runs, and file imports (SIE, bank statements).
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
+
+### `GET /api/v1/companies/{companyId}/bank-connections`
+
+**List PSD2 bank connections with sync freshness and consent expiry.**
+`scope:companies:read · risk:low · idempotent`
+
+Returns every bank connection for the company with its status, last successful sync (last_synced_at), consent expiry (consent_expires) and any user-facing error message. Connections sync automatically once a day server-side; this endpoint tells you whether that is still happening.
+
+**Use when:** You need to verify bank data is current before building on it (liquidity, reconciliation, reports), or to detect a dead connection that needs BankID re-authorisation.
+**Do not use for:** Fetching transactions (use /transactions) or account balances (use /cash-accounts). Triggering a sync: not available on this surface; syncing is automatic.
+
+**Pitfalls:**
+- last_synced_at is null until the first sync completes (about a minute after connecting); it does NOT mean the connection is broken.
+- A connection can hold status=active with a stale last_synced_at (older than ~36 hours): treat the data as suspect, but do NOT assume re-authorisation fixes it. Common causes are a lapsed subscription (this endpoint then answers with a capability error) or every account deselected in settings.
+- status=expired means the PSD2 consent is dead: only the user can fix it, with BankID in a browser.
+- error_message is Swedish and user-facing: show it verbatim rather than translating.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    bank_connections: { connection_id: string, bank: string, status: "pending" | "pending_selection" | "active" | "expired" | "error", since: string, last_synced_at: string, consent_expires: string, error_message: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "bank_connections": [
+      {
+        "connection_id": "4f6c…",
+        "bank": "Swedbank",
+        "status": "active",
+        "since": "2026-08-01T00:00:00Z",
+        "last_synced_at": "2026-08-31T05:04:12Z",
+        "consent_expires": "2026-11-01T00:00:00Z",
+        "error_message": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
 
 ### `GET /api/v1/companies/{companyId}/cash-accounts`
 

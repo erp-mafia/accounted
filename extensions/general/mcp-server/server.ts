@@ -3616,7 +3616,24 @@ export const tools: McpTool[] = [
       type: 'object',
       properties: {
         connected: { type: 'boolean' },
-        connections: { type: 'array', items: { type: 'object' } },
+        connections: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              connection_id: { type: 'string' },
+              bank: { type: ['string', 'null'] },
+              status: { type: 'string' },
+              since: { type: 'string' },
+              // Semantics live in the instructions string (runtime output), not
+              // here: every byte of this schema is charged against the
+              // tools/list context-budget ceiling (payload-size.bench.test.ts).
+              last_synced_at: { type: ['string', 'null'] },
+              consent_expires: { type: ['string', 'null'] },
+              error_message: { type: ['string', 'null'] },
+            },
+          },
+        },
         connect_url: { type: 'string' },
         instructions: { type: 'string' },
       },
@@ -3632,12 +3649,20 @@ export const tools: McpTool[] = [
     async execute(args, companyId, _userId, supabase) {
       const { data, error } = await supabase
         .from('bank_connections')
-        .select('id, bank_name, status, created_at')
+        .select('id, bank_name, status, created_at, last_synced_at, consent_expires, error_message')
         .eq('company_id', companyId)
         .in('status', ['pending', 'pending_selection', 'active', 'expired', 'error'])
         .order('created_at', { ascending: false })
       if (error) throw error
-      const connections = (data ?? []) as Array<{ id: string; bank_name: string | null; status: string; created_at: string }>
+      const connections = (data ?? []) as Array<{
+        id: string
+        bank_name: string | null
+        status: string
+        created_at: string
+        last_synced_at: string | null
+        consent_expires: string | null
+        error_message: string | null
+      }>
       const active = connections.filter((c) => c.status === 'active')
       // A named bank deep-links straight into that bank's consent (the page
       // auto-starts it; unknown names fall back to the prefilled picker).
@@ -3652,11 +3677,14 @@ export const tools: McpTool[] = [
           bank: c.bank_name,
           status: c.status,
           since: c.created_at,
+          last_synced_at: c.last_synced_at,
+          consent_expires: c.consent_expires,
+          error_message: c.error_message,
         })),
         connect_url: connectUrl,
         instructions:
           active.length > 0
-            ? 'At least one bank is connected and syncing. To add another bank, give the user the connect_url.'
+            ? 'At least one bank is connected and syncing. Check last_synced_at on each connection: older than 36 hours means transactions and balances may be STALE; warn the user before building on them. A null last_synced_at right after connecting is normal (the first sync lands within a minute). Match the remedy to the cause: status expired/error or consent_expires near or past needs BankID re-authorisation via the connect_url; a stale last_synced_at while status is active usually means the subscription lapsed or every account is deselected, so point the user to Installningar -> Bank instead of re-authorising. To add another bank, give the user the connect_url.'
             : (requestedBank
                 ? ''
                 : 'BETTER LINK AVAILABLE: if you know (or can ask) which bank the company uses, call this tool again with bank=<name>; the link then opens that bank\'s consent directly instead of a picker. ') +
