@@ -91,19 +91,26 @@ describe('behandlingshistorik audit triggers (BFNAR 2013:2 p. 9.16)', () => {
     await insertCompanyMember({ companyId, userId })
     await setActiveCompany(userId, companyId)
     const templateId = randomUUID()
-    await withUserContext(userId, async (client) => {
+    // Asserted INSIDE the user transaction: withUserContext always rolls back,
+    // so the audit row the trigger writes is gone by the time an outside
+    // connection could look for it. The row is what is under test, not its
+    // persistence, and the trigger fires in the same transaction as the write.
+    const rows = await withUserContext(userId, async (client) => {
       await client.query(
         `INSERT INTO public.booking_template_library (id, company_id, created_by, name, lines)
          VALUES ($1, $2, $3, 'Hyra', '[{"account":"5010","side":"debit"}]'::jsonb)`,
         [templateId, companyId, userId],
       )
+      const audit = await client.query<{ action: string; company_id: string | null; user_id: string | null }>(
+        `SELECT action, company_id, user_id FROM public.audit_log
+          WHERE table_name = 'booking_template_library' AND record_id = $1`,
+        [templateId],
+      )
+      return audit.rows
     })
-    const rows = await getPool().query<{ action: string; company_id: string | null; user_id: string | null }>(
-      `SELECT action, company_id, user_id FROM public.audit_log
-        WHERE table_name = 'booking_template_library' AND record_id = $1`,
-      [templateId],
-    )
-    expect(rows.rows).toEqual([{ action: 'INSERT', company_id: companyId, user_id: userId }])
+    // booking_template_library has no user_id column, so write_audit_log()
+    // falls back to auth.uid(): the actor is the authenticated writer.
+    expect(rows).toEqual([{ action: 'INSERT', company_id: companyId, user_id: userId }])
   })
 
   it('logs the global payroll constants without a company (read via service role by the report)', async () => {
