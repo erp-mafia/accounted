@@ -36,7 +36,7 @@ reverse charge wrong is exactly the distinction we need to see.
 
 | Suite | n | What it measures | Oracle |
 |---|---|---|---|
-| **Booking** | 54 | BAS account + VAT treatment for one bank transaction with company context | Exact match against gold account (plus explicitly listed acceptable alternatives) and a 10-value VAT-treatment enum |
+| **Booking** | 53 | BAS account + VAT treatment for one bank transaction with company context | Exact match against gold account (plus explicitly listed acceptable alternatives) and a 10-value VAT-treatment enum |
 | **Reasoning** | 36 | Swedish VAT / bookkeeping-law knowledge: rutor, deadlines, thresholds, rate changes, correction rules | Deterministic answers (number, date, account, ruta, or one of fixed options) |
 | **Extraction (OCR)** | 12 | Structured fields from rendered Swedish documents: invoices, receipts, credit notes | Per-field exact match after normalization; amounts at 0.01 tolerance; arithmetic invariants hold by construction |
 | **Ledger-agent** | 3 | Multi-turn tool use against a real Postgres ledger: book, correct, settle | End state of the books via SQL assertions; legal invariants enforced by the production database triggers |
@@ -48,7 +48,7 @@ behind a Swedish reseller, prepayment rate rules, non-registered buyers).
 
 **Evidence segments (booking).** The suite is split by what the model gets
 to see, and reported separately, because the two segments answer different
-questions. *Invoice attached* (35 tasks) includes underlag text, and Swedish
+questions. *Invoice attached* (34 tasks) includes underlag text, and Swedish
 invoices state the VAT, so the VAT metric there measures evidence READING.
 *Bank feed only* (19 tasks) shows nothing but counterparty, description and
 amount, the common state of löpande bokföring, so the same metric there
