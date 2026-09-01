@@ -1351,9 +1351,11 @@ export function appReleaseEvents(rows: AppReleaseRow[]): RawBehandlingshistorikE
       out.push(appReleaseEvent(group[0]))
       continue
     }
+    // Every build id, not the usual five-plus-"och N till": the point of the
+    // entry is that an auditor can reconstruct which versions ran that day, and
+    // a truncated list defeats it. A day is bounded by the deploy rate (~19),
+    // so this stays one readable cell.
     const versions = group.map((r) => r.version)
-    const listed = versions.slice(0, MAX_LISTED_OBJECTS).join(', ')
-    const rest = versions.length - MAX_LISTED_OBJECTS
     out.push({
       id: `release:${day}:bulk`,
       occurred_at: toIso(group[0].first_seen_at)!,
@@ -1362,7 +1364,7 @@ export function appReleaseEvents(rows: AppReleaseRow[]): RawBehandlingshistorikE
       event: 'Nya programversioner i drift',
       object: `${versions.length} versioner`,
       actor: { type: 'system', user_id: null, actor_label: null },
-      details: [rest > 0 ? `${listed} och ${rest} till` : listed],
+      details: [versions.join(', ')],
       source: 'audit_log',
       count: versions.length,
     })

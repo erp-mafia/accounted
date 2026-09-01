@@ -788,12 +788,14 @@ describe('appReleaseEvents: per-day roll-up', () => {
     expect(out[0]).toMatchObject({ code: 'system.release', object: 'aaaaaaaaaaaa' })
   })
 
-  it('collapses a day of deploys into one dated event, listing at most five build ids', () => {
+  it('collapses a day of deploys into one dated event that still names every build id', () => {
+    // Truncating the list would defeat the entry: an auditor has to be able to
+    // reconstruct which versions ran that day.
     const versions = ['a1', 'b2', 'c3', 'd4', 'e5', 'f6', 'g7']
     const out = appReleaseEvents(versions.map((v, i) => day(i + 1, v)))
     expect(out).toHaveLength(1)
     expect(out[0]).toMatchObject({ code: 'system.release.bulk', object: '7 versioner', count: 7 })
-    expect(out[0].details).toEqual(['a1, b2, c3, d4, e5 och 2 till'])
+    expect(out[0].details).toEqual(['a1, b2, c3, d4, e5, f6, g7'])
   })
 
   it('never lets the deploy rate swamp the report: a year of merges stays one event per day', () => {
