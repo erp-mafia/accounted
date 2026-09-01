@@ -298,9 +298,14 @@ export function ApiKeysPanel() {
     }
   }
 
-  const mcpBase = typeof window !== 'undefined'
-    ? `${window.location.origin}/api/extensions/ext/mcp-server/mcp`
-    : '/api/extensions/ext/mcp-server/mcp'
+  // This panel is server-rendered before it hydrates, and window.location has
+  // no server equivalent. Reading the origin at render time therefore yields a
+  // relative URL in the first paint, and a click on the install link in that
+  // window would hand claude.ai a connectorUrl it cannot resolve. Resolve the
+  // origin after mount and withhold the link's href until it is known.
+  const [origin, setOrigin] = useState('')
+  useEffect(() => setOrigin(window.location.origin), [])
+  const mcpBase = `${origin}/api/extensions/ext/mcp-server/mcp`
   // `tool_namespace=accounted` is load-bearing: resolveMcpToolNamespace()
   // falls back to the legacy `gnubok_` tool prefix when the param is absent,
   // so a URL without it hands the client tool names that none of our docs,
@@ -357,7 +362,12 @@ export function ApiKeysPanel() {
             code blocks competing with the button. */}
         <div className="px-1 pb-4 pt-2">
           <Button asChild size="lg">
-            <a href={claudeInstallUrl} target="_blank" rel="noopener noreferrer">
+            <a
+              href={origin ? claudeInstallUrl : undefined}
+              aria-disabled={!origin}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               {t('connect_to_claude')}
               <ArrowUpRight className="ml-1.5 h-4 w-4" />
             </a>
@@ -409,7 +419,7 @@ export function ApiKeysPanel() {
               <p className="mb-1 text-sm">Claude Code</p>
               <p className="mb-2 text-xs text-muted-foreground">{t('terminal_runs_browser_login')}</p>
               {/* URL is quoted: unquoted `?` in the query string trips zsh globbing. */}
-              <CopyBlock text={`claude mcp add ${connectorName} --transport http "${mcpUrl('claude-code')}"`} copyAriaLabel={t('copy_aria')} />
+              <CopyBlock text={`claude mcp add --transport http ${connectorName} "${mcpUrl('claude-code')}"`} copyAriaLabel={t('copy_aria')} />
             </div>
 
             <div>
@@ -477,8 +487,8 @@ export function ApiKeysPanel() {
               <p className="mb-2 text-xs text-muted-foreground">
                 {t('terminal_with_api_key')}
               </p>
-              <CopyBlock text={`claude mcp add ${connectorName} --transport http \\
-  --url "${mcpUrl('claude-code')}" \\
+              <CopyBlock text={`claude mcp add --transport http ${connectorName} \\
+  "${mcpUrl('claude-code')}" \\
   --header "Authorization: Bearer gnubok_sk_..."`} copyAriaLabel={t('copy_aria')} />
             </div>
           </div>

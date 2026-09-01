@@ -63,7 +63,7 @@ Kör sedan \`/mcp\` och logga in med Accounted (samma OAuth-ruta som i väg A). 
 Vill du bara ha anslutningen utan arbetsflödena kopplar \`claude mcp add\` in samma server i Claude Code:
 
 \`\`\`bash
-claude mcp add accounted --transport http \\
+claude mcp add --transport http accounted \\
   "https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-code"
 \`\`\`
 

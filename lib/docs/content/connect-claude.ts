@@ -56,7 +56,7 @@ Then run \`/mcp\` and sign in with Accounted (the same OAuth consent screen as P
 Prefer plain MCP without the workflow commands? \`claude mcp add\` wires the same connection into Claude Code:
 
 \`\`\`bash
-claude mcp add accounted --transport http \\
+claude mcp add --transport http accounted \\
   "https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-code"
 \`\`\`
 
