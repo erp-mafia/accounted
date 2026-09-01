@@ -148,6 +148,10 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // Cash accounts: the bank/kassa register incl. the bank-reported balance
   // (booked + available + balance_updated_at) from the PSD2 sync.
   'GET /api/v1/companies/:companyId/cash-accounts': 'transactions:read',
+  // Bank connections: PSD2 connection health (status, last_synced_at,
+  // consent_expires). companies:read, mirroring the MCP gnubok_connect_bank
+  // mapping: connection metadata, no transaction data.
+  'GET /api/v1/companies/:companyId/bank-connections': 'companies:read',
   // Reconciliation (legacy bank-only routes; kept as aliases of the
   // account-keyed routes below, with their original scopes)
   'POST /api/v1/companies/:companyId/reconciliation/bank/run': 'transactions:write',
