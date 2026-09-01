@@ -19,6 +19,8 @@ import {
   getAllTransactionsWithRaw,
   convertTransaction,
   probeSessionHealth,
+  startAuthorization,
+  createSession,
   type Transaction,
 } from '../api-client'
 
@@ -569,5 +571,89 @@ describe('probeSessionHealth', () => {
   it('reports unknown when the request itself fails', async () => {
     fetchSpy.mockRejectedValue(new Error('network down'))
     expect(await probeSessionHealth('s1')).toBe('unknown')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Connector mode (self-host routes upstream through the hosted bank proxy)
+// ---------------------------------------------------------------------------
+describe('connector mode', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+
+  const okJson = (body: unknown) =>
+    new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // A self-host with a connector key and no own EB credentials. The
+    // own-credentials env vars must stay unset for bankConnectorMode() to
+    // engage (key present AND no own credentials).
+    vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_testsecret')
+    vi.stubEnv('GNUBOK_CONNECT_URL', 'https://app.test.example')
+    vi.stubEnv('ENABLE_BANKING_PRIVATE_KEY', '')
+    vi.stubEnv('ENABLE_BANKING_PRIVATE_KEY_PRODUCTION', '')
+    vi.stubEnv('ENABLE_BANKING_APP_ID', '')
+    vi.stubEnv('ENABLE_BANKING_APP_ID_PRODUCTION', '')
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+  })
+
+  afterEach(() => {
+    fetchSpy.mockRestore()
+    vi.unstubAllEnvs()
+  })
+
+  const lastCall = () => {
+    const call = fetchSpy.mock.calls[fetchSpy.mock.calls.length - 1]
+    const url = String(call[0])
+    const init = (call[1] ?? {}) as RequestInit
+    const headers = (init.headers ?? {}) as Record<string, string>
+    return { url, init, headers }
+  }
+
+  it('routes reads through the proxy with the connector key, never the EB JWT', async () => {
+    fetchSpy.mockResolvedValue(okJson({ aspsps: [] }))
+    await getASPSPs('SE')
+    const { url, headers } = lastCall()
+    expect(url).toContain('https://app.test.example/api/connect/bank/aspsps')
+    expect(headers['Authorization']).toBe('Bearer gnubok_ck_testsecret')
+    expect(headers['Authorization']).not.toContain('jwt')
+    // The JWT signer must not run: the instance holds no EB private key.
+    expect(mockGenerateJWT).not.toHaveBeenCalled()
+  })
+
+  it('sends X-Connector-Company on /auth so the proxy can meter the company quota', async () => {
+    fetchSpy.mockResolvedValue(okJson({ url: 'https://bank/auth', authorization_id: 'a1' }))
+    await startAuthorization('Bank', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', undefined, 'company-42')
+    const { url, headers, init } = lastCall()
+    expect(url).toBe('https://app.test.example/api/connect/bank/auth')
+    expect(init.method).toBe('POST')
+    expect(headers['X-Connector-Company']).toBe('company-42')
+    expect(headers['Authorization']).toBe('Bearer gnubok_ck_testsecret')
+  })
+
+  it('binds /sessions to the signed connector_state when one is passed', async () => {
+    fetchSpy.mockResolvedValue(okJson({ session_id: 's1', accounts: [], access: { valid_until: '2027-01-01' } }))
+    await createSession('auth-code', 'signed-connector-state')
+    const { url, init } = lastCall()
+    expect(url).toBe('https://app.test.example/api/connect/bank/sessions')
+    expect(JSON.parse(String(init.body))).toEqual({ code: 'auth-code', connector_state: 'signed-connector-state' })
+  })
+
+  it('omits connector_state from /sessions when none is passed', async () => {
+    fetchSpy.mockResolvedValue(okJson({ session_id: 's1', accounts: [], access: { valid_until: '2027-01-01' } }))
+    await createSession('auth-code')
+    const { init } = lastCall()
+    expect(JSON.parse(String(init.body))).toEqual({ code: 'auth-code' })
+  })
+
+  it('does not engage when the instance has its own EB credentials (own-credentials seam)', async () => {
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    fetchSpy.mockResolvedValue(okJson({ aspsps: [] }))
+    await getASPSPs('SE')
+    const { url, headers } = lastCall()
+    // Direct EB base (captured at import), never the connector proxy.
+    expect(url).not.toContain('/api/connect/bank')
+    expect(url).toContain('enablebanking.com')
+    expect(headers['Authorization']).toBe('Bearer test-jwt-token')
   })
 })

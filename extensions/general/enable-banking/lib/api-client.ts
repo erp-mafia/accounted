@@ -15,6 +15,7 @@
 import { getAuthorizationHeader } from './jwt'
 import { deriveTransactionLabel } from './transaction-label'
 import { FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
+import { bankConnectorMode, CONNECTOR_COMPANY_HEADER } from '@/lib/connect/instance/upstreams'
 
 // Prefer _PRODUCTION variant; sandbox uses api.tilisy.com, production uses api.enablebanking.com
 const ENABLE_BANKING_API_URL =
@@ -264,7 +265,16 @@ async function authenticatedFetch(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<Response> {
-  const url = `${ENABLE_BANKING_API_URL}${endpoint}`
+  // Connector mode: a self-host with a connector key and no own Enable Banking
+  // credentials routes every upstream call through the hosted bank proxy. The
+  // proxy holds the real EB credentials and mints the JWT on its side, so the
+  // instance sends the connector key as a Bearer token and NEVER calls
+  // getAuthorizationHeader() (there is no private key to sign with here). When
+  // this instance has its own EB credentials, or on hosted, bankConnectorMode()
+  // returns null and the direct path below is byte-identical to before.
+  const connector = bankConnectorMode()
+  const url = connector ? `${connector.baseUrl}${endpoint}` : `${ENABLE_BANKING_API_URL}${endpoint}`
+  const authorization = connector ? `Bearer ${connector.key}` : getAuthorizationHeader()
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
 
@@ -273,7 +283,7 @@ async function authenticatedFetch(
       ...options,
       signal: controller.signal,
       headers: {
-        'Authorization': getAuthorizationHeader(),
+        'Authorization': authorization,
         'Content-Type': 'application/json',
         ...options.headers,
       },
@@ -490,7 +500,8 @@ export async function startAuthorization(
   redirectUrl: string,
   state: string,
   psuType: 'personal' | 'business' = 'personal',
-  authMethod?: string
+  authMethod?: string,
+  companyId?: string
 ): Promise<AuthResponse> {
   // Calculate consent validity (90 days)
   const validUntil = new Date()
@@ -519,9 +530,15 @@ export async function startAuthorization(
     requestBody.auth_method = authMethod
   }
 
+  // In connector mode the hosted bank proxy meters the per-company connection
+  // quota, so it needs to know which company this authorization is for. The
+  // header is ignored on the direct path (EB never reads it).
+  const authHeaders = companyId ? { [CONNECTOR_COMPANY_HEADER]: companyId } : undefined
+
   const response = await authenticatedFetch('/auth', {
     method: 'POST',
-    body: JSON.stringify(requestBody)
+    body: JSON.stringify(requestBody),
+    ...(authHeaders ? { headers: authHeaders } : {}),
   })
 
   if (!response.ok) {
@@ -547,11 +564,15 @@ export async function startAuthorization(
  * Create a session after user completes bank authorization
  *
  * @param code - The authorization code from callback
+ * @param connectorState - The signed connector state echoed back through the
+ *   hosted callback in connector mode. The bank proxy binds the /sessions
+ *   exchange to the pending row it signed at /auth time (single-use, race-safe),
+ *   so it is required in connector mode and absent on the direct path.
  */
-export async function createSession(code: string): Promise<SessionResponse> {
+export async function createSession(code: string, connectorState?: string): Promise<SessionResponse> {
   const response = await authenticatedFetch('/sessions', {
     method: 'POST',
-    body: JSON.stringify({ code })
+    body: JSON.stringify(connectorState ? { code, connector_state: connectorState } : { code })
   })
 
   if (!response.ok) {
