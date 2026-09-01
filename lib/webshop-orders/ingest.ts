@@ -551,7 +551,18 @@ export async function removeWebshopOrders(
         code: (deleteError as { code?: string }).code,
       })
     } else {
-      result.removed += deletedRows?.length ?? 0
+      const deletedIds = ((deletedRows ?? []) as Array<{ id: string }>).map((r) => r.id)
+      result.removed += deletedIds.length
+      if (deletedIds.length > 0) {
+        // Hard delete of financial staging rows: the log is the only record
+        // of what was removed and by which process (compliance finding, ISO
+        // A.8.10), since pre-bokföring rows carry no behandlingshistorik.
+        log.info('webshop order rows removed (store reports order failed)', {
+          companyId,
+          deletedIds,
+          requestedExternalIds: batch,
+        })
+      }
     }
   }
 
