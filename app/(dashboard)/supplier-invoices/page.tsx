@@ -330,7 +330,8 @@ export default function SupplierInvoicesPage() {
         label = key
       } else if (groupMode === 'supplier') {
         label = inv.supplier?.name ?? '—'
-        key = label.toLocaleLowerCase('sv-SE')
+        // Bucket by id, not display name: two suppliers can share a name.
+        key = inv.supplier_id ?? label
       } else {
         key = (inv.invoice_date ?? '').slice(0, 7) || '—'
         label = key
@@ -343,7 +344,7 @@ export default function SupplierInvoicesPage() {
     if (groupMode === 'status') {
       ordered = ['awaiting', 'settled'].filter((key) => buckets.has(key))
     } else if (groupMode === 'supplier') {
-      ordered.sort((a, b) => a.localeCompare(b, 'sv'))
+      ordered.sort((a, b) => (buckets.get(a)?.label ?? a).localeCompare(buckets.get(b)?.label ?? b, 'sv'))
     } else {
       ordered.sort((a, b) => b.localeCompare(a))
     }
