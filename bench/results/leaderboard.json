@@ -1,6 +1,6 @@
 {
   "benchVersion": "v1.6",
-  "generatedAt": "2026-09-01T11:16:58.370Z",
+  "generatedAt": "2026-09-01T14:31:16.783Z",
   "suites": {
     "booking": [
       {
@@ -25,6 +25,20 @@
           "ece": 0.094,
           "coverage95": 1,
           "coverage99": 0.538,
+          "coverage95Evidence": {
+            "coverage": 1,
+            "selected": 52,
+            "errors": 2,
+            "precisionLo": 0.87,
+            "threshold": 0.68
+          },
+          "coverage99Evidence": {
+            "coverage": 0.538,
+            "selected": 28,
+            "errors": 0,
+            "precisionLo": 0.879,
+            "threshold": 0.87
+          },
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -64,6 +78,20 @@
           "ece": 0.007,
           "coverage95": 1,
           "coverage99": 0.173,
+          "coverage95Evidence": {
+            "coverage": 1,
+            "selected": 52,
+            "errors": 2,
+            "precisionLo": 0.87,
+            "threshold": 0.9
+          },
+          "coverage99Evidence": {
+            "coverage": 0.173,
+            "selected": 9,
+            "errors": 0,
+            "precisionLo": 0.701,
+            "threshold": 0.99
+          },
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -103,6 +131,20 @@
           "ece": 0.034,
           "coverage95": 0.981,
           "coverage99": 0.231,
+          "coverage95Evidence": {
+            "coverage": 0.981,
+            "selected": 51,
+            "errors": 2,
+            "precisionLo": 0.868,
+            "threshold": 0.75
+          },
+          "coverage99Evidence": {
+            "coverage": 0.231,
+            "selected": 12,
+            "errors": 0,
+            "precisionLo": 0.757,
+            "threshold": 0.97
+          },
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -142,6 +184,20 @@
           "ece": 0.061,
           "coverage95": 0.769,
           "coverage99": 0.365,
+          "coverage95Evidence": {
+            "coverage": 0.769,
+            "selected": 40,
+            "errors": 2,
+            "precisionLo": 0.835,
+            "threshold": 0.95
+          },
+          "coverage99Evidence": {
+            "coverage": 0.365,
+            "selected": 19,
+            "errors": 0,
+            "precisionLo": 0.832,
+            "threshold": 0.99
+          },
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -181,6 +237,20 @@
           "ece": 0.066,
           "coverage95": 0.538,
           "coverage99": 0.538,
+          "coverage95Evidence": {
+            "coverage": 0.538,
+            "selected": 28,
+            "errors": 0,
+            "precisionLo": 0.879,
+            "threshold": 0.99
+          },
+          "coverage99Evidence": {
+            "coverage": 0.538,
+            "selected": 28,
+            "errors": 0,
+            "precisionLo": 0.879,
+            "threshold": 0.99
+          },
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -220,6 +290,20 @@
           "ece": 0.061,
           "coverage95": 0.846,
           "coverage99": 0.5,
+          "coverage95Evidence": {
+            "coverage": 0.846,
+            "selected": 44,
+            "errors": 2,
+            "precisionLo": 0.849,
+            "threshold": 0.85
+          },
+          "coverage99Evidence": {
+            "coverage": 0.5,
+            "selected": 26,
+            "errors": 0,
+            "precisionLo": 0.871,
+            "threshold": 0.92
+          },
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -259,6 +343,20 @@
           "ece": 0.067,
           "coverage95": 0.635,
           "coverage99": 0.596,
+          "coverage95Evidence": {
+            "coverage": 0.635,
+            "selected": 33,
+            "errors": 1,
+            "precisionLo": 0.847,
+            "threshold": 0.88
+          },
+          "coverage99Evidence": {
+            "coverage": 0.596,
+            "selected": 31,
+            "errors": 0,
+            "precisionLo": 0.89,
+            "threshold": 0.9
+          },
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -298,6 +396,20 @@
           "ece": 0.131,
           "coverage95": 0.654,
           "coverage99": 0.654,
+          "coverage95Evidence": {
+            "coverage": 0.654,
+            "selected": 34,
+            "errors": 0,
+            "precisionLo": 0.898,
+            "threshold": 0.8
+          },
+          "coverage99Evidence": {
+            "coverage": 0.654,
+            "selected": 34,
+            "errors": 0,
+            "precisionLo": 0.898,
+            "threshold": 0.8
+          },
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -337,6 +449,20 @@
           "ece": 0.049,
           "coverage95": 0.673,
           "coverage99": 0.058,
+          "coverage95Evidence": {
+            "coverage": 0.673,
+            "selected": 35,
+            "errors": 1,
+            "precisionLo": 0.855,
+            "threshold": 0.9
+          },
+          "coverage99Evidence": {
+            "coverage": 0.058,
+            "selected": 3,
+            "errors": 0,
+            "precisionLo": 0.438,
+            "threshold": 0.97
+          },
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -376,6 +502,20 @@
           "ece": 0.046,
           "coverage95": 0.423,
           "coverage99": 0.115,
+          "coverage95Evidence": {
+            "coverage": 0.423,
+            "selected": 22,
+            "errors": 1,
+            "precisionLo": 0.782,
+            "threshold": 0.93
+          },
+          "coverage99Evidence": {
+            "coverage": 0.115,
+            "selected": 6,
+            "errors": 0,
+            "precisionLo": 0.61,
+            "threshold": 0.96
+          },
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -415,6 +555,20 @@
           "ece": 0.048,
           "coverage95": 0.115,
           "coverage99": 0.115,
+          "coverage95Evidence": {
+            "coverage": 0.115,
+            "selected": 6,
+            "errors": 0,
+            "precisionLo": 0.61,
+            "threshold": 0.97
+          },
+          "coverage99Evidence": {
+            "coverage": 0.115,
+            "selected": 6,
+            "errors": 0,
+            "precisionLo": 0.61,
+            "threshold": 0.97
+          },
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -454,6 +608,20 @@
           "ece": 0.071,
           "coverage95": 0.32,
           "coverage99": 0.32,
+          "coverage95Evidence": {
+            "coverage": 0.32,
+            "selected": 16,
+            "errors": 0,
+            "precisionLo": 0.806,
+            "threshold": 0.97
+          },
+          "coverage99Evidence": {
+            "coverage": 0.32,
+            "selected": 16,
+            "errors": 0,
+            "precisionLo": 0.806,
+            "threshold": 0.97
+          },
           "parseFailures": 2,
           "segments": {
             "underlag": {
@@ -493,6 +661,20 @@
           "ece": 0.25,
           "coverage95": 0,
           "coverage99": 0,
+          "coverage95Evidence": {
+            "coverage": 0,
+            "selected": 0,
+            "errors": 0,
+            "precisionLo": 0,
+            "threshold": 1
+          },
+          "coverage99Evidence": {
+            "coverage": 0,
+            "selected": 0,
+            "errors": 0,
+            "precisionLo": 0,
+            "threshold": 1
+          },
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -532,6 +714,20 @@
           "ece": 0.39,
           "coverage95": 0,
           "coverage99": 0,
+          "coverage95Evidence": {
+            "coverage": 0,
+            "selected": 0,
+            "errors": 0,
+            "precisionLo": 0,
+            "threshold": 1
+          },
+          "coverage99Evidence": {
+            "coverage": 0,
+            "selected": 0,
+            "errors": 0,
+            "precisionLo": 0,
+            "threshold": 1
+          },
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -571,6 +767,20 @@
           "ece": 0.413,
           "coverage95": 0,
           "coverage99": 0,
+          "coverage95Evidence": {
+            "coverage": 0,
+            "selected": 0,
+            "errors": 0,
+            "precisionLo": 0,
+            "threshold": 1
+          },
+          "coverage99Evidence": {
+            "coverage": 0,
+            "selected": 0,
+            "errors": 0,
+            "precisionLo": 0,
+            "threshold": 1
+          },
           "parseFailures": 0,
           "segments": {
             "underlag": {

@@ -59,20 +59,52 @@ function latestPerKey(records: RunRecord[]): RunRecord[] {
 // stated confidence clears a threshold, what share of the work is automated
 // while keeping precision at or above the target? This is the deployment
 // question (auto/suggest/review routing) collapsed into one number.
+export interface CoverageResult {
+  // Share of all transactions the gate would auto-commit.
+  coverage: number
+  // How many transactions that is, and how many of them the model got wrong.
+  selected: number
+  errors: number
+  // 95% Wilson lower bound on the precision actually achieved on those
+  // selected transactions. This is the number that matters: at these sample
+  // sizes an observed 100% is compatible with a true precision far below the
+  // target, and the threshold was chosen on the same data it is scored on,
+  // so the observed figure is optimistic by construction.
+  precisionLo: number
+  threshold: number
+}
+
 function coverageAtPrecision(
   samples: { confidence: number; correct: boolean }[],
   target: number,
-): number | null {
+): CoverageResult | null {
   if (samples.length < 10) return null
-  let best = 0
+  let best: CoverageResult = {
+    coverage: 0,
+    selected: 0,
+    errors: 0,
+    precisionLo: 0,
+    threshold: 1,
+  }
   const thresholds = [...new Set(samples.map((s) => s.confidence))].sort()
   for (const t of thresholds) {
     const sel = samples.filter((s) => s.confidence >= t)
     if (sel.length === 0) continue
-    const precision = sel.filter((s) => s.correct).length / sel.length
-    if (precision >= target) best = Math.max(best, sel.length / samples.length)
+    const errors = sel.filter((s) => !s.correct).length
+    const precision = (sel.length - errors) / sel.length
+    const coverage = sel.length / samples.length
+    if (precision >= target && coverage > best.coverage) {
+      best = {
+        coverage: Math.round(coverage * 1000) / 1000,
+        selected: sel.length,
+        errors,
+        precisionLo:
+          Math.round(wilson(sel.length - errors, sel.length, 1.96).lo * 1000) / 1000,
+        threshold: t,
+      }
+    }
   }
-  return Math.round(best * 1000) / 1000
+  return best
 }
 
 // Reliability: among tasks attempted more than once, the share where EVERY
@@ -196,6 +228,11 @@ function suiteExtras(
   freshIds?: Set<string>,
 ): Record<string, unknown> {
   if (suite === 'booking') {
+    const confSamples = records
+      .filter((r) => typeof r.score.confidence === 'number')
+      .map((r) => ({ confidence: r.score.confidence as number, correct: r.pass }))
+    const cov95 = coverageAtPrecision(confSamples, 0.95)
+    const cov99 = coverageAtPrecision(confSamples, 0.99)
     const accountAcc =
       records.filter((r) => r.score.accountCorrect === true).length / records.length
     const vatAcc = records.filter((r) => r.score.vatCorrect === true).length / records.length
@@ -234,18 +271,14 @@ function suiteExtras(
       ),
       vatAccuracy: round3(vatAcc),
       ece: ece(calibration),
-      coverage95: coverageAtPrecision(
-        records
-          .filter((r) => typeof r.score.confidence === 'number')
-          .map((r) => ({ confidence: r.score.confidence as number, correct: r.pass })),
-        0.95,
-      ),
-      coverage99: coverageAtPrecision(
-        records
-          .filter((r) => typeof r.score.confidence === 'number')
-          .map((r) => ({ confidence: r.score.confidence as number, correct: r.pass })),
-        0.99,
-      ),
+      coverage95: cov95?.coverage ?? null,
+      coverage99: cov99?.coverage ?? null,
+      // The gate's own evidence travels with it: how many transactions it
+      // would actually commit, how many of those were wrong, and the lower
+      // bound on the precision it really achieved. Reporting the coverage
+      // share alone overstates what a sample this size can support.
+      coverage95Evidence: cov95,
+      coverage99Evidence: cov99,
       parseFailures: records.filter((r) => r.score.parseFailed === true).length,
       segments: { underlag: seg('underlag'), bank_only: seg('bank_only') },
     }

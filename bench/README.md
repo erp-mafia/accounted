@@ -120,6 +120,18 @@ on top; its accuracy is tracked separately by the backtest scripts).
   confidence clears a threshold, what share of the work is automated while
   precision stays at or above the target (reported at 95% and 99%)? A model
   with uninformative confidence scores 0% regardless of accuracy.
+  **Read this metric with its evidence, which the aggregator now emits as
+  `coverage99Evidence`: the selected count, the errors in it, and a 95%
+  Wilson lower bound on the precision actually achieved.** At n=52 every
+  model that clears the 99% bar does so with zero errors on the transactions
+  it selected, so the observed precision is 100% and the stated target is not
+  really being tested; the threshold is also fitted to the same sample it is
+  scored on, with no held-out split, which biases it optimistically. The
+  honest reading is the lower bound: above 90% for Sonnet 5 on 34 selected
+  transactions, above 44% for Sonnet 4.6, whose gate selects three. Coverage
+  ranks confidence separation between models; it does not promise an error
+  rate. Fixing this properly needs more tasks and a threshold/scoring split,
+  not different wording.
 - **Reliability (ledger-agent), pass^k.** Each agent task runs k=3 times;
   reliability is the share of tasks solved on EVERY attempt. An agent that is
   rerun monthly is only as good as its worst month.

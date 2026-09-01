@@ -465,7 +465,7 @@
       <h2>Verdicts</h2>
       <p class="sectiondesc">Each model receives a revisor-style opinion on confidence-gated unattended booking, from published criteria.</p>
       <div class="verdicts" id="verdictcards"></div>
-      <p class="vcriteria"><b>Criteria (published, retunable):</b> <em>Approved</em> requires booking ≥85%, automation coverage ≥50% at 99% precision, VAT law ≥80%, and a clean ledger-agent record. <em>Approved with reservation</em> requires booking ≥75%, law ≥60%, and a usable confidence gate. <em>Not assessed</em> means too few clean runs for an opinion. Verdicts concern unattended booking, not assisted use. A model can be blocked by the coverage criterion while ranking at the very top: Claude Fable 5 ties for first on booking, yet its mistakes carry 0.95 stated confidence while its clean answers carry 0.97, so a 99%-precision gate can only trust <span id="vfable">12 of its 52</span> bookings. Claude Sonnet 5 is less accurate and puts its mistakes at 0.60 to 0.75, well clear of its good work, so the same gate trusts <span id="vsonnet">65%</span>. Separation, not accuracy, is what earns an unattended verdict. The Swedish terms beneath each heading are the auditor's own vocabulary (<span class="mono">tillstyrks</span> / <span class="mono">avstyrks</span> in a revisionsberättelse), kept as provenance.</p>
+      <p class="vcriteria"><b>Criteria (published, retunable):</b> <em>Approved</em> requires booking ≥85%, automation coverage ≥50% at 99% precision, VAT law ≥80%, and a clean ledger-agent record. <em>Approved with reservation</em> requires booking ≥75%, law ≥60%, and a usable confidence gate. <em>Not assessed</em> means too few clean runs for an opinion. <b>What "99% precision" rests on:</b> the threshold is chosen on the same 52 transactions it is then scored on, and every model that clears the bar does so with <em>zero</em> errors on the transactions it selected, so the observed precision is 100% and the target is not really being measured. The honest figure is the lower bound: <span id="covbound"></span>. Read coverage as a ranking of confidence separation, not as a promise about the error rate of the next thousand bookings. Verdicts concern unattended booking, not assisted use. A model can be blocked by the coverage criterion while ranking at the very top: Claude Fable 5 ties for first on booking, yet its mistakes carry 0.95 stated confidence while its clean answers carry 0.97, so a 99%-precision gate can only trust <span id="vfable">12 of its 52</span> bookings. Claude Sonnet 5 is less accurate and puts its mistakes at 0.60 to 0.75, well clear of its good work, so the same gate trusts <span id="vsonnet">65%</span>. Separation, not accuracy, is what earns an unattended verdict. The Swedish terms beneath each heading are the auditor's own vocabulary (<span class="mono">tillstyrks</span> / <span class="mono">avstyrks</span> in a revisionsberättelse), kept as provenance.</p>
     </section>
 
     <section id="h2h">
@@ -529,7 +529,7 @@
         <div class="lim"><b>Our own gold has been wrong, and probably still is somewhere.</b> The first independent audit of these answers found a task that let a VAT-exempt dental practice deduct full input VAT, an import booked to a generic purchase account instead of the import account the VAT return is built on, and a machine filed as an inventory item. One further task was retired outright because nothing we hold settles it. Those are the errors a single audit pass caught in 53 tasks; the honest inference is not that the remainder is clean, but that the error rate is low and the process for finding them is public. Every one of them is listed <a href="#validity">above</a>.</div>
         <div class="lim"><b>The gold was written by a ranked model.</b> Tasks and answers were authored with Claude against the cited statutes, and Claude Fable 5 then ties for first. Machine validation, the discrimination audit, the retirement of a defective task, an <a href="#validity">independent cross-vendor audit of every gold answer</a> and a bias test on curated versus untouched tasks all reduce that risk; none of them removes it. Only expert-labelled tasks would.</div>
         <div class="lim"><b>The lenient score is biased upward by construction.</b> Acceptance lists grew during curation partly in response to model answers, worth 21 to 31 points. The strict column exists because of this, and is the number to quote.</div>
-        <div class="lim"><b>Confidence is self-reported.</b> Automation coverage, the metric the verdicts turn on, rests entirely on a number the model writes about itself, which is known to be format-sensitive. A logprob-based check would be stronger and has not been run.</div>
+        <div class="lim"><b>The automation gate is the weakest number here, and it is the one the verdicts turn on.</b> Three things stack up: the confidence is self-reported, and known to be format-sensitive; the threshold is fitted to the same 52 transactions it is scored on, with no held-out split, so the observed precision is optimistic by construction; and the selected subsets are small enough that every qualifying model shows zero errors, which a sample this size cannot distinguish from a true precision in the high eighties. Claude Sonnet 4.6's 5.8% coverage rests on three transactions. The page now prints the lower bound instead of the observed 100%, but the fix that would actually settle it is more tasks and a held-out threshold split, not better wording.</div>
         <div class="lim"><b>Single run, and runs move.</b> Results are pass@1, while our own repeat study found aggregate pass rates moving up to 25 points between identical runs for one model. Only the agent suite is repeated.</div>
         <div class="lim"><b>One prompt, one scaffold.</b> Every score is conditional on a single prompt and a minimal harness. A different prompt could plausibly reorder the field, and no prompt-sensitivity analysis has been run.</div>
         <div class="lim"><b>The documents are too clean.</b> Extraction uses twelve program-rendered PDFs. Real underlag is photographed, skewed, creased and sometimes upside down, and nothing here tests that.</div>
@@ -1346,6 +1346,21 @@
       join(rows.map((r) => money((r.avgCostUsd / (r.extras.strictPass || 1)) * 1000)));
   }
 
+  function renderCoverageBound() {
+    const rows = (DATA.suites.booking || [])
+      .map((r) => ({ label: r.label, e: r.extras.coverage99Evidence }))
+      .filter((x) => x.e && x.e.selected > 0)
+      .sort((a, b) => a.e.precisionLo - b.e.precisionLo);
+    if (rows.length === 0) return;
+    const worst = rows[0];
+    const best = rows[rows.length - 1];
+    const pc = (x) => (x * 100).toFixed(0) + '%';
+    document.getElementById('covbound').innerHTML =
+      `at 95% confidence the true precision behind these gates lies above ` +
+      `${pc(best.e.precisionLo)} for ${best.label} (${best.e.selected} transactions, ${best.e.errors} wrong) ` +
+      `and only above ${pc(worst.e.precisionLo)} for ${worst.label}, whose gate selects ${worst.e.selected}`;
+  }
+
   // The validity section is rendered from the audit and bias-test output files,
   // so the numbers in it cannot drift from what the scripts actually produced.
   function renderValidity() {
@@ -1421,6 +1436,7 @@
   renderExamples();
   renderVerdicts();
   renderCostUnits();
+  renderCoverageBound();
   renderValidity();
   renderPickers();
   renderDuel();
