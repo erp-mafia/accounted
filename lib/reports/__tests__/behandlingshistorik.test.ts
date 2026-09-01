@@ -708,15 +708,18 @@ describe('auditRowToEvent: behandlingsregler', () => {
   })
 
   it('categorization_templates: the learning columns never reach the report', () => {
-    // The DB trigger filters these already (migration 20260901103000); the read
-    // model must not resurrect them if a row slips through, or every booking
-    // would appear as a system change.
+    // The DB trigger filters these already (20260901103000 + 20260901200000);
+    // the read model must not resurrect them if a row slips through, or every
+    // booking would appear as a system change. counterparty_aliases counts as
+    // learning: prod's first 30 minutes of trigger rows were 15/16 alias
+    // noise, and those pre-fix rows are still in audit_log and must render as
+    // no-ops.
     const learning = auditRowToEvent(
       auditRow({
         table_name: 'categorization_templates',
         action: 'UPDATE',
-        old_state: { counterparty_name: 'Spotify AB', debit_account: '6540', occurrence_count: 4, confidence: 0.7 },
-        new_state: { counterparty_name: 'Spotify AB', debit_account: '6540', occurrence_count: 5, confidence: 0.9 },
+        old_state: { counterparty_name: 'Spotify AB', debit_account: '6540', occurrence_count: 4, confidence: 0.7, counterparty_aliases: ['SPOTIFY'] },
+        new_state: { counterparty_name: 'Spotify AB', debit_account: '6540', occurrence_count: 5, confidence: 0.9, counterparty_aliases: ['SPOTIFY', 'SPOTIFY STOCKHOLM 4711'] },
       }),
     )
     expect(learning).toBeNull()
