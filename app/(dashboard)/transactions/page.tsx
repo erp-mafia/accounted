@@ -71,6 +71,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
+import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
@@ -844,6 +845,20 @@ export default function TransactionsPage() {
         .map((item) => item.data.id),
     [exitingIds, inboxItems],
   )
+
+  // Shift-click ranges run per selection set: bank rows and skattekonto rows
+  // are interleaved in one table but are booked through different endpoints,
+  // so each range walks only its own selectable ids in rendered order.
+  const bankRange = useRangeSelect({
+    visibleIds: selectableInboxIds,
+    selectedIds,
+    setSelectedIds,
+  })
+  const skvRange = useRangeSelect({
+    visibleIds: selectableSkvIds,
+    selectedIds: skvSelectedIds,
+    setSelectedIds: setSkvSelectedIds,
+  })
 
   const skvSelectedRows = useMemo(
     () => skvRows.filter((r) => skvSelectedIds.has(r.id)),
@@ -2734,13 +2749,8 @@ export default function TransactionsPage() {
     })
   }
 
-  function toggleSkvSelect(id: string) {
-    setSkvSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  function toggleSkvSelect(id: string, extend?: boolean) {
+    skvRange.toggle(id, extend)
   }
 
   async function handleSkvUnignore(id: string) {
@@ -3041,18 +3051,15 @@ export default function TransactionsPage() {
   // The bulkbar counter ticks per completed row.
   const BATCH_CONCURRENCY = 5
 
-  function toggleBatchSelect(id: string) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  function toggleBatchSelect(id: string, extend?: boolean) {
+    bankRange.toggle(id, extend)
   }
 
   function exitBatchMode() {
     setSelectedIds(new Set())
     setSkvSelectedIds(new Set())
+    bankRange.resetAnchor()
+    skvRange.resetAnchor()
   }
 
   async function handleBatchDelete() {
@@ -3810,6 +3817,8 @@ export default function TransactionsPage() {
                         onClick={() => {
                           setSelectedIds(new Set(selectableInboxIds))
                           setSkvSelectedIds(new Set(selectableSkvIds))
+                          bankRange.resetAnchor()
+                          skvRange.resetAnchor()
                         }}
                       >
                         {t('batch_select_all', {
