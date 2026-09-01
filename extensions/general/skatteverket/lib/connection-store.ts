@@ -230,6 +230,29 @@ export async function listVerifiedCompanies(
   return (data ?? []) as Array<{ company_id: string; org_number: string; created_by: string | null }>
 }
 
+/**
+ * Every connection row for an environment, for the ombudsregister sync: the
+ * rows the register no longer lists must be downgraded, whatever their
+ * status. Explicitly revoked rows (user disconnect) are included so that a
+ * re-grant at Skatteverket re-verifies them without a manual step.
+ */
+export async function listConnections(
+  environment: SkvEnvironment,
+  limit = 1000
+): Promise<SkvCompanyConnection[]> {
+  const { data, error } = await getServiceClient()
+    .from('skatteverket_company_connections')
+    .select(CONNECTION_COLUMNS)
+    .eq('environment', environment)
+    .order('created_at', { ascending: true })
+    .limit(limit)
+  if (error) {
+    log.warn('listConnections failed', { environment, error: error.message })
+    return []
+  }
+  return (data ?? []) as unknown as SkvCompanyConnection[]
+}
+
 /** Test hook: reset the memoized service client. */
 export function __resetConnectionStoreForTests(): void {
   _serviceClient = null

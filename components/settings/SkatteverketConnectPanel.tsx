@@ -395,7 +395,7 @@ function SkatteverketPersonalConnectionCard() {
         </SettingsRowEnd>
       </SettingsRow>
 
-      <SettingsRow label={t('token_expires_label')}>
+      <SettingsRow label={t('token_expires_label')} help={t('session_lifetime_note')}>
         <SettingsRowNote className="tabular-nums">
           {expiresAtDate.toLocaleString('sv-SE')}
           {!status.expired && expiresInMinutes > 0 && (
@@ -460,6 +460,41 @@ function SkatteverketSystemConnectionCard() {
   const { toast } = useToast()
   const [state, setState] = useState<SystemConnectionState | null>(null)
   const [verifying, setVerifying] = useState(false)
+  const [linking, setLinking] = useState(false)
+
+  /**
+   * Ombudshantering deep link: Skatteverket's e-service opens with the app
+   * pre-filled as ombud and both roles pre-selected, so the company only
+   * signs. The tab is opened synchronously on click (popup blockers) and
+   * pointed at the link once the server has minted it.
+   */
+  async function openDeepLink() {
+    setLinking(true)
+    const tab = window.open('', '_blank', 'noopener')
+    try {
+      const res = await fetch('/api/extensions/ext/skatteverket/system-connection/deeplink', {
+        method: 'POST',
+      })
+      const body = await res.json().catch(() => ({}))
+      const url = typeof body?.data?.djuplank === 'string' ? body.data.djuplank : null
+      if (!res.ok || !url) {
+        tab?.close()
+        toast({
+          title: t('system_deeplink_failed'),
+          description: typeof body?.error === 'string' ? body.error : undefined,
+          variant: 'destructive',
+        })
+        return
+      }
+      if (tab) tab.location.href = url
+      else window.open(url, '_blank', 'noopener')
+    } catch {
+      tab?.close()
+      toast({ title: t('system_deeplink_failed'), variant: 'destructive' })
+    } finally {
+      setLinking(false)
+    }
+  }
 
   async function loadState() {
     try {
@@ -547,6 +582,10 @@ function SkatteverketSystemConnectionCard() {
       )}
 
       <div className="flex flex-wrap items-center gap-4 px-1 py-3">
+        <Button size="sm" variant="outline" onClick={openDeepLink} disabled={linking} title={t('system_deeplink_hint', { appName })}>
+          {linking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ExternalLink className="mr-2 h-4 w-4" />}
+          {linking ? t('system_deeplink_loading') : t('system_deeplink', { appName })}
+        </Button>
         {state.grant_url && (
           <a
             href={state.grant_url}
