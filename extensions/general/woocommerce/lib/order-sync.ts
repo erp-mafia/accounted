@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { upsertWebshopOrders } from '@/lib/webshop-orders/ingest'
+import { removeWebshopOrders, upsertWebshopOrders } from '@/lib/webshop-orders/ingest'
 import type { WebshopOrderUpsert } from '@/lib/webshop-orders/types'
 import { createLogger, type Logger } from '@/lib/logger'
 import { roundOre as round } from '@/lib/money'
@@ -21,8 +21,9 @@ const defaultLog = createLogger('woocommerce/order-sync')
  * public.webshop_orders (the Orders page), replacing the earlier
  * transactions-inbox feed.
  *
- * Every non-trash order imports (including unpaid ones: the Orders page shows
- * order state and the invoice flow needs pre-payment orders), carrying the
+ * Every order imports except trash and failed (including unpaid ones: the
+ * Orders page shows order state and the invoice flow needs pre-payment
+ * orders), carrying the
  * full booking underlag the wc/v3 payload already contains: customer billing
  * snapshot, payment method, per-rate VAT breakdown and line items. Refunds
  * are separate negative rows parented to their order. Nothing here books
@@ -113,6 +114,8 @@ export interface WooCommerceSyncSummary {
   updated: number
   /** Re-polled rows with nothing new. */
   unchanged: number
+  /** Rows deleted because the store now reports the order as failed. */
+  removed: number
   /** Booked rows whose financials drifted remotely (flagged, not touched). */
   frozenFlagged: number
   /** Rows linked to a row the retired transactions feed already imported. */
@@ -157,9 +160,24 @@ export function orderIsPaid(order: Pick<WooOrder, 'date_paid_gmt'>): boolean {
   return Boolean(order.date_paid_gmt)
 }
 
-/** Every non-trash order imports; trash is the store's recycle bin. */
+/**
+ * Which orders exist in the feed. Trash is the store's recycle bin; failed
+ * is a checkout whose payment never went through, so it carries no money
+ * event (user report: failed attempts flooded the Orders page as permanently
+ * unbookable "Ej betald" rows).
+ */
 export function orderImports(order: Pick<WooOrder, 'status'>): boolean {
-  return order.status !== 'trash'
+  return order.status !== 'trash' && order.status !== 'failed'
+}
+
+/**
+ * Orders whose already-imported rows should be REMOVED on re-poll: a pending
+ * order that transitions to failed would otherwise sit stale forever. Trash
+ * keeps its long-standing skip-only semantics (a trashed order can be
+ * restored in wp-admin, and its row may mirror a real paid event).
+ */
+export function orderRemoves(order: Pick<WooOrder, 'status'>): boolean {
+  return order.status === 'failed'
 }
 
 /**
@@ -467,6 +485,8 @@ export function mapRefundToWebshopRow(
 
 interface PageRowsOutcome {
   rows: WebshopOrderUpsert[]
+  /** external_ids of orders whose existing rows should be removed (failed). */
+  removalExternalIds: string[]
   /**
    * date_modified (ms) of every order whose refund rows are incomplete this
    * run (fetch failed or skipped on deadline). The cursor must not advance
@@ -486,14 +506,26 @@ async function buildPageRows(
   log: Logger,
   deadlineMs?: number,
 ): Promise<PageRowsOutcome> {
-  const outcome: PageRowsOutcome = { rows: [], incompleteModifiedMs: [], hitDeadline: false }
+  const outcome: PageRowsOutcome = {
+    rows: [],
+    removalExternalIds: [],
+    incompleteModifiedMs: [],
+    hitDeadline: false,
+  }
 
   for (const order of orders) {
+    if (orderRemoves(order)) {
+      outcome.removalExternalIds.push(wooOrderExternalId(storeScope, order.id))
+    }
+    // Non-importing orders contribute nothing else; skipping here also keeps
+    // their refunds out (a refund row parented to an order that never
+    // imports, or is being removed, would be an unexplainable negative).
+    if (!orderImports(order)) continue
     // A corrupt total is counted and logged, never silently identical to a
     // zero-total order. Deliberately NOT held via the cursor: a permanently
     // corrupt total would stall the whole feed forever, where a skipped row
     // plus a loud error can be followed up.
-    if (orderImports(order) && orderAmountUnparseable(order)) {
+    if (orderAmountUnparseable(order)) {
       summary.errors += 1
       log.warn('unparseable order total; row skipped', {
         orderId: order.id,
@@ -572,6 +604,7 @@ export async function syncWooCommerceOrders(
     inserted: 0,
     updated: 0,
     unchanged: 0,
+    removed: 0,
     frozenFlagged: 0,
     crossMarked: 0,
     errors: 0,
@@ -645,6 +678,20 @@ export async function syncWooCommerceOrders(
           // Failed upserts are dropped inside the service; hold the cursor
           // below this page so the next run re-lists and retries it rather
           // than turning a transient DB error into permanently missing rows.
+          failureFloorMs = Math.min(failureFloorMs, firstMs - 1000)
+        }
+      }
+      if (page.removalExternalIds.length > 0) {
+        const removal = await removeWebshopOrders(
+          supabase,
+          connection.company_id,
+          page.removalExternalIds,
+        )
+        summary.removed += removal.removed
+        summary.errors += removal.errors
+        if (removal.errors > 0) {
+          // Same retry contract as failed upserts: hold the cursor so the
+          // next run re-lists this page and retries the removal.
           failureFloorMs = Math.min(failureFloorMs, firstMs - 1000)
         }
       }
