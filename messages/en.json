@@ -918,6 +918,7 @@
     "th_amount": "Amount",
     "th_remaining": "Remaining",
     "th_status": "Status",
+    "sort_by": "Sort by {column}",
     "status_registered": "Registered",
     "status_approved": "Approved",
     "status_paid": "Paid",
