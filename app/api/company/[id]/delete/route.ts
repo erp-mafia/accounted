@@ -136,7 +136,95 @@ export async function POST(
     .eq('user_id', user.id)
     .eq('active_company_id', companyId)
 
-  // 6. Write audit log row. companies has no auto-audit trigger, so do it
+  // 6. Revoke the company's store connections. The store-uniqueness indexes
+  // (e.g. woocommerce_connections_store_active_uniq) allow a store to be
+  // actively connected to at most ONE company, and user_company_ids() hides
+  // archived companies, so an 'active' row left behind would block
+  // reconnecting the store from any new company with no user-reachable
+  // disconnect. Same status flip as the manual disconnect paths, secrets
+  // nulled. Non-fatal: the archive already happened, but never silent.
+  // .neq('revoked') rather than pending/active: 'error'-state rows also
+  // carry credentials and are just as unreachable after the archive. Each
+  // update carries its payload as an object literal so the phantom-column
+  // scanner can resolve every column.
+  const revokes = [
+    {
+      table: 'woocommerce_connections',
+      result: await service
+        .from('woocommerce_connections')
+        .update({
+          status: 'revoked',
+          disconnected_at: archivedAt,
+          consumer_key_encrypted: null,
+          consumer_secret_encrypted: null,
+          oauth_state: null,
+        })
+        .eq('company_id', companyId)
+        .neq('status', 'revoked')
+        .select('id'),
+    },
+    {
+      table: 'shopify_connections',
+      result: await service
+        .from('shopify_connections')
+        .update({
+          status: 'revoked',
+          disconnected_at: archivedAt,
+          client_id_encrypted: null,
+          client_secret_encrypted: null,
+        })
+        .eq('company_id', companyId)
+        .neq('status', 'revoked')
+        .select('id'),
+    },
+    {
+      table: 'stripe_connections',
+      result: await service
+        .from('stripe_connections')
+        .update({
+          status: 'revoked',
+          disconnected_at: archivedAt,
+          oauth_state: null,
+        })
+        .eq('company_id', companyId)
+        .neq('status', 'revoked')
+        .select('id'),
+    },
+  ]
+  for (const { table, result } of revokes) {
+    if (result.error) {
+      log.error('Failed to revoke store connections on company archive', {
+        companyId,
+        table,
+        error: result.error.message,
+      })
+      continue
+    }
+    // Credential revocation is a compliance-critical mutation: audit it like
+    // the archive itself (the tables have no auto-audit trigger). Non-fatal,
+    // same doctrine as the archive's own audit write below.
+    for (const row of (result.data ?? []) as Array<{ id: string }>) {
+      const { error: revokeAuditError } = await service.from('audit_log').insert({
+        user_id: user.id,
+        company_id: companyId,
+        action: 'UPDATE',
+        table_name: table,
+        record_id: row.id,
+        actor_id: user.id,
+        new_state: { status: 'revoked', disconnected_at: archivedAt },
+        description: `Store connection revoked on company archive: ${company.name}`,
+      })
+      if (revokeAuditError) {
+        log.error('Failed to write audit_log row for connection revocation', {
+          companyId,
+          table,
+          error: revokeAuditError.message,
+        })
+      }
+    }
+  }
+
+  // 7. Write audit log row. companies has no auto-audit trigger, so do it
   // explicitly. Service client bypasses audit_log RLS (no INSERT policy).
   // The archive already happened — don't fail the request, but an audit
   // write failing on an irreversible action must never be silent.
@@ -158,13 +246,13 @@ export async function POST(
     })
   }
 
-  // 7. Emit event
+  // 8. Emit event
   await eventBus.emit({
     type: 'company.deleted',
     payload: { companyId, userId: user.id, archivedAt },
   })
 
-  // 8. Build response and clear company cookie if it matched
+  // 9. Build response and clear company cookie if it matched
   const response = NextResponse.json({ data: { companyId, archivedAt } })
 
   const cookieCompanyId = request.headers.get('cookie')?.match(/gnubok-company-id=([^;]+)/)?.[1]

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeIban } from '@/lib/cash-accounts/service'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createLogger } from '@/lib/logger'
 import type { StoredAccount } from '../types'
 
@@ -72,8 +73,17 @@ export function unclaimedAccountsFor(
     seen.add(iban)
     // The source company's enable/disable choice is its own; company B starts
     // with everything on and unchecks in the picker. Drop the source's ledger
-    // mapping too: that number belongs to the other company's chart.
-    const { ledger_account: _ledger, ...rest } = account
+    // mapping too: that number belongs to the other company's chart. The
+    // claimed_by_* flags are likewise the source row's history: everything
+    // offered here is unclaimed by definition, so a stale flag must not
+    // render a "synkas i annat bolag" note on a genuinely free account.
+    const {
+      ledger_account: _ledger,
+      claimed_by_company_id: _claimedId,
+      claimed_by_company_name: _claimedName,
+      deselected_elsewhere: _deselected,
+      ...rest
+    } = account
     out.push({ ...rest, enabled: true })
   }
   return out
@@ -269,6 +279,208 @@ async function fetchCompanyNames(
       .filter((c): c is { id: string; name: string } => !!c.name)
       .map(c => [c.id, c.name]),
   )
+}
+
+/** The company whose books an IBAN is already synced into. */
+export interface ForeignIbanClaim {
+  companyId: string
+  companyName: string | null
+}
+
+export interface CrossCompanyAccountContext {
+  /**
+   * Normalized IBAN → the OTHER company of this user that already books it
+   * (enabled cash_accounts row, or an enabled account on a live-ish
+   * connection). First claimant wins; which sibling is named is cosmetic.
+   * Never contains an IBAN the ACTIVE company itself already books: the
+   * active company's standing state outranks a sibling's claim, whatever row
+   * the callback happens to be finalizing (a bank-list renewal arrives on a
+   * FRESH row with no priors, and must not switch a working feed off).
+   */
+  claims: Map<string, ForeignIbanClaim>
+  /**
+   * Normalized IBANs the user has deselected ("Synkas ej") on other
+   * connection rows, in any company, so a fresh connection row does not
+   * resurrect an account the user already opted out of (the recurring
+   * came-back-pre-checked complaint). Only rows whose selection the user has
+   * actually SAVED contribute ('active'/'expired'/'error'):
+   * a 'pending_selection' row's flags are unconfirmed callback output,
+   * including this guard's own fail-closed writes, and treating them as user
+   * intent would make one abandoned picker (or one transient lookup error)
+   * poison every later connect. Cleared of anything the active company
+   * books or a sibling claims (both outrank a remembered deselection).
+   */
+  deselectedIbans: Set<string>
+  /**
+   * Normalized IBANs the ACTIVE company already books: enabled cash_accounts
+   * rows, plus enabled accounts on its own live-ish connection rows. Exposed
+   * for the callers/tests; claims and deselectedIbans are already cleaned
+   * against it.
+   */
+  activeCompanyIbans: Set<string>
+}
+
+/**
+ * What the user's OTHER companies already do with each IBAN, for the OAuth
+ * callback's cross-company guard. At one-session banks (SEB) the PSU's single
+ * consent can cover accounts that belong in a sibling company's books, and the
+ * callback stores whatever the session returns: without this lookup those
+ * accounts land pre-enabled in the wrong company.
+ *
+ * Runs on the callback's SERVICE-ROLE client, so nothing is RLS-scoped:
+ * every query below filters on the user's own rows explicitly
+ * (bank_connections.user_id, cash_accounts.company_id via company_members).
+ *
+ * Returns null when any lookup failed. The caller must fail closed (treat
+ * every unrecognized account as not-safe-to-pre-check): an empty result is
+ * indistinguishable from "nothing is claimed", which is the one answer this
+ * guard must never invent.
+ */
+export async function fetchCrossCompanyAccountContext(
+  serviceSupabase: SupabaseClient,
+  userId: string,
+  activeCompanyId: string,
+  excludeConnectionId: string,
+): Promise<CrossCompanyAccountContext | null> {
+  const claims = new Map<string, ForeignIbanClaim>()
+  const deselectedIbans = new Set<string>()
+  const activeCompanyIbans = new Set<string>()
+
+  // Statuses whose accounts count: a revoked row's accounts are released
+  // territory; 'expired'/'error' still count (a sibling whose feed
+  // momentarily died at a one-session bank has NOT given its accounts up).
+  // 'pending_selection' rows count ASYMMETRICALLY: their enabled accounts
+  // still claim, because an attach-created row holds deliberately-offered
+  // accounts with no cash_accounts rows until its picker is saved, and
+  // ignoring that window lets a second company take the same physical
+  // account (the exact failure fetchIbanCarriers documents). Their DISABLED
+  // flags are unconfirmed callback output though — including this guard's
+  // own fail-closed writes — so they never feed the deselection memory:
+  // one abandoned picker or transient lookup error must not poison every
+  // later connect.
+  let connectionRows: Array<{
+    id: string
+    company_id: string
+    status: string
+    accounts_data: StoredAccount[] | null
+  }>
+  try {
+    connectionRows = await fetchAllRows(range =>
+      serviceSupabase
+        .from('bank_connections')
+        .select('id, company_id, status, accounts_data')
+        .eq('user_id', userId)
+        .neq('id', excludeConnectionId)
+        .in('status', ['active', 'pending_selection', 'expired', 'error'])
+        // Unique-column order: fetchAllRows pages with .range(), and an
+        // unordered paged read can silently SKIP rows at page boundaries —
+        // a skipped row here is a missed claim, which fails open.
+        .order('id')
+        .range(range.from, range.to),
+    )
+  } catch (connectionError) {
+    log.error('cross-company claim lookup failed (bank_connections)', {
+      activeCompanyId,
+      error: connectionError instanceof Error ? connectionError.message : String(connectionError),
+    })
+    return null
+  }
+
+  for (const row of connectionRows) {
+    for (const account of row.accounts_data ?? []) {
+      const iban = normalizeIban(account.iban)
+      if (!iban) continue
+      if (account.enabled === false) {
+        if (row.status !== 'pending_selection') deselectedIbans.add(iban)
+      } else if (row.company_id === activeCompanyId) {
+        activeCompanyIbans.add(iban)
+      } else if (!claims.has(iban)) {
+        claims.set(iban, { companyId: row.company_id, companyName: null })
+      }
+    }
+  }
+
+  // cash_accounts catches standing state the connection rows no longer carry
+  // (older connects, CSV-era rows promoted onto a feed, a row a supersede is
+  // about to demote). ALL of the user's companies are read: sibling rows
+  // become claims, the active company's rows become its own standing set.
+  // Scoped via memberships, since the service client sees everything.
+  const { data: membershipRows, error: membershipError } = await serviceSupabase
+    .from('company_members')
+    .select('company_id')
+    .eq('user_id', userId)
+
+  if (membershipError) {
+    log.error('cross-company claim lookup failed (company_members)', {
+      activeCompanyId,
+      error: membershipError.message,
+    })
+    return null
+  }
+
+  const memberCompanyIds = [
+    ...new Set(
+      ((membershipRows ?? []) as Array<{ company_id: string }>).map(r => r.company_id),
+    ),
+  ]
+
+  if (memberCompanyIds.length > 0) {
+    let cashRows: Array<{ company_id: string; iban: string | null }>
+    try {
+      // fetchAllRows, not a bare select: PostgREST silently caps at 1000
+      // rows, and a silently truncated claim set fails OPEN for exactly the
+      // multi-company consultants this guard exists for.
+      cashRows = await fetchAllRows(range =>
+        serviceSupabase
+          .from('cash_accounts')
+          .select('company_id, iban')
+          .in('company_id', memberCompanyIds)
+          .eq('enabled', true)
+          .not('iban', 'is', null)
+          // Unique-column order: see the bank_connections page above.
+          .order('id')
+          .range(range.from, range.to),
+      )
+    } catch (cashError) {
+      log.error('cross-company claim lookup failed (cash_accounts)', {
+        activeCompanyId,
+        error: cashError instanceof Error ? cashError.message : String(cashError),
+      })
+      return null
+    }
+
+    for (const row of cashRows) {
+      const iban = normalizeIban(row.iban)
+      if (!iban) continue
+      if (row.company_id === activeCompanyId) {
+        activeCompanyIbans.add(iban)
+      } else if (!claims.has(iban)) {
+        claims.set(iban, { companyId: row.company_id, companyName: null })
+      }
+    }
+  }
+
+  // Precedence, strongest first: the active company's own standing state
+  // (a renewal must never switch a working feed off, whichever row it
+  // arrives on), then a sibling's claim, then a remembered deselection (the
+  // picker note "synkas i X" is strictly more information than a bare
+  // unchecked box).
+  for (const iban of activeCompanyIbans) {
+    claims.delete(iban)
+    deselectedIbans.delete(iban)
+  }
+  for (const iban of claims.keys()) deselectedIbans.delete(iban)
+
+  if (claims.size > 0) {
+    const names = await fetchCompanyNames(serviceSupabase, [
+      ...new Set([...claims.values()].map(c => c.companyId)),
+    ])
+    for (const claim of claims.values()) {
+      claim.companyName = names.get(claim.companyId) ?? null
+    }
+  }
+
+  return { claims, deselectedIbans, activeCompanyIbans }
 }
 
 /**

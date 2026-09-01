@@ -590,7 +590,8 @@ export const enableBankingExtension: Extension = {
               redirectUrl,
               oauthState,
               psuType,
-              authMethod
+              authMethod,
+              companyId
             )
 
             // Record the bank's authorization_id for audit/traceability. The
@@ -623,7 +624,8 @@ export const enableBankingExtension: Extension = {
             redirectUrl,
             oauthState,
             psuType,
-            authMethod
+            authMethod,
+            companyId
           )
 
           const { data: connection, error } = await supabase
@@ -846,6 +848,23 @@ export const enableBankingExtension: Extension = {
           }
 
           const syncedAt = new Date().toISOString()
+          // Mirror refreshed balances into cash_accounts: the Bank-page source
+          // picker and the reconciliation status read that table, and without
+          // this the balance there froze at connect time.
+          {
+            const { updateBalancesFromSync } = await import('@/lib/cash-accounts/service')
+            await updateBalancesFromSync(
+              supabase,
+              companyId,
+              connection.id,
+              allAccounts.map((a) => ({
+                external_uid: a.uid,
+                balance: a.balance,
+                available_balance: a.available_balance,
+                balance_updated_at: a.balance_updated_at,
+              })),
+            )
+          }
           await supabase
             .from('bank_connections')
             .update({
@@ -1132,7 +1151,7 @@ export const enableBankingExtension: Extension = {
         const mappingsByUid = new Map(mappings.map(m => [m.uid, m]))
         const updatedAccounts: StoredAccount[] = existing.map(a => {
           const mapping = mappingsByUid.get(a.uid)
-          return {
+          const next: StoredAccount = {
             ...a,
             enabled: enabledSet.has(a.uid),
             // Apply ledger_account from mapping when present. Explicit null clears it.
@@ -1142,7 +1161,28 @@ export const enableBankingExtension: Extension = {
               ? { ledger_account: mapping.ledger_account ?? undefined }
               : {}),
           }
+          // Enabling an account is the deliberate takeover the callback's
+          // guard flags exist to force: once made, the flags are stale (the
+          // account syncs HERE now) and would keep rendering a false
+          // "synkas i annat bolag" note in every later picker.
+          if (next.enabled) {
+            delete next.claimed_by_company_id
+            delete next.claimed_by_company_name
+            delete next.deselected_elsewhere
+          }
+          return next
         })
+
+        // Accounts the callback guard left disabled AND unmirrored (no ledger
+        // anywhere) stay that way through a save that does not enable them:
+        // allocating a 19xx slot and upserting a cash_accounts row for a
+        // still-disabled claimed account would recreate exactly the state the
+        // guard exists to prevent (another company's IBAN and name in this
+        // company's chart and routing table), one screen after the callback
+        // avoided it. Disabled accounts that already have a ledger or a
+        // mirrored row keep the existing behavior: their row's enabled flag
+        // must still flip off.
+        const neverMirroredDisabledUids = new Set<string>()
 
         // Resolve the effective mirror ledger for every account up front and
         // reject collisions with a 400 — the mirror pass below writes into
@@ -1266,6 +1306,13 @@ export const enableBankingExtension: Extension = {
         // mirror pass surface any collision per-account, as before.
         for (const a of updatedAccounts) {
           if (effectiveLedgerByUid.has(a.uid)) continue
+          // See neverMirroredDisabledUids above: a disabled account that has
+          // never held a ledger or a mirrored row gets neither allocated nor
+          // mirrored by this save.
+          if (!enabledSet.has(a.uid) && !reuseRowByUid.has(a.uid)) {
+            neverMirroredDisabledUids.add(a.uid)
+            continue
+          }
           let allocated: string | null = null
           try {
             const resolved = await resolvePsd2LedgerAccount(supabase, companyId, user.id, {
@@ -1288,8 +1335,10 @@ export const enableBankingExtension: Extension = {
         }
 
         // accounts_data mirrors the resolved assignment so the picker
-        // pre-fills reality on the next open.
+        // pre-fills reality on the next open. Skipped disabled accounts keep
+        // no assignment: their slot is only claimed if they are ever enabled.
         for (const a of updatedAccounts) {
+          if (neverMirroredDisabledUids.has(a.uid)) continue
           a.ledger_account = effectiveLedgerByUid.get(a.uid)
         }
 
@@ -1324,6 +1373,9 @@ export const enableBankingExtension: Extension = {
         // without reading the JSONB column.
         {
           for (const a of updatedAccounts) {
+            // Never-mirrored disabled accounts (callback-guard leftovers the
+            // user did not enable) get no cash_accounts row: see above.
+            if (neverMirroredDisabledUids.has(a.uid)) continue
             const ledgerAccount = a.ledger_account ?? '1930'
             // Only reuse the IBAN-matched row when it already sits on the
             // ledger we are about to write. If the user deliberately remapped
@@ -1341,6 +1393,7 @@ export const enableBankingExtension: Extension = {
                 iban: a.iban ?? null,
                 name: a.name ?? null,
                 balance: a.balance ?? null,
+                available_balance: a.available_balance ?? null,
                 balance_updated_at: a.balance_updated_at ?? null,
                 enabled: a.enabled ?? true,
                 reuse_cash_account_id: reuseCashAccountId,
@@ -1563,6 +1616,30 @@ export const enableBankingExtension: Extension = {
               }
             }
 
+            // Mirror the balances the backfill just fetched into cash_accounts.
+            // accounts_data is deliberately NOT re-written here (see below), so
+            // without this the balances fetched during the initial sync would
+            // reach neither store until the next scheduled sync.
+            try {
+              const { updateBalancesFromSync } = await import('@/lib/cash-accounts/service')
+              await updateBalancesFromSync(
+                supabase,
+                companyId,
+                connection.id,
+                updatedAccounts.map((a) => ({
+                  external_uid: a.uid,
+                  balance: a.balance,
+                  available_balance: a.available_balance,
+                  balance_updated_at: a.balance_updated_at,
+                })),
+              )
+            } catch (mirrorErr) {
+              log.error('[enable-banking] Balance mirror after initial backfill failed', {
+                connectionId: connection.id,
+                error: mirrorErr instanceof Error ? mirrorErr.message : String(mirrorErr),
+              })
+            }
+
             const completedAt = new Date().toISOString()
             // Don't re-write accounts_data here: the first update already wrote it.
             // Including it again races with any concurrent writer (e.g. cron firing in
@@ -1703,7 +1780,10 @@ export const enableBankingExtension: Extension = {
           try {
             await deleteSession(connection.session_id)
           } catch (error) {
-            log.error('[enable-banking] Failed to revoke PSD2 session (may be expired)', {
+            // The revoke is best-effort: an expired or already-closed session
+            // is the normal case here, and the disconnect continues either
+            // way, so this is a warning and not an error.
+            log.warn('[enable-banking] Failed to revoke PSD2 session (may be expired)', {
               message: error instanceof Error ? error.message : String(error),
               sessionId: connection.session_id,
               connectionId: connection_id,

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
@@ -19,7 +19,8 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -199,14 +200,11 @@ export default function OrdersPage() {
     .filter((o) => isBulkBookable(o, canWrite))
     .map((o) => o.id)
 
-  const toggleSelect = useCallback((id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }, [])
+  const range = useRangeSelect({ visibleIds: selectableIds, selectedIds, setSelectedIds })
+  const toggleSelect = useCallback(
+    (id: string, extend?: boolean) => range.toggle(id, extend),
+    [range],
+  )
 
   const openBulkBooking = useCallback(() => {
     setBulkOrders(rows.filter((o) => selectedIds.has(o.id)))
@@ -302,7 +300,10 @@ export default function OrdersPage() {
                 <button
                   type="button"
                   className={QUIET_LINK_CLASS}
-                  onClick={() => setSelectedIds(new Set(selectableIds))}
+                  onClick={() => {
+                    setSelectedIds(new Set(selectableIds))
+                    range.resetAnchor()
+                  }}
                 >
                   {t('bulk_select_all', { count: selectableIds.length })}
                 </button>
@@ -310,7 +311,10 @@ export default function OrdersPage() {
               <button
                 type="button"
                 className={QUIET_LINK_CLASS}
-                onClick={() => setSelectedIds(new Set())}
+                onClick={() => {
+                  setSelectedIds(new Set())
+                  range.resetAnchor()
+                }}
               >
                 {t('bulk_clear')}
               </button>
@@ -470,13 +474,16 @@ function OrderRow({
   canWrite: boolean
   selectable: boolean
   isSelected: boolean
-  onToggleSelect: (id: string) => void
+  onToggleSelect: (id: string, extend?: boolean) => void
   onBook: () => void
   onInvoice: () => void
   onMarkBooked: () => void
   onUnmark: () => void
   t: ReturnType<typeof useTranslations<'webshop_orders'>>
 }) {
+  // Radix' onCheckedChange carries no mouse event: the preceding click records
+  // whether shift was held, for range selection.
+  const shiftHeld = useRef(false)
   const isRefund = order.row_type === 'refund'
   const booked = order.journal_entry_id !== null
   const invoiced = order.invoice_id !== null
@@ -503,17 +510,18 @@ function OrderRow({
       {/* Hover-revealed selection checkbox (transactions-page pattern):
           zero-width cell, the checkbox hangs in the left page margin so the
           date column stays where it was. Selected rows keep it visible. */}
-      <td className={cn(TD_CLASS, 'relative w-0 !p-0')}>
+      <td className={cn(TD_CLASS, 'relative w-0 !p-0 select-none')}>
         {selectable && (
           <Checkbox
             checked={isSelected}
-            onCheckedChange={() => onToggleSelect(order.id)}
+            onClick={(e) => {
+              shiftHeld.current = e.shiftKey
+            }}
+            onCheckedChange={() => onToggleSelect(order.id, shiftHeld.current)}
             aria-label={t('select_order_aria', { number: order.order_number })}
             className={cn(
-              'absolute -left-5 top-1/2 -translate-y-1/2 transition-opacity duration-150 md:-left-6',
-              isSelected
-                ? 'opacity-100'
-                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100',
+              'absolute -left-5 top-1/2 -translate-y-1/2 border-foreground duration-150 md:-left-6',
+              isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
             )}
           />
         )}

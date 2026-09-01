@@ -251,17 +251,17 @@ export default function BankSyncNowButton() {
   const selfHosted = isSelfHosted()
   const gateTitle = !hasBankSync
     ? selfHosted
-      ? 'Bankkoppling kräver en connector-nyckel eller egna Enable Banking-uppgifter'
-      : 'Bankkoppling kräver ett abonnemang'
+      ? t('bank_sync_requires_connector_key')
+      : t('bank_sync_requires_subscription')
     : undefined
   const upsellNote = !hasBankSync ? (
     selfHosted ? (
-      <span className="text-xs text-muted-foreground">Kräver connector-nyckel (GNUBOK_CONNECTOR_KEY).</span>
+      <span className="text-xs text-muted-foreground">{t('bank_sync_upsell_connector_key')}</span>
     ) : (
       <span className="text-xs text-muted-foreground">
-        Kräver abonnemang.{' '}
+        {t('bank_sync_upsell_subscription')}{' '}
         <a href="/settings/billing" className="underline underline-offset-2">
-          Uppgradera
+          {t('bank_sync_upsell_upgrade')}
         </a>
       </span>
     )

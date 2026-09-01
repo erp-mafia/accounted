@@ -1,6 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getMultiUserState } from '@/lib/entitlements/multi-user'
 
 /**
  * GET /api/company/members
@@ -60,6 +61,13 @@ export const GET = withRouteContext('company_members.list', async (_request, ctx
   const currentMember = members?.find((m) => m.user_id === user.id)
   const canInvite = currentMember?.role === 'owner' || currentMember?.role === 'admin'
 
+  // Multi-user seat gate: when the company is frozen (no multi_user grant
+  // active or in grace), the invite POST answers 403, so the UI swaps the
+  // invite form for the paid-plan upsell instead of a dead form.
+  const multiUserAccess = canInvite
+    ? await getMultiUserState(serviceClient, companyId)
+    : null
+
   return NextResponse.json({
     data: {
       members: (members || []).map((m) => ({
@@ -73,6 +81,7 @@ export const GET = withRouteContext('company_members.list', async (_request, ctx
       })),
       invitations: invitations || [],
       canInvite,
+      inviteRequiresUpgrade: multiUserAccess?.state === 'frozen',
     },
   })
 })

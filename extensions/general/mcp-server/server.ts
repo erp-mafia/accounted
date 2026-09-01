@@ -11878,7 +11878,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_list_cash_accounts',
     keywords: ['bankkonto', 'kassakonto', 'bankkonton', 'likvidkonton', 'kassa'],
     title: 'List Cash Accounts',
-    description: 'List the company bank/cash accounts (cash_accounts): BAS ledger, currency, IBAN, primary flag. Use cash_account_id to filter transaction listings and account_number (ledger_account) for gnubok_get_reconciliation_status.',
+    description: 'List the company bank/cash accounts (cash_accounts): BAS ledger, currency, IBAN, primary flag, bank-reported balance (booked + available, with balance_updated_at). Use cash_account_id to filter transaction listings; use for "how much money is in the bank".',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -11904,8 +11904,20 @@ export const tools: McpTool[] = [
               is_primary: { type: 'boolean' },
               enabled: { type: 'boolean' },
               source: { type: 'string', enum: ['enable_banking', 'manual', 'sie_import'] },
+              balance: {
+                type: ['number', 'null'],
+                description: 'Bank-reported booked balance as of balance_updated_at; null for manual accounts or before the first sync. NOT the bookkept 19xx balance.',
+              },
+              available_balance: {
+                type: ['number', 'null'],
+                description: 'Bank-reported available balance; null when the bank reports no available type.',
+              },
+              balance_updated_at: {
+                type: ['string', 'null'],
+                description: 'ISO timestamp of the last balance fetch (PSD2 quota: refreshed at most every 12h).',
+              },
             },
-            required: ['cash_account_id', 'ledger_account', 'name', 'currency', 'iban', 'is_primary', 'enabled', 'source'],
+            required: ['cash_account_id', 'ledger_account', 'name', 'currency', 'iban', 'is_primary', 'enabled', 'source', 'balance', 'available_balance', 'balance_updated_at'],
           },
         },
         count: { type: 'number' },
@@ -11934,6 +11946,9 @@ export const tools: McpTool[] = [
         is_primary: row.is_primary === true,
         enabled: row.enabled !== false,
         source: row.source,
+        balance: row.balance ?? null,
+        available_balance: row.available_balance ?? null,
+        balance_updated_at: row.balance_updated_at ?? null,
       }))
       return { cash_accounts: cashAccounts, count: cashAccounts.length }
     },

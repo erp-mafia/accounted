@@ -17,19 +17,29 @@ export interface CompanyMembersPayload<M, I> {
   members: M[]
   invitations: I[]
   canInvite: boolean
+  /** Multi-user seat gate: swap the invite form for the paid-plan upsell. */
+  inviteRequiresUpgrade: boolean
 }
 
 export function parseCompanyMembersPayload<M, I>(body: unknown): CompanyMembersPayload<M, I> | null {
   if (typeof body !== 'object' || body === null) return null
   const data = (body as { data?: unknown }).data
   if (typeof data !== 'object' || data === null) return null
-  const d = data as { members?: unknown; invitations?: unknown; canInvite?: unknown }
+  const d = data as {
+    members?: unknown
+    invitations?: unknown
+    canInvite?: unknown
+    inviteRequiresUpgrade?: unknown
+  }
   if (!Array.isArray(d.members) || !Array.isArray(d.invitations)) return null
   return {
     members: d.members as M[],
     invitations: d.invitations as I[],
     // Only an explicit boolean true unlocks the invite form.
     canInvite: d.canInvite === true,
+    // Only an explicit true swaps the form for the upsell: an older server
+    // without the field keeps the form, and the POST's own 403 still guards.
+    inviteRequiresUpgrade: d.inviteRequiresUpgrade === true,
   }
 }
 

@@ -6,6 +6,9 @@ export interface StoredAccount {
   name?: string
   currency: string
   balance?: number
+  // Bank-reported available balance from the same BALANCES response as
+  // `balance` (booked). Absent when the ASPSP returns no available type.
+  available_balance?: number
   balance_updated_at?: string
   // When false, the account is part of the PSD2 consent but the user has
   // chosen not to sync transactions from it. Treated as true if missing
@@ -23,6 +26,20 @@ export interface StoredAccount {
   // the whole history. lib/sync.ts falls back to IBAN-then-uid when unset
   // (rows that predate this field) and stamps it on the next sync.
   dedup_scope?: string
+  // Set by the OAuth callback when the account's IBAN is already booked by
+  // ANOTHER of the user's companies. At one-session banks (SEB) the PSU's
+  // single consent can cover accounts that belong in a sibling company's
+  // books; such accounts are stored disabled and never mirrored into this
+  // company's cash_accounts, and the picker renders the claim so the user
+  // sees why the account is unchecked. Enabling one is a deliberate act.
+  claimed_by_company_id?: string
+  claimed_by_company_name?: string
+  // Set by the OAuth callback when the account arrived deselected because the
+  // user chose "Synkas ej" for the same IBAN on another connection row (any
+  // company). Rendered as a note in the picker so the unchecked box is never
+  // silent; cleared by the selection save when the user re-enables the
+  // account.
+  deselected_elsewhere?: boolean
 }
 
 // Re-export API types from the client

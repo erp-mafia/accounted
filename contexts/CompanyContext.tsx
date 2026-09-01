@@ -4,6 +4,7 @@ import { createContext, useContext } from 'react'
 import type { Company, CompanyRole, Team } from '@/types'
 import type { CapabilityKey } from '@/lib/entitlements/keys'
 import type { EntitlementState } from '@/lib/entitlements/has-capability'
+import type { MultiUserAccess } from '@/lib/entitlements/multi-user-state'
 
 /** The user's byrå team membership (teams.kind = 'byra'), when any (WL-08). */
 export interface ByraTeamRef {
@@ -62,6 +63,19 @@ interface CompanyContextValue {
   entitlementState: EntitlementState
   /** When the lapsed trial ran out; set only while entitlementState is 'trial_expired'. */
   trialExpiredAt: string | null
+  /**
+   * Multi-user seat state of the ACTIVE company (entitled / grace / frozen)
+   * with the grace deadline. Optional: the no-company shells leave it unset;
+   * consumers treat absence as entitled (UI affordance only, the server
+   * enforces).
+   */
+  multiUser?: MultiUserAccess
+  /**
+   * Companies in `companies` that are FROZEN for this user (non-owner
+   * membership, multi_user lapsed past grace): the switcher renders them
+   * greyed with a lock instead of hiding them. Optional; absent = none.
+   */
+  lockedCompanyIds?: string[]
 }
 
 const CompanyContext = createContext<CompanyContextValue | null>(null)

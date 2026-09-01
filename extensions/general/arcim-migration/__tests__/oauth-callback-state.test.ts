@@ -217,7 +217,9 @@ describe('GET /callback: full-page fallback when there is no opener', () => {
   function fallbackNavigation(html: string): URL {
     // Both arms are emitted; the opener arm postMessages instead of navigating.
     expect(html).toContain('window.opener')
-    const match = html.match(/window\.location\.href = "([^"]+)"/)
+    // replace(), not href: the callback URL carries a spent one-time state and
+    // must not stay in session history. See the replay describe below.
+    const match = html.match(/window\.location\.replace\("([^"]+)"\)/)
     expect(match, 'callback HTML has no no-opener navigation').not.toBeNull()
     return new URL(match![1])
   }
@@ -481,5 +483,63 @@ describe('GET /preview: cross-tenant consent status oracle', () => {
     // 404 with no state is exactly what a nonexistent consent returns too.
     expect(body.error.details ?? {}).not.toHaveProperty('status')
     expect(body.error.details ?? {}).not.toHaveProperty('provider')
+  })
+})
+
+/**
+ * A callback URL is single-use: the state it carries is spent the moment
+ * consumeOAuthState returns. Prod caught the consequence of leaving it in
+ * session history: a callback that had already succeeded was delivered a
+ * second time 19 seconds later, and the user was told "Ingen giltig
+ * migrationssession hittades" about a connection that had just worked.
+ *
+ * The page therefore replaces its history entry instead of pushing one, and
+ * the response is no-store so no Back/reload can serve it from cache. The
+ * state check itself is deliberately untouched: the callback is
+ * unauthenticated, so it still answers consumed, expired, forged and unknown
+ * with the same sentence.
+ */
+describe('GET /callback: the spent callback URL cannot come back', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', APP_URL)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  it('sends no-store and replaces history on a successful callback', async () => {
+    ;(consumeOAuthState as Mock).mockResolvedValue({
+      consentId: 'consent-1',
+      provider: 'fortnox',
+    })
+
+    const res = await callbackHandler(
+      callbackRequest({ code: 'provider-auth-code', state: 'one-time-token' }),
+    )
+    const html = await res.text()
+
+    expect(res.headers.get('Cache-Control')).toBe('no-store')
+    expect(html).toContain('window.location.replace(')
+    expect(html).not.toContain('window.location.href')
+  })
+
+  it('sends no-store and replaces history on a rejected callback too', async () => {
+    ;(consumeOAuthState as Mock).mockResolvedValue(null)
+
+    const res = await callbackHandler(
+      callbackRequest({ code: 'provider-auth-code', state: 'spent-token' }),
+    )
+    const html = await res.text()
+
+    expect(res.headers.get('Cache-Control')).toBe('no-store')
+    expect(html).toContain('window.location.replace(')
+    expect(html).not.toContain('window.location.href')
+    // The anti-oracle property stands: a consumed state still reads exactly
+    // like a forged one.
+    expect(html).toContain(GENERIC_REJECTION)
   })
 })

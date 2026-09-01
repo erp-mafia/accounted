@@ -29,6 +29,14 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
+// Multi-user seat gate: mocked so the queued table mock's enqueue order stays
+// untouched for the pre-existing tests; the gate's own behavior is covered in
+// lib/entitlements/__tests__/multi-user.test.ts.
+const getMultiUserStateMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/entitlements/multi-user', () => ({
+  getMultiUserState: (...args: unknown[]) => getMultiUserStateMock(...args),
+}))
+
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: () => serviceSupabase,
 }))
@@ -87,6 +95,7 @@ beforeEach(() => {
     error: null,
   })
   requireWriteMock.mockResolvedValue({ ok: true })
+  getMultiUserStateMock.mockResolvedValue({ state: 'entitled', graceEndsAt: null })
   isConfiguredMock.mockReturnValue(true)
   sendEmailMock.mockResolvedValue({ success: true, messageId: 'msg-1' })
   brandSenderMock.getSenderForCompany.mockResolvedValue({
@@ -131,6 +140,38 @@ describe('POST /api/company/members/invite', () => {
     )
     expect(status).toBe(403)
     expect(body.error).toBe('Behörighet saknas.')
+  })
+
+  it('blocks invites with 403 + upsell when multi_user is frozen', async () => {
+    getMultiUserStateMock.mockResolvedValue({ state: 'frozen', graceEndsAt: null })
+    enqueue({ data: { role: 'owner' } }) // caller membership
+
+    const { status, body } = await parseJsonResponse<{
+      error: string
+      capability_blocked: boolean
+      capability: string
+    }>(await post({ email: 'x@y.se' }))
+
+    expect(status).toBe(403)
+    expect(body.error).toBe('Bjud in fler personer med betald plan.')
+    expect(body.capability_blocked).toBe(true)
+    expect(body.capability).toBe('multi_user')
+    expect(sendEmailMock).not.toHaveBeenCalled()
+  })
+
+  it('still allows invites during the post-lapse grace window', async () => {
+    getMultiUserStateMock.mockResolvedValue({
+      state: 'grace',
+      graceEndsAt: new Date(Date.now() + 5 * 86_400_000).toISOString(),
+    })
+    enqueue({ data: { role: 'owner' } }) // caller membership
+    enqueue({ data: [] }) // existing members
+    enqueue({ data: null }) // existing invite
+    enqueue({ data: { name: 'Acme AB' } }) // company name
+    enqueue({ data: null }) // insert invitation
+
+    const { status } = await parseJsonResponse(await post({ email: 'x@y.se' }))
+    expect(status).toBe(200)
   })
 
   it('rejects an invalid email with 400', async () => {

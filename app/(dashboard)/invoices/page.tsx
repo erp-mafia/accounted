@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
@@ -17,7 +17,8 @@ import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Dialog, DialogContent, DialogTitle, DialogVeil } from '@/components/ui/dialog'
 import { DataListEmpty } from '@/components/ui/data-list'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { SplitButton, type SplitButtonOption } from '@/components/ui/split-button'
@@ -204,6 +205,9 @@ export default function InvoicesPage() {
   const accountingMethod: string = companySettings?.accounting_method ?? 'accrual'
   const deferInvoiceBooking: boolean = companySettings?.defer_invoice_booking ?? false
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // Radix' onCheckedChange carries no mouse event: the preceding click records
+  // whether shift was held, for range selection.
+  const shiftHeld = useRef(false)
   const [showBulkBookConfirm, setShowBulkBookConfirm] = useState(false)
   const [isBulkBooking, setIsBulkBooking] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -419,13 +423,16 @@ export default function InvoicesPage() {
   const allSelectableSelected =
     selectableInvoices.length > 0 && selectableInvoices.every((inv) => selectedIds.has(inv.id))
 
-  function toggleSelect(id: string) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  // Ranges walk the selectable rows that are actually rendered: the list is
+  // sorted and cut at visibleCount, so rows below the fold are not in range.
+  const range = useRangeSelect({
+    visibleIds: visibleInvoices.filter(isBulkSelectable).map((inv) => inv.id),
+    selectedIds,
+    setSelectedIds,
+  })
+
+  function toggleSelect(id: string, extend?: boolean) {
+    range.toggle(id, extend)
   }
 
   const selectedInvoices = invoices.filter((inv) => selectedIds.has(inv.id))
@@ -642,7 +649,10 @@ export default function InvoicesPage() {
             <button
               type="button"
               className={QUIET_LINK_CLASS}
-              onClick={() => setSelectedIds(new Set(selectableInvoices.map((inv) => inv.id)))}
+              onClick={() => {
+                setSelectedIds(new Set(selectableInvoices.map((inv) => inv.id)))
+                range.resetAnchor()
+              }}
             >
               {t('bulk_select_all', { count: selectableInvoices.length })}
             </button>
@@ -650,7 +660,10 @@ export default function InvoicesPage() {
           <button
             type="button"
             className={QUIET_LINK_CLASS}
-            onClick={() => setSelectedIds(new Set())}
+            onClick={() => {
+              setSelectedIds(new Set())
+              range.resetAnchor()
+            }}
           >
             {t('bulk_clear')}
           </button>
@@ -780,19 +793,22 @@ export default function InvoicesPage() {
                     {/* Hover-revealed selection checkbox (supplier-invoices shape). */}
                     {showSelection && (
                       <td
-                        className={cn(TD_CLASS, 'w-[26px] !pl-1 py-[9px]')}
+                        className={cn(TD_CLASS, 'w-[26px] !pl-1 py-[9px] select-none')}
                         onClick={(e) => e.stopPropagation()}
                       >
                         {isBulkSelectable(invoice) && (
                           <Checkbox
                             checked={selectedIds.has(invoice.id)}
-                            onCheckedChange={() => toggleSelect(invoice.id)}
+                            onClick={(e) => {
+                              shiftHeld.current = e.shiftKey
+                            }}
+                            onCheckedChange={() => toggleSelect(invoice.id, shiftHeld.current)}
                             aria-label={t('bulk_select_row')}
                             className={cn(
-                              'transition-opacity duration-150',
+                              'border-foreground duration-150',
                               selectedIds.has(invoice.id) || selectedIds.size > 0
                                 ? 'opacity-100'
-                                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100',
+                                : CHECKBOX_REVEAL_CLASS,
                             )}
                           />
                         )}

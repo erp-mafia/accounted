@@ -470,6 +470,36 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
     },
   ]
 
+  // What the bank itself reports (F7): booked + available balance from the
+  // last PSD2 balance refresh, with its fetch date. Point-in-time, so it
+  // lives outside the movement-based tiles.
+  const bankReportedRaw =
+    !isSkv && !isManual
+      ? (status.bank as {
+          bank_reported_balance?: number | null
+          bank_reported_available_balance?: number | null
+          bank_balance_updated_at?: string | null
+        } | null)
+      : null
+  // Both the amount and its fetch timestamp must exist: a balance of unknown
+  // age labeled with today's date is exactly the misleading staleness the
+  // timestamp exists to prevent, so without it the line is omitted entirely.
+  const bankReportedLine =
+    bankReportedRaw &&
+    typeof bankReportedRaw.bank_reported_balance === 'number' &&
+    bankReportedRaw.bank_balance_updated_at
+      ? typeof bankReportedRaw.bank_reported_available_balance === 'number'
+        ? t('bank_reported_line_available', {
+            amount: formatCurrency(bankReportedRaw.bank_reported_balance, currency),
+            available: formatCurrency(bankReportedRaw.bank_reported_available_balance, currency),
+            date: formatDate(bankReportedRaw.bank_balance_updated_at),
+          })
+        : t('bank_reported_line', {
+            amount: formatCurrency(bankReportedRaw.bank_reported_balance, currency),
+            date: formatDate(bankReportedRaw.bank_balance_updated_at),
+          })
+      : null
+
   const unexplained = status.unexplained_difference
   const attn = status.stale
     ? t('stale_line', { source: sourceLabel })
@@ -534,6 +564,12 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
           </div>
         ))}
       </div>
+
+      {bankReportedLine && (
+        <p className="text-[12.5px] text-muted-foreground" data-ph-mask>
+          {bankReportedLine}
+        </p>
+      )}
 
       {attn ? (
         <AttnLine>{attn}</AttnLine>

@@ -102,6 +102,19 @@
  *      horizontal scrollbar instead of repositioning (AccountCombobox's
  *      dropdown pre-2026-08-19). Tracked as a per-file baseline set that may
  *      only shrink.
+ *   12. ambiguous-embed: a PostgREST `.select()` that embeds a table joined to
+ *      the from-table by more than one foreign key, without naming the
+ *      relationship. PostgREST answers PGRST201 instead of picking one, and
+ *      neither a mocked-Supabase unit test (a mock never resolves a
+ *      relationship) nor a pg-real test (it bypasses PostgREST) can see that,
+ *      so a static guard is the only thing that catches the class. Two sites
+ *      shipped the same journal_entries -> fiscal_periods embed: the nightly
+ *      underlag cron (fixed 2026-08-31, ~60 period-lock trigger rejections a
+ *      night) and supplier-invoice underlag anchoring, which swallowed the
+ *      error and therefore never anchored a single document in production.
+ *      The ambiguous pairs are derived from supabase/migrations; both hint
+ *      forms PostgREST accepts count as disambiguated. Implementation and
+ *      rationale in ambiguous-embed.mjs. No baseline: the count is 0 today.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -123,6 +136,7 @@ import ts from 'typescript'
 import { findSekLabelledFxAmounts } from './format-currency-sek-label.mjs'
 import { findRawReferenceFetches } from './raw-reference-fetch.mjs'
 import { findClientNodeBuiltins } from './client-node-builtin.mjs'
+import { findAmbiguousEmbeds } from './ambiguous-embed.mjs'
 import {
   findExtensionRouteFindings,
   UNGATED_EXTENSION_ROUTES,
@@ -1027,6 +1041,7 @@ const current = {
   directAiClients: findDirectAiClients(),
   rawReferenceFetch: findRawReferenceFetches(ROOT),
   clientNodeBuiltins: findClientNodeBuiltins(ROOT),
+  ambiguousEmbeds: findAmbiguousEmbeds(ROOT),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
@@ -1115,6 +1130,28 @@ if (current.clientNodeBuiltins.length) {
       '    (see lib/auth/bankid-flags.ts, lib/import/bank-file/formats.ts, lib/salary/personnummer-format.ts,\n' +
       '    lib/auth/api-key-scopes.ts) and import that from the client. scripts/perf/client-import-closure.mjs\n' +
       '    prints the full chain for any module.',
+  )
+}
+
+// 1b4. ambiguous-embed: an embed between two tables joined by more than one
+// foreign key must name the relationship, or PostgREST answers PGRST201 at
+// runtime. No baseline: the count is 0 today, any new one is a hard failure.
+if (current.ambiguousEmbeds.length) {
+  failed = true
+  console.error(
+    `\n✗ ambiguous-embed: ${current.ambiguousEmbeds.length} PostgREST embed(s) between a table pair ` +
+      `that shares more than one foreign key, with no relationship named:`,
+  )
+  current.ambiguousEmbeds.forEach((f) =>
+    console.error(`    ${f.where}  ${f.from} -> ${f.target}`),
+  )
+  console.error(
+    '  → name the relationship in the embed, either by constraint\n' +
+      "    (.select('fiscal_period:fiscal_periods!journal_entries_fiscal_period_id_fkey(...)'))\n" +
+      "    or by foreign key column (.select('journal_entries!opening_balance_entry_id(...)')).\n" +
+      '    Without it PostgREST returns PGRST201 for every call, and no mocked-Supabase test\n' +
+      '    or pg-real test can see it: a mock never resolves a relationship and pg-real does\n' +
+      '    not go through PostgREST at all.',
   )
 }
 
@@ -1410,5 +1447,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
 )

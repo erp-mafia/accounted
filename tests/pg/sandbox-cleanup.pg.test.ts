@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
+import type { PoolClient } from 'pg'
 import { describe, expect, it } from 'vitest'
 import { getClient, getPool } from './setup'
-import { insertPostedJournalEntry, seedCompany } from './fixtures'
+import { insertPostedJournalEntry, insertTransaction, seedCompany } from './fixtures'
 
 /**
  * Sandbox cleanup RPCs (migration 20260807130000):
@@ -14,12 +15,26 @@ import { insertPostedJournalEntry, seedCompany } from './fixtures'
  * deletes, non-sandbox users stay refused, immutability outside the RPC is
  * untouched, and the expired sweep also removes orphaned anonymous users
  * that never got a company_settings row.
+ *
+ * Extended by 20260901120000 with the four blockers that stalled nine
+ * sandboxes on prod (oldest 2026-07-22): a betalfil batch holding a supplier
+ * invoice through ON DELETE RESTRICT, a fiscal period pointing at its IB and
+ * bokslut vouchers through NO ACTION FKs, a terminal webhook delivery, and a
+ * payment_match_log row with company_id NULL. The seed now carries all four,
+ * and each relaxed guard gets a paired test proving it still refuses a
+ * NON-sandbox tenant even when the teardown flag is set: that, not the happy
+ * path, is the regression that matters.
  */
 
 async function seedSandboxUser(settingsCreatedAt?: string): Promise<{
   userId: string
   companyId: string
+  fiscalPeriodId: string
   entryId: string
+  batchId: string
+  supplierInvoiceId: string
+  deliveryId: string
+  matchLogId: string
 }> {
   const { userId, companyId, fiscalPeriodId } = await seedCompany()
   await getPool().query(
@@ -96,7 +111,115 @@ async function seedSandboxUser(settingsCreatedAt?: string): Promise<{
      VALUES ($1, $2, $3, '{}', '{"1":"BUTIK"}', 'Sandbox cleanup test retag')`,
     [companyId, entryId, lineRows[0]!.id],
   )
-  return { userId, companyId, entryId }
+  // A betalfil batch: supplier_payment_batch_items references the supplier
+  // invoice with a composite ON DELETE RESTRICT FK, so the batch header must
+  // be purged before the supplier_invoices delete (20260901120000).
+  const supplierId = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.suppliers (id, user_id, company_id, name, bankgiro)
+     VALUES ($1, $2, $3, 'Derome Bygg AB', '5050-1055')`,
+    [supplierId, userId, companyId],
+  )
+  const supplierInvoiceId = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.supplier_invoices
+       (id, user_id, company_id, supplier_id, arrival_number,
+        supplier_invoice_number, invoice_date, due_date,
+        subtotal, vat_amount, total, remaining_amount, status)
+     VALUES ($1, $2, $3, $4, floor(random() * 1000000)::int,
+             $5, '2026-06-23', '2026-07-07',
+             590, 147.5, 737.5, 737.5, 'approved')`,
+    [supplierInvoiceId, userId, companyId, supplierId, `CD-${supplierInvoiceId.slice(0, 8)}`],
+  )
+  const batchId = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.supplier_payment_batches
+       (id, company_id, user_id, format, total_amount, item_count, msg_id, debtor_snapshot)
+     VALUES ($1, $2, $3, 'pain001', 737.5, 1, $4,
+             '{"name":"Sandbox AB","org_number":"556677-8899","iban":"SE3550000000054910000003","bic":"ESSESESS"}')`,
+    [batchId, companyId, userId, `ACCOUNTED-5566778899-B${batchId.slice(0, 8)}`],
+  )
+  await getPool().query(
+    `INSERT INTO public.supplier_payment_batch_items
+       (batch_id, company_id, supplier_invoice_id, amount, payment_date,
+        payee_type, payee_bankgiro, payee_name, reference_type, reference)
+     VALUES ($1, $2, $3, 737.5, '2026-08-15',
+             'bankgiro', '50501055', 'Derome Bygg AB', 'invoice_number', 'CD3014794407')`,
+    [batchId, companyId, supplierInvoiceId],
+  )
+  // A period that has both an IB link (write-once once opening_balances_set)
+  // and a bokslut link: fiscal_periods_opening_balance_entry_id_fkey and
+  // fiscal_periods_closing_entry_id_fkey are both NO ACTION, so the journal
+  // delete fails until the teardown clears them, and clearing them is itself
+  // blocked by enforce_opening_balance_immutability outside the bypass.
+  const closingEntryId = await insertPostedJournalEntry({
+    userId,
+    companyId,
+    fiscalPeriodId,
+    voucherNumber: 1,
+    sourceType: 'year_end',
+    description: 'Sandbox bokslut',
+  })
+  await getPool().query(
+    `UPDATE public.fiscal_periods
+     SET opening_balance_entry_id = $2, opening_balances_set = true, closing_entry_id = $3
+     WHERE id = $1`,
+    [fiscalPeriodId, entryId, closingEntryId],
+  )
+  // A delivered webhook delivery: block_webhook_delivery_terminal_delete
+  // raises on the auth.users -> companies cascade outside the bypass.
+  const webhookId = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.webhooks (id, company_id, event_type, webhook_url, secret)
+     VALUES ($1, $2, 'journal_entry.committed', 'https://example.invalid/hook', $3)`,
+    [webhookId, companyId, randomUUID()],
+  )
+  const deliveryId = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.webhook_deliveries
+       (id, webhook_id, company_id, event_type, payload, api_version, status, delivered_at)
+     VALUES ($1, $2, $3, 'journal_entry.committed', '{"id":"demo"}', '2026-05-12',
+             'delivered', now())`,
+    [deliveryId, webhookId, companyId],
+  )
+  // A match-log row WITHOUT company_id: the shape lib/invoices/match-log.ts
+  // has always written, and the one the shared audit_log_immutable() bypass
+  // could not recognise as a sandbox row. It points at the supplier invoice
+  // above on purpose: payment_match_log_supplier_invoice_id_fkey is ON DELETE
+  // SET NULL, so a teardown that purges the match log after the supplier
+  // invoices turns this row into an UPDATE, which the guard refuses even
+  // during teardown. The order of the two deletes is what this row pins.
+  const transactionId = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.transactions
+       (id, company_id, user_id, currency, amount, date, description, category)
+     VALUES ($1, $2, $3, 'SEK', -737.5, '2026-06-24', 'Sandbox betalning', 'uncategorized')`,
+    [transactionId, companyId, userId],
+  )
+  const { rows: matchRows } = await getPool().query<{ id: string }>(
+    `INSERT INTO public.payment_match_log
+       (user_id, transaction_id, supplier_invoice_id, action)
+     VALUES ($1, $2, $3, 'matched') RETURNING id`,
+    [userId, transactionId, supplierInvoiceId],
+  )
+  return {
+    userId,
+    companyId,
+    fiscalPeriodId,
+    entryId,
+    batchId,
+    supplierInvoiceId,
+    deliveryId,
+    matchLogId: matchRows[0]!.id,
+  }
+}
+
+async function countById(table: string, id: string): Promise<number> {
+  const { rows } = await getPool().query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM ${table} WHERE id = $1`,
+    [id],
+  )
+  return rows[0]!.n
 }
 
 async function insertAnonymousAuthUser(createdAt: string): Promise<string> {
@@ -149,6 +272,31 @@ describe('sandbox cleanup RPCs (pg)', () => {
       [entryId],
     )
     expect(lines[0]!.n).toBe(0)
+  })
+
+  it('clears the batch, IB/bokslut, webhook and match-log blockers and leaves no tenant rows', async () => {
+    const seed = await seedSandboxUser()
+
+    await getPool().query(`SELECT public.cleanup_sandbox_user($1)`, [seed.userId])
+
+    expect(await authUserExists(seed.userId)).toBe(false)
+    // Each of these is one of the four blockers: before 20260901120000 the
+    // RPC raised on the first of them and the whole teardown rolled back.
+    expect(await countById('public.supplier_payment_batches', seed.batchId)).toBe(0)
+    expect(await countById('public.supplier_invoices', seed.supplierInvoiceId)).toBe(0)
+    expect(await countById('public.fiscal_periods', seed.fiscalPeriodId)).toBe(0)
+    expect(await countById('public.webhook_deliveries', seed.deliveryId)).toBe(0)
+    expect(await countById('public.payment_match_log', seed.matchLogId)).toBe(0)
+    const { rows: items } = await getPool().query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM public.supplier_payment_batch_items WHERE batch_id = $1`,
+      [seed.batchId],
+    )
+    expect(items[0]!.n).toBe(0)
+    const { rows: leftovers } = await getPool().query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM public.company_settings WHERE company_id = $1`,
+      [seed.companyId],
+    )
+    expect(leftovers[0]!.n).toBe(0)
   })
 
   it('refuses a user with no company_settings rows at all', async () => {
@@ -440,5 +588,176 @@ describe('sandbox cleanup RPCs (pg)', () => {
     expect(rows[0]!.anon_user).toBe(false)
     expect(rows[0]!.anon_expired).toBe(false)
     expect(rows[0]!.authed_expired).toBe(false)
+  })
+})
+
+/**
+ * The regression half of 20260901120000: three guards were relaxed for
+ * sandbox teardown, and each one still has to refuse a real tenant. Every
+ * case runs twice, once plain and once with gnubok.sandbox_cleanup set by
+ * hand, because a flag-only bypass would pass the first and fail the second.
+ */
+describe('sandbox teardown bypasses never reach a real tenant (pg)', () => {
+  async function withTeardownFlag<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      await client.query(`SELECT set_config('gnubok.sandbox_cleanup', 'true', true)`)
+      return await fn(client)
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
+  }
+
+  async function seedRealCompany(): Promise<{
+    userId: string
+    companyId: string
+    fiscalPeriodId: string
+  }> {
+    const ctx = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.company_settings (user_id, company_id, is_sandbox)
+       VALUES ($1, $2, false)`,
+      [ctx.userId, ctx.companyId],
+    )
+    return ctx
+  }
+
+  it('enforce_opening_balance_immutability still refuses to unlink a real IB voucher', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedRealCompany()
+    const entryId = await insertPostedJournalEntry({ userId, companyId, fiscalPeriodId })
+    await getPool().query(
+      `UPDATE public.fiscal_periods
+       SET opening_balance_entry_id = $2, opening_balances_set = true
+       WHERE id = $1`,
+      [fiscalPeriodId, entryId],
+    )
+
+    await expect(
+      getPool().query(
+        `UPDATE public.fiscal_periods SET opening_balance_entry_id = NULL WHERE id = $1`,
+        [fiscalPeriodId],
+      ),
+    ).rejects.toThrow(/opening balances are immutable once set/i)
+
+    await withTeardownFlag(async (client) => {
+      await expect(
+        client.query(
+          `UPDATE public.fiscal_periods SET opening_balance_entry_id = NULL WHERE id = $1`,
+          [fiscalPeriodId],
+        ),
+      ).rejects.toThrow(/opening balances are immutable once set/i)
+    })
+  })
+
+  it('enforce_opening_balance_immutability still refuses to detach a real bokslut voucher', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedRealCompany()
+    const closingEntryId = await insertPostedJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      sourceType: 'year_end',
+      description: 'Bokslut 2026',
+    })
+    await getPool().query(
+      `UPDATE public.fiscal_periods SET closing_entry_id = $2 WHERE id = $1`,
+      [fiscalPeriodId, closingEntryId],
+    )
+
+    await withTeardownFlag(async (client) => {
+      await expect(
+        client.query(
+          `UPDATE public.fiscal_periods SET closing_entry_id = NULL WHERE id = $1`,
+          [fiscalPeriodId],
+        ),
+      ).rejects.toThrow(/year-end closing is immutable/i)
+    })
+  })
+
+  it('block_webhook_delivery_terminal_delete still refuses a real tenant terminal delivery', async () => {
+    const { companyId } = await seedRealCompany()
+    const deliveryId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.webhook_deliveries
+         (id, company_id, event_type, payload, api_version, status, delivered_at)
+       VALUES ($1, $2, 'journal_entry.committed', '{"id":"real"}', '2026-05-12',
+               'delivered', now())`,
+      [deliveryId, companyId],
+    )
+
+    await expect(
+      getPool().query(`DELETE FROM public.webhook_deliveries WHERE id = $1`, [deliveryId]),
+    ).rejects.toThrow(/terminal status/i)
+
+    await withTeardownFlag(async (client) => {
+      await expect(
+        client.query(`DELETE FROM public.webhook_deliveries WHERE id = $1`, [deliveryId]),
+      ).rejects.toThrow(/terminal status/i)
+    })
+
+    // Non-terminal rows stay deletable, flag or no flag: the guard's
+    // predicate is unchanged for everyone outside a sandbox.
+    const pendingId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.webhook_deliveries
+         (id, company_id, event_type, payload, api_version, status)
+       VALUES ($1, $2, 'journal_entry.committed', '{"id":"real"}', '2026-05-12', 'pending')`,
+      [pendingId, companyId],
+    )
+    await getPool().query(`DELETE FROM public.webhook_deliveries WHERE id = $1`, [pendingId])
+  })
+
+  it('payment_match_log stays append-only for a real tenant, company_id set or NULL', async () => {
+    const { userId, companyId } = await seedRealCompany()
+    const transactionId = await insertTransaction({ companyId, userId })
+    const { rows } = await getPool().query<{ id: string }>(
+      `INSERT INTO public.payment_match_log (user_id, company_id, transaction_id, action)
+       VALUES ($1, $2, $3, 'matched') RETURNING id`,
+      [userId, companyId, transactionId],
+    )
+    const tenantedId = rows[0]!.id
+    const { rows: untenanted } = await getPool().query<{ id: string }>(
+      `INSERT INTO public.payment_match_log (user_id, transaction_id, action)
+       VALUES ($1, $2, 'unmatched') RETURNING id`,
+      [userId, transactionId],
+    )
+    const untenantedId = untenanted[0]!.id
+
+    for (const id of [tenantedId, untenantedId]) {
+      await expect(
+        getPool().query(`DELETE FROM public.payment_match_log WHERE id = $1`, [id]),
+      ).rejects.toThrow(/cannot be modified or deleted/i)
+      // The company_id IS NULL branch is the one 20260901120000 added; it
+      // must resolve through company_settings.user_id, not through the flag.
+      await withTeardownFlag(async (client) => {
+        await expect(
+          client.query(`DELETE FROM public.payment_match_log WHERE id = $1`, [id]),
+        ).rejects.toThrow(/cannot be modified or deleted/i)
+      })
+    }
+
+    await expect(
+      getPool().query(
+        `UPDATE public.payment_match_log SET action = 'unmatched' WHERE id = $1`,
+        [tenantedId],
+      ),
+    ).rejects.toThrow(/cannot be modified or deleted/i)
+  })
+
+  it('payment_match_log UPDATE stays forbidden even inside a sandbox teardown', async () => {
+    const seed = await seedSandboxUser()
+
+    await withTeardownFlag(async (client) => {
+      await expect(
+        client.query(
+          `UPDATE public.payment_match_log SET action = 'unmatched' WHERE id = $1`,
+          [seed.matchLogId],
+        ),
+      ).rejects.toThrow(/cannot be modified or deleted/i)
+    })
+
+    await getPool().query(`SELECT public.cleanup_sandbox_user($1)`, [seed.userId])
+    expect(await authUserExists(seed.userId)).toBe(false)
   })
 })

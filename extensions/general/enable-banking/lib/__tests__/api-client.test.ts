@@ -13,12 +13,16 @@ vi.stubEnv('ENABLE_BANKING_API_URL', 'https://api.test.com')
 
 import {
   getASPSPs,
+  getAccountBalance,
   getAccountBalances,
   getAccountTransactions,
   getAllTransactions,
   getAllTransactionsWithRaw,
   convertTransaction,
+  deleteSession,
   probeSessionHealth,
+  startAuthorization,
+  createSession,
   type Transaction,
 } from '../api-client'
 
@@ -47,6 +51,97 @@ describe('api-client', () => {
       )
 
       await expect(getAccountBalances('acc-1')).rejects.toThrow('Aborted')
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Balance-type selection
+  // -------------------------------------------------------------------------
+  describe('getAccountBalance', () => {
+    function balancesResponse(balances: unknown[]): Response {
+      return new Response(JSON.stringify({ balances }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    it('returns booked (closingBooked) plus available (interimAvailable) from one response', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'interimAvailable', balance_amount: { amount: '900.50', currency: 'SEK' } },
+          { balance_type: 'closingBooked', balance_amount: { amount: '1000.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result).toEqual({ amount: 1000, date: '2026-09-01', available: 900.5 })
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('accepts ISO 20022 codes (CLBD/ITAV) case-insensitively', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'ITAV', balance_amount: { amount: '450.25', currency: 'SEK' } },
+          { balance_type: 'CLBD', balance_amount: { amount: '500.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result?.amount).toBe(500)
+      expect(result?.available).toBe(450.25)
+    })
+
+    it('returns available: null when the bank reports no available type', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'closingBooked', balance_amount: { amount: '1000.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result).toEqual({ amount: 1000, date: '2026-09-01', available: null })
+    })
+
+    it('falls back to the first balance for booked, never to an available type by preference', async () => {
+      // Only an unknown type: the pre-existing first-entry fallback applies.
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'somethingElse', balance_amount: { amount: '42.00', currency: 'SEK' }, reference_date: '2026-08-31' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result).toEqual({ amount: 42, date: '2026-08-31', available: null })
+    })
+
+    it('prefers interimBooked (ITBD) over the generic first-entry fallback', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'somethingElse', balance_amount: { amount: '1.00', currency: 'SEK' } },
+          { balance_type: 'ITBD', balance_amount: { amount: '3.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result?.amount).toBe(3)
+    })
+
+    it('returns null (never a fabricated 0) when the bank reports no balances at all', async () => {
+      fetchSpy.mockResolvedValueOnce(balancesResponse([]))
+      const result = await getAccountBalance('acc-1')
+      expect(result).toBeNull()
+    })
+
+    it('prefers expected over the first entry when closingBooked is missing', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'other', balance_amount: { amount: '1.00', currency: 'SEK' } },
+          { balance_type: 'expected', balance_amount: { amount: '2.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result?.amount).toBe(2)
     })
   })
 
@@ -569,5 +664,172 @@ describe('probeSessionHealth', () => {
   it('reports unknown when the request itself fails', async () => {
     fetchSpy.mockRejectedValue(new Error('network down'))
     expect(await probeSessionHealth('s1')).toBe('unknown')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Connector mode (self-host routes upstream through the hosted bank proxy)
+// ---------------------------------------------------------------------------
+describe('connector mode', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+
+  const okJson = (body: unknown) =>
+    new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // A self-host with a connector key and no own EB credentials. The
+    // own-credentials env vars must stay unset for bankConnectorMode() to
+    // engage (key present AND no own credentials).
+    vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_testsecret')
+    vi.stubEnv('GNUBOK_CONNECT_URL', 'https://app.test.example')
+    vi.stubEnv('ENABLE_BANKING_PRIVATE_KEY', '')
+    vi.stubEnv('ENABLE_BANKING_PRIVATE_KEY_PRODUCTION', '')
+    vi.stubEnv('ENABLE_BANKING_APP_ID', '')
+    vi.stubEnv('ENABLE_BANKING_APP_ID_PRODUCTION', '')
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+  })
+
+  afterEach(() => {
+    fetchSpy.mockRestore()
+    vi.unstubAllEnvs()
+  })
+
+  const lastCall = () => {
+    const call = fetchSpy.mock.calls[fetchSpy.mock.calls.length - 1]
+    const url = String(call[0])
+    const init = (call[1] ?? {}) as RequestInit
+    const headers = (init.headers ?? {}) as Record<string, string>
+    return { url, init, headers }
+  }
+
+  it('routes reads through the proxy with the connector key, never the EB JWT', async () => {
+    fetchSpy.mockResolvedValue(okJson({ aspsps: [] }))
+    await getASPSPs('SE')
+    const { url, headers } = lastCall()
+    expect(url).toContain('https://app.test.example/api/connect/bank/aspsps')
+    expect(headers['Authorization']).toBe('Bearer gnubok_ck_testsecret')
+    expect(headers['Authorization']).not.toContain('jwt')
+    // The JWT signer must not run: the instance holds no EB private key.
+    expect(mockGenerateJWT).not.toHaveBeenCalled()
+  })
+
+  it('sends X-Connector-Company on /auth so the proxy can meter the company quota', async () => {
+    fetchSpy.mockResolvedValue(okJson({ url: 'https://bank/auth', authorization_id: 'a1' }))
+    await startAuthorization('Bank', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', undefined, 'company-42')
+    const { url, headers, init } = lastCall()
+    expect(url).toBe('https://app.test.example/api/connect/bank/auth')
+    expect(init.method).toBe('POST')
+    expect(headers['X-Connector-Company']).toBe('company-42')
+    expect(headers['Authorization']).toBe('Bearer gnubok_ck_testsecret')
+  })
+
+  it('binds /sessions to the signed connector_state when one is passed', async () => {
+    fetchSpy.mockResolvedValue(okJson({ session_id: 's1', accounts: [], access: { valid_until: '2027-01-01' } }))
+    await createSession('auth-code', 'signed-connector-state')
+    const { url, init } = lastCall()
+    expect(url).toBe('https://app.test.example/api/connect/bank/sessions')
+    expect(JSON.parse(String(init.body))).toEqual({ code: 'auth-code', connector_state: 'signed-connector-state' })
+  })
+
+  it('omits connector_state from /sessions when none is passed', async () => {
+    fetchSpy.mockResolvedValue(okJson({ session_id: 's1', accounts: [], access: { valid_until: '2027-01-01' } }))
+    await createSession('auth-code')
+    const { init } = lastCall()
+    expect(JSON.parse(String(init.body))).toEqual({ code: 'auth-code' })
+  })
+
+  it('does not engage when the instance has its own EB credentials (own-credentials seam)', async () => {
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    fetchSpy.mockResolvedValue(okJson({ aspsps: [] }))
+    await getASPSPs('SE')
+    const { url, headers } = lastCall()
+    // Direct EB base (captured at import), never the connector proxy.
+    expect(url).not.toContain('/api/connect/bank')
+    expect(url).toContain('enablebanking.com')
+    expect(headers['Authorization']).toBe('Bearer test-jwt-token')
+  })
+
+  it('never sends X-Connector-Company on the direct path, even with companyId passed', async () => {
+    // Own EB credentials → direct path. companyId is always set on hosted /auth,
+    // so the header must be gated on connector mode, not on companyId: leaking
+    // the internal company UUID to the real Enable Banking API is a regression.
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    fetchSpy.mockResolvedValue(okJson({ url: 'https://bank/auth', authorization_id: 'a1' }))
+    await startAuthorization('Bank', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', undefined, 'company-42')
+    const { url, headers } = lastCall()
+    expect(url).toContain('enablebanking.com')
+    expect(headers['X-Connector-Company']).toBeUndefined()
+    expect(headers['Authorization']).toBe('Bearer test-jwt-token')
+  })
+})
+
+/**
+ * Log levels for the two conditions that are expected rather than broken.
+ *
+ * A PSD2 consent that ran out and a session Enable Banking has already dropped
+ * are both handled: the sync flips the connection to 'expired' and asks for a
+ * re-authorization, and the disconnect carries on regardless. Logging them at
+ * error filled the production error panel with events nobody could act on and
+ * buried the genuine ASPSP failures next to them. The thrown errors are
+ * unchanged: only the level moves.
+ */
+describe('expected-condition log levels', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+  let errorSpy: ReturnType<typeof vi.spyOn>
+  let warnSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    fetchSpy.mockRestore()
+    errorSpy.mockRestore()
+    warnSpy.mockRestore()
+  })
+
+  it('logs an expired bank session at warn, and still throws SessionExpiredError', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(JSON.stringify({ code: 'EXPIRED_SESSION' }), { status: 401 })
+    )
+
+    await expect(
+      getAllTransactionsWithRaw('acc-1', '2024-01-01', '2024-12-31')
+    ).rejects.toThrow('Bank session expired')
+
+    expect(warnSpy).toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('still logs a genuine ASPSP failure at error', async () => {
+    // 500 is retried before it gives up; every attempt is the same failure.
+    fetchSpy.mockResolvedValue(new Response('{"message":"internal error"}', { status: 500 }))
+
+    await expect(
+      getAllTransactionsWithRaw('acc-1', '2024-01-01', '2024-12-31')
+    ).rejects.toThrow('Failed to get transactions')
+
+    expect(errorSpy).toHaveBeenCalled()
+  })
+
+  it('logs a session that is already gone at Enable Banking at warn', async () => {
+    fetchSpy.mockResolvedValue(new Response('', { status: 404 }))
+
+    await expect(deleteSession('session-1')).rejects.toThrow('Failed to revoke session')
+
+    expect(warnSpy).toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('still logs an unexpected revoke failure at error', async () => {
+    fetchSpy.mockResolvedValue(new Response('{"message":"boom"}', { status: 500 }))
+
+    await expect(deleteSession('session-1')).rejects.toThrow('Failed to revoke session')
+
+    expect(errorSpy).toHaveBeenCalled()
   })
 })

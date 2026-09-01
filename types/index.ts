@@ -685,6 +685,7 @@ export interface CashAccount {
                                   // tolerate future currencies without DB-driven enum drift
   ledger_account: string
   balance: number | null
+  available_balance: number | null
   balance_updated_at: string | null
   enabled: boolean
   is_primary: boolean

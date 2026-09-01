@@ -40,6 +40,7 @@ import {
   VTH_CLASS,
   VTD_CLASS,
   QUIET_LINK_CLASS,
+  CHECKBOX_REVEAL_CLASS,
   RowFoldout,
 } from '@/components/ui/dry-table'
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal, RotateCcw } from 'lucide-react'
@@ -59,6 +60,7 @@ import JournalEntryStatusBadge from '@/components/bookkeeping/JournalEntryStatus
 import AttachmentPreviewSheet from '@/components/bookkeeping/AttachmentPreviewSheet'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
@@ -256,6 +258,9 @@ export default function JournalEntryList({
   const [noDocRequired, setNoDocRequired] = useState<Map<string, string | null>>(new Map())
   const [showMissingOnly, setShowMissingOnly] = useState(initialShowMissingOnly)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // Radix' onCheckedChange carries no mouse event: the click that precedes it
+  // records whether shift was held, for range selection.
+  const shiftHeld = useRef(false)
   const [batchReason, setBatchReason] = useState('')
   const [batchSubmitting, setBatchSubmitting] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
@@ -809,15 +814,6 @@ export default function JournalEntryList({
     [attachmentCounts, noDocRequired],
   )
 
-  const toggleSelect = (id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
   const handleBatchExempt = async () => {
     const ids = Array.from(selectedIds)
     if (ids.length === 0) return
@@ -1047,6 +1043,13 @@ export default function JournalEntryList({
   const eligibleEntries = canWrite ? filteredEntries.filter(isEligibleForExempt) : []
   const allEligibleSelected =
     eligibleEntries.length > 0 && eligibleEntries.every((e) => selectedIds.has(e.id))
+  // Ranges walk the selectable rows of the current page, in rendered order.
+  const range = useRangeSelect({
+    visibleIds: eligibleEntries.map((e) => e.id),
+    selectedIds,
+    setSelectedIds,
+  })
+  const toggleSelect = (id: string, extend?: boolean) => range.toggle(id, extend)
   const toggleSelectAll = () => {
     setSelectedIds((prev) => {
       const next = new Set(prev)
@@ -1057,6 +1060,7 @@ export default function JournalEntryList({
       }
       return next
     })
+    range.resetAnchor()
   }
 
   // Pristine, untouched ledger: nothing posted in ANY year, no drafts, no
@@ -1536,19 +1540,22 @@ export default function JournalEntryList({
                     >
                       {/* Hover-revealed selection checkbox (concept .cb) */}
                       <td
-                        className={cn(TD_CLASS, 'w-[26px] !pl-1 py-[9px]')}
+                        className={cn(TD_CLASS, 'w-[26px] !pl-1 py-[9px] select-none')}
                         onClick={(e) => e.stopPropagation()}
                       >
                         {selectable && (
                           <Checkbox
                             checked={selectedIds.has(entry.id)}
-                            onCheckedChange={() => toggleSelect(entry.id)}
+                            onClick={(e) => {
+                              shiftHeld.current = e.shiftKey
+                            }}
+                            onCheckedChange={() => toggleSelect(entry.id, shiftHeld.current)}
                             aria-label={t('batch_select_row')}
                             className={cn(
-                              'transition-opacity duration-150',
+                              'border-foreground duration-150',
                               selectedIds.has(entry.id)
                                 ? 'opacity-100'
-                                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                                : CHECKBOX_REVEAL_CLASS,
                             )}
                           />
                         )}
