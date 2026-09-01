@@ -7,7 +7,7 @@ import ExtractionStatus from '@/components/ui/extraction-status'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { TD_CLASS, RowFoldout } from '@/components/ui/dry-table'
+import { TD_CLASS, CHECKBOX_REVEAL_CLASS, RowFoldout } from '@/components/ui/dry-table'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import {
@@ -284,7 +284,7 @@ export default function TransactionInboxCard({
             : undefined
         }
       >
-        {/* Hover-revealed selection checkbox (concept .cb) */}
+        {/* Always-visible selection checkbox (concept .cb) */}
         {/* Zero-width cell: the checkbox hangs in the left page margin so
             the date column can sit flush with the page edge. */}
         <td
@@ -297,10 +297,8 @@ export default function TransactionInboxCard({
               onCheckedChange={() => onToggleSelect(transaction.id)}
               aria-label="Välj transaktion"
               className={cn(
-                'absolute -left-5 top-1/2 -translate-y-1/2 transition-opacity duration-150 md:-left-6',
-                isSelected
-                  ? 'opacity-100'
-                  : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                'absolute -left-5 top-1/2 -translate-y-1/2 border-foreground duration-150 md:-left-6',
+                isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
               )}
             />
           )}
