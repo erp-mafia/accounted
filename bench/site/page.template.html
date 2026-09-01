@@ -218,6 +218,7 @@
   .vcard h5 .dot { width: 7px; height: 7px; border-radius: 999px; background: var(--sage); }
   .vcard.warn h5 .dot { background: var(--ochre); }
   .vcard.no h5 .dot { background: var(--terra); }
+  .vcard .vsv { font-family: "Geist Mono",monospace; font-size: 11px; color: var(--faint); margin: 0 0 8px; letter-spacing: .02em; }
   .vcard .vdesc { font-size: 12px; color: var(--faint); margin: 0 0 14px; max-width: none; }
   .vcard .rows { display: grid; gap: 8px; }
   .vcard .rows span { display: flex; align-items: center; font-size: 13.5px; font-weight: 500; }
@@ -295,12 +296,12 @@
   <canvas id="strata" aria-hidden="true"></canvas>
   <header class="site">
     <span><b>Accounted</b> · Labs</span>
-    <span class="meta">Ledger-Bench v1.2 · 2026-08-31</span>
+    <span class="meta" id="metaline">Ledger-Bench</span>
   </header>
   <div class="content">
     <h1>Ledger-Bench</h1>
     <p class="dek">How good are language models at real Swedish accounting work? Four rankings: choosing the account, knowing the VAT law, reading the invoice, and keeping a live ledger legal.</p>
-    <p class="facts">Updated 2026-09-01 · Version 1.5 · 104 tasks · 15 models · pass@1 · <a href="#method">methodology</a></p>
+    <p class="facts" id="herofacts"></p>
     <div class="ctas">
       <a class="btn primary" href="#board">View leaderboard</a>
       <a class="btn secondary" href="#method">Methodology</a>
@@ -369,10 +370,10 @@
     </section>
 
     <section id="verdicts">
-      <h2>Utlåtande</h2>
+      <h2>Verdicts</h2>
       <p class="sectiondesc">Each model receives a revisor-style opinion on confidence-gated unattended booking, from published criteria.</p>
       <div class="verdicts" id="verdictcards"></div>
-      <p class="vcriteria"><b>Criteria (published, retunable):</b> Tillstyrks requires booking ≥85%, automation coverage ≥50% at 99% precision, VAT law ≥80%, and a clean ledger-agent record. Med reservation requires booking ≥75%, law ≥60%, and a usable confidence gate. Ej bedömd means too few clean runs for an opinion. Verdicts concern unattended booking, not assisted use.</p>
+      <p class="vcriteria"><b>Criteria (published, retunable):</b> <em>Approved</em> requires booking ≥85%, automation coverage ≥50% at 99% precision, VAT law ≥80%, and a clean ledger-agent record. <em>Approved with reservation</em> requires booking ≥75%, law ≥60%, and a usable confidence gate. <em>Not assessed</em> means too few clean runs for an opinion. Verdicts concern unattended booking, not assisted use. The Swedish terms beneath each heading are the auditor's own vocabulary (<span class="mono">tillstyrks</span> / <span class="mono">avstyrks</span> in a revisionsberättelse), kept as provenance.</p>
     </section>
 
     <section id="h2h">
@@ -432,7 +433,7 @@
 
   <footer class="site">
     <div class="inner">
-      <span>ACCOUNTED LEDGER-BENCH V1.2</span>
+      <span id="footversion">ACCOUNTED LEDGER-BENCH</span>
       <span>ORACLE: TRIGGER-ENFORCED SWEDISH ACCOUNTING LAW</span>
       <span>2026-08-31</span>
     </div>
@@ -562,8 +563,8 @@
 
   /* ---------- shared ---------- */
   const SUITES = [
-    { id: 'booking', label: 'Booking', legend: '<b>Pass</b> account and VAT both right · <b>Strikt</b> exact gold account, no accepted alternatives · <b>Auto@99%</b> share auto-bookable at 99% precision, gated on stated confidence · <b>ECE</b> calibration error, 0 = perfect · <b>Cost</b> per task · a horizontal rule separates statistical tie groups (paired McNemar, p<0.05)' },
-    { id: 'reasoning', label: 'Reasoning', legend: '<b>Pass</b> exact deterministic answer · <b>Färskhet</b> the six tasks on rules changed 2025-2026 · <b>ECE</b> calibration error, lower is better · <b>Cost</b> per task · rules separate statistical tie groups' },
+    { id: 'booking', label: 'Booking', legend: '<b>Pass</b> account and VAT both right · <b>Strict</b> exact gold account, no accepted alternatives · <b>Auto@99%</b> share auto-bookable at 99% precision, gated on stated confidence · <b>ECE</b> calibration error, 0 = perfect · <b>Cost</b> per task · a horizontal rule separates statistical tie groups (paired McNemar, p<0.05)' },
+    { id: 'reasoning', label: 'Reasoning', legend: '<b>Pass</b> exact deterministic answer · <b>Fresh rules</b> the six tasks on rules that changed in 2025-2026 · <b>ECE</b> calibration error, lower is better · <b>Cost</b> per task · rules separate statistical tie groups' },
     { id: 'extraction', label: 'Extraction', legend: '<b>Pass</b> every field on the document right · <b>Fields</b> mean per-field accuracy · <b>Cost</b> per task · models without vision are absent' },
     { id: 'ledger-agent', label: 'Ledger-agent', legend: '<b>Pass</b> all end-state assertions hold on the real ledger · <b>Pass^k</b> share of tasks solved on EVERY repeat attempt · <b>Turns</b> model turns used · <b>Cost</b> per task' },
   ];
@@ -608,8 +609,8 @@
   }
 
   function headerCols() {
-    if (active === 'booking') return segment === 'all' ? ['Model','Pass','Strikt','Auto@99%','ECE','Cost'] : ['Model','Pass','Konto','Moms','Cost'];
-    if (active === 'reasoning') return ['Model','Pass','Färskhet','ECE','Cost'];
+    if (active === 'booking') return segment === 'all' ? ['Model','Pass','Strict','Auto@99%','ECE','Cost'] : ['Model','Pass','Account','VAT','Cost'];
+    if (active === 'reasoning') return ['Model','Pass','Fresh rules','ECE','Cost'];
     if (active === 'extraction') return ['Model','Pass','Fields','Cost'];
     return ['Model','Pass','Pass^k','Turns','Cost'];
   }
@@ -761,10 +762,10 @@
   function renderVerdicts() {
     const host = document.getElementById('verdictcards');
     const groups = [
-      { key: 'tillstyrks', cls: '', title: 'Tillstyrks', desc: 'Fit for confidence-gated unattended booking today.' },
-      { key: 'tillstyrks_med_reservation', cls: 'warn', title: 'Tillstyrks med reservation', desc: 'Usable with human review below the confidence gate.' },
-      { key: 'avstyrks', cls: 'no', title: 'Avstyrks', desc: 'Should not book unattended in any configuration.' },
-      { key: 'ej_bedomd', cls: 'no', title: 'Ej bedömd', desc: 'Too few clean runs for an opinion; no verdict either way.' },
+      { key: 'tillstyrks', cls: '', title: 'Approved', sv: 'tillstyrks', desc: 'Fit for confidence-gated unattended booking today.' },
+      { key: 'tillstyrks_med_reservation', cls: 'warn', title: 'Approved with reservation', sv: 'tillstyrks med reservation', desc: 'Usable with human review below the confidence gate.' },
+      { key: 'avstyrks', cls: 'no', title: 'Not approved', sv: 'avstyrks', desc: 'Should not book unattended in any configuration.' },
+      { key: 'ej_bedomd', cls: 'no', title: 'Not assessed', sv: 'ej bedömd', desc: 'Too few clean runs for an opinion; no verdict either way.' },
     ];
     const byModel = DATA.verdicts || {};
     const labelOf = (id) => (allModels.find((mm) => mm.id === id) || { label: id }).label;
@@ -778,7 +779,8 @@
             const cov = byModel[id].coverage99;
             return `<span>${markFor(vendorOf(id))}${short(labelOf(id))}<span class="cov">${cov != null ? Math.round(cov*100) + '% auto' : ''}</span></span>`;
           }).join('');
-      return `<div class="vcard ${g.cls}"><h5><span class="dot"></span>${g.title}</h5><p class="vdesc">${g.desc}</p><div class="rows">${rows}</div></div>`;
+      return `<div class="vcard ${g.cls}"><h5><span class="dot"></span>${g.title}</h5>` +
+        `<p class="vsv">${g.sv}</p><p class="vdesc">${g.desc}</p><div class="rows">${rows}</div></div>`;
     }).join('');
   }
 
@@ -952,6 +954,23 @@
       `Divergence is expected. <a href="${EXTERNAL.url}">${EXTERNAL.source}</a> asks ${EXTERNAL.n} US-GAAP questions across AP, AR, bank reconciliation, financial reporting and month-end close; Ledger-Bench asks Swedish BAS and moms questions and writes to a real ledger under Bokföringslagen. ` +
       `Neither board validates the other, and at 101 and 104 tasks both are small enough that adjacent ranks differ by single questions. Our strict scores (mean 57.8%) sit nearer their range (71.1%) than our lenient ones (83.6%) but agree no better (ρ = +0.18), so scoring leniency does not explain the gap.`;
   }
+
+  // Version and date come from the results file, so they can never go stale.
+  (function stampVersion() {
+    const v = (DATA.benchVersion || 'v1').replace(/^v/, '');
+    const date = (DATA.generatedAt || '').slice(0, 10);
+    const models = new Set();
+    let tasks = 0;
+    for (const suite of Object.keys(DATA.suites || {})) {
+      for (const r of DATA.suites[suite]) models.add(r.model);
+      const top = (DATA.suites[suite] || [])[0];
+      if (top) tasks += top.n;
+    }
+    document.getElementById('metaline').textContent = `Ledger-Bench v${v} · ${date}`;
+    document.getElementById('footversion').textContent = `ACCOUNTED LEDGER-BENCH V${v}`;
+    document.getElementById('herofacts').innerHTML =
+      `Updated ${date} · Version ${v} · ${tasks} tasks · ${models.size} models · pass@1 · <a href="#method">methodology</a>`;
+  })();
 
   renderBoard();
   renderVerdicts();

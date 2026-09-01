@@ -1,6 +1,6 @@
 {
-  "benchVersion": "v1.1",
-  "generatedAt": "2026-09-01T07:55:03.930Z",
+  "benchVersion": "v1.5",
+  "generatedAt": "2026-09-01T08:11:12.442Z",
   "suites": {
     "booking": [
       {
