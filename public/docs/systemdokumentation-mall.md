@@ -39,7 +39,7 @@ Systemdokumentationen ska förvaras tillsammans med övrig räkenskapsinformatio
 
 *Vid egen drift: ange var databasen driftas och vem som ansvarar för drift och säkerhetskopiering.*
 
-## 3. Kontoplan
+## 3. Kontoplan (BFNAR 2013:2 punkt 9.2 a, 9.3)
 
 3.1. Kontoplanen bygger på BAS-kontoplanen (BAS 2026) utgiven av BAS-intressenternas Förening.
 
@@ -58,7 +58,7 @@ Systemdokumentationen ska förvaras tillsammans med övrig räkenskapsinformatio
 3.4. Företagsspecifika anpassningar av kontoplanen:
 [BESKRIV EVENTUELLA TILLAGDA ELLER BORTTAGNA KONTON, t.ex. "Konto 4010 Inköp varor, 5010 Lokalhyra har lagts till. Inga standardkonton har tagits bort."]
 
-## 4. Samlingsplan
+## 4. Samlingsplan (BFNAR 2013:2 punkt 9.2 c, 9.4, 9.11)
 
 Samlingsplanen beskriver hur bokföringen är organiserad i form av delsystem, grundbokföring och huvudbokföring.
 
@@ -132,7 +132,7 @@ Bankkonto 1930 avstäms via bankavstämningsmodulen (flerstegs matchning: exakt 
 
 ## 5. Verifikationer
 
-### 5.1 Verifikationsnumrering
+### 5.1 Verifikationsnumrering (BFNAR 2013:2 punkt 9.6)
 
 Verifikationsnummer tilldelas sekventiellt av systemet vid bokföring. Numreringen är unik per företag, räkenskapsår och verifikationsserie. Numren tilldelas via en databasfunktion som är säker vid samtidiga anrop och kan inte sättas manuellt.
 
@@ -214,7 +214,7 @@ Dokument som är kopplade till bokförda verifikationer kan inte raderas, efters
 8.4. Redovisningsmetod: [ ] Faktureringsmetod  [ ] Kontantmetod
 Momsperiod: [ ] Månad  [ ] Kvartal  [ ] Helår
 
-## 9. Behandlingshistorik
+## 9. Behandlingshistorik (BFL 5 kap. 11 §, BFNAR 2013:2 punkt 9.15-9.16)
 
 9.1. Systemet registrerar automatiskt en behandlingshistorik som inkluderar:
 - Registreringsdatum och tidpunkt för varje journalpost
@@ -304,7 +304,7 @@ Momsperiod: [ ] Månad  [ ] Kvartal  [ ] Helår
 
 13.6. Ansvarig för att tilldela och granska behörigheter: [NAMN]
 
-## 14. Säkerhetskopiering och arkivering
+## 14. Säkerhetskopiering och arkivering (BFNAR 2013:2 punkt 8.3, 9.2 d, 9.12)
 
 14.1. Räkenskapsinformationen lagras i EU och bevaras i minst 7 år enligt BFL 7 kap.
 

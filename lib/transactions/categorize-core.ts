@@ -325,7 +325,7 @@ export async function categorizeMatchedTransaction(
   } else {
     // allowDuplicate=true bypassed the guard. Booking over a possible
     // double-booking is a bookkeeping act that must leave a durable
-    // behandlingshistorik record (BFNAR 2013:2 kap 8). Re-detect to capture
+    // behandlingshistorik record (BFNAR 2013:2 p. 9.16). Re-detect to capture
     // the dismissed candidate; best-effort, a logging failure must never block
     // a legitimate booking.
     try {
@@ -359,7 +359,7 @@ export async function categorizeMatchedTransaction(
             // Dismissing a candidate whose amounts were never comparable is a
             // materially different decision from dismissing a confirmed
             // same-amount twin; behandlingshistorik has to record which one
-            // the user actually made (BFNAR 2013:2 kap 8).
+            // the user actually made (BFNAR 2013:2 p. 9.16).
             amount_verified: dismissed.amount_verified,
             unverified_reason: dismissed.unverified_reason,
             via: 'allow_duplicate',
