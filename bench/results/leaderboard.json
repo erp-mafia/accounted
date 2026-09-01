@@ -1,6 +1,6 @@
 {
   "benchVersion": "v1.5",
-  "generatedAt": "2026-09-01T08:28:40.740Z",
+  "generatedAt": "2026-09-01T08:47:50.202Z",
   "suites": {
     "booking": [
       {
@@ -25,6 +25,45 @@
           "ece": 0.096,
           "coverage95": 1,
           "coverage99": 0.528,
+          "parseFailures": 0,
+          "segments": {
+            "underlag": {
+              "n": 34,
+              "pass": 0.971,
+              "accountAccuracy": 0.971,
+              "vatAccuracy": 1
+            },
+            "bank_only": {
+              "n": 19,
+              "pass": 0.947,
+              "accountAccuracy": 0.947,
+              "vatAccuracy": 1
+            }
+          }
+        }
+      },
+      {
+        "model": "claude-fable-5",
+        "label": "Claude Fable 5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 53,
+        "pass": 51,
+        "passRate": 0.962,
+        "wilsonLo": 0.926,
+        "wilsonHi": 0.981,
+        "totalCostUsd": 14.799,
+        "avgCostUsd": 0.27923,
+        "avgTurns": 1,
+        "avgDurationMs": 4817,
+        "extras": {
+          "accountAccuracy": 0.962,
+          "strictAccountAccuracy": 0.717,
+          "strictPass": 0.717,
+          "vatAccuracy": 1,
+          "ece": 0.054,
+          "coverage95": 1,
+          "coverage99": 0.226,
           "parseFailures": 0,
           "segments": {
             "underlag": {
@@ -1435,7 +1474,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1459,7 +1498,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1483,7 +1522,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1507,7 +1546,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1519,7 +1558,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.45
+        "disc": 0.47
       },
       {
         "id": "booking-024",
@@ -1531,7 +1570,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 1,
           "claude-opus-5": 0,
-          "claude-fable-5": null,
+          "claude-fable-5": 0,
           "gpt-5-6-terra-pro": 0,
           "gpt-5-6-luna": 0,
           "gemini-3-1-pro": 0,
@@ -1543,7 +1582,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.15
+        "disc": 0.13
       },
       {
         "id": "booking-025",
@@ -1555,7 +1594,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1567,7 +1606,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.57
+        "disc": 0.58
       },
       {
         "id": "booking-026",
@@ -1579,7 +1618,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1591,7 +1630,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.26
+        "disc": 0.28
       },
       {
         "id": "booking-027",
@@ -1603,7 +1642,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1615,7 +1654,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.47
+        "disc": 0.49
       },
       {
         "id": "booking-028",
@@ -1627,7 +1666,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 0,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 0,
           "gpt-5-6-luna": 0,
           "gemini-3-1-pro": 1,
@@ -1639,7 +1678,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.44
+        "disc": 0.48
       },
       {
         "id": "booking-029",
@@ -1651,7 +1690,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1675,7 +1714,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1699,7 +1738,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1711,7 +1750,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.85
+        "disc": 0.86
       },
       {
         "id": "booking-032",
@@ -1723,7 +1762,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1735,7 +1774,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.32
+        "disc": 0.34
       },
       {
         "id": "booking-033",
@@ -1747,7 +1786,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 0,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 0,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 0,
@@ -1759,7 +1798,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.33
+        "disc": 0.39
       },
       {
         "id": "booking-034",
@@ -1771,7 +1810,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1783,7 +1822,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.5
+        "disc": 0.52
       },
       {
         "id": "booking-035",
@@ -1795,7 +1834,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1807,7 +1846,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.38
+        "disc": 0.39
       },
       {
         "id": "booking-036",
@@ -1819,7 +1858,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 0,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1831,7 +1870,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.26
+        "disc": 0.27
       },
       {
         "id": "booking-037",
@@ -1843,7 +1882,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1867,7 +1906,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1891,7 +1930,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1915,7 +1954,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1939,7 +1978,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 0,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1951,7 +1990,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.53
+        "disc": 0.54
       },
       {
         "id": "booking-103",
@@ -1963,7 +2002,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1987,7 +2026,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2011,7 +2050,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2023,7 +2062,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.28
+        "disc": 0.29
       },
       {
         "id": "booking-107",
@@ -2035,7 +2074,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 0,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2047,7 +2086,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.08
+        "disc": 0.12
       },
       {
         "id": "booking-108",
@@ -2059,7 +2098,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2071,7 +2110,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.61
+        "disc": 0.62
       },
       {
         "id": "booking-109",
@@ -2083,7 +2122,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2107,7 +2146,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2131,7 +2170,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2155,7 +2194,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2179,7 +2218,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2191,7 +2230,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.37
+        "disc": 0.38
       },
       {
         "id": "booking-114",
@@ -2203,7 +2242,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 0,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 0,
           "gemini-3-1-pro": 1,
@@ -2215,7 +2254,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.46
+        "disc": 0.4
       },
       {
         "id": "booking-115",
@@ -2227,7 +2266,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2251,7 +2290,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2275,7 +2314,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 0,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2287,7 +2326,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.21
+        "disc": 0.23
       },
       {
         "id": "booking-118",
@@ -2299,7 +2338,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 0,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2311,7 +2350,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.66
+        "disc": 0.67
       },
       {
         "id": "booking-001",
@@ -2323,7 +2362,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2347,7 +2386,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2371,7 +2410,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2395,7 +2434,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2419,7 +2458,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2443,7 +2482,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2467,7 +2506,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2491,7 +2530,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2515,7 +2554,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2539,7 +2578,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2563,7 +2602,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2575,7 +2614,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.01
+        "disc": 0.02
       },
       {
         "id": "booking-012",
@@ -2587,7 +2626,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2611,7 +2650,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2635,7 +2674,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2659,7 +2698,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2683,7 +2722,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3882,6 +3921,7 @@
     "booking": [
       [
         "claude-opus-5",
+        "claude-fable-5",
         "gemini-3-1-pro",
         "gpt-5-6-luna",
         "gpt-5-6-terra-pro",
@@ -4030,6 +4070,17 @@
           "account": "7632",
           "vat": "representation_capped",
           "confidence": 0.82,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-fable-5",
+          "label": "Claude Fable 5",
+          "vendor": "Anthropic",
+          "pass": true,
+          "account": "7631",
+          "vat": "representation_capped",
+          "confidence": 0.95,
           "accountCorrect": true,
           "vatCorrect": true
         },
@@ -4218,6 +4269,17 @@
           "vatCorrect": true
         },
         {
+          "model": "claude-fable-5",
+          "label": "Claude Fable 5",
+          "vendor": "Anthropic",
+          "pass": true,
+          "account": "5410",
+          "vat": "domestic_25",
+          "confidence": 0.9,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
           "model": "gpt-5-6-terra-pro",
           "label": "GPT-5.6 Terra Pro",
           "vendor": "OpenAI",
@@ -4402,6 +4464,17 @@
           "vatCorrect": true
         },
         {
+          "model": "claude-fable-5",
+          "label": "Claude Fable 5",
+          "vendor": "Anthropic",
+          "pass": true,
+          "account": "5410",
+          "vat": "domestic_25",
+          "confidence": 0.9,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
           "model": "gpt-5-6-terra-pro",
           "label": "GPT-5.6 Terra Pro",
           "vendor": "OpenAI",
@@ -4523,6 +4596,14 @@
       "reasoning": 0.889,
       "agentClean": true
     },
+    "claude-fable-5": {
+      "verdict": "ej_bedomd",
+      "coverage99": 0.226,
+      "coverage95": 1,
+      "booking": 0.962,
+      "reasoning": 0.944,
+      "agentClean": false
+    },
     "gemini-3-1-pro": {
       "verdict": "tillstyrks_med_reservation",
       "coverage99": 0.151,
@@ -4625,14 +4706,6 @@
       "coverage95": 0,
       "booking": 0.434,
       "reasoning": 0.361,
-      "agentClean": false
-    },
-    "claude-fable-5": {
-      "verdict": "ej_bedomd",
-      "coverage99": 0,
-      "coverage95": 0,
-      "booking": null,
-      "reasoning": 0.944,
       "agentClean": false
     }
   }

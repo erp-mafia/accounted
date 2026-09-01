@@ -15,7 +15,22 @@ import type {
 let apiClient: Anthropic | null = null
 let bedrockClient: AnthropicBedrock | null = null
 
+const bedrockClients = new Map<string, AnthropicBedrock>()
+
 function getClient(provider: string): Anthropic | AnthropicBedrock {
+  if (provider === 'anthropic-bedrock-us') {
+    // Fable 5 is not offered on the EU deployment. Public synthetic tasks
+    // only: assertDataClassAllowed refuses prod-derived data on any
+    // non-EU residency, so this route can never see customer data.
+    if (!process.env.AWS_ACCESS_KEY_ID) {
+      throw new Error('Bedrock US model needs AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY')
+    }
+    const region = process.env.AWS_REGION_US ?? 'us-east-1'
+    if (!bedrockClients.has(region)) {
+      bedrockClients.set(region, new AnthropicBedrock({ awsRegion: region }))
+    }
+    return bedrockClients.get(region)!
+  }
   if (provider === 'anthropic-bedrock-eu') {
     if (!process.env.AWS_ACCESS_KEY_ID) {
       throw new Error('Bedrock model needs AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY')

@@ -51,7 +51,7 @@ export interface ChatResponse {
 }
 
 export async function chat(spec: ModelSpec, req: ChatRequest): Promise<ChatResponse> {
-  if (spec.provider === 'anthropic' || spec.provider === 'anthropic-bedrock-eu') {
+  if (spec.provider.startsWith('anthropic')) {
     return anthropicChat(spec, req)
   }
   if (spec.provider === 'openrouter') {

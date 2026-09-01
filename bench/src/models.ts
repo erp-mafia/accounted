@@ -18,7 +18,7 @@
 // may only run on 'eu-bedrock'. All v1 tasks are 'public' (synthetic), so
 // every listed model is eligible for them.
 
-export type ProviderKind = 'anthropic' | 'anthropic-bedrock-eu' | 'openrouter'
+export type ProviderKind = 'anthropic' | 'anthropic-bedrock-eu' | 'anthropic-bedrock-us' | 'openrouter'
 
 export interface ModelSpec {
   // Stable id used in results files and the leaderboard.
@@ -31,7 +31,7 @@ export interface ModelSpec {
   apiModel: string
   vision: boolean
   pricing: { inputPerMTok: number; outputPerMTok: number } | null
-  residency: 'anthropic-api' | 'eu-bedrock' | 'openrouter-various'
+  residency: 'anthropic-api' | 'eu-bedrock' | 'us-bedrock' | 'openrouter-various'
   enabled: boolean
   notes?: string
 }
@@ -91,13 +91,13 @@ export const MODELS: ModelSpec[] = [
     label: 'Claude Fable 5',
     vendor: 'Anthropic',
     open_weights: false,
-    provider: 'openrouter',
-    apiModel: 'anthropic/claude-fable-5',
+    provider: 'anthropic-bedrock-us',
+    apiModel: 'us.anthropic.claude-fable-5',
     vision: true,
     pricing: { inputPerMTok: 10, outputPerMTok: 50 },
-    residency: 'openrouter-various',
+    residency: 'us-bedrock',
     enabled: true,
-    notes: 'Runnable via OpenRouter at vendor list ($10/$50); a full sweep costs ~$25, enable after topping up. Task author disclosure: bench tasks were authored with Claude (Fable 5), so its own scores carry the authorship-bias caveat doubly; see methodology.',
+    notes: 'Not offered on the EU Bedrock deployment; run on Bedrock us-east-1, which is why it may only take public synthetic tasks (assertDataClassAllowed). Reasoning and extraction were run earlier through OpenRouter at the same list price. Task author disclosure: bench tasks were authored with Claude (Fable 5), so its own scores carry the authorship-bias caveat doubly.',
   },
 
   // --- OpenRouter models (closed + open weights). Slugs VERIFIED against
