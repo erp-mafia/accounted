@@ -6422,7 +6422,16 @@
     "bulk_book_failed_title": "Kunde inte bokföra",
     "status_overdue_days": "Förfallen {days} dgr",
     "status_paid_date": "Betald {date}",
-    "status_picker_aria": "Filtrera på status"
+    "status_picker_aria": "Filtrera på status",
+    "group_picker_aria": "Gruppera fakturor",
+    "group_by": "Gruppera",
+    "group_status": "Status",
+    "group_customer": "Kund",
+    "group_month": "Månad",
+    "group_none": "Ingen gruppering",
+    "section_drafts": "Utkast ({count})",
+    "section_awaiting": "Väntar på betalning ({count})",
+    "section_settled": "Betalda och avslutade ({count})"
   },
   "notices": {
     "bank_broken_one": "Bankkopplingen till {bank} har slutat fungera och hämtar inte längre transaktioner.",

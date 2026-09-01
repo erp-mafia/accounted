@@ -1,11 +1,11 @@
 'use client'
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { Fragment, useState, useEffect, useMemo, useRef } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { Button } from '@/components/ui/button'
@@ -121,6 +121,32 @@ function matchesListTab(invoice: Invoice, tab: ListTab): boolean {
   )
 }
 
+// Row grouping: sections in the table body. 'status' is the default and
+// mirrors the supplier-invoices layout (payment queue as its own section).
+const GROUP_MODES = ['status', 'customer', 'month', 'none'] as const
+type GroupMode = (typeof GROUP_MODES)[number]
+const GROUP_LABEL_KEYS: Record<GroupMode, string> = {
+  status: 'group_status',
+  customer: 'group_customer',
+  month: 'group_month',
+  none: 'group_none',
+}
+
+type StatusGroup = 'drafts' | 'awaiting' | 'settled'
+function statusGroupOf(invoice: Invoice): StatusGroup {
+  if (invoice.status === 'draft') return 'drafts'
+  const isCreditNote = !!invoice.credited_invoice_id
+  const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
+  if (
+    ['sent', 'overdue', 'partially_paid'].includes(invoice.status) &&
+    !isCreditNote &&
+    docType === 'invoice'
+  ) {
+    return 'awaiting'
+  }
+  return 'settled'
+}
+
 const TAB_LABEL_KEYS: Record<ListTab, string> = {
   all: 'tab_all',
   unpaid: 'tab_unpaid',
@@ -222,6 +248,10 @@ export default function InvoicesPage() {
       ? (candidate as ListTab)
       : 'all'
   })
+  const [groupMode, setGroupMode] = useState<GroupMode>(() => {
+    const param = searchParams.get('group')
+    return param && GROUP_MODES.includes(param as never) ? (param as GroupMode) : 'status'
+  })
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
   // Fiscal-year scope (convention 8): null = all years.
   const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
@@ -229,6 +259,7 @@ export default function InvoicesPage() {
   const { toast } = useToast()
   const supabase = createClient()
   const t = useTranslations('invoices')
+  const locale = useLocale()
   const tCommon = useTranslations('common')
   const tStart = useTranslations('start_cards')
   const { uiState, loaded: uiStateLoaded } = useUiState()
@@ -357,13 +388,81 @@ export default function InvoicesPage() {
     () => (sort ? sortInvoiceList(filteredInvoices, sort, oreRounding) : filteredInvoices),
     [filteredInvoices, oreRounding, sort],
   )
-  const visibleInvoices = sortedInvoices.slice(0, visibleCount)
+  // Grouping: bucket the sorted rows, keep the sort order inside each
+  // bucket, and flatten back to one list so paging and the detail pager
+  // walk the exact rendered order.
+  const { flatRows, groupMeta } = useMemo(() => {
+    if (groupMode === 'none') {
+      return {
+        flatRows: sortedInvoices.map((invoice) => ({ invoice, groupKey: null as string | null })),
+        groupMeta: new Map<string, { label: string; count: number }>(),
+      }
+    }
+    const buckets = new Map<string, { label: string; rows: Invoice[] }>()
+    for (const invoice of sortedInvoices) {
+      let key: string
+      let label: string
+      if (groupMode === 'status') {
+        key = statusGroupOf(invoice)
+        label = key
+      } else if (groupMode === 'customer') {
+        label = (invoice.customer as { name: string })?.name ?? '—'
+        key = label.toLocaleLowerCase('sv-SE')
+      } else {
+        key = (invoice.invoice_date ?? '').slice(0, 7) || '—'
+        label = key
+      }
+      const bucket = buckets.get(key) ?? { label, rows: [] }
+      bucket.rows.push(invoice)
+      buckets.set(key, bucket)
+    }
+    let keys = [...buckets.keys()]
+    if (groupMode === 'status') {
+      keys = (['drafts', 'awaiting', 'settled'] as const).filter((key) => buckets.has(key))
+    } else if (groupMode === 'customer') {
+      keys.sort((a, b) => a.localeCompare(b, 'sv'))
+    } else {
+      keys.sort((a, b) => b.localeCompare(a))
+    }
+    const flat: Array<{ invoice: Invoice; groupKey: string | null }> = []
+    const meta = new Map<string, { label: string; count: number }>()
+    for (const key of keys) {
+      const bucket = buckets.get(key)!
+      meta.set(key, { label: bucket.label, count: bucket.rows.length })
+      for (const invoice of bucket.rows) flat.push({ invoice, groupKey: key })
+    }
+    return { flatRows: flat, groupMeta: meta }
+  }, [groupMode, sortedInvoices])
 
-  // Detail-pager context: the FULL sorted list (not the visible slice), so
+  const visibleRows = flatRows.slice(0, visibleCount)
+  // Status sections only earn headers when there is more than one of them;
+  // customer/month grouping is an explicit ask, so headers always show.
+  const showGroupHeaders = groupMode !== 'none' && (groupMode !== 'status' || groupMeta.size > 1)
+
+  const monthFormatter = useMemo(
+    () => new Intl.DateTimeFormat(locale === 'en' ? 'en-GB' : 'sv-SE', { month: 'long', year: 'numeric' }),
+    [locale],
+  )
+  function groupHeaderLabel(key: string): string {
+    const meta = groupMeta.get(key)
+    const count = meta?.count ?? 0
+    if (groupMode === 'status') {
+      if (key === 'drafts') return t('section_drafts', { count })
+      if (key === 'awaiting') return t('section_awaiting', { count })
+      return t('section_settled', { count })
+    }
+    if (groupMode === 'month' && key !== '—') {
+      const label = monthFormatter.format(new Date(`${key}-01T00:00:00`))
+      return `${label.charAt(0).toLocaleUpperCase('sv-SE')}${label.slice(1)} (${count})`
+    }
+    return `${meta?.label ?? key} (${count})`
+  }
+
+  // Detail-pager context: the FULL grouped list (not the visible slice), so
   // prev/next on the detail page can walk past the paging boundary.
   const rememberListContext = () => {
     writeListContext(listContextKey('invoices', company?.id), {
-      ids: sortedInvoices.map((invoice) => invoice.id),
+      ids: flatRows.map((row) => row.invoice.id),
     })
   }
 
@@ -379,12 +478,13 @@ export default function InvoicesPage() {
 
   const resetPaging = () => setVisibleCount(INITIAL_VISIBLE_ROWS)
 
+  // Tri-state cycle: asc → desc → back to the default order (invoice date
+  // desc), so an applied sort can always be released, also inside groups.
   const updateSort = (column: InvoiceListSortColumn) => {
-    setSort((current) => ({
-      column,
-      direction:
-        current?.column === column && current.direction === 'asc' ? 'desc' : 'asc',
-    }))
+    setSort((current) => {
+      if (current?.column !== column) return { column, direction: 'asc' }
+      return current.direction === 'asc' ? { column, direction: 'desc' } : null
+    })
     resetPaging()
   }
 
@@ -398,6 +498,16 @@ export default function InvoicesPage() {
     params.delete('tab')
     if (tab === 'all') params.delete('status')
     else params.set('status', tab)
+    const qs = params.toString()
+    router.replace(qs ? `/invoices?${qs}` : '/invoices', { scroll: false })
+  }
+
+  const updateGroup = (mode: GroupMode) => {
+    setGroupMode(mode)
+    resetPaging()
+    const params = new URLSearchParams(searchParams.toString())
+    if (mode === 'status') params.delete('group')
+    else params.set('group', mode)
     const qs = params.toString()
     router.replace(qs ? `/invoices?${qs}` : '/invoices', { scroll: false })
   }
@@ -609,6 +719,16 @@ export default function InvoicesPage() {
             annotation: tabCounts[tab] > 0 ? String(tabCounts[tab]) : undefined,
           }))}
         />
+        <ContextPicker
+          value={groupMode}
+          onChange={(id) => updateGroup(id as GroupMode)}
+          ariaLabel={t('group_picker_aria')}
+          triggerLabel={`${t('group_by')} · ${t(GROUP_LABEL_KEYS[groupMode])}`}
+          items={GROUP_MODES.map((mode) => ({
+            id: mode,
+            label: t(GROUP_LABEL_KEYS[mode]),
+          }))}
+        />
         <ToolbarSearch
           containerClassName="min-w-[190px]"
           placeholder={t('search_placeholder')}
@@ -756,7 +876,9 @@ export default function InvoicesPage() {
               </tr>
             </thead>
             <tbody className="stagger-enter">
-              {visibleInvoices.map((invoice) => {
+              {visibleRows.map(({ invoice, groupKey }, index) => {
+                const prevKey = index > 0 ? visibleRows[index - 1].groupKey : undefined
+                const showHeader = showGroupHeaders && groupKey !== null && groupKey !== prevKey
                 const status = statusDescriptor(invoice)
                 const isCreditNote = !!invoice.credited_invoice_id
                 const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
@@ -779,8 +901,21 @@ export default function InvoicesPage() {
                           : null
                     : null
                 return (
+                  <Fragment key={invoice.id}>
+                  {showHeader && (
+                    <tr>
+                      <td
+                        colSpan={showSelection ? 6 : 5}
+                        className={cn(
+                          'border-b border-border px-1 pb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground',
+                          index === 0 ? 'pt-4' : 'pt-6',
+                        )}
+                      >
+                        {groupHeaderLabel(groupKey)}
+                      </td>
+                    </tr>
+                  )}
                   <tr
-                    key={invoice.id}
                     className={cn(
                       'group cursor-pointer transition-colors duration-150 hover:bg-secondary/35',
                       selectedIds.has(invoice.id) && 'bg-secondary/40',
@@ -805,10 +940,10 @@ export default function InvoicesPage() {
                             onCheckedChange={() => toggleSelect(invoice.id, shiftHeld.current)}
                             aria-label={t('bulk_select_row')}
                             className={cn(
-                              'border-foreground duration-150',
+                              'transition-opacity duration-150',
                               selectedIds.has(invoice.id) || selectedIds.size > 0
                                 ? 'opacity-100'
-                                : CHECKBOX_REVEAL_CLASS,
+                                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100',
                             )}
                           />
                         )}
@@ -861,6 +996,7 @@ export default function InvoicesPage() {
                       </span>
                     </td>
                   </tr>
+                  </Fragment>
                 )
               })}
             </tbody>
@@ -868,7 +1004,7 @@ export default function InvoicesPage() {
         </div>
       )}
 
-      {!isLoading && visibleCount < sortedInvoices.length && (
+      {!isLoading && visibleCount < flatRows.length && (
         <div className="flex justify-center">
           <Button
             type="button"

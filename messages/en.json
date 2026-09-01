@@ -6422,7 +6422,16 @@
     "bulk_book_failed_title": "Could not book",
     "status_overdue_days": "Overdue {days} d",
     "status_paid_date": "Paid {date}",
-    "status_picker_aria": "Filter by status"
+    "status_picker_aria": "Filter by status",
+    "group_picker_aria": "Group invoices",
+    "group_by": "Group",
+    "group_status": "Status",
+    "group_customer": "Customer",
+    "group_month": "Month",
+    "group_none": "No grouping",
+    "section_drafts": "Drafts ({count})",
+    "section_awaiting": "Awaiting payment ({count})",
+    "section_settled": "Paid and settled ({count})"
   },
   "notices": {
     "bank_broken_one": "The {bank} bank connection has stopped working and no longer fetches transactions.",
