@@ -96,6 +96,15 @@ jobs:
         # execute those at build time.
         run: npm run validate:registry
 
+      - name: Ledger-Bench frozen and valid
+        # bench/ is a published benchmark whose credibility rests on the board
+        # not moving quietly. validate-tasks checks every gold account exists in
+        # the chart and the arithmetic holds; freeze --check fails if any scored
+        # task or scoring parameter changed without bench/freeze.json being
+        # regenerated in the same commit. A gold edit is then a reviewable diff,
+        # not a silent adjustment.
+        run: npm run bench:check
+
       - name: Check no core imports from extensions
         run: |
           VIOLATIONS=$(grep -r "from '@/extensions/" lib/ app/api/ components/ --include="*.ts" --include="*.tsx" \

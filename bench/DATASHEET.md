@@ -68,8 +68,11 @@ identification only.
 ## Maintenance
 
 Maintained in `bench/` with versioned changelog in `bench/README.md`.
-Corrections via pull request are welcome; every published verdict criterion
+Corrections via pull request are welcome; every published routing criterion
 and every statistical method is in-repo and re-runnable
-(`npm run bench:aggregate`). Raw per-run records are committed under
+(`npm run bench:aggregate`). The scored task set and scoring parameters are
+content-hashed in `bench/freeze.json` and checked in CI (`npm run bench:check`),
+so a gold correction is a reviewable diff, not a silent change; scoring
+parameters are pre-registered in `bench/src/scoring-config.ts`. Raw per-run records are committed under
 `bench/results/runs/` (board data) and `bench/results/variance/`
 (methods studies).

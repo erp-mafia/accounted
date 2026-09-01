@@ -1,6 +1,6 @@
 {
-  "benchVersion": "v1.6",
-  "generatedAt": "2026-09-01T15:20:43.052Z",
+  "benchVersion": "v2.0",
+  "generatedAt": "2026-09-01T19:31:45.446Z",
   "suites": {
     "booking": [
       {
@@ -23,16 +23,36 @@
           "strictPass": 0.75,
           "vatAccuracy": 1,
           "ece": 0.094,
-          "coverage95": 1,
-          "coverage99": 0.538,
-          "coverage95Evidence": {
+          "gate": {
+            "method": "cross_fitted",
+            "target": 0.95,
+            "folds": 2,
+            "thresholds": [
+              0.68,
+              0.82
+            ],
+            "coverage": 0.942,
+            "selected": 49,
+            "errors": 2,
+            "precision": 0.959,
+            "precisionLo": 0.863
+          },
+          "gateFixed": {
+            "threshold": 0.9,
+            "coverage": 0.481,
+            "selected": 25,
+            "errors": 0,
+            "precision": 1,
+            "precisionLo": 0.867
+          },
+          "fittedCoverage95": {
             "coverage": 1,
             "selected": 52,
             "errors": 2,
             "precisionLo": 0.87,
             "threshold": 0.68
           },
-          "coverage99Evidence": {
+          "fittedCoverage99": {
             "coverage": 0.538,
             "selected": 28,
             "errors": 0,
@@ -76,16 +96,36 @@
           "strictPass": 0.712,
           "vatAccuracy": 1,
           "ece": 0.007,
-          "coverage95": 1,
-          "coverage99": 0.173,
-          "coverage95Evidence": {
+          "gate": {
+            "method": "cross_fitted",
+            "target": 0.95,
+            "folds": 2,
+            "thresholds": [
+              0.9,
+              0.9
+            ],
+            "coverage": 1,
+            "selected": 52,
+            "errors": 2,
+            "precision": 0.962,
+            "precisionLo": 0.87
+          },
+          "gateFixed": {
+            "threshold": 0.9,
+            "coverage": 1,
+            "selected": 52,
+            "errors": 2,
+            "precision": 0.962,
+            "precisionLo": 0.87
+          },
+          "fittedCoverage95": {
             "coverage": 1,
             "selected": 52,
             "errors": 2,
             "precisionLo": 0.87,
             "threshold": 0.9
           },
-          "coverage99Evidence": {
+          "fittedCoverage99": {
             "coverage": 0.173,
             "selected": 9,
             "errors": 0,
@@ -129,16 +169,36 @@
           "strictPass": 0.731,
           "vatAccuracy": 1,
           "ece": 0.034,
-          "coverage95": 0.981,
-          "coverage99": 0.231,
-          "coverage95Evidence": {
+          "gate": {
+            "method": "cross_fitted",
+            "target": 0.95,
+            "folds": 2,
+            "thresholds": [
+              0.75,
+              0.75
+            ],
+            "coverage": 0.981,
+            "selected": 51,
+            "errors": 2,
+            "precision": 0.961,
+            "precisionLo": 0.868
+          },
+          "gateFixed": {
+            "threshold": 0.9,
+            "coverage": 0.827,
+            "selected": 43,
+            "errors": 2,
+            "precision": 0.953,
+            "precisionLo": 0.845
+          },
+          "fittedCoverage95": {
             "coverage": 0.981,
             "selected": 51,
             "errors": 2,
             "precisionLo": 0.868,
             "threshold": 0.75
           },
-          "coverage99Evidence": {
+          "fittedCoverage99": {
             "coverage": 0.231,
             "selected": 12,
             "errors": 0,
@@ -182,16 +242,36 @@
           "strictPass": 0.692,
           "vatAccuracy": 1,
           "ece": 0.061,
-          "coverage95": 0.769,
-          "coverage99": 0.365,
-          "coverage95Evidence": {
+          "gate": {
+            "method": "cross_fitted",
+            "target": 0.95,
+            "folds": 2,
+            "thresholds": [
+              0.78,
+              0.99
+            ],
+            "coverage": 0.692,
+            "selected": 36,
+            "errors": 3,
+            "precision": 0.917,
+            "precisionLo": 0.782
+          },
+          "gateFixed": {
+            "threshold": 0.9,
+            "coverage": 0.923,
+            "selected": 48,
+            "errors": 4,
+            "precision": 0.917,
+            "precisionLo": 0.804
+          },
+          "fittedCoverage95": {
             "coverage": 0.769,
             "selected": 40,
             "errors": 2,
             "precisionLo": 0.835,
             "threshold": 0.95
           },
-          "coverage99Evidence": {
+          "fittedCoverage99": {
             "coverage": 0.365,
             "selected": 19,
             "errors": 0,
@@ -235,16 +315,36 @@
           "strictPass": 0.673,
           "vatAccuracy": 1,
           "ece": 0.066,
-          "coverage95": 0.538,
-          "coverage99": 0.538,
-          "coverage95Evidence": {
+          "gate": {
+            "method": "cross_fitted",
+            "target": 0.95,
+            "folds": 2,
+            "thresholds": [
+              0.98,
+              0.99
+            ],
+            "coverage": 0.673,
+            "selected": 35,
+            "errors": 2,
+            "precision": 0.943,
+            "precisionLo": 0.814
+          },
+          "gateFixed": {
+            "threshold": 0.9,
+            "coverage": 0.942,
+            "selected": 49,
+            "errors": 4,
+            "precision": 0.918,
+            "precisionLo": 0.808
+          },
+          "fittedCoverage95": {
             "coverage": 0.538,
             "selected": 28,
             "errors": 0,
             "precisionLo": 0.879,
             "threshold": 0.99
           },
-          "coverage99Evidence": {
+          "fittedCoverage99": {
             "coverage": 0.538,
             "selected": 28,
             "errors": 0,
@@ -288,16 +388,36 @@
           "strictPass": 0.635,
           "vatAccuracy": 1,
           "ece": 0.061,
-          "coverage95": 0.846,
-          "coverage99": 0.5,
-          "coverage95Evidence": {
+          "gate": {
+            "method": "cross_fitted",
+            "target": 0.95,
+            "folds": 2,
+            "thresholds": [
+              0.85,
+              0.82
+            ],
+            "coverage": 0.885,
+            "selected": 46,
+            "errors": 3,
+            "precision": 0.935,
+            "precisionLo": 0.825
+          },
+          "gateFixed": {
+            "threshold": 0.9,
+            "coverage": 0.538,
+            "selected": 28,
+            "errors": 1,
+            "precision": 0.964,
+            "precisionLo": 0.823
+          },
+          "fittedCoverage95": {
             "coverage": 0.846,
             "selected": 44,
             "errors": 2,
             "precisionLo": 0.849,
             "threshold": 0.85
           },
-          "coverage99Evidence": {
+          "fittedCoverage99": {
             "coverage": 0.5,
             "selected": 26,
             "errors": 0,
@@ -341,16 +461,36 @@
           "strictPass": 0.635,
           "vatAccuracy": 0.962,
           "ece": 0.067,
-          "coverage95": 0.635,
-          "coverage99": 0.596,
-          "coverage95Evidence": {
+          "gate": {
+            "method": "cross_fitted",
+            "target": 0.95,
+            "folds": 2,
+            "thresholds": [
+              0.9,
+              0.6
+            ],
+            "coverage": 0.75,
+            "selected": 39,
+            "errors": 3,
+            "precision": 0.923,
+            "precisionLo": 0.797
+          },
+          "gateFixed": {
+            "threshold": 0.9,
+            "coverage": 0.596,
+            "selected": 31,
+            "errors": 0,
+            "precision": 1,
+            "precisionLo": 0.89
+          },
+          "fittedCoverage95": {
             "coverage": 0.635,
             "selected": 33,
             "errors": 1,
             "precisionLo": 0.847,
             "threshold": 0.88
           },
-          "coverage99Evidence": {
+          "fittedCoverage99": {
             "coverage": 0.596,
             "selected": 31,
             "errors": 0,
@@ -394,16 +534,36 @@
           "strictPass": 0.635,
           "vatAccuracy": 0.962,
           "ece": 0.049,
-          "coverage95": 0.673,
-          "coverage99": 0.058,
-          "coverage95Evidence": {
+          "gate": {
+            "method": "cross_fitted",
+            "target": 0.95,
+            "folds": 2,
+            "thresholds": [
+              0.85,
+              0.9
+            ],
+            "coverage": 0.808,
+            "selected": 42,
+            "errors": 3,
+            "precision": 0.929,
+            "precisionLo": 0.81
+          },
+          "gateFixed": {
+            "threshold": 0.9,
+            "coverage": 0.673,
+            "selected": 35,
+            "errors": 1,
+            "precision": 0.971,
+            "precisionLo": 0.855
+          },
+          "fittedCoverage95": {
             "coverage": 0.673,
             "selected": 35,
             "errors": 1,
             "precisionLo": 0.855,
             "threshold": 0.9
           },
-          "coverage99Evidence": {
+          "fittedCoverage99": {
             "coverage": 0.058,
             "selected": 3,
             "errors": 0,
@@ -447,16 +607,36 @@
           "strictPass": 0.577,
           "vatAccuracy": 0.981,
           "ece": 0.046,
-          "coverage95": 0.423,
-          "coverage99": 0.115,
-          "coverage95Evidence": {
+          "gate": {
+            "method": "cross_fitted",
+            "target": 0.95,
+            "folds": 2,
+            "thresholds": [
+              0.9,
+              0.96
+            ],
+            "coverage": 0.346,
+            "selected": 18,
+            "errors": 2,
+            "precision": 0.889,
+            "precisionLo": 0.672
+          },
+          "gateFixed": {
+            "threshold": 0.9,
+            "coverage": 0.654,
+            "selected": 34,
+            "errors": 2,
+            "precision": 0.941,
+            "precisionLo": 0.809
+          },
+          "fittedCoverage95": {
             "coverage": 0.423,
             "selected": 22,
             "errors": 1,
             "precisionLo": 0.782,
             "threshold": 0.93
           },
-          "coverage99Evidence": {
+          "fittedCoverage99": {
             "coverage": 0.115,
             "selected": 6,
             "errors": 0,
@@ -500,16 +680,36 @@
           "strictPass": 0.615,
           "vatAccuracy": 0.981,
           "ece": 0.056,
-          "coverage95": 0.212,
-          "coverage99": 0.212,
-          "coverage95Evidence": {
+          "gate": {
+            "method": "cross_fitted",
+            "target": 0.95,
+            "folds": 2,
+            "thresholds": [
+              0.75,
+              0.88
+            ],
+            "coverage": 0.577,
+            "selected": 30,
+            "errors": 5,
+            "precision": 0.833,
+            "precisionLo": 0.664
+          },
+          "gateFixed": {
+            "threshold": 0.9,
+            "coverage": 0.192,
+            "selected": 10,
+            "errors": 0,
+            "precision": 1,
+            "precisionLo": 0.722
+          },
+          "fittedCoverage95": {
             "coverage": 0.212,
             "selected": 11,
             "errors": 0,
             "precisionLo": 0.741,
             "threshold": 0.88
           },
-          "coverage99Evidence": {
+          "fittedCoverage99": {
             "coverage": 0.212,
             "selected": 11,
             "errors": 0,
@@ -553,16 +753,36 @@
           "strictPass": 0.538,
           "vatAccuracy": 0.942,
           "ece": 0.048,
-          "coverage95": 0.115,
-          "coverage99": 0.115,
-          "coverage95Evidence": {
+          "gate": {
+            "method": "cross_fitted",
+            "target": 0.95,
+            "folds": 2,
+            "thresholds": [
+              0.9,
+              0.98
+            ],
+            "coverage": 0.385,
+            "selected": 20,
+            "errors": 4,
+            "precision": 0.8,
+            "precisionLo": 0.584
+          },
+          "gateFixed": {
+            "threshold": 0.9,
+            "coverage": 0.731,
+            "selected": 38,
+            "errors": 5,
+            "precision": 0.868,
+            "precisionLo": 0.727
+          },
+          "fittedCoverage95": {
             "coverage": 0.115,
             "selected": 6,
             "errors": 0,
             "precisionLo": 0.61,
             "threshold": 0.97
           },
-          "coverage99Evidence": {
+          "fittedCoverage99": {
             "coverage": 0.115,
             "selected": 6,
             "errors": 0,
@@ -606,16 +826,36 @@
           "strictPass": 0.538,
           "vatAccuracy": 0.904,
           "ece": 0.071,
-          "coverage95": 0.32,
-          "coverage99": 0.32,
-          "coverage95Evidence": {
+          "gate": {
+            "method": "cross_fitted",
+            "target": 0.95,
+            "folds": 2,
+            "thresholds": [
+              0.97,
+              0.8
+            ],
+            "coverage": 0.64,
+            "selected": 32,
+            "errors": 4,
+            "precision": 0.875,
+            "precisionLo": 0.719
+          },
+          "gateFixed": {
+            "threshold": 0.9,
+            "coverage": 0.76,
+            "selected": 38,
+            "errors": 5,
+            "precision": 0.868,
+            "precisionLo": 0.727
+          },
+          "fittedCoverage95": {
             "coverage": 0.32,
             "selected": 16,
             "errors": 0,
             "precisionLo": 0.806,
             "threshold": 0.97
           },
-          "coverage99Evidence": {
+          "fittedCoverage99": {
             "coverage": 0.32,
             "selected": 16,
             "errors": 0,
@@ -659,16 +899,36 @@
           "strictPass": 0.346,
           "vatAccuracy": 0.865,
           "ece": 0.245,
-          "coverage95": 0,
-          "coverage99": 0,
-          "coverage95Evidence": {
+          "gate": {
+            "method": "cross_fitted",
+            "target": 0.95,
+            "folds": 2,
+            "thresholds": [
+              null,
+              null
+            ],
+            "coverage": 0,
+            "selected": 0,
+            "errors": 0,
+            "precision": 0,
+            "precisionLo": 0
+          },
+          "gateFixed": {
+            "threshold": 0.9,
+            "coverage": 0.769,
+            "selected": 40,
+            "errors": 15,
+            "precision": 0.625,
+            "precisionLo": 0.47
+          },
+          "fittedCoverage95": {
             "coverage": 0,
             "selected": 0,
             "errors": 0,
             "precisionLo": 0,
             "threshold": 1
           },
-          "coverage99Evidence": {
+          "fittedCoverage99": {
             "coverage": 0,
             "selected": 0,
             "errors": 0,
@@ -712,16 +972,36 @@
           "strictPass": 0.192,
           "vatAccuracy": 0.904,
           "ece": 0.39,
-          "coverage95": 0,
-          "coverage99": 0,
-          "coverage95Evidence": {
+          "gate": {
+            "method": "cross_fitted",
+            "target": 0.95,
+            "folds": 2,
+            "thresholds": [
+              null,
+              null
+            ],
+            "coverage": 0,
+            "selected": 0,
+            "errors": 0,
+            "precision": 0,
+            "precisionLo": 0
+          },
+          "gateFixed": {
+            "threshold": 0.9,
+            "coverage": 0.827,
+            "selected": 43,
+            "errors": 19,
+            "precision": 0.558,
+            "precisionLo": 0.411
+          },
+          "fittedCoverage95": {
             "coverage": 0,
             "selected": 0,
             "errors": 0,
             "precisionLo": 0,
             "threshold": 1
           },
-          "coverage99Evidence": {
+          "fittedCoverage99": {
             "coverage": 0,
             "selected": 0,
             "errors": 0,
@@ -765,16 +1045,36 @@
           "strictPass": 0.192,
           "vatAccuracy": 0.865,
           "ece": 0.413,
-          "coverage95": 0,
-          "coverage99": 0,
-          "coverage95Evidence": {
+          "gate": {
+            "method": "cross_fitted",
+            "target": 0.95,
+            "folds": 2,
+            "thresholds": [
+              null,
+              null
+            ],
+            "coverage": 0,
+            "selected": 0,
+            "errors": 0,
+            "precision": 0,
+            "precisionLo": 0
+          },
+          "gateFixed": {
+            "threshold": 0.9,
+            "coverage": 0.981,
+            "selected": 51,
+            "errors": 29,
+            "precision": 0.431,
+            "precisionLo": 0.305
+          },
+          "fittedCoverage95": {
             "coverage": 0,
             "selected": 0,
             "errors": 0,
             "precisionLo": 0,
             "threshold": 1
           },
-          "coverage99Evidence": {
+          "fittedCoverage99": {
             "coverage": 0,
             "selected": 0,
             "errors": 0,
@@ -4796,121 +5096,301 @@
   ],
   "verdicts": {
     "claude-opus-5": {
-      "verdict": "tillstyrks",
-      "coverage99": 0.538,
-      "coverage95": 1,
+      "verdict": "auto",
+      "gate": {
+        "method": "cross_fitted",
+        "target": 0.95,
+        "folds": 2,
+        "thresholds": [
+          0.68,
+          0.82
+        ],
+        "coverage": 0.942,
+        "selected": 49,
+        "errors": 2,
+        "precision": 0.959,
+        "precisionLo": 0.863
+      },
       "booking": 0.962,
       "reasoning": 0.889,
       "agentClean": true
     },
     "gemini-3-1-pro": {
-      "verdict": "tillstyrks_med_reservation",
-      "coverage99": 0.173,
-      "coverage95": 1,
+      "verdict": "auto",
+      "gate": {
+        "method": "cross_fitted",
+        "target": 0.95,
+        "folds": 2,
+        "thresholds": [
+          0.9,
+          0.9
+        ],
+        "coverage": 1,
+        "selected": 52,
+        "errors": 2,
+        "precision": 0.962,
+        "precisionLo": 0.87
+      },
       "booking": 0.962,
       "reasoning": 0.861,
       "agentClean": true
     },
     "claude-fable-5": {
-      "verdict": "tillstyrks_med_reservation",
-      "coverage99": 0.231,
-      "coverage95": 0.981,
+      "verdict": "auto",
+      "gate": {
+        "method": "cross_fitted",
+        "target": 0.95,
+        "folds": 2,
+        "thresholds": [
+          0.75,
+          0.75
+        ],
+        "coverage": 0.981,
+        "selected": 51,
+        "errors": 2,
+        "precision": 0.961,
+        "precisionLo": 0.868
+      },
       "booking": 0.942,
       "reasoning": 0.944,
       "agentClean": true
     },
     "gpt-5-6-terra-pro": {
-      "verdict": "tillstyrks_med_reservation",
-      "coverage99": 0.365,
-      "coverage95": 0.769,
+      "verdict": "assist",
+      "gate": {
+        "method": "cross_fitted",
+        "target": 0.95,
+        "folds": 2,
+        "thresholds": [
+          0.78,
+          0.99
+        ],
+        "coverage": 0.692,
+        "selected": 36,
+        "errors": 3,
+        "precision": 0.917,
+        "precisionLo": 0.782
+      },
       "booking": 0.923,
       "reasoning": 0.944,
       "agentClean": true
     },
     "gpt-5-6-luna": {
-      "verdict": "tillstyrks",
-      "coverage99": 0.538,
-      "coverage95": 0.538,
+      "verdict": "assist",
+      "gate": {
+        "method": "cross_fitted",
+        "target": 0.95,
+        "folds": 2,
+        "thresholds": [
+          0.98,
+          0.99
+        ],
+        "coverage": 0.673,
+        "selected": 35,
+        "errors": 2,
+        "precision": 0.943,
+        "precisionLo": 0.814
+      },
       "booking": 0.923,
       "reasoning": 0.861,
       "agentClean": true
     },
     "grok-4-6": {
-      "verdict": "tillstyrks_med_reservation",
-      "coverage99": 0.5,
-      "coverage95": 0.846,
+      "verdict": "assist",
+      "gate": {
+        "method": "cross_fitted",
+        "target": 0.95,
+        "folds": 2,
+        "thresholds": [
+          0.85,
+          0.82
+        ],
+        "coverage": 0.885,
+        "selected": 46,
+        "errors": 3,
+        "precision": 0.935,
+        "precisionLo": 0.825
+      },
       "booking": 0.904,
       "reasoning": 0.75,
       "agentClean": true
     },
     "kimi-k3": {
-      "verdict": "tillstyrks_med_reservation",
-      "coverage99": 0.596,
-      "coverage95": 0.635,
+      "verdict": "assist",
+      "gate": {
+        "method": "cross_fitted",
+        "target": 0.95,
+        "folds": 2,
+        "thresholds": [
+          0.9,
+          0.6
+        ],
+        "coverage": 0.75,
+        "selected": 39,
+        "errors": 3,
+        "precision": 0.923,
+        "precisionLo": 0.797
+      },
       "booking": 0.904,
       "reasoning": 0.694,
       "agentClean": true
     },
     "claude-sonnet-4-6": {
-      "verdict": "tillstyrks_med_reservation",
-      "coverage99": 0.058,
-      "coverage95": 0.673,
+      "verdict": "assist",
+      "gate": {
+        "method": "cross_fitted",
+        "target": 0.95,
+        "folds": 2,
+        "thresholds": [
+          0.85,
+          0.9
+        ],
+        "coverage": 0.808,
+        "selected": 42,
+        "errors": 3,
+        "precision": 0.929,
+        "precisionLo": 0.81
+      },
       "booking": 0.865,
       "reasoning": 0.722,
       "agentClean": true
     },
     "glm-5-3-flash": {
-      "verdict": "avstyrks",
-      "coverage99": 0.115,
-      "coverage95": 0.423,
+      "verdict": "review",
+      "gate": {
+        "method": "cross_fitted",
+        "target": 0.95,
+        "folds": 2,
+        "thresholds": [
+          0.9,
+          0.96
+        ],
+        "coverage": 0.346,
+        "selected": 18,
+        "errors": 2,
+        "precision": 0.889,
+        "precisionLo": 0.672
+      },
       "booking": 0.865,
       "reasoning": 0.444,
       "agentClean": false
     },
     "claude-sonnet-5": {
-      "verdict": "tillstyrks_med_reservation",
-      "coverage99": 0.212,
-      "coverage95": 0.212,
+      "verdict": "review",
+      "gate": {
+        "method": "cross_fitted",
+        "target": 0.95,
+        "folds": 2,
+        "thresholds": [
+          0.75,
+          0.88
+        ],
+        "coverage": 0.577,
+        "selected": 30,
+        "errors": 5,
+        "precision": 0.833,
+        "precisionLo": 0.664
+      },
       "booking": 0.846,
       "reasoning": 0.861,
       "agentClean": true
     },
     "deepseek-v4-pro": {
-      "verdict": "avstyrks",
-      "coverage99": 0.115,
-      "coverage95": 0.115,
+      "verdict": "review",
+      "gate": {
+        "method": "cross_fitted",
+        "target": 0.95,
+        "folds": 2,
+        "thresholds": [
+          0.9,
+          0.98
+        ],
+        "coverage": 0.385,
+        "selected": 20,
+        "errors": 4,
+        "precision": 0.8,
+        "precisionLo": 0.584
+      },
       "booking": 0.827,
       "reasoning": 0.611,
       "agentClean": true
     },
     "qwen3-8-2-4t": {
-      "verdict": "tillstyrks_med_reservation",
-      "coverage99": 0.32,
-      "coverage95": 0.32,
+      "verdict": "review",
+      "gate": {
+        "method": "cross_fitted",
+        "target": 0.95,
+        "folds": 2,
+        "thresholds": [
+          0.97,
+          0.8
+        ],
+        "coverage": 0.64,
+        "selected": 32,
+        "errors": 4,
+        "precision": 0.875,
+        "precisionLo": 0.719
+      },
       "booking": 0.827,
       "reasoning": 0.611,
       "agentClean": true
     },
     "claude-haiku-4-5": {
-      "verdict": "avstyrks",
-      "coverage99": 0,
-      "coverage95": 0,
+      "verdict": "review",
+      "gate": {
+        "method": "cross_fitted",
+        "target": 0.95,
+        "folds": 2,
+        "thresholds": [
+          null,
+          null
+        ],
+        "coverage": 0,
+        "selected": 0,
+        "errors": 0,
+        "precision": 0,
+        "precisionLo": 0
+      },
       "booking": 0.558,
       "reasoning": 0.222,
       "agentClean": false
     },
     "gpt-oss-120b": {
-      "verdict": "avstyrks",
-      "coverage99": 0,
-      "coverage95": 0,
+      "verdict": "review",
+      "gate": {
+        "method": "cross_fitted",
+        "target": 0.95,
+        "folds": 2,
+        "thresholds": [
+          null,
+          null
+        ],
+        "coverage": 0,
+        "selected": 0,
+        "errors": 0,
+        "precision": 0,
+        "precisionLo": 0
+      },
       "booking": 0.5,
       "reasoning": 0.361,
       "agentClean": false
     },
     "llama-4-maverick": {
-      "verdict": "avstyrks",
-      "coverage99": 0,
-      "coverage95": 0,
+      "verdict": "review",
+      "gate": {
+        "method": "cross_fitted",
+        "target": 0.95,
+        "folds": 2,
+        "thresholds": [
+          null,
+          null
+        ],
+        "coverage": 0,
+        "selected": 0,
+        "errors": 0,
+        "precision": 0,
+        "precisionLo": 0
+      },
       "booking": 0.442,
       "reasoning": 0.361,
       "agentClean": false

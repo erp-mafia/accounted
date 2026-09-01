@@ -417,7 +417,7 @@
       <div class="prose">
         <p>Swedish bookkeeping is not a matter of taste. Bokföringslagen fixes what a verifikat must contain, when a business event must be recorded, and how a mistake may be corrected; mervärdesskattelagen fixes which of ten VAT treatments applies and which ruta it lands in. An accounting agent that is fluent but wrong is worse than no agent, because its output enters a legally binding record that a human later signs.</p>
         <p>That makes the domain unusually testable. The correct end state of a booking is decidable, not a matter of preference, and Accounted's production database already enforces the law in triggers: an entry that does not balance, an edit to a posted voucher, a write into a locked period. Those triggers are the oracle. Where other agent benchmarks grade a transcript or ask a model to judge a model, this one asks a database whose constraints are the statute.</p>
-        <p>The second question is not accuracy at all. A model that books at 96% cannot be trusted unattended if it cannot tell you which 4% to check. So every task also elicits the model's own confidence, and the headline deployment metric is how much of the work it could commit alone while staying right: the gate, not the score.</p>
+        <p>Accuracy is not the whole question. A model that books at 96% still cannot be trusted unattended unless it can tell you which 4% to check, so every task also elicits the model's own confidence, and the board reports how much a model could commit alone while staying right. That figure is measured out of sample, with the threshold fitted on tasks it is not then scored on. At this suite's size the honest version of that metric turns out to track raw accuracy closely: the models we would let book alone are simply the most accurate ones. Whether calibration earns a model more than its accuracy already does is a question a larger suite could answer and this one cannot yet.</p>
       </div>
     </section>
 
@@ -461,10 +461,10 @@
     </section>
 
     <section id="verdicts">
-      <h2>Verdicts</h2>
-      <p class="sectiondesc">Each model receives a revisor-style opinion on confidence-gated unattended booking, from published criteria.</p>
+      <h2>How we would route each model</h2>
+      <p class="sectiondesc">Our own routing decision for unattended booking, from published criteria. It is not a certification of any model, and the word "approved" does not appear on purpose.</p>
       <div class="verdicts" id="verdictcards"></div>
-      <p class="vcriteria"><b>Criteria (published, retunable):</b> <em>Approved</em> requires booking ≥85%, automation coverage ≥50% at 99% precision, VAT law ≥80%, and a clean ledger-agent record. <em>Approved with reservation</em> requires booking ≥75%, law ≥60%, and a usable confidence gate. <em>Not assessed</em> means too few clean runs for an opinion. <b>What "99% precision" rests on:</b> the threshold is chosen on the same 52 transactions it is then scored on, and every model that clears the bar does so with <em>zero</em> errors on the transactions it selected, so the observed precision is 100% and the target is not really being measured. The honest figure is the lower bound: <span id="covbound"></span>. Read coverage as a ranking of confidence separation, not as a promise about the error rate of the next thousand bookings. Verdicts concern unattended booking, not assisted use. A model can be blocked by the coverage criterion while ranking at the very top: Claude Fable 5 ties for first on booking, yet its mistakes carry 0.95 stated confidence while its clean answers carry 0.97, so a 99%-precision gate can only trust <span id="vfable">12 of its 52</span> bookings. Claude Sonnet 5 is less accurate and puts its mistakes at 0.60 to 0.75, well clear of its good work, so the same gate trusts <span id="vsonnet">65%</span>. Separation, not accuracy, is what earns an unattended verdict. The Swedish terms beneath each heading are the auditor's own vocabulary (<span class="mono">tillstyrks</span> / <span class="mono">avstyrks</span> in a revisionsberättelse), kept as provenance.</p>
+      <p class="vcriteria"><b>Criteria (published, retunable):</b> <em>Auto</em> requires booking ≥85%, VAT law ≥80%, a clean ledger-agent record, and a confidence gate that selects at least half the transactions <em>out of sample</em> at ≥95% observed precision with a 95% lower bound of at least 85%. <em>Assist</em> requires booking ≥75%, law ≥60%, and a gate that selects at least a fifth at ≥90% precision. <em>Review</em> is everything else with enough evidence; <em>Not assessed</em> means too few clean runs for any opinion. <b>How the gate is measured:</b> tasks are split into two folds by id, a per-model confidence threshold is fitted on one fold to reach 95% precision and applied to the other, then the folds swap, so every scored transaction was selected by a threshold that never saw it. <span id="covbound"></span> <b>What this changed:</b> <span id="gateshift"></span></p>
     </section>
 
     <section id="h2h">
@@ -516,7 +516,8 @@
         <div class="mrow"><dt>Statistics</dt><dd>Wilson ±1σ intervals on every rate; paired <strong>McNemar exact tests</strong> group the ranking into statistical ties (models inside a group cannot be distinguished at p&lt;0.05, marked by rules in the table); every task carries a published <strong>discrimination index</strong> (point-biserial), and tasks with negative discrimination are retired in review, applied to all models equally. A k=3 repeat study found single-run pass rates moving up to 25 pp between identical runs for one model; the tie groups, not the raw order, are the citable result.</dd></div>
       <div class="mrow"><dt>Contamination</dt><dd>Every task file carries a <strong>canary string</strong> (BIG-bench convention) so future training-data filters can exclude it, and the public split's exposure is stated rather than hidden. The prod-derived private split is the contamination-free instrument.</dd></div>
       <div class="mrow"><dt>Cost</dt><dd>Measured tokens at each vendor's first-party list price, standard tier, no cache, batch or promotional discounts; open-weights models without a vendor API are priced at a named serving provider. <strong>Platform neutrality, verified:</strong> Anthropic models were measured on Bedrock and the others through OpenRouter, which invites the objection that the serving platform biases the comparison. It does not: the price applied is always the vendor's own list rate, never the platform's bill. To check that token <em>counting</em> also agrees, Claude Fable 5 was run on the identical booking task through both routes: Bedrock reported 27 475 input tokens and OpenRouter reported 27 475, a difference of zero. What does differ between vendors is the tokenizer, and that is a real cost: the same Swedish chart of accounts costs Claude about 27 000 tokens and GPT-5.6 Luna about 18 000. <strong>What this cost is:</strong> the price of running these tasks through the neutral scaffold, where every booking ships the entire 1 290-account BAS chart as context, roughly 18 000 to 27 000 input tokens per task. Input therefore dominates, and the cost ranking is close to the input-price ranking. <strong>What it is not:</strong> the price of booking a transaction in production, where a retrieval step puts perhaps twenty candidate accounts in front of the model instead of all of them, and caching applies. Read it as a comparable price of the same work, not as an invoice. <strong>Per correct</strong> divides it by the strict pass rate, because a model that fails cheaply is not cheap. In units a practitioner buys: booking a thousand transactions costs about <strong><span id="cost1k"></span></strong>; per thousand <em>correct</em> bookings that becomes <span id="cost1kcorrect"></span>, which reorders them, because the cheapest model here is right half the time. A cheaper model can also cost more than a dearer one: Qwen3.8 lists at $2/$6 against Opus 5's $5/$25 yet costs six times as much per reasoning task, because it spends about 5 700 output tokens per answer on hidden thinking where Opus spends 300. One artefact worth knowing: <strong>GPT-5.6 Terra Pro reports about four times the input tokens of GPT-5.6 Luna on the identical prompt</strong> (76 630 against 18 122), so the Pro tier evidently runs several internal passes and is billed for each. Its cost is what you would pay; its token count is not a prompt-size comparison.</dd></div>
-      <div class="mrow"><dt>Disclosure</dt><dd>Tasks authored with Claude against cited law, machine-validated, public for review. Provider marks are their owners' trademarks, shown for identification only.</dd></div>
+      <div class="mrow"><dt>Frozen</dt><dd>The scored task set and the scoring parameters are content-hashed into <span class="mono">bench/freeze.json</span>, and CI fails if either changes without that file being regenerated in the same commit. A gold correction is therefore a reviewable diff, never a silent adjustment: development happens on staged tasks, which are excluded from the board until a full run promotes them. Current frozen set: <span class="mono" id="freezehash"></span>.</dd></div>
+        <div class="mrow"><dt>Disclosure</dt><dd>Tasks authored with Claude against cited law, machine-validated, public for review. Provider marks are their owners' trademarks, shown for identification only.</dd></div>
       </dl>
     </section>
 
@@ -533,14 +534,14 @@
         <div class="lim"><b>One prompt, one scaffold.</b> Every score is conditional on a single prompt and a minimal harness. A different prompt could plausibly reorder the field, and no prompt-sensitivity analysis has been run.</div>
         <div class="lim"><b>The documents are too clean.</b> Extraction uses twelve program-rendered PDFs. Real underlag is photographed, skewed, creased and sometimes upside down, and nothing here tests that.</div>
         <div class="lim"><b>Three agent tasks is a probe.</b> Eleven models score 9 of 9. The suite has no locked periods, no dual-control interruptions and no adversarial states, so it discriminates only at the bottom.</div>
-        <div class="lim"><b>The thresholds are ours.</b> Approved requires 85% booking and 50% coverage because we chose those numbers, not because a risk model produced them. They are retunable, and moving them moves models.</div>
+        <div class="lim"><b>The routing thresholds are ours.</b> Auto requires 85% booking and a gate that selects at least half the work out of sample at high precision because we chose those numbers, not because a risk model produced them. They are retunable, published, and moving them moves models. The routing words are ours too: this is how we would deploy a model, not a certification of it.</div>
         <div class="lim"><b>We are not disinterested.</b> This is published by a company selling the capability it measures, using its own chart of accounts and its own observed error classes. Everything is open for that reason: the tasks, the raw runs, the scoring code and this page.</div>
       </div>
     </section>
 
     <section id="roadmap">
       <h2>What this measures next</h2>
-      <p class="sectiondesc">v1.6 measures models. The axes that follow measure everything else in the sentence "this model, with these instructions, in this system".</p>
+      <p class="sectiondesc">v2.0 measures models. The axes that follow measure everything else in the sentence "this model, with these instructions, in this system".</p>
       <div class="roadmap">
         <div class="rcard">
           <h5>What the suite does not test yet</h5>
@@ -724,7 +725,7 @@
 
   /* ---------- shared ---------- */
   const SUITES = [
-    { id: 'booking', label: 'Booking', legend: '<b>Pass</b> account and VAT both right · <b>Strict</b> the single gold account and the right VAT, with no credit for defensible alternatives · <b>Auto@99%</b> share auto-bookable at 99% precision, gated on stated confidence · <b>ECE</b> calibration error, 0 = perfect · <b>Cost</b> per task · a horizontal rule separates statistical tie groups (paired McNemar, p<0.05)' },
+    { id: 'booking', label: 'Booking', legend: '<b>Pass</b> account and VAT both right · <b>Strict</b> the single gold account and the right VAT, with no credit for defensible alternatives · <b>Auto</b> share a per-model confidence gate, fitted out of sample to 95% precision, would book unattended; hover for the precision it actually achieved · <b>ECE</b> calibration error, 0 = perfect · <b>Cost</b> per task · a horizontal rule separates statistical tie groups (paired McNemar, p<0.05)' },
     { id: 'reasoning', label: 'Reasoning', legend: '<b>Pass</b> exact deterministic answer · <b>Fresh rules</b> the six tasks on rules that changed in 2025-2026 · <b>ECE</b> calibration error, lower is better · <b>Cost</b> per task · rules separate statistical tie groups' },
     { id: 'extraction', label: 'Extraction', legend: '<b>Pass</b> every field on the document right, all-or-nothing across 12 documents, so most models land on the same 10/12 · <b>Fields</b> mean per-field accuracy, the more informative number here: nearly every model reads 98% of fields correctly and loses the document on one OCR reference or one öre · <b>Cost</b> per task · <b>Per correct</b> cost of one fully correct document · models without vision are absent' },
     { id: 'ledger-agent', label: 'Ledger-agent', legend: '<b>Pass</b> all end-state assertions hold on the real ledger · <b>Pass^k</b> share of tasks solved on EVERY repeat attempt · <b>Turns</b> model turns used · <b>Cost</b> per task · <b>Per correct</b> cost of one solved task · this suite is 3 tasks run 3 times each, a probe rather than a population: treat 100% as \'did not fail these three\', not as a general claim' },
@@ -763,7 +764,7 @@
     switch (name) {
       case 'Pass': return passOf(r);
       case 'Strict': return e.strictPass ?? 0;
-      case 'Auto@99%': return e.coverage99 ?? -1;
+      case 'Auto': return (e.gate || {}).coverage ?? -1;
       case 'ECE': return -(e.ece ?? 1);
       case 'Account': return (segmented(r)?.accountAccuracy ?? e.accountAccuracy) ?? 0;
       case 'VAT': return (segmented(r)?.vatAccuracy ?? e.vatAccuracy) ?? 0;
@@ -805,7 +806,7 @@
   }
 
   function headerCols() {
-    if (active === 'booking') return segment === 'all' ? ['Model','Pass','Strict','Auto@99%','ECE','Cost','Per correct'] : ['Model','Pass','Account','VAT','Cost'];
+    if (active === 'booking') return segment === 'all' ? ['Model','Pass','Strict','Auto','ECE','Cost','Per correct'] : ['Model','Pass','Account','VAT','Cost'];
     if (active === 'reasoning') return ['Model','Pass','Fresh rules','ECE','Cost','Per correct'];
     if (active === 'extraction') return ['Model','Pass','Fields','Cost','Per correct'];
     return ['Model','Pass','Pass^k','Turns','Cost','Per correct'];
@@ -828,7 +829,7 @@
       if (segment === 'all') {
         return [pc,
           e.strictPass == null ? '—' : fmtPct0(e.strictPass),
-          e.coverage99 == null ? '—' : fmtPct0(e.coverage99),
+          !e.gate ? '—' : fmtPct0(e.gate.coverage),
           e.ece == null ? '—' : e.ece.toFixed(2), cost, perCorrect];
       }
       const konto = s ? s.accountAccuracy : e.accountAccuracy;
@@ -1035,8 +1036,9 @@
       if (!r) return;
       const e = r.extras || {};
       const extra =
-        active === 'booking' && e.coverage99 != null
-          ? `<div class="trow"><span>Auto @99%</span><b>${fmtPct0(e.coverage99)}</b></div>`
+        active === 'booking' && e.gate
+          ? `<div class="trow"><span>Auto (out of sample)</span><b>${fmtPct0(e.gate.coverage)}</b></div>` +
+            `<div class="trow"><span>Gate precision</span><b>${fmtPct0(e.gate.precision)} <span style="color:var(--faint);font-weight:400">≥${fmtPct0(e.gate.precisionLo)}</span></b></div>`
           : active === 'ledger-agent' && e.reliability != null
             ? `<div class="trow"><span>Pass^k</span><b>${fmtPct0(e.reliability)}</b></div>`
             : '';
@@ -1089,42 +1091,31 @@
   /* ---------- verdicts ---------- */
   const allModels = rowsOf('booking').map((r) => ({ id: r.model, label: r.label, vendor: r.vendor }));
   function renderVerdicts() {
-    // These two figures are the section's whole argument, so they are read off
-    // the results file rather than typed into the prose.
-    const fable = modelRow('booking', 'claude-fable-5');
-    const sonnet = modelRow('booking', 'claude-sonnet-5');
-    if (fable) {
-      const n = fable.n;
-      document.getElementById('vfable').textContent =
-        `${Math.round((fable.extras.coverage99 ?? 0) * n)} of its ${n}`;
-    }
-    if (sonnet) {
-      document.getElementById('vsonnet').textContent =
-        Math.round((sonnet.extras.coverage99 ?? 0) * 100) + '%';
-    }
-
     const host = document.getElementById('verdictcards');
     const groups = [
-      { key: 'tillstyrks', cls: '', title: 'Approved', sv: 'tillstyrks', desc: 'Fit for confidence-gated unattended booking today.' },
-      { key: 'tillstyrks_med_reservation', cls: 'warn', title: 'Approved with reservation', sv: 'tillstyrks med reservation', desc: 'Usable with human review below the confidence gate.' },
-      { key: 'avstyrks', cls: 'no', title: 'Not approved', sv: 'avstyrks', desc: 'Should not book unattended in any configuration.' },
-      { key: 'ej_bedomd', cls: 'no', title: 'Not assessed', sv: 'ej bedömd', desc: 'Too few clean runs for an opinion; no verdict either way.' },
+      { key: 'auto', cls: '', title: 'Auto', desc: 'We would let it commit above its gate without a person in the loop.' },
+      { key: 'assist', cls: 'warn', title: 'Assist', desc: 'It proposes, a person confirms every booking.' },
+      { key: 'review', cls: 'no', title: 'Review', desc: 'A person books; the model may be consulted.' },
+      { key: 'not_assessed', cls: 'no', title: 'Not assessed', desc: 'Too few clean runs for an opinion either way.' },
     ];
     const byModel = DATA.verdicts || {};
     const labelOf = (id) => (allModels.find((mm) => mm.id === id) || { label: id }).label;
+    const pc = (x) => Math.round(x * 100) + '%';
     host.innerHTML = groups.map((g) => {
       const ids = Object.keys(byModel).filter((id) => byModel[id].verdict === g.key)
-        .sort((a,b) => (byModel[b].coverage99 ?? 0) - (byModel[a].coverage99 ?? 0));
-      if (g.key === 'ej_bedomd' && ids.length === 0) return '';
+        .sort((a,b) => ((byModel[b].gate || {}).coverage ?? 0) - ((byModel[a].gate || {}).coverage ?? 0));
+      if (g.key === 'not_assessed' && ids.length === 0) return '';
       const rows = ids.length === 0
         ? '<span class="none">none</span>'
         : ids.map((id) => {
             const v = byModel[id];
-            // For an unassessed model, name the suite that is missing rather
-            // than leaving a top-of-board model looking mysteriously excluded.
-            let right = v.coverage99 != null && g.key === 'tillstyrks'
-              ? `${Math.round(v.coverage99 * 100)}% auto` : '';
-            if (g.key === 'ej_bedomd') {
+            const gt = v.gate || {};
+            // Every row carries the evidence its placement rests on: how much
+            // the gate selects, and how often it was wrong, out of sample.
+            let right = gt.selected > 0
+              ? `${pc(gt.coverage)} auto · ${gt.errors} wrong of ${gt.selected} · p ≥ ${pc(gt.precisionLo)}`
+              : (g.key === 'not_assessed' ? '' : 'gate selects nothing');
+            if (g.key === 'not_assessed') {
               const missing = SUITES
                 .filter((s) => !modelRow(s.id, id))
                 .map((s) => s.label.toLowerCase());
@@ -1133,9 +1124,10 @@
             return `<span>${markFor(vendorOf(id))}${short(labelOf(id))}<span class="cov">${right}</span></span>`;
           }).join('');
       return `<div class="vcard ${g.cls}"><h5><span class="dot"></span>${g.title}</h5>` +
-        `<p class="vsv">${g.sv}</p><p class="vdesc">${g.desc}</p><div class="rows">${rows}</div></div>`;
+        `<p class="vdesc">${g.desc}</p><div class="rows">${rows}</div></div>`;
     }).join('');
   }
+
 
   /* ---------- head to head ---------- */
   let selA = 'claude-sonnet-5';
@@ -1292,18 +1284,17 @@
   function renderTakeaways() {
     const B = DATA.suites.booking.slice();
     const A = DATA.suites['ledger-agent'] || [];
-    const cov = (r) => (r.extras.coverage99 ?? 0) * 100;
+    const cov = (r) => ((r.extras.gate || {}).coverage ?? 0) * 100;
+    const gprec = (r) => ((r.extras.gate || {}).precision ?? 0) * 100;
     const strict = (r) => (r.extras.strictPass ?? r.passRate) * 100;
     const pct = (x) => x.toFixed(1).replace(/\.0$/, '') + '%';
     const byCov = B.slice().sort((a, b) => cov(b) - cov(a));
-    // Approved is the published verdict, not the coverage number alone: it also
+    // Auto is the published routing decision, not the coverage number alone: it also
     // requires booking accuracy, VAT-law accuracy and a clean agent record.
-    const gated = byCov.filter((r) => (DATA.verdicts?.[r.model] || {}).verdict === 'tillstyrks');
+    const gated = byCov.filter((r) => (DATA.verdicts?.[r.model] || {}).verdict === 'auto');
     const cheapest = gated.slice().sort((a, b) => a.avgCostUsd - b.avgCostUsd)[0];
     const dearest = gated.slice().sort((a, b) => b.avgCostUsd - a.avgCostUsd)[0];
     const top = B[0];
-    const flat = B.slice(0, 4).sort((a, b) => cov(a) - cov(b))[0];
-    const best = byCov[0];
     const open = B.filter((r) => r.open_weights)[0];
     const openAgent = A.find((r) => r.model === open.model);
     const drops = B.map((r) => r.passRate * 100 - strict(r));
@@ -1312,11 +1303,21 @@
     const list = (rs, f) => rs.map(f).join(', ').replace(/, ([^,]*)$/, ' and $1');
 
     const items = [
-      `<strong>${gated.length} of ${B.length} models are approved for confidence-gated unattended booking:</strong> ` +
-        list(gated, (r) => `${r.label} (${pct(cov(r))})`) +
-        ` of transactions auto-bookable at 99% precision. ${cheapest.label} does it for about $${cheapest.avgCostUsd.toFixed(3)} a transaction at list price, roughly 1/${Math.round(dearest.avgCostUsd / cheapest.avgCostUsd)}th of ${dearest.label}.`,
-      `<strong>Accuracy without calibration cannot automate.</strong> ${flat.label} sits in the top four on booking (${pct(flat.passRate * 100)}), yet its flat confidence supports auto-booking only ${pct(cov(flat))} of transactions at 99% precision, against ${pct(cov(best))} for ${best.label} at ${pct(best.passRate * 100)}. The gate, not the score, is what lets a model work alone.`,
-      `<strong>Open weights arrived.</strong> ${open.label} books ${pct(open.passRate * 100)}, inside the leading tie group, with ${openAgent ? `${openAgent.pass}/${openAgent.n} agent reliability and ` : ''}a ${pct(cov(open))} automation gate. The open-closed gap on Swedish accounting is now a few points at the top, not forty.`,
+      gated.length
+        ? `<strong>${gated.length} of ${B.length} models we would let book unattended:</strong> ` +
+          list(gated, (r) => `${r.label} (${pct(cov(r))} of transactions at ${pct(gprec(r))} precision)`) +
+          `, all measured out of sample. ${cheapest.label} does it for about $${cheapest.avgCostUsd.toFixed(3)} a transaction at list price` +
+          (dearest !== cheapest ? `, roughly 1/${Math.round(dearest.avgCostUsd / cheapest.avgCostUsd)}th of ${dearest.label}.` : '.')
+        : `<strong>No model clears our bar for unattended booking</strong> once the confidence gate is fitted out of sample.`,
+      (() => {
+        const withBoth = B.filter((r) => r.extras.gate && r.extras.fittedCoverage99 && r.extras.fittedCoverage99.selected > 0 && r.extras.gate.selected > 0)
+          .map((r) => { const f = r.extras.fittedCoverage99; return { r, inPrec: (f.selected - f.errors) / f.selected * 100, inCov: f.coverage * 100 }; })
+          .sort((a, b) => b.inCov - a.inCov)[0];
+        if (!withBoth) return '';
+        const { r, inPrec, inCov } = withBoth;
+        return `<strong>The confidence gate adds less than it appeared to.</strong> Under the previous metric ${r.label} led on automation: a threshold fitted on these same tasks selected ${pct(inCov)} of them at ${pct(inPrec)} precision. Fitted on one half and scored on the other, the same model's gate is right ${pct(gprec(r))} of the time and it drops to <em>${(DATA.verdicts?.[r.model] || {}).verdict || 'review'}</em>. The models that clear the gate out of sample are the most accurate ones, whose thresholds select nearly everything; at ${B.length ? (B[0].n) : 52} tasks this benchmark cannot show calibration doing work that accuracy is not already doing.`;
+      })(),
+      `<strong>Open weights arrived.</strong> ${open.label} books ${pct(open.passRate * 100)}, inside the leading tie group, with ${openAgent ? `${openAgent.pass}/${openAgent.n} agent reliability and ` : ''}a gate that books ${pct(cov(open))} out of sample at ${pct(gprec(open))} precision. The open-closed gap on Swedish accounting is now a few points at the top, not forty.`,
       `<strong>Read the strict column before believing the headline.</strong> Booking's pass rate credits any chart-defensible account, and those acceptance lists grew during curation partly in response to model answers. Requiring the single gold account and the right VAT drops every model by ${Math.round(Math.min(...drops))} to ${Math.round(Math.max(...drops))} points: ${top.label} from ${pct(top.passRate * 100)} to ${pct(strict(top))}. The strict column carries no such bias and is the conservative reading.`,
       `<strong>The ledger is the honesty test.</strong> ${perfect} of ${A.length} models solved every agent task on every repeat attempt; ` +
         list(worst, (r) => `${r.label} managed ${r.pass} of ${r.n}`) + `. Chat quality does not predict who can keep books.`,
@@ -1339,18 +1340,27 @@
 
   function renderCoverageBound() {
     const rows = (DATA.suites.booking || [])
-      .map((r) => ({ label: r.label, e: r.extras.coverage99Evidence }))
-      .filter((x) => x.e && x.e.selected > 0)
-      .sort((a, b) => a.e.precisionLo - b.e.precisionLo);
+      .map((r) => ({ label: r.label, g: r.extras.gate, f: r.extras.fittedCoverage99 }))
+      .filter((x) => x.g && x.g.selected > 0);
     if (rows.length === 0) return;
-    const worst = rows[0];
-    const best = rows[rows.length - 1];
     const pc = (x) => (x * 100).toFixed(0) + '%';
+    const byLo = rows.slice().sort((a, b) => b.g.precisionLo - a.g.precisionLo);
+    const best = byLo[0], worst = byLo[byLo.length - 1];
     document.getElementById('covbound').innerHTML =
-      `at 95% confidence the true precision behind these gates lies above ` +
-      `${pc(best.e.precisionLo)} for ${best.label} (${best.e.selected} transactions, ${best.e.errors} wrong) ` +
-      `and only above ${pc(worst.e.precisionLo)} for ${worst.label}, whose gate selects ${worst.e.selected}`;
+      `Out of sample, the best-supported gate is ${best.label}'s: ${best.g.selected} selected, ${best.g.errors} wrong, precision at least ${pc(best.g.precisionLo)} at 95% confidence. ` +
+      `The weakest that still selects anything is ${worst.label}'s, at least ${pc(worst.g.precisionLo)}. Three models never reach the target on the fitting fold and select nothing.`;
+    // The model whose in-sample figure fell furthest when the threshold was
+    // fitted out of sample: the earlier metric's optimism, made concrete.
+    const shifted = rows
+      .filter((x) => x.f && x.f.selected > 0)
+      .sort((a, b) => b.f.coverage - a.f.coverage)[0];
+    if (shifted) {
+      document.getElementById('gateshift').innerHTML =
+        `under the v1 metric, which fitted the threshold on the same tasks it scored, ${shifted.label} showed ${pc(shifted.f.coverage)} coverage with ${shifted.f.errors === 0 ? 'no errors' : shifted.f.errors + ' errors'} on its selected transactions. Fitted out of sample, its gate is wrong ${shifted.g.errors} times in ${shifted.g.selected}: ${pc(shifted.g.precision)} precision. ` +
+        `That gap is the optimism the old metric carried, and it is why the models that now clear <em>Auto</em> are simply the most accurate ones, whose gates select nearly everything. At ${(DATA.suites.booking[0] || {}).n || 52} tasks, a confidence gate adds little beyond raw accuracy that this benchmark can demonstrate.`;
+    }
   }
+
 
   // The validity section is rendered from the audit and bias-test output files,
   // so the numbers in it cannot drift from what the scripts actually produced.
@@ -1429,6 +1439,7 @@
   renderCostUnits();
   renderCoverageBound();
   renderValidity();
+  { const fz = (VALIDITY.freeze || {}); const el = document.getElementById('freezehash'); if (el && fz.sha256) el.textContent = fz.sha256.slice(0, 16) + '… · ' + Object.entries(fz.suites || {}).map(([k, v]) => k + ' ' + v.count).join(', ') + (fz.frozenAt ? ' · ' + fz.frozenAt : ''); }
   renderPickers();
   renderDuel();
 </script>

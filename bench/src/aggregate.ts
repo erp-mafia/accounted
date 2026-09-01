@@ -13,6 +13,8 @@ import path from 'node:path'
 import { MODELS } from './models'
 import type { BookingTask, RunRecord, SuiteId, Task } from './types'
 import { BENCH_ROOT, loadTasks } from './util'
+import { GATE_TARGET, GATE_FOLDS, FIXED_GATE_THRESHOLD } from './scoring-config'
+export { GATE_TARGET, GATE_FOLDS, FIXED_GATE_THRESHOLD } from './scoring-config'
 
 // Booking tasks split into evidence segments: 'underlag' tasks attach
 // invoice/receipt text (which usually states the VAT: the metric there is
@@ -72,6 +74,124 @@ export interface CoverageResult {
   // so the observed figure is optimistic by construction.
   precisionLo: number
   threshold: number
+}
+
+// The published gate. The threshold is FIXED in advance rather than fitted to
+// the sample: 0.90 is the round number a practitioner would pick for
+// "book it without asking me", chosen without reference to which model it
+// favours and recorded in bench/freeze.json. Nothing here is optimised, so
+// the precision it reports is an unbiased estimate, unlike coverageAtPrecision
+// below, whose threshold is chosen on the same data it is scored on.
+export interface FixedGateResult {
+  threshold: number
+  // Share of all transactions whose stated confidence clears the threshold.
+  coverage: number
+  selected: number
+  errors: number
+  // Precision on the selected transactions, observed and as a 95% Wilson
+  // lower bound. The bound is the number to quote.
+  precision: number
+  precisionLo: number
+}
+
+function coverageAtThreshold(
+  samples: { confidence: number; correct: boolean }[],
+  threshold: number,
+): FixedGateResult | null {
+  if (samples.length < 10) return null
+  const sel = samples.filter((s) => s.confidence >= threshold)
+  const errors = sel.filter((s) => !s.correct).length
+  const ok = sel.length - errors
+  return {
+    threshold,
+    coverage: Math.round((sel.length / samples.length) * 1000) / 1000,
+    selected: sel.length,
+    errors,
+    precision: sel.length ? Math.round((ok / sel.length) * 1000) / 1000 : 0,
+    precisionLo: sel.length ? Math.round(wilson(ok, sel.length, 1.96).lo * 1000) / 1000 : 0,
+  }
+}
+
+// The published gate: a per-model threshold fitted OUT OF SAMPLE.
+//
+// The deployment question is "if we auto-commit above a confidence threshold
+// tuned for this model, what share is automated and how often is it wrong?"
+// The v1 metric answered it by fitting the threshold on the same tasks it
+// then scored, which is optimistic by construction. A single fixed threshold
+// (kept below as gateFixed) removes the bias but measures the wrong thing:
+// whether a model's confidence SCALE happens to sit near the number chosen,
+// so a model that separates its errors cleanly at 0.6 vs 0.85 scores zero.
+//
+// Cross-fitting does neither. Tasks are split into two deterministic folds by
+// id; the threshold is fitted on one fold to reach the precision target and
+// applied to the other, then the roles swap. Every scored transaction was
+// selected by a threshold that never saw it. The pooled out-of-sample
+// selection gives coverage, precision and a Wilson lower bound that are
+// honest estimates, at the cost of noise that the bound then reports.
+
+export interface GateResult {
+  method: 'cross_fitted'
+  target: number
+  folds: number
+  // The threshold fitted on each fold's complement, for the record.
+  thresholds: number[]
+  // Share of all transactions selected out of sample.
+  coverage: number
+  selected: number
+  errors: number
+  // Precision on the pooled out-of-sample selection, observed and as a 95%
+  // Wilson lower bound. The bound is the number to quote.
+  precision: number
+  precisionLo: number
+}
+
+function fitThreshold(
+  fit: { confidence: number; correct: boolean }[],
+  target: number,
+): number | null {
+  let best: { t: number; cov: number } | null = null
+  for (const t of [...new Set(fit.map((s) => s.confidence))].sort()) {
+    const sel = fit.filter((s) => s.confidence >= t)
+    if (sel.length === 0) continue
+    const precision = sel.filter((s) => s.correct).length / sel.length
+    if (precision >= target && (!best || sel.length > best.cov)) best = { t, cov: sel.length }
+  }
+  return best ? best.t : null
+}
+
+function crossFittedGate(
+  samples: { taskId: string; confidence: number; correct: boolean }[],
+  target: number,
+  folds: number,
+): GateResult | null {
+  if (samples.length < 10) return null
+  const ordered = samples.slice().sort((a, b) => (a.taskId < b.taskId ? -1 : 1))
+  const foldOf = new Map(ordered.map((s, i) => [s.taskId, i % folds]))
+  const thresholds: number[] = []
+  const pooled: { correct: boolean }[] = []
+  for (let k = 0; k < folds; k++) {
+    const fit = ordered.filter((s) => foldOf.get(s.taskId) !== k)
+    const evalSet = ordered.filter((s) => foldOf.get(s.taskId) === k)
+    const t = fitThreshold(fit, target)
+    // No threshold reaches the target on the fitting fold: the gate selects
+    // nothing on this fold, which is the honest answer, not a failure.
+    thresholds.push(t ?? Infinity)
+    if (t === null) continue
+    for (const s of evalSet) if (s.confidence >= t) pooled.push({ correct: s.correct })
+  }
+  const errors = pooled.filter((s) => !s.correct).length
+  const ok = pooled.length - errors
+  return {
+    method: 'cross_fitted',
+    target,
+    folds,
+    thresholds,
+    coverage: Math.round((pooled.length / samples.length) * 1000) / 1000,
+    selected: pooled.length,
+    errors,
+    precision: pooled.length ? Math.round((ok / pooled.length) * 1000) / 1000 : 0,
+    precisionLo: pooled.length ? Math.round(wilson(ok, pooled.length, 1.96).lo * 1000) / 1000 : 0,
+  }
 }
 
 function coverageAtPrecision(
@@ -230,9 +350,11 @@ function suiteExtras(
   if (suite === 'booking') {
     const confSamples = records
       .filter((r) => typeof r.score.confidence === 'number')
-      .map((r) => ({ confidence: r.score.confidence as number, correct: r.pass }))
+      .map((r) => ({ taskId: r.taskId, confidence: r.score.confidence as number, correct: r.pass }))
     const cov95 = coverageAtPrecision(confSamples, 0.95)
     const cov99 = coverageAtPrecision(confSamples, 0.99)
+    const gate = crossFittedGate(confSamples, GATE_TARGET, GATE_FOLDS)
+    const gateFixed = coverageAtThreshold(confSamples, FIXED_GATE_THRESHOLD)
     const accountAcc =
       records.filter((r) => r.score.accountCorrect === true).length / records.length
     const vatAcc = records.filter((r) => r.score.vatCorrect === true).length / records.length
@@ -271,14 +393,19 @@ function suiteExtras(
       ),
       vatAccuracy: round3(vatAcc),
       ece: ece(calibration),
-      coverage95: cov95?.coverage ?? null,
-      coverage99: cov99?.coverage ?? null,
-      // The gate's own evidence travels with it: how many transactions it
-      // would actually commit, how many of those were wrong, and the lower
-      // bound on the precision it really achieved. Reporting the coverage
-      // share alone overstates what a sample this size can support.
-      coverage95Evidence: cov95,
-      coverage99Evidence: cov99,
+      // Headline automation figure: out-of-sample coverage and precision at
+      // a per-model threshold cross-fitted to 95%, with the Wilson lower
+      // bound the page quotes.
+      gate,
+      // A single fixed 0.90 threshold, stored for the record. It measures
+      // whether a model's confidence scale matches a naive policy, not
+      // whether it separates its errors, and drives nothing on the page.
+      gateFixed,
+      // The v1 metric, kept for the record: coverage at a threshold fitted to
+      // this sample so that observed precision reached 95% / 99%. Optimistic
+      // by construction and no longer used for any verdict.
+      fittedCoverage95: cov95,
+      fittedCoverage99: cov99,
       parseFailures: records.filter((r) => r.score.parseFailed === true).length,
       segments: { underlag: seg('underlag'), bank_only: seg('bank_only') },
     }
@@ -331,7 +458,7 @@ function main() {
   const latest = latestPerKey(loadAllRecords())
   const suites: SuiteId[] = ['booking', 'reasoning', 'extraction', 'ledger-agent']
   const leaderboard: Record<string, unknown> = {
-    benchVersion: 'v1.6',
+    benchVersion: 'v2.0',
     generatedAt: new Date().toISOString(),
     suites: {},
     taskMatrix: {},
@@ -540,10 +667,16 @@ function main() {
     })
   }
 
-  // Verdict per model, revisor-style, from published criteria (README).
-  // tillstyrks: fit for confidence-gated unattended booking today.
-  // reservation: usable with human review of everything below the gate.
-  // avstyrks: should not book unattended in any configuration.
+  // Routing decision per model, from published criteria (README). This is
+  // how WE would route the model's bookings, not a certification of it:
+  //   auto    : we would let it commit above the gate without a human
+  //   assist  : it proposes, a human confirms
+  //   review  : a human books; the model may be consulted
+  //   not_assessed : too few clean runs for any opinion
+  // Auto requires EVIDENCE of precision, not just a high observed figure:
+  // the 95% lower bound must clear 0.85, which at zero errors needs at least
+  // 24 selected transactions. A gate that selects three cannot be trusted
+  // however clean those three were.
   const verdicts: Record<string, unknown> = {}
   const suitesObj = leaderboard.suites as Record<string, SuiteRow[]>
   const allModelIds = new Set(
@@ -553,8 +686,7 @@ function main() {
     const booking = suitesObj['booking']?.find((r) => r.model === id)
     const reasoning = suitesObj['reasoning']?.find((r) => r.model === id)
     const agent = suitesObj['ledger-agent']?.find((r) => r.model === id)
-    const cov99 = (booking?.extras.coverage99 as number | null) ?? 0
-    const cov95 = (booking?.extras.coverage95 as number | null) ?? 0
+    const gate = (booking?.extras.gate as GateResult | null) ?? null
     const bp = booking?.passRate ?? 0
     const rp = reasoning?.passRate ?? 0
     const agentClean = (agent?.passRate ?? 0) >= 0.999
@@ -562,17 +694,22 @@ function main() {
     // credit exhaustion) must not produce verdicts in either direction.
     const assessed =
       (booking?.n ?? 0) >= 35 && (reasoning?.n ?? 0) >= 30 && (agent?.n ?? 0) >= 3
-    let verdict: 'tillstyrks' | 'tillstyrks_med_reservation' | 'avstyrks' | 'ej_bedomd' =
-      'avstyrks'
-    if (!assessed) verdict = 'ej_bedomd'
-    else if (bp >= 0.85 && cov99 >= 0.5 && rp >= 0.8 && agentClean) verdict = 'tillstyrks'
-    else if (bp >= 0.75 && rp >= 0.6 && (cov99 >= 0.2 || cov95 >= 0.5)) {
-      verdict = 'tillstyrks_med_reservation'
+    const g = gate ?? {
+      method: 'cross_fitted' as const, target: GATE_TARGET, folds: GATE_FOLDS, thresholds: [],
+      coverage: 0, precision: 0, precisionLo: 0, selected: 0, errors: 0,
+    }
+    let verdict: 'auto' | 'assist' | 'review' | 'not_assessed' = 'review'
+    if (!assessed) verdict = 'not_assessed'
+    else if (
+      bp >= 0.85 && rp >= 0.8 && agentClean &&
+      g.coverage >= 0.5 && g.precision >= 0.95 && g.precisionLo >= 0.85
+    ) verdict = 'auto'
+    else if (bp >= 0.75 && rp >= 0.6 && g.coverage >= 0.2 && g.precision >= 0.9) {
+      verdict = 'assist'
     }
     verdicts[id] = {
       verdict,
-      coverage99: cov99,
-      coverage95: cov95,
+      gate: g,
       booking: booking?.passRate ?? null,
       reasoning: reasoning?.passRate ?? null,
       agentClean,

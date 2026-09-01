@@ -115,23 +115,27 @@ on top; its accuracy is tracked separately by the backtest scripts).
   correct; reasoning: exact answer; extraction: all gold fields correct;
   ledger-agent: all end-state assertions hold). Reported with a Wilson score
   interval at z=1, matching how Ramp reports spread.
-- **Automation coverage (booking).** The deployment question collapsed into
-  one number: if bookings are auto-committed only when the model's stated
-  confidence clears a threshold, what share of the work is automated while
-  precision stays at or above the target (reported at 95% and 99%)? A model
-  with uninformative confidence scores 0% regardless of accuracy.
-  **Read this metric with its evidence, which the aggregator now emits as
-  `coverage99Evidence`: the selected count, the errors in it, and a 95%
-  Wilson lower bound on the precision actually achieved.** At n=52 every
-  model that clears the 99% bar does so with zero errors on the transactions
-  it selected, so the observed precision is 100% and the stated target is not
-  really being tested; the threshold is also fitted to the same sample it is
-  scored on, with no held-out split, which biases it optimistically. The
-  honest reading is the lower bound: above 90% for Sonnet 5 on 34 selected
-  transactions, above 44% for Sonnet 4.6, whose gate selects three. Coverage
-  ranks confidence separation between models; it does not promise an error
-  rate. Fixing this properly needs more tasks and a threshold/scoring split,
-  not different wording.
+- **Automation coverage (booking), cross-fitted.** The deployment question:
+  if bookings are auto-committed only when the model's stated confidence
+  clears a threshold, what share is automated and how often is it wrong? The
+  v1 metric fitted that threshold on the same tasks it then scored, which is
+  optimistic by construction and, at n=52, degenerate: every model that
+  cleared the 99% target did so with zero errors on the transactions it
+  selected, so observed precision was always 100% and the target measured
+  nothing. v2 cross-fits: tasks split into two folds by id, the threshold is
+  fitted on one fold to reach 95% precision and applied to the other, then
+  the folds swap. Every scored transaction was selected by a threshold that
+  never saw it. The aggregator emits `gate` (coverage, selected, errors,
+  observed precision, and a 95% Wilson lower bound on precision) as the
+  headline, `gateFixed` (a single pre-registered 0.90 threshold) for the
+  record, and the old fitted figures as `fittedCoverage95/99` so the change
+  is inspectable. **What this revealed:** out of sample the gate tracks raw
+  accuracy closely. The models that clear it are the most accurate ones,
+  whose thresholds select nearly everything; three of the weakest never
+  reach the target on the fitting fold and select nothing. At this size a
+  confidence gate demonstrably adds little beyond accuracy, which reverses
+  the v1 story (where a fitted gate appeared to reorder the field) and is
+  stated as such on the page.
 - **Reliability (ledger-agent), pass^k.** Each agent task runs k=3 times;
   reliability is the share of tasks solved on EVERY attempt. An agent that is
   rerun monthly is only as good as its worst month.
@@ -140,7 +144,7 @@ on top; its accuracy is tracked separately by the backtest scripts).
   McNemar tests on paired task outcomes. The published ranking is grouped
   into statistical ties by leader-chaining (a model joins the group above it
   while McNemar vs the group leader gives p >= 0.05); a simplification of a
-  compact letter display, stated as such. At v1.6's n=52 booking tasks, the
+  compact letter display, stated as such. At v2.0's n=52 booking tasks, the
   top NINE models are one tie group: differences under ~8 points are noise
   at this size, which is said on the page rather than hidden, and is the
   standing argument for growing the task set.
@@ -169,15 +173,20 @@ on top; its accuracy is tracked separately by the backtest scripts).
   (Claude Sonnet 5: 100/92/75%) while others held within 0-8 pp. Single-run
   pass@1 therefore carries run noise on top of sampling noise; another
   reason the tie groups, not the raw ordering, are the citable result.
-- **Verdicts.** Each model receives a revisor-style opinion on
-  confidence-gated unattended booking, from published criteria:
-  **tillstyrks** requires booking >= 85%, coverage@99% >= 50%, reasoning
-  >= 80%, and a clean ledger-agent record; **tillstyrks med reservation**
-  requires booking >= 75%, reasoning >= 60%, and a usable confidence gate
-  (coverage@99% >= 20% or coverage@95% >= 50%); everything else is
-  **avstyrks**. Criteria live in `src/aggregate.ts` and are deliberately
-  retunable; the point is that the benchmark states an opinion and shows its
-  arithmetic.
+- **Routing decisions (not certifications).** Each model gets our own
+  deployment decision, from published criteria, and the words are chosen so
+  they cannot be misread as an audit opinion: **auto** (we would let it
+  commit above its gate without a person) requires booking >= 85%,
+  reasoning >= 80%, a clean ledger-agent record, and a cross-fitted gate
+  that selects >= 50% at >= 95% observed precision with a 95% lower bound of
+  >= 85%; **assist** (it proposes, a person confirms) requires booking
+  >= 75%, reasoning >= 60%, and a gate selecting >= 20% at >= 90% precision;
+  **review** (a person books) is everything else with enough evidence;
+  **not_assessed** is too few clean runs. The lower-bound requirement is what
+  stops a gate that selected three clean transactions from earning `auto`.
+  Criteria live in `src/aggregate.ts`, are deliberately retunable, and the
+  earlier revisor vocabulary (tillstyrks/avstyrks) was dropped because it
+  lent an audit-report authority the evidence does not carry.
 - **Secondary metrics:** booking account-accuracy and VAT-accuracy separately;
   extraction per-field accuracy; ledger-agent tool errors and invariant
   refusals; turns; wall-clock.
@@ -248,6 +257,32 @@ prompt for every model and invalidates the current board) or adding a
 separate revenue suite. The second is the better fit for a benchmark that
 already scores each suite independently, and neither has been done.
 
+## Frozen test set and pre-registration
+
+The board develops on one set of tasks and reports on the same set, and gold
+has been corrected after seeing model answers. Left unguarded, that lets a
+benchmark move its own numbers unnoticed. Two mechanisms make it visible.
+
+- **Staged development.** New tasks land with `staged: true`, excluded from the
+  board until a full run promotes them (see above). Iteration happens off the
+  scored set.
+- **A content-hashed freeze.** `bench/scripts/freeze.ts` writes
+  `bench/freeze.json`: a SHA-256 over every scored (non-staged) task in
+  canonical form, per suite, plus the pinned scoring parameters (the
+  cross-fitted gate target and folds, the fixed-threshold value, and the strict
+  and lenient definitions). `npm run bench:check` runs it in `--check` mode in
+  CI and fails if any hash does not match the working tree. A gold correction
+  is then a reviewable diff of `freeze.json` in the same commit, named down to
+  the task and whether ids were added, removed, or edited in place. It is a
+  tripwire, not a lock: it does not prevent a change, it makes one impossible
+  to make quietly. The current frozen hash is shown on the results page.
+
+The scoring parameters are **pre-registered** rather than tuned: the gate
+target (95% precision), the fold count, and the fixed 0.90 threshold were
+chosen once, without reference to which model they favour, and live in
+`bench/src/scoring-config.ts` under the same freeze. Changing any of them is a
+visible, reviewable event, not a silent retune toward a nicer-looking board.
+
 ## Validity controls
 
 - `bench/scripts/validate-tasks.ts`: every gold account must exist in the
@@ -292,6 +327,23 @@ already scores each suite independently, and neither has been done.
   circularity in general; only expert-labelled tasks would do that.
 
 ## Changelog
+
+**v2.0 (2026-09-01).** Trustworthiness release. (1) The automation-coverage
+metric is now **cross-fitted**: the confidence threshold is fitted on one fold
+of tasks and scored on the other, so no transaction is judged by a threshold
+that saw it. The v1 metric fitted on the same tasks it scored and, at n=52, was
+degenerate (every qualifying model showed zero errors on its selected subset).
+Out of sample the gate tracks raw accuracy closely, which reverses the v1
+story that calibration reordered the field. (2) **Verdicts became routing
+decisions** (`auto` / `assist` / `review` / `not_assessed`): `auto` now
+requires a 95% Wilson lower bound on gate precision of >= 0.85, which stops a
+gate that selected three clean transactions from qualifying. The revisor
+vocabulary (tillstyrks/avstyrks) was dropped for borrowing audit-report
+authority the evidence does not carry. (3) A **frozen test set**
+(`bench/freeze.json`, checked in CI) and **pre-registered scoring parameters**
+(`bench/src/scoring-config.ts`) make any change to the board a reviewable diff.
+Booking stays 52 tasks; the ranking is unchanged; what changed is what the
+board claims about deployment and how hard it is to move quietly.
 
 **v1.6 (2026-09-01).** Validity release. Every booking gold was audited by
 models from other vendors (`scripts/audit-gold.ts`), which produced five
@@ -433,7 +485,7 @@ rest). Results land as append-only JSONL under `bench/results/runs/`.
 
 ## Roadmap: what this measures next
 
-v1.6 measures models. Three further axes are planned and explicitly not yet
+v2.0 measures models. Three further axes are planned and explicitly not yet
 run, recorded here so the direction predates the numbers:
 
 1. **Skills and instructions.** Hold the model fixed, vary the instruction
