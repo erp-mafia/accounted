@@ -34,6 +34,7 @@ import InboxDocumentPicker, { type AvailableInboxDoc } from '@/components/bookke
 import { fetchBookingTemplates, type BookingTemplateWithUsage } from '@/lib/reference-data/fetchers'
 import { TemplateForm } from '@/components/settings/TemplateForm'
 import { applyTemplate, deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
+import { findMatchingTemplates } from '@/lib/bookkeeping/booking-templates'
 import { roundOre, sumOre } from '@/lib/money'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -286,12 +287,18 @@ export default function ExpenseClaimsPage() {
           : []),
       ]
     }
-    // The calculated-VAT rate follows the basis account variant:
-    // 4535/4531 -> 25 %, 4536/4532 -> 12 %, 4537/4533 -> 6 %.
-    const rcRate = /^45(36|32)/.test(expenseAccount) ? 0.12 : /^45(37|33)/.test(expenseAccount) ? 0.06 : 0.25
+    // The basis must sit on the ruta-bearing 45xx account even when a
+    // template picked a domestic cost account; the calculated-VAT rate
+    // follows the variant: 4535/4531 -> 25 %, 4536/4532 -> 12 %, 4537/4533 -> 6 %.
+    const rcBasis = expenseAccount.startsWith('45')
+      ? expenseAccount
+      : sellerCountry === 'eu'
+        ? '4535'
+        : '4531'
+    const rcRate = /^45(36|32)/.test(rcBasis) ? 0.12 : /^45(37|33)/.test(rcBasis) ? 0.06 : 0.25
     const rc = roundOre(parsedAmount * rcRate)
     return [
-      { key: nextRowKey(), account: expenseAccount, debit: parsedAmount.toFixed(2), credit: '' },
+      { key: nextRowKey(), account: rcBasis, debit: parsedAmount.toFixed(2), credit: '' },
       { key: nextRowKey(), account: '2645', debit: rc.toFixed(2), credit: '' },
       { key: nextRowKey(), account: '2614', debit: '', credit: rc.toFixed(2) },
     ]
@@ -316,19 +323,57 @@ export default function ExpenseClaimsPage() {
   }, [creating, templates.length])
 
   const EXCLUDED_TEMPLATE_CATEGORIES = ['salary', 'year_end', 'vat', 'tax_account', 'private_transfer']
-  const visibleTemplates = useMemo(() => {
+  /** Expense-shaped: every business line is a debit (no income templates),
+   *  and no 45xx business line: those are the country-variant purchase
+   *  templates the Säljarens land selector replaces. */
+  const isExpenseTemplate = (tpl: BookingTemplateWithUsage) => {
+    const business = tpl.lines.filter((l) => l.type === 'business')
+    if (business.length === 0) return false
+    if (!business.every((l) => l.side === 'debit')) return false
+    if (business.some((l) => /^45/.test(l.account))) return false
+    return true
+  }
+  const templateSections = useMemo(() => {
     const q = templateSearch.trim().toLocaleLowerCase('sv-SE')
-    return templates
-      .filter((tpl) => tpl.is_active && !EXCLUDED_TEMPLATE_CATEGORIES.includes(tpl.category))
+    const pool = templates
+      .filter((tpl) => tpl.is_active && !tpl.is_hidden)
+      .filter((tpl) => !EXCLUDED_TEMPLATE_CATEGORIES.includes(tpl.category))
+      .filter(isExpenseTemplate)
       .filter(
         (tpl) =>
           !q ||
           tpl.name.toLocaleLowerCase('sv-SE').includes(q) ||
           (tpl.description ?? '').toLocaleLowerCase('sv-SE').includes(q),
       )
-      .slice(0, 30)
+    if (q) return { recommended: [], recent: [], all: pool.slice(0, 30) }
+    // Recommendations ride the transaction-categorization matcher (keyword +
+    // direction scoring) against the step-1 description, mapped back onto the
+    // library by Swedish name.
+    const matches = description.trim()
+      ? findMatchingTemplates(
+          {
+            description,
+            merchant_name: null,
+            amount: -(parsedAmount || 1),
+            mcc_code: null,
+          } as never,
+        )
+      : []
+    const byName = new Map(pool.map((tpl) => [tpl.name, tpl]))
+    const recommended = matches
+      .map((m) => byName.get(m.template.name_sv))
+      .filter((tpl): tpl is BookingTemplateWithUsage => Boolean(tpl))
+      .slice(0, 3)
+    const taken = new Set(recommended.map((tpl) => tpl.id))
+    const recent = pool
+      .filter((tpl) => tpl.last_used_at && !taken.has(tpl.id))
+      .sort((a, b) => (b.last_used_at ?? '').localeCompare(a.last_used_at ?? ''))
+      .slice(0, 3)
+    for (const tpl of recent) taken.add(tpl.id)
+    const all = pool.filter((tpl) => !taken.has(tpl.id)).slice(0, 30)
+    return { recommended, recent, all }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [templates, templateSearch])
+  }, [templates, templateSearch, description, parsedAmount])
 
   /** Bokio's semantic: the template picks the account/type, the country picks
    *  the VAT variant. Single-cost templates map onto the generator; multi-line
@@ -1120,26 +1165,43 @@ export default function ExpenseClaimsPage() {
                     </span>
                     <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                   </button>
-                  <div className="max-h-[320px] space-y-1 overflow-y-auto">
-                    {visibleTemplates.map((tpl) => (
-                      <button
-                        key={tpl.id}
-                        type="button"
-                        className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left transition-colors hover:bg-secondary/35"
-                        onClick={() => chooseTemplate(tpl)}
-                      >
-                        <span className="flex-1">
-                          <span className="block text-sm font-medium">{tpl.name}</span>
-                          {tpl.description && (
-                            <span className="block text-xs leading-snug text-muted-foreground">{tpl.description}</span>
+                  <div className="max-h-[340px] space-y-3 overflow-y-auto">
+                    {([
+                      ['templates_recommended', templateSections.recommended],
+                      ['templates_recent', templateSections.recent],
+                      ['templates_all', templateSections.all],
+                    ] as const).map(([labelKey, list]) =>
+                      list.length === 0 ? null : (
+                        <div key={labelKey} className="space-y-1">
+                          {(templateSections.recommended.length > 0 || templateSections.recent.length > 0) && (
+                            <p className="px-3 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                              {t(labelKey)}
+                            </p>
                           )}
-                        </span>
-                        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                      </button>
-                    ))}
-                    {visibleTemplates.length === 0 && (
-                      <p className="px-3 py-4 text-sm text-muted-foreground">{t('no_templates_found')}</p>
+                          {list.map((tpl) => (
+                            <button
+                              key={tpl.id}
+                              type="button"
+                              className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left transition-colors hover:bg-secondary/35"
+                              onClick={() => chooseTemplate(tpl)}
+                            >
+                              <span className="flex-1">
+                                <span className="block text-sm font-medium">{tpl.name}</span>
+                                {tpl.description && (
+                                  <span className="block text-xs leading-snug text-muted-foreground">{tpl.description}</span>
+                                )}
+                              </span>
+                              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                            </button>
+                          ))}
+                        </div>
+                      ),
                     )}
+                    {templateSections.recommended.length === 0 &&
+                      templateSections.recent.length === 0 &&
+                      templateSections.all.length === 0 && (
+                        <p className="px-3 py-4 text-sm text-muted-foreground">{t('no_templates_found')}</p>
+                      )}
                   </div>
                 </div>
               ) : (
