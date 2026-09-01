@@ -160,6 +160,18 @@ function isSkvBulkEligible(row: SkattekontoTransactionWithSuggestion): boolean {
   )
 }
 
+/**
+ * Every unbooked skattekonto row in the inbox can be selected: bulk Ignorera
+ * applies to all of them, and bulk Bokför re-filters the selection through
+ * isSkvBulkEligible at both the button and submit time. Before #2127 only
+ * rows with a deterministic suggestion got a checkbox, so a migration
+ * backlog on the skattekonto (pre-first-fiscal-year rows, already-booked
+ * history) could only be ignored one row at a time.
+ */
+function isSkvSelectable(row: SkattekontoTransactionWithSuggestion): boolean {
+  return !row.journal_entry_id && !row.is_ignored
+}
+
 function buildInvoiceMap(rows: InvoiceWithCustomer[] | null): Record<string, InvoiceWithCustomer> {
   if (!rows) return {}
   return rows.reduce<Record<string, InvoiceWithCustomer>>((acc, inv) => {
@@ -832,16 +844,17 @@ export default function TransactionsPage() {
     [exitingIds, inboxItems],
   )
 
-  // ... plus the visible skattekonto rows whose booking is deterministic
-  // (rule matched, no duplicate hint, unbooked, genomförd). These go through
-  // the skatteverket extension's bokfor-batch endpoint instead.
+  // ... plus the visible unbooked skattekonto rows. Ignorera applies to all
+  // of them; Bokför only to the deterministic subset (rule matched, no
+  // duplicate hint, genomförd), which goes through the skatteverket
+  // extension's bokfor-batch endpoint instead.
   const selectableSkvIds = useMemo(
     () =>
       inboxItems
         .filter(
           (item) =>
             item.source === 'skatteverket' &&
-            isSkvBulkEligible(item.data) &&
+            isSkvSelectable(item.data) &&
             !exitingIds.has(item.data.id),
         )
         .map((item) => item.data.id),
@@ -867,6 +880,13 @@ export default function TransactionsPage() {
     [skvRows, skvSelectedIds],
   )
 
+  // The subset of the selection that bulk Bokför can take: the button, the
+  // confirmation summary and the submit all read this one list.
+  const skvBookableSelectedRows = useMemo(
+    () => skvSelectedRows.filter(isSkvBulkEligible),
+    [skvSelectedRows],
+  )
+
   // Bulk confirmation summary: selected rows grouped by their deterministic
   // suggestion ("3 × Intäktsränta skattekonto → 8314") with per-group sums.
   // Count-based on purpose: voucher numbers are assigned atomically at
@@ -876,7 +896,7 @@ export default function TransactionsPage() {
       string,
       { label: string; account: string; count: number; sum: number }
     >()
-    for (const row of skvSelectedRows) {
+    for (const row of skvBookableSelectedRows) {
       const suggestion = row.booking_suggestion
       if (!suggestion) continue
       const label = suggestion.label ?? suggestion.account_name ?? row.transaktionstext
@@ -892,7 +912,7 @@ export default function TransactionsPage() {
       groups.set(key, group)
     }
     return Array.from(groups.values())
-  }, [skvSelectedRows])
+  }, [skvBookableSelectedRows])
 
   const skvBulkTotal = useMemo(
     () => roundOre(skvBulkGroups.reduce((sum, g) => sum + g.sum, 0)),
@@ -2856,7 +2876,7 @@ export default function TransactionsPage() {
   async function handleSkvBulkConfirm() {
     // Re-check eligibility at submit time: a refetch may have attached a
     // duplicate hint or booked a row while the selection sat idle.
-    const ids = skvSelectedRows.filter(isSkvBulkEligible).map((r) => r.id)
+    const ids = skvBookableSelectedRows.map((r) => r.id)
     if (ids.length === 0) {
       setSkvBulkConfirmOpen(false)
       setSkvSelectedIds(new Set())
@@ -3192,20 +3212,46 @@ export default function TransactionsPage() {
   }
 
   async function handleBatchIgnore() {
-    const ids = Array.from(selectedIds)
+    const bankIds = Array.from(selectedIds)
+    // The selection can outlive a refetch: only rows that are still
+    // ignorable go to the server (a booked skattekonto row would 409).
+    const skvIgnorable = skvSelectedRows.filter(isSkvSelectable)
+    const skvIds = skvIgnorable.map((r) => r.id)
+    const total = bankIds.length + skvIds.length
+    if (total === 0) return
+    // Rows with a booking suggestion and no duplicate hint look like
+    // affärshändelser that should be booked (BFL 5 kap.), not ignored. The
+    // ignore stays allowed (a migrated backlog is exactly such rows, already
+    // in the imported books), but the dialog says how many of them there
+    // are so the choice is informed, not accidental.
+    const skvLikelyBusiness = skvIgnorable.filter(
+      (r) => r.booking_suggestion != null && r.match_suggestion == null,
+    ).length
+    const body =
+      bankIds.length > 0 && skvIds.length > 0
+        ? t('batch_ignore_confirm_body_mixed')
+        : skvIds.length > 0
+          ? t('batch_ignore_confirm_body_skv')
+          : t('batch_ignore_confirm_body_bank')
     const ok = await confirm({
-      title: `Ignorera ${ids.length} transaktioner?`,
-      description: 'Transaktionerna försvinner från listan utan att bokföras. Du kan återställa dem under Bankavstämning.',
-      confirmLabel: 'Ignorera',
-      cancelLabel: 'Avbryt',
+      title: t('batch_ignore_confirm_title', { count: total }),
+      description:
+        skvLikelyBusiness > 0
+          ? `${body} ${t('batch_ignore_confirm_skv_suggested', { count: skvLikelyBusiness })}`
+          : body,
+      confirmLabel: t('batch_ignore_confirm_cta'),
+      cancelLabel: t('batch_ignore_confirm_cancel'),
       variant: 'warning',
     })
     if (!ok) return
 
-    const ignoredIds = new Set<string>()
-    setBatchProgress({ done: 0, total: ids.length })
+    setBatchProgress({ done: 0, total })
     let completed = 0
-    const results = await mapWithConcurrency(ids, BATCH_CONCURRENCY, async (id) => {
+    const tick = () => {
+      completed++
+      setBatchProgress({ done: completed, total })
+    }
+    const bankResults = await mapWithConcurrency(bankIds, BATCH_CONCURRENCY, async (id) => {
       let ignored = false
       try {
         const res = await fetch(`/api/transactions/${id}/ignore`, { method: 'POST' })
@@ -3213,54 +3259,86 @@ export default function TransactionsPage() {
       } catch {
         ignored = false
       }
-      completed++
-      setBatchProgress({ done: completed, total: ids.length })
+      tick()
       return ignored
     })
-    let successes = 0
-    const failures: string[] = []
-    ids.forEach((id, i) => {
-      if (results[i]) {
-        successes++
-        ignoredIds.add(id)
-      } else {
-        const tx = transactions.find((t) => t.id === id)
-        failures.push(tx?.description || id)
+    // Same endpoint as the per-row Ignorera on SkattekontoInboxCard; there is
+    // no batch variant, and 5-wide concurrency keeps this snappy for the
+    // migration-sized backlogs it exists for.
+    const skvResults = await mapWithConcurrency(skvIds, BATCH_CONCURRENCY, async (id) => {
+      let ignored = false
+      try {
+        const res = await fetch(
+          `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${id}/ignore`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_ignored: true }),
+          },
+        )
+        ignored = res.ok
+      } catch {
+        ignored = false
       }
+      tick()
+      return ignored
     })
-    if (ignoredIds.size > 0) {
+    const ignoredBank = new Set(bankIds.filter((_, i) => bankResults[i]))
+    const ignoredSkv = new Set(skvIds.filter((_, i) => skvResults[i]))
+    const successes = ignoredBank.size + ignoredSkv.size
+    const failed = total - successes
+
+    if (successes > 0) {
       setExitingIds((prev) => {
         const next = new Set(prev)
-        for (const id of ignoredIds) next.add(id)
+        for (const id of ignoredBank) next.add(id)
+        for (const id of ignoredSkv) next.add(id)
         return next
       })
-      setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? ignoredIds.size) - ignoredIds.size))
+      if (ignoredBank.size > 0) {
+        setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? ignoredBank.size) - ignoredBank.size))
+      }
       setTimeout(() => {
-        setTransactions((prev) =>
-          prev.map((t) => (ignoredIds.has(t.id) ? { ...t, is_ignored: true } : t))
-        )
+        if (ignoredBank.size > 0) {
+          setTransactions((prev) =>
+            prev.map((t) => (ignoredBank.has(t.id) ? { ...t, is_ignored: true } : t))
+          )
+        }
+        if (ignoredSkv.size > 0) {
+          setSkvRows((prev) =>
+            prev.map((r) => (ignoredSkv.has(r.id) ? { ...r, is_ignored: true } : r))
+          )
+        }
         setExitingIds((prev) => {
           const next = new Set(prev)
-          for (const id of ignoredIds) next.delete(id)
+          for (const id of ignoredBank) next.delete(id)
+          for (const id of ignoredSkv) next.delete(id)
           return next
         })
       }, 350)
     }
     setBatchProgress(null)
-    if (failures.length === 0) {
+    if (failed === 0) {
+      // Restore lives where the rows now live: Bankavstämning for bank rows,
+      // the Skattekonto page for skattekonto rows.
       toast({
-        title: 'Klart',
-        description: `${successes} transaktioner ignorerade`,
-        action: (
-          <ToastAction altText="Öppna Bankavstämning" asChild>
-            <Link href="/reconciliation">Avstämning</Link>
-          </ToastAction>
-        ),
+        title: t('batch_done_title'),
+        description: t('batch_ignore_done_description', { count: successes }),
+        action:
+          ignoredBank.size > 0 ? (
+            <ToastAction altText={t('batch_ignore_open_reconciliation_alt')} asChild>
+              <Link href="/reconciliation">{t('batch_ignore_open_reconciliation')}</Link>
+            </ToastAction>
+          ) : (
+            <ToastAction altText={t('batch_ignore_open_skattekonto_alt')} asChild>
+              <Link href="/skattekonto">{t('batch_ignore_open_skattekonto')}</Link>
+            </ToastAction>
+          ),
       })
     } else {
       toast({
-        title: 'Delvis klart',
-        description: `${successes} ignorerade, ${failures.length} misslyckades`,
+        title: t('batch_partial_title'),
+        description: t('batch_ignore_partial_description', { success: successes, failed }),
         variant: 'destructive',
       })
     }
@@ -3840,9 +3918,6 @@ export default function TransactionsPage() {
                         >
                           {t('batch_bulk_book')}
                         </Button>
-                        <button type="button" className={QUIET_LINK_CLASS} onClick={handleBatchIgnore}>
-                          {t('batch_ignore')}
-                        </button>
                         <button
                           type="button"
                           className={cn(QUIET_LINK_CLASS, 'hover:text-destructive')}
@@ -3853,12 +3928,19 @@ export default function TransactionsPage() {
                       </>
                     )}
                     {/* SKV rows book through the skatteverket extension: one
-                        summary confirmation, then draft+commit per row. */}
-                    {skvSelectedIds.size > 0 && (
+                        summary confirmation, then draft+commit per row. Only
+                        the deterministic subset of the selection is bookable;
+                        the rest is still ignorable below. */}
+                    {skvBookableSelectedRows.length > 0 && (
                       <Button size="sm" onClick={() => setSkvBulkConfirmOpen(true)}>
-                        {t('batch_skv_book', { count: skvSelectedIds.size })}
+                        {t('batch_skv_book', { count: skvBookableSelectedRows.length })}
                       </Button>
                     )}
+                    {/* Ignorera spans both selections (bank + skattekonto):
+                        one confirmation, one progress counter, one toast. */}
+                    <button type="button" className={QUIET_LINK_CLASS} onClick={handleBatchIgnore}>
+                      {t('batch_ignore')}
+                    </button>
                     {(selectedIds.size < selectableInboxIds.length ||
                       skvSelectedIds.size < selectableSkvIds.length) && (
                       <button
@@ -3938,7 +4020,7 @@ export default function TransactionsPage() {
                         bookingSuggestion={item.data.booking_suggestion}
                         isExiting={exitingIds.has(item.data.id)}
                         processing={skvBulkSubmitting}
-                        selectable={isSkvBulkEligible(item.data)}
+                        selectable={isSkvSelectable(item.data)}
                         isSelected={skvSelectedIds.has(item.data.id)}
                         onToggleSelect={toggleSkvSelect}
                         onBokfor={handleSkvBokfor}
@@ -4320,10 +4402,10 @@ export default function TransactionsPage() {
         <ConfirmationDialog
           open
           onOpenChange={setSkvBulkConfirmOpen}
-          title={t('skv_bulk_title', { count: skvSelectedIds.size })}
+          title={t('skv_bulk_title', { count: skvBookableSelectedRows.length })}
           isSubmitting={skvBulkSubmitting}
           confirmLabel={t('skv_bulk_confirm')}
-          warningText={t('skv_bulk_warning', { count: skvSelectedIds.size })}
+          warningText={t('skv_bulk_warning', { count: skvBookableSelectedRows.length })}
           onConfirm={handleSkvBulkConfirm}
         >
           <div className="space-y-2 py-2 text-sm">
@@ -4346,7 +4428,7 @@ export default function TransactionsPage() {
               </div>
             ))}
             <div className="flex items-baseline justify-between gap-4 border-t border-border pt-2 font-medium">
-              <span>{t('skv_bulk_total', { count: skvSelectedIds.size })}</span>
+              <span>{t('skv_bulk_total', { count: skvBookableSelectedRows.length })}</span>
               <span className="tabular-nums">
                 {skvBulkTotal > 0 ? '+' : ''}
                 {formatCurrency(skvBulkTotal)}
