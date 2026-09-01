@@ -1738,7 +1738,10 @@ export const enableBankingExtension: Extension = {
           try {
             await deleteSession(connection.session_id)
           } catch (error) {
-            log.error('[enable-banking] Failed to revoke PSD2 session (may be expired)', {
+            // The revoke is best-effort: an expired or already-closed session
+            // is the normal case here, and the disconnect continues either
+            // way, so this is a warning and not an error.
+            log.warn('[enable-banking] Failed to revoke PSD2 session (may be expired)', {
               message: error instanceof Error ? error.message : String(error),
               sessionId: connection.session_id,
               connectionId: connection_id,

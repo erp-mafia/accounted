@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { getErrorMessage } from '../get-error-message'
+import { getErrorMessage, getProviderResourceForbiddenMessage } from '../get-error-message'
+import { getErrorEntry } from '../structured-errors'
 import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
@@ -536,5 +537,29 @@ describe('getErrorMessage: GoTrue auth error patterns', () => {
     expect(msg).toBe(
       'E-postmeddelandet kunde inte skickas av autentiseringstjänsten. Kontrollera installationens SMTP-inställningar och försök igen.',
     )
+  })
+})
+
+describe('getProviderResourceForbiddenMessage', () => {
+  it('builds on the registry copy and appends the provider\'s own sentence', () => {
+    const entry = getErrorEntry('PROVIDER_RESOURCE_FORBIDDEN')!
+    const msg = getProviderResourceForbiddenMessage('Saknar behörighet för leverantörsregister.')
+
+    // One copy of the sentence, in the registry: the toast, the API envelope
+    // and the public error catalogue all have to say the same thing.
+    expect(msg.startsWith(entry.message_sv)).toBe(true)
+    // The provider's own words are the only part that names the register.
+    expect(msg).toContain('Leverantörens svar: "Saknar behörighet för leverantörsregister."')
+  })
+
+  it('falls back to the base sentence alone when the provider sent an opaque body', () => {
+    const entry = getErrorEntry('PROVIDER_RESOURCE_FORBIDDEN')!
+    expect(getProviderResourceForbiddenMessage(null)).toBe(entry.message_sv)
+    expect(getProviderResourceForbiddenMessage('   ')).toBe(entry.message_sv)
+    expect(getProviderResourceForbiddenMessage(null, 'en')).toBe(entry.message_en)
+  })
+
+  it('never tells the user to reconnect: the same grant meets the same 403', () => {
+    expect(getProviderResourceForbiddenMessage(null)).not.toMatch(/återanslut för att fortsätta/i)
   })
 })

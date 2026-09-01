@@ -3167,6 +3167,17 @@ const PROVIDER: Record<string, StructuredErrorEntry> = {
     message_sv: 'Anslutningen till leverantören har gått ut. Återanslut för att fortsätta.',
     message_en: 'Provider authentication expired or refresh failed.',
   },
+  // The provider refused ONE register while the same access token keeps
+  // answering for the rest (Fortnox: "Saknar behörighet för
+  // leverantörsregister.", code 2003275). Never "återanslut" here: the
+  // reconnect re-mints the same grant and meets the same 403.
+  PROVIDER_RESOURCE_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv:
+      'Leverantören nekade åtkomst till en del av uppgifterna, men anslutningen fungerar. Att återansluta hjälper inte: kontrollera behörigheterna för det registret hos leverantören (i Fortnox användarens rättigheter och licens, i Bokio rättigheterna på integrationstoken) och försök igen.',
+    message_en:
+      'The provider refused access to part of the data, but the connection itself works. Reconnecting will not help: check that register\'s permissions with the provider (in Fortnox the user rights and licence, in Bokio the integration token rights) and try again.',
+  },
   PROVIDER_LICENSE_MISSING: {
     httpStatus: 403,
     message_sv:
