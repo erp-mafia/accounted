@@ -12,6 +12,8 @@ import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse } from '@/lib/api/v1/errors'
+import { requireCapability } from '@/lib/entitlements/has-capability'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 
 const BankConnection = z.object({
   connection_id: z.string(),
@@ -39,8 +41,8 @@ registerEndpoint({
   doNotUseFor:
     'Fetching transactions (use /transactions) or account balances (use /cash-accounts). Triggering a sync: not available on this surface; syncing is automatic.',
   pitfalls: [
-    'last_synced_at is null until the first sync completes; it does NOT mean the connection is broken.',
-    'A connection can hold status=active with a stale last_synced_at: treat data older than ~2 days as suspect and tell the user.',
+    'last_synced_at is null until the first sync completes (about a minute after connecting); it does NOT mean the connection is broken.',
+    'A connection can hold status=active with a stale last_synced_at (older than ~36 hours): treat the data as suspect, but do NOT assume re-authorisation fixes it. Common causes are a lapsed subscription (this endpoint then answers with a capability error) or every account deselected in settings.',
     'status=expired means the PSD2 consent is dead: only the user can fix it, with BankID in a browser.',
     'error_message is Swedish and user-facing: show it verbatim rather than translating.',
   ],
@@ -73,6 +75,14 @@ registerEndpoint({
 export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'bank-connections.list',
   async (_request, ctx) => {
+    // Mirror the MCP twin (gnubok_connect_bank is gated on bank_sync via
+    // MCP_TOOL_CAPABILITY_MAP): without this, a company whose entitlement
+    // lapsed reads status=active with a frozen last_synced_at and the docs
+    // steer the agent toward a needless BankID re-auth. The capability error
+    // names the real cause instead.
+    const capBlocked = await requireCapability(ctx.supabase, ctx.companyId!, CAPABILITY.bank_sync)
+    if (capBlocked) return capBlocked
+
     try {
       const { data, error } = await ctx.supabase
         .from('bank_connections')

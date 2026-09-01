@@ -3690,7 +3690,7 @@ export const tools: McpTool[] = [
         connect_url: connectUrl,
         instructions:
           active.length > 0
-            ? 'At least one bank is connected and syncing. Check last_synced_at on each connection: if it is more than 2 days old, or consent_expires is near or past, transactions and balances may be STALE; warn the user and hand them the connect_url to re-authorise. To add another bank, give the user the connect_url.'
+            ? 'At least one bank is connected and syncing. Check last_synced_at on each connection: older than 36 hours means transactions and balances may be STALE; warn the user before building on them. A null last_synced_at right after connecting is normal (the first sync lands within a minute). Match the remedy to the cause: status expired/error or consent_expires near or past needs BankID re-authorisation via the connect_url; a stale last_synced_at while status is active usually means the subscription lapsed or every account is deselected, so point the user to Installningar -> Bank instead of re-authorising. To add another bank, give the user the connect_url.'
             : (requestedBank
                 ? ''
                 : 'BETTER LINK AVAILABLE: if you know (or can ask) which bank the company uses, call this tool again with bank=<name>; the link then opens that bank\'s consent directly instead of a picker. ') +

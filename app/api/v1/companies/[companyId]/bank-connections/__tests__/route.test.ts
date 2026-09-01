@@ -21,6 +21,11 @@ vi.mock('@supabase/supabase-js', async () => {
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
 })
 
+const { requireCapabilityMock } = vi.hoisted(() => ({ requireCapabilityMock: vi.fn() }))
+vi.mock('@/lib/entitlements/has-capability', () => ({
+  requireCapability: requireCapabilityMock,
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET } from '../route'
 
@@ -84,6 +89,7 @@ const params = { params: Promise.resolve({ companyId: COMPANY_ID }) }
 describe('v1 bank-connections list', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    requireCapabilityMock.mockResolvedValue(null)
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { role: 'owner' } },
@@ -102,6 +108,16 @@ describe('v1 bank-connections list', () => {
     authOk(['transactions:read'])
     const res = await GET(req(), params)
     expect(res.status).toBe(403)
+  })
+
+  it('returns the capability-blocked response when bank_sync is not entitled', async () => {
+    authOk(['companies:read'])
+    requireCapabilityMock.mockResolvedValue(
+      Response.json({ error: { code: 'CAPABILITY_BLOCKED' } }, { status: 403 }),
+    )
+    const res = await GET(req(), params)
+    expect(res.status).toBe(403)
+    expect(requireCapabilityMock).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, 'bank_sync')
   })
 
   it('404 when the key user is not a member of the company', async () => {
