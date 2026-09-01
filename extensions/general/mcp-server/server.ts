@@ -1461,13 +1461,20 @@ const PAGINATION_PROPS = {
   next_offset: { type: 'number', description: 'Offset for the next page (omitted on last page)' },
 } as const
 
+// Declared loosely on purpose. Every field here is transmitted once per
+// staged-write tool, and there are 58 of them in the default catalog, so a
+// character in this constant costs 58 characters of every agent's context.
+// `additionalProperties: false` stays: staging.test.ts pins the next hint as a
+// closed shape, and a guard whose reason is not in front of me is not a guard
+// to loosen for 420 tokens. Only args' redundant `additionalProperties: true`
+// went, which is the JSON Schema default anyway.
 const NEXT_ACTION_HINT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
     description: { type: 'string' },
     tool: { type: 'string' },
-    args: { type: 'object', additionalProperties: true },
+    args: { type: 'object' },
     resource: { type: 'string' },
   },
   required: ['description'],
@@ -1477,7 +1484,7 @@ const STAGED_OPERATION_SCHEMA = {
   type: 'object',
   properties: {
     staged: { type: 'boolean' },
-    operation_id: { type: 'string', description: 'UUID of the staged operation, present once persisted' },
+    operation_id: { type: 'string', description: 'Staged operation UUID, once persisted' },
     risk_level: { type: 'string', enum: ['low', 'medium', 'high'] },
     actor: { type: 'object' },
     dry_run: { type: 'boolean' },
@@ -1485,14 +1492,13 @@ const STAGED_OPERATION_SCHEMA = {
     message: { type: 'string' },
     approve: { type: 'object' },
     preview: { type: 'object' },
+    // Shape carried in prose rather than declared: the same three properties
+    // spelled out as JSON Schema cost 58x what one sentence costs, and the
+    // model reads the sentence either way. Same reason actor/approve/preview
+    // above have always been bare objects.
     period_status: {
       type: 'object',
-      description: 'Fiscal period covering the affärshändelse date. Use to detect locked/closed periods without a round-trip.',
-      properties: {
-        period_id: { type: ['string', 'null'] },
-        status: { type: 'string', enum: ['open', 'locked', 'closed'] },
-        lock_date: { type: ['string', 'null'] },
-      },
+      description: 'Period of the affärshändelse: period_id, status (open|locked|closed), lock_date. Detects a locked period without a round-trip.',
     },
     next: NEXT_ACTION_HINT_SCHEMA,
   },
@@ -3027,6 +3033,9 @@ export const tools: McpTool[] = [
         scope: { type: 'string', description: 'Optional filter: only tools requiring this API key scope (e.g. "invoices:write").' },
         limit: { type: 'number', description: 'Max results, 1-50 (default 20).' },
       },
+      // No offset exists: a caller paged with one today (2026-09-01) and was
+      // rejected. Raise limit instead, or narrow the query.
+      examples: [{ query: 'moms', detail: 'summary' }, { query: 'faktura', limit: 50 }],
     },
     outputSchema: {
       type: 'object',
@@ -5100,6 +5109,7 @@ export const tools: McpTool[] = [
         offset: { type: 'number', description: 'Number of results to skip for pagination (default 0)' },
         cash_account_id: { type: 'string' },
       },
+      examples: [{}, { limit: 100, offset: 100 }],
     },
     outputSchema: paginatedSchema('transactions', {
       type: 'object',
@@ -12024,6 +12034,9 @@ export const tools: McpTool[] = [
         },
       },
       required: ['file_name'],
+      // Step 1 of 2: PUT the bytes to upload_url, then complete with the SAME
+      // upload_id and file_name.
+      examples: [{ file_name: 'kvitto-sl-2026-03-12.pdf' }],
     },
     outputSchema: {
       type: 'object',
@@ -12091,6 +12104,8 @@ export const tools: McpTool[] = [
         },
       },
       required: ['upload_id', 'file_name'],
+      // Step 2 of 2: same upload_id and file_name as gnubok_create_document_upload.
+      examples: [{ upload_id: 'f00d...', file_name: 'kvitto-sl-2026-03-12.pdf' }],
     },
     outputSchema: {
       type: 'object',
@@ -13164,6 +13179,7 @@ export const tools: McpTool[] = [
         dry_run: { type: 'boolean', description: 'Preview without staging' },
       },
       required: ['document_id', 'journal_entry_id'],
+      examples: [{ document_id: 'd0c1...', journal_entry_id: 'a44e...' }],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: {
