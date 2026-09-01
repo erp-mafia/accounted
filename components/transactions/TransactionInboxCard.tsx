@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { useDocumentExtraction } from '@/lib/hooks/use-document-extraction'
 import ExtractionStatus from '@/components/ui/extraction-status'
@@ -85,7 +85,7 @@ interface TransactionInboxCardProps {
   /** The company's enabled cash accounts (the page's ?enabled_only=true fetch):
    *  gates the move action, which is pointless with a single account. */
   cashAccounts?: CashAccount[]
-  onToggleSelect: (id: string) => void
+  onToggleSelect: (id: string, extend?: boolean) => void
   /** End date of the company's completed SIE-import coverage. Rows on or
    *  before it are pre-migration history: they most likely correspond to an
    *  already-imported verifikat, so the row carries a quiet marker steering
@@ -123,6 +123,10 @@ export default function TransactionInboxCard({
 }: TransactionInboxCardProps) {
   const t = useTranslations('tx_inbox_card')
   const tMethod = useTranslations('tx_method')
+  // Radix' onCheckedChange carries no mouse event, so the shift state is
+  // captured from the click that precedes it (Radix composes our onClick
+  // before its own handler) and read back when the toggle fires.
+  const shiftHeld = useRef(false)
   // Attaching underlag is a write: hide the affordance from viewers so they
   // don't dead-end on a 403 (mirrors the gate in TransactionHistoryList).
   const { canWrite } = useCanWrite()
@@ -288,13 +292,16 @@ export default function TransactionInboxCard({
         {/* Zero-width cell: the checkbox hangs in the left page margin so
             the date column can sit flush with the page edge. */}
         <td
-          className={cn(TD_CLASS, 'relative w-0 !p-0')}
+          className={cn(TD_CLASS, 'relative w-0 !p-0 select-none')}
           onClick={(e) => e.stopPropagation()}
         >
           {selectable && (
             <Checkbox
               checked={isSelected}
-              onCheckedChange={() => onToggleSelect(transaction.id)}
+              onClick={(e) => {
+                shiftHeld.current = e.shiftKey
+              }}
+              onCheckedChange={() => onToggleSelect(transaction.id, shiftHeld.current)}
               aria-label="Välj transaktion"
               className={cn(
                 'absolute -left-5 top-1/2 -translate-y-1/2 border-foreground duration-150 md:-left-6',
