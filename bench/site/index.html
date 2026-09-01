@@ -333,6 +333,10 @@
   .method dd strong { color: var(--ink); font-weight: 600; }
   .prose p { font-size: 15px; color: var(--soft); margin: 0 0 14px; max-width: 68ch; }
   .prose p:last-child { margin-bottom: 0; }
+  .limits { display: grid; gap: 0; }
+  .lim { padding: 13px 0; border-bottom: 1px solid var(--border); font-size: 14px; color: var(--soft); max-width: 80ch; }
+  .lim:last-child { border-bottom: none; }
+  .lim b { color: var(--ink); font-weight: 600; }
   .roadmap { display: grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap: 16px; }
   .rcard { border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; }
   .rcard h5 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
@@ -387,6 +391,7 @@
       <a href="#h2h">Head to head</a>
       <a href="#external">Cross-check</a>
       <a href="#method">Method</a>
+      <a href="#limitations">Limits</a>
       <a href="#roadmap">Next</a>
     </div>
   </nav>
@@ -401,7 +406,7 @@
         <li><span><strong>Open weights arrived.</strong> Kimi K3 books 90.6%, level with Claude Sonnet 5 (the two are a statistical tie), with 9/9 agent reliability and a 60% automation gate. The open-closed gap on Swedish accounting is now a few points at the top, not forty.</span></li>
         <li><span><strong>Two independent benchmarks agree on the frontier and disagree below it.</strong> Scored strictly, our figures land within about two points of DualEntry's US-GAAP board for Opus 5, Gemini 3.1 Pro and GPT-5.6 Luna, while Haiku 4.5 scores 36 points lower here. Frontier models appear to carry accounting competence across jurisdictions; weaker ones do not survive the translation to Swedish accounts and moms.</span></li>
         <li><span><strong>Read the strict column before believing the headline.</strong> Booking's pass rate credits any chart-defensible account, and those acceptance lists grew during curation partly in response to model answers. Requiring the single gold account and the right VAT drops every model by 25-32 points: Opus 5 from 96% to 72%, Sonnet 5 from 91% to 60%. The strict column carries no such bias and is the conservative reading.</span></li>
-        <li><span><strong>The ledger is the honesty test.</strong> Ten of fourteen models solved every agent task on every repeat attempt; Llama 4 Maverick managed 1 of 9, GPT-OSS-120B 6 of 9, Haiku 4.5 4 of 9. Chat quality does not predict who can keep books.</span></li>
+        <li><span><strong>The ledger is the honesty test.</strong> Eleven of fifteen models solved every agent task on every repeat attempt; Llama 4 Maverick managed 1 of 9, GPT-OSS-120B 6 of 9, Haiku 4.5 4 of 9. Chat quality does not predict who can keep books.</span></li>
       </ol></div>
     </section>
 
@@ -499,6 +504,23 @@
       <div class="mrow"><dt>Cost</dt><dd>Measured tokens at each vendor's first-party list price, standard tier, no cache, batch or promotional discounts; open-weights models without a vendor API are priced at a named serving provider. <strong>Platform neutrality, verified:</strong> Anthropic models were measured on Bedrock and the others through OpenRouter, which invites the objection that the serving platform biases the comparison. It does not: the price applied is always the vendor's own list rate, never the platform's bill. To check that token <em>counting</em> also agrees, Claude Fable 5 was run on the identical booking task through both routes: Bedrock reported 27 475 input tokens and OpenRouter reported 27 475, a difference of zero. What does differ between vendors is the tokenizer, and that is a real cost: the same Swedish chart of accounts costs Claude about 27 000 tokens and GPT-5.6 Luna about 18 000. <strong>What this cost is:</strong> the price of running these tasks through the neutral scaffold, where every booking ships the entire 1 290-account BAS chart as context, roughly 18 000 to 27 000 input tokens per task. Input therefore dominates, and the cost ranking is close to the input-price ranking. <strong>What it is not:</strong> the price of booking a transaction in production, where a retrieval step puts perhaps twenty candidate accounts in front of the model instead of all of them, and caching applies. Read it as a comparable price of the same work, not as an invoice. <strong>Per correct</strong> divides it by the strict pass rate, because a model that fails cheaply is not cheap. In units a practitioner buys: booking a thousand transactions costs about <strong>$3 with GPT-OSS-120B, $4 with GLM 5.3 Flash, $57 with Claude Sonnet 5 and $279 with Claude Fable 5</strong>; per thousand <em>correct</em> bookings that becomes $14, $7, $95 and $389, which reorders them, because the cheapest model here is right half the time. A cheaper model can also cost more than a dearer one: Qwen3.8 lists at $2/$6 against Opus 5's $5/$25 yet costs six times as much per reasoning task, because it spends about 5 700 output tokens per answer on hidden thinking where Opus spends 300. One artefact worth knowing: <strong>GPT-5.6 Terra Pro reports about four times the input tokens of GPT-5.6 Luna on the identical prompt</strong> (76 630 against 18 122), so the Pro tier evidently runs several internal passes and is billed for each. Its cost is what you would pay; its token count is not a prompt-size comparison.</dd></div>
       <div class="mrow"><dt>Disclosure</dt><dd>Tasks authored with Claude against cited law, machine-validated, public for review. Provider marks are their owners' trademarks, shown for identification only.</dd></div>
       </dl>
+    </section>
+
+    <section id="limitations">
+      <h2>How to argue with this benchmark</h2>
+      <p class="sectiondesc">The strongest objections we know of, stated by us rather than left for someone else to find.</p>
+      <div class="limits">
+        <div class="lim"><b>It cannot rank the frontier.</b> With 53 booking tasks the top ten models are a single statistical tie. Nothing about the ordering inside that group is a result, and no presentation fixes it: only more tasks will.</div>
+        <div class="lim"><b>The gold was written by a ranked model.</b> Tasks and answers were authored with Claude against the cited statutes, and Claude Fable 5 then ties for first. Machine validation, the discrimination audit and the retirement of a defective task reduce that risk; they do not remove it. Only expert-labelled tasks would.</div>
+        <div class="lim"><b>The lenient score is biased upward by construction.</b> Acceptance lists grew during curation partly in response to model answers, worth 25 to 32 points. The strict column exists because of this, and is the number to quote.</div>
+        <div class="lim"><b>Confidence is self-reported.</b> Automation coverage, the metric the verdicts turn on, rests entirely on a number the model writes about itself, which is known to be format-sensitive. A logprob-based check would be stronger and has not been run.</div>
+        <div class="lim"><b>Single run, and runs move.</b> Results are pass@1, while our own repeat study found aggregate pass rates moving up to 25 points between identical runs for one model. Only the agent suite is repeated.</div>
+        <div class="lim"><b>One prompt, one scaffold.</b> Every score is conditional on a single prompt and a minimal harness. A different prompt could plausibly reorder the field, and no prompt-sensitivity analysis has been run.</div>
+        <div class="lim"><b>The documents are too clean.</b> Extraction uses twelve program-rendered PDFs. Real underlag is photographed, skewed, creased and sometimes upside down, and nothing here tests that.</div>
+        <div class="lim"><b>Three agent tasks is a probe.</b> Eleven models score 9 of 9. The suite has no locked periods, no dual-control interruptions and no adversarial states, so it discriminates only at the bottom.</div>
+        <div class="lim"><b>The thresholds are ours.</b> Approved requires 85% booking and 50% coverage because we chose those numbers, not because a risk model produced them. They are retunable, and moving them moves models.</div>
+        <div class="lim"><b>We are not disinterested.</b> This is published by a company selling the capability it measures, using its own chart of accounts and its own observed error classes. Everything is open for that reason: the tasks, the raw runs, the scoring code and this page.</div>
+      </div>
     </section>
 
     <section id="roadmap">
@@ -1307,7 +1329,7 @@
     document.getElementById('exttable').innerHTML = html + '</tbody>';
     const rho = spearman(rows.map((r) => [r.strict, r.theirs]));
     document.getElementById('extnote').innerHTML =
-      `<b>At the frontier the two benchmarks converge.</b> Scored strictly, Claude Opus 5 lands within 0.6 points of DualEntry's figure, Gemini 3.1 Pro within 1.5 and GPT-5.6 Luna within 2.1: two benchmarks built independently, in different jurisdictions, from different task types, agreeing on the top of the field to inside a rounding error. ` +
+      `<b>Three models coincide closely; treat that as weak evidence, not validation.</b> Scored strictly, Claude Opus 5 lands within 0.6 points of DualEntry's figure, Gemini 3.1 Pro within 1.5 and GPT-5.6 Luna within 2.1. It is tempting to call that independent corroboration, but our strict scores compress into a 60 to 72 band while theirs spread from 66 to 84, so the models that coincide are the ones whose DualEntry score happens to fall inside our range, and the models they rate higher (Claude Fable 5 −11.5, Kimi K3 −14.9, Grok 4.6 −19.9) diverge simply because we have a ceiling near 72. Range overlap explains the agreement at least as well as genuine convergence does. ` +
       `<b>Below the frontier we are markedly harder.</b> Claude Haiku 4.5 scores 36 points lower here than there, GPT-OSS-120B 29 lower, DeepSeek V4 Pro 25 lower. The plausible reading is jurisdiction transfer: naming one BAS account out of 1 290 and one VAT treatment out of ten punishes a weak model far more than US-GAAP questions do, while a frontier model carries its accounting competence across the border. ` +
       `Rank agreement stays weak on that account (Spearman ρ = ${rho >= 0 ? '+' : ''}${rho.toFixed(2)}, 95% interval roughly [−0.46, +0.75] at ${rows.length} shared models, not distinguishable from zero), because the mid-field orders differently on each board. Neither validates the other; both are small enough that adjacent ranks differ by single questions.`;
   }

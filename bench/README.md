@@ -255,12 +255,17 @@ a 33x spread that the raw cost-per-task column understates.
 ## External cross-check (published numbers, not measured by us)
 
 DualEntry's 2026 Accounting AI Benchmark is the nearest comparable public
-board and the page reports the agreement directly. **At the frontier the two boards converge to within about two points.**
+board and the page reports the agreement directly. **Three models coincide closely, but this is weak evidence, not validation.**
 Scored strictly, Claude Opus 5 differs from DualEntry's figure by -0.6 pp,
 Gemini 3.1 Pro by -1.5 and GPT-5.6 Luna by -2.1: two benchmarks built
 independently, in different jurisdictions, from different task types,
-agreeing on the top of the field to inside a rounding error. That is the
-strongest external validity evidence this benchmark has.
+coinciding to inside a rounding error. Do not read that as corroboration
+without the caveat: our strict scores compress into a 60-72 band while
+DualEntry's spread from 66 to 84, so the models that coincide are exactly
+the ones whose DualEntry score falls inside our range, and models they rate
+higher (Fable 5 -11.5, Kimi K3 -14.9, Grok 4.6 -19.9) diverge because we
+have a ceiling near 72. Range overlap explains the agreement at least as
+well as genuine convergence does.
 
 **Below the frontier Ledger-Bench is markedly harder**: Haiku 4.5 -36.3 pp,
 GPT-OSS-120B -28.7, DeepSeek V4 Pro -25.4. The plausible reading is
@@ -359,6 +364,22 @@ run, recorded here so the direction predates the numbers:
    defaults and posting rules are properties of the system, not the model,
    and measuring that difference is the reason to own the benchmark rather
    than cite someone else's.
+
+## How to argue with this benchmark
+
+The strongest objections we know of, published rather than left to be found:
+it cannot rank the frontier (53 booking tasks put the top ten in one
+statistical tie); the gold was authored by a model that then ties for first;
+the lenient score is biased upward by construction (25-32 points) because
+acceptance lists grew in response to model answers; automation coverage
+rests on self-reported confidence and no logprob check has been run; results
+are pass@1 while our own repeat study found up to 25 points of run-to-run
+movement; every score is conditional on one prompt and one scaffold with no
+sensitivity analysis; the extraction documents are program-rendered and
+therefore too clean; three agent tasks is a probe, not a population; the
+verdict thresholds are chosen rather than derived; and the publisher sells
+the capability it measures, which is why the tasks, raw runs, scoring code
+and page source are all public.
 
 ## Future work
 
