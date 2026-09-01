@@ -46,6 +46,14 @@ export interface WebshopOrderUpsert {
   refunded_total: number
 }
 
+export interface WebshopOrderRemovalResult {
+  /** Rows deleted (unfrozen order rows; unfrozen refund children cascade). */
+  removed: number
+  errors: number
+  /** First error encountered, surfaced for the sync summary/logs. */
+  firstError?: { message: string; code?: string | null }
+}
+
 export interface WebshopOrderUpsertResult {
   inserted: number
   updated: number
