@@ -254,6 +254,73 @@ describe('anchorSupplierInvoiceDocument', () => {
     ).resolves.toBeNull()
   })
 
+  it('names the foreign key in the fiscal_periods embed', async () => {
+    // fiscal_periods points back at journal_entries twice (closing_entry_id,
+    // opening_balance_entry_id), so the bare embed is ambiguous and PostgREST
+    // answers PGRST201. The bare form shipped 2026-07-27 and this helper
+    // anchored nothing in production until 2026-09-01. A mocked client resolves
+    // no relationship, so asserting the string is the only thing a unit test
+    // can do here; scripts/checks/ambiguous-embed.mjs is the repo-wide guard.
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      {
+        data: {
+          id: 'si-1',
+          document_id: 'doc-1',
+          registration_journal_entry_id: 'je-reg',
+          payment_journal_entry_id: null,
+        },
+      },
+      { data: { id: 'doc-1', journal_entry_id: null, is_current_version: true } },
+      { data: [] },
+      { data: [{ id: 'je-reg', status: 'posted', fiscal_period: openPeriod }] },
+      { data: [{ id: 'doc-1' }] },
+    ])
+
+    await anchorSupplierInvoiceDocument(supabase as unknown as SupabaseClient, 'company-1', 'si-1')
+
+    expect(findCall('journal_entries', 'select')?.[0]).toContain(
+      'fiscal_periods!journal_entries_fiscal_period_id_fkey',
+    )
+  })
+
+  it('logs the reason when the period lock state cannot be read, and anchors nothing', async () => {
+    // Failing closed is right: never anchor on a lock state we could not read.
+    // Failing SILENTLY is what let the PGRST201 above sit dead for five weeks,
+    // with the caller's "no verifikat can anchor it" warning as the only
+    // signal, naming a cause that had nothing to do with it.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      {
+        data: {
+          id: 'si-1',
+          document_id: 'doc-1',
+          registration_journal_entry_id: 'je-reg',
+          payment_journal_entry_id: null,
+        },
+      },
+      { data: { id: 'doc-1', journal_entry_id: null, is_current_version: true } },
+      { data: [] },
+      {
+        error: {
+          message:
+            "Could not embed because more than one relationship was found for 'journal_entries' and 'fiscal_periods'",
+        },
+      },
+    ])
+
+    await expect(
+      anchorSupplierInvoiceDocument(supabase as unknown as SupabaseClient, 'company-1', 'si-1'),
+    ).resolves.toBeNull()
+    // Stopped at the failed read: no UPDATE was attempted.
+    expect(supabase.from).toHaveBeenCalledTimes(4)
+    const logged = consoleError.mock.calls.flat().join(' ')
+    expect(logged).toContain('failed to resolve period lock state for supplier invoice anchoring')
+    expect(logged).toContain('more than one relationship')
+    consoleError.mockRestore()
+  })
+
   it('reports failure as null instead of throwing at the caller', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueMany([

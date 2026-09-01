@@ -176,11 +176,30 @@ async function pickAnchorEntry(
   }
   if (candidates.length === 0) return null
 
-  const { data: entries } = await supabase
+  const { data: entries, error } = await supabase
     .from('journal_entries')
-    .select('id, status, fiscal_period:fiscal_periods(is_closed, locked_at)')
+    // fiscal_periods also points back at journal_entries (closing_entry_id,
+    // opening_balance_entry_id), so PostgREST refuses the bare embed as
+    // ambiguous; name the FK explicitly.
+    .select(
+      'id, status, fiscal_period:fiscal_periods!journal_entries_fiscal_period_id_fkey(is_closed, locked_at)',
+    )
     .eq('company_id', companyId)
     .in('id', candidates)
+
+  if (error) {
+    // Fail closed: never anchor on a lock state we could not read. But say so.
+    // The bare embed above returned PGRST201 on every call from 2026-07-27
+    // onwards and the result was dropped on the floor, so the caller's "no
+    // verifikat can anchor it" warning was the only signal, and it named the
+    // wrong cause.
+    log.error('failed to resolve period lock state for supplier invoice anchoring', {
+      companyId,
+      supplierInvoiceId,
+      reason: error.message,
+    })
+    return null
+  }
 
   type EntryRow = {
     id: string

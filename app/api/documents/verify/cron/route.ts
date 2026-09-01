@@ -7,20 +7,70 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 /**
  * GET /api/documents/verify/cron: nightly 03:00 UTC (schedule in vercel.json).
  * Spot-checks WORM archive integrity by recomputing SHA-256 for the next
- * batch of documents and writing INTEGRITY_FAILURE rows to the audit log
- * for any mismatches. Documents whose storage object cannot be downloaded
- * get an INTEGRITY_FAILURE row marked DOCUMENT_OBJECT_MISSING and are still
- * stamped as checked so they stop head-blocking the nulls-first queue.
+ * batch of documents and appending the outcome to document_integrity_checks.
+ * Hash mismatches and unreadable storage objects additionally get an
+ * INTEGRITY_FAILURE row in the audit log, which is the durable incident
+ * surface.
+ *
+ * Both the queue and the stamp live in document_integrity_checks and NOT in
+ * document_attachments.last_integrity_check_at (now legacy): any UPDATE of a
+ * document linked to an entry in a closed/locked period is rejected by
+ * enforce_period_lock_documents() (migration 017, legally required and never
+ * touched), which had this cron wedged at 200 of 200 rejected per night with
+ * both write errors discarded. See
+ * supabase/migrations/20260901130000_document_integrity_checks.sql.
  */
 
 // Vercel function budget; verification is sequential, see batch size below.
 export const maxDuration = 300
 
-// Measured ~0.8s per document (download + hash + stamp), so 200 documents
-// finish in ~160s with headroom inside the 300s budget. The previous default
-// of 500 hit the platform timeout around item ~250 every night, so the tail
-// of the queue was never reached.
+// Measured ~0.8s per document (download + hash + ledger append), so 200
+// documents finish in ~160s with headroom inside the 300s budget. The previous
+// default of 500 hit the platform timeout around item ~250 every night, so the
+// tail of the queue was never reached.
 const DEFAULT_VERIFY_BATCH_SIZE = 200
+
+type ServiceClient = ReturnType<typeof createServiceRoleClient>
+
+type IntegrityResult = 'passed' | 'hash_mismatch' | 'object_missing'
+
+/** One row of public.next_documents_for_integrity_check(). */
+interface QueuedDocument {
+  id: string
+  user_id: string
+  company_id: string
+  storage_path: string
+  sha256_hash: string
+  file_name: string
+  last_checked_at: string | null
+}
+
+/**
+ * Append the outcome of one check to the integrity ledger. The write error is
+ * returned, never swallowed: a lost ledger row leaves the document at the head
+ * of the queue, and discarding exactly this error is why the control stayed
+ * dead for weeks without anyone noticing.
+ */
+async function recordCheck(
+  supabase: ServiceClient,
+  doc: QueuedDocument,
+  result: IntegrityResult,
+  computedHash: string | null,
+  detail: string | null
+): Promise<{ error: { message: string } | null }> {
+  const { error } = await supabase.from('document_integrity_checks').insert({
+    company_id: doc.company_id,
+    document_id: doc.id,
+    checked_at: new Date().toISOString(),
+    expected_sha256: doc.sha256_hash,
+    computed_sha256: computedHash,
+    storage_path: doc.storage_path,
+    result,
+    detail,
+  })
+
+  return { error }
+}
 
 export const GET = withCronContext('cron.documents_verify', async (_request, ctx) => {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -35,25 +85,33 @@ export const GET = withCronContext('cron.documents_verify', async (_request, ctx
 
   const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
 
-  const { data: documents, error: fetchError } = await supabase
-    .from('document_attachments')
-    .select('id, user_id, company_id, storage_path, sha256_hash, file_name')
-    .eq('is_current_version', true)
-    .order('last_integrity_check_at', { ascending: true, nullsFirst: true })
-    .limit(parseInt(process.env.DOCUMENT_VERIFY_BATCH_SIZE || '', 10) || DEFAULT_VERIFY_BATCH_SIZE)
+  const batchSize =
+    parseInt(process.env.DOCUMENT_VERIFY_BATCH_SIZE || '', 10) || DEFAULT_VERIFY_BATCH_SIZE
+
+  // Least-recently-checked first, never-checked ahead of those, tie-broken on
+  // created_at so the drain is a deterministic FIFO rather than heap order.
+  const { data, error: fetchError } = await supabase.rpc('next_documents_for_integrity_check', {
+    p_limit: batchSize,
+  })
 
   if (fetchError) {
     ctx.log.error('failed to fetch documents for verify', fetchError)
     return errorResponse(fetchError, ctx.log, { requestId: ctx.requestId })
   }
 
-  if (!documents || documents.length === 0) {
+  const documents = (data ?? []) as QueuedDocument[]
+
+  if (documents.length === 0) {
     return NextResponse.json({ message: 'No documents to verify', processed: 0 })
   }
 
   let verified = 0
   let failures = 0
   let missingObjects = 0
+  // Ledger and audit writes the database rejected. Counted, logged and shipped
+  // in the response so a broken write path shows up on the first run instead
+  // of weeks later.
+  let writeFailures = 0
 
   const summary = await ctx.forEach('document', documents, async (doc, itemCtx) => {
     // Dual-layout download: the batch is snapshotted up front, and a
@@ -89,18 +147,31 @@ export const GET = withCronContext('cron.documents_verify', async (_request, ctx
       })
 
       if (auditError) {
-        // Leave last_integrity_check_at untouched so the document is retried
-        // (and the incident write re-attempted) on the next run.
+        // Append no ledger row, so the document keeps its place at the head of
+        // the queue and the incident write is re-attempted on the next run.
+        writeFailures++
+        itemCtx.log.error('audit insert failed for missing object', new Error(auditError.message), {
+          documentId: doc.id,
+        })
         throw new Error(`audit insert failed for missing object: ${auditError.message}`)
       }
 
-      // Stamp the check so the row stops sorting to the head of the
-      // nulls-first queue every night; the audit row above is the durable
-      // incident surface.
-      await supabase
-        .from('document_attachments')
-        .update({ last_integrity_check_at: new Date().toISOString() })
-        .eq('id', doc.id)
+      const { error: ledgerError } = await recordCheck(
+        supabase,
+        doc,
+        'object_missing',
+        null,
+        `DOCUMENT_OBJECT_MISSING: ${reason}`
+      )
+
+      if (ledgerError) {
+        writeFailures++
+        itemCtx.log.error('integrity ledger write failed', new Error(ledgerError.message), {
+          documentId: doc.id,
+          result: 'object_missing',
+        })
+        throw new Error(`integrity ledger write failed: ${ledgerError.message}`)
+      }
 
       missingObjects++
       itemCtx.log.error('document object missing', new Error(reason), {
@@ -118,13 +189,11 @@ export const GET = withCronContext('cron.documents_verify', async (_request, ctx
 
     const isValid = computedHash === doc.sha256_hash
 
-    await supabase
-      .from('document_attachments')
-      .update({ last_integrity_check_at: new Date().toISOString() })
-      .eq('id', doc.id)
-
     if (!isValid) {
-      await supabase.from('audit_log').insert({
+      // Audit row before ledger row: if the ledger row landed first and the
+      // audit write then failed, the document would leave the queue with the
+      // incident lost. This order re-checks it tomorrow instead.
+      const { error: auditError } = await supabase.from('audit_log').insert({
         user_id: doc.user_id,
         company_id: doc.company_id,
         action: 'INTEGRITY_FAILURE',
@@ -135,6 +204,33 @@ export const GET = withCronContext('cron.documents_verify', async (_request, ctx
         new_state: { computed_hash: computedHash },
       })
 
+      if (auditError) {
+        writeFailures++
+        itemCtx.log.error('audit insert failed for hash mismatch', new Error(auditError.message), {
+          documentId: doc.id,
+        })
+        throw new Error(`audit insert failed for hash mismatch: ${auditError.message}`)
+      }
+    }
+
+    const { error: ledgerError } = await recordCheck(
+      supabase,
+      doc,
+      isValid ? 'passed' : 'hash_mismatch',
+      computedHash,
+      isValid ? null : `stored hash ${doc.sha256_hash}, computed hash ${computedHash}`
+    )
+
+    if (ledgerError) {
+      writeFailures++
+      itemCtx.log.error('integrity ledger write failed', new Error(ledgerError.message), {
+        documentId: doc.id,
+        result: isValid ? 'passed' : 'hash_mismatch',
+      })
+      throw new Error(`integrity ledger write failed: ${ledgerError.message}`)
+    }
+
+    if (!isValid) {
       itemCtx.log.error('integrity failure', new Error('hash_mismatch'), {
         documentId: doc.id,
         fileName: doc.file_name,
@@ -152,14 +248,25 @@ export const GET = withCronContext('cron.documents_verify', async (_request, ctx
     verified,
     failures,
     missingObjects,
+    writeFailures,
     downloadErrors: summary.failed,
   })
+
+  if (writeFailures > 0) {
+    // Loud on its own line: a rejected ledger write means the queue does not
+    // advance, which is exactly the silent stall this cron just came out of.
+    ctx.log.error('integrity ledger writes rejected', new Error('integrity_write_failed'), {
+      processed: summary.total,
+      writeFailures,
+    })
+  }
 
   return NextResponse.json({
     processed: summary.total,
     verified,
     failures,
     missingObjects,
+    writeFailures,
     errors: summary.failed,
   })
 })
