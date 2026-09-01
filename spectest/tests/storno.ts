@@ -9,6 +9,10 @@
 import { expect } from "@specific.dev/spectest";
 import { env, APP_URL } from "../index";
 import { bookTransaction } from "./booking";
+import { SEK_TX_COUNT, EUR_TRANSACTIONS } from "../fakes/enable-banking-data";
+
+/** Everything the consent imported, derived so a fixture change cannot rot it. */
+const TOTAL_TX = SEK_TX_COUNT + EUR_TRANSACTIONS.length;
 
 export const stornoReversesTheEntry = env.test(
   "storno cancels the verifikat without deleting it",
@@ -138,12 +142,13 @@ export const stornoReturnsTheTransactionToTheWorklist = env.test(
              count(*) filter (where is_business is null and is_ignored = false)::int      as worklist_says
       from public.transactions`;
 
-    // No bank transaction is booked any more, so all 22 are work again.
-    expect(counts[0]?.unbooked).toBe(22);
+    // The storno released the one booked transaction, so everything imported
+    // is work again (#1950, fixed in cb9ae15d4).
+    expect(counts[0]?.unbooked).toBe(TOTAL_TX);
     expect(
       counts[0]?.worklist_says,
       'the dialog promised the transaction returns to "Att bokföra"',
-    ).toBe(22);
+    ).toBe(TOTAL_TX);
 
     return ctx.parent;
   },

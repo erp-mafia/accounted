@@ -249,56 +249,37 @@ re-walking a wizard.
 
 ## Still missing
 
-Roughly in order of what would find the most, per unit of effort.
+**Reachable today:**
 
-**Reachable today, no new plumbing:**
-
-- **N:1 reconciliation**, several bank rows settling one verifikat, plus the
-  residual booking the footer offers for that shape. The 1:N direction is
-  covered (`reconcile-one-to-many.ts`); this is its mirror and shares the code.
-- **Closing a year for real.** Readiness is covered (`year-end.ts`); resolving
-  the reminders and actually locking the period is not, and the lock is what
-  every other write path has to respect afterwards.
-- **Domestic reverse charge** (byggtjänster, 2647), which differs from the EU
-  case in the account and in who it applies between.
-- **Supplier credit note and the uncredit path.** The customer side is covered
-  (`credit-note.ts`); the supplier side has its own route and its own undo.
-- **Periodisering / accruals.** `lib/bookkeeping/accruals` has a whole service
-  and the invoice editor exposes it per line, with nothing end to end.
-- **Team invites and the byrå surfaces.** Multi-user is the one dimension the
-  suite has never touched: every test runs as one person in one company.
-
-**Blocked on a fixture change** (`spectest/fakes` is not cache-excluded, so
-touching it forces a cold rebuild; worth doing once, in a batch):
-
-- **Representation**, where the VAT deduction is capped at a 300 kr base per
-  person. The template carries the rule and is flagged HIGH risk, but nothing
-  asserts the user ever sees it. Needs a restaurant row (mcc 5812) in the bank
-  fixture.
-- **Import VAT** (2615, rutorna 50 and 60), which needs a non-EU supplier and
-  a customs document.
+- **Filing an AGI.** The momsdeklaration path is covered (`vat-filing.ts`) and
+  the Skatteverket fake serves the OAuth and the gateway; AGI needs its own
+  handlers on the fake, which is the same afternoon's work again.
+- **Skattekonto reconciliation against the bank.** Both sides of the same
+  43 120 kr payment now exist, and nothing yet matches them to each other.
+- **Roles enforced, not just assigned.** `team-invite.ts` covers inviting a
+  viewer; nobody has yet signed in as one and been refused a write.
+- **The 12 % and 6 % rates on the PURCHASE side**, and import VAT (2615,
+  rutorna 50 and 60), which goes through Tullverket rather than the supplier
+  invoice and so needs a different surface than the one this suite drives.
 - **Foreign-currency settlement** and the 7960/3960 FX residual (#2037). The
-  EUR account exists in the bank fake; an FX invoice does not.
-
-**Now reachable, since the Skatteverket fake landed:**
-
-- **Filing a momsdeklaration and an AGI.** The fake serves the OAuth and the
-  gateway; the submission endpoints still need handlers, which is an afternoon
-  rather than a project. `skattekonto.ts` shows the shape.
-- **Skattekonto reconciliation against the bank.** The fake's deposit is the
-  same 43 120 kr the bank fixture shows leaving the account, so both sides of
-  one event exist for the first time.
+  EUR bank account exists; an invoice in EUR does not.
 
 **Still blocked on a fake:**
 
-- **Årsredovisning at Bolagsverket**, which has no fake and no configurable
-  host.
-
-**Fakes, in the order they are worth building:**
-
+- **Årsredovisning at Bolagsverket.** No fake, no configurable host.
 - **Fortnox and Qvalia hardcode their hosts** (`https://api.fortnox.se`,
   `https://api.qvalia.com`). Faking either means first making the base URL
   configurable, which is a change to shipped code and belongs in its own PR
   rather than something the test harness sneaks in.
 - **Bedrock** goes through the AWS SDK, so it is intercepted at the client
   level, not by a URL swap. Everything AI-shaped is dark until then.
+
+## Fixture changes force a cold rebuild
+
+`spectest/tests/**` is excluded from the environment cache; `spectest/fakes/**`
+is not. Adding the restaurant row for `representation.ts` cost a full rebuild,
+so batch fixture changes rather than making them one at a time.
+
+Counts derived from the fixture are imported rather than written out
+(`SEK_TX_COUNT + EUR_TRANSACTIONS.length` in `booking.ts` and `storno.ts`).
+Hardcoding "22 transactions" meant one added row broke two unrelated tests.

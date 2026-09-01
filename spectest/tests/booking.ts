@@ -15,6 +15,10 @@
 import { expect } from "@specific.dev/spectest";
 import { env, APP_URL } from "../index";
 import { connectBank } from "./bank";
+import { SEK_TX_COUNT, EUR_TRANSACTIONS } from "../fakes/enable-banking-data";
+
+/** Everything the consent imported, derived so a fixture change cannot rot it. */
+const TOTAL_TX = SEK_TX_COUNT + EUR_TRANSACTIONS.length;
 
 export const bookTransaction = env.test(
   "book a bank transaction into the ledger",
@@ -191,13 +195,14 @@ export const partiallyBookedStaysOnTheWorklist = env.test(
              count(*) filter (where is_business is null and is_ignored = false)::int      as worklist_says
       from public.transactions`;
 
-    // 22 imported, 1 booked, so 21 remain to be dealt with. The worklist
-    // reports one fewer, because the refused booking marked one of them done.
-    expect(counts[0]?.unbooked).toBe(21);
+    // Everything imported, less the one this branch booked. The worklist used
+    // to report one fewer, because the refused booking marked a transaction
+    // done without producing a verifikat (#1947, fixed in f0af4ad4e).
+    expect(counts[0]?.unbooked).toBe(TOTAL_TX - 1);
     expect(
       counts[0]?.worklist_says,
       "every unbooked transaction is still counted as work to do",
-    ).toBe(21);
+    ).toBe(TOTAL_TX - 1);
 
     return ctx.parent;
   },

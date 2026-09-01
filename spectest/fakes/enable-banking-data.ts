@@ -149,6 +149,10 @@ export const SEK_TRANSACTIONS: Fixture[] = [
   { daysAgo: 9, amount: "96500.00", ind: "DBIT", creditor: "LÖNEUTBETALNING", remittance: ["Lön augusti"], code: "PMNT-ICDT-SALA" },
   { daysAgo: 11, amount: "389.90", ind: "DBIT", creditor: "CIRCLE K", remittance: ["Kortköp CIRCLE K STHLM"], mcc: "5541", code: "PMNT-CCRD-POSD" },
   { daysAgo: 12, amount: "62.75", ind: "DBIT", remittance: [], code: "PMNT-RCDT-CHRG", proprietary: "AVGIFT" },
+  // A restaurant, mcc 5812. Representation is the one expense whose VAT
+  // deduction is capped by law (a 300 kr base per person), and without a
+  // restaurant row that rule is unreachable from the bank flow.
+  { daysAgo: 13, amount: "2240.00", ind: "DBIT", creditor: "RESTAURANG STRANDVÄGEN", remittance: ["Kortköp RESTAURANG STRANDV"], mcc: "5812", code: "PMNT-CCRD-POSD" },
   { daysAgo: 15, amount: "7350.25", ind: "CRDT", debtor: "BRF SOLGÅRDEN", remittance: ["Faktura 2026-108"], code: "PMNT-RCDT-ESCT" },
   { daysAgo: 18, amount: "12000.00", ind: "DBIT", creditor: "HYRESVÄRDEN FASTIGHETS AB", remittance: ["Hyra kontor september"], code: "PMNT-ICDT-ESCT" },
   { daysAgo: 21, amount: "4990.00", ind: "CRDT", debtor: "SWISH", remittance: ["Swish från Anna Lindqvist"], code: "PMNT-RCDT-ESCT" },
