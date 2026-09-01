@@ -28,10 +28,12 @@ import {
   MoreHorizontal,
   Paperclip,
   Trash2,
+  Unlink,
 } from 'lucide-react'
 import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator'
 import CorrectionAffordance from '@/components/bookkeeping/CorrectionAffordance'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { canDetachDocument } from './detach-underlag'
 import type { JeUnderlagStatus } from '@/lib/transactions/underlag-status'
 import type { TransactionWithInvoice, HistoryFilter, SourceFilter } from './transaction-types'
 import type {
@@ -60,6 +62,8 @@ interface TransactionHistoryListProps {
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
   /** Open the attach-underlag dialog (pin an inbox doc / fresh upload). */
   onOpenAttachDocument?: (transaction: TransactionWithInvoice) => void
+  /** Detach the pinned underlag. Unbooked rows only (see canDetachDocument). */
+  onDetachDocument?: (transaction: TransactionWithInvoice) => void
   /** Open the match-against-existing-voucher dialog. Unbooked rows can end up
    *  here (not in the inbox) when is_business is already set, e.g. after a
    *  voucher was removed without a full uncategorize; without this item such
@@ -88,6 +92,7 @@ export default function TransactionHistoryList({
   onOpenMatchDialog,
   onOpenCategoryDialog,
   onOpenAttachDocument,
+  onDetachDocument,
   onOpenMatchVoucher,
   onDelete,
   onSkvBokfor,
@@ -191,6 +196,7 @@ export default function TransactionHistoryList({
                     onOpenMatchDialog={onOpenMatchDialog}
                     onOpenCategoryDialog={onOpenCategoryDialog}
                     onOpenAttachDocument={onOpenAttachDocument}
+                    onDetachDocument={onDetachDocument}
                     onOpenMatchVoucher={onOpenMatchVoucher}
                     onDelete={onDelete}
                   />
@@ -238,6 +244,7 @@ function BankHistoryRow({
   onOpenMatchDialog,
   onOpenCategoryDialog,
   onOpenAttachDocument,
+  onDetachDocument,
   onOpenMatchVoucher,
   onDelete,
 }: {
@@ -247,10 +254,12 @@ function BankHistoryRow({
   onOpenMatchDialog: (transaction: TransactionWithInvoice) => void
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
   onOpenAttachDocument?: (transaction: TransactionWithInvoice) => void
+  onDetachDocument?: (transaction: TransactionWithInvoice) => void
   onOpenMatchVoucher?: (transaction: TransactionWithInvoice) => void
   onDelete?: (id: string) => void
 }) {
   const t = useTranslations('tx_history')
+  const tDetach = useTranslations('tx_detach')
   // Viewers must not see write affordances. CorrectionAffordance opens a
   // dialog that stages a storno + correction journal entry; the API path
   // already 403s for viewers but rendering the trigger creates a confusing
@@ -273,11 +282,18 @@ function BankHistoryRow({
   const hasJeDoc = jeStatus === 'has'
   const missingUnderlag = isBooked && !transaction.document_id && jeStatus === 'missing'
   const showAttachItem = canWrite && !!onOpenAttachDocument
+  // Detach is narrower than attach: only unbooked rows, and only with a pin.
+  const showDetachItem = canDetachDocument({
+    isBooked,
+    canWrite,
+    documentId: transaction.document_id,
+    hasHandler: !!onDetachDocument,
+  })
   // Same affordance as the inbox card: an unbooked row may need to be linked
   // to an already-booked voucher (e.g. the other leg of a transfer).
   const showMatchVoucherItem = canWrite && !isBooked && !!onOpenMatchVoucher
   const showOverflowMenu =
-    hasInvoiceMatch || (canDelete && !!onDelete) || (isBooked && canWrite) || showAttachItem || showMatchVoucherItem
+    hasInvoiceMatch || (canDelete && !!onDelete) || (isBooked && canWrite) || showAttachItem || showDetachItem || showMatchVoucherItem
 
   const isPrivate = transaction.is_business === false
   const categoryLabel =
@@ -418,6 +434,12 @@ function BankHistoryRow({
                     {t('attach_document')}
                   </DropdownMenuItem>
                 )}
+                {showDetachItem && (
+                  <DropdownMenuItem onSelect={() => onDetachDocument!(transaction)}>
+                    <Unlink className="h-3.5 w-3.5" />
+                    {tDetach('menu_item')}
+                  </DropdownMenuItem>
+                )}
                 {isBooked && canWrite && transaction.journal_entry_id && (
                   <CorrectionAffordance journalEntryId={transaction.journal_entry_id}>
                     {({ open, isLoading }) => (
@@ -429,7 +451,7 @@ function BankHistoryRow({
                 )}
                 {canDelete && onDelete && (
                   <>
-                    {(hasInvoiceMatch || showAttachItem || showMatchVoucherItem) && <DropdownMenuSeparator />}
+                    {(hasInvoiceMatch || showAttachItem || showDetachItem || showMatchVoucherItem) && <DropdownMenuSeparator />}
                     <DropdownMenuItem
                       onSelect={() => onDelete(transaction.id)}
                       className="text-destructive focus:text-destructive"

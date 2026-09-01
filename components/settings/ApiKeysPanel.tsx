@@ -375,6 +375,22 @@ export function ApiKeysPanel() {
           <p className="mt-2 max-w-prose text-xs text-muted-foreground">
             {t('connect_to_claude_help')}
           </p>
+          {/* The step-by-step guide is canonical on the docs site, in one
+              language per URL (the docs site has no locale routing). Root-relative
+              so the /docs/api/* 308 in next.config.ts forwards to docs.gnubok.se.
+              It sits right under the button: the steps on Claude's side after
+              the click (consent, first-call sign-in) live there, and a reader
+              who has just clicked should not have to open two disclosures to
+              find them (issue #2133). */}
+          <a
+            href={locale === 'sv' ? '/docs/api/anslut-claude' : '/docs/api/connect-claude'}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2 inline-flex items-center gap-1.5 text-xs text-muted-foreground underline-offset-4 transition-colors duration-150 hover:text-foreground hover:underline"
+          >
+            {t('full_guide_link')}
+            <ArrowUpRight className="h-3 w-3" />
+          </a>
         </div>
 
         <button
@@ -493,19 +509,6 @@ export function ApiKeysPanel() {
             </div>
           </div>
         </SettingsReveal>
-
-        {/* The step-by-step guide is canonical on the docs site, in one
-            language per URL (the docs site has no locale routing). Root-relative
-            so the /docs/api/* 308 in next.config.ts forwards to docs.gnubok.se. */}
-        <a
-          href={locale === 'sv' ? '/docs/api/anslut-claude' : '/docs/api/connect-claude'}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 px-1 py-3 text-xs text-muted-foreground underline-offset-4 transition-colors duration-150 hover:text-foreground hover:underline"
-        >
-          {t('full_guide_link')}
-          <ArrowUpRight className="h-3 w-3" />
-        </a>
       </SettingsGroup>
 
       <SettingsGroup>

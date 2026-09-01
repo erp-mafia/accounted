@@ -73,6 +73,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { resolveDetachErrorMessage } from '@/components/transactions/detach-underlag'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary } from '@/types'
@@ -316,6 +317,7 @@ export default function TransactionsPage() {
   const companyId = company?.id ?? null
   const searchParams = useSearchParams()
   const t = useTranslations('transactions')
+  const tDetach = useTranslations('tx_detach')
   const [transactions, setTransactions] = useState<TransactionWithInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [mode, setMode] = useState<ViewMode>('inbox')
@@ -3063,6 +3065,61 @@ export default function TransactionsPage() {
     }
   }
 
+  /**
+   * "Ta bort underlag" (#2132): confirm, then DELETE attach-document. On
+   * success the pin is cleared in the list, in the attach dialog's own row
+   * snapshot, and in the inbox card's optimistic override. A 409 (doc already
+   * on a verifikation, or the row changed under us) shows the route's Swedish
+   * message verbatim; other failures map through get-error-message.
+   */
+  async function handleDetachDocument(tx: TransactionWithInvoice) {
+    // Same idiom as Ignorera: the pin is reversible (re-attach), but the
+    // indicator vanishes immediately, so confirm before the write.
+    const ok = await confirm({
+      title: tDetach('confirm_title'),
+      description: tDetach('confirm_body', {
+        description: tx.description,
+        amount: formatCurrency(tx.amount, tx.currency),
+      }),
+      confirmLabel: tDetach('confirm_label'),
+      cancelLabel: tDetach('cancel_label'),
+      variant: 'warning',
+    })
+    if (!ok) return
+
+    try {
+      const res = await fetch(`/api/transactions/${tx.id}/attach-document`, { method: 'DELETE' })
+      const result: unknown = await res.json().catch(() => null)
+      const errorBody = (result as { error?: unknown } | null)?.error
+      if (!res.ok || errorBody) {
+        // 409 = the doc already became räkenskapsinformation: the route's
+        // Swedish message says so and names the storno path; keep it verbatim.
+        toast({
+          title: tDetach('toast_failed'),
+          description: resolveDetachErrorMessage(res.status, result),
+          variant: 'destructive',
+        })
+        return
+      }
+      setTransactions((prev) =>
+        prev.map((row) => (row.id === tx.id ? { ...row, document_id: null } : row))
+      )
+      // The attach dialog renders its "already attached" hint off its own
+      // snapshot of the row, not the list.
+      setAttachDocTx((prev) => (prev?.id === tx.id ? { ...prev, document_id: null } : prev))
+      // Drop the inbox card's optimistic "attached" override (set by the
+      // upload path through the matching -linked event).
+      window.dispatchEvent(
+        new CustomEvent('Accounted:transaction-document-unlinked', {
+          detail: { transaction_id: tx.id },
+        })
+      )
+      toast({ title: tDetach('toast_done') })
+    } catch {
+      toast({ title: tDetach('toast_failed'), variant: 'destructive' })
+    }
+  }
+
   // Batch mode handlers
 
   // Bounded pool for the per-row batch requests: parallel enough that a
@@ -3952,6 +4009,7 @@ export default function TransactionsPage() {
                         onOpenSplitMatch={openSplitMatchDialog}
                         onOpenMatchVoucher={openMatchVoucherDialog}
                         onOpenAttachDocument={openAttachDocumentDialog}
+                        onDetachDocument={handleDetachDocument}
                         onOpenCategoryDialog={openCategoryDialog}
                         onDelete={handleDeleteTransaction}
                         onIgnore={handleIgnoreTransaction}
@@ -4015,6 +4073,7 @@ export default function TransactionsPage() {
           onOpenMatchDialog={openMatchDialog}
           onOpenCategoryDialog={openCategoryDialog}
           onOpenAttachDocument={openAttachDocumentDialog}
+          onDetachDocument={handleDetachDocument}
           onOpenMatchVoucher={openMatchVoucherDialog}
           onDelete={handleDeleteTransaction}
           onSkvBokfor={handleSkvBokfor}
@@ -4130,6 +4189,7 @@ export default function TransactionsPage() {
           }}
           transaction={attachDocTx}
           onAttached={handleDocumentAttached}
+          onDetach={handleDetachDocument}
         />
       )}
 
