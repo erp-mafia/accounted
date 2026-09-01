@@ -14,6 +14,7 @@ import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
+import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import type { Logger } from '@/lib/logger'
 import type {
@@ -165,6 +166,10 @@ export async function issueAndBookInvoice(
       errorCode: 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING',
       details: { currency: (invoice as Invoice).currency },
     }
+  }
+
+  if (!hasRequiredSellerVatNumber(settings, invoice as Invoice)) {
+    return { ok: false, errorCode: 'INVOICE_SEND_VAT_NUMBER_MISSING' }
   }
 
   // Assign the number only after all payment-instruction guards pass.

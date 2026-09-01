@@ -126,6 +126,30 @@ describe('issueAndBookInvoice', () => {
     expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
   })
 
+  it('rejects a VAT-registered company without VAT number, before number allocation', async () => {
+    const broken = { ...settings, vat_registered: true, vat_number: null } as CompanySettings
+
+    const result = await issue(makeDraft({ invoice_number: null }), broken)
+
+    expect(result).toEqual({ ok: false, errorCode: 'INVOICE_SEND_VAT_NUMBER_MISSING' })
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('issues for an unregistered company without VAT number', async () => {
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // CAS flip
+    const unregistered = {
+      ...settings,
+      vat_registered: false,
+      vat_number: null,
+      defer_invoice_booking: true,
+    } as CompanySettings
+
+    const result = await issue(makeDraft(), unregistered)
+
+    expect(result).toEqual({ ok: true, journalEntryId: null, partialFailures: [] })
+  })
+
   it('fails with INVOICE_CREATE_NUMBER_ASSIGN_FAILED when numbering fails', async () => {
     mockEnsureInvoiceNumber.mockRejectedValue(new Error('sequence exhausted'))
 

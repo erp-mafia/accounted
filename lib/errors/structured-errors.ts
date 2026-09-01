@@ -1151,6 +1151,14 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       description: 'Lägg till ett betalningskonto med IBAN för fakturans valuta under Inställningar → Fakturering.',
     },
   },
+  INVOICE_SEND_VAT_NUMBER_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Företaget är momsregistrerat men saknar momsregistreringsnummer, som måste anges på fakturan (ML 17 kap. 24 §). Lägg till det under Inställningar → Skatt innan du skickar fakturan.',
+    message_en: 'The company is VAT-registered but has no VAT number, which is a mandatory invoice element (ML 17 kap. 24 §). Add it under Inställningar → Skatt (Settings → Tax) before issuing the invoice.',
+    remediation: {
+      description: 'Lägg till företagets momsregistreringsnummer under Inställningar → Skatt.',
+    },
+  },
   INVOICE_SEND_NUMBER_ASSIGN_FAILED: {
     httpStatus: 500,
     message_sv: 'Kunde inte tilldela fakturanummer.',

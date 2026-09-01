@@ -513,6 +513,76 @@ describe('commitPendingOperation: invoice send payment account guard', () => {
   )
 })
 
+describe('commitPendingOperation: seller VAT number guard', () => {
+  it('rejects mark_invoice_sent for a registered company without VAT number', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: makeInvoice({
+        id: 'invoice-1',
+        status: 'draft',
+        invoice_number: null,
+        credited_invoice_id: null,
+      }),
+      error: null,
+    })
+    enqueue({
+      data: { bankgiro: '123-4567', vat_registered: true, vat_number: null },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // dispatcher rejected update
+
+    const op = makePendingOp({
+      operation_type: 'mark_invoice_sent',
+      params: { invoice_id: 'invoice-1' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(ensureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockRecordManualInvoiceDelivery).not.toHaveBeenCalled()
+  })
+
+  it('rejects send_invoice for a registered company without VAT number', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: makeInvoice({
+        id: 'invoice-1',
+        status: 'draft',
+        invoice_number: null,
+        customer: makeCustomer({ id: 'customer-1', email: 'customer@example.test' }),
+        items: [],
+      }),
+      error: null,
+    })
+    enqueue({
+      data: {
+        company_name: 'Test AB',
+        bankgiro: '123-4567',
+        vat_registered: true,
+        vat_number: null,
+      },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // dispatcher's rejected update
+
+    const op = makePendingOp({
+      operation_type: 'send_invoice',
+      params: { invoice_id: 'invoice-1' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(ensureInvoiceNumber).not.toHaveBeenCalled()
+    expect(supabase.from).not.toHaveBeenCalledWith('invoice_deliveries')
+  })
+})
+
 describe('commitPendingOperation: invoice send recipient limit', () => {
   it('rejects an oversized configured recipient set before reservation and allocation', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()

@@ -328,6 +328,19 @@ describe('tools/list payload size guard', () => {
     //         zero. Demoting those would hide the year-end flow exactly when it
     //         is needed. Usage data is necessary here, not sufficient.
     //
+    //   * 61.3K to 61.5K by adding worked `examples` to five tools
+    //     (2026-09-01, #2066): categorize_transaction, create_voucher,
+    //     query_journal, approve_pending_operation, get_kpi_report. 199 tokens
+    //     for 10 examples, spending part of what the demotion above reclaimed
+    //     and leaving ~118 under the ceiling. The ceiling is NOT raised.
+    //     Examples were priced against 30 days of mcp.tool_called and aimed at
+    //     the combinations the descriptions already warn about and callers
+    //     still get wrong (account_override without vat_treatment;
+    //     representation without deltagare; confirmed on a high-risk approval;
+    //     `metric` sent to a tool whose only parameter is period_id).
+    //     Cheaper than it looks per example, so the next batch should still
+    //     demote a read first rather than assume there is room.
+    //
     // Long-term answer to growth is no longer a ceiling bump. gnubok_call_tool
     // makes `catalogVisibility: 'search'` usable for READ tools on hosts that
     // can only invoke what tools/list showed them, which is the constraint that
