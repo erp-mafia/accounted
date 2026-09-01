@@ -39,6 +39,7 @@ import type { ProviderName } from '@/lib/providers/types'
 import { FORTNOX_DOCUMENT_SCOPES_APPROVED } from '@/lib/providers/fortnox/oauth'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { classifyProviderError } from '@/lib/providers/with-provider-call'
+import { getProviderResourceForbiddenMessage } from '@/lib/errors/get-error-message'
 import { FortnoxApiError, fortnoxErrorMessage } from '@/lib/providers/fortnox/client'
 import { createLogger } from '@/lib/logger'
 
@@ -145,6 +146,36 @@ async function buildArcimOAuthUrl(
 }
 
 /**
+ * Answer a failed provider call with its classified code, falling back to the
+ * caller's own code when the failure is not provider-shaped.
+ *
+ * PROVIDER_RESOURCE_FORBIDDEN carries its message here instead of from the
+ * shared registry: the useful half is the provider's own sentence naming the
+ * register it refused ("Saknar behörighet för leverantörsregister."), which
+ * only the error itself holds. Without the override the code would fall
+ * through entryFor() to INTERNAL_ERROR and answer 500.
+ */
+function providerFailureResponse(error: unknown, fallbackCode: string): NextResponse {
+  const classified = classifyProviderError(error)
+  const ctx = {
+    details: {
+      reason: error instanceof Error ? error.message : 'unknown',
+      classified: classified ?? 'unclassified',
+    },
+  }
+  if (classified === 'PROVIDER_RESOURCE_FORBIDDEN') {
+    const reason = fortnoxErrorMessage(error)
+    return errorResponseFromCode(classified, moduleLog, {
+      ...ctx,
+      status: 403,
+      messageSv: getProviderResourceForbiddenMessage(reason, 'sv'),
+      messageEn: getProviderResourceForbiddenMessage(reason, 'en'),
+    })
+  }
+  return errorResponseFromCode(classified ?? fallbackCode, moduleLog, ctx)
+}
+
+/**
  * Map a failed /migrate run to its structured error response. Shared by the
  * JSON path (returned as-is) and the NDJSON path (body re-sent as the
  * terminal `error` event, since the stream's 200 status is already
@@ -156,13 +187,7 @@ function migrateFailureResponse(error: unknown, consentId: string): NextResponse
       details: { consentId },
     })
   }
-  const classified = classifyProviderError(error)
-  return errorResponseFromCode(classified ?? 'PROVIDER_MIGRATE_FAILED', moduleLog, {
-    details: {
-      reason: error instanceof Error ? error.message : 'unknown',
-      classified: classified ?? 'unclassified',
-    },
-  })
+  return providerFailureResponse(error, 'PROVIDER_MIGRATE_FAILED')
 }
 
 /**
@@ -562,31 +587,48 @@ export const arcimMigrationExtension: Extension = {
           // describe as "nothing happens". Leaving the reason on screen keeps
           // every error diagnosable; the wizard also shows it when the message
           // does arrive.
+          //
+          // location.replace, not href: the callback URL carries a one-time
+          // state that is already spent, so a Back or a reload onto it can
+          // only fail. no-store keeps it out of the browser cache for the same
+          // reason.
           const html = `<!DOCTYPE html><html><body><script>
             if (window.opener) {
               window.opener.postMessage({ type: 'arcim-oauth-error', reason: ${jsLiteral(reason)} }, ${jsLiteral(appUrl)});
             } else {
-              window.location.href = ${jsLiteral(fallbackUrl.toString())};
+              window.location.replace(${jsLiteral(fallbackUrl.toString())});
             }
           </script><p>Anslutningen misslyckades: ${escapedReason}</p><p>Du kan stänga detta fönster.</p></body></html>`
 
           return new Response(html, {
             status: 200,
-            // charset is required: without it browsers default to Latin-1 and
-            // render the Swedish text as mojibake (the "rÃ¤tt behÃ¶righeter" bug).
-            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+            headers: {
+              // charset is required: without it browsers default to Latin-1 and
+              // render the Swedish text as mojibake (the "rÃ¤tt behÃ¶righeter" bug).
+              'Content-Type': 'text/html; charset=utf-8',
+              'Cache-Control': 'no-store',
+            },
           })
         }
 
         // Provider returned an OAuth error (user cancelled, missing API
         // subscription on the Fortnox side, invalid scope, etc.)
         if (oauthError) {
-          log.error('OAuth callback returned provider error', {
+          // access_denied is the user clicking "avbryt" in the provider's
+          // consent screen: an expected outcome of an optional flow, so it is
+          // logged at warn and stays out of the error panel. Every other
+          // provider error is still an error.
+          const oauthErrorDetails = {
             error: oauthError,
             errorDescription: oauthErrorDescription,
             hasCode: !!code,
             hasState: !!stateRaw,
-          })
+          }
+          if (oauthError === 'access_denied') {
+            log.warn('OAuth callback cancelled by the user at the provider', oauthErrorDetails)
+          } else {
+            log.error('OAuth callback returned provider error', oauthErrorDetails)
+          }
           let consentId: string | undefined
           if (stateRaw) {
             try {
@@ -644,20 +686,28 @@ export const arcimMigrationExtension: Extension = {
 
           // Return an HTML page that notifies the opener tab and closes itself
           const successUrl = `${appUrl}/import?migration=connected&consentId=${encodeURIComponent(consentId)}`
+          // location.replace + no-store: see respondWithError above. The state
+          // is spent the moment consumeOAuthState returns, and prod caught the
+          // consequence of leaving the URL in history: a second delivery 19
+          // seconds after a successful connect, answered with a red "ingen
+          // giltig migrationssession" about a connection that had just worked.
           const html = `<!DOCTYPE html><html><body><script>
             if (window.opener) {
               window.opener.postMessage({ type: 'arcim-oauth-success', consentId: ${jsLiteral(consentId)} }, ${jsLiteral(appUrl)});
               window.close();
             } else {
-              window.location.href = ${jsLiteral(successUrl)};
+              window.location.replace(${jsLiteral(successUrl)});
             }
           </script><p>Anslutningen lyckades. Du kan stänga denna flik.</p></body></html>`
 
           return new Response(html, {
             status: 200,
-            // charset is required: without it browsers default to Latin-1 and
-            // render the Swedish text as mojibake (the "rÃ¤tt behÃ¶righeter" bug).
-            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+            headers: {
+              // charset is required: without it browsers default to Latin-1 and
+              // render the Swedish text as mojibake (the "rÃ¤tt behÃ¶righeter" bug).
+              'Content-Type': 'text/html; charset=utf-8',
+              'Cache-Control': 'no-store',
+            },
           })
         } catch (error) {
           log.error('OAuth callback exchange failed', error)
@@ -801,13 +851,7 @@ export const arcimMigrationExtension: Extension = {
           }
           // Classify HTTP failures into typed codes so the toast can suggest
           // reconnect / retry instead of a generic "preview failed".
-          const classified = classifyProviderError(error)
-          return errorResponseFromCode(classified ?? 'PROVIDER_PREVIEW_FAILED', moduleLog, {
-            details: {
-              reason: error instanceof Error ? error.message : 'unknown',
-              classified: classified ?? 'unclassified',
-            },
-          })
+          return providerFailureResponse(error, 'PROVIDER_PREVIEW_FAILED')
         }
       },
     },
@@ -1013,13 +1057,7 @@ export const arcimMigrationExtension: Extension = {
           })
         } catch (error) {
           log.error('arcim sie-data fetch failed', error as Error)
-          const classified = classifyProviderError(error)
-          return errorResponseFromCode(classified ?? 'PROVIDER_SIE_FETCH_FAILED', moduleLog, {
-            details: {
-              reason: error instanceof Error ? error.message : 'unknown',
-              classified: classified ?? 'unclassified',
-            },
-          })
+          return providerFailureResponse(error, 'PROVIDER_SIE_FETCH_FAILED')
         }
       },
     },
@@ -1128,13 +1166,7 @@ export const arcimMigrationExtension: Extension = {
           return NextResponse.json(result)
         } catch (error) {
           log.error('arcim sie import failed', error as Error)
-          const classified = classifyProviderError(error)
-          return errorResponseFromCode(classified ?? 'SIE_IMPORT_UNEXPECTED', moduleLog, {
-            details: {
-              reason: error instanceof Error ? error.message : 'unknown',
-              classified: classified ?? 'unclassified',
-            },
-          })
+          return providerFailureResponse(error, 'SIE_IMPORT_UNEXPECTED')
         }
       },
     },

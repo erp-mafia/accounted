@@ -1,8 +1,7 @@
 import { redirect } from 'next/navigation'
 import { getTranslations } from 'next-intl/server'
-import { TrendingUp } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyByraClients } from '@/components/ui/empty-state'
 import { fetchByraKpiOverview } from '@/lib/byra/kpi-overview'
 import ByraKpiView from '@/components/byra/ByraKpiView'
 import { getDashboardAuthContext } from '../../request-context'
@@ -46,11 +45,7 @@ export default async function ByraKpiPage({
     <div className="space-y-8">
       <PageHeader title={t('kpi_title')} />
       {overview.allClients.length === 0 ? (
-        <EmptyState
-          icon={TrendingUp}
-          title={t('kpi_empty_title')}
-          description={t('kpi_empty_description')}
-        />
+        <EmptyByraClients />
       ) : (
         <ByraKpiView
           preset={overview.preset}

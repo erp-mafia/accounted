@@ -697,12 +697,22 @@ export async function deleteSession(sessionId: string): Promise<void> {
 
   if (!response.ok) {
     const body = await response.text()
-    console.error('[enable-banking] deleteSession failed', {
+    // A session Enable Banking has already dropped (404, or a 401/403 naming
+    // an expired/closed session) is the expected answer when we revoke a
+    // connection whose PSD2 consent ran out: every caller catches and carries
+    // on, so it does not belong in the error panel.
+    const alreadyGone = response.status === 404 || isSessionExpiredResponse(response.status, body)
+    const logLine = {
       status: response.status,
       statusText: response.statusText,
       body,
       sessionId,
-    })
+    }
+    if (alreadyGone) {
+      console.warn('[enable-banking] deleteSession: session already gone at Enable Banking', logLine)
+    } else {
+      console.error('[enable-banking] deleteSession failed', logLine)
+    }
     throw new Error(`Failed to revoke session (${response.status}): ${body}`)
   }
 }
@@ -1063,7 +1073,12 @@ export async function getAllTransactionsWithRaw(
         activeDateFrom = recovery.dateFrom
         continue
       }
-      console.error('[enable-banking] getAllTransactionsWithRaw failed', {
+      // An expired PSD2 session is an expected end of life for a consent, not
+      // a failure: SessionExpiredError below flips the connection to 'expired'
+      // and asks the user to re-authorize. Log it at warn so only the genuine
+      // ASPSP/upstream failures reach the error panel.
+      const sessionExpired = isSessionExpiredResponse(response.status, body)
+      const logLine = {
         status: response.status,
         statusText: response.statusText,
         body,
@@ -1073,10 +1088,12 @@ export async function getAllTransactionsWithRaw(
         strategy: activeStrategy,
         page,
         hasContinuationKey: !!continuationKey,
-      })
-      if (isSessionExpiredResponse(response.status, body)) {
+      }
+      if (sessionExpired) {
+        console.warn('[enable-banking] getAllTransactionsWithRaw: bank session expired', logLine)
         throw new SessionExpiredError(response.status, body)
       }
+      console.error('[enable-banking] getAllTransactionsWithRaw failed', logLine)
       throw new Error(`Failed to get transactions (${response.status}): ${body}`)
     }
 

@@ -359,14 +359,6 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         daysUntilExpiry: daysLeft,
       })
     } catch (error) {
-      ctx.log.error('sync failed for connection', error as Error, {
-        connectionId: connection.id,
-        userId: connection.user_id,
-        bankName: connection.bank_name,
-        consentExpires: connection.consent_expires,
-        lastSyncedAt: connection.last_synced_at,
-      })
-
       // A dead PSD2 session (closed/expired/invalid consent) is a re-auth
       // condition, not a transient failure: flip it to 'expired' (same state
       // the consent-elapsed branch uses) so the UI offers a reconnect instead
@@ -374,10 +366,29 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       //
       // error_message is rendered verbatim on the settings panel, so it gets
       // the short Swedish user message in both cases: the raw Enable Banking
-      // error body (an English JSON envelope) stays in the server log above.
+      // error body (an English JSON envelope) stays in the server log below.
       const isSessionDead = error instanceof SessionExpiredError
       const failureStatus = isSessionDead ? 'expired' : 'error'
       const failureMessage = isSessionDead ? REAUTH_REQUIRED_MESSAGE : SYNC_FAILED_MESSAGE
+
+      // An expired PSD2 consent is the normal end of a bank grant and the row
+      // is flipped to 'expired' for the user to reconnect: a warning, not an
+      // error. Only genuine sync failures belong in the error panel.
+      const failureContext = {
+        connectionId: connection.id,
+        userId: connection.user_id,
+        bankName: connection.bank_name,
+        consentExpires: connection.consent_expires,
+        lastSyncedAt: connection.last_synced_at,
+      }
+      if (isSessionDead) {
+        ctx.log.warn('bank session expired for connection', {
+          ...failureContext,
+          reason: error instanceof Error ? error.message : String(error),
+        })
+      } else {
+        ctx.log.error('sync failed for connection', error as Error, failureContext)
+      }
 
       await supabase
         .from('bank_connections')
