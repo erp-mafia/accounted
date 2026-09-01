@@ -46,6 +46,15 @@ export function createServiceClientNoCookies() {
   )
 }
 
+/**
+ * Name of every api_keys row minted by the MCP OAuth token route
+ * (app/api/mcp-oauth/token). It is the only marker those rows carry (there
+ * is no source column), so the Hem checklist's "Anslut till Claude" step
+ * matches on it to know a client completed its first sign-in. Renaming it
+ * would untick the step for every existing connection.
+ */
+export const OAUTH_MCP_KEY_NAME = 'MCP-klient (OAuth)'
+
 export function generateApiKey(mode: ApiKeyMode = 'live'): { key: string; hash: string; prefix: string } {
   const random = crypto.randomBytes(32).toString('base64url')
   // Test keys carry an explicit `test_` infix so integrators can tell at a

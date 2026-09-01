@@ -5,6 +5,8 @@ import DashboardContent from '@/components/dashboard/DashboardContent'
 import { ChecklistSkeleton, PanesSkeleton } from '@/components/dashboard/HemSkeletons'
 import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
 import { isCockpitLandingRole } from '@/lib/company/home-domain'
+import { OAUTH_MCP_KEY_NAME } from '@/lib/auth/api-keys'
+import { claudeStepDone } from '@/lib/onboarding/checklist'
 import {
   getDashboardAuthContext,
   getDashboardCompanyId,
@@ -71,7 +73,13 @@ export default async function DashboardPage() {
 
   const now = new Date()
 
-  const [settingsRes, { data: profile }, agentProfile, { count: skatteverketTokenCount }] =
+  const [
+    settingsRes,
+    { data: profile },
+    agentProfile,
+    { count: skatteverketTokenCount },
+    { count: oauthKeyCount },
+  ] =
     await Promise.all([
       getDashboardSettings(),
       // First name for the greeting.
@@ -80,6 +88,18 @@ export default async function DashboardPage() {
       // The Skatteverket promo below the panes needs this flag in the shell;
       // the checklist section reads it again for its own step (cheap head count).
       supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('user_id', user.id).eq('company_id', companyId),
+      // The checklist's "Anslut till Claude" step is done when the MCP OAuth
+      // token route has minted a key for this user (claudeStepDone). Keyed on
+      // the user, not the company: the Claude connection follows the person,
+      // and the key's company_id is whatever was active at sign-in (or null
+      // for a companyless signup), so a company filter would miss real
+      // connections. Revoked rows do not count.
+      supabase
+        .from('api_keys')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .eq('name', OAUTH_MCP_KEY_NAME)
+        .is('revoked_at', null),
     ])
 
   // A FAILED settings read must not masquerade as "onboarding not done":
@@ -110,6 +130,7 @@ export default async function DashboardPage() {
   }
 
   const agentBuilt = Boolean(agentProfile?.verified_at)
+  const hasMcpKey = claudeStepDone({ oauthKeyCount })
   const userFirstName = profile?.full_name?.trim().split(/\s+/)[0] ?? null
   const initialSetup = {
     path: settings.initial_setup_path ?? null,
@@ -137,7 +158,7 @@ export default async function DashboardPage() {
             userId={user.id}
             now={now}
             initialSetup={initialSetup}
-            agentBuilt={agentBuilt}
+            hasMcpKey={hasMcpKey}
             vatRegistered={settings.vat_registered}
             momsPeriod={settings.moms_period ?? null}
           />

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Check } from 'lucide-react'
 import posthog from 'posthog-js'
 import { Badge } from '@/components/ui/badge'
@@ -13,7 +13,7 @@ import { cn } from '@/lib/utils'
 import { useErrorToast } from '@/lib/hooks/use-error-toast'
 import { useFormat } from '@/lib/hooks/use-format'
 import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
-import { checklistNumbers, type VatDeadlineLine } from '@/lib/onboarding/checklist'
+import { checklistNumbers, claudeConnectorLink, type VatDeadlineLine } from '@/lib/onboarding/checklist'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -27,7 +27,11 @@ interface NewUserChecklistProps {
   hasBankConnected?: boolean
   hasSkatteverketConnected?: boolean
   hasInboxItems?: boolean
-  hasAgentBuilt?: boolean
+  /** The user holds a live OAuth-minted MCP key, i.e. a Claude (or other
+   *  MCP client) connection completed its first sign-in. This is the only
+   *  signal that means "connected to Claude"; the in-app AI-profile flag
+   *  used to tick this step and never corresponded to it (issue #2133). */
+  hasMcpKey?: boolean
   /** Personalized VAT-deadline line for the Skatteverket step (null = say nothing). */
   vatLine?: VatDeadlineLine
   /** Latest SIE reconciliation-sweep outcome: surfaces "X matchade, Y att
@@ -74,11 +78,12 @@ export default function NewUserChecklist({
   hasBankConnected = false,
   hasSkatteverketConnected = false,
   hasInboxItems = false,
-  hasAgentBuilt = false,
+  hasMcpKey = false,
   vatLine = null,
   sieSweep = null,
 }: NewUserChecklistProps) {
   const t = useTranslations('initial_setup')
+  const locale = useLocale()
   const { appName } = useBranding()
   const router = useRouter()
   const showError = useErrorToast()
@@ -134,7 +139,7 @@ export default function NewUserChecklist({
   // Companies built without the skatteverket/inbox extensions skip those steps.
   const step3Done = !hasSkatteverket || hasSkatteverketConnected
   const step4Done = !hasInbox || hasInboxItems
-  const step5Done = hasAgentBuilt
+  const step5Done = hasMcpKey
 
   useEffect(() => {
     // The block retires itself once every step is done; Dölj remains the
@@ -231,9 +236,11 @@ export default function NewUserChecklist({
   // page origin so self-hosted and white-label domains link to themselves.
   const goClaude = () => {
     captureSetup('onboarding_setup_step_started', { step: 'claude' })
-    const serverUrl = `${window.location.origin}/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted`
-    const link = `https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=${encodeURIComponent(appName)}&connectorUrl=${encodeURIComponent(serverUrl)}`
-    window.open(link, '_blank', 'noopener')
+    window.open(
+      claudeConnectorLink({ origin: window.location.origin, appName }),
+      '_blank',
+      'noopener',
+    )
   }
   // ChatGPT has no add-connector deep link (the user pastes the server URL
   // into Developer mode manually), so the side door copies the URL instead.
@@ -428,6 +435,22 @@ export default function NewUserChecklist({
           )}
           footnote={
             <div className="mt-2">
+              {/* What the click leads to on Claude's side. Tools list before
+                  any sign-in (lazy auth, by design), so without this line a
+                  "connected" status with an unanswered first question reads
+                  as a broken connection (issue #2133). The guide carries the
+                  full sequence; one language per URL, see ApiKeysPanel. */}
+              <p className="mb-2 max-w-prose text-xs leading-5 text-muted-foreground">
+                {t('step_claude_expectation')}{' '}
+                <a
+                  href={locale === 'sv' ? '/docs/api/anslut-claude' : '/docs/api/connect-claude'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                >
+                  {t('step_claude_guide_link')}
+                </a>
+              </p>
               <button
                 type="button"
                 onClick={toggleChatGpt}

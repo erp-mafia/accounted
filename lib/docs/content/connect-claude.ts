@@ -22,6 +22,17 @@ The link opens claude.ai with the connector name and URL already filled in. You 
 
 **Read-only by default.** On the consent screen you pick the company and grant read scopes (list invoices, read reports, compute VAT). Write scopes (create invoice, categorise, book vouchers, run year-end) are listed separately and must be ticked explicitly, so a reviewer can connect read-only while you keep a write-enabled connection for daily work.
 
+#### What happens after you click
+
+The rest of the setup happens on Claude's side, in this order:
+
+1. **The connector dialog.** claude.ai opens **Add custom connector** with the name and URL filled in. Check the URL and click **Add**. If the dialog asks about authentication, choose **"Required when the server asks"**, not the auto-detected "None": the server does not demand a login at connect time, so "None" looks right but blocks the sign-in in step 3. Claude Desktop shows the same dialog under Settings → Connectors.
+2. **The tools appear straight away.** The connector shows as connected and Claude lists the Accounted tools before you have signed in. That is by design: the handshake and the documentation tools need no account.
+3. **The first real question opens the sign-in.** Ask something about your books, for example *"Which company am I connected to?"*. The server answers that a login is required, and claude.ai opens the Accounted sign-in (BankID or e-mail + 2FA), followed by the consent screen where you pick the company and tick scopes. Approve, then **ask the question again**: the question that was waiting when the sign-in opened is not retried on its own. A "connected" status with an unanswered first question means "sign in, then ask again", not a broken connection.
+4. **Done.** From here every question runs against the company you chose; writes stage at **/pending** until you confirm.
+
+Signed in, but Claude still says it cannot reach the server? Ask again in the same chat first. If that does not help, open Settings → Connectors, remove the connector, and add it again with authentication set to "Required when the server asks".
+
 #### Adding it by hand instead
 
 In **claude.ai** (Settings → Connectors) or **Claude Desktop** (Settings → Connectors → Add custom connector), choose **Add custom connector** and paste:

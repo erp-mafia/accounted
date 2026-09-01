@@ -29,6 +29,17 @@ Länken öppnar claude.ai med namn och adress ifyllda. Du granskar värdena och 
 
 **Läsrättigheter som standard.** På godkännandesidan väljer du bolag och ger läsrättigheter (lista fakturor, läsa rapporter, räkna moms). Skrivrättigheter (skapa faktura, kontera, bokföra verifikat, köra bokslut) listas separat och måste bockas i uttryckligen. Så kan en granskare ansluta läsande medan du själv har en anslutning med skrivrättigheter för det dagliga arbetet.
 
+#### Vad som händer efter klicket
+
+Resten av inställningarna görs på Claudes sida, i den här ordningen:
+
+1. **Connector-dialogen.** claude.ai öppnar **Add custom connector** med namn och adress ifyllda. Kontrollera adressen och klicka **Add**. Frågar dialogen om autentisering, välj **"Required when the server asks"**, inte det automatiskt föreslagna "None": servern kräver ingen inloggning när du ansluter, så "None" ser rätt ut men stoppar inloggningen i steg 3. Claude Desktop visar samma dialog under Inställningar → Connectors.
+2. **Verktygen dyker upp direkt.** Anslutningen visas som ansluten och Claude listar Accounteds verktyg innan du har loggat in. Det är avsiktligt: handskakningen och dokumentationsverktygen behöver inget konto.
+3. **Första riktiga frågan öppnar inloggningen.** Fråga något om bokföringen, till exempel *"Vilket bolag är jag ansluten till?"*. Servern svarar att inloggning krävs, och claude.ai öppnar Accounteds inloggning (BankID eller e-post + 2FA) följd av godkännandesidan där du väljer bolag och bockar i rättigheter. Godkänn och **ställ frågan igen**: frågan som väntade när inloggningen öppnades görs inte om av sig själv. Statusen "ansluten" med en obesvarad första fråga betyder "logga in och fråga igen", inte att anslutningen är trasig.
+4. **Klart.** Härifrån går varje fråga mot bolaget du valde, och skrivningar stannar under **/pending** tills du bekräftar.
+
+Inloggad, men Claude säger fortfarande att servern inte går att nå? Fråga igen i samma chatt först. Hjälper inte det: öppna Inställningar → Connectors, ta bort anslutningen och lägg till den igen med autentisering satt till "Required when the server asks".
+
 #### Lägga till manuellt i stället
 
 I **claude.ai** (Inställningar → Connectors) eller **Claude Desktop** (Inställningar → Connectors → Add custom connector), välj **Add custom connector** och klistra in:
