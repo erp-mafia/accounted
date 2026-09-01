@@ -224,7 +224,6 @@
   .chartcard svg .qlab { fill: var(--faint); font-size: 9.5px; letter-spacing: .08em; }
   .chartcard svg .halo { fill: var(--bg); stroke: var(--border); stroke-width: 1; }
   .chartcard svg .dm { color: var(--ink); }
-  .chartcard svg .lab { fill: var(--ink); font-size: 10.5px; }
   .chartbody { position: relative; }
   .chartcard svg .dm { cursor: default; }
   .chartcard svg .dm .halo { transition: stroke .12s ease, stroke-width .12s ease; }
@@ -1000,17 +999,10 @@
         out += `<line class="whisk" x1="${cx-3.5}" y1="${y(r.wilsonHi)}" x2="${cx+3.5}" y2="${y(r.wilsonHi)}"></line>`;
       }
     }
-    // Label the efficiency frontier plus the leader; everything else is a
-    // hover away, which keeps a 15-model field readable.
-    const frontierModels = new Set();
-    { let best2 = -1;
-      for (const r of rows.slice().sort((a,b) => perTask(a)-perTask(b))) {
-        if (passOf(r) > best2) { frontierModels.add(r.model); best2 = passOf(r); }
-      } }
-    const leader = rows.slice().sort((a,b) => passOf(b)-passOf(a))[0];
-    if (leader) frontierModels.add(leader.model);
-    const labeled = frontierModels;
-    const placed = [];
+    // No printed names on the plot. Labelling a subset of a 15-model field
+    // collided with itself and with the quadrant captions, and picked five
+    // models arbitrarily. The mark carries the vendor, hover carries the
+    // numbers, and the table underneath names every row.
     for (const r of rows) {
       const cx = x(perTask(r)), cy = y(passOf(r));
       const l = LOGOS[r.vendor];
@@ -1022,11 +1014,6 @@
         out += `<text x="${cx}" y="${cy+3}" text-anchor="middle" style="font-size:7.5px;font-weight:600;fill:currentColor">${short(r.label).slice(0,2)}</text>`;
       }
       out += `</g>`;
-      if (!labeled.has(r.model)) continue;
-      let ly = cy - 15;
-      while (placed.some((p) => Math.abs(p - ly) < 14)) ly -= 14;
-      placed.push(ly);
-      out += `<text class="lab" x="${Math.min(cx+14, W-m.r-4)}" y="${ly}" text-anchor="${cx > W-200 ? 'end' : 'start'}">${short(r.label)}</text>`;
     }
     svg.innerHTML = out;
     wireHover(rows);
