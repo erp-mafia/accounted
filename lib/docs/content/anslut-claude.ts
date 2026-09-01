@@ -57,11 +57,23 @@ Kör sedan \`/mcp\` och logga in med Accounted (samma OAuth-ruta som i väg A). 
 | \`/accounted:payroll\` | Månadens lönekörning och underlag för AGI |
 | \`/accounted:year-end\` | Bokslut, spärrat mot readiness-kontrollen |
 
-Använder du Cursor eller en annan terminalklient utan pluginformat lägger du till anslutningen direkt i stället:
+Vill du bara ha anslutningen utan arbetsflödena kopplar \`claude mcp add\` in samma server i Claude Code:
 
 \`\`\`bash
 claude mcp add accounted --transport http \\
   "https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-code"
+\`\`\`
+
+**Cursor** har inget pluginformat och läser inte \`claude mcp add\`. Lägg i stället till servern i \`~/.cursor/mcp.json\` (globalt) eller \`.cursor/mcp.json\` (per projekt):
+
+\`\`\`json
+{
+  "mcpServers": {
+    "accounted": {
+      "url": "https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=cursor"
+    }
+  }
+}
 \`\`\`
 
 ## Väg C: \`npx accounted-mcp\` med API-nyckel
@@ -110,7 +122,7 @@ En snabb genomgång som visar att anslutningen fungerar innan du släpper in den
 2. **Kontrollera bolaget.** Fråga *"Vilket bolag är jag ansluten till?"* → Claude namnger sandlådebolaget (till exempel **Sandlådan Konsult**).
 3. **Kör fråga 1** (okonterade och konteringsförslag). → En lista med okonterade rader plus förslag. Ingen bokföring sker.
 4. **Kör fråga 2** (förfallna fakturor). → Minst en förfallen kundfaktura med åldersfördelning.
-5. **Kör fråga 3** (moms och kan jag stänga). → Momsdeklarationens rutor plus en **icke-tom lista med stopp** från \`vat_close_check\` (okonterade transaktioner, en ej godkänd leverantörsfaktura och en större utgift utan kvitto).
+5. **Kör fråga 3** (moms och kan jag stänga). → Momsdeklarationens rutor plus en **icke-tom lista med stopp** från \`accounted_vat_close_check\` (okonterade transaktioner, en ej godkänd leverantörsfaktura och en större utgift utan kvitto).
 6. **Testa en skrivning.** Be Claude kontera en transaktion. → Claude lägger upp en pending operation och ber dig bekräfta. Bokföringen sker **inte** förrän du godkänner i chatten eller på **/pending**.
 
 Stämmer varje steg är anslutningen rätt kopplad och godkännandemodellen på plats.

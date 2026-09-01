@@ -50,11 +50,23 @@ Then run \`/mcp\` and sign in with Accounted (the same OAuth consent screen as P
 | \`/accounted:payroll\` | Monthly salary run and AGI underlag |
 | \`/accounted:year-end\` | Bokslut, readiness-gated |
 
-Cursor and other terminal clients have no plugin format; add the connection directly instead:
+Prefer plain MCP without the workflow commands? \`claude mcp add\` wires the same connection into Claude Code:
 
 \`\`\`bash
 claude mcp add accounted --transport http \\
   "https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-code"
+\`\`\`
+
+**Cursor** has no plugin format and does not read \`claude mcp add\`. Add the server to \`~/.cursor/mcp.json\` (global) or \`.cursor/mcp.json\` (per project) instead:
+
+\`\`\`json
+{
+  "mcpServers": {
+    "accounted": {
+      "url": "https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=cursor"
+    }
+  }
+}
 \`\`\`
 
 ## Path C: \`npx accounted-mcp\` with an API key (stdio bridge)
@@ -105,7 +117,7 @@ A quick end-to-end pass to confirm the connection works before you trust it with
 2. **Confirm the company.** Ask *"Which company am I connected to?"* → Claude names the sandbox company (e.g. **Sandlådan Konsult**).
 3. **Run prompt 1** (*uncategorized + suggest categories*). → A list of uncategorised rows plus category suggestions; no booking happens.
 4. **Run prompt 2** (*overdue invoices*). → At least one overdue customer invoice with aging.
-5. **Run prompt 3** (*VAT report + can I close*). → Momsdeklaration rutor returned; \`vat_close_check\` reports a **non-empty blocker list** (uncategorised transactions, an unapproved leverantörsfaktura, and a high-value business expense without a receipt).
+5. **Run prompt 3** (*VAT report + can I close*). → Momsdeklaration rutor returned; \`accounted_vat_close_check\` reports a **non-empty blocker list** (uncategorised transactions, an unapproved leverantörsfaktura, and a high-value business expense without a receipt).
 6. **Stage a write.** Ask Claude to categorise one transaction. → Claude stages a pending operation and asks you to confirm: the booking does **not** post until you approve in chat or at **/pending**.
 
 If every step matches, the connector is wired correctly and the approval model is enforced.

@@ -2817,7 +2817,7 @@
     "works_with_ai": "Fungerar med Claude, ChatGPT och andra AI-assistenter.",
     "recommended_badge": "Rekommenderat",
     "claude_ai_instructions": "Gå till <path>Settings → Connectors → Add custom connector</path> och klistra in MCP-serverns URL. Du loggas in via ditt {connectorName}-konto: ingen API-nyckel behövs.",
-    "claude_code_cursor": "Claude Code / Cursor",
+    "cursor_instructions": "Lägg till i <code>~/.cursor/mcp.json</code> (globalt) eller <code>.cursor/mcp.json</code> (per projekt). Cursor läser inte <code>claude mcp add</code>.",
     "terminal_runs_browser_login": "Kör i terminalen, loggar in via webbläsaren:",
     "connect_with_api_key": "Anslut med API-nyckel istället",
     "claude_desktop_instructions": "Lägg till i <code>claude_desktop_config.json</code> (Inställningar → Developer):",

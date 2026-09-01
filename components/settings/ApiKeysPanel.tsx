@@ -436,7 +436,7 @@ export function ApiKeysPanel() {
         </SettingsRow>
 
         <SettingsRow
-          label={t('claude_code_cursor')}
+          label="Claude Code"
           align="baseline"
           help={t('terminal_runs_browser_login')}
         >
@@ -460,6 +460,24 @@ export function ApiKeysPanel() {
               text={`/plugin marketplace add erp-mafia/accounted\n/plugin install accounted@accounted`}
               copyAriaLabel={t('copy_aria')}
             />
+          </div>
+        </SettingsRow>
+
+        <SettingsRow
+          label="Cursor"
+          align="baseline"
+          help={t.rich('cursor_instructions', {
+            code: (chunks) => <code className="text-xs">{chunks}</code>,
+          })}
+        >
+          <div className="w-full min-w-0">
+            <CopyBlock text={`{
+  "mcpServers": {
+    "${connectorName}": {
+      "url": "${mcpUrl('cursor')}"
+    }
+  }
+}`} copyAriaLabel={t('copy_aria')} />
           </div>
         </SettingsRow>
 
@@ -506,7 +524,7 @@ export function ApiKeysPanel() {
             </div>
 
             <div>
-              <p className="mb-1 text-sm">{t('claude_code_cursor')}</p>
+              <p className="mb-1 text-sm">Claude Code</p>
               <p className="mb-2 text-xs text-muted-foreground">
                 {t('terminal_with_api_key')}
               </p>
