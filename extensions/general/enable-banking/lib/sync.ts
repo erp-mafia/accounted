@@ -254,6 +254,9 @@ export async function syncAccountTransactions(
     try {
       const balance = await getAccountBalance(account.uid)
       account.balance = balance.amount
+      // Overwrite (not keep) on null: a stale available figure next to a
+      // fresh booked figure would misstate what can be spent.
+      account.available_balance = balance.available ?? undefined
       account.balance_updated_at = new Date().toISOString()
     } catch {
       // Keep previous balance, don't update timestamp

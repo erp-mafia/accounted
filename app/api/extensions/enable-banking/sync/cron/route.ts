@@ -27,6 +27,7 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getBranding } from '@/lib/branding/service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { updateBalancesFromSync } from '@/lib/cash-accounts/service'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
 
 ensureInitialized()
@@ -324,6 +325,19 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
           initial_sync_lookback_days: lookbackDays,
         }
       }
+      // Mirror refreshed balances into cash_accounts (what the Bank-page
+      // picker and reconciliation read); logs failures instead of throwing.
+      await updateBalancesFromSync(
+        supabase,
+        connection.company_id,
+        connection.id,
+        allAccounts.map(a => ({
+          external_uid: a.uid,
+          balance: a.balance,
+          available_balance: a.available_balance,
+          balance_updated_at: a.balance_updated_at,
+        })),
+      )
       await supabase
         .from('bank_connections')
         .update({

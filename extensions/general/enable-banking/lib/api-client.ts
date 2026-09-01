@@ -730,27 +730,55 @@ export async function getAccountBalances(accountUid: string): Promise<Balance[]>
   return data.balances || []
 }
 
+// Balance-type preference orders. ASPSPs report types either as camelCase
+// names or ISO 20022 codes; both spellings of each type are accepted,
+// case-insensitively. Booked answers "what has the bank settled", available
+// answers "what can be spent right now" (the covering-decision number).
+const BOOKED_BALANCE_TYPES = ['closingbooked', 'clbd', 'expected', 'xpcd']
+const AVAILABLE_BALANCE_TYPES = [
+  'interimavailable',
+  'itav',
+  'closingavailable',
+  'clav',
+  'forwardavailable',
+  'fwav',
+]
+
+function pickBalanceByType(balances: Balance[], preference: string[]): Balance | undefined {
+  for (const type of preference) {
+    const match = balances.find(b => b.balance_type?.toLowerCase() === type)
+    if (match) return match
+  }
+  return undefined
+}
+
 /**
- * Get account balance (returns booked balance amount)
+ * Get account balance from one BALANCES call: the booked amount (falling back
+ * to the first reported balance, as before) plus the available amount when the
+ * ASPSP reports one. One call: both figures come from the same quota-limited
+ * response, so exposing `available` costs nothing extra.
  */
 export async function getAccountBalance(
   accountUid: string
-): Promise<{ amount: number; date: string }> {
+): Promise<{ amount: number; date: string; available: number | null }> {
   const balances = await getAccountBalances(accountUid)
 
   // Prefer closingBooked, then expected, then first available
-  const balance =
-    balances.find(b => b.balance_type === 'closingBooked') ||
-    balances.find(b => b.balance_type === 'expected') ||
-    balances[0]
+  const balance = pickBalanceByType(balances, BOOKED_BALANCE_TYPES) || balances[0]
 
   if (!balance) {
-    return { amount: 0, date: new Date().toISOString().split('T')[0] }
+    return { amount: 0, date: new Date().toISOString().split('T')[0], available: null }
   }
+
+  const availableBalance = pickBalanceByType(balances, AVAILABLE_BALANCE_TYPES)
+  const available = availableBalance
+    ? parseFloat(availableBalance.balance_amount.amount)
+    : null
 
   return {
     amount: parseFloat(balance.balance_amount.amount),
-    date: balance.reference_date || new Date().toISOString().split('T')[0]
+    date: balance.reference_date || new Date().toISOString().split('T')[0],
+    available: available != null && Number.isFinite(available) ? available : null,
   }
 }
 

@@ -470,6 +470,35 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
     },
   ]
 
+  // What the bank itself reports (F7): booked + available balance from the
+  // last PSD2 balance refresh, with its fetch date. Point-in-time, so it
+  // lives outside the movement-based tiles.
+  const bankReportedRaw =
+    !isSkv && !isManual
+      ? (status.bank as {
+          bank_reported_balance?: number | null
+          bank_reported_available_balance?: number | null
+          bank_balance_updated_at?: string | null
+        } | null)
+      : null
+  const bankReportedLine =
+    bankReportedRaw && typeof bankReportedRaw.bank_reported_balance === 'number'
+      ? typeof bankReportedRaw.bank_reported_available_balance === 'number'
+        ? t('bank_reported_line_available', {
+            amount: formatCurrency(bankReportedRaw.bank_reported_balance, currency),
+            available: formatCurrency(bankReportedRaw.bank_reported_available_balance, currency),
+            date: bankReportedRaw.bank_balance_updated_at
+              ? formatDate(bankReportedRaw.bank_balance_updated_at)
+              : formatDate(asOfDate),
+          })
+        : t('bank_reported_line', {
+            amount: formatCurrency(bankReportedRaw.bank_reported_balance, currency),
+            date: bankReportedRaw.bank_balance_updated_at
+              ? formatDate(bankReportedRaw.bank_balance_updated_at)
+              : formatDate(asOfDate),
+          })
+      : null
+
   const unexplained = status.unexplained_difference
   const attn = status.stale
     ? t('stale_line', { source: sourceLabel })
@@ -534,6 +563,12 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
           </div>
         ))}
       </div>
+
+      {bankReportedLine && (
+        <p className="text-[12.5px] text-muted-foreground" data-ph-mask>
+          {bankReportedLine}
+        </p>
+      )}
 
       {attn ? (
         <AttnLine>{attn}</AttnLine>

@@ -8240,6 +8240,8 @@
     "load_failed": "Could not load the reconciliation. Try again in a moment.",
     "tile_external_skv": "Balance at Skatteverket",
     "tile_external_bank": "Movement on the bank in the period",
+    "bank_reported_line": "Bank-reported balance: {amount} · fetched {date}",
+    "bank_reported_line_available": "Bank-reported balance: {amount} (available {available}) · fetched {date}",
     "tile_bank_breakdown": "{inflow} in · {outflow} out · {count} transactions",
     "tile_ledger": "Booked on {account}",
     "tile_ledger_bank": "Booked on {account} in the period",

@@ -2,10 +2,74 @@
 
 # Banking endpoints
 
-Bank transactions (ingest, categorize, match against invoices), bank reconciliation runs, and file imports (SIE, bank statements).
+Bank transactions (ingest, categorize, match against invoices), cash accounts with the bank-reported balance, bank reconciliation runs, and file imports (SIE, bank statements).
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
+
+### `GET /api/v1/companies/{companyId}/cash-accounts`
+
+**List bank/cash accounts with the bank-reported balance.**
+`scope:transactions:read · risk:low · idempotent`
+
+Returns the company's cash accounts (bank accounts, kassa) with their BAS ledger mapping and, for PSD2-connected accounts, the balance the bank itself reported at the last sync: balance (booked), available_balance, and balance_updated_at (when it was fetched). Pass ?enabled_only=true to return only accounts that sync.
+
+**Use when:** You need the current bank balance per account (e.g. a covering decision before a payment run), or cash_account_id values to filter transaction listings.
+**Do not use for:** The bookkept 19xx balance: use the trial-balance or balance-sheet reports. The two legitimately differ (pending bookings, timing).
+
+**Pitfalls:**
+- balance/available_balance are what the BANK reported, refreshed at most every 12h (PSD2 quota): check balance_updated_at before treating them as current.
+- balance is null for manual and SIE-imported accounts, and for PSD2 accounts that have not completed a sync since connecting.
+- available_balance is null when the bank reports no available balance type; that does not mean 0.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    cash_accounts: { cash_account_id: string, ledger_account: string, name: string, currency: string, iban: string, is_primary: boolean, enabled: boolean, source: "enable_banking" | "manual" | "sie_import", balance: number, available_balance: number, balance_updated_at: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "cash_accounts": [
+      {
+        "cash_account_id": "ca_…",
+        "ledger_account": "1930",
+        "name": "Företagskonto",
+        "currency": "SEK",
+        "iban": "SE4550000000058398257466",
+        "is_primary": true,
+        "enabled": true,
+        "source": "enable_banking",
+        "balance": 125430.5,
+        "available_balance": 123930.5,
+        "balance_updated_at": "2026-09-01T05:12:44.000Z"
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
 
 ### `POST /api/v1/companies/{companyId}/imports/bank`
 

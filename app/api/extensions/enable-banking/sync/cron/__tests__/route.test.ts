@@ -54,6 +54,15 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
   DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD: 0.9,
 }))
 
+// The balance mirror runs against cash_accounts after every successful sync;
+// its own behavior is covered in lib/cash-accounts/__tests__/service.test.ts.
+vi.mock('@/lib/cash-accounts/service', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/cash-accounts/service')>(
+    '@/lib/cash-accounts/service',
+  )
+  return { ...actual, updateBalancesFromSync: vi.fn().mockResolvedValue(undefined) }
+})
+
 vi.mock('@/lib/email/service', () => ({
   getEmailService: () => ({ isConfigured: () => false, sendEmail: vi.fn() }),
 }))

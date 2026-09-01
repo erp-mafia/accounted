@@ -17,8 +17,11 @@ export const prompts: McpPrompt[] = [
     name: 'cash_today',
     description: 'Visa banksaldo just nu',
     text:
-      'Hur mycket pengar har jag på företagskontot just nu? Anropa gnubok_get_balance_sheet ' +
-      'för dagens datum och rapportera saldot på konto 1930. Visa även de senaste 5 transaktionerna ' +
+      'Hur mycket pengar har jag på företagskontot just nu? Anropa gnubok_list_cash_accounts och ' +
+      'rapportera bankens rapporterade saldo (balance, available_balance) per konto med tidsstämpeln ' +
+      'balance_updated_at. Saknas rapporterat saldo (manuellt konto eller aldrig synkat): fall tillbaka ' +
+      'på gnubok_get_balance_sheet för dagens datum och saldot på konto 1930, och säg att siffran är ' +
+      'bokförd, inte bankens. Visa även de senaste 5 transaktionerna ' +
       'via gnubok_list_uncategorized_transactions (limit=5, sortera nyast först: men inkludera även ' +
       'kategoriserade om verktyget tillåter). Svara kort på svenska.',
   },

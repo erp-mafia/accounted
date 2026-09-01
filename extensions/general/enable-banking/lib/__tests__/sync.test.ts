@@ -608,7 +608,7 @@ describe('syncAccountTransactions', () => {
 
   it('refreshes the balance when the stored balance is older than 12 hours', async () => {
     mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
-    mockGetAccountBalance.mockResolvedValue({ amount: 1234.56, date: '2026-06-01' })
+    mockGetAccountBalance.mockResolvedValue({ amount: 1234.56, date: '2026-06-01', available: 1100.5 })
 
     const staleAt = new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString()
     const account = makeAccount({ balance: 500, balance_updated_at: staleAt })
@@ -620,7 +620,26 @@ describe('syncAccountTransactions', () => {
 
     expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1')
     expect(account.balance).toBe(1234.56)
+    expect(account.available_balance).toBe(1100.5)
     expect(account.balance_updated_at).not.toBe(staleAt)
+  })
+
+  it('clears a stored available balance when the refresh reports none', async () => {
+    // A stale available figure next to a fresh booked figure would misstate
+    // what can be spent: null from the bank overwrites, never keeps.
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
+    mockGetAccountBalance.mockResolvedValue({ amount: 1234.56, date: '2026-06-01', available: null })
+
+    const staleAt = new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString()
+    const account = makeAccount({ balance: 500, available_balance: 480, balance_updated_at: staleAt })
+
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, account,
+      '2026-01-01', '2026-06-01', mockIngest
+    )
+
+    expect(account.balance).toBe(1234.56)
+    expect(account.available_balance).toBeUndefined()
   })
 
   it('treats a future balance_updated_at as stale and refreshes', async () => {

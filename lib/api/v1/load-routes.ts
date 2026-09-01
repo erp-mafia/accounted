@@ -71,6 +71,7 @@ import '@/app/api/v1/companies/[companyId]/transactions/ingest/route'
 import '@/app/api/v1/companies/[companyId]/transactions/batch-categorize/route'
 import '@/app/api/v1/companies/[companyId]/reconciliation/bank/run/route'
 import '@/app/api/v1/companies/[companyId]/reconciliation/bank/status/route'
+import '@/app/api/v1/companies/[companyId]/cash-accounts/route'
 
 // Phase 4 PR-1: AP world: suppliers + supplier-invoices verticals.
 import '@/app/api/v1/companies/[companyId]/suppliers/route'

@@ -53,6 +53,9 @@ interface CashAccountRow {
   is_primary: boolean | null
   source: string | null
   bank_connection_id: string | null
+  balance: number | null
+  available_balance: number | null
+  balance_updated_at: string | null
   updated_at: string | null
 }
 
@@ -156,6 +159,12 @@ async function bankStatus(
   )
   const syncedAt = await latestBankSyncAt(supabase, companyId, account.id)
   const stale = !syncedAt || daysBetween(today, syncedAt.slice(0, 10)) > STALE_AFTER_DAYS
+  // The bank-reported (booked) balance, mirrored from the last PSD2 balance
+  // refresh. Point-in-time, unlike ledger_balance which is period movement:
+  // difference/unexplained stay transaction-based and never compare the two.
+  const reportedBalance = account.balance == null ? null : Number(account.balance)
+  const reportedAvailable =
+    account.available_balance == null ? null : Number(account.available_balance)
   return {
     account_key: bankAccountKey(account.id),
     kind: 'bank',
@@ -164,7 +173,7 @@ async function bankStatus(
     window: { from: window.from, to: window.to },
     as_of: new Date().toISOString(),
     stale,
-    external_balance: null,
+    external_balance: reportedBalance,
     ledger_balance: raw.gl_1930_period_movement,
     difference: raw.difference,
     unexplained_difference: raw.unexplained_difference,
@@ -178,7 +187,14 @@ async function bankStatus(
       ignored: raw.ignored_transaction_count,
     },
     skattekonto: null,
-    bank: raw as unknown as Record<string, unknown>,
+    bank: {
+      ...(raw as unknown as Record<string, unknown>),
+      // What the bank itself reports for the account (F7): booked +
+      // available + when it was fetched. Distinct from the movement fields.
+      bank_reported_balance: reportedBalance,
+      bank_reported_available_balance: reportedAvailable,
+      bank_balance_updated_at: account.balance_updated_at ?? null,
+    },
   }
 }
 
@@ -221,7 +237,7 @@ export async function listReconciliationAccounts(
 
   const { data, error } = await supabase
     .from('cash_accounts')
-    .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, updated_at')
+    .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, balance, available_balance, balance_updated_at, updated_at')
     .eq('company_id', companyId)
     .eq('enabled', true)
     .order('is_primary', { ascending: false })
@@ -392,7 +408,7 @@ export async function getAccountStatus(
   if (parsed.kind === 'bank') {
     const { data, error } = await supabase
       .from('cash_accounts')
-      .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, updated_at')
+      .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, balance, available_balance, balance_updated_at, updated_at')
       .eq('company_id', companyId)
       .eq('id', parsed.cashAccountId)
       .maybeSingle()

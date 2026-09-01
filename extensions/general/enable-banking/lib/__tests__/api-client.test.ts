@@ -13,6 +13,7 @@ vi.stubEnv('ENABLE_BANKING_API_URL', 'https://api.test.com')
 
 import {
   getASPSPs,
+  getAccountBalance,
   getAccountBalances,
   getAccountTransactions,
   getAllTransactions,
@@ -49,6 +50,79 @@ describe('api-client', () => {
       )
 
       await expect(getAccountBalances('acc-1')).rejects.toThrow('Aborted')
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Balance-type selection
+  // -------------------------------------------------------------------------
+  describe('getAccountBalance', () => {
+    function balancesResponse(balances: unknown[]): Response {
+      return new Response(JSON.stringify({ balances }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    it('returns booked (closingBooked) plus available (interimAvailable) from one response', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'interimAvailable', balance_amount: { amount: '900.50', currency: 'SEK' } },
+          { balance_type: 'closingBooked', balance_amount: { amount: '1000.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result).toEqual({ amount: 1000, date: '2026-09-01', available: 900.5 })
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('accepts ISO 20022 codes (CLBD/ITAV) case-insensitively', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'ITAV', balance_amount: { amount: '450.25', currency: 'SEK' } },
+          { balance_type: 'CLBD', balance_amount: { amount: '500.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result.amount).toBe(500)
+      expect(result.available).toBe(450.25)
+    })
+
+    it('returns available: null when the bank reports no available type', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'closingBooked', balance_amount: { amount: '1000.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result).toEqual({ amount: 1000, date: '2026-09-01', available: null })
+    })
+
+    it('falls back to the first balance for booked, never to an available type by preference', async () => {
+      // Only an unknown type: the pre-existing first-entry fallback applies.
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'somethingElse', balance_amount: { amount: '42.00', currency: 'SEK' }, reference_date: '2026-08-31' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result).toEqual({ amount: 42, date: '2026-08-31', available: null })
+    })
+
+    it('prefers expected over the first entry when closingBooked is missing', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'other', balance_amount: { amount: '1.00', currency: 'SEK' } },
+          { balance_type: 'expected', balance_amount: { amount: '2.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result.amount).toBe(2)
     })
   })
 

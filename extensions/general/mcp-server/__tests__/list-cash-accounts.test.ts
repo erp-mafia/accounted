@@ -26,7 +26,7 @@ describe('gnubok_list_cash_accounts', () => {
 
   it('maps cash_accounts rows to the qualified wire shape, primary first', async () => {
     vi.mocked(listForCompany).mockResolvedValue([
-      { id: 'ca-1', company_id: 'company-1', ledger_account: '1930', name: 'Företagskonto', currency: 'SEK', iban: 'SE4550000000058398257466', is_primary: true, enabled: true, source: 'enable_banking' },
+      { id: 'ca-1', company_id: 'company-1', ledger_account: '1930', name: 'Företagskonto', currency: 'SEK', iban: 'SE4550000000058398257466', is_primary: true, enabled: true, source: 'enable_banking', balance: 12500.75, available_balance: 12000.5, balance_updated_at: '2026-09-01T05:00:00.000Z' },
       { id: 'ca-2', company_id: 'company-1', ledger_account: '1940', name: null, currency: 'SEK', iban: null, is_primary: false, enabled: false, source: 'manual' },
     ] as never)
 
@@ -46,8 +46,12 @@ describe('gnubok_list_cash_accounts', () => {
       is_primary: true,
       enabled: true,
       source: 'enable_banking',
+      balance: 12500.75,
+      available_balance: 12000.5,
+      balance_updated_at: '2026-09-01T05:00:00.000Z',
     })
-    expect(result.cash_accounts[1]).toMatchObject({ cash_account_id: 'ca-2', name: null, iban: null, enabled: false, source: 'manual' })
+    // Manual accounts have no bank-reported balance: explicit nulls, never absent.
+    expect(result.cash_accounts[1]).toMatchObject({ cash_account_id: 'ca-2', name: null, iban: null, enabled: false, source: 'manual', balance: null, available_balance: null, balance_updated_at: null })
     // No bare `id` leaks onto the wire (qualified-ids convention).
     expect(result.cash_accounts[0]).not.toHaveProperty('id')
   })

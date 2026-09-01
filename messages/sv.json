@@ -8240,6 +8240,8 @@
     "load_failed": "Kunde inte hämta avstämningen. Försök igen om en stund.",
     "tile_external_skv": "Saldo hos Skatteverket",
     "tile_external_bank": "Rörelse på banken i perioden",
+    "bank_reported_line": "Saldo enligt banken: {amount} · hämtat {date}",
+    "bank_reported_line_available": "Saldo enligt banken: {amount} (tillgängligt {available}) · hämtat {date}",
     "tile_bank_breakdown": "{inflow} in · {outflow} ut · {count} transaktioner",
     "tile_ledger": "Bokfört på {account}",
     "tile_ledger_bank": "Bokfört på {account} i perioden",
