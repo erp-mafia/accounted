@@ -617,6 +617,12 @@ BEGIN
       JOIN pg_namespace n ON n.oid = p.pronamespace
      WHERE n.nspname = 'public'
        AND p.prosecdef
+       AND p.prokind = 'f'
+       -- prokind = 'f' only. A SECURITY DEFINER PROCEDURE would satisfy the
+       -- other predicates, and REVOKE ... ON FUNCTION rejects a procedure,
+       -- which would abort this migration. public holds no procedures today
+       -- (verified against prod 2026-09-01), so this is a guard against the
+       -- first one anyone adds, not a live bug.
        AND p.prorettype <> 'trigger'::regtype
        AND (p.prosrc ~* '\minsert\s+into\s'
             OR p.prosrc ~* '\mupdate\s+[a-z_"]'

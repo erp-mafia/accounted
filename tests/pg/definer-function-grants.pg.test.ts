@@ -18,6 +18,10 @@ import { seedCompany } from '@/tests/pg/fixtures'
 // The first test is generated from a sweep rather than a hand list, so the next
 // unguarded function that ships fails CI instead of being declared safe by
 // whoever writes the list.
+//
+// prokind = 'f' keeps procedures out of scope: the migration revokes with
+// REVOKE ... ON FUNCTION, which rejects a procedure, so a SECURITY DEFINER
+// procedure must not be reported here as an offender the migration can fix.
 const DEFINER_WRITERS_SQL = `
   SELECT p.oid::regprocedure::text AS fn,
          has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_can
@@ -25,6 +29,7 @@ const DEFINER_WRITERS_SQL = `
     JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public'
      AND p.prosecdef
+     AND p.prokind = 'f'
      AND p.prorettype <> 'trigger'::regtype
      AND (p.prosrc ~* '\\minsert\\s+into\\s'
           OR p.prosrc ~* '\\mupdate\\s+[a-z_"]'
