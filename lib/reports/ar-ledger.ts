@@ -3,6 +3,11 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
 import { fetchPaymentsAsOf, outstandingAsOf, todayIsoDate, type PaymentsAsOf } from './reskontra-payments'
+import {
+  fetchInvoiceRegisterCoverage,
+  NO_INVOICE_REGISTER_COVERAGE,
+  type InvoiceRegisterCoverage,
+} from '@/lib/invoices/invoice-register-coverage'
 
 export interface ARInvoiceDetail {
   invoice_id: string
@@ -48,6 +53,14 @@ export interface ARLedgerReport {
    * outstanding_sek = null) so the user can see them.
    */
   unconverted_fx_count: number
+  /**
+   * Coverage of the invoice register this ledger is built from. A migrated
+   * or backfilled company has invoices that exist only as journal entries;
+   * this ledger cannot list them, and their 1510 balance is why the 1510
+   * reconciliation shows a residual. Renderers show the boundary when
+   * register_coverage.has_pre_register_invoices is true.
+   */
+  register_coverage: InvoiceRegisterCoverage
 }
 
 /**
@@ -103,7 +116,17 @@ export async function generateARLedger(
       total_overdue: 0,
       unpaid_count: 0,
       unconverted_fx_count: 0,
+      register_coverage: NO_INVOICE_REGISTER_COVERAGE,
     }
+  }
+
+  // Coverage disclosure. Non-fatal: the ledger's own numbers do not depend
+  // on it, so a failed lookup degrades to "no marker", never to an error.
+  let registerCoverage: InvoiceRegisterCoverage = NO_INVOICE_REGISTER_COVERAGE
+  try {
+    registerCoverage = await fetchInvoiceRegisterCoverage(supabase, companyId)
+  } catch {
+    // keep NO_INVOICE_REGISTER_COVERAGE
   }
 
   // Group by customer and calculate aging
@@ -236,5 +259,6 @@ export async function generateARLedger(
     total_overdue: Math.round(total_overdue * 100) / 100,
     unpaid_count,
     unconverted_fx_count: unconvertedFxCount,
+    register_coverage: registerCoverage,
   }
 }

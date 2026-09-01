@@ -12,6 +12,10 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import type { Logger } from '@/lib/logger'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { maskEmbeddedCustomer } from '@/lib/customers/protect-personal-number'
+import {
+  fetchInvoiceRegisterCoverage,
+  NO_INVOICE_REGISTER_COVERAGE,
+} from '@/lib/invoices/invoice-register-coverage'
 
 ensureInitialized()
 
@@ -43,9 +47,24 @@ export const GET = withRouteContext(
       return errorResponse(error, log, { requestId })
     }
 
+    // Coverage disclosure: the register only holds invoices created in
+    // Accounted, so for a migrated/backfilled company this list is silently
+    // incomplete before its first invoice. Non-fatal: a failed lookup
+    // degrades to "no marker", never to a failed list.
+    let coverage = NO_INVOICE_REGISTER_COVERAGE
+    try {
+      coverage = await fetchInvoiceRegisterCoverage(supabase, companyId)
+    } catch {
+      // keep NO_INVOICE_REGISTER_COVERAGE
+    }
+
     // Mask the embedded customer's personnummer: the customers(*) join
     // carries the stored ciphertext, which has no business reaching a client.
-    return NextResponse.json({ data: (data ?? []).map(maskEmbeddedCustomer), count })
+    return NextResponse.json({
+      data: (data ?? []).map(maskEmbeddedCustomer),
+      count,
+      invoice_register_coverage: coverage,
+    })
   },
 )
 

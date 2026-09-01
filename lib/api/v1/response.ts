@@ -34,6 +34,14 @@ export interface ResponseMeta {
    * detect a degraded response without parsing the body.
    */
   partial_expansions?: string[]
+  /**
+   * Registry-coverage disclosure for list endpoints whose backing register
+   * may not span all of the company's bookkeeping (e.g. the invoice
+   * register after a mid-year migration). Shape is endpoint-specific and
+   * documented in the endpoint's registry entry. Present only when the
+   * endpoint computes it.
+   */
+  coverage?: Record<string, unknown>
 }
 
 interface ResponseOptions {
@@ -45,6 +53,8 @@ interface ResponseOptions {
   nextCursor?: string
   /** Names of `?expand=` keys whose data fetch failed (soft-degrade). */
   partialExpansions?: string[]
+  /** Endpoint-specific register-coverage disclosure (see ResponseMeta.coverage). */
+  coverage?: Record<string, unknown>
   /** Marks the response as a replay of a previously-cached idempotent call. */
   idempotentReplay?: boolean
   /** Marks the response as a dry-run preview rather than a committed write. */
@@ -80,6 +90,7 @@ function buildMeta(opts: ResponseOptions): ResponseMeta {
   }
   if (opts.nextCursor) meta.next_cursor = opts.nextCursor
   if (opts.audit) meta.audit = opts.audit
+  if (opts.coverage) meta.coverage = opts.coverage
   if (opts.partialExpansions && opts.partialExpansions.length > 0) {
     meta.partial_expansions = opts.partialExpansions
   }

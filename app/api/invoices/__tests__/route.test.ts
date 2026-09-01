@@ -117,6 +117,44 @@ describe('GET /api/invoices', () => {
     expect(body.data[0].customer).toBeNull()
   })
 
+  it('reports invoice-register coverage alongside the list', async () => {
+    // List, then the coverage helper's two lookups: earliest register
+    // invoice + a posted AR verifikat predating it (migrated/backfilled
+    // invoice history living only as journal entries).
+    enqueue({ data: [makeInvoice()], error: null, count: 1 })
+    enqueue({ data: { invoice_date: '2026-07-19' }, error: null })
+    enqueue({ data: { id: 'line-1' }, error: null })
+
+    const request = createMockRequest('/api/invoices')
+    const response = await GET(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{
+      invoice_register_coverage: { covers_from: string | null; has_pre_register_invoices: boolean }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.invoice_register_coverage).toEqual({
+      covers_from: '2026-07-19',
+      has_pre_register_invoices: true,
+    })
+  })
+
+  it('degrades to no coverage instead of failing the list', async () => {
+    enqueue({ data: [makeInvoice()], error: null, count: 1 })
+    // Coverage lookups resolve to nothing (empty queue → null data).
+
+    const request = createMockRequest('/api/invoices')
+    const response = await GET(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{
+      invoice_register_coverage: { covers_from: string | null; has_pre_register_invoices: boolean }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.invoice_register_coverage).toEqual({
+      covers_from: null,
+      has_pre_register_invoices: false,
+    })
+  })
+
   it('applies status filter', async () => {
     enqueue({ data: [], error: null, count: 0 })
 

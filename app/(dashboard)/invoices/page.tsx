@@ -30,6 +30,12 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { matchesInvoiceSearch } from '@/lib/invoices/invoice-search'
+import {
+  fetchInvoiceRegisterCoverage,
+  NO_INVOICE_REGISTER_COVERAGE,
+  type InvoiceRegisterCoverage,
+} from '@/lib/invoices/invoice-register-coverage'
 import {
   sortInvoiceList,
   type InvoiceListSort,
@@ -286,6 +292,30 @@ export default function InvoicesPage() {
   const showRotRutAction =
     rotRutEnabled || invoices.some((invoice) => (invoice.deduction_total ?? 0) > 0)
 
+  // Invoice-register coverage (see lib/invoices/invoice-register-coverage.ts):
+  // a migrated or backfilled company has invoices that live only as verifikat,
+  // so this list looks complete for periods it doesn't cover. One quiet attn
+  // line discloses the boundary; without it the user's next step is "those
+  // invoices were never sent" (the 2026-09-01 report: nearly double-invoiced).
+  const [registerCoverage, setRegisterCoverage] = useState<InvoiceRegisterCoverage>(
+    NO_INVOICE_REGISTER_COVERAGE,
+  )
+  useEffect(() => {
+    if (!company) {
+      setRegisterCoverage(NO_INVOICE_REGISTER_COVERAGE)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      const coverage = await fetchInvoiceRegisterCoverage(supabase, company.id)
+      if (!cancelled) setRegisterCoverage(coverage)
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [company?.id])
+
   async function fetchInvoices() {
     if (!company) return
     // Skeleton takeover only while nothing is on screen: refetches after an
@@ -331,14 +361,7 @@ export default function InvoicesPage() {
   const scopedInvoices = useMemo(
     () =>
       invoices.filter((invoice) => {
-        const matchesSearch =
-          (invoice.invoice_number ?? '').toLocaleLowerCase('sv-SE').includes(normalizedSearch) ||
-          (invoice.external_invoice_number ?? '')
-            .toLocaleLowerCase('sv-SE')
-            .includes(normalizedSearch) ||
-          (invoice.customer as { name: string })?.name
-            ?.toLocaleLowerCase('sv-SE')
-            .includes(normalizedSearch)
+        const matchesSearch = matchesInvoiceSearch(invoice, normalizedSearch)
 
         const matchesFy =
           !fyPeriod ||
@@ -630,6 +653,15 @@ export default function InvoicesPage() {
           />
         </div>
       </div>
+
+      {/* Coverage boundary (convention 6: one page-domain attn line). Shown
+          only when posted AR verifikat predate the register's first invoice:
+          the list is then silently incomplete for that period. */}
+      {registerCoverage.has_pre_register_invoices && registerCoverage.covers_from && (
+        <p className="attn text-[12.5px]">
+          {t('coverage_notice', { date: formatDate(registerCoverage.covers_from) })}
+        </p>
+      )}
 
       {/* Bulkbar: appears once anything is selected (supplier-invoices shape). */}
       {selectedIds.size > 0 && (
