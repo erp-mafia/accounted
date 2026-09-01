@@ -27,7 +27,7 @@ Länken öppnar claude.ai med namn och adress ifyllda. Du granskar värdena och 
 
 **Du behöver inget Accounted-konto ännu.** Anslutningen fungerar direkt: servern svarar på handskakningen och dokumentationsverktygen utan inloggning, och första anropet som rör ett bolag öppnar Accounteds inloggning, där du som ny skapar kontot (BankID eller e-post + 2FA).
 
-**Läsrättigheter som standard.** På godkännandesidan väljer du bolag och ger läsrättigheter (lista fakturor, läsa rapporter, räkna moms). Skrivrättigheter (skapa faktura, kontera, bokföra verifikat, köra bokslut) listas separat och måste bockas i uttryckligen. Så kan en granskare ansluta läsande medan du själv har en anslutning med skrivrättigheter för det dagliga arbetet.
+**Alla behörigheter förvalda, varje skrivning stannar ändå.** Godkännandesidan ger hela behörighetslistan med ett klick. Fäll ut **Behörigheter** och välj **Endast läs** för en läsande anslutning (lista fakturor, läsa rapporter, räkna moms): så kan en granskare ansluta läsande medan du själv har en anslutning med skrivrättigheter för det dagliga arbetet. Oavsett behörigheter lägger skrivverktygen (skapa faktura, kontera, bokföra verifikat, köra bokslut) bara upp en pending operation som du bekräftar innan något bokförs, och åtkomsten går att återkalla under Inställningar → API & MCP.
 
 #### Vad som händer efter klicket
 
@@ -35,8 +35,8 @@ Resten av inställningarna görs på Claudes sida, i den här ordningen:
 
 1. **Connector-dialogen.** claude.ai öppnar **Add custom connector** med namn och adress ifyllda. Kontrollera adressen och klicka **Add**. Frågar dialogen om autentisering, välj **"Required when the server asks"**, inte det automatiskt föreslagna "None": servern kräver ingen inloggning när du ansluter, så "None" ser rätt ut men stoppar inloggningen i steg 3. Claude Desktop visar samma dialog under Inställningar → Connectors.
 2. **Verktygen dyker upp direkt.** Anslutningen visas som ansluten och Claude listar Accounteds verktyg innan du har loggat in. Det är avsiktligt: handskakningen och dokumentationsverktygen behöver inget konto.
-3. **Första riktiga frågan öppnar inloggningen.** Fråga något om bokföringen, till exempel *"Vilket bolag är jag ansluten till?"*. Servern svarar att inloggning krävs, och claude.ai öppnar Accounteds inloggning (BankID eller e-post + 2FA) följd av godkännandesidan där du väljer bolag och bockar i rättigheter. Godkänn och **ställ frågan igen**: frågan som väntade när inloggningen öppnades görs inte om av sig själv. Statusen "ansluten" med en obesvarad första fråga betyder "logga in och fråga igen", inte att anslutningen är trasig.
-4. **Klart.** Härifrån går varje fråga mot bolaget du valde, och skrivningar stannar under **/pending** tills du bekräftar.
+3. **Första riktiga frågan öppnar inloggningen.** Fråga något om bokföringen, till exempel *"Vilket bolag är jag ansluten till?"*. Servern svarar att inloggning krävs, och claude.ai öppnar Accounteds inloggning (BankID eller e-post + 2FA) följd av godkännandesidan. Den visar bolaget som just nu är aktivt i appen (byt bolag i appen först om du har flera) med alla behörigheter förvalda; fäll ut **Behörigheter** och välj **Endast läs** för en läsande anslutning. Godkänn och **ställ frågan igen**: frågan som väntade när inloggningen öppnades görs inte om av sig själv. Statusen "ansluten" med en obesvarad första fråga betyder "logga in och fråga igen", inte att anslutningen är trasig.
+4. **Klart.** Härifrån går varje fråga mot det bolaget, och skrivningar stannar under **/pending** tills du bekräftar.
 
 Inloggad, men Claude säger fortfarande att servern inte går att nå? Fråga igen i samma chatt först. Hjälper inte det: öppna Inställningar → Connectors, ta bort anslutningen och lägg till den igen med autentisering satt till "Required when the server asks".
 
@@ -119,7 +119,7 @@ Nyckelvärdet börjar fortfarande med \`gnubok_sk_\`. Det är ett stabilt kredit
 
 ## Testa med de här frågorna
 
-Alla tre går mot den deterministiska sandlådan (använd en \`gnubok_sk_test_*\`-nyckel eller välj sandlådebolaget på godkännandesidan). De går igenom hela läsvägen utan att bokföra något.
+Alla tre går mot den deterministiska sandlådan (använd en \`gnubok_sk_test_*\`-nyckel, eller gör sandlådebolaget aktivt i appen innan du loggar in från Claude). De går igenom hela läsvägen utan att bokföra något.
 
 1. **"Visa mina okonterade banktransaktioner och föreslå konteringar."**
    Claude kallar \`accounted_list_uncategorized_transactions\` och sedan \`accounted_suggest_categories\` och går igenom förslagen med dig. Godkänner du ett förslag läggs en \`accounted_categorize_transaction\` upp som pending operation. Ingenting bokförs förrän du bekräftar.
@@ -132,7 +132,7 @@ Alla tre går mot den deterministiska sandlådan (använd en \`gnubok_sk_test_*\
 
 En snabb genomgång som visar att anslutningen fungerar innan du släpper in den på skarp data. Kör stegen i ordning. Varje steg säger vad du gör och vad du ska se.
 
-1. **Anslut.** Väg A med bara läsrättigheter, väg B, eller väg C med en \`gnubok_sk_test_*\`-nyckel. → Claude listar Accounteds verktyg (rubriker som *List Uncategorized Transactions* och *VAT Declaration (Momsdeklaration)*).
+1. **Anslut.** Väg A med **Endast läs** valt på godkännandesidan, väg B, eller väg C med en \`gnubok_sk_test_*\`-nyckel. → Claude listar Accounteds verktyg (rubriker som *List Uncategorized Transactions* och *VAT Declaration (Momsdeklaration)*).
 2. **Kontrollera bolaget.** Fråga *"Vilket bolag är jag ansluten till?"* → Claude namnger sandlådebolaget (till exempel **Sandlådan Konsult**).
 3. **Kör fråga 1** (okonterade och konteringsförslag). → En lista med okonterade rader plus förslag. Ingen bokföring sker.
 4. **Kör fråga 2** (förfallna fakturor). → Minst en förfallen kundfaktura med åldersfördelning.

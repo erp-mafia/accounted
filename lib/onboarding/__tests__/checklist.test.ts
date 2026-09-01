@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { checklistNumbers, claudeConnectorLink, claudeStepDone, vatDeadlineLine } from '../checklist'
+import {
+  checklistNumbers,
+  claudeConnectorLink,
+  claudeStepDone,
+  completionPatchBody,
+  vatDeadlineLine,
+} from '../checklist'
 
 describe('vatDeadlineLine', () => {
   it('returns null when the company is not VAT-registered', () => {
@@ -69,6 +75,20 @@ describe('checklistNumbers', () => {
       receipts: 3,
       assistant: 3,
     })
+  })
+})
+
+describe('completionPatchBody', () => {
+  it('keeps a recorded path out of the body', () => {
+    expect(completionPatchBody('bank')).toEqual({ completed: true })
+    expect(completionPatchBody('fresh')).toEqual({ completed: true })
+  })
+
+  it('records migration when no path was chosen, so the route accepts completion', () => {
+    // Skipped the books question, then imported: step 1 is only done via an
+    // import in that state. Without a path the route answers 400 and the
+    // completion effect used to retry it forever.
+    expect(completionPatchBody(null)).toEqual({ completed: true, path: 'migration' })
   })
 })
 

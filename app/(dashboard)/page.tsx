@@ -7,6 +7,7 @@ import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
 import { isCockpitLandingRole } from '@/lib/company/home-domain'
 import { OAUTH_MCP_KEY_NAME } from '@/lib/auth/api-keys'
 import { claudeStepDone } from '@/lib/onboarding/checklist'
+import { createServiceClient } from '@/lib/supabase/server'
 import {
   getDashboardAuthContext,
   getDashboardCompanyId,
@@ -73,6 +74,15 @@ export default async function DashboardPage() {
 
   const now = new Date()
 
+  // Service role for the OAuth-key count below: api_keys' SELECT policy is
+  // company_id IN user_company_ids() (20260330130000), so through the user
+  // client a key minted companyless (company_id NULL, the connect-before-
+  // signup flow) or bound to a company the user has since archived or left is
+  // invisible, and the step would stay open for exactly the user who just
+  // connected. The query filters on user_id explicitly, so no other user's
+  // rows are reachable.
+  const serviceClient = await createServiceClient()
+
   const [
     settingsRes,
     { data: profile },
@@ -94,7 +104,7 @@ export default async function DashboardPage() {
       // and the key's company_id is whatever was active at sign-in (or null
       // for a companyless signup), so a company filter would miss real
       // connections. Revoked rows do not count.
-      supabase
+      serviceClient
         .from('api_keys')
         .select('*', { count: 'exact', head: true })
         .eq('user_id', user.id)

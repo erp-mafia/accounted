@@ -20,7 +20,7 @@ The link opens claude.ai with the connector name and URL already filled in. You 
 
 **You do not need an Accounted account yet.** The connector works as soon as it is added: the server answers the handshake and the documentation tools without credentials, and the first company-scoped call opens the Accounted sign-in, where a new user creates the account (BankID or e-mail + 2FA).
 
-**Read-only by default.** On the consent screen you pick the company and grant read scopes (list invoices, read reports, compute VAT). Write scopes (create invoice, categorise, book vouchers, run year-end) are listed separately and must be ticked explicitly, so a reviewer can connect read-only while you keep a write-enabled connection for daily work.
+**All permissions pre-selected, every write still staged.** The consent page grants the full scope set with one click. Expand **Behörigheter** and choose **Endast läs** to connect read-only (list invoices, read reports, compute VAT): a reviewer can do that while you keep a write-enabled connection for daily work. Whatever the scopes, write tools (create invoice, categorise, book vouchers, run year-end) only stage a pending operation that you confirm before anything is booked, and the grant can be revoked under Settings → API & MCP.
 
 #### What happens after you click
 
@@ -28,8 +28,8 @@ The rest of the setup happens on Claude's side, in this order:
 
 1. **The connector dialog.** claude.ai opens **Add custom connector** with the name and URL filled in. Check the URL and click **Add**. If the dialog asks about authentication, choose **"Required when the server asks"**, not the auto-detected "None": the server does not demand a login at connect time, so "None" looks right but blocks the sign-in in step 3. Claude Desktop shows the same dialog under Settings → Connectors.
 2. **The tools appear straight away.** The connector shows as connected and Claude lists the Accounted tools before you have signed in. That is by design: the handshake and the documentation tools need no account.
-3. **The first real question opens the sign-in.** Ask something about your books, for example *"Which company am I connected to?"*. The server answers that a login is required, and claude.ai opens the Accounted sign-in (BankID or e-mail + 2FA), followed by the consent screen where you pick the company and tick scopes. Approve, then **ask the question again**: the question that was waiting when the sign-in opened is not retried on its own. A "connected" status with an unanswered first question means "sign in, then ask again", not a broken connection.
-4. **Done.** From here every question runs against the company you chose; writes stage at **/pending** until you confirm.
+3. **The first real question opens the sign-in.** Ask something about your books, for example *"Which company am I connected to?"*. The server answers that a login is required, and claude.ai opens the Accounted sign-in (BankID or e-mail + 2FA), followed by the consent page. It shows the company that is currently active in the app (switch company in the app first if you have several) with every permission pre-selected; expand **Behörigheter** and choose **Endast läs** for a read-only connection. Approve, then **ask the question again**: the question that was waiting when the sign-in opened is not retried on its own. A "connected" status with an unanswered first question means "sign in, then ask again", not a broken connection.
+4. **Done.** From here every question runs against that company; writes stage at **/pending** until you confirm.
 
 Signed in, but Claude still says it cannot reach the server? Ask again in the same chat first. If that does not help, open Settings → Connectors, remove the connector, and add it again with authentication set to "Required when the server asks".
 
@@ -114,7 +114,7 @@ continue to work without changes.
 
 ## Try these prompts
 
-All three run against the deterministic sandbox seed (use a \`gnubok_sk_test_*\` key or pick the sandbox company on the OAuth consent screen). They exercise the read path end-to-end without booking anything.
+All three run against the deterministic sandbox seed (use a \`gnubok_sk_test_*\` key, or make the sandbox company the active company in the app before you sign in from Claude). They exercise the read path end-to-end without booking anything.
 
 1. **"Show my uncategorized bank transactions and suggest categories."**
    Claude calls \`accounted_list_uncategorized_transactions\` then \`accounted_suggest_categories\` and walks you through the proposals. Approving one stages an \`accounted_categorize_transaction\` pending operation: nothing is booked until you confirm.
@@ -127,7 +127,7 @@ All three run against the deterministic sandbox seed (use a \`gnubok_sk_test_*\`
 
 A quick end-to-end pass to confirm the connection works before you trust it with real data. Run the steps in order; each lists what you do and what you should see.
 
-1. **Connect.** Use Path A (read-only scopes only), Path B, or Path C with a \`gnubok_sk_test_*\` key. → Claude lists the Accounted tools (titles like *List Uncategorized Transactions*, *VAT Declaration (Momsdeklaration)*).
+1. **Connect.** Use Path A (choose **Endast läs** on the consent page), Path B, or Path C with a \`gnubok_sk_test_*\` key. → Claude lists the Accounted tools (titles like *List Uncategorized Transactions*, *VAT Declaration (Momsdeklaration)*).
 2. **Confirm the company.** Ask *"Which company am I connected to?"* → Claude names the sandbox company (e.g. **Sandlådan Konsult**).
 3. **Run prompt 1** (*uncategorized + suggest categories*). → A list of uncategorised rows plus category suggestions; no booking happens.
 4. **Run prompt 2** (*overdue invoices*). → At least one overdue customer invoice with aging.

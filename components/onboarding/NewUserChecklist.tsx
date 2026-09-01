@@ -13,7 +13,12 @@ import { cn } from '@/lib/utils'
 import { useErrorToast } from '@/lib/hooks/use-error-toast'
 import { useFormat } from '@/lib/hooks/use-format'
 import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
-import { checklistNumbers, claudeConnectorLink, type VatDeadlineLine } from '@/lib/onboarding/checklist'
+import {
+  checklistNumbers,
+  claudeConnectorLink,
+  completionPatchBody,
+  type VatDeadlineLine,
+} from '@/lib/onboarding/checklist'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -97,6 +102,12 @@ export default function NewUserChecklist({
   // step (companies whose completedAt arrives from the server never see it).
   const [retiring, setRetiring] = useState<'verdict' | 'closing' | 'done' | null>(null)
   const retireStartedRef = useRef(false)
+  // A completion PATCH the server rejected (4xx: no write role, no settings
+  // row) must not be retried in a loop: `saving` is a dependency of the
+  // completion effect, so without this latch every rejection re-armed the
+  // effect and re-raised the error toast forever. The next visit tries once
+  // more from server truth.
+  const completeRejectedRef = useRef(false)
   // The ChatGPT side door on the Claude step: collapsed by default so the
   // one-click Claude path stays the visual primary.
   const [chatGptOpen, setChatGptOpen] = useState(false)
@@ -148,14 +159,18 @@ export default function NewUserChecklist({
     if (
       !state.completedAt &&
       step1Done && step2Done && step3Done && step4Done && step5Done &&
-      saving === null
+      saving === null &&
+      !completeRejectedRef.current
     ) {
       if (!retireStartedRef.current) {
         retireStartedRef.current = true
         setRetiring('verdict')
       }
-      void persist({ completed: true }, 'complete').then((updated) => {
+      // completionPatchBody supplies a path when none was recorded: the route
+      // refuses completed:true without one, and this cohort looped on a 400.
+      void persist(completionPatchBody(state.path), 'complete').then((updated) => {
         if (updated) captureSetup('onboarding_setup_completed', { path: updated.path })
+        else completeRejectedRef.current = true
       })
     }
   // persist intentionally stays out: its identity follows the toast hook and
@@ -180,8 +195,9 @@ export default function NewUserChecklist({
   if (state.dismissedAt) return null
   // After the beat, stay retired even while the completion PATCH is still in
   // flight or retrying: falling through to the full checklist here would
-  // flash it after the verdict already played. A failed PATCH keeps retrying
-  // invisibly; the next visit renders from server truth either way.
+  // flash it after the verdict already played. A rejected PATCH is not
+  // retried this session (completeRejectedRef); the next visit renders from
+  // server truth either way.
   if (retiring === 'done') return null
   if (state.completedAt && !retiring) return null
 

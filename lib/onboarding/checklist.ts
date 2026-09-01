@@ -1,4 +1,4 @@
-import type { MomsPeriod } from '@/types'
+import type { InitialSetupPath, MomsPeriod } from '@/types'
 
 /**
  * What the Skatteverket checklist step should say about VAT deadlines.
@@ -46,6 +46,20 @@ export function checklistNumbers(gates: { hasSkatteverket: boolean; hasInbox: bo
   const receipts = 3 + (gates.hasSkatteverket ? 1 : 0)
   const assistant = receipts + (gates.hasInbox ? 1 : 0)
   return { count: assistant, skv, receipts, assistant }
+}
+
+/**
+ * Body of the PATCH that retires the checklist once every step is done.
+ * The route refuses `completed: true` without a path ("Välj först hur du
+ * vill komma igång"). `path` is null when the journey's books question was
+ * skipped and the books then arrived through /import or MCP; in that state
+ * step 1 can only be done via an import, so `migration` is the truthful path
+ * to record. Without it that cohort looped on a 400 (PR #2147 skeptic).
+ */
+export function completionPatchBody(
+  path: InitialSetupPath | null,
+): { completed: true; path?: InitialSetupPath } {
+  return path ? { completed: true } : { completed: true, path: 'migration' }
 }
 
 /**
