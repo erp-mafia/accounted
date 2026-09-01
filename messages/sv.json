@@ -7870,6 +7870,7 @@
     "form_fx_hint": "Beloppen anges i vald valuta och räknas om till SEK med Riksbankens kurs för utläggsdatumet.",
     "form_expense_account": "Kostnadskonto",
     "form_receipt": "Underlag från inkorgen",
+    "form_pick_from_inbox": "Välj från inkorgen",
     "form_receipt_upload": "Släpp eller välj kvitto",
     "form_receipt_none": "Inget underlag",
     "form_receipt_warning": "Kvitto krävs som räkenskapsinformation (BFL). Registrera gärna, men komplettera med underlag så snart som möjligt.",

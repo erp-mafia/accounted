@@ -7870,6 +7870,7 @@
     "form_fx_hint": "Amounts are entered in the selected currency and converted to SEK at the Riksbank rate for the expense date.",
     "form_expense_account": "Expense account",
     "form_receipt": "Receipt from the inbox",
+    "form_pick_from_inbox": "Pick from inbox",
     "form_receipt_upload": "Drop or pick a receipt",
     "form_receipt_none": "No receipt",
     "form_receipt_warning": "A receipt is required as accounting records (BFL). Register now, but attach the receipt as soon as possible.",

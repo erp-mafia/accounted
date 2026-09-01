@@ -30,6 +30,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Checkbox } from '@/components/ui/checkbox'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import InboxDocumentPicker, { type AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
 import BookingTemplatePicker from '@/components/bookkeeping/BookingTemplatePicker'
 import { TemplateForm } from '@/components/settings/TemplateForm'
 import { deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
@@ -156,6 +157,7 @@ export default function ExpenseClaimsPage() {
   const [claimant, setClaimant] = useState(OWNER_VALUE)
   const [ownerName, setOwnerName] = useState('')
   const [inboxChoice, setInboxChoice] = useState(NO_RECEIPT_VALUE)
+  const [showInboxPicker, setShowInboxPicker] = useState(false)
   const [upload, setUpload] = useState<UploadState>({ phase: 'idle' })
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -397,8 +399,9 @@ export default function ExpenseClaimsPage() {
 
   /** Prefill only fields the user has not already filled in. */
   const applyExtraction = useCallback(
-    (extracted: ExtractedReceipt | null) => {
+    (extracted: ExtractedReceipt | null, opts: { force?: boolean } = {}) => {
       if (!extracted) return
+      const force = opts.force ?? false
       const total = extracted.totals?.total
       const vat = extracted.totals?.vatAmount
       const date = extracted.invoice?.invoiceDate
@@ -406,19 +409,21 @@ export default function ExpenseClaimsPage() {
       const supplier = extracted.supplier?.name
       const firstLine = extracted.lineItems?.[0]?.description
 
-      setAmount((prev) => (prev || total == null ? prev : String(total)))
-      setVatAmount((prev) => (prev || vat == null ? prev : String(vat)))
+      // force = the user actively picked this receipt, so its data replaces
+      // whatever an earlier pick prefilled. Without force only empty fields
+      // are filled (the AI-read-on-upload path, mid-typing).
+      setAmount((prev) => (total == null ? prev : force || !prev ? String(total) : prev))
+      setVatAmount((prev) => (vat == null ? prev : force || !prev ? String(vat) : prev))
       if (date) {
         setExpenseDate((prev) =>
-          prev === new Date().toISOString().slice(0, 10) ? date : prev,
+          force || prev === new Date().toISOString().slice(0, 10) ? date : prev,
         )
       }
       if (curr && (CURRENCIES as readonly string[]).includes(curr)) {
-        setCurrency((prev) => (prev === 'SEK' ? curr : prev))
+        setCurrency((prev) => (force || prev === 'SEK' ? curr : prev))
       }
-      setDescription((prev) =>
-        prev ? prev : [firstLine, supplier].filter(Boolean).join(', ') || prev,
-      )
+      const suggested = [firstLine, supplier].filter(Boolean).join(', ')
+      setDescription((prev) => (suggested && (force || !prev) ? suggested : prev))
     },
     [],
   )
@@ -436,7 +441,7 @@ export default function ExpenseClaimsPage() {
       const picked = inboxOptions.find((i) => i.id === wanted)
       if (picked) {
         setInboxChoice(picked.id)
-        if (picked.extracted) applyExtraction(picked.extracted)
+        if (picked.extracted) applyExtraction(picked.extracted, { force: true })
       }
     }
     router.replace('/expenses')
@@ -919,27 +924,36 @@ export default function ExpenseClaimsPage() {
 
               {upload.phase === 'idle' && inboxOptions.length > 0 && (
                 <div className="space-y-2">
-                  <Label htmlFor="ec_receipt">{t('form_receipt')}</Label>
-                  <Select
-                    value={inboxChoice}
-                    onValueChange={(v) => {
-                      setInboxChoice(v)
-                      const picked = inboxOptions.find((i) => i.id === v)
-                      if (picked?.extracted) applyExtraction(picked.extracted)
-                    }}
-                  >
-                    <SelectTrigger id="ec_receipt">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={NO_RECEIPT_VALUE}>{t('form_receipt_none')}</SelectItem>
-                      {inboxOptions.map((i) => (
-                        <SelectItem key={i.id} value={i.id}>
-                          {i.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Label>{t('form_receipt')}</Label>
+                  <div className="flex items-center gap-2">
+                    {inboxChoice !== NO_RECEIPT_VALUE ? (
+                      <Badge variant="secondary" className="gap-1.5 py-1 pl-2 pr-1 font-normal">
+                        <span className="max-w-[260px] truncate">
+                          {inboxOptions.find((i) => i.id === inboxChoice)?.label ?? inboxChoice}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5"
+                          aria-label={t('form_receipt_none')}
+                          onClick={() => setInboxChoice(NO_RECEIPT_VALUE)}
+                        >
+                          <X className="h-3 w-3" />
+                        </Button>
+                      </Badge>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">{t('form_receipt_none')}</span>
+                    )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowInboxPicker(true)}
+                    >
+                      {t('form_pick_from_inbox')}
+                    </Button>
+                  </div>
                 </div>
               )}
 
@@ -1282,6 +1296,18 @@ export default function ExpenseClaimsPage() {
               </Button>
             )}
           </DialogFooter>
+
+          <InboxDocumentPicker
+            open={showInboxPicker}
+            onClose={() => setShowInboxPicker(false)}
+            onSelect={(doc: AvailableInboxDoc) => {
+              setShowInboxPicker(false)
+              setInboxChoice(doc.inbox_item_id)
+              const picked = inboxOptions.find((i) => i.id === doc.inbox_item_id)
+              // An explicit pick wins: overwrite the previous receipt's prefill.
+              if (picked?.extracted) applyExtraction(picked.extracted, { force: true })
+            }}
+          />
 
           {showSaveTemplate && (
             <Dialog open onOpenChange={(open) => !open && setShowSaveTemplate(false)}>
