@@ -72,6 +72,20 @@ export interface RegisterExpenseClaimInput {
   claimant_name?: string
   document_id?: string
   inbox_item_id?: string
+  /**
+   * Custom verifikat lines in claim currency (the advanced booking step:
+   * reverse charge, templates, manual rows). When present they replace the
+   * generated cost/VAT lines entirely. Must balance, and must contain
+   * exactly one credit line on the liability account equal to `amount`.
+   */
+  lines?: ExpenseClaimLineInput[]
+}
+
+export interface ExpenseClaimLineInput {
+  account_number: string
+  debit_amount: number
+  credit_amount: number
+  line_description?: string | null
 }
 
 export type RegisterExpenseClaimResult =
@@ -83,6 +97,7 @@ export type RegisterExpenseClaimResult =
         | 'CLAIMANT_REQUIRED'
         | 'RATE_UNAVAILABLE'
         | 'VAT_EXCEEDS_AMOUNT'
+        | 'INVALID_LINES'
         | 'FISCAL_PERIOD_NOT_FOUND'
         | 'CLAIM_INSERT_FAILED'
       detail?: string
@@ -112,8 +127,38 @@ export async function registerExpenseClaim(
   }
   if (!claimantName) return { ok: false, code: 'CLAIMANT_REQUIRED' }
 
-  if (input.vat_amount < 0 || input.vat_amount >= input.amount) {
+  if (!input.lines && (input.vat_amount < 0 || input.vat_amount >= input.amount)) {
     return { ok: false, code: 'VAT_EXCEEDS_AMOUNT' }
+  }
+
+  // Custom lines: validate in claim currency before any conversion.
+  if (input.lines) {
+    const lines = input.lines
+    if (lines.length < 2 || lines.length > 20) {
+      return { ok: false, code: 'INVALID_LINES', detail: 'line count' }
+    }
+    for (const line of lines) {
+      const debit = line.debit_amount || 0
+      const credit = line.credit_amount || 0
+      if (!/^[0-9]{4}$/.test(line.account_number)) {
+        return { ok: false, code: 'INVALID_LINES', detail: `account ${line.account_number}` }
+      }
+      if (debit < 0 || credit < 0 || (debit > 0) === (credit > 0)) {
+        return { ok: false, code: 'INVALID_LINES', detail: 'each line needs exactly one side' }
+      }
+    }
+    const sumDebit = sumOre(lines.map((l) => l.debit_amount || 0))
+    const sumCredit = sumOre(lines.map((l) => l.credit_amount || 0))
+    if (Math.abs(sumDebit - sumCredit) > 0.005) {
+      return { ok: false, code: 'INVALID_LINES', detail: 'unbalanced' }
+    }
+    // The payout flow reimburses claim.amount_sek from the liability account,
+    // so the verifikat must carry exactly that credit: one line, right
+    // account, right amount.
+    const liabilityLines = lines.filter((l) => l.account_number === liability && (l.credit_amount || 0) > 0)
+    if (liabilityLines.length !== 1 || Math.abs((liabilityLines[0].credit_amount || 0) - input.amount) > 0.005) {
+      return { ok: false, code: 'INVALID_LINES', detail: `liability line must credit ${liability} with the gross amount` }
+    }
   }
 
   // Convert to SEK. The claim total is gross; VAT converts at the same rate
@@ -133,7 +178,17 @@ export async function registerExpenseClaim(
     }
   }
   const amountSek = roundOre(input.amount * rate)
-  const vatSek = roundOre(input.vat_amount * rate)
+  // With custom lines the claim's displayed VAT is the actually debited
+  // 2641 side (reverse-charge 2614/2645 pairs net to zero and stay out).
+  const vatSek = input.lines
+    ? roundOre(
+        sumOre(
+          input.lines
+            .filter((l) => l.account_number.startsWith('2641'))
+            .map((l) => (l.debit_amount || 0) * rate),
+        ),
+      )
+    : roundOre(input.vat_amount * rate)
   const netSek = roundOre(amountSek - vatSek)
 
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, input.expense_date)
@@ -167,6 +222,48 @@ export async function registerExpenseClaim(
   }
 
   const desc = `Utlägg: ${input.description} (${claimantName})`
+
+  let customLines: CreateJournalEntryLineInput[] | null = null
+  if (input.lines) {
+    // Convert each custom line at the claim rate; the per-line öre rounding
+    // can leave a residual, which lands on the largest non-liability line so
+    // the liability credit stays exactly amount_sek (the payout contract).
+    const converted = input.lines.map((l) => ({
+      account_number: l.account_number,
+      debit_amount: (l.debit_amount || 0) > 0 ? roundOre(l.debit_amount * rate) : 0,
+      credit_amount:
+        l.account_number === liability
+          ? amountSek
+          : (l.credit_amount || 0) > 0
+            ? roundOre(l.credit_amount * rate)
+            : 0,
+      line_description: l.line_description?.trim() || desc,
+    }))
+    const residual = roundOre(
+      sumOre(converted.map((l) => l.debit_amount)) - sumOre(converted.map((l) => l.credit_amount)),
+    )
+    if (residual !== 0) {
+      const target = converted
+        .filter((l) => l.account_number !== liability)
+        .sort((a, b) => (b.debit_amount + b.credit_amount) - (a.debit_amount + a.credit_amount))[0]
+      if (!target) return { ok: false, code: 'INVALID_LINES', detail: 'no adjustable line' }
+      if (target.debit_amount > 0) target.debit_amount = roundOre(target.debit_amount - residual)
+      else target.credit_amount = roundOre(target.credit_amount + residual)
+      if (target.debit_amount < 0 || target.credit_amount < 0) {
+        return { ok: false, code: 'INVALID_LINES', detail: 'rounding residual exceeds line' }
+      }
+    }
+    customLines = converted.map((l) => ({
+      account_number: l.account_number,
+      debit_amount: l.debit_amount,
+      credit_amount: l.credit_amount,
+      line_description: l.line_description,
+      ...(input.currency !== 'SEK' && l.account_number === liability
+        ? { currency: input.currency, amount_in_currency: roundOre(input.amount), exchange_rate: rate }
+        : {}),
+    }))
+  }
+
   const lines: CreateJournalEntryLineInput[] = [
     {
       account_number: input.expense_account,
@@ -203,7 +300,7 @@ export async function registerExpenseClaim(
     description: desc,
     source_type: 'expense_claim',
     source_id: claim.id,
-    lines,
+    lines: customLines ?? lines,
   }
 
   let journalEntryId: string

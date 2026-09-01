@@ -3572,9 +3572,23 @@ export const CreateExpenseClaimSchema = z
     claimant_name: z.string().trim().max(200).optional(),
     document_id: uuid.optional().nullable(),
     inbox_item_id: uuid.optional().nullable(),
+    /** Advanced booking: full verifikat lines in claim currency. Deep
+     *  validation (balance, liability line) happens in the service. */
+    lines: z
+      .array(
+        z.object({
+          account_number: accountNumberSchema,
+          debit_amount: z.number().nonnegative().default(0),
+          credit_amount: z.number().nonnegative().default(0),
+          line_description: z.string().trim().max(300).optional().nullable(),
+        }),
+      )
+      .min(2)
+      .max(20)
+      .optional(),
   })
   .superRefine((data, ctx) => {
-    if (data.vat_amount >= data.amount) {
+    if (!data.lines && data.vat_amount >= data.amount) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'Momsen måste vara mindre än totalbeloppet.',

@@ -215,6 +215,74 @@ describe('registerExpenseClaim', () => {
     })
   })
 
+  it('books custom lines (reverse charge) converted at the claim rate', async () => {
+    enqueue({ data: { id: 'claim-1' } }) // insert
+    enqueue({ data: null }) // update
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'Plaud Annual',
+      expense_date: '2026-09-01',
+      amount: 299.99,
+      vat_amount: 0,
+      currency: 'USD',
+      exchange_rate: 10,
+      expense_account: '4531',
+      claimant_name: 'Joakim',
+      lines: [
+        { account_number: '4531', debit_amount: 239.99, credit_amount: 0 },
+        { account_number: '6992', debit_amount: 60, credit_amount: 0 },
+        { account_number: '2645', debit_amount: 60, credit_amount: 0 },
+        { account_number: '2614', debit_amount: 0, credit_amount: 60 },
+        { account_number: '2893', debit_amount: 0, credit_amount: 299.99 },
+      ],
+    })
+
+    expect(result.ok).toBe(true)
+    const input = createJournalEntryMock.mock.calls[0][3]
+    const byAccount = Object.fromEntries(input.lines.map((l: { account_number: string }) => [l.account_number, l]))
+    expect(byAccount['2893'].credit_amount).toBe(2999.9)
+    expect(byAccount['4531'].debit_amount).toBeCloseTo(2399.9, 1)
+    expect(byAccount['2614'].credit_amount).toBe(600)
+    // Displayed VAT: no 2641 line, so the claim carries zero deductible VAT.
+    const insert = findCall('expense_claims', 'insert')
+    expect(insert?.[0]).toMatchObject({ vat_sek: 0 })
+  })
+
+  it('rejects unbalanced custom lines before touching the ledger', async () => {
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'x',
+      expense_date: '2026-09-01',
+      amount: 100,
+      vat_amount: 0,
+      currency: 'SEK',
+      expense_account: '5410',
+      claimant_name: 'Joakim',
+      lines: [
+        { account_number: '5410', debit_amount: 90, credit_amount: 0 },
+        { account_number: '2893', debit_amount: 0, credit_amount: 100 },
+      ],
+    })
+    expect(result).toMatchObject({ ok: false, code: 'INVALID_LINES' })
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects custom lines whose liability credit does not match the gross', async () => {
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'x',
+      expense_date: '2026-09-01',
+      amount: 100,
+      vat_amount: 0,
+      currency: 'SEK',
+      expense_account: '5410',
+      claimant_name: 'Joakim',
+      lines: [
+        { account_number: '5410', debit_amount: 90, credit_amount: 0 },
+        { account_number: '2893', debit_amount: 0, credit_amount: 90 },
+      ],
+    })
+    expect(result).toMatchObject({ ok: false, code: 'INVALID_LINES' })
+  })
+
   it('removes the claim row again when the booking throws', async () => {
     enqueue({ data: { id: 'claim-1' } }) // insert
     enqueue({ data: null }) // delete (cleanup)

@@ -13,6 +13,10 @@ import {
 ensureInitialized()
 
 const REGISTER_ERROR_MESSAGES: Record<string, { message: string; status: number }> = {
+  INVALID_LINES: {
+    message: 'Verifikatraderna är ogiltiga: kontrollera att raderna balanserar och att skuldraden matchar beloppet.',
+    status: 400,
+  },
   EMPLOYEE_NOT_FOUND: { message: 'Anställd hittades inte', status: 404 },
   CLAIMANT_REQUIRED: {
     message: 'Ange vem utlägget avser: välj anställd eller skriv ett namn.',

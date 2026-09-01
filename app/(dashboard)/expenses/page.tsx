@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { Receipt, Lock, Loader2, Upload, Sparkles, X } from 'lucide-react'
+import { Receipt, Lock, Loader2, Upload, Sparkles, X, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -30,11 +30,16 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Checkbox } from '@/components/ui/checkbox'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import BookingTemplatePicker from '@/components/bookkeeping/BookingTemplatePicker'
+import { TemplateForm } from '@/components/settings/TemplateForm'
+import { deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
+import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import { roundOre, sumOre } from '@/lib/money'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import type { BASAccount } from '@/types'
+import type { BASAccount, BookingTemplateLibrary } from '@/types'
 
 interface ExpenseClaim {
   id: string
@@ -81,6 +86,16 @@ const STATUS_VARIANT: Record<ExpenseClaim['status'], 'secondary' | 'success'> = 
 
 const OWNER_VALUE = 'owner'
 const NO_RECEIPT_VALUE = 'none'
+type VatMode = 'domestic' | 'reverse_eu' | 'reverse_noneu' | 'no_vat'
+interface BookingRow {
+  key: number
+  account: string
+  debit: string
+  credit: string
+}
+let bookingRowKey = 0
+const nextRowKey = () => ++bookingRowKey
+
 const CURRENCIES = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'] as const
 const UPLOAD_ACCEPT = '.pdf,.jpg,.jpeg,.png,.webp,.heic'
 /** Deferred inbox extraction usually lands within ~20 s; stop polling after this. */
@@ -102,6 +117,7 @@ type UploadState =
 
 export default function ExpenseClaimsPage() {
   const t = useTranslations('expense_claims')
+  const tTpl = useTranslations('settings_booking_templates')
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const router = useRouter()
@@ -129,6 +145,11 @@ export default function ExpenseClaimsPage() {
   const [vatAmount, setVatAmount] = useState('')
   const [currency, setCurrency] = useState('SEK')
   const [expenseAccount, setExpenseAccount] = useState('5410')
+  // Step 2 booking editor: VAT mode drives the generated rows; any manual
+  // edit or applied template freezes them into `bookingRows`.
+  const [vatMode, setVatMode] = useState<VatMode>('domestic')
+  const [bookingRows, setBookingRows] = useState<BookingRow[] | null>(null)
+  const [showSaveTemplate, setShowSaveTemplate] = useState(false)
   const [claimant, setClaimant] = useState(OWNER_VALUE)
   const [ownerName, setOwnerName] = useState('')
   const [inboxChoice, setInboxChoice] = useState(NO_RECEIPT_VALUE)
@@ -242,6 +263,93 @@ export default function ExpenseClaimsPage() {
   const parsedAmount = parseFloat(amount) || 0
   const parsedVat = parseFloat(vatAmount) || 0
   const netAmount = Math.max(0, parsedAmount - parsedVat)
+
+  // Rows generated from the VAT mode (claim currency). Reverse charge books
+  // the gross as basis and adds the 2614/2645 pair; the receipt VAT field
+  // only feeds the domestic 2641 row.
+  const generatedRows = useMemo<BookingRow[]>(() => {
+    if (vatMode === 'domestic') {
+      return [
+        { key: nextRowKey(), account: expenseAccount, debit: netAmount.toFixed(2), credit: '' },
+        ...(parsedVat > 0
+          ? [{ key: nextRowKey(), account: '2641', debit: parsedVat.toFixed(2), credit: '' }]
+          : []),
+      ]
+    }
+    if (vatMode === 'no_vat') {
+      return [{ key: nextRowKey(), account: expenseAccount, debit: parsedAmount.toFixed(2), credit: '' }]
+    }
+    const rc = roundOre(parsedAmount * 0.25)
+    return [
+      { key: nextRowKey(), account: expenseAccount, debit: parsedAmount.toFixed(2), credit: '' },
+      { key: nextRowKey(), account: '2645', debit: rc.toFixed(2), credit: '' },
+      { key: nextRowKey(), account: '2614', debit: '', credit: rc.toFixed(2) },
+    ]
+  }, [vatMode, expenseAccount, netAmount, parsedAmount, parsedVat])
+
+  const editorRows = bookingRows ?? generatedRows
+  const rowSum = (side: 'debit' | 'credit') => sumOre(editorRows.map((r) => parseFloat(r[side]) || 0))
+  const totalDebit = rowSum('debit')
+  const totalCredit = roundOre(rowSum('credit') + parsedAmount)
+  const bookingBalanced = Math.abs(totalDebit - totalCredit) <= 0.005
+  const bookingRowsValid = editorRows.every((r) => {
+    const d = parseFloat(r.debit) || 0
+    const c = parseFloat(r.credit) || 0
+    return /^[0-9]{4}$/.test(r.account) && (d > 0) !== (c > 0)
+  })
+
+  const applyVatMode = (mode: VatMode) => {
+    setVatMode(mode)
+    setBookingRows(null)
+    // Suggest the ruta-bearing basis account when entering a reverse mode.
+    if (mode === 'reverse_eu' && !expenseAccount.startsWith('45')) setExpenseAccount('4535')
+    if (mode === 'reverse_noneu' && !expenseAccount.startsWith('45')) setExpenseAccount('4531')
+  }
+
+  const editRow = (key: number, patch: Partial<BookingRow>) => {
+    const base = bookingRows ?? editorRows
+    setBookingRows(base.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+  }
+  const removeRow = (key: number) => {
+    const base = bookingRows ?? editorRows
+    setBookingRows(base.filter((r) => r.key !== key))
+  }
+  const addRow = () => {
+    const base = bookingRows ?? editorRows
+    setBookingRows([...base, { key: nextRowKey(), account: '', debit: '', credit: '' }])
+  }
+
+  /** Booking templates: drop the template's money leg (19xx or the claim's
+   *  liability account): the locked liability row below carries it. */
+  const applyBookingTemplate = (templateLines: FormLine[]) => {
+    setBookingRows(
+      templateLines
+        .filter((l) => !l.account_number.startsWith('19') && l.account_number !== liabilityAccount)
+        .map((l) => ({
+          key: nextRowKey(),
+          account: l.account_number,
+          debit: l.debit_amount || '',
+          credit: l.credit_amount || '',
+        })),
+    )
+  }
+
+  const templateSeedLines = useMemo(
+    () =>
+      deriveTemplateLinesFromBooking(
+        [
+          ...editorRows.map((r) => ({
+            account_number: r.account,
+            debit_amount: r.debit,
+            credit_amount: r.credit,
+            line_description: '',
+          })),
+          { account_number: liabilityAccount, debit_amount: '', credit_amount: parsedAmount.toFixed(2), line_description: '' },
+        ],
+        Object.fromEntries(accounts.map((a) => [a.account_number, a.account_name])),
+      ),
+    [editorRows, liabilityAccount, parsedAmount, accounts],
+  )
   const claimantDisplay =
     claimant === OWNER_VALUE
       ? ownerName || t('owner_fallback_name')
@@ -269,6 +377,9 @@ export default function ExpenseClaimsPage() {
     setClaimant(OWNER_VALUE)
     setInboxChoice(NO_RECEIPT_VALUE)
     setUpload({ phase: 'idle' })
+    setVatMode('domestic')
+    setBookingRows(null)
+    setShowSaveTemplate(false)
     setStep(1)
     setCreating(false)
   }
@@ -445,6 +556,16 @@ export default function ExpenseClaimsPage() {
       }
       if (claimant === OWNER_VALUE) body.claimant_name = ownerName || t('owner_fallback_name')
       else body.employee_id = claimant
+      // The booking editor's rows plus the locked liability line; amounts in
+      // claim currency, converted by the service at the booking rate.
+      body.lines = [
+        ...editorRows.map((row) => ({
+          account_number: row.account,
+          debit_amount: parseFloat(row.debit) || 0,
+          credit_amount: parseFloat(row.credit) || 0,
+        })),
+        { account_number: liabilityAccount, debit_amount: 0, credit_amount: parsedAmount },
+      ]
       if (uploaded) {
         body.inbox_item_id = uploaded.inboxItemId
         if (uploaded.documentId) body.document_id = uploaded.documentId
@@ -909,54 +1030,144 @@ export default function ExpenseClaimsPage() {
             </div>
           ) : (
             <div className="space-y-4">
-              {/* Step 2: the full verifikat, with a searchable cost account. */}
-              <div className="space-y-2">
-                <Label>{t('form_expense_account')}</Label>
-                <AccountCombobox
-                  value={expenseAccount}
-                  accounts={accounts}
-                  onChange={setExpenseAccount}
-                />
+              {/* Step 2: VAT mode + templates + an editable verifikat grid.
+                  The liability row is locked: the payout flow reimburses
+                  exactly the claim gross from that account. */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>{t('form_vat_mode')}</Label>
+                  <Select value={vatMode} onValueChange={(v) => applyVatMode(v as VatMode)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="domestic">{t('vat_mode_domestic')}</SelectItem>
+                      <SelectItem value="reverse_eu">{t('vat_mode_reverse_eu')}</SelectItem>
+                      <SelectItem value="reverse_noneu">{t('vat_mode_reverse_noneu')}</SelectItem>
+                      <SelectItem value="no_vat">{t('vat_mode_none')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>{t('form_expense_account')}</Label>
+                  <AccountCombobox
+                    value={expenseAccount}
+                    accounts={accounts}
+                    onChange={(v) => {
+                      setExpenseAccount(v)
+                      setBookingRows(null)
+                    }}
+                  />
+                </div>
+              </div>
+              {(vatMode === 'reverse_eu' || vatMode === 'reverse_noneu') && (
+                <p className="text-xs text-muted-foreground">
+                  {vatMode === 'reverse_eu' ? t('vat_mode_reverse_eu_hint') : t('vat_mode_reverse_noneu_hint')}
+                </p>
+              )}
+              <div className="flex flex-wrap items-center gap-2">
+                <BookingTemplatePicker defaultAmount={parsedAmount || undefined} onApply={applyBookingTemplate} />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowSaveTemplate(true)}
+                  disabled={templateSeedLines.length < 2}
+                >
+                  {t('save_as_template')}
+                </Button>
               </div>
 
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
                     <th className={TH_CLASS}>{t('preview_account')}</th>
-                    <th className={`${TH_CLASS} text-right`}>{t('preview_debit')}</th>
-                    <th className={`${TH_CLASS} text-right`}>{t('preview_credit')}</th>
+                    <th className={`${TH_CLASS} w-[110px] text-right`}>{t('preview_debit')}</th>
+                    <th className={`${TH_CLASS} w-[110px] text-right`}>{t('preview_credit')}</th>
+                    <th className={`${TH_CLASS} w-[36px]`} aria-hidden="true"></th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr>
-                    <td className={TD_CLASS}>
-                      {expenseAccount}{' '}
-                      <span className="text-muted-foreground">{accountName(expenseAccount)}</span>
-                    </td>
-                    <td className={`${TD_CLASS} text-right tabular-nums`}>
-                      {netAmount.toFixed(2)} {currency}
-                    </td>
-                    <td className={`${TD_CLASS} text-right`} />
-                  </tr>
-                  {parsedVat > 0 && (
-                    <tr>
+                  {editorRows.map((row) => (
+                    <tr key={row.key}>
+                      <td className={`${TD_CLASS} pr-2`}>
+                        <AccountCombobox
+                          value={row.account}
+                          accounts={accounts}
+                          onChange={(v) => editRow(row.key, { account: v })}
+                        />
+                      </td>
+                      <td className={`${TD_CLASS} text-right`}>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="text-right tabular-nums"
+                          value={row.debit}
+                          onChange={(e) => editRow(row.key, { debit: e.target.value, credit: '' })}
+                        />
+                      </td>
+                      <td className={`${TD_CLASS} text-right`}>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="text-right tabular-nums"
+                          value={row.credit}
+                          onChange={(e) => editRow(row.key, { credit: e.target.value, debit: '' })}
+                        />
+                      </td>
                       <td className={TD_CLASS}>
-                        2641 <span className="text-muted-foreground">{accountName('2641')}</span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          aria-label={t('remove_row')}
+                          onClick={() => removeRow(row.key)}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
                       </td>
-                      <td className={`${TD_CLASS} text-right tabular-nums`}>
-                        {parsedVat.toFixed(2)} {currency}
-                      </td>
-                      <td className={`${TD_CLASS} text-right`} />
                     </tr>
-                  )}
+                  ))}
                   <tr>
                     <td className={TD_CLASS}>
-                      {liabilityAccount}{' '}
-                      <span className="text-muted-foreground">{accountName(liabilityAccount)}</span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <Lock className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
+                        {liabilityAccount}{' '}
+                        <span className="text-muted-foreground">{accountName(liabilityAccount)}</span>
+                      </span>
                     </td>
                     <td className={`${TD_CLASS} text-right`} />
                     <td className={`${TD_CLASS} text-right tabular-nums`}>
                       {parsedAmount.toFixed(2)} {currency}
+                    </td>
+                    <td className={TD_CLASS} />
+                  </tr>
+                  <tr>
+                    <td className={`${TD_CLASS} font-medium`}>
+                      <Button type="button" variant="ghost" size="sm" className="-ml-2" onClick={addRow}>
+                        <Plus className="mr-1 h-3.5 w-3.5" />
+                        {t('add_row')}
+                      </Button>
+                    </td>
+                    <td className={`${TD_CLASS} text-right font-medium tabular-nums`}>
+                      {totalDebit.toFixed(2)}
+                    </td>
+                    <td className={`${TD_CLASS} text-right font-medium tabular-nums`}>
+                      {totalCredit.toFixed(2)}
+                    </td>
+                    <td className={TD_CLASS}>
+                      {bookingBalanced && bookingRowsValid ? (
+                        <Badge variant="outline" className="whitespace-nowrap font-normal text-positive">
+                          {t('balanced')}
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="whitespace-nowrap font-normal text-attn">
+                          {t('unbalanced')}
+                        </Badge>
+                      )}
                     </td>
                   </tr>
                 </tbody>
@@ -997,13 +1208,47 @@ export default function ExpenseClaimsPage() {
               <Button
                 type="button"
                 onClick={handleCreate}
-                disabled={submitting || upload.phase === 'uploading'}
+                disabled={submitting || upload.phase === 'uploading' || !bookingBalanced || !bookingRowsValid}
               >
                 {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {t('form_register')}
               </Button>
             )}
           </DialogFooter>
+
+          {showSaveTemplate && (
+            <Dialog open onOpenChange={(open) => !open && setShowSaveTemplate(false)}>
+              <DialogContent className="sm:max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>{t('save_as_template')}</DialogTitle>
+                </DialogHeader>
+                <TemplateForm
+                  mode="create"
+                  entityLabels={{
+                    all: tTpl('entity_all'),
+                    enskild_firma: tTpl('entity_enskild_firma'),
+                    aktiebolag: tTpl('entity_aktiebolag'),
+                  }}
+                  initialTemplate={{
+                    id: '',
+                    company_id: null,
+                    team_id: null,
+                    created_by: null,
+                    name: description.trim(),
+                    description: '',
+                    category: 'other',
+                    entity_type: 'all',
+                    lines: templateSeedLines,
+                    is_system: false,
+                    is_active: true,
+                    created_at: '',
+                    updated_at: '',
+                  } satisfies BookingTemplateLibrary}
+                  onSaved={() => setShowSaveTemplate(false)}
+                />
+              </DialogContent>
+            </Dialog>
+          )}
         </DialogContent>
       </Dialog>
 
