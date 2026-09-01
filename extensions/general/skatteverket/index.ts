@@ -12,6 +12,8 @@ import { TimeoutError } from '@/lib/http/fetch-with-timeout'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { buildAuthorizeUrl, exchangeCodeForTokens, generatePkcePair } from './lib/oauth'
+import { skatteverketConnectorMode, startConnectorAuthorization } from './lib/connector-mode'
+import { isConnectorState, verifyConnectorState } from '@/lib/connect/hosted/state'
 import { storeTokens, getTokens, deleteTokens, getTokenHealth } from './lib/token-store'
 import { skvRequest, skvRequestWithAuth, SkatteverketAuthError, getSkatteverketEnvironment } from './lib/api-client'
 import { writeSkatteverketAudit } from './lib/audit'
@@ -283,7 +285,7 @@ export const skatteverketExtension: Extension = {
         if (blocked) return blocked
 
         const state = crypto.randomUUID()
-        const redirectUri = `${getSkvOauthBaseUrl()}/api/extensions/ext/skatteverket/callback`
+        let redirectUri = `${getSkvOauthBaseUrl()}/api/extensions/ext/skatteverket/callback`
 
         // Optional: where to send the user after the BankID round-trip.
         // Allowlisted to internal in-app paths to avoid open-redirect abuse.
@@ -299,6 +301,44 @@ export const skatteverketExtension: Extension = {
         // tokens unless PKCE is present, so we always send it.
         const pkce = generatePkcePair()
 
+        // Connector mode (self-host with a connector key and no own SKV
+        // client): the broker builds the authorize URL against Arcim's
+        // registered SKV client and OUR hosted redirect_uri; the hosted
+        // callback bounces the browser back to THIS instance's /callback with
+        // the code. The broker's redirect_uri replaces the local one (the
+        // token exchange must repeat the redirect_uri SKV saw), and the
+        // broker's signed connector_state is persisted for that exchange.
+        const connector = skatteverketConnectorMode()
+        let authorizeUrl: string
+        let connectorState: string | null = null
+        if (connector) {
+          try {
+            const started = await startConnectorAuthorization(connector, {
+              companyRef: ctx.companyId,
+              returnUrl: redirectUri,
+              state,
+              codeChallenge: pkce.challenge,
+            })
+            redirectUri = started.redirectUri
+            connectorState = started.connectorState
+            authorizeUrl = started.authorizeUrl
+          } catch (err) {
+            log.error('connector authorize-url failed', err as Error, { companyId: ctx.companyId })
+            return NextResponse.json(
+              {
+                error:
+                  'Kunde inte starta Skatteverket-anslutningen via connectorn. ' +
+                  'Kontrollera GNUBOK_CONNECTOR_KEY och anslutningsläget på /api/connector/status.',
+              },
+              { status: 502 },
+            )
+          }
+        } else {
+          authorizeUrl = buildAuthorizeUrl(redirectUri, state, {
+            codeChallenge: pkce.challenge,
+          })
+        }
+
         // Store state for CSRF validation in callback. The user id is stored
         // alongside it because the callback runs on the OAuth host (see
         // getSkvOauthBaseUrl), where the browser carries no session cookies
@@ -307,12 +347,10 @@ export const skatteverketExtension: Extension = {
         await ctx.settings.set('oauth_user_id', ctx.userId)
         await ctx.settings.set('oauth_redirect_uri', redirectUri)
         await ctx.settings.set('oauth_code_verifier', pkce.verifier)
+        if (connectorState) await ctx.settings.set('oauth_connector_state', connectorState)
+        else await ctx.settings.clear('oauth_connector_state')
         if (returnTo) await ctx.settings.set('oauth_return_to', returnTo)
         else await ctx.settings.clear('oauth_return_to')
-
-        const authorizeUrl = buildAuthorizeUrl(redirectUri, state, {
-          codeChallenge: pkce.challenge,
-        })
 
         return NextResponse.redirect(authorizeUrl)
       },
@@ -333,6 +371,27 @@ export const skatteverketExtension: Extension = {
         const code = url.searchParams.get('code')
         const state = url.searchParams.get('state')
         const error = url.searchParams.get('error')
+
+        // Connector branch: a self-hosted instance started this SKV consent
+        // through the /api/connect/skv broker, which registered OUR redirect
+        // uri and a signed connector state. We never exchange the code here
+        // (the instance does, through the broker's /oauth/token): just bounce
+        // the browser back to the instance with the code + its original
+        // state, so no per-instance redirect uri is registered at SKV.
+        if (isConnectorState(state)) {
+          const verified = verifyConnectorState(state as string)
+          if (!verified.ok || verified.payload.svc !== 'skv') {
+            return NextResponse.redirect(`${appUrl}/?connector_error=${encodeURIComponent(verified.ok ? 'wrong_service' : verified.reason)}`)
+          }
+          const ret = new URL(verified.payload.ret)
+          if (error) ret.searchParams.set('error', error)
+          const errorDescription = url.searchParams.get('error_description')
+          if (errorDescription) ret.searchParams.set('error_description', errorDescription)
+          if (code) ret.searchParams.set('code', code)
+          if (verified.payload.st) ret.searchParams.set('state', verified.payload.st)
+          ret.searchParams.set('connector_state', state as string)
+          return NextResponse.redirect(ret.toString())
+        }
 
         // Injection-safety invariants: appUrl comes from NEXT_PUBLIC_APP_URL
         // (deployment configuration, never user input), and jsLiteral
@@ -505,6 +564,15 @@ export const skatteverketExtension: Extension = {
         // PKCE rollout: once those drain, this can be made required.
         const codeVerifier = (await readSetting('oauth_code_verifier')) || undefined
 
+        // Connector mode: the broker's signed state, stored by /authorize
+        // (authoritative) with the hosted callback's bounced query param as
+        // fallback for a row written before the store landed. Required by the
+        // broker's token exchange; undefined on the direct path.
+        const connectorState =
+          (await readSetting('oauth_connector_state')) ||
+          url.searchParams.get('connector_state') ||
+          undefined
+
         // Optional in-app destination set by /authorize?return_to=...
         const returnTo = await readSetting('oauth_return_to')
         const successPath = returnTo
@@ -516,7 +584,7 @@ export const skatteverketExtension: Extension = {
             : `/reports?tab=vat-declaration&skv_error=${encodeURIComponent(msg)}`
 
         try {
-          const tokens = await exchangeCodeForTokens(code, redirectUri, codeVerifier)
+          const tokens = await exchangeCodeForTokens(code, redirectUri, codeVerifier, connectorState)
           await storeTokens(db, userId, tokens, companyId)
 
           // Clean up CSRF state + the one-shot user id/return_to/PKCE verifier.
@@ -525,7 +593,7 @@ export const skatteverketExtension: Extension = {
             .delete()
             .eq('company_id', companyId)
             .eq('extension_id', 'skatteverket')
-            .in('key', ['oauth_state', 'oauth_user_id', 'oauth_return_to', 'oauth_code_verifier'])
+            .in('key', ['oauth_state', 'oauth_user_id', 'oauth_return_to', 'oauth_code_verifier', 'oauth_connector_state'])
 
           // Refresh Skatteverket-derived data AFTER the response is sent.
           // Right-after-consent is still the one reliable window for a
@@ -565,7 +633,7 @@ export const skatteverketExtension: Extension = {
               .delete()
               .eq('company_id', companyId)
               .eq('extension_id', 'skatteverket')
-              .in('key', ['oauth_state', 'oauth_user_id', 'oauth_return_to', 'oauth_code_verifier'])
+              .in('key', ['oauth_state', 'oauth_user_id', 'oauth_return_to', 'oauth_code_verifier', 'oauth_connector_state'])
           } catch (cleanupErr) {
             log.error('oauth state cleanup after failed exchange failed', cleanupErr, { companyId })
           }

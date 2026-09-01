@@ -128,6 +128,48 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(decodeURIComponent(location)).toContain('Starta bankkopplingen på nytt')
   })
 
+  it('threads connector_state from the query into createSession (connector mode)', async () => {
+    // In connector mode the hosted callback bounces the browser back here with
+    // the signed connector_state echoed alongside code + the instance's own
+    // oauth_state. createSession must forward it so the bank proxy binds the
+    // /sessions exchange to the pending ledger row it signed at /auth time.
+    mockFrom.mockImplementation(() =>
+      mockChain({
+        data: { id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'TestBank', status: 'pending' },
+        error: null,
+      }),
+    )
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-1',
+      accounts: [],
+      access: { valid_until: '2027-12-31T00:00:00Z' },
+      aspsp: { name: 'TestBank', country: 'SE' },
+    })
+
+    await GET(makeRequest({ code: 'auth-code', state: 'valid-state', connector_state: 'signed-connector-state' }))
+
+    expect(mockCreateSession).toHaveBeenCalledWith('auth-code', 'signed-connector-state')
+  })
+
+  it('passes undefined connector_state on the direct path (no connector_state in the query)', async () => {
+    mockFrom.mockImplementation(() =>
+      mockChain({
+        data: { id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'TestBank', status: 'pending' },
+        error: null,
+      }),
+    )
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-1',
+      accounts: [],
+      access: { valid_until: '2027-12-31T00:00:00Z' },
+      aspsp: { name: 'TestBank', country: 'SE' },
+    })
+
+    await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+
+    expect(mockCreateSession).toHaveBeenCalledWith('auth-code', undefined)
+  })
+
   it('writes pending_selection and streams a finalizing page that redirects to the picker', async () => {
     const capturedUpdates: Record<string, unknown>[] = []
     let callIndex = 0

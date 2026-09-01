@@ -14,6 +14,7 @@ import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
+import { computeLineNet } from '@/lib/invoices/line-amounts'
 import {
   DEDUCTION_LINE_ERRORS,
   HOUSEWORK_TYPE_VALUES,
@@ -403,6 +404,10 @@ export const CreateInvoiceItemSchema = z
     quantity: z.number(),
     unit: z.string(),
     unit_price: z.number(),
+    // Percentage discount on the line (rabatt i procent per artikelrad).
+    // line_total and vat_amount are computed NET of this server-side
+    // (lib/invoices/line-amounts.ts); the client never sends a total.
+    discount_percent: z.number().min(0).max(100).nullable().optional(),
     vat_rate: z.number().min(0).max(100).optional(),
     // Article linkage. `article_id` ties the line to a catalog article (text
     // rows omit it). `revenue_account` is the legacy wire name for the optional
@@ -459,7 +464,8 @@ export const CreateInvoiceItemSchema = z
           message: 'ROT/RUT-rader kan inte periodiseras',
         })
       }
-      if (item.quantity * item.unit_price <= 0) {
+      // Net of any line discount: a 100 % rebated row has nothing to defer.
+      if (computeLineNet(item.quantity, item.unit_price, item.discount_percent) <= 0) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['accrual_period_start'],
@@ -520,6 +526,10 @@ const CreateInvoiceBaseSchema = z.object({
   document_type: InvoiceDocumentTypeSchema.optional(),
   your_reference: z.string().optional(),
   our_reference: z.string().optional(),
+  // Fakturamärkning: buyer-required marking (kostnadsställe/projekt/PO),
+  // separate from your_reference. Printed on the PDF and mapped to Peppol
+  // BT-10 BuyerReference when set.
+  invoice_marking: z.string().max(200).optional(),
   notes: z.string().optional(),
   // Optional online payment link (manual MVP): the user pastes a link created
   // in their PSP dashboard (e.g. a Stripe Payment Link). https-only because the
@@ -2669,6 +2679,28 @@ export const OpeningBalanceExecuteSchema = z.object({
     credit_amount: nonNegativeAmount,
   })).min(2, 'At least two lines are required for double-entry'),
 })
+
+export const OpeningBalanceCorrectSchema = OpeningBalanceExecuteSchema.extend({
+  // Also apply the correction's per-account delta to subsequent years' linked
+  // IB verifikat (Fortnox/SIE migrations book one IB per imported year).
+  cascade: z.boolean().optional(),
+})
+
+/**
+ * Inline (no-storno) IB correction: strike changed lines and add replacements
+ * inside the SAME verifikat, BFL 5 kap 5 § track 2. Only for open, unlocked
+ * years; the correct_entry_lines_inline RPC enforces the full envelope.
+ */
+export const OpeningBalanceCorrectInlineSchema = z
+  .object({
+    fiscal_period_id: uuid,
+    strike_line_ids: z.array(uuid).max(200).default([]),
+    new_lines: z.array(InlineRattelseLineSchema).max(100).default([]),
+    cascade: z.boolean().optional(),
+  })
+  .refine((body) => body.strike_line_ids.length > 0 || body.new_lines.length > 0, {
+    message: 'Rättelsen måste stryka eller lägga till minst en rad',
+  })
 
 // ============================================================
 // Register import schemas (customers, suppliers)

@@ -39,6 +39,10 @@
       "schedule": "0 3 * * *"
     },
     {
+      "path": "/api/documents/reanchor/cron",
+      "schedule": "30 3 * * *"
+    },
+    {
       "path": "/api/sandbox/cleanup/cron",
       "schedule": "0 4 * * *"
     },
@@ -97,6 +101,14 @@
     {
       "path": "/api/receipt-hunt/cron",
       "schedule": "30 5 * * *"
+    },
+    {
+      "path": "/api/notifications/bookkeeping-digest/cron",
+      "schedule": "45 5 * * *"
+    },
+    {
+      "path": "/api/notifications/multi-user-grace/cron",
+      "schedule": "0 7 * * *"
     },
     {
       "path": "/api/peppol/inbound/cron",

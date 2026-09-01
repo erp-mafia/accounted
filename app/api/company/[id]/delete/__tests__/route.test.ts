@@ -24,7 +24,10 @@ const mockCreateServiceClient = vi.mocked(createServiceClient)
 
 type Row = { data: unknown; error: unknown }
 
-function mockService(rowsByTable: Record<string, Row[]>) {
+function mockService(
+  rowsByTable: Record<string, Row[]>,
+  updateResults: Record<string, Row> = {},
+) {
   const insertSpy = vi.fn().mockResolvedValue({ data: null, error: null })
   const updateSpies: Record<string, ReturnType<typeof vi.fn>> = {}
 
@@ -32,12 +35,22 @@ function mockService(rowsByTable: Record<string, Row[]>) {
     const queue = rowsByTable[table] ?? []
     const next = queue.shift() ?? { data: null, error: null }
 
-    const updateFn = vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        eq: vi.fn().mockResolvedValue({ data: null, error: null }),
-        then: (resolve: (v: unknown) => void) => resolve({ data: null, error: null }),
-      }),
-    })
+    // Awaitable at any depth: update().eq(...), update().eq(...).eq(...),
+    // update().eq(...).neq(...).select(...) all resolve to the table's
+    // configured update result (default: one revoked row, no error).
+    const updateResult = updateResults[table] ?? { data: [{ id: `${table}-1` }], error: null }
+    const updateChain: {
+      eq: ReturnType<typeof vi.fn>
+      neq: ReturnType<typeof vi.fn>
+      select: ReturnType<typeof vi.fn>
+      then: (resolve: (v: unknown) => void) => void
+    } = {
+      eq: vi.fn(() => updateChain),
+      neq: vi.fn(() => updateChain),
+      select: vi.fn(() => updateChain),
+      then: (resolve: (v: unknown) => void) => resolve(updateResult),
+    }
+    const updateFn = vi.fn().mockReturnValue(updateChain)
     updateSpies[table] = updateFn
 
     return {
@@ -243,5 +256,118 @@ describe('POST /api/company/[id]/delete', () => {
     // Event emitted
     expect(emitted).toHaveLength(1)
     expect(emitted[0]).toMatchObject({ companyId: 'c1', userId: 'user-1' })
+  })
+
+  it('revokes store connections on archive so the store-uniqueness indexes free up', async () => {
+    // Regression: archived companies are hidden by user_company_ids(), so an
+    // 'active' connection left behind blocks reconnecting the same store from
+    // a new company ("Butiken är redan ansluten till ett företag") with no
+    // user-reachable disconnect.
+    mockAuth('user-1')
+    const { updateSpies } = mockService({
+      companies: [{ data: { id: 'c1', name: 'Acme AB', archived_at: null }, error: null }],
+      company_members: [{ data: { role: 'owner' }, error: null }],
+    })
+
+    const req = createMockRequest('/api/company/c1/delete', {
+      method: 'POST',
+      body: { confirm_name: 'Acme AB' },
+    })
+    const { status } = await parseJsonResponse(
+      await POST(req, createMockRouteParams({ id: 'c1' }))
+    )
+    expect(status).toBe(200)
+
+    expect(updateSpies.woocommerce_connections).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'revoked',
+        disconnected_at: expect.any(String),
+        consumer_key_encrypted: null,
+        consumer_secret_encrypted: null,
+        oauth_state: null,
+      })
+    )
+    expect(updateSpies.shopify_connections).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'revoked',
+        disconnected_at: expect.any(String),
+        client_id_encrypted: null,
+        client_secret_encrypted: null,
+      })
+    )
+    expect(updateSpies.stripe_connections).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'revoked',
+        disconnected_at: expect.any(String),
+        oauth_state: null,
+      })
+    )
+  })
+
+  it('writes audit_log rows for each revoked connection', async () => {
+    mockAuth('user-1')
+    const { insertSpy } = mockService({
+      companies: [{ data: { id: 'c1', name: 'Acme AB', archived_at: null }, error: null }],
+      company_members: [{ data: { role: 'owner' }, error: null }],
+    })
+
+    const req = createMockRequest('/api/company/c1/delete', {
+      method: 'POST',
+      body: { confirm_name: 'Acme AB' },
+    })
+    const { status } = await parseJsonResponse(
+      await POST(req, createMockRouteParams({ id: 'c1' }))
+    )
+    expect(status).toBe(200)
+
+    // One audit insert per revoked connection row.
+    for (const table of [
+      'woocommerce_connections',
+      'shopify_connections',
+      'stripe_connections',
+    ]) {
+      expect(insertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'UPDATE',
+          table_name: table,
+          record_id: `${table}-1`,
+          company_id: 'c1',
+          user_id: 'user-1',
+          new_state: expect.objectContaining({ status: 'revoked' }),
+        }),
+      )
+    }
+  })
+
+  it('still archives the company when a connection revoke update fails', async () => {
+    mockAuth('user-1')
+    const { insertSpy, updateSpies } = mockService(
+      {
+        companies: [{ data: { id: 'c1', name: 'Acme AB', archived_at: null }, error: null }],
+        company_members: [{ data: { role: 'owner' }, error: null }],
+      },
+      {
+        woocommerce_connections: { data: null, error: { message: 'boom' } },
+      },
+    )
+
+    const req = createMockRequest('/api/company/c1/delete', {
+      method: 'POST',
+      body: { confirm_name: 'Acme AB' },
+    })
+    const { status } = await parseJsonResponse(
+      await POST(req, createMockRouteParams({ id: 'c1' }))
+    )
+
+    // Non-fatal by design: the archive already happened.
+    expect(status).toBe(200)
+    expect(updateSpies.companies).toHaveBeenCalled()
+    // No audit rows for the failed table, but the other tables still processed.
+    expect(insertSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ table_name: 'woocommerce_connections' }),
+    )
+    expect(insertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ table_name: 'shopify_connections' }),
+    )
   })
 })

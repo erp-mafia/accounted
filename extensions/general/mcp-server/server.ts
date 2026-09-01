@@ -47,6 +47,7 @@ import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { dbError } from '@/lib/errors/db-error'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
@@ -59,6 +60,7 @@ import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
 import { eventBus } from '@/lib/events/bus'
 import { getVatRules, getPermittedVatRates, getArticleVatRateAdoptionSet } from '@/lib/invoices/vat-rules'
 import { validateDeductionLines } from '@/lib/invoices/rot-rut-rules'
+import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { getBranding } from '@/lib/branding/service'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
@@ -266,7 +268,7 @@ import {
 } from '@/lib/core/documents/document-service'
 import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
 import { createHash } from 'node:crypto'
-import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema, AgentExtractionSchema } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema, AgentExtractionSchema, fetchOwnCompanyIdentity } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 import { mirrorExtractionToDocument } from '@/extensions/general/invoice-inbox/lib/mirror-extraction'
 // Skatteverket filing tools (PR5). Cross-extension lib import, same sanctioned
 // pattern as invoice-inbox above: the CI guard only checks lib/, app/api/,
@@ -303,6 +305,8 @@ type StagedInvoiceLineInput = {
   quantity: number
   unit?: string
   unit_price?: number
+  /** Line discount 0-100 (rabatt i procent); totals are computed net of it. */
+  discount_percent?: number
   vat_rate?: number
   article_id?: string
   revenue_account?: string | null
@@ -370,10 +374,21 @@ function resolveInvoiceLineFromArticle(
       quantity: 0,
       unit: '',
       unit_price: 0,
+      discount_percent: 0,
       vat_rate: 0,
     }
   }
   if (!item.quantity || item.quantity <= 0) throw new Error(`Item ${lineNo}: quantity must be positive`)
+  // Strict typeof: a host that skips inputSchema validation could send a
+  // string, which JS comparisons would coerce past a bare range check while
+  // hasLineDiscount (typeof === 'number') then ignores it in the totals.
+  if (
+    item.discount_percent != null &&
+    (typeof item.discount_percent !== 'number' ||
+      !(item.discount_percent >= 0 && item.discount_percent <= 100))
+  ) {
+    throw new Error(`Item ${lineNo}: discount_percent must be a number between 0 and 100`)
+  }
   if (item.article_id && !article) {
     throw new Error(`Item ${lineNo}: article ${item.article_id} not found in this company. Use gnubok_list_articles to find valid IDs.`)
   }
@@ -423,6 +438,15 @@ interface ActorContext {
    * single agent conversation. Not used for auth.
    */
   sessionId?: string | null
+  /**
+   * Approval authority for this key in SEK: the largest amount it may commit
+   * with no human in the loop, or null/undefined for unlimited (the default,
+   * and what every key created before this column existed has).
+   *
+   * Only meaningful for `type: 'api_key'`. Read once at auth time so the
+   * ceiling cannot drift mid-request.
+   */
+  unattendedCommitLimit?: number | null
   /**
    * Distribution-channel marker from `X-Accounted-Client`, the legacy
    * `X-Gnubok-Client`, or the `client` query param (e.g. 'openclaw').
@@ -602,7 +626,12 @@ async function createDocumentInboxItem(
     if (existing) return existing
   }
 
-  const extraction = await extractInvoiceFields({ buffer, mimeType, fileName })
+  const extraction = await extractInvoiceFields({
+    buffer,
+    mimeType,
+    fileName,
+    ownCompany: await fetchOwnCompanyIdentity(supabase, companyId),
+  })
   const { data: extracted } = extraction
   // uploadDocument()/completePendingDocumentUpload() were told this inbox
   // item owns extraction, so the document-extraction extension yielded;
@@ -4886,6 +4915,7 @@ export const tools: McpTool[] = [
         ...(dimensionsBlock ? { dimensions: dimensionsBlock } : {}),
         ...(ledgerDigest ? { ledger_context: ledgerDigest } : {}),
         ...(skvConnection ? { skatteverket_connection: skvConnection } : {}),
+
         // Static per-workflow loadouts (issue #1098): lets a deferred-loading
         // harness batch-load a whole workflow cluster in one call. Validated
         // against the tool registry at module init (assertRecommendedLoadoutsValid).
@@ -6282,6 +6312,7 @@ export const tools: McpTool[] = [
         remaining_amount: { type: ['number', 'null'] },
         your_reference: { type: ['string', 'null'] },
         our_reference: { type: ['string', 'null'] },
+        invoice_marking: { type: ['string', 'null'], description: 'Fakturamärkning (buyer marking), separate from your_reference' },
         notes: { type: ['string', 'null'] },
         default_dimensions: { type: 'object', additionalProperties: { type: 'string' } },
         editable_draft: { type: 'boolean', description: 'true when gnubok_update_invoice can edit it' },
@@ -6298,6 +6329,7 @@ export const tools: McpTool[] = [
               quantity: { type: 'number' },
               unit: { type: 'string' },
               unit_price: { type: 'number' },
+              discount_percent: { type: 'number', description: 'Line discount 0-100; line_total is net of it' },
               line_total: { type: 'number' },
               vat_rate: { type: 'number' },
               vat_amount: { type: 'number' },
@@ -6340,7 +6372,7 @@ export const tools: McpTool[] = [
       const { data: invoice, error } = await supabase
         .from('invoices')
         .select(
-          'id, invoice_number, status, document_type, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
+          'id, invoice_number, status, document_type, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, invoice_marking, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
         )
         .eq('id', invoiceId)
         .eq('company_id', companyId)
@@ -6357,6 +6389,7 @@ export const tools: McpTool[] = [
         quantity: number
         unit: string
         unit_price: number
+        discount_percent: number | null
         line_total: number
         vat_rate: number
         vat_amount: number | null
@@ -6385,6 +6418,7 @@ export const tools: McpTool[] = [
         quantity: row.quantity,
         unit: row.unit,
         unit_price: row.unit_price,
+        discount_percent: row.discount_percent ?? 0,
         line_total: row.line_total,
         vat_rate: row.vat_rate,
         vat_amount: row.vat_amount ?? 0,
@@ -6422,6 +6456,7 @@ export const tools: McpTool[] = [
         remaining_amount: invoice.remaining_amount ?? null,
         your_reference: invoice.your_reference ?? null,
         our_reference: invoice.our_reference ?? null,
+        invoice_marking: invoice.invoice_marking ?? null,
         notes: invoice.notes ?? null,
         default_dimensions: (invoice.default_dimensions as Record<string, string> | null) ?? {},
         editable_draft: isEditableInvoiceDraft(invoice),
@@ -6451,6 +6486,7 @@ export const tools: McpTool[] = [
               quantity: { type: 'number' },
               unit: { type: 'string', description: 'st, tim, dag, mån' },
               unit_price: { type: 'number', description: 'Price per unit excl. VAT' },
+              discount_percent: { type: 'number', description: 'Line discount 0-100 (rabatt); line total and VAT computed net of it' },
               vat_rate: { type: 'number', description: 'VAT rate 0-100 (optional override)' },
               article_id: {
                 type: 'string',
@@ -6478,6 +6514,7 @@ export const tools: McpTool[] = [
         currency: { type: 'string', enum: ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'] },
         our_reference: { type: 'string' },
         your_reference: { type: 'string' },
+        invoice_marking: { type: 'string', description: 'Fakturamärkning (buyer marking/PO label), separate from your_reference; feeds Peppol BuyerReference.' },
         notes: { type: 'string' },
         payment_link_url: {
           type: 'string',
@@ -6598,8 +6635,11 @@ export const tools: McpTool[] = [
       const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated)
       const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
-      // Calculate per-item VAT
-      const subtotal = items.reduce((s, item) => s + item.quantity * item.unit_price, 0)
+      // Calculate per-item VAT (line totals net of any per-line discount)
+      const subtotal = items.reduce(
+        (s, item) => s + computeLineNet(item.quantity, item.unit_price, item.discount_percent),
+        0,
+      )
       let vatAmount = 0
       for (const item of items) {
         const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
@@ -6609,7 +6649,7 @@ export const tools: McpTool[] = [
             `Allowed rates: ${permittedRates.map((r) => r.rate + '%').join(', ')}`
           )
         }
-        const lineTotal = item.quantity * item.unit_price
+        const lineTotal = computeLineNet(item.quantity, item.unit_price, item.discount_percent)
         vatAmount += Math.round(lineTotal * itemRate / 100 * 100) / 100
       }
       const total = subtotal + vatAmount
@@ -6636,6 +6676,7 @@ export const tools: McpTool[] = [
           currency,
           our_reference: (args.our_reference as string) || null,
           your_reference: (args.your_reference as string) || null,
+          invoice_marking: (args.invoice_marking as string) || null,
           notes: (args.notes as string) || null,
           payment_link_url: paymentLinkUrl,
         },
@@ -6644,7 +6685,7 @@ export const tools: McpTool[] = [
           customer_type: customer.customer_type,
           items: stagedItems.map(item => ({
             ...item,
-            line_total: item.quantity * item.unit_price,
+            line_total: computeLineNet(item.quantity, item.unit_price, item.discount_percent),
             vat_rate: item.vat_rate ?? vatRules.rate,
           })),
           subtotal: Math.round(subtotal * 100) / 100,
@@ -7797,6 +7838,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_counterparty_templates',
+    catalogVisibility: 'search',
     keywords: ['motpart', 'konteringsmall', 'mallar'],
     title: 'List Counterparty Templates',
     description: 'List active counterparty categorization templates: learned patterns from prior categorizations used for auto-matching new transactions.',
@@ -8353,6 +8395,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_dimension_values',
+    catalogVisibility: 'search',
     keywords: ['dimensionsvärden', 'kostnadsställe', 'projekt'],
     title: 'List Dimension Values',
     description: 'List values (SIE #OBJEKT codes) for one dimension, optionally fuzzy-matched by query. Use to find the right kostnadsställe/projekt code before tagging lines. sie_dim_no: 1 = kostnadsställe, 6 = projekt.',
@@ -8923,6 +8966,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_dimension_pnl',
+    catalogVisibility: 'search',
     keywords: ['projektresultat', 'kostnadsställe', 'resultat per projekt'],
     title: 'P&L per Dimension (Resultat per projekt)',
     description: 'Resultat per projekt/kostnadsställe: P&L matrix over one SIE dimension: each value with activity becomes a column plus an untagged bucket, and the Totalt column reconciles exactly with the resultatrapport. sie_dim_no: 1 = kostnadsställe, 6 = projekt.',
@@ -14256,6 +14300,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_agi_status',
+    catalogVisibility: 'search',
     keywords: ['arbetsgivardeklaration'],
     title: 'AGI Declaration Status (Arbetsgivardeklaration)',
     description: "Fetch AGI filing status for a salary run: run-scoped filing_state and kvittensnummer (a correction run never inherits the superseded original's receipt), plus live Skatteverket kvittenser.",
@@ -14343,6 +14388,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_get_employee',
+    catalogVisibility: 'search',
     keywords: ['anställd', 'personal'],
     title: 'Get Employee',
     description: 'Get one employee\'s full payroll config: salary, tax table/column, jamkning, F-skatt, vacation rule, vaxa-stod, bank details, dimensions. Personnummer masked. Use after gnubok_list_employees to drill into one employee before payroll work.',
@@ -14440,6 +14486,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_get_payslip',
+    catalogVisibility: 'search',
     keywords: ['lönebesked', 'lönespecifikation', 'lönespec', 'lön'],
     title: 'Get Payslip (Lönebesked)',
     description: 'Get one employee\'s payslip in a salary run: gross, tax, avgifter, net, every line item and the step-by-step calculation breakdown. Personnummer masked. Use after gnubok_get_salary_run to verify how one employee\'s pay was computed.',
@@ -14533,6 +14580,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_list_absence',
+    catalogVisibility: 'search',
     keywords: ['frånvaro', 'sjukfrånvaro', 'semester', 'vab'],
     title: 'List Absence (Frånvaro)',
     description: 'List an employee\'s registered absence days (sick, vab, parental, ...) in a date range, max 92 days. These per-day rows drive karensavdrag and sjuklön at calculation time. Use before gnubok_register_absence to see what is already registered.',
@@ -15406,6 +15454,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_get_vacation_balance',
+    catalogVisibility: 'search',
     keywords: ['semester', 'semestersaldo', 'semesterdagar'],
     title: 'Get Vacation Balance (Semestersaldo)',
     description: 'Get one employee\'s open vacation balance: entitled/taken/remaining days, sparade dagar per origin year, forced payouts and estimated semesterlöneskuld in SEK. Use before gnubok_close_vacation_year.',
@@ -17169,6 +17218,7 @@ export const tools: McpTool[] = [
         delivery_date: { type: ['string', 'null'], description: 'YYYY-MM-DD; null clears the delivery date.' },
         your_reference: { type: 'string' },
         our_reference: { type: 'string' },
+        invoice_marking: { type: 'string', description: 'Fakturamärkning (buyer marking/PO label), separate from your_reference.' },
         items: {
           type: 'array',
           items: {
@@ -17178,6 +17228,7 @@ export const tools: McpTool[] = [
               quantity: { type: 'number' },
               unit: { type: 'string', description: 'st, tim, dag, mån' },
               unit_price: { type: 'number', description: 'Price per unit excl. VAT' },
+              discount_percent: { type: 'number', description: 'Line discount 0-100 (rabatt); pass back to keep it, totals computed net of it.' },
               vat_rate: { type: 'number', description: 'VAT rate 0-100 (optional override)' },
               article_id: {
                 type: 'string',
@@ -17254,7 +17305,7 @@ export const tools: McpTool[] = [
       }
 
       const headerChanges: Record<string, unknown> = {}
-      for (const key of ['notes', 'invoice_date', 'due_date', 'delivery_date', 'your_reference', 'our_reference']) {
+      for (const key of ['notes', 'invoice_date', 'due_date', 'delivery_date', 'your_reference', 'our_reference', 'invoice_marking']) {
         if (args[key] !== undefined) headerChanges[key] = args[key]
       }
       if (rawItems === undefined && args.default_dimensions === undefined && Object.keys(headerChanges).length === 0) {
@@ -17359,7 +17410,7 @@ export const tools: McpTool[] = [
               `Allowed rates: ${permittedRates.map((r) => r.rate + '%').join(', ')}`
             )
           }
-          const lineTotal = item.quantity * item.unit_price
+          const lineTotal = computeLineNet(item.quantity, item.unit_price, item.discount_percent)
           subtotal += lineTotal
           vatAmount += roundOre(lineTotal * itemRate / 100)
         }
@@ -17374,6 +17425,7 @@ export const tools: McpTool[] = [
             deductionLines.map((item) => ({
               unit_price: item.unit_price,
               quantity: item.quantity,
+              discount_percent: item.discount_percent ?? 0,
               deduction_type: item.deduction_type ?? null,
               vat_rate: item.vat_rate ?? vatRules.rate,
               labor_hours: item.labor_hours ?? null,
@@ -17416,7 +17468,7 @@ export const tools: McpTool[] = [
         // the property columns are not needed for the preview.
         const { data: currentRows, error: currentError } = await supabase
           .from('invoice_items')
-          .select('line_type, description, quantity, unit, unit_price, line_total, vat_rate, revenue_account, article_id, deduction_type, accrual_period_start, accrual_period_end')
+          .select('line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, revenue_account, article_id, deduction_type, accrual_period_start, accrual_period_end')
           .eq('invoice_id', invoice.id)
           .order('sort_order', { ascending: true })
         if (currentError) throw dbError(currentError)
@@ -17426,6 +17478,7 @@ export const tools: McpTool[] = [
           quantity: row.quantity,
           unit: row.unit,
           unit_price: row.unit_price,
+          discount_percent: row.discount_percent ?? 0,
           line_total: row.line_total,
           vat_rate: row.vat_rate,
           revenue_account: row.revenue_account ?? null,
@@ -17659,6 +17712,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_sie_preflight',
+    catalogVisibility: 'search',
     keywords: ['sie', 'sie-fil', 'kontrollera sie'],
     title: 'SIE Preflight Scan',
     description:
@@ -18250,9 +18304,23 @@ export const tools: McpTool[] = [
         if (inactiveAccounts.length > 0) {
           parts.push(`inaktiva: ${inactiveAccounts.join(', ')}`)
         }
-        throw new Error(
-          `Kan inte skapa verifikation. Konton ${parts.join('; ')}. ` +
-          'Skapa kontot med gnubok_create_account, aktivera det med gnubok_update_account, eller välj andra konton.'
+        // Carry the stable code, not just the prose. The message here is the
+        // better one (it names the accounts AND the two tools that fix it),
+        // but a bare Error resolves to UNKNOWN_ERROR, so an agent branching on
+        // `code` sees "unknown" for a failure that has a documented remedy.
+        // ACCOUNTS_NOT_IN_CHART already exists in the registry with a
+        // remediation pointing at Accounted://chart-of-accounts, and
+        // storno-service already throws it; this path just never did.
+        // On production this was 40 of the create_voucher failures in 60 days.
+        throw Object.assign(
+          new Error(
+            `Kan inte skapa verifikation. Konton ${parts.join('; ')}. ` +
+            'Skapa kontot med gnubok_create_account, aktivera det med gnubok_update_account, eller välj andra konton.'
+          ),
+          {
+            code: ACCOUNTS_NOT_IN_CHART,
+            accountNumbers: [...unseedableAccounts, ...inactiveAccounts],
+          },
         )
       }
 
@@ -18830,6 +18898,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_accrual_schedules',
+    catalogVisibility: 'search',
     keywords: ['periodisering', 'periodiseringar'],
     title: 'List Periodiseringar',
     description:
@@ -19350,6 +19419,12 @@ export const tools: McpTool[] = [
           actor: {
             type: actor?.type === 'api_key' ? 'api_key' : 'user',
             ...(actor?.label ? { label: actor.label } : {}),
+            // Only an api_key actor can carry a ceiling; the ternary above
+            // already collapsed everything else to 'user', for which
+            // exceedsUnattendedLimit returns false regardless.
+            ...(actor?.type === 'api_key'
+              ? { unattendedCommitLimit: actor.unattendedCommitLimit ?? null }
+              : {}),
           },
           ...(userEmail ? { userEmail } : {}),
         }
@@ -20333,8 +20408,14 @@ function emitToolCallTelemetry(payload: {
   success: boolean
   isError: boolean
   errorCode: string | null
-  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'unknown_tool' | 'test_key_write_blocked' | 'bridge_refused' | null
+  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'invalid_arguments' | 'unknown_tool' | 'test_key_write_blocked' | 'bridge_refused' | null
   errorMessage: string | null
+  /**
+   * The specific English diagnostic, passed as `structured.error.message_en`.
+   * Stored only when it differs from errorMessage, so the common case where
+   * message_sv is already the domain message costs nothing.
+   */
+  errorDetail?: string | null
   requestId: string | number | null
   userId: string
   // null/empty while the key's user has no company yet (issue #1814): the
@@ -20361,6 +20442,13 @@ function emitToolCallTelemetry(payload: {
         // validation messages can embed long lists. 500 chars is plenty for
         // clustering failures into gotchas without bloating event_log rows.
         errorMessage: payload.errorMessage ? payload.errorMessage.slice(0, 500) : null,
+        // Only when it adds something. For most domain failures message_sv IS
+        // the specific text and this is null; for the generic registry
+        // defaults it is the difference between a usable log and a shrug.
+        errorDetail:
+          payload.errorDetail && payload.errorDetail !== payload.errorMessage
+            ? payload.errorDetail.slice(0, 500)
+            : null,
         requestId: payload.requestId,
         userId: payload.userId,
         companyId,
@@ -20636,6 +20724,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   let apiKeyId: string | undefined
   let apiKeyName: string | undefined
   let keyMode: ApiKeyMode = 'live'
+  let unattendedCommitLimit: number | null = null
   if (token) {
     const authResult = await validateApiKey(token)
     if ('error' in authResult) {
@@ -20651,7 +20740,15 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       }
       return unauthorized()
     }
-    ;({ userId, companyId, scopes: keyScopes, apiKeyId, apiKeyName, mode: keyMode } = authResult)
+    ;({
+      userId,
+      companyId,
+      scopes: keyScopes,
+      apiKeyId,
+      apiKeyName,
+      mode: keyMode,
+      unattendedCommitLimit,
+    } = authResult)
   } else {
     // Anonymous traffic has no key to rate-limit on: per truncated IP instead.
     // No-op without Upstash (self-hosted), like the OAuth register endpoint.
@@ -20683,6 +20780,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         type: 'api_key',
         id: apiKeyId,
         label: apiKeyName ?? 'Unnamed API key',
+        unattendedCommitLimit,
         sessionId,
         client,
       }
@@ -20974,6 +21072,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           errorCode: bridgeError.error.code,
           errorKind: 'bridge_refused',
           errorMessage: bridgeError.error.message_sv,
+          errorDetail: bridgeError.error.message_en,
           requestId: id ?? null,
           userId,
           companyId,
@@ -21037,6 +21136,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           errorCode: scopeError.error.code,
           errorKind: 'scope_denied',
           errorMessage: scopeError.error.message_sv,
+          errorDetail: scopeError.error.message_en,
           requestId: id ?? null,
           userId,
           companyId,
@@ -21101,8 +21201,17 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           success: false,
           isError: true,
           errorCode: structured.error.code,
-          errorKind: 'company_access_denied',
+          // Argument problems are not access problems. Exactly two things in
+          // this try raise VALIDATION_ERROR (the unknown-parameter guard and a
+          // malformed company_id) and neither is a permissions failure. Both
+          // used to log as company_access_denied, which is how 604 rejected
+          // calls read as a tenancy bug for a week.
+          errorKind:
+            structured.error.code === 'VALIDATION_ERROR'
+              ? 'invalid_arguments'
+              : 'company_access_denied',
           errorMessage: structured.error.message_sv,
+          errorDetail: structured.error.message_en,
           requestId: id ?? null,
           userId,
           // Keep denied attempts attributed to the key default. An arbitrary,
@@ -21125,8 +21234,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 
       // Enforce the capability paywall: the MCP/agent path is a paid chokepoint
       // just like the HTTP routes (send_invoice → email_send, the two SKV
-      // submissions → skatteverket). Fail-closed; self-hosted short-circuits to
-      // all-on inside hasCapability. Blocks before any pending op is staged.
+      // submissions → skatteverket). Fail-closed; self-hosted is all-on inside
+      // hasCapability except connector capabilities without own credentials
+      // (see lib/entitlements). Blocks before any pending op is staged.
       const requiredCapability = MCP_TOOL_CAPABILITY_MAP[toolName]
       if (requiredCapability && !(await hasCapability(supabase, tenantId, requiredCapability))) {
         const capError = { error: capabilityBlockedError(requiredCapability) }
@@ -21141,6 +21251,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           errorCode: capError.error.code,
           errorKind: 'capability_denied',
           errorMessage: capError.error.message_sv,
+          errorDetail: capError.error.message_en,
           requestId: id ?? null,
           userId,
           companyId: effectiveCompanyId,
@@ -21182,6 +21293,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             errorCode: blocked.error.code,
             errorKind: 'test_key_write_blocked',
             errorMessage: blocked.error.message_sv,
+            errorDetail: blocked.error.message_en,
             requestId: id ?? null,
             userId,
             companyId: effectiveCompanyId,
@@ -21271,6 +21383,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               errorCode: structured.error.code,
               errorKind: 'execution',
               errorMessage: structured.error.message_sv,
+              errorDetail: structured.error.message_en,
               requestId: id ?? null,
               userId,
               companyId: effectiveCompanyId,
@@ -21363,6 +21476,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           // balanserar inte", "Perioden är låst", …): the text worth
           // clustering when mining failures for gotchas.
           errorMessage: structured.error.message_sv,
+          errorDetail: structured.error.message_en,
           requestId: id ?? null,
           userId,
           companyId: effectiveCompanyId,

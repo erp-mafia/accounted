@@ -35,6 +35,15 @@ export const CAPABILITY = {
   /** Shopify store sync: orders/refunds imported as a transaction feed. */
   shopify_sync: 'shopify_sync',
   /**
+   * Multiple people working in one company. Without it only the OWNER can
+   * enter the company: every other membership goes dormant (never deleted)
+   * after a 20-day post-lapse grace window, and new invites are blocked.
+   * See lib/entitlements/multi-user.ts for the derived entitled/grace/frozen
+   * state; company_capability_config does NOT apply to this key (it gates
+   * member access, not a feature surface).
+   */
+  multi_user: 'multi_user',
+  /**
    * Invoice email from the company's own verified sending domain (Resend
    * domain per company). Opt-in: granted manually per company, NOT part of
    * PAID_CAPABILITIES, so it is never trial-seeded or written by the Stripe
@@ -69,7 +78,38 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
   CAPABILITY.stripe_payments,
   CAPABILITY.woocommerce_sync,
   CAPABILITY.shopify_sync,
+  // Founder decision (2026-09-01): multiple users per company is paid.
+  // Trial-seeded and Stripe-synced like the rest; enforcement is the
+  // owner-only dormancy rule in lib/entitlements/multi-user.ts.
+  CAPABILITY.multi_user,
 ] as const
+
+/**
+ * Capabilities that a SELF-HOSTED instance cannot provide on its own because
+ * they run on services Accounted operates (the PSD2/AISP bank connection,
+ * the Skatteverket API client, the TIC lookup contract, the migration
+ * gateway). On hosted these follow the normal paywall (bank_sync and
+ * skatteverket are in PAID_CAPABILITIES; org_lookup and migration are free).
+ * On a self-host every other capability is always on, and exactly these fall
+ * through to the grant lookup: the hourly connector sync writes
+ * `source = 'connector'` grants for them from the instance's connector key
+ * (lib/connect/instance, arriving with the connector-keys stack PR #1748).
+ * A self-host serving an upstream from its OWN credentials holds that
+ * capability outright (see own-credentials.ts): only keyless-and-credential-
+ * less connector capabilities are withheld. Deliberately NOT part of
+ * PAID_CAPABILITIES and NOT seeded by the trial trigger: hosted companies
+ * never receive connector grants.
+ */
+export const CONNECTOR_CAPABILITIES: readonly CapabilityKey[] = [
+  CAPABILITY.bank_sync,
+  CAPABILITY.skatteverket,
+  CAPABILITY.org_lookup,
+  CAPABILITY.migration,
+] as const
+
+export function isConnectorCapability(key: CapabilityKey): boolean {
+  return (CONNECTOR_CAPABILITIES as readonly string[]).includes(key)
+}
 
 /**
  * Paid MCP tools → required capability. The MCP/agent path is a paid chokepoint

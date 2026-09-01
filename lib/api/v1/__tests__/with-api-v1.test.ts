@@ -36,6 +36,19 @@ vi.mock('@supabase/supabase-js', async () => {
   }
 })
 
+// Multi-user seat gate: mocked so the membership stub stays single-purpose;
+// the gate's own logic is covered in lib/entitlements/__tests__/multi-user.test.ts.
+const getMultiUserStateMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/entitlements/multi-user', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/entitlements/multi-user')>(
+    '@/lib/entitlements/multi-user',
+  )
+  return {
+    ...actual,
+    getMultiUserState: (...args: unknown[]) => getMultiUserStateMock(...args),
+  }
+})
+
 vi.mock('@/lib/api/idempotency', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api/idempotency')>(
     '@/lib/api/idempotency',
@@ -102,6 +115,7 @@ function companyParams(companyId: string) {
 beforeEach(() => {
   vi.clearAllMocks()
   mockServiceClient.mockReturnValue(makeSupabaseStub(null))
+  getMultiUserStateMock.mockResolvedValue({ state: 'entitled', graceEndsAt: null })
 })
 
 describe('withApiV1: auth', () => {
@@ -276,6 +290,72 @@ describe('withApiV1: company membership', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.companyId).toBe('company-1')
+  })
+
+  it('refuses a NON-OWNER membership in a frozen company with 403 (multi-user seat gate)', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: 'company-1',
+      scopes: ['companies:read'],
+      mode: 'live',
+    })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'admin' }))
+    getMultiUserStateMock.mockResolvedValue({ state: 'frozen', graceEndsAt: null })
+
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'companies.get',
+      async (_req, ctx) => ok({ ok: true }, { requestId: ctx.requestId }),
+      { requireScope: 'companies:read' },
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1', {
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      companyParams('company-1'),
+    )
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(body.error.details.capability).toBe('multi_user')
+  })
+
+  it('OWNERS pass the seat gate without a state read; grace passes for non-owners', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: 'company-1',
+      scopes: ['companies:read'],
+      mode: 'live',
+    })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+    getMultiUserStateMock.mockResolvedValue({ state: 'frozen', graceEndsAt: null })
+
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'companies.get',
+      async (_req, ctx) => ok({ ok: true }, { requestId: ctx.requestId }),
+      { requireScope: 'companies:read' },
+    )
+    const ownerRes = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1', {
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      companyParams('company-1'),
+    )
+    expect(ownerRes.status).toBe(200)
+    expect(getMultiUserStateMock).not.toHaveBeenCalled()
+
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'member' }))
+    getMultiUserStateMock.mockResolvedValue({
+      state: 'grace',
+      graceEndsAt: new Date(Date.now() + 5 * 86_400_000).toISOString(),
+    })
+    const graceRes = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1', {
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      companyParams('company-1'),
+    )
+    expect(graceRes.status).toBe(200)
   })
 })
 

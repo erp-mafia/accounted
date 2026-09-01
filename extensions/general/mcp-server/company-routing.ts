@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ApiKeyScope } from '@/lib/auth/api-keys'
+import { getMultiUserState, isMembershipDormant } from '@/lib/entitlements/multi-user'
 import type { CompanyRole } from '@/types'
 
 const UUID_PATTERN =
@@ -142,6 +143,20 @@ export async function resolveMcpCompanyContext(args: {
   }
   if (!isCompanyRole(membership.role)) {
     throw codedError('FORBIDDEN', 'Company membership has an unsupported role')
+  }
+
+  // Multi-user seat gate: the MCP surface is a chokepoint like the HTTP
+  // routes, so a non-owner membership in a frozen company (multi_user lapsed
+  // past its 20-day grace) is refused here, before any tool touches tenant
+  // data. Owners always pass; self-hosted/dev return 'entitled' outright.
+  if (membership.role !== 'owner') {
+    const access = await getMultiUserState(args.supabase, companyId)
+    if (isMembershipDormant(membership.role, access.state)) {
+      throw codedError(
+        'FORBIDDEN',
+        'This company is paused for your account: multiple users require a paid plan. Ask the company owner to upgrade.'
+      )
+    }
   }
 
   return {

@@ -12,7 +12,7 @@ import { validateBody } from '@/lib/api/validate'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
 import { dbError } from '@/lib/errors/db-error'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
-import { extractInvoiceFields, ExtractionSchema, emptyResult } from './lib/extract-invoice-fields'
+import { extractInvoiceFields, ExtractionSchema, emptyResult, fetchOwnCompanyIdentity } from './lib/extract-invoice-fields'
 import { mirrorExtractionToDocument } from './lib/mirror-extraction'
 import {
   uploadAndExtract,
@@ -1081,6 +1081,7 @@ export const invoiceInboxExtension: Extension = {
                 buffer: Buffer.from(slicedBuffer ?? buffer),
                 mimeType: file.type,
                 fileName: file.name,
+                ownCompany: await fetchOwnCompanyIdentity(ctx.supabase, ctx.companyId),
               })
           const { data: extracted } = extraction
           if (!skipExtraction && slicedBuffer != null && pageCount != null) {
@@ -1448,6 +1449,7 @@ export const invoiceInboxExtension: Extension = {
             buffer,
             mimeType: doc.mime_type,
             fileName: doc.file_name,
+            ownCompany: await fetchOwnCompanyIdentity(ctx.supabase, ctx.companyId),
           })
           const { data: extracted } = extraction
           await mirrorExtractionToDocument(item.document_id, {

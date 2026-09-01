@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Currency, Customer, InvoiceDocumentType } from '@/types'
 import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
 import { isBalanceSheetAccount } from '@/lib/invoices/posting-account'
+import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
 import {
@@ -46,6 +47,9 @@ export interface InvoiceWriteItemInput {
   quantity: number
   unit: string
   unit_price: number
+  /** Percentage discount on the line (0-100). Omitted/null = 0; line_total
+   *  and vat_amount are computed NET of it (lib/invoices/line-amounts.ts). */
+  discount_percent?: number | null
   vat_rate?: number
   article_id?: string | null
   revenue_account?: string | null
@@ -70,6 +74,8 @@ export interface InvoiceWriteInput {
   currency: Currency
   your_reference?: string
   our_reference?: string
+  /** Fakturamärkning: buyer-required marking, separate from your_reference. */
+  invoice_marking?: string
   notes?: string
   /** Optional https payment link (schema-validated). Omitted/empty → null. */
   payment_link_url?: string
@@ -111,6 +117,7 @@ export type InvoiceWriteFields = {
   reverse_charge_text: string | null
   your_reference: string | null | undefined
   our_reference: string | null | undefined
+  invoice_marking: string | null
   notes: string | null | undefined
   payment_link_url: string | null
   payment_link_auto: boolean
@@ -129,6 +136,7 @@ export type InvoiceWriteItemRow = {
   quantity: number
   unit: string
   unit_price: number
+  discount_percent: number
   line_total: number
   vat_rate: number
   vat_amount: number
@@ -224,8 +232,12 @@ export async function buildInvoiceWriteData(params: {
   }
 
   // Free-text rows carry no amounts and are excluded from totals + VAT.
+  // Line totals are net of any per-line discount (rabatt i procent).
   const subtotal = items.reduce(
-    (sum, item) => (item.line_type === 'text' ? sum : sum + item.quantity * item.unit_price),
+    (sum, item) =>
+      item.line_type === 'text'
+        ? sum
+        : sum + computeLineNet(item.quantity, item.unit_price, item.discount_percent),
     0,
   )
 
@@ -260,7 +272,7 @@ export async function buildInvoiceWriteData(params: {
           details: { account: item.revenue_account, vatRate: itemRate },
         }
       }
-      const lineTotal = item.quantity * item.unit_price
+      const lineTotal = computeLineNet(item.quantity, item.unit_price, item.discount_percent)
       vatAmount += Math.round(lineTotal * itemRate / 100 * 100) / 100
     }
   }
@@ -330,6 +342,7 @@ export async function buildInvoiceWriteData(params: {
     const validateInput = items.map((item) => ({
       unit_price: item.unit_price,
       quantity: item.quantity,
+      discount_percent: item.discount_percent ?? 0,
       deduction_type: item.deduction_type ?? null,
       // The deduction base is arbetskostnaden inkl. moms (HUSFL 6-9 §§), so
       // the validator and total need the same per-line rate the item rows
@@ -513,6 +526,9 @@ export async function buildInvoiceWriteData(params: {
     reverse_charge_text: notVatRegistered ? null : (headerRules.reverseChargeText || null),
     your_reference: input.your_reference,
     our_reference: input.our_reference,
+    // Always a concrete value so a draft edit that cleared the field NULLs
+    // the column (supabase-js drops undefined keys).
+    invoice_marking: input.invoice_marking?.trim() || null,
     notes: input.notes,
     // Always a concrete value (never undefined) so a draft edit that cleared
     // the field actually NULLs the column: supabase-js drops undefined keys.
@@ -542,6 +558,7 @@ export async function buildInvoiceWriteData(params: {
         quantity: 0,
         unit: '',
         unit_price: 0,
+        discount_percent: 0,
         line_total: 0,
         vat_rate: 0,
         vat_amount: 0,
@@ -561,7 +578,8 @@ export async function buildInvoiceWriteData(params: {
       }
     }
     const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
-    const lineTotal = item.quantity * item.unit_price
+    const discountPercent = item.discount_percent ?? 0
+    const lineTotal = computeLineNet(item.quantity, item.unit_price, discountPercent)
     const itemVat = documentType === 'delivery_note' ? 0 : Math.round(lineTotal * itemRate / 100 * 100) / 100
     // ROT/RUT deduction is recomputed server-side so a tampered client can't
     // expand the 1513 receivable beyond the rules. Non-invoice document types
@@ -571,6 +589,7 @@ export async function buildInvoiceWriteData(params: {
       ? computeDeduction({
           unit_price: item.unit_price,
           quantity: item.quantity,
+          discount_percent: discountPercent,
           deduction_type: deductionType,
           vat_rate: itemRate,
         })
@@ -582,6 +601,7 @@ export async function buildInvoiceWriteData(params: {
       quantity: item.quantity,
       unit: item.unit,
       unit_price: item.unit_price,
+      discount_percent: discountPercent,
       line_total: lineTotal,
       vat_rate: itemRate,
       vat_amount: itemVat,

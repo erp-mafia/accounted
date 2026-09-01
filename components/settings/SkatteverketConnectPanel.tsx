@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { useCapability } from '@/contexts/CompanyContext'
 import { isAllowedSkvPopupOrigin } from '@/lib/skatteverket/popup-origin'
+import { isSelfHosted } from '@/lib/env/public-flags'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import {
@@ -305,7 +306,13 @@ function SkatteverketPersonalConnectionCard() {
               size="sm"
               onClick={startConnect}
               disabled={status?.disabled || !hasSkatteverket || connecting}
-              title={!hasSkatteverket ? 'Anslutning till Skatteverket kräver ett abonnemang' : undefined}
+              title={
+                !hasSkatteverket
+                  ? isSelfHosted()
+                    ? t('connect_requires_connector_key')
+                    : t('connect_requires_subscription')
+                  : undefined
+              }
             >
               <ExternalLink className="mr-2 h-4 w-4" />
               {connecting ? t('connect_waiting') : t('connect_with_bankid')}
@@ -364,7 +371,13 @@ function SkatteverketPersonalConnectionCard() {
               size="sm"
               onClick={startConnect}
               disabled={status.disabled || !hasSkatteverket || connecting}
-              title={!hasSkatteverket ? 'Anslutning till Skatteverket kräver ett abonnemang' : undefined}
+              title={
+                !hasSkatteverket
+                  ? isSelfHosted()
+                    ? t('connect_requires_connector_key')
+                    : t('connect_requires_subscription')
+                  : undefined
+              }
             >
               <ExternalLink className="mr-2 h-4 w-4" />
               {connecting ? t('connect_waiting') : t('reconnect')}

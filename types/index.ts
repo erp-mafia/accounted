@@ -1267,6 +1267,11 @@ export interface Invoice {
   // Reference
   your_reference: string | null
   our_reference: string | null
+  // Fakturamärkning: buyer-required marking (cost center, project, PO label),
+  // separate from your_reference (Er referens = contact person). Printed on
+  // the PDF and mapped to Peppol BT-10 BuyerReference when set. Optional in
+  // TS for pre-migration fixtures.
+  invoice_marking?: string | null
 
   // Optional online payment link (pasted by the user, e.g. a Stripe Payment
   // Link). Rendered as a "Betala online" button in the invoice email and as a
@@ -1431,7 +1436,12 @@ export interface InvoiceItem {
   // Price
   unit_price: number
 
-  // Calculated
+  // Percentage discount on the line (0-100). line_total and vat_amount are
+  // stored NET of this discount (lib/invoices/line-amounts.ts). Optional in
+  // TS for pre-migration fixtures; treat undefined the same as 0.
+  discount_percent?: number
+
+  // Calculated (net of discount_percent)
   line_total: number
 
   // Per-line VAT
@@ -1708,6 +1718,8 @@ export interface CreateInvoiceInput {
   document_type?: InvoiceDocumentType
   your_reference?: string
   our_reference?: string
+  /** Fakturamärkning: buyer-required marking, separate from your_reference. */
+  invoice_marking?: string
   notes?: string
   /** Optional https link where the customer can pay online (e.g. a Stripe Payment Link). */
   payment_link_url?: string
@@ -1731,6 +1743,8 @@ export interface CreateInvoiceItemInput {
   quantity: number
   unit: string
   unit_price: number
+  /** Percentage discount on the line (0-100). Omitted/null = 0. */
+  discount_percent?: number | null
   vat_rate?: number
   /** Source article (optional). Free-text lines omit it. */
   article_id?: string | null
@@ -2881,6 +2895,7 @@ export interface NotificationSettings {
   receipt_extracted_enabled: boolean
   receipt_matched_enabled: boolean
   missing_underlag_enabled: boolean
+  email_digest_enabled: boolean
   created_at: string
   updated_at: string
 }
@@ -2898,6 +2913,7 @@ export type NotificationType =
   | 'missing_underlag'
   | 'skv_kvittens'
   | 'skv_connection_expired'
+  | 'bookkeeping_digest'
 
 // Notification log entry
 export interface NotificationLog {
@@ -2908,7 +2924,7 @@ export interface NotificationLog {
   reference_id: string
   days_before: number
   sent_at: string
-  delivery_status: 'sent' | 'delivered' | 'failed'
+  delivery_status: 'pending' | 'sent' | 'delivered' | 'failed'
 }
 
 // ============================================================

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   hasCapability,
@@ -7,7 +7,7 @@ import {
   getCompanyIdsWithCapability,
   getCompanyEntitlements,
 } from '../has-capability'
-import { CAPABILITY, PAID_CAPABILITIES } from '../keys'
+import { CAPABILITY, CONNECTOR_CAPABILITIES, PAID_CAPABILITIES } from '../keys'
 
 /**
  * Per-table mock: each table resolves to its own configured result, so a
@@ -37,7 +37,41 @@ function makeSupabase(byTable: Record<string, TableResult>): SupabaseClient {
   return { from: (t: string) => chainFor(t) } as unknown as SupabaseClient
 }
 
+/**
+ * Same per-table mock, but every chained call is recorded so a test can
+ * assert WHICH filters a query applied (the mock itself ignores them).
+ */
+type RecordedCall = { table: string; method: string; args: unknown[] }
+function makeRecordingSupabase(byTable: Record<string, TableResult>, calls: RecordedCall[]): SupabaseClient {
+  const chainFor = (table: string) => {
+    const result = byTable[table] ?? { data: null, error: null }
+    const chain: unknown = new Proxy(
+      {},
+      {
+        get(_t, prop) {
+          if (prop === 'then') {
+            return (resolve: (v: unknown) => void) =>
+              resolve({ data: result.data ?? null, error: result.error ?? null })
+          }
+          return (...args: unknown[]) => {
+            calls.push({ table, method: String(prop), args })
+            return chain
+          }
+        },
+      },
+    )
+    return chain
+  }
+  return { from: (t: string) => chainFor(t) } as unknown as SupabaseClient
+}
+const sourceFilters = (calls: RecordedCall[]) =>
+  calls.filter((c) => c.table === 'capability_grants' && c.method === 'eq' && c.args[0] === 'source')
+
 const iso = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString()
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -172,14 +206,17 @@ describe('getCompanyIdsWithCapability', () => {
     expect([...result].sort()).toEqual([directCompanyId, firmCompanyId].sort())
   })
 
-  it('returns every valid requested company when the paywall is bypassed', async () => {
+  it('returns every valid requested company when the paywall is bypassed (self-hosted, local capability)', async () => {
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
     const supabase = makeSupabase({})
 
+    // A local capability: self-hosted is all-on without touching the DB. The
+    // connector capabilities (e.g. skatteverket) are covered in the
+    // self-hosted connector block below: they need a grant even here.
     const result = await getCompanyIdsWithCapability(
       supabase,
       [directCompanyId, directCompanyId, 'not-a-uuid'],
-      CAPABILITY.skatteverket,
+      CAPABILITY.ai,
     )
 
     expect([...result]).toEqual([directCompanyId])
@@ -344,11 +381,24 @@ describe('getCompanyEntitlements', () => {
     expect(result.capabilities).toEqual([])
   })
 
-  it('bypass (self-hosted) holds everything with no trial countdown', async () => {
+  it('self-hosted holds every local paid capability with no trial countdown; connector keys need a grant', async () => {
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
-    const supabase = makeSupabase({})
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: { data: [] },
+      company_capability_config: { data: [] },
+    })
     const result = await getCompanyEntitlements(supabase, companyId)
     expect(result.trialEndsAt).toBeNull()
+    expect(result.capabilities).toEqual(PAID_CAPABILITIES.filter((k) => !CONNECTOR_CAPABILITIES.includes(k)))
+    // No trial exists on a self-host: 'none' until a connector grant is active.
+    expect(result.entitlementState).toBe('none')
+  })
+
+  it('dev bypass on a self-host still holds everything (connector keys included)', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    vi.stubEnv('NODE_ENV', 'development')
+    const result = await getCompanyEntitlements(makeSupabase({}), companyId)
     expect(result.capabilities).toEqual([...PAID_CAPABILITIES])
     expect(result.entitlementState).toBe('paid')
   })
@@ -363,5 +413,403 @@ describe('capabilityBlockedResponse', () => {
     expect(body.error_en).toBeTruthy()
     expect(body.capability_blocked).toBe(true)
     expect(body.capability).toBe(CAPABILITY.bank_sync)
+  })
+})
+
+/**
+ * Sovereign self-host partition (plan WS3 PR3). Local capabilities stay all-on
+ * on a self-host; the CONNECTOR_CAPABILITIES (bank sync, Skatteverket, org
+ * lookup, migration: services Accounted operates) fall through to the grant
+ * lookup, where the connector sync writes source='connector' rows. Hosted
+ * behaviour is untouched by construction (the tests above still pass).
+ */
+describe('self-hosted connector capabilities', () => {
+  const COMPANY = '11111111-1111-4111-8111-111111111111'
+
+  it('keeps every local capability all-on without touching the DB', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const supabase = makeSupabase({})
+    for (const key of PAID_CAPABILITIES.filter((k) => !CONNECTOR_CAPABILITIES.includes(k))) {
+      expect(await hasCapability(supabase, COMPANY, key), key).toBe(true)
+    }
+  })
+
+  it('gates a connector capability on a grant (true with an active connector grant)', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: { data: [{ expires_at: iso(60_000) }] },
+      company_capability_config: { data: null },
+    })
+    expect(await hasCapability(supabase, COMPANY, CAPABILITY.bank_sync)).toBe(true)
+  })
+
+  it('fails closed for a connector capability without a grant, and once the grant expired (offline grace over)', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    expect(
+      await hasCapability(
+        makeSupabase({ companies: { data: { team_id: null } }, capability_grants: { data: [] } }),
+        COMPANY,
+        CAPABILITY.skatteverket,
+      ),
+    ).toBe(false)
+    expect(
+      await hasCapability(
+        makeSupabase({
+          companies: { data: { team_id: null } },
+          capability_grants: { data: [{ expires_at: iso(-60_000) }] },
+        }),
+        COMPANY,
+        CAPABILITY.org_lookup,
+      ),
+    ).toBe(false)
+  })
+
+  it('keeps the dev bypass all-on on a self-host, connector capabilities included', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    vi.stubEnv('NODE_ENV', 'development')
+    expect(await hasCapability(makeSupabase({}), COMPANY, CAPABILITY.migration)).toBe(true)
+  })
+
+  it('lets FORCE_PAYWALL run the real gate for connector capabilities but never for local ones', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    vi.stubEnv('NODE_ENV', 'development')
+    vi.stubEnv('FORCE_PAYWALL', 'true')
+    const noGrant = makeSupabase({ companies: { data: { team_id: null } }, capability_grants: { data: [] } })
+    expect(await hasCapability(noGrant, COMPANY, CAPABILITY.bank_sync)).toBe(false)
+    expect(await hasCapability(noGrant, COMPANY, CAPABILITY.ai)).toBe(true)
+  })
+
+  it('bulk resolution honours the same partition', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const supabase = makeSupabase({
+      companies: { data: [{ id: COMPANY, team_id: null }] },
+      company_capability_config: { data: [] },
+      capability_grants: { data: [] },
+    })
+    expect(await getCompanyIdsWithCapability(supabase, [COMPANY], CAPABILITY.ai)).toEqual(new Set([COMPANY]))
+    expect(await getCompanyIdsWithCapability(supabase, [COMPANY], CAPABILITY.bank_sync)).toEqual(new Set())
+  })
+
+  it('getCompanyEntitlements reports local paid keys plus active connector keys, state paid/none, no trial copy', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const localPaid = PAID_CAPABILITIES.filter((k) => !CONNECTOR_CAPABILITIES.includes(k))
+
+    const without = await getCompanyEntitlements(
+      makeSupabase({ companies: { data: { team_id: null } }, capability_grants: { data: [] }, company_capability_config: { data: [] } }),
+      COMPANY,
+    )
+    expect(without.capabilities).toEqual(localPaid)
+    expect(without.entitlementState).toBe('none')
+    expect(without.trialEndsAt).toBeNull()
+    expect(without.trialExpiredAt).toBeNull()
+
+    const withGrant = await getCompanyEntitlements(
+      makeSupabase({
+        companies: { data: { team_id: null } },
+        capability_grants: { data: [{ capability_key: 'bank_sync', expires_at: iso(60_000), source: 'connector' }] },
+        company_capability_config: { data: [] },
+      }),
+      COMPANY,
+    )
+    expect(withGrant.capabilities).toEqual(PAID_CAPABILITIES.filter((k) => localPaid.includes(k) || k === CAPABILITY.bank_sync))
+    expect(withGrant.entitlementState).toBe('paid')
+  })
+
+  // The dashboard layout passes teamId, which moves the grants read into the
+  // early wave (#1946). That call site and the fallback read must narrow to
+  // the same key list and carry the same source filter, or the self-host
+  // partition silently reads every paid key on the layout path. The in-loop
+  // source check masks a lost narrowing, so this pins the query itself.
+  it('getCompanyEntitlements with teamId narrows the early grants read to connector keys and source=connector on a self-host', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase(
+      {
+        // Deliberately wrong: the lookup must not run when teamId is supplied.
+        companies: { data: { team_id: null } },
+        capability_grants: { data: [] },
+        company_capability_config: { data: [] },
+        company_subscriptions: { data: null },
+      },
+      calls,
+    )
+    const result = await getCompanyEntitlements(supabase, COMPANY, { teamId: null })
+    const keyFilters = calls.filter((c) => c.table === 'capability_grants' && c.method === 'in')
+    expect(keyFilters.map((c) => c.args)).toEqual([
+      ['capability_key', PAID_CAPABILITIES.filter((k) => CONNECTOR_CAPABILITIES.includes(k))],
+    ])
+    expect(sourceFilters(calls).map((c) => c.args)).toEqual([['source', 'connector']])
+    expect(calls.map((c) => c.table)).not.toContain('companies')
+    expect(result.capabilities).toEqual(PAID_CAPABILITIES.filter((k) => !CONNECTOR_CAPABILITIES.includes(k)))
+    expect(result.entitlementState).toBe('none')
+  })
+
+  it('getCompanyEntitlements with teamId reads every paid key and every source on hosted', async () => {
+    const TEAM = '55555555-5555-4555-8555-555555555555'
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase(
+      {
+        companies: { data: { team_id: null } },
+        capability_grants: { data: [] },
+        company_capability_config: { data: [] },
+        company_subscriptions: { data: null },
+      },
+      calls,
+    )
+    await getCompanyEntitlements(supabase, COMPANY, { teamId: TEAM })
+    const keyFilters = calls.filter((c) => c.table === 'capability_grants' && c.method === 'in')
+    expect(keyFilters.map((c) => c.args)).toEqual([['capability_key', PAID_CAPABILITIES]])
+    expect(sourceFilters(calls)).toHaveLength(0)
+    expect(calls.map((c) => c.table)).not.toContain('companies')
+  })
+
+  // The trial-seed trigger writes source='trial' rows for bank_sync and
+  // skatteverket on every company insert, self-hosts included. Only the
+  // connector sync's own rows may unlock a connector capability there.
+  it('reads only source=connector grants on a self-host, so the trial seed cannot unlock a connector', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase(
+      {
+        companies: { data: { team_id: null } },
+        capability_grants: { data: [{ expires_at: iso(60_000) }] },
+        company_capability_config: { data: null },
+      },
+      calls,
+    )
+    expect(await hasCapability(supabase, COMPANY, CAPABILITY.bank_sync)).toBe(true)
+    expect(sourceFilters(calls).map((c) => c.args)).toEqual([['source', 'connector']])
+  })
+
+  it('bulk resolution applies the source=connector filter to both the company and the firm grant reads', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const TEAM = '55555555-5555-4555-8555-555555555555'
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase(
+      {
+        companies: { data: [{ id: COMPANY, team_id: TEAM }] },
+        company_capability_config: { data: [] },
+        capability_grants: { data: [] },
+      },
+      calls,
+    )
+    await getCompanyIdsWithCapability(supabase, [COMPANY], CAPABILITY.skatteverket)
+    expect(sourceFilters(calls).map((c) => c.args)).toEqual([
+      ['source', 'connector'],
+      ['source', 'connector'],
+    ])
+  })
+
+  it('hosted keeps reading grants of every source (trial, stripe, comp, manual): no connector filter', async () => {
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase(
+      {
+        companies: { data: { team_id: null } },
+        capability_grants: { data: [{ expires_at: iso(60_000) }] },
+        company_capability_config: { data: null },
+      },
+      calls,
+    )
+    expect(await hasCapability(supabase, COMPANY, CAPABILITY.bank_sync)).toBe(true)
+    expect(sourceFilters(calls)).toHaveLength(0)
+
+    const bulkCalls: RecordedCall[] = []
+    await getCompanyIdsWithCapability(
+      makeRecordingSupabase(
+        {
+          companies: { data: [{ id: COMPANY, team_id: null }] },
+          company_capability_config: { data: [] },
+          capability_grants: { data: [] },
+        },
+        bulkCalls,
+      ),
+      [COMPANY],
+      CAPABILITY.bank_sync,
+    )
+    expect(sourceFilters(bulkCalls)).toHaveLength(0)
+  })
+
+  it('getCompanyEntitlements ignores trial-seeded connector rows on a self-host', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const localPaid = PAID_CAPABILITIES.filter((k) => !CONNECTOR_CAPABILITIES.includes(k))
+
+    const seededOnly = await getCompanyEntitlements(
+      makeSupabase({
+        companies: { data: { team_id: null } },
+        capability_grants: {
+          data: [
+            { capability_key: 'bank_sync', expires_at: iso(60_000), source: 'trial' },
+            { capability_key: 'skatteverket', expires_at: iso(60_000), source: 'trial' },
+          ],
+        },
+        company_capability_config: { data: [] },
+      }),
+      COMPANY,
+    )
+    expect(seededOnly.capabilities).toEqual(localPaid)
+    expect(seededOnly.entitlementState).toBe('none')
+    expect(seededOnly.trialEndsAt).toBeNull()
+    expect(seededOnly.trialExpiredAt).toBeNull()
+
+    const mixed = await getCompanyEntitlements(
+      makeSupabase({
+        companies: { data: { team_id: null } },
+        capability_grants: {
+          data: [
+            { capability_key: 'bank_sync', expires_at: iso(60_000), source: 'trial' },
+            { capability_key: 'skatteverket', expires_at: iso(60_000), source: 'connector' },
+          ],
+        },
+        company_capability_config: { data: [] },
+      }),
+      COMPANY,
+    )
+    expect(mixed.capabilities).toEqual(
+      PAID_CAPABILITIES.filter((k) => localPaid.includes(k) || k === CAPABILITY.skatteverket),
+    )
+    expect(mixed.entitlementState).toBe('paid')
+  })
+})
+
+/**
+ * Own-credentials seam: a self-host that serves an upstream from its OWN
+ * credentials (its own Enable Banking registration, its own Skatteverket
+ * client) is never connector-gated for it. Without this, upgrading an
+ * own-credentials self-host would silently kill working bank/SKV integrations
+ * (the 2026-08-17 folded-flag incident, recreated). Hosted never reaches the
+ * seam: isBypassedFor checks isSelfHosted() first.
+ */
+describe('self-hosted own-credentials seam', () => {
+  const COMPANY = '11111111-1111-4111-8111-111111111111'
+  const CRED_VARS = [
+    'ENABLE_BANKING_APP_ID',
+    'ENABLE_BANKING_APP_ID_PRODUCTION',
+    'ENABLE_BANKING_PRIVATE_KEY',
+    'ENABLE_BANKING_PRIVATE_KEY_PRODUCTION',
+    'SKATTEVERKET_OAUTH2_CLIENT_ID',
+    'SKATTEVERKET_APIGW_CLIENT_ID',
+  ] as const
+  const stubNoOwnCredentials = () => {
+    for (const v of CRED_VARS) vi.stubEnv(v, '')
+  }
+
+  it('own EB credentials keep bank_sync all-on without touching the DB (FORCE_PAYWALL included)', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    vi.stubEnv('FORCE_PAYWALL', 'true')
+    stubNoOwnCredentials()
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    const supabase = makeSupabase({}) // would resolve null/false if queried
+    expect(await hasCapability(supabase, COMPANY, CAPABILITY.bank_sync)).toBe(true)
+    // skatteverket has no own credentials here: still gated.
+    expect(
+      await hasCapability(
+        makeSupabase({ companies: { data: { team_id: null } }, capability_grants: { data: [] } }),
+        COMPANY,
+        CAPABILITY.skatteverket,
+      ),
+    ).toBe(false)
+  })
+
+  it('own SKV credentials keep skatteverket all-on (either client id variant)', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    stubNoOwnCredentials()
+    vi.stubEnv('SKATTEVERKET_APIGW_CLIENT_ID', 'own-client')
+    expect(await hasCapability(makeSupabase({}), COMPANY, CAPABILITY.skatteverket)).toBe(true)
+    vi.stubEnv('SKATTEVERKET_APIGW_CLIENT_ID', '')
+    vi.stubEnv('SKATTEVERKET_OAUTH2_CLIENT_ID', 'own-oauth-client')
+    expect(await hasCapability(makeSupabase({}), COMPANY, CAPABILITY.skatteverket)).toBe(true)
+  })
+
+  it('own credentials never unlock org_lookup or migration (no own-credentials form exists)', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    stubNoOwnCredentials()
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    vi.stubEnv('SKATTEVERKET_APIGW_CLIENT_ID', 'own-client')
+    const noGrant = makeSupabase({ companies: { data: { team_id: null } }, capability_grants: { data: [] } })
+    expect(await hasCapability(noGrant, COMPANY, CAPABILITY.org_lookup)).toBe(false)
+    expect(await hasCapability(noGrant, COMPANY, CAPABILITY.migration)).toBe(false)
+  })
+
+  it('hosted behaviour is unchanged by credential env vars (gate still runs)', async () => {
+    stubNoOwnCredentials()
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'hosted-always-has-these')
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: { data: [{ expires_at: iso(-60_000) }] }, // expired
+    })
+    expect(await hasCapability(supabase, COMPANY, CAPABILITY.bank_sync)).toBe(false)
+  })
+
+  it('bulk resolution honours the seam', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    stubNoOwnCredentials()
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    const supabase = makeSupabase({
+      companies: { data: [{ id: COMPANY, team_id: null }] },
+      company_capability_config: { data: [] },
+      capability_grants: { data: [] },
+    })
+    expect(await getCompanyIdsWithCapability(supabase, [COMPANY], CAPABILITY.bank_sync)).toEqual(new Set([COMPANY]))
+    expect(await getCompanyIdsWithCapability(supabase, [COMPANY], CAPABILITY.skatteverket)).toEqual(new Set())
+  })
+
+  it('getCompanyEntitlements counts own-credential keys as local paid and narrows the grants read', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    stubNoOwnCredentials()
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    const calls: RecordedCall[] = []
+    const result = await getCompanyEntitlements(
+      makeRecordingSupabase(
+        {
+          companies: { data: { team_id: null } },
+          capability_grants: { data: [] },
+          company_capability_config: { data: [] },
+          company_subscriptions: { data: null },
+        },
+        calls,
+      ),
+      COMPANY,
+    )
+    expect(result.capabilities).toContain(CAPABILITY.bank_sync)
+    expect(result.capabilities).not.toContain(CAPABILITY.skatteverket)
+    expect(result.entitlementState).toBe('none') // no connector grant; touchpoint renders nothing
+    const grantKeyFilters = calls.filter(
+      (c) => c.table === 'capability_grants' && c.method === 'in' && c.args[0] === 'capability_key',
+    )
+    expect(grantKeyFilters).toHaveLength(1)
+    expect(grantKeyFilters[0].args[1]).toEqual([CAPABILITY.skatteverket])
+  })
+
+  it('getCompanyEntitlements skips the grants read entirely when every connector upstream has own credentials', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    stubNoOwnCredentials()
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    vi.stubEnv('SKATTEVERKET_APIGW_CLIENT_ID', 'own-client')
+    const calls: RecordedCall[] = []
+    const result = await getCompanyEntitlements(
+      makeRecordingSupabase(
+        {
+          companies: { data: { team_id: null } },
+          company_capability_config: { data: [] },
+          company_subscriptions: { data: null },
+        },
+        calls,
+      ),
+      COMPANY,
+      { teamId: null },
+    )
+    expect(result.capabilities).toEqual([...PAID_CAPABILITIES])
+    expect(calls.filter((c) => c.table === 'capability_grants')).toHaveLength(0)
+  })
+
+  it('self-host block copy names the connector key, hosted copy keeps the subscription upsell', async () => {
+    stubNoOwnCredentials()
+    const hosted = await capabilityBlockedResponse(CAPABILITY.bank_sync).json()
+    expect(hosted.error).toContain('prenumeration')
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const selfHost = await capabilityBlockedResponse(CAPABILITY.bank_sync).json()
+    expect(selfHost.error).toContain('GNUBOK_CONNECTOR_KEY')
+    expect(selfHost.error_en).toContain('GNUBOK_CONNECTOR_KEY')
   })
 })

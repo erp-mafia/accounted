@@ -48,6 +48,7 @@ import {
   RATE_LIMIT_RETRY_AFTER_SECONDS,
   validateApiKey,
 } from '@/lib/auth/api-keys'
+import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 
 // Per CLAUDE.md: any route that emits events via eventBus must call
 // ensureInitialized() at module level to wire extension event handlers
@@ -57,6 +58,7 @@ import {
 // idempotent (guarded by a module-level boolean).
 ensureInitialized()
 import { resolveRequiredScope } from '@/lib/auth/scopes'
+import { getMultiUserState, isMembershipDormant } from '@/lib/entitlements/multi-user'
 import { getEndpointByConcretePath } from './registry'
 import {
   checkIdempotencyKey,
@@ -90,6 +92,13 @@ export interface ApiV1Context {
   apiKeyName: string | undefined
   /** Scopes granted to the calling key. */
   scopes: ApiKeyScope[]
+  /**
+   * Largest amount in SEK this key may commit with no human approving it, or
+   * null for no ceiling (the default, and what every key predating the column
+   * has). Enforced at the two places an API key can post money: this surface's
+   * journal-entries.commit, and commitPendingOperation for the MCP path.
+   */
+  unattendedCommitLimit: number | null
   /**
    * test|live. Test keys are simulation-only: the wrapper forces `dryRun` on
    * for every write, so handlers never need to special-case `mode`; they just
@@ -298,6 +307,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           apiKeyId: undefined,
           apiKeyName: undefined,
           scopes: [],
+          unattendedCommitLimit: null,
           mode: 'live',
           supabase: createAnonClient(),
           dryRun: false,
@@ -313,6 +323,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
               apiKeyId: auth.apiKeyId,
               apiKeyName: auth.apiKeyName,
               scopes: auth.scopes,
+              unattendedCommitLimit: auth.unattendedCommitLimit,
               mode: auth.mode,
               supabase: createServiceClientNoCookies(),
             }
@@ -402,6 +413,28 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
             details: { companyId },
           })
         }
+
+        // Multi-user seat gate: the API-key surface is a chokepoint like the
+        // cookie routes and MCP. A non-owner membership in a frozen company
+        // (multi_user lapsed past its 20-day grace) is refused here so an old
+        // key cannot keep working the books after the freeze. Owners pass
+        // without the extra read; the service client sees team-scoped grants.
+        if ((membership as { role?: string }).role !== 'owner') {
+          const access = await getMultiUserState(supabase, companyId)
+          if (isMembershipDormant((membership as { role: string }).role, access.state)) {
+            userLog.warn('multi-user seat gate refused frozen membership', { companyId, ...forensic })
+            return await v1ErrorResponseFromCode('FORBIDDEN', userLog, {
+              requestId,
+              status: 403,
+              reason: 'multi_user_frozen',
+              details: {
+                companyId,
+                capability: 'multi_user',
+                message: 'Company is paused for this account: multiple users require a paid plan. Ask the company owner to upgrade.',
+              },
+            })
+          }
+        }
       }
 
       // 6. Idempotency. Mandatory for state-changing methods when the route
@@ -482,6 +515,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         apiKeyId: auth.apiKeyId,
         apiKeyName: auth.apiKeyName,
         scopes: auth.scopes,
+        unattendedCommitLimit: auth.unattendedCommitLimit,
         mode: auth.mode,
         supabase,
         companyId,
@@ -489,8 +523,28 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         idempotencyKey,
       }
 
-      // 9. Invoke handler.
-      const response = await handler(workingRequest, ctx, params)
+      // 9. Invoke handler, inside the commit-actor scope.
+      //
+      // commitEntry() reads getActor() as its fallback and forwards it to the
+      // commit_journal_entry RPC, which stamps journal_entries.committed_actor_*
+      // and the audit_log COMMIT row (migration 20260619120000). Wrapping here
+      // rather than threading a parameter means EVERY v1 write is attributed,
+      // including the ones that reach the ledger through a helper several
+      // frames down (reverseEntry, correctEntry, the supplier-invoice paths).
+      //
+      // Before this, runWithActor had exactly ONE production call site, the
+      // pending-operations commit. Everything committing outside that path was
+      // anonymous: on production, 99.8% of storno entries and 100% of
+      // correction entries carried no actor at all, which are precisely the two
+      // sanctioned rättelse paths under BFL 5 kap. 5 § and the place where
+      // "who did this, and when" is a legal question rather than a nicety.
+      //
+      // `api_key` is the honest label for this surface: a gnubok_sk_ bearer
+      // token. The OAuth/MCP surfaces set their own actor and are unaffected.
+      const response = await runWithActor(
+        { type: 'api_key', label: auth.apiKeyName ?? 'Unnamed API key' },
+        () => handler(workingRequest, ctx, params),
+      )
 
       // Signal test mode on every test-key response so integrators can see the
       // request was simulation-only without inspecting the body.

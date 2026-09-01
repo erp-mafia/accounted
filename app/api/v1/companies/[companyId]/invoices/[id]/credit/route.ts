@@ -39,7 +39,7 @@ const CreditNoteRequest = z.object({
 })
 
 const ORIGINAL_INVOICE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, default_dimensions'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, invoice_marking, notes, reverse_charge_text, credited_invoice_id, document_type, default_dimensions'
 
 // default_dimensions stays in this projection: the inserted credit-note row is
 // handed to createCreditNoteJournalEntry, which reads the bag off the row so
@@ -48,7 +48,7 @@ const CREDIT_NOTE_RESPONSE_COLUMNS =
   'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
 
 const ORIGINAL_ITEMS_COLUMNS =
-  'sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, dimensions'
+  'sort_order, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, dimensions'
 
 const CreditNoteCreated = z.object({
   id: z.string().uuid(),
@@ -181,6 +181,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         quantity: number
         unit: string
         unit_price: number
+        discount_percent?: number | null
         line_total: number
         vat_rate?: number | null
         vat_amount?: number | null
@@ -246,6 +247,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       reverse_charge_text: original.reverse_charge_text ?? null,
       your_reference: original.your_reference ?? null,
       our_reference: original.our_reference ?? null,
+      // Same buyer routing on the kreditfaktura as the original.
+      invoice_marking: original.invoice_marking ?? null,
       notes: reason || `Krediterar faktura ${original.invoice_number ?? original.id}`,
       credited_invoice_id: originalId,
       status: 'sent' as const,
@@ -261,6 +264,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       quantity: -Math.abs(item.quantity),
       unit: item.unit,
       unit_price: item.unit_price,
+      // Carried so the kreditfaktura's face arithmetic multiplies out and the
+      // Rabatt column renders (ML 17 kap 24 §).
+      discount_percent: item.discount_percent ?? 0,
       line_total: -Math.abs(item.line_total),
       vat_rate: item.vat_rate ?? 0,
       vat_amount: -Math.abs(item.vat_amount ?? 0),

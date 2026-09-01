@@ -18,6 +18,7 @@ import {
 import { cn, formatCurrency } from '@/lib/utils'
 import { useFormat } from '@/lib/hooks/use-format'
 import { BillingActions } from '@/components/settings/BillingActions'
+import { ConnectorSettingsSection } from '@/components/settings/ConnectorSettingsSection'
 import { PLAN_PRICES } from '@/components/settings/billing-plans'
 import type { BillingPlan } from '@/lib/stripe/client'
 import { useBranding } from '@/lib/branding/brand-context'
@@ -26,7 +27,7 @@ import { useBranding } from '@/lib/branding/brand-context'
 // capability in lib/entitlements/keys.ts (ai, bank_sync, skatteverket,
 // email_send, stripe_payments, woocommerce_sync + shopify_sync as one
 // "webshop" item). Keep in step with PAID_CAPABILITIES when a key is added.
-const UNLOCK_KEYS = ['unlock_ai', 'unlock_bank', 'unlock_skv', 'unlock_email', 'unlock_payments', 'unlock_webshop'] as const
+const UNLOCK_KEYS = ['unlock_ai', 'unlock_bank', 'unlock_skv', 'unlock_email', 'unlock_payments', 'unlock_webshop', 'unlock_users'] as const
 
 // Mirrors the checkout route's deferred-first-charge condition (Stripe's 48h
 // trial_end floor plus clock margin). Above this, checkout collects the card
@@ -74,6 +75,18 @@ function UnlockList({ className }: { className?: string }) {
  * made, instead of repeated as reassurance copy around the page.
  */
 export function BillingSettingsContent() {
+  return (
+    <>
+      <BillingCoreContent />
+      {/* Self-host only (renders null on hosted): connector status + manual
+          entitlement sync. Sits below the billing states, which is why the
+          core content is split out: it has several early returns. */}
+      <ConnectorSettingsSection />
+    </>
+  )
+}
+
+function BillingCoreContent() {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
   const t = useTranslations('settings_billing')

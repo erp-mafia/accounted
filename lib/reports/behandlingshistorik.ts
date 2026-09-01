@@ -355,6 +355,11 @@ const API_KEY_FIELDS: Record<string, string> = {
   rate_limit_per_minute: 'Anrop per minut',
   expires_at: 'Giltig till',
   is_active: 'Aktiv',
+  // How much the key may post without a human. A change here changes who
+  // approves the company's bookkeeping, so it belongs in behandlingshistorik
+  // (BFL 5 kap. 11 §) exactly like a scope change does. Without this line the
+  // UPDATE row exists in audit_log but renders zero diff lines and is dropped.
+  unattended_commit_limit: 'Belopp utan mänsklig granskning',
 }
 
 const DIMENSION_FIELDS: Record<string, string> = {

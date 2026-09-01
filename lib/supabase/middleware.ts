@@ -11,9 +11,12 @@ import {
   type ProxyTimings,
 } from '@/lib/supabase/proxy-timing'
 import { shouldEnforceMfa } from '@/lib/auth/mfa'
+import { isMultiUserEnforced } from '@/lib/entitlements/multi-user'
+import { MULTI_USER_GRACE_DAYS } from '@/lib/entitlements/multi-user-state'
 import { apiPathSkipsMfaGate } from '@/lib/auth/api-mfa-gate'
 import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from '@/i18n/config'
 import { userHasPassword } from '@/lib/auth/has-password'
+import { isEmailOnBrandAllowlist } from '@/lib/auth/brand-signup-gate'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { normalizeHost, resolveBrandByHost } from '@/lib/branding/resolve'
 import {
@@ -41,12 +44,27 @@ import {
 const log = createLogger('proxy')
 
 /**
- * Host-scoped marker that the signed-in user is on their home domain, so the
- * affinity check below costs zero queries on the hot path. Expiry re-runs the
- * check, which bounds staleness after team-membership changes.
+ * Marker that the signed-in user is on their home domain, so the affinity
+ * check below costs zero queries on the hot path. Expiry re-runs the check,
+ * which bounds staleness after team-membership changes.
+ *
+ * The value is scoped to BOTH the user and the host (`userId~host`): a
+ * host-only value let anyone who signed in within the TTL window inherit the
+ * previous user's "this is home" verdict in the same browser, skipping the
+ * brand-host bounce entirely (found via the amnas account-switch repro,
+ * 2026-08-31). A stale host-only cookie from before this change simply never
+ * matches, so the check re-runs and the format migrates itself. The `~`
+ * separator is unreserved under encodeURIComponent AND a legal raw cookie
+ * octet, so the value round-trips byte-identically whether or not the cookie
+ * layer percent-encodes.
  */
 const HOME_DOMAIN_OK_COOKIE = 'gnubok-home-ok'
 const HOME_DOMAIN_OK_MAX_AGE = 15 * 60
+
+/** The `userId~host` value a home-ok cookie must carry to skip the check. */
+function homeDomainOkValue(userId: string, host: string): string {
+  return `${userId}~${host}`
+}
 
 /**
  * Auth proxy entry point. Wraps the real work so every response carries a
@@ -355,14 +373,19 @@ async function updateSessionInner(
   // stays the answer for multi-domain company rosters. Exemption: byrå
   // staff who also have canonical-homed companies stay put on the canonical
   // host; the signpost handles per-company homing.
-  const homeOutcome = await resolveHomeDomainOutcome(supabase, user.id, request)
+  const homeOutcome = await resolveHomeDomainOutcome(
+    supabase,
+    user.id,
+    user.email ?? null,
+    request,
+  )
   if (homeOutcome.redirectTo) {
     return NextResponse.redirect(homeOutcome.redirectTo)
   }
   if (homeOutcome.cacheOk) {
     supabaseResponse.cookies.set(
       HOME_DOMAIN_OK_COOKIE,
-      normalizeHost(request.nextUrl.hostname),
+      homeDomainOkValue(user.id, normalizeHost(request.nextUrl.hostname)),
       {
         path: '/',
         httpOnly: true,
@@ -414,6 +437,7 @@ async function updateSessionInner(
     companyId: string | null
     locale: string | null
     degraded: boolean
+    allLocked: boolean
   } | null = null
   const resolveCompanyOnce = async () =>
     (resolvedCompany ??= await timed(timing, 'companyMs', () =>
@@ -464,7 +488,7 @@ async function updateSessionInner(
 
   // Company context resolution
   const cookieCompanyId = request.cookies.get('gnubok-company-id')?.value
-  const { companyId, locale: dbLocale, degraded } = await resolveCompanyOnce()
+  const { companyId, locale: dbLocale, degraded, allLocked } = await resolveCompanyOnce()
 
   // If the cookie pointed at a company we can no longer resolve (e.g.
   // archived), clear it so the browser stops sending it. Never on degraded
@@ -495,7 +519,10 @@ async function updateSessionInner(
     pathname.startsWith('/select-company') ||
     pathname.startsWith('/settings/account') ||
     pathname.startsWith('/api/account/') ||
-    pathname.startsWith('/api/company')
+    pathname.startsWith('/api/company') ||
+    // Multi-user seat gate: the paused page IS the destination for a user
+    // whose every membership is frozen, so it must render in that state.
+    pathname.startsWith('/paused')
 
   // No companies: redirect to the picker if we have BankID enrichment for
   // this user, otherwise the manual wizard. Either way, allow the escape-hatch
@@ -542,6 +569,18 @@ async function updateSessionInner(
         return supabaseResponse
       }
       return NextResponse.redirect(new URL('/byra', request.url))
+    }
+
+    // Multi-user seat gate: memberships exist but every one is frozen for
+    // this (non-owner) user. This is NOT the no-company state: sending them
+    // to onboarding would walk a locked-out colleague into creating a
+    // pointless company. The paused page explains and names the companies.
+    // API requests pass through so routes answer JSON, not an HTML redirect.
+    if (allLocked) {
+      if (pathname.startsWith('/api/')) {
+        return supabaseResponse
+      }
+      return NextResponse.redirect(new URL('/paused', request.url))
     }
 
     // Enrichment lives in the user-keyed `bankid_enrichment` table (migration
@@ -761,19 +800,26 @@ function isAffinityExemptHost(host: string): boolean {
  *      byrå's own client users log in on the byrå domain).
  *   3. Everyone else stays put.
  *
- * `cacheOk` marks a positive "this is home" verdict, cached in a host-scoped
- * cookie by the caller. Query failures fail open with no caching, so a
- * transient error neither locks anyone out nor sticks for a TTL window.
+ * `cacheOk` marks a positive "this is home" verdict, cached by the caller in
+ * a cookie scoped to this user and host. Query failures fail open with no
+ * caching, so a transient error neither locks anyone out nor sticks for a
+ * TTL window.
  */
 async function resolveHomeDomainOutcome(
   supabase: ReturnType<typeof createServerClient>,
   userId: string,
+  userEmail: string | null,
   request: NextRequest,
 ): Promise<{ redirectTo: URL | null; cacheOk: boolean }> {
   const stay = { redirectTo: null, cacheOk: false }
   const host = normalizeHost(request.nextUrl.hostname)
   if (isAffinityExemptHost(host)) return stay
-  if (request.cookies.get(HOME_DOMAIN_OK_COOKIE)?.value === host) return stay
+  // The cached verdict must belong to THIS user: a host-only match let a
+  // second account signed in within the TTL window ride the first account's
+  // verdict and skip the brand-host bounce.
+  if (request.cookies.get(HOME_DOMAIN_OK_COOKIE)?.value === homeDomainOkValue(userId, host)) {
+    return stay
+  }
 
   // Rule 1: the user's own byrå brand domains (RLS: members read their brand).
   const { data: byraRows, error: byraError } = await supabase
@@ -857,6 +903,17 @@ async function resolveHomeDomainOutcome(
   }
   if ((clientRows ?? []).length > 0) return { redirectTo: null, cacheOk: true }
 
+  // A signup-allowlisted email stays on the brand host even before any
+  // membership exists: the partner owner between allowlisted signup and team
+  // provisioning. Without this the layout-level exemption in
+  // resolveBrandDomainBounce (lib/auth/brand-signup-gate.ts) is unreachable,
+  // because this redirect runs first. Fail-closed lookup: an allowlist query
+  // error reads as "not allowlisted" and falls through to the platform
+  // redirect, which is the pre-existing behavior.
+  if (userEmail && (await isEmailOnBrandAllowlist(hostBrand.id, userEmail))) {
+    return { redirectTo: null, cacheOk: true }
+  }
+
   const platformUrl = new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://app.gnubok.se')
   if (normalizeHost(platformUrl.hostname) === host) return { redirectTo: null, cacheOk: true }
   // Preserve path + query for the same deep-link reason as the byrå hop.
@@ -926,19 +983,32 @@ async function resolveCompanyForMiddleware(
   supabase: ReturnType<typeof createServerClient>,
   userId: string,
   _request: NextRequest
-): Promise<{ companyId: string | null; locale: string | null; degraded: boolean }> {
-  const { data, error } = await supabase.rpc('resolve_active_company')
+): Promise<{ companyId: string | null; locale: string | null; degraded: boolean; allLocked: boolean }> {
+  // Multi-user seat gate: the gated RPC skips memberships frozen for this
+  // user (non-owner, multi_user lapsed past its 20-day grace) and reports
+  // has_locked_membership when NOTHING resolved because of that, which is
+  // what routes the user to /paused instead of onboarding. Self-hosted and
+  // dev call the ungated function: the gate never bites there.
+  const enforced = isMultiUserEnforced()
+  const { data, error } = enforced
+    ? await supabase.rpc('resolve_active_company_gated', {
+        p_grace_days: MULTI_USER_GRACE_DAYS,
+      })
+    : await supabase.rpc('resolve_active_company')
 
   if (error) {
     if (error.code === 'PGRST202') {
-      // Function not deployed here: use the query path.
+      // Function not deployed here (self-host not migrated yet, or a deploy
+      // racing the branch merge): use the ungated query path. The race
+      // window fails OPEN for the seat gate on purpose: never lock people
+      // out because a deploy is mid-flight.
       return resolveCompanyForMiddlewareViaQueries(supabase, userId, _request)
     }
     // Issue #1053: a FAILED call degrades (fail open), never reads as "no
     // companies". locale null is fine because the degraded flag already
     // suppresses the locale-cookie sync at the call site.
     console.error('[middleware] resolve_active_company rpc failed', error)
-    return { companyId: null, locale: null, degraded: true }
+    return { companyId: null, locale: null, degraded: true, allLocked: false }
   }
 
   const row = Array.isArray(data) ? data[0] : data
@@ -946,7 +1016,7 @@ async function resolveCompanyForMiddleware(
     // Zero rows = NULL auth.uid(); impossible for the cookie-auth middleware
     // client, so treat as degraded rather than redirecting to onboarding.
     console.error('[middleware] resolve_active_company returned no row for authenticated user')
-    return { companyId: null, locale: null, degraded: true }
+    return { companyId: null, locale: null, degraded: true, allLocked: false }
   }
 
   if (row.company_id && row.used_fallback) {
@@ -969,6 +1039,9 @@ async function resolveCompanyForMiddleware(
     companyId: row.company_id ?? null,
     locale: row.locale ?? null,
     degraded: false,
+    // Only the gated RPC carries the column; the ungated one leaves it
+    // undefined, which correctly reads as false.
+    allLocked: row.has_locked_membership === true,
   }
 }
 
@@ -981,7 +1054,7 @@ async function resolveCompanyForMiddlewareViaQueries(
   supabase: ReturnType<typeof createServerClient>,
   userId: string,
   _request: NextRequest
-): Promise<{ companyId: string | null; locale: string | null; degraded: boolean }> {
+): Promise<{ companyId: string | null; locale: string | null; degraded: boolean; allLocked: boolean }> {
   // 1. user_preferences (authoritative) + first membership, fetched in
   // parallel: the fallback query result doubles as validation when the
   // preferred company happens to be the first membership, which is the
@@ -1016,12 +1089,12 @@ async function resolveCompanyForMiddlewareViaQueries(
       '[middleware] company resolution query failed',
       prefsRes.error ?? firstRes.error
     )
-    return { companyId: null, locale, degraded: true }
+    return { companyId: null, locale, degraded: true, allLocked: false }
   }
 
   if (prefs?.active_company_id) {
     if (prefs.active_company_id === firstCompany?.company_id) {
-      return { companyId: firstCompany.company_id, locale, degraded: false }
+      return { companyId: firstCompany.company_id, locale, degraded: false, allLocked: false }
     }
 
     const { data: membership, error: membershipError } = await supabase
@@ -1036,14 +1109,14 @@ async function resolveCompanyForMiddlewareViaQueries(
     // first membership (wrong company for consultants): degrade instead.
     if (membershipError) {
       console.error('[middleware] company preference validation failed', membershipError)
-      return { companyId: null, locale, degraded: true }
+      return { companyId: null, locale, degraded: true, allLocked: false }
     }
 
-    if (membership) return { companyId: membership.company_id, locale, degraded: false }
+    if (membership) return { companyId: membership.company_id, locale, degraded: false, allLocked: false }
   }
 
   // 2. Fallback: first non-archived membership (already fetched above)
-  if (!firstCompany) return { companyId: null, locale, degraded: false }
+  if (!firstCompany) return { companyId: null, locale, degraded: false, allLocked: false }
 
   // Write the fallback back to user_preferences so future RLS lookups
   // see the same active company without needing this fallback scan.
@@ -1061,5 +1134,5 @@ async function resolveCompanyForMiddlewareViaQueries(
     console.error('[middleware] active company write-back failed', writeBackError)
   }
 
-  return { companyId: firstCompany.company_id, locale, degraded: false }
+  return { companyId: firstCompany.company_id, locale, degraded: false, allLocked: false }
 }
