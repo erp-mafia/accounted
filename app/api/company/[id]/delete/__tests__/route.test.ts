@@ -32,12 +32,18 @@ function mockService(rowsByTable: Record<string, Row[]>) {
     const queue = rowsByTable[table] ?? []
     const next = queue.shift() ?? { data: null, error: null }
 
-    const updateFn = vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        eq: vi.fn().mockResolvedValue({ data: null, error: null }),
-        then: (resolve: (v: unknown) => void) => resolve({ data: null, error: null }),
-      }),
-    })
+    // Awaitable at any depth: update().eq(...), update().eq(...).eq(...),
+    // update().eq(...).in(...) all resolve to a success result.
+    const updateChain: {
+      eq: ReturnType<typeof vi.fn>
+      in: ReturnType<typeof vi.fn>
+      then: (resolve: (v: unknown) => void) => void
+    } = {
+      eq: vi.fn(() => updateChain),
+      in: vi.fn(() => updateChain),
+      then: (resolve: (v: unknown) => void) => resolve({ data: null, error: null }),
+    }
+    const updateFn = vi.fn().mockReturnValue(updateChain)
     updateSpies[table] = updateFn
 
     return {
@@ -243,5 +249,51 @@ describe('POST /api/company/[id]/delete', () => {
     // Event emitted
     expect(emitted).toHaveLength(1)
     expect(emitted[0]).toMatchObject({ companyId: 'c1', userId: 'user-1' })
+  })
+
+  it('revokes store connections on archive so the store-uniqueness indexes free up', async () => {
+    // Regression: archived companies are hidden by user_company_ids(), so an
+    // 'active' connection left behind blocks reconnecting the same store from
+    // a new company ("Butiken är redan ansluten till ett företag") with no
+    // user-reachable disconnect.
+    mockAuth('user-1')
+    const { updateSpies } = mockService({
+      companies: [{ data: { id: 'c1', name: 'Acme AB', archived_at: null }, error: null }],
+      company_members: [{ data: { role: 'owner' }, error: null }],
+    })
+
+    const req = createMockRequest('/api/company/c1/delete', {
+      method: 'POST',
+      body: { confirm_name: 'Acme AB' },
+    })
+    const { status } = await parseJsonResponse(
+      await POST(req, createMockRouteParams({ id: 'c1' }))
+    )
+    expect(status).toBe(200)
+
+    expect(updateSpies.woocommerce_connections).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'revoked',
+        disconnected_at: expect.any(String),
+        consumer_key_encrypted: null,
+        consumer_secret_encrypted: null,
+        oauth_state: null,
+      })
+    )
+    expect(updateSpies.shopify_connections).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'revoked',
+        disconnected_at: expect.any(String),
+        client_id_encrypted: null,
+        client_secret_encrypted: null,
+      })
+    )
+    expect(updateSpies.stripe_connections).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'revoked',
+        disconnected_at: expect.any(String),
+        oauth_state: null,
+      })
+    )
   })
 })

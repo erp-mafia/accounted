@@ -136,7 +136,44 @@ export async function POST(
     .eq('user_id', user.id)
     .eq('active_company_id', companyId)
 
-  // 6. Write audit log row. companies has no auto-audit trigger, so do it
+  // 6. Revoke the company's store connections. The store-uniqueness indexes
+  // (e.g. woocommerce_connections_store_active_uniq) allow a store to be
+  // actively connected to at most ONE company, and user_company_ids() hides
+  // archived companies, so an 'active' row left behind would block
+  // reconnecting the store from any new company with no user-reachable
+  // disconnect. Same status flip as the manual disconnect paths, secrets
+  // nulled. Non-fatal: the archive already happened, but never silent.
+  const connectionTables: Array<{ table: string; clear: Record<string, null> }> = [
+    {
+      table: 'woocommerce_connections',
+      clear: {
+        consumer_key_encrypted: null,
+        consumer_secret_encrypted: null,
+        oauth_state: null,
+      },
+    },
+    {
+      table: 'shopify_connections',
+      clear: { client_id_encrypted: null, client_secret_encrypted: null },
+    },
+    { table: 'stripe_connections', clear: { oauth_state: null } },
+  ]
+  for (const { table, clear } of connectionTables) {
+    const { error: revokeError } = await service
+      .from(table)
+      .update({ status: 'revoked', disconnected_at: archivedAt, ...clear })
+      .eq('company_id', companyId)
+      .in('status', ['pending', 'active'])
+    if (revokeError) {
+      log.error('Failed to revoke store connections on company archive', {
+        companyId,
+        table,
+        error: revokeError.message,
+      })
+    }
+  }
+
+  // 7. Write audit log row. companies has no auto-audit trigger, so do it
   // explicitly. Service client bypasses audit_log RLS (no INSERT policy).
   // The archive already happened — don't fail the request, but an audit
   // write failing on an irreversible action must never be silent.
@@ -158,13 +195,13 @@ export async function POST(
     })
   }
 
-  // 7. Emit event
+  // 8. Emit event
   await eventBus.emit({
     type: 'company.deleted',
     payload: { companyId, userId: user.id, archivedAt },
   })
 
-  // 8. Build response and clear company cookie if it matched
+  // 9. Build response and clear company cookie if it matched
   const response = NextResponse.json({ data: { companyId, archivedAt } })
 
   const cookieCompanyId = request.headers.get('cookie')?.match(/gnubok-company-id=([^;]+)/)?.[1]
