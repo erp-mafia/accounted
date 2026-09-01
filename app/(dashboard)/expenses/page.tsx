@@ -157,9 +157,6 @@ export default function ExpenseClaimsPage() {
   const [bookingRows, setBookingRows] = useState<BookingRow[] | null>(null)
   const [showRowEditor, setShowRowEditor] = useState(false)
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
-  // The domestic cost account survives a round trip through EU/non-EU modes
-  // (which force the 45xx basis account into the same field).
-  const domesticAccountRef = useRef('5410')
   const [claimant, setClaimant] = useState(OWNER_VALUE)
   const [ownerName, setOwnerName] = useState('')
   const [inboxChoice, setInboxChoice] = useState(NO_RECEIPT_VALUE)
@@ -287,18 +284,27 @@ export default function ExpenseClaimsPage() {
           : []),
       ]
     }
-    // The basis must sit on the ruta-bearing 45xx account even when a
-    // template picked a domestic cost account; the calculated-VAT rate
-    // follows the variant: 4535/4531 -> 25 %, 4536/4532 -> 12 %, 4537/4533 -> 6 %.
-    const rcBasis = expenseAccount.startsWith('45')
+    // The engine's house pattern (same as supplier invoices and the
+    // transactions flow): the cost stays on the chosen cost account, the
+    // fiktiv-moms pair books 2645/2614, and the basbelopp pair (45xx debet /
+    // 4598 kredit) feeds ruta 21/22 while netting to zero in the P&L. When
+    // the chosen account already IS a basis account the pair is skipped.
+    const isBasisCost = /^4[45]\d{2}$/.test(expenseAccount)
+    const basisAccount = isBasisCost
       ? expenseAccount
       : sellerCountry === 'eu'
         ? '4535'
         : '4531'
-    const rcRate = /^45(36|32)/.test(rcBasis) ? 0.12 : /^45(37|33)/.test(rcBasis) ? 0.06 : 0.25
+    const rcRate = /^45(36|32)/.test(basisAccount) ? 0.12 : /^45(37|33)/.test(basisAccount) ? 0.06 : 0.25
     const rc = roundOre(parsedAmount * rcRate)
     return [
-      { key: nextRowKey(), account: rcBasis, debit: parsedAmount.toFixed(2), credit: '' },
+      { key: nextRowKey(), account: expenseAccount, debit: parsedAmount.toFixed(2), credit: '' },
+      ...(isBasisCost
+        ? []
+        : [
+            { key: nextRowKey(), account: basisAccount, debit: parsedAmount.toFixed(2), credit: '' },
+            { key: nextRowKey(), account: '4598', debit: '', credit: parsedAmount.toFixed(2) },
+          ]),
       { key: nextRowKey(), account: '2645', debit: rc.toFixed(2), credit: '' },
       { key: nextRowKey(), account: '2614', debit: '', credit: rc.toFixed(2) },
     ]
@@ -383,7 +389,6 @@ export default function ExpenseClaimsPage() {
     setAppliedTemplate({ name: tpl.name, description: tpl.description ?? '' })
     if (businessDebits.length === 1) {
       setExpenseAccount(businessDebits[0].account)
-      if (sellerCountry === 'se') domesticAccountRef.current = businessDebits[0].account
       setBookingRows(null)
     } else {
       setBookingRows(
@@ -406,14 +411,7 @@ export default function ExpenseClaimsPage() {
   }
 
   const applyCountry = (country: SellerCountry) => {
-    setSellerCountry((prev) => {
-      if (prev === 'se' && country !== 'se') domesticAccountRef.current = expenseAccount
-      return country
-    })
-    if (country === 'se') setExpenseAccount(domesticAccountRef.current || '5410')
-    else if (country === 'eu') setExpenseAccount('4535')
-    else setExpenseAccount('4531')
-    setAppliedTemplate(null)
+    setSellerCountry(country)
     setBookingRows(null)
   }
 
