@@ -375,6 +375,13 @@ describe('tools/list payload size guard', () => {
     //     costs ~11 800 tokens across those 58 tools, and the structural fix is
     //     to stop repeating it, not to trim it further.
     //
+    //   * 59.0K to 59.1K: second examples batch (2026-09-01, #2066), 7
+    //     examples on 5 more tools for 80 tokens, spending under half the
+    //     margin the envelope trim created. Picked by evidence: search_tools
+    //     was sent a nonexistent `offset` in prod the same day, the upload
+    //     pair's examples ARE the two-step flow, and
+    //     list_uncategorized_transactions is the highest-traffic read.
+    //
     // Long-term answer to growth is no longer a ceiling bump. gnubok_call_tool
     // makes `catalogVisibility: 'search'` usable for READ tools on hosts that
     // can only invoke what tools/list showed them, which is the constraint that
