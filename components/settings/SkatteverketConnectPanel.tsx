@@ -309,8 +309,8 @@ function SkatteverketPersonalConnectionCard() {
               title={
                 !hasSkatteverket
                   ? isSelfHosted()
-                    ? 'Anslutning till Skatteverket kräver en connector-nyckel eller egna API-uppgifter'
-                    : 'Anslutning till Skatteverket kräver ett abonnemang'
+                    ? t('connect_requires_connector_key')
+                    : t('connect_requires_subscription')
                   : undefined
               }
             >
@@ -374,8 +374,8 @@ function SkatteverketPersonalConnectionCard() {
               title={
                 !hasSkatteverket
                   ? isSelfHosted()
-                    ? 'Anslutning till Skatteverket kräver en connector-nyckel eller egna API-uppgifter'
-                    : 'Anslutning till Skatteverket kräver ett abonnemang'
+                    ? t('connect_requires_connector_key')
+                    : t('connect_requires_subscription')
                   : undefined
               }
             >

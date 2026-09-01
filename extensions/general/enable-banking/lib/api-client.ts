@@ -15,6 +15,7 @@
 import { getAuthorizationHeader } from './jwt'
 import { deriveTransactionLabel } from './transaction-label'
 import { FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
+import { bankConnectorMode, CONNECTOR_COMPANY_HEADER } from '@/lib/connect/instance/upstreams'
 
 // Prefer _PRODUCTION variant; sandbox uses api.tilisy.com, production uses api.enablebanking.com
 const ENABLE_BANKING_API_URL =
@@ -264,7 +265,16 @@ async function authenticatedFetch(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<Response> {
-  const url = `${ENABLE_BANKING_API_URL}${endpoint}`
+  // Connector mode: a self-host with a connector key and no own Enable Banking
+  // credentials routes every upstream call through the hosted bank proxy. The
+  // proxy holds the real EB credentials and mints the JWT on its side, so the
+  // instance sends the connector key as a Bearer token and NEVER calls
+  // getAuthorizationHeader() (there is no private key to sign with here). When
+  // this instance has its own EB credentials, or on hosted, bankConnectorMode()
+  // returns null and the direct path below is byte-identical to before.
+  const connector = bankConnectorMode()
+  const url = connector ? `${connector.baseUrl}${endpoint}` : `${ENABLE_BANKING_API_URL}${endpoint}`
+  const authorization = connector ? `Bearer ${connector.key}` : getAuthorizationHeader()
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
 
@@ -273,7 +283,7 @@ async function authenticatedFetch(
       ...options,
       signal: controller.signal,
       headers: {
-        'Authorization': getAuthorizationHeader(),
+        'Authorization': authorization,
         'Content-Type': 'application/json',
         ...options.headers,
       },
@@ -490,7 +500,8 @@ export async function startAuthorization(
   redirectUrl: string,
   state: string,
   psuType: 'personal' | 'business' = 'personal',
-  authMethod?: string
+  authMethod?: string,
+  companyId?: string
 ): Promise<AuthResponse> {
   // Calculate consent validity (90 days)
   const validUntil = new Date()
@@ -519,9 +530,20 @@ export async function startAuthorization(
     requestBody.auth_method = authMethod
   }
 
+  // In connector mode the hosted bank proxy meters the per-company connection
+  // quota, so it needs to know which company this authorization is for. This is
+  // gated on bankConnectorMode(), NOT merely on companyId: on hosted and on
+  // own-credentials self-hosts companyId is always set, and sending an internal
+  // company UUID to the real Enable Banking API is both a needless behavior
+  // change and an identifier leak to a third-party processor. Off the connector
+  // path the direct request stays byte-identical.
+  const authHeaders =
+    companyId && bankConnectorMode() ? { [CONNECTOR_COMPANY_HEADER]: companyId } : undefined
+
   const response = await authenticatedFetch('/auth', {
     method: 'POST',
-    body: JSON.stringify(requestBody)
+    body: JSON.stringify(requestBody),
+    ...(authHeaders ? { headers: authHeaders } : {}),
   })
 
   if (!response.ok) {
@@ -547,11 +569,15 @@ export async function startAuthorization(
  * Create a session after user completes bank authorization
  *
  * @param code - The authorization code from callback
+ * @param connectorState - The signed connector state echoed back through the
+ *   hosted callback in connector mode. The bank proxy binds the /sessions
+ *   exchange to the pending row it signed at /auth time (single-use, race-safe),
+ *   so it is required in connector mode and absent on the direct path.
  */
-export async function createSession(code: string): Promise<SessionResponse> {
+export async function createSession(code: string, connectorState?: string): Promise<SessionResponse> {
   const response = await authenticatedFetch('/sessions', {
     method: 'POST',
-    body: JSON.stringify({ code })
+    body: JSON.stringify(connectorState ? { code, connector_state: connectorState } : { code })
   })
 
   if (!response.ok) {
@@ -671,12 +697,22 @@ export async function deleteSession(sessionId: string): Promise<void> {
 
   if (!response.ok) {
     const body = await response.text()
-    console.error('[enable-banking] deleteSession failed', {
+    // A session Enable Banking has already dropped (404, or a 401/403 naming
+    // an expired/closed session) is the expected answer when we revoke a
+    // connection whose PSD2 consent ran out: every caller catches and carries
+    // on, so it does not belong in the error panel.
+    const alreadyGone = response.status === 404 || isSessionExpiredResponse(response.status, body)
+    const logLine = {
       status: response.status,
       statusText: response.statusText,
       body,
       sessionId,
-    })
+    }
+    if (alreadyGone) {
+      console.warn('[enable-banking] deleteSession: session already gone at Enable Banking', logLine)
+    } else {
+      console.error('[enable-banking] deleteSession failed', logLine)
+    }
     throw new Error(`Failed to revoke session (${response.status}): ${body}`)
   }
 }
@@ -704,27 +740,65 @@ export async function getAccountBalances(accountUid: string): Promise<Balance[]>
   return data.balances || []
 }
 
+// Balance-type preference orders. ASPSPs report types either as camelCase
+// names or ISO 20022 codes; both spellings of each type are accepted,
+// case-insensitively. Booked answers "what has the bank settled", available
+// answers "what can be spent right now" (the covering-decision number).
+// closingBooked (settled, definitive) wins over expected, which wins over
+// interimBooked (intraday booked): fall through to less-final booked types
+// only when the stabler one is absent, and to the generic first-entry
+// fallback only when no booked type exists at all.
+const BOOKED_BALANCE_TYPES = ['closingbooked', 'clbd', 'expected', 'xpcd', 'interimbooked', 'itbd']
+const AVAILABLE_BALANCE_TYPES = [
+  'interimavailable',
+  'itav',
+  'closingavailable',
+  'clav',
+  'forwardavailable',
+  'fwav',
+]
+
+function pickBalanceByType(balances: Balance[], preference: string[]): Balance | undefined {
+  for (const type of preference) {
+    const match = balances.find(b => b.balance_type?.toLowerCase() === type)
+    if (match) return match
+  }
+  return undefined
+}
+
 /**
- * Get account balance (returns booked balance amount)
+ * Get account balance from one BALANCES call: the booked amount (falling back
+ * to the first reported balance, as before) plus the available amount when the
+ * ASPSP reports one. One call: both figures come from the same quota-limited
+ * response, so exposing `available` costs nothing extra.
+ *
+ * Returns null when the ASPSP reports NO balances at all. The old behavior
+ * fabricated `amount: 0` here; once balances became user-facing ("how much
+ * money is in the bank", covering decisions before payment runs) a fabricated
+ * zero with a fresh timestamp is dangerous, so the caller keeps its previous
+ * stored value instead.
  */
 export async function getAccountBalance(
   accountUid: string
-): Promise<{ amount: number; date: string }> {
+): Promise<{ amount: number; date: string; available: number | null } | null> {
   const balances = await getAccountBalances(accountUid)
 
   // Prefer closingBooked, then expected, then first available
-  const balance =
-    balances.find(b => b.balance_type === 'closingBooked') ||
-    balances.find(b => b.balance_type === 'expected') ||
-    balances[0]
+  const balance = pickBalanceByType(balances, BOOKED_BALANCE_TYPES) || balances[0]
 
   if (!balance) {
-    return { amount: 0, date: new Date().toISOString().split('T')[0] }
+    return null
   }
+
+  const availableBalance = pickBalanceByType(balances, AVAILABLE_BALANCE_TYPES)
+  const available = availableBalance
+    ? parseFloat(availableBalance.balance_amount.amount)
+    : null
 
   return {
     amount: parseFloat(balance.balance_amount.amount),
-    date: balance.reference_date || new Date().toISOString().split('T')[0]
+    date: balance.reference_date || new Date().toISOString().split('T')[0],
+    available: available != null && Number.isFinite(available) ? available : null,
   }
 }
 
@@ -1009,7 +1083,12 @@ export async function getAllTransactionsWithRaw(
         activeDateFrom = recovery.dateFrom
         continue
       }
-      console.error('[enable-banking] getAllTransactionsWithRaw failed', {
+      // An expired PSD2 session is an expected end of life for a consent, not
+      // a failure: SessionExpiredError below flips the connection to 'expired'
+      // and asks the user to re-authorize. Log it at warn so only the genuine
+      // ASPSP/upstream failures reach the error panel.
+      const sessionExpired = isSessionExpiredResponse(response.status, body)
+      const logLine = {
         status: response.status,
         statusText: response.statusText,
         body,
@@ -1019,10 +1098,12 @@ export async function getAllTransactionsWithRaw(
         strategy: activeStrategy,
         page,
         hasContinuationKey: !!continuationKey,
-      })
-      if (isSessionExpiredResponse(response.status, body)) {
+      }
+      if (sessionExpired) {
+        console.warn('[enable-banking] getAllTransactionsWithRaw: bank session expired', logLine)
         throw new SessionExpiredError(response.status, body)
       }
+      console.error('[enable-banking] getAllTransactionsWithRaw failed', logLine)
       throw new Error(`Failed to get transactions (${response.status}): ${body}`)
     }
 

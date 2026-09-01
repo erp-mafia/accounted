@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -10,7 +10,8 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { DataListEmpty } from '@/components/ui/data-list'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -163,6 +164,9 @@ export default function SupplierInvoicesPage() {
   const [approvingId, setApprovingId] = useState<string | null>(null)
   // Payment-file bulk selection + the "already in an active betalfil" chip map.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // Radix' onCheckedChange carries no mouse event: the preceding click records
+  // whether shift was held, for range selection.
+  const shiftHeld = useRef(false)
   const [activeBatchInvoiceIds, setActiveBatchInvoiceIds] = useState<Set<string>>(new Set())
   const [showPaymentDialog, setShowPaymentDialog] = useState(false)
 
@@ -294,13 +298,15 @@ export default function SupplierInvoicesPage() {
   const allSelectableSelected =
     selectableInvoices.length > 0 && selectableInvoices.every((inv) => selectedIds.has(inv.id))
 
-  function toggleSelect(id: string) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  // Ranges walk the selectable rows in rendered (sorted) order.
+  const range = useRangeSelect({
+    visibleIds: sortedInvoices.filter(isBatchSelectable).map((inv) => inv.id),
+    selectedIds,
+    setSelectedIds,
+  })
+
+  function toggleSelect(id: string, extend?: boolean) {
+    range.toggle(id, extend)
   }
 
   // Labels the excluded rows in the payment dialog ("Derome CD3014794407"),
@@ -440,9 +446,10 @@ export default function SupplierInvoicesPage() {
             <button
               type="button"
               className={QUIET_LINK_CLASS}
-              onClick={() =>
+              onClick={() => {
                 setSelectedIds(new Set(selectableInvoices.map((inv) => inv.id)))
-              }
+                range.resetAnchor()
+              }}
             >
               {t('bulk_select_all', { count: selectableInvoices.length })}
             </button>
@@ -450,7 +457,10 @@ export default function SupplierInvoicesPage() {
           <button
             type="button"
             className={QUIET_LINK_CLASS}
-            onClick={() => setSelectedIds(new Set())}
+            onClick={() => {
+              setSelectedIds(new Set())
+              range.resetAnchor()
+            }}
           >
             {t('bulk_clear')}
           </button>
@@ -579,19 +589,22 @@ export default function SupplierInvoicesPage() {
                     {/* Hover-revealed selection checkbox (JournalEntryList shape). */}
                     {canWrite && (
                       <td
-                        className={cn(TD_CLASS, 'w-[26px] !pl-1 py-[9px]')}
+                        className={cn(TD_CLASS, 'w-[26px] !pl-1 py-[9px] select-none')}
                         onClick={(e) => e.stopPropagation()}
                       >
                         {selectable && (
                           <Checkbox
                             checked={selectedIds.has(inv.id)}
-                            onCheckedChange={() => toggleSelect(inv.id)}
+                            onClick={(e) => {
+                              shiftHeld.current = e.shiftKey
+                            }}
+                            onCheckedChange={() => toggleSelect(inv.id, shiftHeld.current)}
                             aria-label={t('bulk_select_row')}
                             className={cn(
-                              'transition-opacity duration-150',
+                              'border-foreground duration-150',
                               selectedIds.has(inv.id) || selectedIds.size > 0
                                 ? 'opacity-100'
-                                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100',
+                                : CHECKBOX_REVEAL_CLASS,
                             )}
                           />
                         )}

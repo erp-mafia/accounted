@@ -145,6 +145,9 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // Writes: bulk
   'POST /api/v1/companies/:companyId/transactions/ingest': 'transactions:write',
   'POST /api/v1/companies/:companyId/transactions/batch-categorize': 'transactions:write',
+  // Cash accounts: the bank/kassa register incl. the bank-reported balance
+  // (booked + available + balance_updated_at) from the PSD2 sync.
+  'GET /api/v1/companies/:companyId/cash-accounts': 'transactions:read',
   // Reconciliation (legacy bank-only routes; kept as aliases of the
   // account-keyed routes below, with their original scopes)
   'POST /api/v1/companies/:companyId/reconciliation/bank/run': 'transactions:write',

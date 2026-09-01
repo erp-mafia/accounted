@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { upsertWebshopOrders } from '../ingest'
+import { removeWebshopOrders, upsertWebshopOrders } from '../ingest'
 import type { WebshopOrderUpsert } from '../types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -311,5 +311,102 @@ describe('upsertWebshopOrders', () => {
 
     expect(result.errors).toBe(1)
     expect(result.firstError?.message).toBe('boom')
+  })
+})
+
+describe('removeWebshopOrders', () => {
+  let mock: ReturnType<typeof createQueuedMockSupabase>
+  const supabase = () => mock.supabase as unknown as SupabaseClient
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mock = createQueuedMockSupabase()
+  })
+
+  it('deletes unfrozen rows and reports the count', async () => {
+    mock.enqueueMany([
+      { data: [{ id: 'row-1' }, { id: 'row-2' }] }, // unfrozen candidates
+      { data: [] }, // no frozen refund children
+      { data: [{ id: 'row-1' }, { id: 'row-2' }] }, // delete
+    ])
+
+    const result = await removeWebshopOrders(supabase(), COMPANY, [
+      'woo_butik.example.se_order_1001',
+      'woo_butik.example.se_order_1002',
+    ])
+
+    expect(result).toEqual({ removed: 2, errors: 0 })
+    expect(mock.findCall('webshop_orders', 'delete')).toBeDefined()
+    // The freeze guards run on the candidate select AND are repeated on the
+    // delete statement itself: a row frozen between the two round trips must
+    // survive (TOCTOU skeptic finding).
+    const guardColumns = [
+      'journal_entry_id',
+      'invoice_id',
+      'manually_booked_at',
+      'legacy_transaction_id',
+    ]
+    expect(mock.findCalls('webshop_orders', 'is').map((args) => args[0])).toEqual([
+      ...guardColumns,
+      ...guardColumns,
+    ])
+    // Paid rows are never deleted, on both statements.
+    expect(
+      mock.findCalls('webshop_orders', 'eq').filter((args) => args[0] === 'is_paid'),
+    ).toEqual([
+      ['is_paid', false],
+      ['is_paid', false],
+    ])
+  })
+
+  it('does nothing when no unfrozen row matches', async () => {
+    mock.enqueueMany([{ data: [] }])
+
+    const result = await removeWebshopOrders(supabase(), COMPANY, [
+      'woo_butik.example.se_order_1001',
+    ])
+
+    expect(result).toEqual({ removed: 0, errors: 0 })
+    expect(mock.findCall('webshop_orders', 'delete')).toBeUndefined()
+  })
+
+  it('spares a parent whose refund child is frozen (delete would cascade)', async () => {
+    mock.enqueueMany([
+      { data: [{ id: 'row-1' }, { id: 'row-2' }] },
+      { data: [{ parent_order_id: 'row-1' }] }, // row-1 has a booked refund
+      { data: [{ id: 'row-2' }] },
+    ])
+
+    const result = await removeWebshopOrders(supabase(), COMPANY, [
+      'woo_butik.example.se_order_1001',
+      'woo_butik.example.se_order_1002',
+    ])
+
+    expect(result).toEqual({ removed: 1, errors: 0 })
+    const deleteIn = mock
+      .findCalls('webshop_orders', 'in')
+      .find((args) => args[0] === 'id')
+    expect(deleteIn?.[1]).toEqual(['row-2'])
+  })
+
+  it('surfaces delete errors without throwing', async () => {
+    mock.enqueueMany([
+      { data: [{ id: 'row-1' }] },
+      { data: [] },
+      { data: null, error: { message: 'boom', code: '500' } },
+    ])
+
+    const result = await removeWebshopOrders(supabase(), COMPANY, [
+      'woo_butik.example.se_order_1001',
+    ])
+
+    expect(result.removed).toBe(0)
+    expect(result.errors).toBe(1)
+    expect(result.firstError?.message).toBe('boom')
+  })
+
+  it('returns immediately on an empty id list', async () => {
+    const result = await removeWebshopOrders(supabase(), COMPANY, [])
+    expect(result).toEqual({ removed: 0, errors: 0 })
   })
 })

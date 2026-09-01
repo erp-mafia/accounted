@@ -11,6 +11,8 @@ import {
   type ProxyTimings,
 } from '@/lib/supabase/proxy-timing'
 import { shouldEnforceMfa } from '@/lib/auth/mfa'
+import { isMultiUserEnforced } from '@/lib/entitlements/multi-user'
+import { MULTI_USER_GRACE_DAYS } from '@/lib/entitlements/multi-user-state'
 import { apiPathSkipsMfaGate } from '@/lib/auth/api-mfa-gate'
 import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from '@/i18n/config'
 import { userHasPassword } from '@/lib/auth/has-password'
@@ -265,7 +267,12 @@ async function updateSessionInner(
         supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
       )
       if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
-        return NextResponse.json({ error: 'MFA-verifiering krävs.' }, { status: 403 })
+        const response = NextResponse.json(
+          { error: 'MFA-verifiering krävs.' },
+          { status: 403 },
+        )
+        copyResponseCookies(supabaseResponse, response)
+        return response
       }
     }
     return supabaseResponse
@@ -350,14 +357,17 @@ async function updateSessionInner(
       const destination = carriesDestination
         ? safeReturnTo(request.nextUrl.searchParams.get('next'), '/')
         : '/'
-      return NextResponse.redirect(new URL(destination, request.url))
+      return redirectWithAuthCookies(
+        supabaseResponse,
+        new URL(destination, request.url),
+      )
     }
     return supabaseResponse
   }
 
   // Protected routes - require authentication
   if (!user) {
-    return bounceToAuth(request, '/login')
+    return bounceToAuth(request, supabaseResponse, '/login')
   }
 
   // ── Home-domain affinity (WL, founder call 2026-08-05) ──────────────────
@@ -378,7 +388,7 @@ async function updateSessionInner(
     request,
   )
   if (homeOutcome.redirectTo) {
-    return NextResponse.redirect(homeOutcome.redirectTo)
+    return redirectWithAuthCookies(supabaseResponse, homeOutcome.redirectTo)
   }
   if (homeOutcome.cacheOk) {
     supabaseResponse.cookies.set(
@@ -406,7 +416,8 @@ async function updateSessionInner(
       const mfaTarget = `/mfa/enroll${
         innerReturnTo ? `?returnTo=${encodeURIComponent(innerReturnTo)}` : ''
       }`
-      return NextResponse.redirect(
+      return redirectWithAuthCookies(
+        supabaseResponse,
         new URL(
           `/account/set-password?returnTo=${encodeURIComponent(mfaTarget)}`,
           request.url,
@@ -435,6 +446,7 @@ async function updateSessionInner(
     companyId: string | null
     locale: string | null
     degraded: boolean
+    allLocked: boolean
   } | null = null
   const resolveCompanyOnce = async () =>
     (resolvedCompany ??= await timed(timing, 'companyMs', () =>
@@ -449,7 +461,7 @@ async function updateSessionInner(
 
     // User has MFA enrolled but hasn't verified this session → redirect to verify
     if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
-      return bounceToAuth(request, '/mfa/verify')
+      return bounceToAuth(request, supabaseResponse, '/mfa/verify')
     }
 
     // MFA required but user has no factor enrolled yet → force enrollment
@@ -473,7 +485,7 @@ async function updateSessionInner(
         const hasVerifiedFactor = factors?.totp?.some(f => f.status === 'verified')
 
         if (!hasVerifiedFactor) {
-          return bounceToAuth(request, '/mfa/enroll')
+          return bounceToAuth(request, supabaseResponse, '/mfa/enroll')
         }
       }
     }
@@ -485,7 +497,7 @@ async function updateSessionInner(
 
   // Company context resolution
   const cookieCompanyId = request.cookies.get('gnubok-company-id')?.value
-  const { companyId, locale: dbLocale, degraded } = await resolveCompanyOnce()
+  const { companyId, locale: dbLocale, degraded, allLocked } = await resolveCompanyOnce()
 
   // If the cookie pointed at a company we can no longer resolve (e.g.
   // archived), clear it so the browser stops sending it. Never on degraded
@@ -516,7 +528,10 @@ async function updateSessionInner(
     pathname.startsWith('/select-company') ||
     pathname.startsWith('/settings/account') ||
     pathname.startsWith('/api/account/') ||
-    pathname.startsWith('/api/company')
+    pathname.startsWith('/api/company') ||
+    // Multi-user seat gate: the paused page IS the destination for a user
+    // whose every membership is frozen, so it must render in that state.
+    pathname.startsWith('/paused')
 
   // No companies: redirect to the picker if we have BankID enrichment for
   // this user, otherwise the manual wizard. Either way, allow the escape-hatch
@@ -562,7 +577,19 @@ async function updateSessionInner(
       if (isByraNoCompanyAllowed) {
         return supabaseResponse
       }
-      return NextResponse.redirect(new URL('/byra', request.url))
+      return redirectWithAuthCookies(supabaseResponse, new URL('/byra', request.url))
+    }
+
+    // Multi-user seat gate: memberships exist but every one is frozen for
+    // this (non-owner) user. This is NOT the no-company state: sending them
+    // to onboarding would walk a locked-out colleague into creating a
+    // pointless company. The paused page explains and names the companies.
+    // API requests pass through so routes answer JSON, not an HTML redirect.
+    if (allLocked) {
+      if (pathname.startsWith('/api/')) {
+        return supabaseResponse
+      }
+      return NextResponse.redirect(new URL('/paused', request.url))
     }
 
     // Enrichment lives in the user-keyed `bankid_enrichment` table (migration
@@ -575,7 +602,10 @@ async function updateSessionInner(
       .maybeSingle()
 
     const destination = enrichmentRow ? '/select-company' : '/onboarding'
-    return NextResponse.redirect(new URL(destination, request.url))
+    return redirectWithAuthCookies(
+      supabaseResponse,
+      new URL(destination, request.url),
+    )
   }
 
   // Set company cookie on the response so downstream requests have it
@@ -654,6 +684,28 @@ function copyResponseCookies(from: NextResponse, to: NextResponse): void {
   for (const cookie of from.cookies.getAll()) {
     to.cookies.set(cookie)
   }
+}
+
+/**
+ * Redirect that carries the auth cookies queued on `authResponse`.
+ *
+ * auth-js writes through the `setAll` callback while `getUser()` runs: a
+ * successful refresh puts the ROTATED tokens on the response, a dead session
+ * puts the cookie DELETIONS there. A bare `NextResponse.redirect()` throws
+ * both away, so the browser replays the old cookie on the very next request:
+ * a consumed refresh token on the happy path, and a dead one on the expiry
+ * path, where production showed the bounce and the following /login each
+ * spending their own GoTrue 400 about 100 ms apart. Every response that
+ * replaces `supabaseResponse` has to go through here (or through
+ * `copyResponseCookies`, for the non-redirect ones).
+ */
+function redirectWithAuthCookies(
+  authResponse: NextResponse,
+  url: URL | string,
+): NextResponse {
+  const response = NextResponse.redirect(url)
+  copyResponseCookies(authResponse, response)
+  return response
 }
 
 function sessionTimeoutResponse(
@@ -737,9 +789,14 @@ const AUTH_DESTINATION_PARAM = {
  * that was going to happen anyway, on exactly the same conditions. The auth
  * pages navigate to the destination only after the step-up succeeds, and the
  * next request re-runs this same gate regardless.
+ *
+ * The bounce also has to carry the cookies auth-js queued on the response
+ * while `getUser()` ran, hence `authResponse`: see
+ * `redirectWithAuthCookies`.
  */
 function bounceToAuth(
   request: NextRequest,
+  authResponse: NextResponse,
   target: keyof typeof AUTH_DESTINATION_PARAM,
 ) {
   // Absolute-path reference: replaces path AND clears query/fragment.
@@ -751,7 +808,7 @@ function bounceToAuth(
   if (destination !== '/') {
     url.search = `${AUTH_DESTINATION_PARAM[target]}=${encodeURIComponent(destination)}`
   }
-  return NextResponse.redirect(url)
+  return redirectWithAuthCookies(authResponse, url)
 }
 
 /**
@@ -965,19 +1022,32 @@ async function resolveCompanyForMiddleware(
   supabase: ReturnType<typeof createServerClient>,
   userId: string,
   _request: NextRequest
-): Promise<{ companyId: string | null; locale: string | null; degraded: boolean }> {
-  const { data, error } = await supabase.rpc('resolve_active_company')
+): Promise<{ companyId: string | null; locale: string | null; degraded: boolean; allLocked: boolean }> {
+  // Multi-user seat gate: the gated RPC skips memberships frozen for this
+  // user (non-owner, multi_user lapsed past its 20-day grace) and reports
+  // has_locked_membership when NOTHING resolved because of that, which is
+  // what routes the user to /paused instead of onboarding. Self-hosted and
+  // dev call the ungated function: the gate never bites there.
+  const enforced = isMultiUserEnforced()
+  const { data, error } = enforced
+    ? await supabase.rpc('resolve_active_company_gated', {
+        p_grace_days: MULTI_USER_GRACE_DAYS,
+      })
+    : await supabase.rpc('resolve_active_company')
 
   if (error) {
     if (error.code === 'PGRST202') {
-      // Function not deployed here: use the query path.
+      // Function not deployed here (self-host not migrated yet, or a deploy
+      // racing the branch merge): use the ungated query path. The race
+      // window fails OPEN for the seat gate on purpose: never lock people
+      // out because a deploy is mid-flight.
       return resolveCompanyForMiddlewareViaQueries(supabase, userId, _request)
     }
     // Issue #1053: a FAILED call degrades (fail open), never reads as "no
     // companies". locale null is fine because the degraded flag already
     // suppresses the locale-cookie sync at the call site.
     console.error('[middleware] resolve_active_company rpc failed', error)
-    return { companyId: null, locale: null, degraded: true }
+    return { companyId: null, locale: null, degraded: true, allLocked: false }
   }
 
   const row = Array.isArray(data) ? data[0] : data
@@ -985,7 +1055,7 @@ async function resolveCompanyForMiddleware(
     // Zero rows = NULL auth.uid(); impossible for the cookie-auth middleware
     // client, so treat as degraded rather than redirecting to onboarding.
     console.error('[middleware] resolve_active_company returned no row for authenticated user')
-    return { companyId: null, locale: null, degraded: true }
+    return { companyId: null, locale: null, degraded: true, allLocked: false }
   }
 
   if (row.company_id && row.used_fallback) {
@@ -1008,6 +1078,9 @@ async function resolveCompanyForMiddleware(
     companyId: row.company_id ?? null,
     locale: row.locale ?? null,
     degraded: false,
+    // Only the gated RPC carries the column; the ungated one leaves it
+    // undefined, which correctly reads as false.
+    allLocked: row.has_locked_membership === true,
   }
 }
 
@@ -1020,7 +1093,7 @@ async function resolveCompanyForMiddlewareViaQueries(
   supabase: ReturnType<typeof createServerClient>,
   userId: string,
   _request: NextRequest
-): Promise<{ companyId: string | null; locale: string | null; degraded: boolean }> {
+): Promise<{ companyId: string | null; locale: string | null; degraded: boolean; allLocked: boolean }> {
   // 1. user_preferences (authoritative) + first membership, fetched in
   // parallel: the fallback query result doubles as validation when the
   // preferred company happens to be the first membership, which is the
@@ -1055,12 +1128,12 @@ async function resolveCompanyForMiddlewareViaQueries(
       '[middleware] company resolution query failed',
       prefsRes.error ?? firstRes.error
     )
-    return { companyId: null, locale, degraded: true }
+    return { companyId: null, locale, degraded: true, allLocked: false }
   }
 
   if (prefs?.active_company_id) {
     if (prefs.active_company_id === firstCompany?.company_id) {
-      return { companyId: firstCompany.company_id, locale, degraded: false }
+      return { companyId: firstCompany.company_id, locale, degraded: false, allLocked: false }
     }
 
     const { data: membership, error: membershipError } = await supabase
@@ -1075,14 +1148,14 @@ async function resolveCompanyForMiddlewareViaQueries(
     // first membership (wrong company for consultants): degrade instead.
     if (membershipError) {
       console.error('[middleware] company preference validation failed', membershipError)
-      return { companyId: null, locale, degraded: true }
+      return { companyId: null, locale, degraded: true, allLocked: false }
     }
 
-    if (membership) return { companyId: membership.company_id, locale, degraded: false }
+    if (membership) return { companyId: membership.company_id, locale, degraded: false, allLocked: false }
   }
 
   // 2. Fallback: first non-archived membership (already fetched above)
-  if (!firstCompany) return { companyId: null, locale, degraded: false }
+  if (!firstCompany) return { companyId: null, locale, degraded: false, allLocked: false }
 
   // Write the fallback back to user_preferences so future RLS lookups
   // see the same active company without needing this fallback scan.
@@ -1100,5 +1173,5 @@ async function resolveCompanyForMiddlewareViaQueries(
     console.error('[middleware] active company write-back failed', writeBackError)
   }
 
-  return { companyId: firstCompany.company_id, locale, degraded: false }
+  return { companyId: firstCompany.company_id, locale, degraded: false, allLocked: false }
 }

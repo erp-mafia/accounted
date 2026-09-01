@@ -35,6 +35,15 @@ export const CAPABILITY = {
   /** Shopify store sync: orders/refunds imported as a transaction feed. */
   shopify_sync: 'shopify_sync',
   /**
+   * Multiple people working in one company. Without it only the OWNER can
+   * enter the company: every other membership goes dormant (never deleted)
+   * after a 20-day post-lapse grace window, and new invites are blocked.
+   * See lib/entitlements/multi-user.ts for the derived entitled/grace/frozen
+   * state; company_capability_config does NOT apply to this key (it gates
+   * member access, not a feature surface).
+   */
+  multi_user: 'multi_user',
+  /**
    * Invoice email from the company's own verified sending domain (Resend
    * domain per company). Opt-in: granted manually per company, NOT part of
    * PAID_CAPABILITIES, so it is never trial-seeded or written by the Stripe
@@ -69,6 +78,10 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
   CAPABILITY.stripe_payments,
   CAPABILITY.woocommerce_sync,
   CAPABILITY.shopify_sync,
+  // Founder decision (2026-09-01): multiple users per company is paid.
+  // Trial-seeded and Stripe-synced like the rest; enforcement is the
+  // owner-only dormancy rule in lib/entitlements/multi-user.ts.
+  CAPABILITY.multi_user,
 ] as const
 
 /**

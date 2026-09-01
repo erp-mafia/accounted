@@ -139,7 +139,13 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // 2026-08-31: +1 for lib/connect/hosted/ledger.ts countHeldConnections, whose
 // .or() filter interpolates a computed timestamp (fresh-pending quota window);
 // the columns it references (status, created_at) are literals in the string.
-const UNRESOLVED_CEILING = 391
+// 2026-09-01: +2 for the multi_user seat gate: lib/entitlements/multi-user.ts
+// getMultiUserState's .or() scope filter interpolates server-resolved UUIDs
+// (company_id/team_id, same shape as hasCapability's existing filter), and
+// lib/stripe/subscription-sync.ts scopes the cancel-time multi_user expiry
+// update with an .or() interpolating a timestamp; every column named in both
+// strings is a literal (company_id, team_id, expires_at).
+const UNRESOLVED_CEILING = 393
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

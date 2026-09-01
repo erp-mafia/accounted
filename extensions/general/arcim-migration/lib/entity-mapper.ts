@@ -12,6 +12,7 @@ import { normalizeVatRateToFraction } from '@/lib/vat/vat-rate-unit'
 import { sumLineVat, lineVatFromPercent } from '@/lib/providers/amounts'
 import type { Currency, CustomerType, ExchangeRate, SupplierType, VatTreatment } from '@/types'
 import type {
+  AmountType,
   CustomerDto,
   SupplierDto,
   SalesInvoiceDto,
@@ -543,6 +544,23 @@ export interface MappedInvoice {
    * could not establish VAT says so instead of looking clean.
    */
   vatUnresolved: boolean
+  /**
+   * True for an imported kreditfaktura that carries no pointer at the invoice
+   * it credits.
+   *
+   * `invoices` models that relation only through `credited_invoice_id`, and no
+   * provider DTO carries a reference to the credited invoice: SalesInvoiceDto
+   * and SupplierInvoiceDto (lib/providers/dto.ts) state the type through
+   * `invoiceTypeCode` 381 and nothing else. So every credit note the migration
+   * imports lands unlinked, and guessing the original from a number in a note
+   * or from the amount would put a wrong pair in the AR ledger. The row itself
+   * is complete räkenskapsinformation (reversed amounts, terminal status);
+   * only the pairing is missing. Meant to be counted into the migration
+   * summary the way `vatUnresolved` is, so the user is told instead of finding
+   * it out in the ledger; the orchestrator does not read it yet, and the copy
+   * that reports it waits in `ext_arcim_credit_notes_unlinked_detail`.
+   */
+  creditNoteUnlinked: boolean
 }
 
 // ── Public mappers ──────────────────────────────────────────────────
@@ -608,6 +626,45 @@ export function mapSupplier(dto: SupplierDto, userId: string, companyId: string)
   }
 }
 
+/** Reversed sign for a kreditfaktura amount, without producing -0. */
+function negate(n: number): number {
+  return n === 0 ? 0 : -n
+}
+
+/**
+ * The same document stated in magnitudes.
+ *
+ * Providers disagree on the sign a kreditfaktura carries: Visma reports a
+ * credit invoice with a negative TotalAmount (lib/providers/visma/mapper.ts)
+ * while the arcim gateway states the magnitude beside invoiceTypeCode 381.
+ * Both have to land on the single convention Accounted stores, so the amounts
+ * are resolved from the magnitudes and the credit sign is applied once, at the
+ * end. It is also what lets resolveInvoiceVat classify the rate at all: it
+ * divides VAT by subtotal, which only yields a statutory rate when both are
+ * positive.
+ */
+function withAbsoluteAmounts(dto: SalesInvoiceDto): SalesInvoiceDto {
+  const abs = (amount: AmountType): AmountType => ({ ...amount, value: Math.abs(amount.value) })
+  return {
+    ...dto,
+    lines: dto.lines.map((line) => ({
+      ...line,
+      quantity: line.quantity != null ? Math.abs(line.quantity) : undefined,
+      unitPrice: line.unitPrice ? abs(line.unitPrice) : undefined,
+      lineExtensionAmount: abs(line.lineExtensionAmount),
+      taxAmount: line.taxAmount ? abs(line.taxAmount) : undefined,
+    })),
+    taxTotal: dto.taxTotal ? { ...dto.taxTotal, taxAmount: abs(dto.taxTotal.taxAmount) } : undefined,
+    legalMonetaryTotal: {
+      ...dto.legalMonetaryTotal,
+      lineExtensionAmount: dto.legalMonetaryTotal.lineExtensionAmount
+        ? abs(dto.legalMonetaryTotal.lineExtensionAmount)
+        : undefined,
+      payableAmount: abs(dto.legalMonetaryTotal.payableAmount),
+    },
+  }
+}
+
 export function mapSalesInvoice(
   dto: SalesInvoiceDto,
   userId: string,
@@ -615,10 +672,15 @@ export function mapSalesInvoice(
   customerId: string,
   fxRates?: FxRateIndex
 ): MappedInvoice {
-  const total = round2(dto.legalMonetaryTotal.payableAmount.value)
-  const vat = resolveInvoiceVat(dto)
-  const subtotal = vat.subtotal
-  const vatAmount = vat.vatAmount
+  const isCreditNote = dto.invoiceTypeCode === '381'
+
+  const amounts = isCreditNote ? withAbsoluteAmounts(dto) : dto
+  const sign = (n: number): number => (isCreditNote ? negate(n) : n)
+
+  const total = sign(round2(amounts.legalMonetaryTotal.payableAmount.value))
+  const vat = resolveInvoiceVat(amounts)
+  const subtotal = sign(vat.subtotal)
+  const vatAmount = sign(vat.vatAmount)
 
   // Map Arcim status to Accounted status
   const statusMap: Record<string, string> = {
@@ -631,7 +693,30 @@ export function mapSalesInvoice(
     credited: 'credited',
   }
 
-  const isCreditNote = dto.invoiceTypeCode === '381'
+  // A kreditfaktura is never an open or a paid receivable, so it gets a
+  // terminal status regardless of the provider's lifecycle status:
+  // invoiceTypeCode is the only signal that the document IS a credit note, and
+  // the arcim gateway is not guaranteed to also send status='credited'. Same
+  // reasoning as mapSupplierInvoice.
+  const status = isCreditNote ? 'credited' : (statusMap[dto.status] || 'sent')
+
+  // Nothing is ever collected on a kreditfaktura: it reduces what the customer
+  // owes rather than settling anything. This also keeps the row clear of
+  // invoices_credit_note_not_paid, which forbids paid/partially_paid the moment
+  // the row points at the invoice it credits.
+  const settlement = isCreditNote
+    ? { paidAt: null as string | null, paidAmount: 0, remainingAmount: 0 }
+    : {
+        paidAt: dto.paymentStatus.paid
+          ? dto.paymentStatus.lastPaymentDate || dto.issueDate
+          : null,
+        paidAmount: dto.paymentStatus.paid
+          ? total
+          : round2(total - dto.paymentStatus.balance.value),
+        remainingAmount: dto.paymentStatus.paid
+          ? 0
+          : Math.max(0, round2(dto.paymentStatus.balance.value)),
+      }
 
   // SEK value of a foreign invoice, at the rate valid on its own issue date.
   const fx = resolveFx(dto.currencyCode, dto.issueDate, fxRates)
@@ -646,7 +731,7 @@ export function mapSalesInvoice(
     invoice_number: dto.invoiceNumber || null,
     invoice_date: dto.issueDate,
     due_date: dto.dueDate || dto.issueDate,
-    status: statusMap[dto.status] || 'sent',
+    status,
     currency: dto.currencyCode || 'SEK',
     // null for a SEK invoice (no rate applies) and for a foreign invoice whose
     // rate could not be established: that case is reported via fxUnresolved.
@@ -665,18 +750,52 @@ export function mapSalesInvoice(
     vat_rate: vat.rate,
     your_reference: null,
     our_reference: null,
-    notes: dto.note || null,
-    document_type: isCreditNote ? 'credit_note' : 'invoice',
-    paid_at: dto.paymentStatus.paid ? dto.paymentStatus.lastPaymentDate || dto.issueDate : null,
-    paid_amount: dto.paymentStatus.paid ? total : round2(total - dto.paymentStatus.balance.value),
+    notes: isCreditNote ? creditNoteUnlinkedNote(dto.note) : (dto.note || null),
+    // Always 'invoice'. invoices_document_type_check allows only
+    // ('invoice', 'proforma', 'delivery_note'), and Accounted models a
+    // kreditfaktura as an invoice row with reversed amounts plus
+    // credited_invoice_id, not as a document type of its own (see
+    // app/api/invoices/route.ts and .../invoices/[id]/credit/route.ts).
+    // Writing 'credit_note' here made Postgres reject every migrated
+    // kreditfaktura with a 23514, and the run counted each one as skipped.
+    document_type: 'invoice',
+    paid_at: settlement.paidAt,
+    paid_amount: settlement.paidAmount,
     // remaining_amount is NOT NULL DEFAULT 0, so omitting it makes every
     // migrated open invoice look fully settled in AR aging.
-    remaining_amount: dto.paymentStatus.paid ? 0 : Math.max(0, round2(dto.paymentStatus.balance.value)),
+    remaining_amount: settlement.remainingAmount,
   }
 
-  const items = dto.lines.map((line, idx) => mapSalesInvoiceLine(line, idx, vat.rate))
+  const items = amounts.lines.map((line, idx) => mapSalesInvoiceLine(line, idx, vat.rate, isCreditNote))
 
-  return { invoice, items, fxUnresolved: fx.unresolved, vatUnresolved: vat.unresolved }
+  return {
+    invoice,
+    items,
+    fxUnresolved: fx.unresolved,
+    vatUnresolved: vat.unresolved,
+    creditNoteUnlinked: isCreditNote,
+  }
+}
+
+/**
+ * Durable note for a migrated kreditfaktura that carries no pointer at the
+ * invoice it credits.
+ *
+ * ML 17 kap 22-23 § requires a kreditfaktura to reference the original
+ * invoice, and BFL 5 kap 6-7 § requires a verifikation to reference its
+ * underlag. No provider DTO carries that reference (lib/providers/dto.ts), so
+ * the pairing cannot be resolved at import time and guessing it would corrupt
+ * the AR ledger. The wizard reports the count, but a wizard result screen is
+ * not rakenskapsinformation: the gap has to be legible on the record itself,
+ * years later, to whoever opens the invoice. So it is written into `notes`,
+ * preserving whatever note the provider sent.
+ */
+function creditNoteUnlinkedNote(providerNote: string | null | undefined): string {
+  const disclosure =
+    'Kreditfaktura importerad vid systembyte. Referens till ursprungsfakturan '
+    + 'saknas: kallsystemet skickade ingen sadan referens vid migreringen.'
+  const existing = (providerNote || '').trim()
+  return existing ? `${existing}\n\n${disclosure}` : disclosure
 }
 
 /**
@@ -695,22 +814,27 @@ function mapSalesInvoiceLine(
   line: SalesInvoiceLineDto,
   index: number,
   invoiceRate: number | null,
+  isCreditNote: boolean,
 ): Record<string, unknown> {
   const lineTotal = round2(line.lineExtensionAmount.value)
   const rate = line.taxPercent != null ? snapToSwedishRate(line.taxPercent) : invoiceRate
   const vatAmount = line.taxAmount?.value ?? lineVatFromPercent(lineTotal, rate ?? undefined)
+  // A kreditfaktura reverses quantity, line total and VAT and keeps the unit
+  // price and the rate positive: exactly what buildCreditNoteItem writes for a
+  // credit note issued in-app (lib/invoices/build-credit-note-item.ts).
+  const sign = (n: number): number => (isCreditNote ? negate(n) : n)
 
   return {
     sort_order: index + 1,
     description: line.description || line.itemName || '',
-    quantity: line.quantity || 1,
+    quantity: sign(line.quantity || 1),
     unit: line.unitCode || 'st',
     unit_price: round2(line.unitPrice?.value ?? line.lineExtensionAmount.value),
-    line_total: lineTotal,
+    line_total: sign(lineTotal),
     // 0 rather than the old hardcoded 25 when nothing established a rate: a
     // 0 % line beside 0 kr of VAT is at least internally consistent.
     vat_rate: rate ?? 0,
-    vat_amount: round2(vatAmount ?? 0),
+    vat_amount: sign(round2(vatAmount ?? 0)),
   }
 }
 
@@ -808,12 +932,21 @@ export function mapSupplierInvoice(
     paid_amount: resolvedStatus === 'paid' ? total : Math.max(0, paidAmount),
     remaining_amount: resolvedStatus === 'paid' ? 0 : Math.max(0, balance),
     is_credit_note: isCreditNote,
-    notes: dto.note || null,
+    notes: isCreditNote ? creditNoteUnlinkedNote(dto.note) : (dto.note || null),
   }
 
   const items = dto.lines.map((line, idx) => mapSupplierInvoiceLine(line, idx, vat.rate))
 
-  return { invoice, items, fxUnresolved: fx.unresolved, vatUnresolved: vat.unresolved }
+  return {
+    invoice,
+    items,
+    fxUnresolved: fx.unresolved,
+    vatUnresolved: vat.unresolved,
+    // supplier_invoices carries is_credit_note, so the row still reads as a
+    // kreditfaktura on its own; what is missing is the same pointer at the
+    // original that the sales side lacks.
+    creditNoteUnlinked: isCreditNote,
+  }
 }
 
 /**

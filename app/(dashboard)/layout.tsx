@@ -12,6 +12,10 @@ import { SettingsHotkey } from '@/components/settings/SettingsHotkey'
 import { SessionTimeoutController } from '@/components/auth/SessionTimeoutController'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import TrialExpiredDialog from '@/components/billing/TrialExpiredDialog'
+import MultiUserGraceBanner from '@/components/billing/MultiUserGraceBanner'
+import { resolveDormantCompanyIds } from '@/lib/company/active-company'
+import { getMultiUserState } from '@/lib/entitlements/multi-user'
+import { createServiceClient } from '@/lib/supabase/server'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider, type ByraTeamRef } from '@/contexts/CompanyContext'
 import { ReferenceDataSeed } from '@/components/providers/ReferenceDataSeed'
@@ -408,6 +412,62 @@ export default async function DashboardLayout({
 
   const isSandbox = settings?.is_sandbox === true
 
+  // Multi-user seat gate, switcher side: which of the user's OTHER companies
+  // are frozen for them (non-owner membership, multi_user lapsed past grace).
+  // Zero queries for the common owner-of-everything user; the grants read
+  // runs only when a non-owner membership exists.
+  const dormantCompanyIds = await resolveDormantCompanyIds(
+    supabase,
+    (allMemberships || [])
+      .filter((m) => m.companies)
+      .map((m) => ({
+        company_id: m.company_id,
+        role: m.role as string,
+        companies: {
+          team_id: ((m.companies as { team_id?: string | null } | null)?.team_id ?? null),
+        },
+      })),
+  )
+
+  // The entitlements-derived multiUser state is computed from the grant rows
+  // the CALLER can see, and RLS hides team-scoped grants from users outside
+  // the team (byrå clients): re-verify any non-entitled answer through the
+  // SECURITY DEFINER state RPC before acting on it. One extra round trip only
+  // in the rare non-entitled case.
+  const activeMultiUser =
+    entitlements.multiUser.state === 'entitled'
+      ? entitlements.multiUser
+      : await getMultiUserState(supabase, companyId)
+
+  // Grace countdown banner data: only while the ACTIVE company is in its
+  // 20-day window AND actually has affected people (>= 1 non-owner member).
+  // Service client because other members' emails are not readable through
+  // the caller's RLS (same reason as GET /api/company/members).
+  let graceBanner: { graceEndsAt: string; affectedEmails: string[]; isAffectedUser: boolean } | null =
+    null
+  if (!isSandbox && activeMultiUser.state === 'grace' && activeMultiUser.graceEndsAt) {
+    const serviceClient = await createServiceClient()
+    const { data: memberRows } = await serviceClient
+      .from('company_members')
+      .select('user_id, role')
+      .eq('company_id', companyId)
+    const affected = (memberRows || []).filter((m) => m.role !== 'owner')
+    if (affected.length > 0) {
+      const { data: affectedProfiles } = await serviceClient
+        .from('profiles')
+        .select('id, email')
+        .in('id', affected.map((a) => a.user_id))
+      const emailById = new Map((affectedProfiles || []).map((p) => [p.id, p.email as string | null]))
+      graceBanner = {
+        graceEndsAt: activeMultiUser.graceEndsAt,
+        affectedEmails: affected
+          .map((a) => emailById.get(a.user_id))
+          .filter((e): e is string => !!e),
+        isAffectedUser: affected.some((a) => a.user_id === user.id),
+      }
+    }
+  }
+
   // Client-driven UI preferences (sidebar collapse + fold state). Read here
   // so the shell renders at the right width on first paint; the nav toggles
   // flip the data attribute client-side and persist via /api/user/ui-state.
@@ -458,6 +518,8 @@ export default async function DashboardLayout({
     trialEndsAt: entitlements.trialEndsAt,
     entitlementState: entitlements.entitlementState,
     trialExpiredAt: entitlements.trialExpiredAt,
+    multiUser: activeMultiUser,
+    lockedCompanyIds: [...dormantCompanyIds],
   }
 
   // Signpost gate (WL-01): a company is opened ONLY on its home domain. When
@@ -511,6 +573,14 @@ export default async function DashboardLayout({
             Hoppa till innehåll
           </a>
           {isSandbox && <SandboxBanner />}
+          {graceBanner && (
+            <MultiUserGraceBanner
+              graceEndsAt={graceBanner.graceEndsAt}
+              affectedEmails={graceBanner.affectedEmails}
+              isAffectedUser={graceBanner.isAffectedUser}
+              companyName={displayName}
+            />
+          )}
           <DashboardNav
             companyName={settings?.company_name || 'Min verksamhet'}
             entityType={entityType}

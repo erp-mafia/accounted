@@ -58,6 +58,7 @@ import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 // idempotent (guarded by a module-level boolean).
 ensureInitialized()
 import { resolveRequiredScope } from '@/lib/auth/scopes'
+import { getMultiUserState, isMembershipDormant } from '@/lib/entitlements/multi-user'
 import { getEndpointByConcretePath } from './registry'
 import {
   checkIdempotencyKey,
@@ -411,6 +412,28 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
             requestId,
             details: { companyId },
           })
+        }
+
+        // Multi-user seat gate: the API-key surface is a chokepoint like the
+        // cookie routes and MCP. A non-owner membership in a frozen company
+        // (multi_user lapsed past its 20-day grace) is refused here so an old
+        // key cannot keep working the books after the freeze. Owners pass
+        // without the extra read; the service client sees team-scoped grants.
+        if ((membership as { role?: string }).role !== 'owner') {
+          const access = await getMultiUserState(supabase, companyId)
+          if (isMembershipDormant((membership as { role: string }).role, access.state)) {
+            userLog.warn('multi-user seat gate refused frozen membership', { companyId, ...forensic })
+            return await v1ErrorResponseFromCode('FORBIDDEN', userLog, {
+              requestId,
+              status: 403,
+              reason: 'multi_user_frozen',
+              details: {
+                companyId,
+                capability: 'multi_user',
+                message: 'Company is paused for this account: multiple users require a paid plan. Ask the company owner to upgrade.',
+              },
+            })
+          }
         }
       }
 
