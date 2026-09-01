@@ -76,6 +76,15 @@ interface InboxOption {
   extracted: ExtractedReceipt | null
 }
 
+interface PayoutBatch {
+  id: string
+  payout_date: string
+  claimant_name: string
+  cash_account: string
+  total_sek: number
+  journal_entry_id: string | null
+}
+
 interface ExtractedReceipt {
   totals?: { total?: number; vatAmount?: number } | null
   invoice?: { invoiceDate?: string | null; currency?: string | null } | null
@@ -132,6 +141,7 @@ export default function ExpenseClaimsPage() {
   const [employees, setEmployees] = useState<EmployeeOption[]>([])
   const { accounts } = useAccounts()
   const [inboxOptions, setInboxOptions] = useState<InboxOption[]>([])
+  const [payoutBatches, setPayoutBatches] = useState<PayoutBatch[]>([])
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState<'all' | 'registered' | 'paid'>('all')
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -221,14 +231,22 @@ export default function ExpenseClaimsPage() {
     }
   }, [])
 
+  const loadPayouts = useCallback(() => {
+    fetch('/api/expense-claims/payouts')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => setPayoutBatches(json?.data ?? []))
+      .catch(() => {})
+  }, [])
+
   useEffect(() => {
     load()
     loadInbox()
+    loadPayouts()
     fetch('/api/salary/employees')
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => setEmployees(json?.data ?? []))
       .catch(() => setEmployees([]))
-  }, [load, loadInbox])
+  }, [load, loadInbox, loadPayouts])
 
   const cashAccounts = useMemo(
     () => accounts.filter((a) => /^19\d{2}$/.test(a.account_number)),
@@ -854,6 +872,7 @@ export default function ExpenseClaimsPage() {
         setSelected(new Set())
         setPaying(false)
         await load()
+        loadPayouts()
       } else {
         const result = await res.json()
         toast({
@@ -895,10 +914,25 @@ export default function ExpenseClaimsPage() {
       {outstandingByClaimant.length > 0 && (
         <div className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
           {outstandingByClaimant.map(([name, sum]) => (
-            <div key={name}>
+            <button
+              key={name}
+              type="button"
+              disabled={!canWrite}
+              title={canWrite ? t('outstanding_select_hint') : undefined}
+              onClick={() =>
+                setSelected(
+                  new Set(
+                    claims
+                      .filter((c) => c.status === 'registered' && c.claimant_name === name)
+                      .map((c) => c.id),
+                  ),
+                )
+              }
+              className="text-left disabled:cursor-default"
+            >
               <span className="text-muted-foreground">{t('outstanding_to', { name })}</span>{' '}
               <span className="font-medium tabular-nums">{formatCurrency(sum)}</span>
-            </div>
+            </button>
           ))}
         </div>
       )}
@@ -1043,6 +1077,47 @@ export default function ExpenseClaimsPage() {
             ))}
           </tbody>
         </table>
+      )}
+
+      {/* Booked payouts: each row is one bank transfer (skuld -> likvidkonto),
+          so the list doubles as the transfer checklist after booking. */}
+      {payoutBatches.length > 0 && (
+        <div className="space-y-2 pt-4">
+          <h2 className="text-sm font-medium text-muted-foreground">{t('payouts_heading')}</h2>
+          <table className="w-full border-collapse text-[13px]">
+            <thead>
+              <tr>
+                <th className={TH_CLASS}>{t('th_date')}</th>
+                <th className={TH_CLASS}>{t('th_claimant')}</th>
+                <th className={TH_CLASS}>{t('payout_cash_account')}</th>
+                <th className={`${TH_CLASS} text-right`}>{t('th_amount')}</th>
+                <th className={TH_CLASS} />
+              </tr>
+            </thead>
+            <tbody>
+              {payoutBatches.map((b) => (
+                <tr key={b.id}>
+                  <td className={`${TD_CLASS} tabular-nums`}>{formatDate(b.payout_date)}</td>
+                  <td className={TD_CLASS}>{b.claimant_name}</td>
+                  <td className={`${TD_CLASS} tabular-nums`}>{b.cash_account}</td>
+                  <td className={`${TD_CLASS} text-right font-medium tabular-nums`}>
+                    {formatCurrency(b.total_sek)}
+                  </td>
+                  <td className={`${TD_CLASS} text-right`}>
+                    {b.journal_entry_id && (
+                      <Link
+                        href={`/bookkeeping/${b.journal_entry_id}`}
+                        className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                      >
+                        {t('payout_view_entry')}
+                      </Link>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {/* Create dialog: step 1 receipt + details, step 2 verifikat review. */}
