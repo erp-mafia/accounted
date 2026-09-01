@@ -76,10 +76,17 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
 
   const W = 320
   const H = 120
-  const maxAbs = Math.max(...months.map((m) => Math.abs(m.net)), 1)
-  // Baseline sits lower when no month is negative, so positive bars get the room.
   const hasNegative = months.some((m) => m.net < 0)
-  const baseline = hasNegative ? H * 0.62 : H - 4
+  // Fixed headroom above (and below, when negatives exist) keeps the endpoint
+  // label inside the viewBox even when a single month dominates the scale.
+  const topPad = 16
+  const bottomPad = hasNegative ? 16 : 4
+  const maxPos = Math.max(...months.map((m) => Math.max(0, m.net)), 0)
+  const maxNeg = Math.max(...months.map((m) => Math.max(0, -m.net)), 0)
+  // One px-per-krona scale for both signs, so bar heights stay comparable.
+  const pxPerKr = (H - topPad - bottomPad) / Math.max(maxPos + maxNeg, 1)
+  // All-zero months keep the baseline at the bottom instead of the top.
+  const baseline = maxPos + maxNeg === 0 ? H - bottomPad : topPad + maxPos * pxPerKr
   const slot = W / months.length
   const barW = Math.min(30, slot * 0.62)
 
@@ -95,7 +102,7 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
         })}
       >
         {months.map((m, i) => {
-          const scaled = (Math.abs(m.net) / maxAbs) * (hasNegative ? H * 0.55 : H - 26)
+          const scaled = Math.abs(m.net) * pxPerKr
           const h = m.net === 0 ? 2 : Math.max(3, scaled)
           const x = i * slot + (slot - barW) / 2
           const y = m.net >= 0 ? baseline - h : baseline
