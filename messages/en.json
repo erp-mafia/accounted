@@ -7895,6 +7895,8 @@
     "book_manually": "Book manually",
     "book_manually_help": "Pick the account and country yourself, or edit the rows freely.",
     "no_templates_found": "No templates match the search.",
+    "show_receipt": "Show receipt",
+    "hide_receipt": "Hide receipt",
     "templates_recommended": "Recommended",
     "templates_ai_badge": "AI suggestions",
     "templates_ai_loading": "AI is suggesting templates from the description …",

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { Receipt, Lock, Loader2, Upload, Sparkles, X, Plus, ChevronRight, ChevronLeft, NotebookPen } from 'lucide-react'
+import { Receipt, Lock, Loader2, Upload, Sparkles, X, Plus, ChevronRight, ChevronLeft, NotebookPen, FileText } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -31,6 +31,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import InboxDocumentPicker, { type AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
+import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { useAccounts, useBookingTemplates } from '@/lib/reference-data/hooks'
 import type { BookingTemplateWithUsage } from '@/lib/reference-data/fetchers'
 import { TemplateForm } from '@/components/settings/TemplateForm'
@@ -164,6 +165,9 @@ export default function ExpenseClaimsPage() {
   const [inboxChoice, setInboxChoice] = useState(NO_RECEIPT_VALUE)
   const [showInboxPicker, setShowInboxPicker] = useState(false)
   const [upload, setUpload] = useState<UploadState>({ phase: 'idle' })
+  // Split view: show the attached receipt beside the form so the user can
+  // read the figures off it while booking. Auto-opens when a document exists.
+  const [showReceipt, setShowReceipt] = useState(true)
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const pollAbort = useRef<{ cancelled: boolean }>({ cancelled: false })
@@ -535,6 +539,18 @@ export default function ExpenseClaimsPage() {
       ),
     [editorRows, liabilityAccount, parsedAmount, accounts],
   )
+  /** The attached receipt's document, from either path (upload or inbox). */
+  const receiptDoc = useMemo(() => {
+    if ((upload.phase === 'done' || upload.phase === 'extracting') && upload.documentId) {
+      return { id: upload.documentId, fileName: upload.fileName }
+    }
+    if (inboxChoice !== NO_RECEIPT_VALUE) {
+      const opt = inboxOptions.find((i) => i.id === inboxChoice)
+      if (opt?.document_id) return { id: opt.document_id, fileName: opt.label }
+    }
+    return null
+  }, [upload, inboxChoice, inboxOptions])
+
   const claimantDisplay =
     claimant === OWNER_VALUE
       ? ownerName || t('owner_fallback_name')
@@ -562,6 +578,7 @@ export default function ExpenseClaimsPage() {
     setClaimant(OWNER_VALUE)
     setInboxChoice(NO_RECEIPT_VALUE)
     setUpload({ phase: 'idle' })
+    setShowReceipt(true)
     setSellerCountry('se')
     setBookingMode('choose')
     setTemplateSearch('')
@@ -1014,7 +1031,13 @@ export default function ExpenseClaimsPage() {
 
       {/* Create dialog: step 1 receipt + details, step 2 verifikat review. */}
       <Dialog open={creating} onOpenChange={(open) => !open && !submitting && resetCreate()}>
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent
+          className={
+            receiptDoc && showReceipt
+              ? 'max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto'
+              : 'sm:max-w-xl'
+          }
+        >
           <DialogHeader>
             <DialogTitle>
               {t('new_claim')}
@@ -1027,6 +1050,32 @@ export default function ExpenseClaimsPage() {
             </DialogDescription>
           </DialogHeader>
 
+          {receiptDoc && (
+            <div className="flex justify-end">
+              <Button type="button" variant="ghost" size="sm" onClick={() => setShowReceipt((v) => !v)}>
+                <FileText className="mr-1.5 h-3.5 w-3.5" />
+                {showReceipt ? t('hide_receipt') : t('show_receipt')}
+              </Button>
+            </div>
+          )}
+
+          <div
+            className={
+              receiptDoc && showReceipt
+                ? 'grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]'
+                : undefined
+            }
+          >
+            {receiptDoc && showReceipt && (
+              <div className="flex h-[45vh] flex-col lg:sticky lg:top-0 lg:h-[72vh] lg:self-start">
+                <DocumentViewerPane
+                  documentId={receiptDoc.id}
+                  fileName={receiptDoc.fileName}
+                  className="min-h-0 flex-1"
+                />
+              </div>
+            )}
+            <div className="min-w-0">
           {step === 1 ? (
             <div className="space-y-4">
               {/* Receipt drop zone with AI extraction */}
@@ -1525,6 +1574,8 @@ export default function ExpenseClaimsPage() {
               )}
             </div>
           )}
+            </div>
+          </div>
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={resetCreate} disabled={submitting}>
