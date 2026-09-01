@@ -4,6 +4,8 @@ import {
   formatVoucher,
   parseVoucher,
   resolveDefaultSeriesForSource,
+  voucherSeriesLabel,
+  VOUCHER_SERIES_PRESETS,
 } from '../voucher-series-resolver'
 
 describe('resolveDefaultSeriesForSource', () => {
@@ -190,5 +192,44 @@ describe('parseVoucher', () => {
     expect(parseVoucher('A0')).toBeNull()
     expect(parseVoucher('A--1')).toBeNull()
     expect(parseVoucher('A  1')).toBeNull()
+  })
+})
+
+describe('VOUCHER_SERIES_PRESETS', () => {
+  it('offers the conventional Swedish series in a stable order', () => {
+    expect(VOUCHER_SERIES_PRESETS.map((p) => p.letter)).toEqual(
+      'ABCDEFGHIJKLM'.split(''),
+    )
+  })
+
+  it('gives every preset a non-empty label', () => {
+    for (const preset of VOUCHER_SERIES_PRESETS) {
+      expect(preset.label.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('uses letters the resolver accepts as a series', () => {
+    for (const preset of VOUCHER_SERIES_PRESETS) {
+      expect(
+        resolveDefaultSeriesForSource({ manual: preset.letter }, 'manual'),
+      ).toBe(preset.letter)
+    }
+  })
+})
+
+describe('voucherSeriesLabel', () => {
+  it('describes a preset letter', () => {
+    // A is the general series manual entries land in, not kundfakturor: it is
+    // the shipped default for every source_type. Guards against a relabelling
+    // that would mislabel every existing company's history.
+    expect(voucherSeriesLabel('A')).toBe('Redovisning')
+    expect(voucherSeriesLabel('B')).toBe('Kundfakturor')
+    expect(voucherSeriesLabel('K')).toBe('Lön')
+  })
+
+  it('returns an empty string for a letter with no preset meaning', () => {
+    expect(voucherSeriesLabel('N')).toBe('')
+    expect(voucherSeriesLabel('Z')).toBe('')
+    expect(voucherSeriesLabel('')).toBe('')
   })
 })

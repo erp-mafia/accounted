@@ -176,7 +176,7 @@ exports[`invoice mail (template class: invoice) > unbranded: template output unc
       
       <p style="margin: 10px 0 0 0; color: #999; font-size: 12px;">
         Org.nr: 556000-0000
-        
+         | VAT: SE556012579001
          | Innehar F-skattsedel
       </p>
       
@@ -314,7 +314,7 @@ exports[`reminder mail (template class: reminder) > unbranded: canonical action 
         
         <p style="margin: 10px 0 0 0; color: #999; font-size: 12px;">
           Org.nr: 199001011234
-          
+           | VAT: SE556012579001
         </p>
         
       </div>
