@@ -4,7 +4,7 @@ import { insertAuthUser, insertCompany, insertCompanyMember } from './fixtures'
 import { getPool, withUserContext } from './setup'
 
 /**
- * Behandlingshistorik, part 3 (migration 20260901103000): the behandlingsregler
+ * Behandlingshistorik, part 3 (migrations 20260901103000 + 20260901200000): the behandlingsregler
  * tables and the import logs write to the immutable audit_log, learning-only
  * updates on categorization_templates are filtered, the global payroll
  * constants are logged without a company, and app_releases is an append-only,
@@ -65,21 +65,36 @@ describe('behandlingshistorik audit triggers (BFNAR 2013:2 p. 9.16)', () => {
        VALUES ($1, $2, $3, 'Spotify AB', '6540', '1930')`,
       [templateId, userId, companyId],
     )
-    // Learning on every booking: occurrence_count / confidence / last_seen_date.
+    // Learning on every booking: occurrence_count / confidence / last_seen_date,
+    // and counterparty_aliases, which the learning path merges in the same
+    // write (20260901200000; prod showed 15 of the first 16 audit rows were
+    // alias+learning noise).
     await getPool().query(
       `UPDATE public.categorization_templates
-          SET occurrence_count = occurrence_count + 1, confidence = 0.9, last_seen_date = CURRENT_DATE
+          SET occurrence_count = occurrence_count + 1, confidence = 0.9, last_seen_date = CURRENT_DATE,
+              counterparty_aliases = ARRAY['SPOTIFY STOCKHOLM 4711']
         WHERE id = $1`,
       [templateId],
     )
     expect(await auditActions('categorization_templates', templateId)).toEqual(['INSERT'])
 
-    // A rule change (the account) is logged.
-    await getPool().query(`UPDATE public.categorization_templates SET debit_account = '6212' WHERE id = $1`, [templateId])
+    // But an account change arriving in the same write as learning columns is
+    // a behandlingsregel change and must still log (the automatkontering case).
+    await getPool().query(
+      `UPDATE public.categorization_templates
+          SET occurrence_count = occurrence_count + 1, credit_account = '1931',
+              counterparty_aliases = ARRAY['SPOTIFY STOCKHOLM 4711', 'SPOTIFY AB']
+        WHERE id = $1`,
+      [templateId],
+    )
     expect(await auditActions('categorization_templates', templateId)).toEqual(['INSERT', 'UPDATE'])
 
+    // A plain rule change (the account) is logged.
+    await getPool().query(`UPDATE public.categorization_templates SET debit_account = '6212' WHERE id = $1`, [templateId])
+    expect(await auditActions('categorization_templates', templateId)).toEqual(['INSERT', 'UPDATE', 'UPDATE'])
+
     await getPool().query(`DELETE FROM public.categorization_templates WHERE id = $1`, [templateId])
-    expect(await auditActions('categorization_templates', templateId)).toEqual(['INSERT', 'UPDATE', 'DELETE'])
+    expect(await auditActions('categorization_templates', templateId)).toEqual(['INSERT', 'UPDATE', 'UPDATE', 'DELETE'])
   })
 
   it('logs booking_template_library changes (no user_id column: actor falls back to auth.uid())', async () => {
