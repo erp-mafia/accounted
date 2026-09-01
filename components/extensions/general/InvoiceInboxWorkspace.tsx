@@ -48,7 +48,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn, formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
-import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
 import { StartCard } from '@/components/dashboard/StartCard'
 import EditKonteringDialog from '@/components/extensions/general/EditKonteringDialog'
@@ -2168,8 +2168,12 @@ function InboxRow({
         <div
           className={cn(
             'flex items-center pl-2.5 pr-1.5 transition-opacity',
-            // Always visible on touch (no hover), or when any selection is active.
-            anyChecked ? 'opacity-100' : 'md:opacity-0 md:group-hover:opacity-100 opacity-100'
+            // Solid on touch (pointer-coarse) or when any selection is active;
+            // otherwise muted-but-visible at rest. focus-within because this
+            // wraps the checkbox rather than being it.
+            anyChecked
+              ? 'opacity-100'
+              : cn(CHECKBOX_REVEAL_CLASS, 'focus-within:opacity-100')
           )}
           onClick={(e) => e.stopPropagation()}
         >
@@ -2177,7 +2181,7 @@ function InboxRow({
             checked={isChecked}
             onCheckedChange={onToggleChecked}
             aria-label="Markera post"
-            className="h-3.5 w-3.5"
+            className="h-3.5 w-3.5 border-foreground"
           />
         </div>
       )}
