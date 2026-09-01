@@ -21,6 +21,7 @@ import {
   createUtseOmbudDeepLink,
   getOmbudApiBaseUrl,
   getOmbudRoleDescriptions,
+  isAllowedDeepLinkUrl,
   isGrantActive,
   listOmbudGrants,
   normalizeHuvudman,
@@ -194,6 +195,23 @@ describe('roles and deep links', () => {
     process.env.SKATTEVERKET_OMBUD_ROLL_LASOMBUD = 'JLO'
     mockSkvRequestWithAuth.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) })
     await expect(createUtseOmbudDeepLink('165560000000', ['lasombud'])).rejects.toBeInstanceOf(OmbudApiError)
+  })
+
+  it('createUtseOmbudDeepLink refuses a deep link that is not an https skatteverket.se URL (open redirect)', async () => {
+    process.env.SKATTEVERKET_OMBUD_ROLL_LASOMBUD = 'JLO'
+    for (const bad of [
+      'http://sso.skatteverket.se/ombud',
+      'https://evil.example/skatteverket.se',
+      'https://skatteverket.se.evil.example/',
+      'javascript:alert(1)',
+      'not a url',
+    ]) {
+      mockSkvRequestWithAuth.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ djuplank: bad }) })
+      await expect(createUtseOmbudDeepLink('165560000000', ['lasombud'])).rejects.toMatchObject({ code: 'OBR_BAD_RESPONSE' })
+    }
+    expect(isAllowedDeepLinkUrl('https://sso.skatteverket.se/ombud?x=1')).toBe(true)
+    expect(isAllowedDeepLinkUrl('https://skatteverket.se/ombud')).toBe(true)
+    expect(isAllowedDeepLinkUrl('https://www.test.skatteverket.se/x')).toBe(true)
   })
 })
 

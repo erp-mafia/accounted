@@ -144,6 +144,17 @@ export async function GET(request: Request) {
     }
     if (decision.kind === 'contested') {
       counts.contested += 1
+      if (!decision.lasombud || !decision.momsOmbud) continue
+      const withdrawn = await recordProbeResult({
+        companyId: decision.row.company_id,
+        environment,
+        orgNumber: decision.row.org_number,
+        lasombud: { status: decision.lasombud, detail: decision.detail },
+        momsOmbud: { status: decision.momsOmbud, detail: decision.detail },
+        error: null,
+      })
+      if (withdrawn) counts.revoked += 1
+      else counts.failed += 1
       continue
     }
     if (decision.kind === 'unrecognized') {
@@ -188,8 +199,18 @@ function isAnyGranted(row: SkvCompanyConnection): boolean {
 
 type Decision =
   | { kind: 'unchanged'; row: SkvCompanyConnection }
-  /** More than one live company claims this org number: nobody gets granted on it. */
-  | { kind: 'contested'; row: SkvCompanyConnection }
+  /**
+   * More than one live company claims this org number: nobody gets granted
+   * on it, and a row that already holds a grant has it withdrawn (the
+   * denied statuses are present exactly then).
+   */
+  | {
+      kind: 'contested'
+      row: SkvCompanyConnection
+      lasombud?: GrantStatus
+      momsOmbud?: GrantStatus
+      detail?: string
+    }
   /** The register lists roles we cannot name (codes unpinned/renamed): never a denial. */
   | { kind: 'unrecognized'; row: SkvCompanyConnection }
   | {
@@ -214,7 +235,16 @@ export function planDecisions(
   const decisions: Decision[] = []
   for (const row of rows) {
     if (contested.has(row.org_number)) {
-      decisions.push({ kind: 'contested', row })
+      // A contested number is frozen in both directions: never granted, and
+      // any grant already recorded on it is withdrawn until support settles
+      // which tenant the org number belongs to. Withdrawn outside the
+      // downgrade guards on purpose: this is the guard.
+      if (isAnyGranted(row)) {
+        const detail = `ombudsregister ${today}: organisationsnumret används av fler än ett företag`
+        decisions.push({ kind: 'contested', row, lasombud: 'denied', momsOmbud: 'denied', detail })
+      } else {
+        decisions.push({ kind: 'contested', row })
+      }
       continue
     }
     const summary = grants.get(row.org_number)

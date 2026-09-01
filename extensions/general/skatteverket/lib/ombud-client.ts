@@ -129,7 +129,27 @@ const RollbeskrivningspostSchema = z.object({
 })
 export type Rollbeskrivningspost = z.infer<typeof RollbeskrivningspostSchema>
 
-const DjuplankSchema = z.object({ djuplank: z.string().min(1) })
+/**
+ * Hosts a deep link may point at. The settings page navigates the browser
+ * to this URL, so the register's answer is not trusted blindly: only HTTPS
+ * on skatteverket.se (or a subdomain) passes. Test service links come from
+ * the same domain family.
+ */
+export function isAllowedDeepLinkUrl(raw: string): boolean {
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return false
+  }
+  if (url.protocol !== 'https:') return false
+  const host = url.hostname.toLowerCase()
+  return host === 'skatteverket.se' || host.endsWith('.skatteverket.se')
+}
+
+const DjuplankSchema = z.object({
+  djuplank: z.string().min(1).refine(isAllowedDeepLinkUrl, 'djuplank must be an https skatteverket.se URL'),
+})
 
 /**
  * Accept the list either bare or wrapped in an object under any of the names
@@ -330,6 +350,7 @@ export async function createUtseOmbudDeepLink(
   const json = await readJsonOrThrow(response, 'djuplank/utseombud')
   const parsed = DjuplankSchema.safeParse(json)
   if (!parsed.success) {
+    log.warn('deep link rejected', { issues: parsed.error.issues.map((i) => i.message) })
     throw new OmbudApiError('Djuplänken från Ombudshantering kunde inte tolkas.', 'OBR_BAD_RESPONSE')
   }
   const expires = new Date(now.getTime() + OMBUD_DEEP_LINK_VALIDITY_WEEKS * 7 * 24 * 60 * 60 * 1000)

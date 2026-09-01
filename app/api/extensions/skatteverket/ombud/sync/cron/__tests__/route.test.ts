@@ -257,9 +257,9 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
     expect(recordedFor('c-new')[0]).toMatchObject({ lasombud: { status: 'granted' } })
   })
 
-  it('never grants on a contested org number (two live companies claim it), even with a row and a register grant', async () => {
+  it('a contested org number (two live companies claim it) is never granted, and an existing grant on it is withdrawn', async () => {
     mockListConnections.mockResolvedValue([
-      connection('c-victim', '165560000000', 'unknown', 'unknown', 'pending'),
+      connection('c-victim', '165560000000'), // verified before the twin appeared
       connection('c-twin', '165560000000', 'unknown', 'unknown', 'pending'),
       connection('c-clear', '165570000000', 'unknown', 'unknown', 'pending'),
     ])
@@ -268,10 +268,13 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
 
     const body = await (await GET(request())).json()
 
-    expect(body).toMatchObject({ contested: 2, granted: 1 })
-    expect(mockRecordProbeResult).toHaveBeenCalledTimes(1)
+    expect(body).toMatchObject({ contested: 2, revoked: 1, granted: 1, guardTripped: false })
+    expect(mockRecordProbeResult).toHaveBeenCalledTimes(2)
     expect(recordedFor('c-clear')[0]).toMatchObject({ lasombud: { status: 'granted' } })
-    expect(recordedFor('c-victim')).toHaveLength(0)
+    expect(recordedFor('c-victim')[0]).toMatchObject({
+      lasombud: { status: 'denied', detail: expect.stringContaining('fler än ett företag') },
+      momsOmbud: { status: 'denied' },
+    })
     expect(recordedFor('c-twin')).toHaveLength(0)
   })
 
