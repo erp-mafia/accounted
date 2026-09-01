@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { insertAuthUser, insertCompany } from './fixtures'
+import { insertAuthUser, insertCompany, insertCompanyMember } from './fixtures'
 import { getPool, withUserContext } from './setup'
 
 /**
@@ -10,6 +10,15 @@ import { getPool, withUserContext } from './setup'
  * constants are logged without a company, and app_releases is an append-only,
  * read-for-all, service-role-written version log.
  */
+
+async function setActiveCompany(userId: string, companyId: string): Promise<void> {
+  await getPool().query(
+    `INSERT INTO public.user_preferences (user_id, active_company_id)
+     VALUES ($1, $2)
+     ON CONFLICT (user_id) DO UPDATE SET active_company_id = EXCLUDED.active_company_id`,
+    [userId, companyId],
+  )
+}
 
 async function auditActions(table: string, recordId: string): Promise<string[]> {
   const res = await getPool().query<{ action: string }>(
@@ -28,7 +37,7 @@ describe('behandlingshistorik audit triggers (BFNAR 2013:2 p. 9.16)', () => {
     const ruleId = randomUUID()
     await getPool().query(
       `INSERT INTO public.mapping_rules (id, user_id, company_id, rule_name, rule_type, debit_account, credit_account)
-       VALUES ($1, $2, $3, 'Kontorsmaterial', 'merchant', '6110', '1930')`,
+       VALUES ($1, $2, $3, 'Kontorsmaterial', 'merchant_name', '6110', '1930')`,
       [ruleId, userId, companyId],
     )
     await getPool().query(`UPDATE public.mapping_rules SET debit_account = '6540' WHERE id = $1`, [ruleId])
@@ -76,6 +85,11 @@ describe('behandlingshistorik audit triggers (BFNAR 2013:2 p. 9.16)', () => {
   it('logs booking_template_library changes (no user_id column: actor falls back to auth.uid())', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
+    // btl_insert requires current_user_can_write() and company_id =
+    // current_active_company_id(), so the membership and the active-company
+    // preference both have to exist before the authenticated insert.
+    await insertCompanyMember({ companyId, userId })
+    await setActiveCompany(userId, companyId)
     const templateId = randomUUID()
     await withUserContext(userId, async (client) => {
       await client.query(
