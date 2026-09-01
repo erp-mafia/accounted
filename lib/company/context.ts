@@ -3,6 +3,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { cookies } from 'next/headers'
 import type { EntityType } from '@/types'
 import { CompanyContextError, getActiveCompanyId } from '@/lib/company/active-company'
+import { isMembershipActive } from '@/lib/entitlements/multi-user'
 
 // The resolver and its error class live in active-company.ts (no
 // `next/headers` there) so the API-key path can use them; re-exported here so
@@ -129,13 +130,25 @@ export async function setActiveCompany(
   // Validate membership
   const { data: membership } = await supabase
     .from('company_members')
-    .select('company_id')
+    .select('company_id, role')
     .eq('company_id', companyId)
     .eq('user_id', userId)
     .single()
 
   if (!membership) {
     throw new CompanyContextError('User is not a member of this company', 'not_member')
+  }
+
+  // Multi-user seat gate: a non-owner may not switch INTO a company frozen
+  // for them (multi_user lapsed past its grace window). Without this check
+  // the preference write would stick and every subsequent gated resolution
+  // would silently bounce them elsewhere, which reads as a broken switch.
+  const seatGateOk = await isMembershipActive(supabase, companyId, membership.role)
+  if (!seatGateOk) {
+    throw new CompanyContextError(
+      'Company is frozen for this membership: multi-user access requires a paid plan',
+      'company_locked'
+    )
   }
 
   // Update user_preferences: this is the authoritative value RLS reads.

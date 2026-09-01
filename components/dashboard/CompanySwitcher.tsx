@@ -8,10 +8,10 @@ import { cn } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
 import { performCompanySwitch } from '@/lib/company/switch-client'
 import { useToast } from '@/components/ui/use-toast'
-import { Check, ChevronsUpDown, Plus, Loader2 } from 'lucide-react'
+import { Check, ChevronsUpDown, Plus, Loader2, Lock } from 'lucide-react'
 
 export default function CompanySwitcher() {
-  const { company, companies, isSandbox, foreignCompanies = [] } = useCompany()
+  const { company, companies, isSandbox, foreignCompanies = [], lockedCompanyIds = [] } = useCompany()
   const t = useTranslations('company_switcher')
   const { toast } = useToast()
   const [open, setOpen] = useState(false)
@@ -87,7 +87,13 @@ export default function CompanySwitcher() {
     if (result?.error) {
       setIsPending(false)
       toast({
-        title: t(result.error === 'not_member' ? 'error_no_access' : 'error_switch_failed'),
+        title: t(
+          result.error === 'not_member'
+            ? 'error_no_access'
+            : result.error === 'company_locked'
+              ? 'error_locked'
+              : 'error_switch_failed',
+        ),
         variant: 'destructive',
       })
     }
@@ -146,7 +152,23 @@ export default function CompanySwitcher() {
               )}
 
               <div className="max-h-48 overflow-y-auto px-1">
-                {companies.map(({ company: c, role }) => (
+                {companies.map(({ company: c, role }) =>
+                  lockedCompanyIds.includes(c.id) ? (
+                    // Multi-user seat gate: frozen for this user until the
+                    // company pays. Shown, not hidden: the membership exists
+                    // and the row explains why it cannot be entered.
+                    <div
+                      key={c.id}
+                      className="flex items-center gap-2 w-full px-2.5 py-2 text-left text-[13px] leading-snug text-muted-foreground/60 rounded-sm md:whitespace-nowrap"
+                      aria-disabled="true"
+                    >
+                      <span className="flex-1 min-w-0">
+                        <span className="block truncate">{c.name}</span>
+                        <span className="block truncate text-[10px]">{t('locked_note')}</span>
+                      </span>
+                      <Lock className="h-3 w-3 flex-shrink-0" aria-hidden="true" />
+                    </div>
+                  ) : (
                   <button
                     key={c.id}
                     onClick={() => handleSwitch(c.id)}
@@ -174,7 +196,8 @@ export default function CompanySwitcher() {
                       <Loader2 className="h-3 w-3 animate-spin text-muted-foreground flex-shrink-0" />
                     )}
                   </button>
-                ))}
+                  ),
+                )}
               </div>
             </>
           )}

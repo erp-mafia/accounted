@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
@@ -81,6 +82,10 @@ export function CompanyMembersSection() {
   const [removingId, setRemovingId] = useState<string | null>(null)
   const [revokingId, setRevokingId] = useState<string | null>(null)
   const [canInvite, setCanInvite] = useState(false)
+  // Multi-user seat gate: true when inviting requires the paid plan
+  // (multi_user frozen). The form is swapped for the upsell line; the POST's
+  // own 403 stays the real enforcement.
+  const [inviteRequiresUpgrade, setInviteRequiresUpgrade] = useState(false)
   const [shareInvite, setShareInvite] = useState<ShareableInvite | null>(null)
 
   const fetchMembers = useCallback(async () => {
@@ -118,6 +123,7 @@ export function CompanyMembersSection() {
       setMembers(parsed.members)
       setInvitations(parsed.invitations)
       setCanInvite(parsed.canInvite)
+      setInviteRequiresUpgrade(parsed.inviteRequiresUpgrade)
     } catch {
       setMembers(null)
       setInvitations(null)
@@ -374,8 +380,22 @@ export function CompanyMembersSection() {
         </div>
       )}
 
+      {/* Multi-user seat gate: no invite form without the paid plan. One
+          muted sentence with the billing link, not a dead form. */}
+      {canInvite && inviteRequiresUpgrade && (
+        <p className="px-1 pt-3 text-[12.5px] leading-5 text-muted-foreground">
+          {t('members_invite_upgrade')}{' '}
+          <Link
+            href="/settings/billing"
+            className="underline underline-offset-2 hover:text-foreground"
+          >
+            {t('members_invite_upgrade_cta')}
+          </Link>
+        </p>
+      )}
+
       {/* Inline invite: the list's own last row instead of a separate card. */}
-      {canInvite && (
+      {canInvite && !inviteRequiresUpgrade && (
         <form onSubmit={handleInvite} className="flex flex-col gap-3 px-1 pt-3 sm:flex-row sm:items-center">
           <label htmlFor="company-invite-email" className="sr-only">
             {t('members_invite_email_label')}

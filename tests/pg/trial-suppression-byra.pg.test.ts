@@ -61,15 +61,16 @@ async function trialGrantKeys(companyId: string): Promise<string[]> {
 }
 
 describe('trial suppression for byrå-team companies', () => {
-  it('the trial seed covers the full seven-key PAID set', () => {
+  it('the trial seed covers the full eight-key PAID set', () => {
     // Guard against the seed list drifting from lib/entitlements/keys.ts:
     // if PAID_CAPABILITIES grows, the migration VALUES list (and this test)
-    // must grow with it.
+    // must grow with it. multi_user joined at 20260901081417.
     expect(TRIAL_KEYS).toEqual(
       [
         'ai',
         'bank_sync',
         'email_send',
+        'multi_user',
         'shopify_sync',
         'skatteverket',
         'stripe_payments',

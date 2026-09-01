@@ -13,7 +13,7 @@ afterEach(() => vi.unstubAllEnvs())
 // can assert what applySubscriptionState wrote, without a real DB.
 interface RecordedOp {
   table: string
-  op: 'upsert' | 'delete' | null
+  op: 'upsert' | 'delete' | 'update' | null
   payload: unknown
   conflict: string | undefined
   filters: Array<[string, unknown]>
@@ -36,8 +36,22 @@ function recordingSupabase() {
           calls.push(ctx)
           return chain
         },
+        update(payload: unknown) {
+          ctx.op = 'update'
+          ctx.payload = payload
+          calls.push(ctx)
+          return chain
+        },
         eq(col: string, val: unknown) {
           ctx.filters.push([col, val])
+          return chain
+        },
+        neq(col: string, val: unknown) {
+          ctx.filters.push([`neq:${col}`, val])
+          return chain
+        },
+        or(filter: string) {
+          ctx.filters.push(['or', filter])
           return chain
         },
         then(resolve: (v: { data: null; error: null }) => void) {
@@ -115,11 +129,11 @@ describe('applySubscriptionState', () => {
     const grantUpsert = calls.find((c) => c.table === 'capability_grants')
     expect(grantUpsert?.op).toBe('upsert')
     const rows = grantUpsert?.payload as Array<{ capability_key: string; source: string }>
-    expect(rows.map((r) => r.capability_key).sort()).toEqual(['ai', 'bank_sync', 'email_send', 'shopify_sync', 'skatteverket', 'stripe_payments', 'woocommerce_sync'])
+    expect(rows.map((r) => r.capability_key).sort()).toEqual(['ai', 'bank_sync', 'email_send', 'multi_user', 'shopify_sync', 'skatteverket', 'stripe_payments', 'woocommerce_sync'])
     expect(rows.every((r) => r.source === 'stripe')).toBe(true)
   })
 
-  it('removes only the stripe grants when canceled (freeze-and-retain)', async () => {
+  it('removes the stripe grants when canceled but EXPIRES multi_user (grace anchor)', async () => {
     const { supabase, calls } = recordingSupabase()
     await applySubscriptionState(supabase, {
       companyId: 'co_1',
@@ -129,9 +143,20 @@ describe('applySubscriptionState', () => {
       plan: null,
       currentPeriodEnd: null,
     })
-    const grantOp = calls.find((c) => c.table === 'capability_grants')
-    expect(grantOp?.op).toBe('delete')
-    expect(grantOp?.filters).toContainEqual(['company_id', 'co_1'])
-    expect(grantOp?.filters).toContainEqual(['source', 'stripe'])
+    const grantOps = calls.filter((c) => c.table === 'capability_grants')
+    // Freeze-and-retain deletes every external-service grant, except
+    // multi_user, whose 20-day grace window hangs on an EXPIRED row: a
+    // deleted row would freeze the churned payer's staff instantly.
+    const deleteOp = grantOps.find((c) => c.op === 'delete')
+    expect(deleteOp?.filters).toContainEqual(['company_id', 'co_1'])
+    expect(deleteOp?.filters).toContainEqual(['source', 'stripe'])
+    expect(deleteOp?.filters).toContainEqual(['neq:capability_key', 'multi_user'])
+    const updateOp = grantOps.find((c) => c.op === 'update')
+    expect(updateOp?.filters).toContainEqual(['capability_key', 'multi_user'])
+    const payload = updateOp?.payload as { expires_at: string }
+    expect(new Date(payload.expires_at).getTime()).toBeLessThanOrEqual(Date.now())
+    // Only a still-active row is expired: a re-delivered cancel event must
+    // not slide the grace anchor forward (the .or filter scopes the update).
+    expect(updateOp?.filters.some(([col]) => col === 'or')).toBe(true)
   })
 })

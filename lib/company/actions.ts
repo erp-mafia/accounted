@@ -35,6 +35,11 @@ export async function switchCompany(companyId: string): Promise<{ error?: string
     if (err instanceof CompanyContextError && err.code === 'not_member') {
       return { error: 'not_member' }
     }
+    if (err instanceof CompanyContextError && err.code === 'company_locked') {
+      // Multi-user seat gate: the company is frozen for this (non-owner)
+      // membership until someone pays. Translated by the caller.
+      return { error: 'company_locked' }
+    }
     // persist_failed and anything unexpected: a retryable failure, not a
     // permissions problem: don't tell the user they lack access.
     return { error: 'persist_failed' }
