@@ -106,7 +106,20 @@ async function handle(request: Request, ctx: ConnectorContext): Promise<Response
     })
     const text = await res.text()
     if ([204, 205, 304].includes(res.status)) return new NextResponse(null, { status: res.status })
-    return new NextResponse(text, { status: res.status, headers: { 'Content-Type': res.headers.get('content-type') ?? 'application/json' } })
+    // Forward SKV's diagnostic headers: WWW-Authenticate carries OAuth's
+    // machine-readable failure reason (the instance's insufficient_scope →
+    // MISSING_SCOPE classification depends on it), and the x-skv-*/x-amzn-*/
+    // x-api-* families are the only signal on body-less gateway rejections.
+    // Nothing secret rides in them; stripping them blinded the instance's
+    // 401 classifier (skeptic finding on PR6b-2).
+    const headers: Record<string, string> = { 'Content-Type': res.headers.get('content-type') ?? 'application/json' }
+    res.headers.forEach((v, k) => {
+      const lk = k.toLowerCase()
+      if (lk === 'www-authenticate' || lk.startsWith('x-skv-') || lk.startsWith('x-amzn-') || lk.startsWith('x-api-')) {
+        headers[k] = v
+      }
+    })
+    return new NextResponse(text, { status: res.status, headers })
   } finally {
     clearTimeout(timeout)
   }

@@ -20,7 +20,16 @@ const hh = vi.hoisted(() => ({
   findRefresh: vi.fn(),
 }))
 vi.mock('@/lib/connect/hosted/upstream-budget', () => ({ reserveUpstream: (...a: unknown[]) => hh.budget(...a) }))
-vi.mock('@/lib/connect/upstreams/skatteverket-oauth', () => ({ exchangeSkvCode: (...a: unknown[]) => hh.exchange(...a), refreshSkvToken: (...a: unknown[]) => hh.refresh(...a) }))
+vi.mock('@/lib/connect/upstreams/skatteverket-oauth', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/connect/upstreams/skatteverket-oauth')>()
+  return {
+    exchangeSkvCode: (...a: unknown[]) => hh.exchange(...a),
+    refreshSkvToken: (...a: unknown[]) => hh.refresh(...a),
+    // The dead-dialect classifier stays REAL: these tests pin that the route
+    // re-codes exactly the dialects the classifier recognizes.
+    isSkvDeadRefreshTokenError: actual.isSkvDeadRefreshTokenError,
+  }
+})
 vi.mock('@/lib/connect/hosted/ledger', () => ({
   activateByPendingState: (...a: unknown[]) => hh.activate(...a),
   findPendingByState: (...a: unknown[]) => hh.findPending(...a),
@@ -101,5 +110,46 @@ describe('POST /api/connect/skv/oauth/token', () => {
     hh.exchange.mockRejectedValue(new Error('boom'))
     const res = await POST(createMockRequest('/x', { method: 'POST', body: { grant_type: 'authorization_code', code: 'c', redirect_uri: 'https://app.gnubok.se/cb', connector_state: 'ck1.signed' } }))
     expect(res.status).toBe(502)
+  })
+
+  // SKV per-flow refresh tokens live 65 minutes, so a dead refresh token is
+  // the DOMINANT refresh outcome. The broker must re-code SKV's terminal
+  // dialects distinctly: the instance maps this to SESSION_EXPIRED and shows
+  // its reconnect flow. Collapsing it into the generic 502 stripped every
+  // connector instance of that flow (skeptic refutation on PR6b-2).
+  it('401 CONNECTOR_SKV_REFRESH_DEAD when SKV declares the refresh token dead', async () => {
+    hh.refresh.mockRejectedValue(new Error(
+      'Skatteverket token refresh failed (404): {"error":"id_not_found","error_description":"The refresh token is not found"}',
+    ))
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: { grant_type: 'refresh_token', refresh_token: 'rt' } }))
+    expect(res.status).toBe(401)
+    expect((await res.json()).code).toBe('CONNECTOR_SKV_REFRESH_DEAD')
+  })
+
+  it('401 CONNECTOR_SKV_REFRESH_DEAD on the 400 invalid_grant dialect too', async () => {
+    hh.refresh.mockRejectedValue(new Error(
+      'Skatteverket token refresh failed (400): {"error": "invalid_grant"}',
+    ))
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: { grant_type: 'refresh_token', refresh_token: 'rt' } }))
+    expect(res.status).toBe(401)
+    expect((await res.json()).code).toBe('CONNECTOR_SKV_REFRESH_DEAD')
+  })
+
+  it('keeps transient refresh failures as the generic 502 (never a reconnect signal)', async () => {
+    hh.refresh.mockRejectedValue(new Error('Skatteverket token refresh failed (503): upstream unavailable'))
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: { grant_type: 'refresh_token', refresh_token: 'rt' } }))
+    expect(res.status).toBe(502)
+    expect((await res.json()).code).toBe('CONNECTOR_SKV_TOKEN_FAILED')
+  })
+
+  it('does NOT re-code a dead-dialect failure on the authorization_code grant', async () => {
+    // An expired one-shot code also answers 400 invalid_grant, but that is
+    // not "refresh token dead": the exchange keeps the generic 502.
+    hh.exchange.mockRejectedValue(new Error(
+      'Skatteverket token exchange failed (400): {"error": "invalid_grant"}',
+    ))
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: { grant_type: 'authorization_code', code: 'c', redirect_uri: 'https://app.gnubok.se/cb', connector_state: 'ck1.signed' } }))
+    expect(res.status).toBe(502)
+    expect((await res.json()).code).toBe('CONNECTOR_SKV_TOKEN_FAILED')
   })
 })
