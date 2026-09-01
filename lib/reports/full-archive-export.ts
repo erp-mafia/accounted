@@ -1179,6 +1179,22 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   company_subscriptions: 'billing state',
   deadlines: 'regenerable operational calendar state',
   dimension_retag_log: 'operation log',
+  // Verification metadata ABOUT räkenskapsinformation, not räkenskapsinformation
+  // itself: one row per nightly SHA-256 recompute of an archived document
+  // (migration 20260901130000). The documents ship under dokument/ with their
+  // upload-time hash in dokument/manifest.json, so a recipient can re-verify
+  // every file from the archive alone, without our check log. The checks that
+  // do carry legal weight are the failures, and those are already written to
+  // audit_log as INTEGRITY_FAILURE and exported in
+  // revision/behandlingshistorik.json; a passing check is evidence that our
+  // cron ran, which belongs to the platform and not to the company's books.
+  // Erasure needs nothing either: the ledger holds no personal data of its own
+  // (company_id, document_id, hashes, storage key), it inherits
+  // document_attachments' posture on the user id embedded in a legacy storage
+  // key, and its rows go with the ON DELETE CASCADE from companies and
+  // document_attachments when the underlying data is legally removed.
+  document_integrity_checks:
+    'WORM verification log (SHA-256 recompute outcomes); failures reach the archive via audit_log in revision/behandlingshistorik.json',
   event_log: '30-day TTL event bus log',
   extension_data: 'extension runtime state (includes this backup\'s own state)',
   graph_counterparties: 'derived AI context graph, regenerable',
