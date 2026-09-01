@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { Receipt, Lock, Loader2, Upload, Sparkles, X, Plus } from 'lucide-react'
+import { Receipt, Lock, Loader2, Upload, Sparkles, X, Plus, ChevronRight, ChevronLeft, NotebookPen } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -31,10 +31,9 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import InboxDocumentPicker, { type AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
-import BookingTemplatePicker from '@/components/bookkeeping/BookingTemplatePicker'
+import { fetchBookingTemplates, type BookingTemplateWithUsage } from '@/lib/reference-data/fetchers'
 import { TemplateForm } from '@/components/settings/TemplateForm'
-import { deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
-import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import { applyTemplate, deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
 import { roundOre, sumOre } from '@/lib/money'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -150,7 +149,10 @@ export default function ExpenseClaimsPage() {
   // time. Seller country + cost account generate them, OR an applied
   // template owns them, OR a manual edit freezes them into `bookingRows`.
   const [sellerCountry, setSellerCountry] = useState<SellerCountry>('se')
-  const [appliedTemplate, setAppliedTemplate] = useState<string | null>(null)
+  const [bookingMode, setBookingMode] = useState<'choose' | 'book'>('choose')
+  const [templates, setTemplates] = useState<BookingTemplateWithUsage[]>([])
+  const [templateSearch, setTemplateSearch] = useState('')
+  const [appliedTemplate, setAppliedTemplate] = useState<{ name: string; description: string } | null>(null)
   const [bookingRows, setBookingRows] = useState<BookingRow[] | null>(null)
   const [showRowEditor, setShowRowEditor] = useState(false)
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
@@ -306,6 +308,58 @@ export default function ExpenseClaimsPage() {
     return /^[0-9]{4}$/.test(r.account) && (d > 0) !== (c > 0)
   })
 
+  useEffect(() => {
+    if (!creating || templates.length > 0) return
+    fetchBookingTemplates()
+      .then((rows) => setTemplates(rows))
+      .catch(() => {})
+  }, [creating, templates.length])
+
+  const EXCLUDED_TEMPLATE_CATEGORIES = ['salary', 'year_end', 'vat', 'tax_account', 'private_transfer']
+  const visibleTemplates = useMemo(() => {
+    const q = templateSearch.trim().toLocaleLowerCase('sv-SE')
+    return templates
+      .filter((tpl) => tpl.is_active && !EXCLUDED_TEMPLATE_CATEGORIES.includes(tpl.category))
+      .filter(
+        (tpl) =>
+          !q ||
+          tpl.name.toLocaleLowerCase('sv-SE').includes(q) ||
+          (tpl.description ?? '').toLocaleLowerCase('sv-SE').includes(q),
+      )
+      .slice(0, 30)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templates, templateSearch])
+
+  /** Bokio's semantic: the template picks the account/type, the country picks
+   *  the VAT variant. Single-cost templates map onto the generator; multi-line
+   *  templates apply their rows verbatim and own the verifikat. */
+  const chooseTemplate = (tpl: BookingTemplateWithUsage) => {
+    const businessDebits = tpl.lines.filter((l) => l.type === 'business' && l.side === 'debit')
+    setAppliedTemplate({ name: tpl.name, description: tpl.description ?? '' })
+    if (businessDebits.length === 1) {
+      setExpenseAccount(businessDebits[0].account)
+      if (sellerCountry === 'se') domesticAccountRef.current = businessDebits[0].account
+      setBookingRows(null)
+    } else {
+      setBookingRows(
+        applyTemplate(tpl.lines, parsedAmount)
+          .filter((l) => !/^(15|19|24)/.test(l.account_number) && l.account_number !== liabilityAccount)
+          .map((l) => ({
+            key: nextRowKey(),
+            account: l.account_number,
+            debit: l.debit_amount || '',
+            credit: l.credit_amount || '',
+          })),
+      )
+    }
+    setBookingMode('book')
+  }
+  const chooseManual = () => {
+    setAppliedTemplate(null)
+    setBookingRows(null)
+    setBookingMode('book')
+  }
+
   const applyCountry = (country: SellerCountry) => {
     setSellerCountry((prev) => {
       if (prev === 'se' && country !== 'se') domesticAccountRef.current = expenseAccount
@@ -331,29 +385,6 @@ export default function ExpenseClaimsPage() {
     setBookingRows([...base, { key: nextRowKey(), account: '', debit: '', credit: '' }])
   }
 
-  /** Applying a template makes it the owner of the rows. Its money leg
-   *  (kassa/fordran/leverantörsskuld or the claim's liability) is dropped:
-   *  the locked liability row below carries the settlement. */
-  const applyBookingTemplate = (templateLines: FormLine[], name: string) => {
-    setBookingRows(
-      templateLines
-        .filter(
-          (l) =>
-            !/^(15|19|24)/.test(l.account_number) && l.account_number !== liabilityAccount,
-        )
-        .map((l) => ({
-          key: nextRowKey(),
-          account: l.account_number,
-          debit: l.debit_amount || '',
-          credit: l.credit_amount || '',
-        })),
-    )
-    setAppliedTemplate(name)
-  }
-  const clearTemplate = () => {
-    setAppliedTemplate(null)
-    setBookingRows(null)
-  }
 
   const templateSeedLines = useMemo(
     () =>
@@ -399,6 +430,8 @@ export default function ExpenseClaimsPage() {
     setInboxChoice(NO_RECEIPT_VALUE)
     setUpload({ phase: 'idle' })
     setSellerCountry('se')
+    setBookingMode('choose')
+    setTemplateSearch('')
     setAppliedTemplate(null)
     setBookingRows(null)
     setShowRowEditor(false)
@@ -1068,81 +1101,121 @@ export default function ExpenseClaimsPage() {
               {/* Step 2: VAT mode + templates + an editable verifikat grid.
                   The liability row is locked: the payout flow reimburses
                   exactly the claim gross from that account. */}
-              {appliedTemplate ? (
-                <div className="flex items-center gap-2">
-                  <Badge variant="secondary" className="gap-1.5 py-1 pl-2 pr-1 font-normal">
-                    {t('template_applied', { name: appliedTemplate })}
+              {bookingMode === 'choose' ? (
+                <div className="space-y-3">
+                  <Input
+                    placeholder={t('template_search_placeholder')}
+                    value={templateSearch}
+                    onChange={(e) => setTemplateSearch(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-3 rounded-md border border-border px-3 py-2.5 text-left transition-colors hover:bg-secondary/35"
+                    onClick={chooseManual}
+                  >
+                    <NotebookPen className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span className="flex-1">
+                      <span className="block text-sm font-medium">{t('book_manually')}</span>
+                      <span className="block text-xs text-muted-foreground">{t('book_manually_help')}</span>
+                    </span>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  </button>
+                  <div className="max-h-[320px] space-y-1 overflow-y-auto">
+                    {visibleTemplates.map((tpl) => (
+                      <button
+                        key={tpl.id}
+                        type="button"
+                        className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left transition-colors hover:bg-secondary/35"
+                        onClick={() => chooseTemplate(tpl)}
+                      >
+                        <span className="flex-1">
+                          <span className="block text-sm font-medium">{tpl.name}</span>
+                          {tpl.description && (
+                            <span className="block text-xs leading-snug text-muted-foreground">{tpl.description}</span>
+                          )}
+                        </span>
+                        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      </button>
+                    ))}
+                    {visibleTemplates.length === 0 && (
+                      <p className="px-3 py-4 text-sm text-muted-foreground">{t('no_templates_found')}</p>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md bg-secondary/40 px-3 py-2.5 text-left"
+                    onClick={() => setBookingMode('choose')}
+                  >
+                    <ChevronLeft className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span className="flex-1">
+                      <span className="block text-sm font-medium">
+                        {appliedTemplate ? appliedTemplate.name : t('book_manually')}
+                      </span>
+                      {appliedTemplate?.description && (
+                        <span className="block text-xs leading-snug text-muted-foreground">
+                          {appliedTemplate.description}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                  {bookingRows === null && (
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label>{t('form_seller_country')}</Label>
+                        <Select value={sellerCountry} onValueChange={(v) => applyCountry(v as SellerCountry)}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="se">{t('seller_country_se')}</SelectItem>
+                            <SelectItem value="eu">{t('seller_country_eu')}</SelectItem>
+                            <SelectItem value="noneu">{t('seller_country_noneu')}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      {!appliedTemplate && (
+                        <div className="space-y-2">
+                          <Label>{t('form_expense_account')}</Label>
+                          <AccountCombobox
+                            value={expenseAccount}
+                            accounts={accounts}
+                            selectedName={accountName(expenseAccount)}
+                            onChange={(v) => {
+                              setExpenseAccount(v)
+                              setBookingRows(null)
+                            }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {bookingRows === null && sellerCountry !== 'se' && (
+                    <p className="text-xs text-muted-foreground">
+                      {sellerCountry === 'eu' ? t('seller_country_eu_hint') : t('seller_country_noneu_hint')}
+                    </p>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowSaveTemplate(true)}
+                      disabled={templateSeedLines.length < 2}
+                    >
+                      {t('save_as_template')}
+                    </Button>
                     <Button
                       type="button"
                       variant="ghost"
-                      size="icon"
-                      className="h-5 w-5"
-                      aria-label={t('clear_template')}
-                      onClick={clearTemplate}
+                      size="sm"
+                      onClick={() => setShowRowEditor((v) => !v)}
                     >
-                      <X className="h-3 w-3" />
+                      {showRowEditor ? t('hide_row_editor') : t('edit_rows')}
                     </Button>
-                  </Badge>
-                </div>
-              ) : (
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label>{t('form_seller_country')}</Label>
-                    <Select value={sellerCountry} onValueChange={(v) => applyCountry(v as SellerCountry)}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="se">{t('seller_country_se')}</SelectItem>
-                        <SelectItem value="eu">{t('seller_country_eu')}</SelectItem>
-                        <SelectItem value="noneu">{t('seller_country_noneu')}</SelectItem>
-                      </SelectContent>
-                    </Select>
                   </div>
-                  <div className="space-y-2">
-                    <Label>{t('form_expense_account')}</Label>
-                    <AccountCombobox
-                      value={expenseAccount}
-                      accounts={accounts}
-                      selectedName={accountName(expenseAccount)}
-                      onChange={(v) => {
-                        setExpenseAccount(v)
-                        setBookingRows(null)
-                      }}
-                    />
-                  </div>
-                </div>
-              )}
-              {!appliedTemplate && sellerCountry !== 'se' && (
-                <p className="text-xs text-muted-foreground">
-                  {sellerCountry === 'eu' ? t('seller_country_eu_hint') : t('seller_country_noneu_hint')}
-                </p>
-              )}
-              <div className="flex flex-wrap items-center gap-2">
-                <BookingTemplatePicker
-                  defaultAmount={parsedAmount || undefined}
-                  excludeCategories={['salary', 'year_end', 'vat', 'tax_account', 'private_transfer']}
-                  onApply={(lines, name) => applyBookingTemplate(lines, name)}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowSaveTemplate(true)}
-                  disabled={templateSeedLines.length < 2}
-                >
-                  {t('save_as_template')}
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowRowEditor((v) => !v)}
-                >
-                  {showRowEditor ? t('hide_row_editor') : t('edit_rows')}
-                </Button>
-              </div>
-
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
@@ -1264,6 +1337,8 @@ export default function ExpenseClaimsPage() {
                 })}
                 {currency !== 'SEK' && <> {t('preview_fx_note')}</>}
               </p>
+                </div>
+              )}
             </div>
           )}
 
@@ -1275,7 +1350,10 @@ export default function ExpenseClaimsPage() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setStep(1)}
+                onClick={() => {
+                  if (bookingMode === 'book') setBookingMode('choose')
+                  else setStep(1)
+                }}
                 disabled={submitting}
               >
                 {t('form_back')}
@@ -1293,7 +1371,13 @@ export default function ExpenseClaimsPage() {
               <Button
                 type="button"
                 onClick={handleCreate}
-                disabled={submitting || upload.phase === 'uploading' || !bookingBalanced || !bookingRowsValid}
+                disabled={
+                  submitting ||
+                  upload.phase === 'uploading' ||
+                  bookingMode !== 'book' ||
+                  !bookingBalanced ||
+                  !bookingRowsValid
+                }
               >
                 {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {t('form_register')}
