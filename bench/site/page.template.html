@@ -1,0 +1,883 @@
+<title>Accounted Ledger-Bench</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hedvig+Letters+Serif:opsz@12..24&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --frame: hsl(40 18% 96%);
+    --bg: #FFFFFF;
+    --ink: hsl(0 0% 10%);
+    --soft: hsl(0 0% 38%);
+    --faint: hsl(0 0% 55%);
+    --border: hsl(40 8% 90%);
+    --secondary: hsl(40 11% 89%);
+    --secondary-soft: hsl(40 11% 89% / .55);
+    --sage: hsl(145 22% 40%);
+    --ochre: hsl(38 55% 40%);
+    --terra: hsl(14 50% 44%);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --frame: hsl(0 0% 5%);
+      --bg: hsl(0 0% 9%);
+      --ink: hsl(0 0% 92%);
+      --soft: hsl(0 0% 66%);
+      --faint: hsl(0 0% 48%);
+      --border: hsl(0 0% 17%);
+      --secondary: hsl(0 0% 15%);
+      --secondary-soft: hsl(0 0% 15% / .6);
+      --sage: hsl(145 22% 58%);
+      --ochre: hsl(38 48% 58%);
+      --terra: hsl(14 45% 60%);
+    }
+  }
+  :root[data-theme="dark"] {
+    --frame: hsl(0 0% 5%);
+    --bg: hsl(0 0% 9%);
+    --ink: hsl(0 0% 92%);
+    --soft: hsl(0 0% 66%);
+    --faint: hsl(0 0% 48%);
+    --border: hsl(0 0% 17%);
+    --secondary: hsl(0 0% 15%);
+    --secondary-soft: hsl(0 0% 15% / .6);
+    --sage: hsl(145 22% 58%);
+    --ochre: hsl(38 48% 58%);
+    --terra: hsl(14 45% 60%);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--frame); color: var(--ink); margin: 0;
+    font-family: "Geist","Helvetica Neue",Arial,sans-serif;
+    font-size: 15px; line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .panel {
+    max-width: 1160px; margin: -64px auto 10px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 12px;
+    overflow: clip; position: relative; z-index: 2;
+  }
+  .inner { max-width: 1000px; margin: 0 auto; padding: 0 32px; }
+  @media (max-width: 640px) { .inner { padding: 0 20px; } }
+
+  /* ---------- full-bleed hero with strata ---------- */
+  .hero { position: relative; min-height: 86vh; display: flex; flex-direction: column; overflow: hidden; }
+  @media (max-width: 640px) { .hero { min-height: 72vh; } }
+  .hero canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  header.site {
+    position: relative; z-index: 2;
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 22px clamp(20px, 4vw, 56px) 0; font-size: 12.5px; color: var(--faint);
+  }
+  header.site b { color: var(--ink); font-weight: 600; }
+  header.site .meta { font-family: "Geist Mono",monospace; font-size: 11.5px; }
+  .hero .content {
+    position: relative; z-index: 2; flex: 1;
+    display: flex; flex-direction: column; justify-content: center; align-items: center;
+    text-align: center; margin: 0 auto;
+    padding: 40px clamp(20px, 4vw, 56px) 120px; max-width: 760px;
+  }
+  .hero .ctas { justify-content: center; }
+  h1 {
+    font-family: "Hedvig Letters Serif",Georgia,serif; font-weight: 400;
+    font-size: clamp(46px,7vw,86px); line-height: 1.02; letter-spacing: -.012em;
+    margin: 0 0 16px; text-wrap: balance;
+  }
+  .hero .dek { color: var(--soft); font-size: clamp(15px,1.4vw,16.5px); max-width: 44ch; margin: 0 0 10px; text-wrap: pretty; }
+  .hero .facts { font-family: "Geist Mono",monospace; font-size: 11.5px; color: var(--faint); margin: 0 0 26px; }
+  .hero .ctas { display: flex; gap: 10px; flex-wrap: wrap; }
+  .btn {
+    font-size: 13px; font-weight: 500; text-decoration: none; cursor: pointer;
+    border-radius: 999px; padding: 7px 16px; border: 1px solid transparent;
+    transition: background-color .15s ease, color .15s ease;
+    display: inline-flex; align-items: center;
+  }
+  .btn.primary { background: var(--ink); color: var(--bg); }
+  .btn.primary:hover { background: var(--soft); }
+  .btn.secondary { background: var(--secondary); color: var(--ink); }
+  .btn.secondary:hover { background: var(--secondary-soft); }
+
+  /* ---------- pill nav ---------- */
+  .pillnav-wrap { position: sticky; top: 12px; z-index: 40; display: flex; justify-content: center; padding: 24px 0 0; pointer-events: none; }
+  .pillnav {
+    pointer-events: auto; display: flex; gap: 2px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 999px; padding: 4px;
+  }
+  .pillnav a {
+    font-size: 13px; font-weight: 500; color: var(--soft); text-decoration: none;
+    padding: 6px 15px; border-radius: 999px; white-space: nowrap;
+    transition: background-color .15s ease, color .15s ease;
+  }
+  .pillnav a.active { color: var(--ink); background: var(--secondary); font-weight: 600; }
+  .pillnav a:hover:not(.active) { color: var(--ink); background: var(--secondary-soft); }
+  @media (max-width: 640px) { .pillnav a { padding: 6px 10px; font-size: 12px; } }
+
+  /* ---------- sections ---------- */
+  section { padding: 56px 0 8px; scroll-margin-top: 76px; }
+  h2 {
+    font-family: "Hedvig Letters Serif",Georgia,serif; font-weight: 400;
+    font-size: 24px; line-height: 32px; margin: 0 0 4px; letter-spacing: -.005em;
+  }
+  .sectiondesc { color: var(--soft); margin: 0 0 24px; max-width: 64ch; font-size: 14px; text-wrap: pretty; }
+  p { color: var(--soft); max-width: 66ch; }
+  a { color: var(--ink); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .mono { font-family: "Geist Mono",monospace; font-size: .92em; }
+
+  /* takeaways */
+  .takeaways ol { list-style: none; margin: 0; padding: 0; counter-reset: tk; }
+  .takeaways li {
+    counter-increment: tk; display: grid; grid-template-columns: 30px 1fr; gap: 12px;
+    padding: 14px 0; border-bottom: 1px solid var(--border);
+    color: var(--soft); font-size: 14.5px; max-width: none;
+  }
+  .takeaways li:last-child { border-bottom: none; }
+  .takeaways li::before {
+    content: counter(tk, decimal-leading-zero);
+    font-family: "Geist Mono",monospace; font-size: 11px; color: var(--faint); padding-top: 4px;
+  }
+  .takeaways li strong { color: var(--ink); font-weight: 600; }
+
+  /* marks */
+  .mark { display: inline-flex; width: 15px; height: 15px; vertical-align: -2.5px; margin-right: 8px; color: var(--ink); flex: none; }
+  .mark svg { width: 100%; height: 100%; }
+  .mark.mono2 {
+    font-family: "Geist Mono",monospace; font-size: 7.5px; font-weight: 500;
+    align-items: center; justify-content: center; border: 1px solid var(--faint);
+    border-radius: 4px; color: var(--soft);
+  }
+
+  /* controls */
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; background: var(--secondary-soft); border-radius: 999px; padding: 3px; width: fit-content; }
+  .tabs button {
+    font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; color: var(--soft);
+    background: transparent; border: none; border-radius: 999px; padding: 6px 15px; height: 32px;
+    transition: background-color .15s ease, color .15s ease;
+  }
+  .tabs button[aria-selected="true"] { color: var(--ink); background: var(--bg); font-weight: 600; box-shadow: inset 0 0 0 1px var(--border); }
+  .segbar { display: flex; gap: 6px; margin: 0 0 18px; flex-wrap: wrap; }
+  .segbar button {
+    font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; color: var(--soft);
+    background: transparent; border: 1px solid var(--border); border-radius: 999px; padding: 4px 13px;
+    transition: background-color .15s ease, color .15s ease;
+  }
+  .segbar button[aria-pressed="true"] { background: var(--secondary); color: var(--ink); font-weight: 600; border-color: transparent; }
+
+  /* table: dry-table style, straight on the panel */
+  table.lb { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 620px; }
+  .tablewrap { overflow-x: auto; }
+  table.lb th {
+    font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--faint); text-align: right; padding: 10px 14px; border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  table.lb th:first-child { text-align: left; padding-left: 0; }
+  table.lb td { padding: 11px 14px; border-bottom: 1px solid var(--border); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--soft); }
+  table.lb td:first-child { text-align: left; padding-left: 0; font-weight: 500; color: var(--ink); }
+  table.lb tbody tr { transition: background-color .15s ease; }
+  table.lb tbody tr:hover { background: var(--secondary-soft); }
+  table.lb tr:last-child td { border-bottom: none; }
+  table.lb tr.tiecut td { border-top: 2px solid var(--line-2); }
+  .cellv { display: inline-flex; align-items: center; gap: 10px; justify-content: flex-end; }
+  .cellv b { font-weight: 600; color: var(--ink); min-width: 46px; }
+  .mini { width: 46px; height: 4px; border-radius: 999px; background: var(--secondary); overflow: hidden; }
+  .mini i { display: block; height: 100%; border-radius: 999px; background: var(--sage); }
+  .legendline { font-size: 12px; color: var(--faint); margin-top: 12px; max-width: none; }
+  .legendline b { color: var(--soft); font-weight: 500; }
+
+  /* chart */
+  .chartwrap { display: grid; grid-template-columns: minmax(0,1fr) 280px; gap: 28px; align-items: start; margin-top: 40px; }
+  @media (max-width: 880px) { .chartwrap { grid-template-columns: 1fr; } }
+  .chartcard { border: 1px solid var(--border); border-radius: 8px; padding: 18px 18px 10px; }
+  .chartmeta { display: flex; justify-content: space-between; font-size: 11px; color: var(--faint); font-family: "Geist Mono",monospace; margin-bottom: 6px; }
+  .chartcard svg text { font-family: "Geist Mono",monospace; font-size: 10px; fill: var(--faint); }
+  .chartcard svg .grid { stroke: var(--border); stroke-width: 1; }
+  .chartcard svg .whisk { stroke: var(--faint); stroke-width: 1; opacity: .55; }
+  .chartcard svg .frontier { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 5 4; fill: none; }
+  .chartcard svg .halo { fill: var(--bg); stroke: var(--border); stroke-width: 1; }
+  .chartcard svg .dm { color: var(--ink); }
+  .chartcard svg .lab { fill: var(--ink); font-size: 10.5px; }
+  .chartside h3 { font-family: "Hedvig Letters Serif",Georgia,serif; font-weight: 400; font-size: 18px; margin: 2px 0 6px; }
+  .chartside p { font-size: 13px; }
+
+  /* verdicts */
+  .verdicts { display: grid; grid-template-columns: repeat(auto-fit,minmax(230px,1fr)); gap: 16px; }
+  .vcard { border: 1px solid var(--border); border-radius: 8px; padding: 20px 22px; }
+  .vcard h5 { margin: 0 0 3px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .vcard h5 .dot { width: 7px; height: 7px; border-radius: 999px; background: var(--sage); }
+  .vcard.warn h5 .dot { background: var(--ochre); }
+  .vcard.no h5 .dot { background: var(--terra); }
+  .vcard .vdesc { font-size: 12px; color: var(--faint); margin: 0 0 14px; max-width: none; }
+  .vcard .rows { display: grid; gap: 8px; }
+  .vcard .rows span { display: flex; align-items: center; font-size: 13.5px; font-weight: 500; }
+  .vcard .rows .cov { margin-left: auto; color: var(--faint); font-weight: 400; font-size: 12px; font-variant-numeric: tabular-nums; font-family: "Geist Mono",monospace; }
+  .vcard .rows .none { color: var(--faint); font-style: italic; font-weight: 400; }
+  .vcriteria { font-size: 12px; color: var(--faint); margin-top: 18px; max-width: 82ch; }
+
+  /* head to head */
+  .pickrows { display: grid; gap: 8px; margin-bottom: 26px; }
+  .pickrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .pickrow .who { font-family: "Geist Mono",monospace; font-size: 11px; color: var(--faint); width: 16px; }
+  .pickrow button {
+    font-family: inherit; font-size: 12px; font-weight: 500; cursor: pointer; color: var(--soft);
+    background: transparent; border: 1px solid var(--border); border-radius: 999px;
+    padding: 4px 12px 4px 9px; display: inline-flex; align-items: center;
+    transition: background-color .15s ease, color .15s ease;
+  }
+  .pickrow button .mark { width: 13px; height: 13px; margin-right: 6px; }
+  .pickrow button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); font-weight: 600; }
+  .pickrow button[aria-pressed="true"] .mark { color: var(--bg); }
+  .duelgrid { display: grid; grid-template-columns: repeat(auto-fit,minmax(210px,1fr)); gap: 16px; }
+  .duelcard { border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; }
+  .duelcard h6 { margin: 0 0 10px; font-size: 11px; font-weight: 500; color: var(--faint); text-transform: uppercase; letter-spacing: .05em; }
+  .duelcard .drow { display: flex; align-items: center; padding: 6px 0; font-size: 13.5px; }
+  .duelcard .drow + .drow { border-top: 1px solid var(--border); }
+  .duelcard .drow .nm { color: var(--soft); }
+  .duelcard .drow .vv { margin-left: auto; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--soft); }
+  .duelcard .drow.win .nm { color: var(--ink); font-weight: 600; }
+  .duelcard .drow.win .vv { color: var(--ink); }
+  .duelcard .pv { font-family: "Geist Mono",monospace; font-size: 10.5px; color: var(--faint); margin-top: 8px; }
+  .costline { margin: 18px 0 0; font-size: 13px; color: var(--faint); max-width: none; }
+  .costline b { color: var(--ink); font-weight: 600; }
+  .difflists { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 20px; }
+  @media (max-width: 860px) { .difflists { grid-template-columns: 1fr; } }
+  .difflist { border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; }
+  .difflist h5 { margin: 0 0 8px; font-size: 12.5px; font-weight: 600; }
+  .difflist h5 .count { color: var(--faint); font-weight: 400; font-family: "Geist Mono",monospace; font-size: 11px; }
+  .difflist ul { list-style: none; margin: 0; padding: 0; max-height: 215px; overflow-y: auto; }
+  .difflist li { font-size: 12.5px; color: var(--soft); padding: 5px 0; border-bottom: 1px solid var(--border); max-width: none; }
+  .difflist li:last-child { border-bottom: none; }
+  .difflist li .tid { font-family: "Geist Mono",monospace; font-size: 10.5px; color: var(--faint); margin-right: 7px; }
+  .difflist .empty { color: var(--faint); font-style: italic; }
+
+  /* method */
+  .method .mrow { display: grid; grid-template-columns: 160px 1fr; gap: 20px; padding: 13px 0; border-bottom: 1px solid var(--border); }
+  @media (max-width: 640px) { .method .mrow { grid-template-columns: 1fr; gap: 2px; } }
+  .method dt { font-size: 13px; font-weight: 600; color: var(--ink); padding-top: 1px; }
+  .method dd { margin: 0; font-size: 13.5px; color: var(--soft); max-width: 68ch; }
+  .method dd strong { color: var(--ink); font-weight: 600; }
+  dl { margin: 4px 0 0; }
+
+  footer.site {
+    border-top: 1px solid var(--border); margin-top: 64px;
+    font-family: "Geist Mono",monospace; font-size: 11px; color: var(--faint);
+  }
+  footer.site .inner { display: flex; flex-wrap: wrap; gap: 6px 24px; justify-content: space-between; padding-top: 16px; padding-bottom: 20px; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .stagger tbody tr { animation: fadeup .35s ease-out both; }
+    .stagger tbody tr:nth-child(1) { animation-delay: .02s; } .stagger tbody tr:nth-child(2) { animation-delay: .05s; }
+    .stagger tbody tr:nth-child(3) { animation-delay: .08s; } .stagger tbody tr:nth-child(4) { animation-delay: .11s; }
+    .stagger tbody tr:nth-child(5) { animation-delay: .14s; } .stagger tbody tr:nth-child(6) { animation-delay: .17s; }
+    .stagger tbody tr:nth-child(n+7) { animation-delay: .2s; }
+    @keyframes fadeup { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  }
+</style>
+
+<div class="hero">
+  <canvas id="strata" aria-hidden="true"></canvas>
+  <header class="site">
+    <span><b>Accounted</b> · Labs</span>
+    <span class="meta">Ledger-Bench v1.2 · 2026-08-31</span>
+  </header>
+  <div class="content">
+    <h1>Ledger-Bench</h1>
+    <p class="dek">How good are language models at real Swedish accounting work? Four rankings: choosing the account, knowing the VAT law, reading the invoice, and keeping a live ledger legal.</p>
+    <p class="facts">pass@1 · 104 tasks · 14 models · closed + open weights</p>
+    <div class="ctas">
+      <a class="btn primary" href="#board">View leaderboard</a>
+      <a class="btn secondary" href="#method">Methodology</a>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <nav class="pillnav-wrap" aria-label="Sections">
+    <div class="pillnav">
+      <a href="#takeaways">Takeaways</a>
+      <a href="#board">Leaderboard</a>
+      <a href="#verdicts">Verdicts</a>
+      <a href="#h2h">Head to head</a>
+      <a href="#external">Cross-check</a>
+      <a href="#method">Method</a>
+    </div>
+  </nav>
+
+  <div class="inner">
+
+    <section id="takeaways">
+      <h2>Key takeaways</h2>
+      <div class="takeaways"><ol>
+        <li><span><strong>Three models are fit for confidence-gated unattended booking:</strong> Claude Sonnet 5 (64% of transactions auto-bookable at 99% precision), Claude Opus 5 and GPT-5.6 Luna (53% each). Luna does it at about $0.004 per transaction at list price, roughly 1/40th of Opus.</span></li>
+        <li><span><strong>Accuracy without calibration cannot automate.</strong> Gemini 3.1 Pro ties Opus 5 at the top of the booking table (96.2%), yet its flat confidence supports auto-booking only 15% of transactions at 99% precision, a quarter of what Sonnet 5's calibration unlocks at lower accuracy. The gate, not the score, is what lets a model work alone.</span></li>
+        <li><span><strong>Open weights arrived.</strong> Kimi K3 books 90.6%, level with Claude Sonnet 5 (the two are a statistical tie), with 9/9 agent reliability and a 60% automation gate. The open-closed gap on Swedish accounting is now a few points at the top, not forty.</span></li>
+        <li><span><strong>The ledger is the honesty test.</strong> Ten of fourteen models solved every agent task on every repeat attempt; Llama 4 Maverick managed 1 of 9, GPT-OSS-120B 6 of 9, Haiku 4.5 4 of 9. Chat quality does not predict who can keep books.</span></li>
+      </ol></div>
+    </section>
+
+    <section id="board">
+      <h2>Leaderboard</h2>
+      <p class="sectiondesc">Four suites, four separate rankings, deliberately unblended: a model that reads receipts well but books reverse charge wrong is exactly the distinction an operator needs to see.</p>
+      <div class="tabs" role="tablist" id="tabs"></div>
+      <div class="segbar" id="segbar" hidden>
+        <button data-seg="all" aria-pressed="true">All tasks</button>
+        <button data-seg="underlag" aria-pressed="false">Invoice attached</button>
+        <button data-seg="bank_only" aria-pressed="false">Bank feed only</button>
+      </div>
+      <div class="tablewrap"><table class="lb stagger" id="lbtable"></table></div>
+      <p class="legendline" id="legend"></p>
+
+      <div class="chartwrap">
+        <div class="chartcard">
+          <div class="chartmeta"><span>Ledger-Bench v1.2</span><span id="chartn">pass@1 · Wilson ±1σ CI</span></div>
+          <svg id="scatter" viewBox="0 0 640 380" width="100%" role="img" aria-label="Pass rate against cost per task with efficiency frontier and confidence whiskers"></svg>
+        </div>
+        <div class="chartside">
+          <h3>Score versus spend</h3>
+          <p>Each model's pass rate against its average cost per task, with Wilson ±1σ whiskers. Up and to the left is better; the dashed line is the efficiency frontier.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="verdicts">
+      <h2>Utlåtande</h2>
+      <p class="sectiondesc">Each model receives a revisor-style opinion on confidence-gated unattended booking, from published criteria.</p>
+      <div class="verdicts" id="verdictcards"></div>
+      <p class="vcriteria"><b>Criteria (published, retunable):</b> Tillstyrks requires booking ≥85%, automation coverage ≥50% at 99% precision, VAT law ≥80%, and a clean ledger-agent record. Med reservation requires booking ≥75%, law ≥60%, and a usable confidence gate. Ej bedömd means too few clean runs for an opinion. Verdicts concern unattended booking, not assisted use.</p>
+    </section>
+
+    <section id="h2h">
+      <h2>Head to head</h2>
+      <p class="sectiondesc">Pick any two models: per-suite results, run cost, unique solves and shared misses.</p>
+      <div class="pickrows">
+        <div class="pickrow" id="pickA" role="radiogroup" aria-label="Model A"><span class="who">A</span></div>
+        <div class="pickrow" id="pickB" role="radiogroup" aria-label="Model B"><span class="who">B</span></div>
+      </div>
+      <div class="duelgrid" id="duel"></div>
+      <p class="costline" id="costline"></p>
+      <div class="difflists">
+        <div class="difflist" id="onlyA"></div>
+        <div class="difflist" id="onlyB"></div>
+        <div class="difflist" id="neither"></div>
+      </div>
+    </section>
+
+    <section id="external">
+      <h2>Cross-check against DualEntry</h2>
+      <p class="sectiondesc">The nearest comparable public benchmark. Their figures are published by DualEntry and are not measured by us; the agreement is reported honestly, including where it is weak.</p>
+      <div class="tablewrap"><table class="lb" id="exttable"></table></div>
+      <p class="legendline" id="extnote"></p>
+    </section>
+
+    <section class="method" id="method">
+      <h2>Method, in short</h2>
+      <p class="sectiondesc">The full methodology, task sources and changelog live in <span class="mono">bench/README.md</span> in the Accounted repository.</p>
+      <dl>
+        <div class="mrow"><dt>What</dt><dd><strong>Booking</strong> (53): pick the BAS account + VAT treatment for a bank transaction. <strong>Reasoning</strong> (36): Swedish VAT/BFL law with one deterministic answer. <strong>Extraction</strong> (12): read fields off rendered Swedish documents. <strong>Ledger-agent</strong> (3, run three times each): multi-turn tool use against a real Postgres ledger.</dd></div>
+        <div class="mrow"><dt>Oracle</dt><dd>Deterministic throughout. The agent suite is graded on the <strong>SQL end state of the books</strong>; the production database triggers (balance, immutability, period locks) stay live and refuse illegal writes. A self-test proves the oracle can detect failure before any model runs.</dd></div>
+        <div class="mrow"><dt>Fairness</dt><dd>Byte-identical prompts and tools for every model, vendor-default settings, pass@1, no fallbacks. Runs that never reached a model (rate limits, provider credits) are quarantined as <em>not run</em>, never scored as failures. Costs are measured tokens at each vendor's first-party list price (standard tier, no cache, batch or promo discounts); open-weights models without a vendor API are priced at Fireworks, following Ramp's convention.</dd></div>
+        <div class="mrow"><dt>Evidence split</dt><dd>Booking reports two segments: <strong>invoice attached</strong> (the invoice states the VAT: measures reading) and <strong>bank feed only</strong> (counterparty and amount alone: measures knowing). v1.0 published only the blend and its VAT column saturated; v1.1 fixed that.</dd></div>
+        <div class="mrow"><dt>Context</dt><dd>Closest public benchmarks: <a href="https://www.dualentry.com/accounting-ai-benchmark">DualEntry</a> tops out at 79.2% (US-GAAP, month-end close 50%), <a href="https://www.vals.ai/benchmarks/finance_agent">Vals Finance Agent</a> at 64.4%, <a href="https://taubench.com">τ²-bench</a> at 87.9%. None Swedish, none write-capable against a legally constrained ledger.</dd></div>
+        <div class="mrow"><dt>Statistics</dt><dd>Wilson ±1σ intervals on every rate; paired <strong>McNemar exact tests</strong> group the ranking into statistical ties (models inside a group cannot be distinguished at p&lt;0.05, marked by rules in the table); every task carries a published <strong>discrimination index</strong> (point-biserial), and tasks with negative discrimination are retired in review, applied to all models equally. A k=3 repeat study found single-run pass rates moving up to 25 pp between identical runs for one model; the tie groups, not the raw order, are the citable result.</dd></div>
+      <div class="mrow"><dt>Contamination</dt><dd>Every task file carries a <strong>canary string</strong> (BIG-bench convention) so future training-data filters can exclude it, and the public split's exposure is stated rather than hidden. The prod-derived private split is the contamination-free instrument.</dd></div>
+      <div class="mrow"><dt>Disclosure</dt><dd>Tasks authored with Claude against cited law, machine-validated, public for review. Provider marks are their owners' trademarks, shown for identification only.</dd></div>
+      </dl>
+    </section>
+
+  </div>
+
+  <footer class="site">
+    <div class="inner">
+      <span>ACCOUNTED LEDGER-BENCH V1.2</span>
+      <span>ORACLE: TRIGGER-ENFORCED SWEDISH ACCOUNTING LAW</span>
+      <span>2026-08-31</span>
+    </div>
+  </footer>
+</div>
+
+<script>
+  const DATA = __LEADERBOARD_JSON__;
+  const LOGOS = __LOGOS_JSON__;
+
+  /* ---------- strata: the ledger as sediment ----------
+     Layered horizons drifting almost imperceptibly. Warm neutral bands;
+     a few thin seams in the semantic data colors (sage, ochre, terracotta),
+     which in this design system are reserved for data, and the strata ARE
+     the data: layers of bookkeeping history, append-only. */
+  (function strata() {
+    const cv = document.getElementById('strata');
+    const ctx = cv.getContext('2d');
+    const styles = getComputedStyle(document.documentElement);
+    const attr = document.documentElement.getAttribute('data-theme');
+    const dark = attr === 'dark' || (attr !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+    let W, H, layers = [];
+    const N = 22;
+    function neutral(i) {
+      if (dark) { const l = 10 + i * 1.15; return `hsl(40 3% ${l}%)`; }
+      const l = 99 - i * 1.75, sat = 7 + i * 0.8;
+      return `hsl(40 ${sat}% ${l}%)`;
+    }
+    // Annotated seams: the ledger's strata, surveyed. Semantic colors are
+    // data-only in this design system, and these ARE the data.
+    const seams = {
+      8:  { color: styles.getPropertyValue('--sage').trim(),  label: '1930 · företagskonto' },
+      13: { color: styles.getPropertyValue('--ochre').trim(), label: '2611 · utgående moms' },
+      18: { color: styles.getPropertyValue('--terra').trim(), label: '2641 · ingående moms' },
+    };
+    function build() {
+      const r = cv.parentElement.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      W = r.width; H = r.height;
+      cv.width = W * dpr; cv.height = H * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      layers = [];
+      for (let i = 0; i < N; i++) {
+        const f = i / (N - 1);
+        const base = H * (0.34 + 0.64 * f * f);
+        layers.push({
+          base,
+          amp1: 8 + 16 * f, f1: 0.0028 + 0.0011 * (i % 3), p1: i * 1.7,
+          amp2: 3 + 7 * f, f2: 0.009 + 0.0022 * (i % 4), p2: i * 2.9,
+          amp3: 1.5 + 3 * f, f3: 0.021 + 0.003 * (i % 5), p3: i * 0.8,
+          drift: (0.05 + 0.05 * ((i * 7) % 5)) * (i % 2 ? 1 : -1),
+          color: neutral(i),
+          edge: dark ? 'hsl(40 3% 6% / .5)' : `hsl(40 10% ${86 - i * 1.4}% / .6)`,
+          seam: seams[i] || null,
+        });
+      }
+      ctx.textAlign = 'right';
+    }
+    // Pointer swell: the sediment responds, gently, where you touch it.
+    let mx = -1, mAmp = 0, mTargetAmp = 0;
+    function horizon(l, x, t) {
+      let y = l.base
+        + l.amp1 * Math.sin(x * l.f1 + l.p1 + t * l.drift)
+        + l.amp2 * Math.sin(x * l.f2 + l.p2 - t * l.drift * 1.6)
+        + l.amp3 * Math.sin(x * l.f3 + l.p3 + t * l.drift * 0.7);
+      if (mAmp > 0.01 && mx >= 0) {
+        const dx = (x - mx) / 170;
+        y -= mAmp * (l.base / H) * 26 * Math.exp(-dx * dx);
+      }
+      return y;
+    }
+    function trace(l, t) {
+      const STEP = 5;
+      ctx.moveTo(0, horizon(l, 0, t));
+      for (let x = STEP; x <= W + STEP; x += STEP) ctx.lineTo(x, horizon(l, x, t));
+    }
+    function draw(t) {
+      ctx.clearRect(0, 0, W, H);
+      for (const l of layers) {
+        ctx.beginPath();
+        trace(l, t);
+        ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath();
+        ctx.fillStyle = l.color;
+        ctx.fill();
+        ctx.beginPath();
+        trace(l, t);
+        ctx.strokeStyle = l.seam ? l.seam.color : l.edge;
+        ctx.globalAlpha = l.seam ? 0.65 : 1;
+        ctx.lineWidth = l.seam ? 1.6 : 1;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        if (l.seam) {
+          const yLab = horizon(l, W - 26, t);
+          ctx.font = '10.5px "Geist Mono", monospace';
+          ctx.fillStyle = l.seam.color;
+          ctx.globalAlpha = 0.9;
+          ctx.fillText(l.seam.label, W - 26, yLab - 7);
+          ctx.globalAlpha = 1;
+        }
+      }
+    }
+    let t = 0, visible = true, last = 0;
+    function loop(now) {
+      requestAnimationFrame(loop);
+      if (!visible || now - last < 40) return;
+      last = now; t += 0.055;
+      mAmp += (mTargetAmp - mAmp) * 0.06;
+      draw(t);
+    }
+    build();
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      draw(3);
+      window.addEventListener('resize', () => { build(); draw(3); });
+      return;
+    }
+    cv.parentElement.addEventListener('pointermove', (e) => {
+      const r = cv.getBoundingClientRect();
+      mx = e.clientX - r.left; mTargetAmp = 1;
+    });
+    cv.parentElement.addEventListener('pointerleave', () => { mTargetAmp = 0; });
+    window.addEventListener('resize', build);
+    if ('IntersectionObserver' in window) {
+      new IntersectionObserver((e) => { visible = e[0].isIntersecting; }).observe(cv);
+    }
+    requestAnimationFrame(loop);
+  })();
+
+  /* ---------- shared ---------- */
+  const SUITES = [
+    { id: 'booking', label: 'Booking', legend: '<b>Pass</b> account and VAT both right · <b>Strikt</b> exact gold account, no accepted alternatives · <b>Auto@99%</b> share auto-bookable at 99% precision, gated on stated confidence · <b>ECE</b> calibration error, 0 = perfect · <b>Cost</b> per task · a horizontal rule separates statistical tie groups (paired McNemar, p<0.05)' },
+    { id: 'reasoning', label: 'Reasoning', legend: '<b>Pass</b> exact deterministic answer · <b>Färskhet</b> the six tasks on rules changed 2025-2026 · <b>ECE</b> calibration error, lower is better · <b>Cost</b> per task · rules separate statistical tie groups' },
+    { id: 'extraction', label: 'Extraction', legend: '<b>Pass</b> every field on the document right · <b>Fields</b> mean per-field accuracy · <b>Cost</b> per task · models without vision are absent' },
+    { id: 'ledger-agent', label: 'Ledger-agent', legend: '<b>Pass</b> all end-state assertions hold on the real ledger · <b>Pass^k</b> share of tasks solved on EVERY repeat attempt · <b>Turns</b> model turns used · <b>Cost</b> per task' },
+  ];
+  const fmtPct1 = (x) => (x * 100).toFixed(1) + '%';
+  const fmtPct0 = (x) => (x * 100).toFixed(0) + '%';
+  const perTask = (r) => r.totalCostUsd / r.n;
+  const fmtUsd = (x) => '$' + (x >= 1 ? x.toFixed(2) : x.toFixed(3));
+  const short = (label) => label.replace('Claude ', '');
+  const rowsOf = (suite) => DATA.suites[suite] || [];
+  const modelRow = (suite, id) => rowsOf(suite).find((r) => r.model === id);
+  const vendorOf = (id) => { for (const s of SUITES) { const r = modelRow(s.id, id); if (r) return r.vendor; } return ''; };
+
+  function markFor(vendor) {
+    const d = LOGOS[vendor];
+    if (d) return `<span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="currentColor" d="${d}"/></svg></span>`;
+    const mono = { 'xAI': 'xAI', 'Z.ai': 'Z' }[vendor] || vendor.slice(0, 2);
+    return `<span class="mark mono2" aria-hidden="true">${mono}</span>`;
+  }
+
+  let active = 'booking';
+  let segment = 'all';
+  function segmented(r) {
+    if (active !== 'booking' || segment === 'all') return null;
+    return (r.extras.segments || {})[segment] || null;
+  }
+  function passOf(r) { const s = segmented(r); return s ? s.pass : r.passRate; }
+
+  /* ---------- leaderboard ---------- */
+  const tabsEl = document.getElementById('tabs');
+  const segbarEl = document.getElementById('segbar');
+  const tableEl = document.getElementById('lbtable');
+  const legendEl = document.getElementById('legend');
+
+  function passCell(p) {
+    const w = Math.max(0, Math.min(1, p)) * 100;
+    return `<span class="cellv"><b>${fmtPct1(p)}</b><span class="mini"><i style="width:${w}%"></i></span></span>`;
+  }
+
+  function headerCols() {
+    if (active === 'booking') return segment === 'all' ? ['Model','Pass','Strikt','Auto@99%','ECE','Cost'] : ['Model','Pass','Konto','Moms','Cost'];
+    if (active === 'reasoning') return ['Model','Pass','Färskhet','ECE','Cost'];
+    if (active === 'extraction') return ['Model','Pass','Fields','Cost'];
+    return ['Model','Pass','Pass^k','Turns','Cost'];
+  }
+
+  function rowCols(r) {
+    const s = segmented(r);
+    const p = passOf(r);
+    const e = r.extras || {};
+    const cost = fmtUsd(perTask(r));
+    if (active === 'booking') {
+      if (segment === 'all') {
+        return [passCell(p),
+          e.strictAccountAccuracy == null ? '—' : fmtPct0(e.strictAccountAccuracy),
+          e.coverage99 == null ? '—' : fmtPct0(e.coverage99),
+          e.ece == null ? '—' : e.ece.toFixed(2), cost];
+      }
+      const konto = s ? s.accountAccuracy : e.accountAccuracy;
+      const moms = s ? s.vatAccuracy : e.vatAccuracy;
+      return [passCell(p), fmtPct0(konto ?? 0), fmtPct0(moms ?? 0), cost];
+    }
+    if (active === 'reasoning') {
+      const fr = e.freshness;
+      return [passCell(p), fr ? `${fr.pass}/${fr.n}` : '—', e.ece == null ? '—' : e.ece.toFixed(2), cost];
+    }
+    if (active === 'extraction') return [passCell(p), fmtPct0(e.fieldAccuracy ?? 0), cost];
+    return [passCell(p), e.reliability == null ? '—' : fmtPct0(e.reliability), r.avgTurns.toFixed(1), cost];
+  }
+
+  function renderBoard() {
+    tabsEl.innerHTML = '';
+    for (const s of SUITES) {
+      const b = document.createElement('button');
+      b.textContent = s.label;
+      b.setAttribute('role','tab');
+      b.setAttribute('aria-selected', String(s.id === active));
+      b.addEventListener('click', () => switchView(() => { active = s.id; segment = 'all'; }));
+      tabsEl.appendChild(b);
+    }
+    segbarEl.hidden = active !== 'booking';
+    for (const b of segbarEl.querySelectorAll('button')) {
+      b.setAttribute('aria-pressed', String(b.dataset.seg === segment));
+      b.onclick = () => switchView(() => { segment = b.dataset.seg; });
+    }
+    const rows = rowsOf(active).slice().sort((a,b) => passOf(b) - passOf(a));
+    // Statistical tie groups apply to the unsegmented ranking only.
+    const groups = (segment === 'all' && DATA.tieGroups) ? DATA.tieGroups[active] || [] : [];
+    const groupStart = new Set(groups.slice(1).map((g) => g[0]));
+    let html = '<thead><tr>' + headerCols().map((c) => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
+    for (const r of rows) {
+      const sep = groupStart.has(r.model) ? ' class="tiecut"' : '';
+      html += `<tr${sep}><td>${markFor(r.vendor)}${r.label}</td>` +
+        rowCols(r).map((c) => `<td>${c}</td>`).join('') + '</tr>';
+    }
+    tableEl.innerHTML = html + '</tbody>';
+    legendEl.innerHTML = SUITES.find((s) => s.id === active).legend;
+    document.getElementById('chartn').textContent = `pass@1 · N=${rows[0] ? rows[0].n : 0} · Wilson ±1σ CI`;
+    drawScatter(rows);
+  }
+
+  function switchView(mutate) {
+    if (document.startViewTransition && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      document.startViewTransition(() => { mutate(); renderBoard(); });
+    } else { mutate(); renderBoard(); }
+  }
+
+  /* ---------- scatter ---------- */
+  function drawScatter(rows) {
+    const svg = document.getElementById('scatter');
+    const W = 640, H = 380, m = { l: 52, r: 60, t: 20, b: 44 };
+    const maxCost = Math.max(...rows.map(perTask), 0.001) * 1.28;
+    const x = (c) => m.l + (c / maxCost) * (W - m.l - m.r);
+    const y = (p) => H - m.b - p * (H - m.t - m.b);
+    let out = '';
+    for (let gy = 0; gy <= 4; gy++) {
+      const p = gy / 4;
+      out += `<line class="grid" x1="${m.l}" y1="${y(p)}" x2="${W-m.r}" y2="${y(p)}"></line>`;
+      out += `<text x="${m.l-8}" y="${y(p)+3}" text-anchor="end">${gy*25}%</text>`;
+    }
+    for (const f of [0.25, 0.5, 0.75, 1]) {
+      const t = f * maxCost;
+      out += `<text x="${x(t)}" y="${H-m.b+16}" text-anchor="middle">${t >= 1 ? '$'+t.toFixed(2) : '$'+t.toFixed(3)}</text>`;
+    }
+    out += `<text x="${(W-m.r+m.l)/2}" y="${H-6}" text-anchor="middle">cost per task (average)</text>`;
+    const usesSeg = active === 'booking' && segment !== 'all';
+    const sorted = rows.map((r) => ({ c: perTask(r), p: passOf(r) })).sort((a,b) => a.c - b.c);
+    let best = -1; const frontier = [];
+    for (const pt of sorted) if (pt.p > best) { frontier.push(pt); best = pt.p; }
+    if (frontier.length > 1) {
+      let d = `M ${x(frontier[0].c)} ${y(frontier[0].p)}`;
+      for (let i = 1; i < frontier.length; i++) d += ` L ${x(frontier[i].c)} ${y(frontier[i-1].p)} L ${x(frontier[i].c)} ${y(frontier[i].p)}`;
+      out += `<path class="frontier" d="${d}"></path>`;
+    }
+    if (!usesSeg) {
+      for (const r of rows) {
+        const cx = x(perTask(r));
+        out += `<line class="whisk" x1="${cx}" y1="${y(r.wilsonLo)}" x2="${cx}" y2="${y(r.wilsonHi)}"></line>`;
+        out += `<line class="whisk" x1="${cx-3.5}" y1="${y(r.wilsonLo)}" x2="${cx+3.5}" y2="${y(r.wilsonLo)}"></line>`;
+        out += `<line class="whisk" x1="${cx-3.5}" y1="${y(r.wilsonHi)}" x2="${cx+3.5}" y2="${y(r.wilsonHi)}"></line>`;
+      }
+    }
+    const labeled = new Set(rows.slice().sort((a,b) => passOf(b)-passOf(a)).slice(0,7).map((r)=>r.model));
+    const placed = [];
+    for (const r of rows) {
+      const cx = x(perTask(r)), cy = y(passOf(r));
+      const d = LOGOS[r.vendor];
+      out += `<g class="dm"><circle class="halo" cx="${cx}" cy="${cy}" r="10"></circle>`;
+      if (d) out += `<g transform="translate(${cx-6},${cy-6}) scale(0.5)"><path fill="currentColor" d="${d}"></path></g>`;
+      else out += `<text x="${cx}" y="${cy+3}" text-anchor="middle" style="font-size:7.5px;font-weight:600;fill:currentColor">${short(r.label).slice(0,2)}</text>`;
+      out += `<title>${short(r.label)}: ${fmtPct1(passOf(r))}, ${fmtUsd(perTask(r))}/task</title></g>`;
+      if (!labeled.has(r.model)) continue;
+      let ly = cy - 14;
+      while (placed.some((p) => Math.abs(p - ly) < 13)) ly -= 13;
+      placed.push(ly);
+      out += `<text class="lab" x="${Math.min(cx+12, W-m.r-4)}" y="${ly}" text-anchor="${cx > W-160 ? 'end' : 'start'}">${short(r.label)}</text>`;
+    }
+    svg.innerHTML = out;
+  }
+
+  /* ---------- verdicts ---------- */
+  const allModels = rowsOf('booking').map((r) => ({ id: r.model, label: r.label, vendor: r.vendor }));
+  function renderVerdicts() {
+    const host = document.getElementById('verdictcards');
+    const groups = [
+      { key: 'tillstyrks', cls: '', title: 'Tillstyrks', desc: 'Fit for confidence-gated unattended booking today.' },
+      { key: 'tillstyrks_med_reservation', cls: 'warn', title: 'Tillstyrks med reservation', desc: 'Usable with human review below the confidence gate.' },
+      { key: 'avstyrks', cls: 'no', title: 'Avstyrks', desc: 'Should not book unattended in any configuration.' },
+      { key: 'ej_bedomd', cls: 'no', title: 'Ej bedömd', desc: 'Too few clean runs for an opinion; no verdict either way.' },
+    ];
+    const byModel = DATA.verdicts || {};
+    const labelOf = (id) => (allModels.find((mm) => mm.id === id) || { label: id }).label;
+    host.innerHTML = groups.map((g) => {
+      const ids = Object.keys(byModel).filter((id) => byModel[id].verdict === g.key)
+        .sort((a,b) => (byModel[b].coverage99 ?? 0) - (byModel[a].coverage99 ?? 0));
+      if (g.key === 'ej_bedomd' && ids.length === 0) return '';
+      const rows = ids.length === 0
+        ? '<span class="none">none</span>'
+        : ids.map((id) => {
+            const cov = byModel[id].coverage99;
+            return `<span>${markFor(vendorOf(id))}${short(labelOf(id))}<span class="cov">${cov != null ? Math.round(cov*100) + '% auto' : ''}</span></span>`;
+          }).join('');
+      return `<div class="vcard ${g.cls}"><h5><span class="dot"></span>${g.title}</h5><p class="vdesc">${g.desc}</p><div class="rows">${rows}</div></div>`;
+    }).join('');
+  }
+
+  /* ---------- head to head ---------- */
+  let selA = 'claude-sonnet-5';
+  let selB = 'gpt-5-6-luna';
+  function renderPickers() {
+    for (const [el, sel, setter] of [
+      [document.getElementById('pickA'), selA, (v) => { selA = v; }],
+      [document.getElementById('pickB'), selB, (v) => { selB = v; }],
+    ]) {
+      for (const btn of [...el.querySelectorAll('button')]) btn.remove();
+      for (const mm of allModels) {
+        const b = document.createElement('button');
+        b.innerHTML = `${markFor(mm.vendor)}${short(mm.label)}`;
+        b.setAttribute('role','radio');
+        b.setAttribute('aria-checked', String(mm.id === sel));
+        b.setAttribute('aria-pressed', String(mm.id === sel));
+        b.addEventListener('click', () => { setter(mm.id); renderPickers(); renderDuel(); });
+        el.appendChild(b);
+      }
+    }
+  }
+  function mcnemar(suiteId, a, b) {
+    let wa = 0, wb = 0;
+    for (const t of (DATA.taskMatrix[suiteId] || [])) {
+      const va = t.results[a], vb = t.results[b];
+      if (va == null || vb == null) continue;
+      const sa = va >= 0.999, sb = vb >= 0.999;
+      if (sa && !sb) wa++;
+      if (sb && !sa) wb++;
+    }
+    const n = wa + wb;
+    if (n === 0) return { wa, wb, p: 1 };
+    const k = Math.min(wa, wb);
+    let tail = 0;
+    for (let i = 0; i <= k; i++) {
+      let logC = 0;
+      for (let j = 0; j < i; j++) logC += Math.log(n - j) - Math.log(j + 1);
+      tail += Math.exp(logC - n * Math.LN2);
+    }
+    return { wa, wb, p: Math.min(1, 2 * tail) };
+  }
+
+  function renderDuel() {
+    const a = selA, b = selB;
+    const la = short((allModels.find((mm) => mm.id === a) || { label: a }).label);
+    const lb = short((allModels.find((mm) => mm.id === b) || { label: b }).label);
+    let html = '';
+    for (const s of SUITES) {
+      const ra = modelRow(s.id, a), rb = modelRow(s.id, b);
+      if (!ra && !rb) continue;
+      const pa = ra ? ra.passRate : null, pb = rb ? rb.passRate : null;
+      const row = (name, v, win) =>
+        `<div class="drow ${win ? 'win' : ''}"><span class="nm">${name}</span><span class="vv">${v == null ? '—' : fmtPct0(v)}</span></div>`;
+      const mn = mcnemar(s.id, a, b);
+      const sig = mn.p < 0.05;
+      const pv = mn.wa + mn.wb === 0 ? 'identical results'
+        : `${mn.wa}–${mn.wb} · p=${mn.p < 0.001 ? '<0.001' : mn.p.toFixed(2)}${sig ? '' : ' · statistical tie'}`;
+      html += `<div class="duelcard"><h6>${s.label}</h6>` +
+        row(la, pa, pa != null && (pb == null || pa >= pb)) +
+        row(lb, pb, pb != null && (pa == null || pb >= pa)) +
+        `<div class="pv">${pv}</div></div>`;
+    }
+    document.getElementById('duel').innerHTML = html;
+
+    let costA = 0, costB = 0, both = 0, onlyA = [], onlyB = [], neither = [];
+    for (const s of SUITES) {
+      const ra = modelRow(s.id, a), rb = modelRow(s.id, b);
+      if (ra) costA += ra.totalCostUsd;
+      if (rb) costB += rb.totalCostUsd;
+      for (const t of (DATA.taskMatrix[s.id] || [])) {
+        const va = t.results[a], vb = t.results[b];
+        if (va == null || vb == null) continue;
+        const sa = va >= 0.999, sb = vb >= 0.999;
+        const item = { id: t.id, probe: t.probe };
+        if (sa && sb) both++;
+        else if (sa && !sb) onlyA.push(item);
+        else if (!sa && sb) onlyB.push(item);
+        else neither.push(item);
+      }
+    }
+    document.getElementById('costline').innerHTML =
+      `Full run: <b>${fmtUsd(costA)}</b> (${la}) vs <b>${fmtUsd(costB)}</b> (${lb}) · both solved ${both} tasks`;
+    const list = (el, title, items, emptyText) => {
+      document.getElementById(el).innerHTML = `<h5>${title} <span class="count">· ${items.length}</span></h5><ul>` +
+        (items.length === 0
+          ? `<li class="empty">${emptyText}</li>`
+          : items.map((t) => `<li title="${(t.probe||'').replace(/"/g,'&quot;')}"><span class="tid">${t.id.replace(/^[a-z-]+-/,'#')}</span>${t.probe}</li>`).join('')) +
+        '</ul>';
+    };
+    list('onlyA', `Only ${la} solves`, onlyA, 'no unique solves');
+    list('onlyB', `Only ${lb} solves`, onlyB, 'no unique solves');
+    list('neither', 'Neither solves', neither, 'no shared misses');
+  }
+
+  /* ---------- pill nav ---------- */
+  const navLinks = [...document.querySelectorAll('.pillnav a')];
+  if ('IntersectionObserver' in window) {
+    const io = new IntersectionObserver((entries) => {
+      for (const en of entries) {
+        if (!en.isIntersecting) continue;
+        navLinks.forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + en.target.id));
+      }
+    }, { rootMargin: '-25% 0px -60% 0px' });
+    for (const sec of document.querySelectorAll('section[id]')) io.observe(sec);
+  }
+
+
+  /* ---------- external cross-check ---------- */
+  // Published by DualEntry (2026 Accounting AI Benchmark: 101 questions across
+  // 8 US-GAAP categories, deterministic binary grading). Not measured by us.
+  const EXTERNAL = {
+    source: 'DualEntry Accounting AI Benchmark 2026',
+    url: 'https://www.dualentry.com/accounting-ai-benchmark',
+    n: 101,
+    scores: {
+      'grok-4-6': 82.2, 'deepseek-v4-pro': 78.2, 'kimi-k3': 77.2,
+      'claude-sonnet-5': 73.3, 'claude-opus-5': 72.3, 'gemini-3-1-pro': 71.3,
+      'claude-haiku-4-5': 70.3, 'claude-sonnet-4-6': 70.3, 'gpt-5-6-luna': 66.3,
+      'gpt-oss-120b': 49.5, 'claude-fable-5': 83.2,
+    },
+  };
+
+  function spearman(pairs) {
+    const n = pairs.length;
+    const rank = (vals) => {
+      const order = [...vals.keys()].sort((a, b) => vals[a] - vals[b]);
+      const rk = new Array(n);
+      let i = 0;
+      while (i < n) {
+        let j = i;
+        while (j + 1 < n && vals[order[j + 1]] === vals[order[i]]) j++;
+        const avg = (i + j) / 2 + 1;
+        for (let k = i; k <= j; k++) rk[order[k]] = avg;
+        i = j + 1;
+      }
+      return rk;
+    };
+    const xs = rank(pairs.map((p) => p[0]));
+    const ys = rank(pairs.map((p) => p[1]));
+    const mx = xs.reduce((a, b) => a + b, 0) / n;
+    const my = ys.reduce((a, b) => a + b, 0) / n;
+    let cov = 0, sx = 0, sy = 0;
+    for (let i = 0; i < n; i++) {
+      cov += (xs[i] - mx) * (ys[i] - my);
+      sx += (xs[i] - mx) ** 2;
+      sy += (ys[i] - my) ** 2;
+    }
+    return sx > 0 && sy > 0 ? cov / Math.sqrt(sx * sy) : 0;
+  }
+
+  function renderExternal() {
+    const rows = [];
+    for (const [id, theirs] of Object.entries(EXTERNAL.scores)) {
+      const r = modelRow('booking', id);
+      if (!r) continue; // no booking run on this board: nothing comparable
+      rows.push({ label: r.label, vendor: r.vendor, ours: r.passRate * 100, theirs });
+    }
+    rows.sort((a, b) => b.theirs - a.theirs);
+    let html = '<thead><tr><th>Model</th><th>Ledger-Bench booking</th><th>DualEntry overall</th><th>Difference</th></tr></thead><tbody>';
+    for (const r of rows) {
+      const d = r.ours - r.theirs;
+      html += `<tr><td>${markFor(r.vendor)}${r.label}</td><td>${r.ours.toFixed(1)}%</td>` +
+        `<td>${r.theirs.toFixed(1)}%</td><td>${d >= 0 ? '+' : ''}${d.toFixed(1)} pp</td></tr>`;
+    }
+    document.getElementById('exttable').innerHTML = html + '</tbody>';
+    const rho = spearman(rows.map((r) => [r.ours, r.theirs]));
+    document.getElementById('extnote').innerHTML =
+      `Rank agreement on the ${rows.length} shared models: <b>Spearman ρ = ${rho >= 0 ? '+' : ''}${rho.toFixed(2)}</b>, with a 95% interval of roughly [−0.46, +0.75] at this sample size: not distinguishable from zero, and not evidence either way. ` +
+      `Divergence is expected. <a href="${EXTERNAL.url}">${EXTERNAL.source}</a> asks ${EXTERNAL.n} US-GAAP questions across AP, AR, bank reconciliation, financial reporting and month-end close; Ledger-Bench asks Swedish BAS and moms questions and writes to a real ledger under Bokföringslagen. ` +
+      `Neither board validates the other, and at 101 and 104 tasks both are small enough that adjacent ranks differ by single questions. Our strict scores (mean 57.8%) sit nearer their range (71.1%) than our lenient ones (83.6%) but agree no better (ρ = +0.18), so scoring leniency does not explain the gap.`;
+  }
+
+  renderBoard();
+  renderVerdicts();
+  renderExternal();
+  renderPickers();
+  renderDuel();
+</script>

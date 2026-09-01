@@ -1,6 +1,6 @@
 {
   "benchVersion": "v1.1",
-  "generatedAt": "2026-08-31T19:51:45.750Z",
+  "generatedAt": "2026-09-01T07:55:03.930Z",
   "suites": {
     "booking": [
       {
@@ -538,6 +538,30 @@
     ],
     "reasoning": [
       {
+        "model": "claude-fable-5",
+        "label": "Claude Fable 5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 36,
+        "pass": 34,
+        "passRate": 0.944,
+        "wilsonLo": 0.893,
+        "wilsonHi": 0.972,
+        "totalCostUsd": 0.31,
+        "avgCostUsd": 0.0086,
+        "avgTurns": 1,
+        "avgDurationMs": 12861,
+        "extras": {
+          "ece": 0.067,
+          "freshness": {
+            "n": 6,
+            "pass": 5
+          },
+          "stablePass": 0.967,
+          "parseFailures": 0
+        }
+      },
+      {
         "model": "gpt-5-6-terra-pro",
         "label": "GPT-5.6 Terra Pro",
         "vendor": "OpenAI",
@@ -966,6 +990,24 @@
         }
       },
       {
+        "model": "claude-fable-5",
+        "label": "Claude Fable 5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 12,
+        "pass": 10,
+        "passRate": 0.833,
+        "wilsonLo": 0.701,
+        "wilsonHi": 0.914,
+        "totalCostUsd": 0.589,
+        "avgCostUsd": 0.04906,
+        "avgTurns": 1,
+        "avgDurationMs": 13135,
+        "extras": {
+          "fieldAccuracy": 0.981
+        }
+      },
+      {
         "model": "gpt-5-6-terra-pro",
         "label": "GPT-5.6 Terra Pro",
         "vendor": "OpenAI",
@@ -1379,6 +1421,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1402,6 +1445,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1425,6 +1469,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1448,6 +1493,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1471,6 +1517,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 1,
           "claude-opus-5": 0,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 0,
           "gpt-5-6-luna": 0,
           "gemini-3-1-pro": 0,
@@ -1494,6 +1541,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1517,6 +1565,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1540,6 +1589,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1563,6 +1613,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 0,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 0,
           "gpt-5-6-luna": 0,
           "gemini-3-1-pro": 1,
@@ -1586,6 +1637,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1609,6 +1661,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1632,6 +1685,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1655,6 +1709,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1678,6 +1733,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 0,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 0,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 0,
@@ -1701,6 +1757,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1724,6 +1781,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1747,6 +1805,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 0,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1770,6 +1829,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1793,6 +1853,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1816,6 +1877,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1839,6 +1901,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1862,6 +1925,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 0,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1885,6 +1949,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1908,6 +1973,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1931,6 +1997,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1954,6 +2021,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 0,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -1977,6 +2045,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2000,6 +2069,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2023,6 +2093,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2046,6 +2117,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2069,6 +2141,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2092,6 +2165,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2115,6 +2189,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 0,
           "gemini-3-1-pro": 1,
@@ -2138,6 +2213,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2161,6 +2237,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2184,6 +2261,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 0,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2207,6 +2285,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 0,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2230,6 +2309,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2253,6 +2333,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2276,6 +2357,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2299,6 +2381,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2322,6 +2405,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2345,6 +2429,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2368,6 +2453,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2391,6 +2477,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2414,6 +2501,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2437,6 +2525,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2460,6 +2549,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2483,6 +2573,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2506,6 +2597,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2529,6 +2621,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2552,6 +2645,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2575,6 +2669,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2599,6 +2694,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2610,7 +2706,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.73
+        "disc": 0.75
       },
       {
         "id": "reasoning-002",
@@ -2621,6 +2717,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": null,
@@ -2632,7 +2729,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.76
+        "disc": 0.79
       },
       {
         "id": "reasoning-003",
@@ -2643,6 +2740,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": null,
@@ -2654,7 +2752,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.67
+        "disc": 0.66
       },
       {
         "id": "reasoning-004",
@@ -2665,6 +2763,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2676,7 +2775,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.81
+        "disc": 0.8
       },
       {
         "id": "reasoning-005",
@@ -2687,6 +2786,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2698,7 +2798,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.86
+        "disc": 0.87
       },
       {
         "id": "reasoning-006",
@@ -2709,6 +2809,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2731,6 +2832,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2742,7 +2844,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 1
         },
-        "disc": 0.17
+        "disc": 0.2
       },
       {
         "id": "reasoning-008",
@@ -2753,6 +2855,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2775,6 +2878,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2786,7 +2890,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.73
+        "disc": 0.75
       },
       {
         "id": "reasoning-010",
@@ -2797,6 +2901,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2819,6 +2924,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 0,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2830,7 +2936,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.64
+        "disc": 0.67
       },
       {
         "id": "reasoning-012",
@@ -2841,6 +2947,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 0,
           "claude-opus-5": 0,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 0,
@@ -2852,7 +2959,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.18
+        "disc": 0.28
       },
       {
         "id": "reasoning-013",
@@ -2863,6 +2970,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2885,6 +2993,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2907,6 +3016,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2918,7 +3028,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.7
+        "disc": 0.71
       },
       {
         "id": "reasoning-016",
@@ -2929,6 +3039,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2951,6 +3062,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2973,6 +3085,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -2995,6 +3108,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3017,6 +3131,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3028,7 +3143,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 1
         },
-        "disc": 0.6
+        "disc": 0.59
       },
       {
         "id": "reasoning-021",
@@ -3039,6 +3154,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 0,
           "claude-opus-5": 0,
+          "claude-fable-5": 0,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 0,
           "gemini-3-1-pro": 0,
@@ -3050,7 +3166,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.23
+        "disc": 0.17
       },
       {
         "id": "reasoning-022",
@@ -3061,6 +3177,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3072,7 +3189,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.55
+        "disc": 0.54
       },
       {
         "id": "reasoning-023",
@@ -3083,6 +3200,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 0,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3094,7 +3212,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.7
+        "disc": 0.71
       },
       {
         "id": "reasoning-024",
@@ -3105,6 +3223,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3116,7 +3235,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.79
+        "disc": 0.81
       },
       {
         "id": "reasoning-025",
@@ -3127,6 +3246,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3138,7 +3258,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.54
+        "disc": 0.55
       },
       {
         "id": "reasoning-026",
@@ -3149,6 +3269,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 0,
           "gemini-3-1-pro": 1,
@@ -3160,7 +3281,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.21
+        "disc": 0.23
       },
       {
         "id": "reasoning-027",
@@ -3171,6 +3292,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3182,7 +3304,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.75
+        "disc": 0.77
       },
       {
         "id": "reasoning-028",
@@ -3193,6 +3315,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 0,
@@ -3204,7 +3327,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.67
+        "disc": 0.71
       },
       {
         "id": "reasoning-029",
@@ -3215,6 +3338,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 0,
           "claude-opus-5": 0,
+          "claude-fable-5": 0,
           "gpt-5-6-terra-pro": 0,
           "gpt-5-6-luna": 0,
           "gemini-3-1-pro": 0,
@@ -3237,6 +3361,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 1,
           "claude-opus-5": 0,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 0,
           "gemini-3-1-pro": 0,
@@ -3248,7 +3373,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.36
+        "disc": 0.44
       },
       {
         "id": "reasoning-031",
@@ -3259,6 +3384,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3281,6 +3407,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3292,7 +3419,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.36
+        "disc": 0.38
       },
       {
         "id": "reasoning-033",
@@ -3303,6 +3430,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3325,6 +3453,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 0,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3336,7 +3465,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.4
+        "disc": 0.46
       },
       {
         "id": "reasoning-035",
@@ -3347,6 +3476,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 0,
           "gemini-3-1-pro": 1,
@@ -3358,7 +3488,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.65
+        "disc": 0.69
       },
       {
         "id": "reasoning-036",
@@ -3369,6 +3499,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3380,7 +3511,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.81
+        "disc": 0.82
       }
     ],
     "extraction": [
@@ -3393,6 +3524,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3404,7 +3536,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": null
         },
-        "disc": 0.11
+        "disc": 0.1
       },
       {
         "id": "extraction-002",
@@ -3415,6 +3547,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3426,7 +3559,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": null
         },
-        "disc": 0.11
+        "disc": 0.1
       },
       {
         "id": "extraction-003",
@@ -3437,6 +3570,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3459,6 +3593,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 0,
           "claude-opus-5": 0,
+          "claude-fable-5": 0,
           "gpt-5-6-terra-pro": 0,
           "gpt-5-6-luna": 0,
           "gemini-3-1-pro": 0,
@@ -3481,6 +3616,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3503,6 +3639,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3525,6 +3662,7 @@
           "claude-sonnet-4-6": 0,
           "claude-sonnet-5": 0,
           "claude-opus-5": 0,
+          "claude-fable-5": 0,
           "gpt-5-6-terra-pro": 0,
           "gpt-5-6-luna": 0,
           "gemini-3-1-pro": 1,
@@ -3536,7 +3674,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": null
         },
-        "disc": 0.51
+        "disc": 0.52
       },
       {
         "id": "extraction-008",
@@ -3547,6 +3685,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3569,6 +3708,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3591,6 +3731,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3613,6 +3754,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3635,6 +3777,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3659,6 +3802,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3681,6 +3825,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3703,6 +3848,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
+          "claude-fable-5": null,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3743,6 +3889,7 @@
     ],
     "reasoning": [
       [
+        "claude-fable-5",
         "gpt-5-6-terra-pro",
         "claude-opus-5",
         "claude-sonnet-5",
@@ -3772,6 +3919,7 @@
         "claude-sonnet-4-6",
         "claude-sonnet-5",
         "claude-opus-5",
+        "claude-fable-5",
         "gpt-5-6-terra-pro",
         "gpt-5-6-luna",
         "grok-4-6",
@@ -3909,6 +4057,14 @@
       "coverage95": 0,
       "booking": 0.434,
       "reasoning": 0.361,
+      "agentClean": false
+    },
+    "claude-fable-5": {
+      "verdict": "ej_bedomd",
+      "coverage99": 0,
+      "coverage95": 0,
+      "booking": null,
+      "reasoning": 0.944,
       "agentClean": false
     }
   }

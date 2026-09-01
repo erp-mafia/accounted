@@ -96,7 +96,7 @@ export const MODELS: ModelSpec[] = [
     vision: true,
     pricing: { inputPerMTok: 10, outputPerMTok: 50 },
     residency: 'openrouter-various',
-    enabled: false,
+    enabled: true,
     notes: 'Runnable via OpenRouter at vendor list ($10/$50); a full sweep costs ~$25, enable after topping up. Task author disclosure: bench tasks were authored with Claude (Fable 5), so its own scores carry the authorship-bias caveat doubly; see methodology.',
   },
 

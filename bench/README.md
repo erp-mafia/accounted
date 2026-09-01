@@ -229,6 +229,23 @@ MIT) shown for identification only.
 
 **v1.0 (2026-08-31).** First full campaign: 4 suites, 4 models on Bedrock EU.
 
+## External cross-check (published numbers, not measured by us)
+
+DualEntry's 2026 Accounting AI Benchmark is the nearest comparable public
+board and the page reports the agreement directly. On the shared models,
+Spearman rank agreement with our booking suite is **rho = +0.24** (95% CI
+roughly [-0.46, +0.75] at n=10 shared models: not distinguishable from
+zero). Their strict-vs-lenient hypothesis was tested and rejected: our
+strict scores sit nearer their numeric range (57.8% vs 71.1%, against 83.6%
+lenient) but agree no better (rho = +0.18).
+
+Do not "correct" our numbers toward theirs. Their benchmark is **101
+questions across 8 US-GAAP categories** (12-13 per category, deterministic
+binary grading); Ledger-Bench is 104 Swedish-law tasks with 53 on booking
+alone. At those sizes adjacent ranks on either board differ by single
+questions, and the two measure different jurisdictions and task mixes.
+Divergence is the expected result, not an error to tune away.
+
 ## External context (published numbers, not measured by us)
 
 For placing these results among public instruments: DualEntry's vendor-run
@@ -258,6 +275,15 @@ this benchmark exists to measure.
 - 3 ledger-agent tasks are a probe, not a population. Growing this suite
   (dual-control interruptions, locked periods, SIE round-trips) is the
   highest-value expansion.
+
+## Building the public page
+
+The results page source is committed at `bench/site/page.template.html`
+(two placeholders: `__LEADERBOARD_JSON__`, `__LOGOS_JSON__`).
+`npx tsx bench/scripts/build-site.ts` injects the current
+`results/leaderboard.json` and writes `bench/site/index.html`, so the
+published page is always reproducible from the repo and can never drift
+from the results it reports.
 
 ## Running it
 
