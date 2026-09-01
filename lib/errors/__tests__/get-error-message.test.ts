@@ -563,3 +563,41 @@ describe('getProviderResourceForbiddenMessage', () => {
     expect(getProviderResourceForbiddenMessage(null)).not.toMatch(/återanslut för att fortsätta/i)
   })
 })
+
+describe('getErrorMessage: INVOICE_SEND_PAYMENT_ACCOUNT_MISSING (#2126)', () => {
+  const envelope = (currency?: unknown) => ({
+    error: {
+      code: 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING',
+      message: getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')!.message_sv,
+      message_en: getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')!.message_en,
+      ...(currency !== undefined ? { details: { currency } } : {}),
+    },
+  })
+
+  it('SEK invoice: names bankgiro/plusgiro/Swish, not a currency account', () => {
+    const msg = getErrorMessage(envelope('SEK'), { statusCode: 400 })
+    expect(msg).toContain('bankgiro')
+    expect(msg).toContain('Inställningar → Fakturering')
+    expect(msg).not.toMatch(/valuta/i)
+  })
+
+  it('EUR invoice: asks for an IBAN account for EUR', () => {
+    const msg = getErrorMessage(envelope('EUR'), { statusCode: 400 })
+    expect(msg).toContain('EUR')
+    expect(msg).toContain('IBAN')
+  })
+
+  it('English locale gets the currency-specific English text, not the registry fallback', () => {
+    const msg = getErrorMessage(envelope('SEK'), { statusCode: 400, locale: 'en' })
+    expect(msg).toContain('bankgiro')
+    expect(msg).toContain('Settings → Invoicing')
+    expect(msg).not.toMatch(/currency/i)
+  })
+
+  it('without a currency in details, falls back to the registry text', () => {
+    const msg = getErrorMessage(envelope(), { statusCode: 400 })
+    expect(msg).toBe(getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')!.message_sv)
+    const unknown = getErrorMessage(envelope('JPY'), { statusCode: 400 })
+    expect(unknown).toBe(getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')!.message_sv)
+  })
+})
