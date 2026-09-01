@@ -12,7 +12,10 @@ import {
   defaultLedgerForCurrency,
   normalizeIban,
 } from '@/lib/cash-accounts/service'
-import { fanOutSessionRenewal } from '@/extensions/general/enable-banking/lib/session-sharing'
+import {
+  fanOutSessionRenewal,
+  fetchCrossCompanyAccountContext,
+} from '@/extensions/general/enable-banking/lib/session-sharing'
 import { supersedeSiblingConnections } from '@/extensions/general/enable-banking/lib/supersede'
 import { getBankConnectionErrorMessage } from '@/lib/errors/get-error-message'
 import { renderFinalizeShell, renderFinalizeRedirect } from './finalize-page'
@@ -520,6 +523,84 @@ async function finalizeConnection(
     }
   }
 
+  // Cross-company guard: at one-session banks (SEB) the PSU's single consent
+  // can cover accounts another of the user's companies already books. The
+  // deliberate reuse path (findReusableSessions) never offers a claimed IBAN,
+  // but this callback used to trust the session wholesale: a connect performed
+  // under company B stored company A's accounts pre-enabled and mirrored them
+  // into B's cash_accounts, one "Spara val" away from booking A's transactions
+  // in B's ledger. Accounts claimed elsewhere are stored disabled + flagged
+  // (the picker names the claiming company) and skipped by the mirror below.
+  // Accounts this row itself carried before keep their own state: the active
+  // company's standing choice outranks a sibling's claim, so a renewal can
+  // never switch a working feed off.
+  const crossCompany = await fetchCrossCompanyAccountContext(
+    supabase,
+    userId,
+    pendingConnection.company_id,
+    pendingConnection.id,
+  )
+  // Every account the guard itself disabled, whatever the branch. These are
+  // excluded from the cash_accounts mirror below: mirroring enabled:false for
+  // a new-to-row account can PROMOTE an existing manual holder (the seeded
+  // primary 1930 included) and flip it to disabled with a foreign identity,
+  // and a claimed account's row would double-claim the IBAN besides. The
+  // selection save allocates + mirrors any of them the user turns on.
+  const guardDisabledUids = new Set<string>()
+  let claimedCount = 0
+  for (const account of accountsMetadata) {
+    const normalizedIban = normalizeIban(account.iban)
+    // Row-local memory only. The active company's standing state on OTHER
+    // rows (a bank-list renewal arrives on a fresh row while the old row is
+    // waiting to be superseded) is already folded into crossCompany:
+    // activeCompanyIbans outrank claims and deselections there, so such
+    // accounts fall through to the enabled default below.
+    const seenOnThisRow =
+      priorEnabledByUid.has(account.uid) ||
+      (normalizedIban ? priorEnabledByIban.has(normalizedIban) : false) ||
+      pairedPriorUidByNewUid.has(account.uid)
+    if (seenOnThisRow) continue
+
+    if (crossCompany === null) {
+      // Fail closed: without the claim set a free account cannot be told from
+      // one another company books, and pre-checking a claimed account is the
+      // one outcome this guard must never produce. The user just re-ticks.
+      account.enabled = false
+      guardDisabledUids.add(account.uid)
+      continue
+    }
+    const claim = normalizedIban ? crossCompany.claims.get(normalizedIban) : undefined
+    if (claim) {
+      account.enabled = false
+      account.claimed_by_company_id = claim.companyId
+      if (claim.companyName) account.claimed_by_company_name = claim.companyName
+      guardDisabledUids.add(account.uid)
+      claimedCount += 1
+      continue
+    }
+    if (normalizedIban && crossCompany.deselectedIbans.has(normalizedIban)) {
+      // The user already said "Synkas ej" to this account on another
+      // connection row: a fresh row must not resurrect it pre-checked. The
+      // flag makes the picker say so; an unexplained unchecked box reads as
+      // a glitch and a silent one hides a sync gap.
+      account.enabled = false
+      account.deselected_elsewhere = true
+      guardDisabledUids.add(account.uid)
+    }
+  }
+  if (crossCompany === null) {
+    log.error('cross-company claim lookup failed: storing new accounts deselected', {
+      connectionId: pendingConnection.id,
+    })
+  } else if (claimedCount > 0) {
+    log.warn('session covers accounts claimed by sibling companies', {
+      connectionId: pendingConnection.id,
+      companyId: pendingConnection.company_id,
+      claimedCount,
+      accountCount: accountsMetadata.length,
+    })
+  }
+
   // Stay in 'pending_selection' until the user confirms which accounts to sync.
   // The cron and manual sync routes both skip this status, so no transactions
   // can be pulled before the user has had a chance to deselect accounts.
@@ -657,6 +738,14 @@ async function finalizeConnection(
   let accountsDataDirty = carriedScopeDirty
 
   for (const account of accountsMetadata) {
+    // Nothing the guard disabled is mirrored here: a claimed account's row
+    // would be another company's data in this routing table (and an enabled
+    // one would double-claim the IBAN), and mirroring enabled:false for any
+    // new-to-row account can promote an existing manual holder — the seeded
+    // primary 1930 included — flipping it to disabled under a foreign
+    // identity. No 19xx slot is burned either. The selection save allocates
+    // and mirrors whichever of them the user deliberately turns on.
+    if (guardDisabledUids.has(account.uid)) continue
     let targetLedger = mirroredByUid.get(account.uid)?.ledger_account
     let reuseCashAccountId: string | null = null
     if (!targetLedger) {
