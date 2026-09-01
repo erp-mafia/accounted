@@ -14,6 +14,7 @@ import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import TrialExpiredDialog from '@/components/billing/TrialExpiredDialog'
 import MultiUserGraceBanner from '@/components/billing/MultiUserGraceBanner'
 import { resolveDormantCompanyIds } from '@/lib/company/active-company'
+import { getMultiUserState } from '@/lib/entitlements/multi-user'
 import { createServiceClient } from '@/lib/supabase/server'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider, type ByraTeamRef } from '@/contexts/CompanyContext'
@@ -428,13 +429,23 @@ export default async function DashboardLayout({
       })),
   )
 
+  // The entitlements-derived multiUser state is computed from the grant rows
+  // the CALLER can see, and RLS hides team-scoped grants from users outside
+  // the team (byrå clients): re-verify any non-entitled answer through the
+  // SECURITY DEFINER state RPC before acting on it. One extra round trip only
+  // in the rare non-entitled case.
+  const activeMultiUser =
+    entitlements.multiUser.state === 'entitled'
+      ? entitlements.multiUser
+      : await getMultiUserState(supabase, companyId)
+
   // Grace countdown banner data: only while the ACTIVE company is in its
   // 20-day window AND actually has affected people (>= 1 non-owner member).
   // Service client because other members' emails are not readable through
   // the caller's RLS (same reason as GET /api/company/members).
   let graceBanner: { graceEndsAt: string; affectedEmails: string[]; isAffectedUser: boolean } | null =
     null
-  if (!isSandbox && entitlements.multiUser.state === 'grace' && entitlements.multiUser.graceEndsAt) {
+  if (!isSandbox && activeMultiUser.state === 'grace' && activeMultiUser.graceEndsAt) {
     const serviceClient = await createServiceClient()
     const { data: memberRows } = await serviceClient
       .from('company_members')
@@ -448,7 +459,7 @@ export default async function DashboardLayout({
         .in('id', affected.map((a) => a.user_id))
       const emailById = new Map((affectedProfiles || []).map((p) => [p.id, p.email as string | null]))
       graceBanner = {
-        graceEndsAt: entitlements.multiUser.graceEndsAt,
+        graceEndsAt: activeMultiUser.graceEndsAt,
         affectedEmails: affected
           .map((a) => emailById.get(a.user_id))
           .filter((e): e is string => !!e),
@@ -507,7 +518,7 @@ export default async function DashboardLayout({
     trialEndsAt: entitlements.trialEndsAt,
     entitlementState: entitlements.entitlementState,
     trialExpiredAt: entitlements.trialExpiredAt,
-    multiUser: entitlements.multiUser,
+    multiUser: activeMultiUser,
     lockedCompanyIds: [...dormantCompanyIds],
   }
 

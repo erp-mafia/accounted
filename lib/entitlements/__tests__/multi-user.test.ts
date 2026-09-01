@@ -13,7 +13,16 @@ const COMPANY = '11111111-1111-4111-8111-111111111111'
 const iso = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString()
 
 type TableResult = { data: unknown; error?: unknown }
-function makeSupabase(byTable: Record<string, TableResult>): SupabaseClient {
+/**
+ * Per-table mock plus an rpc seam. getMultiUserState is RPC-first
+ * (company_multi_user_state); the default rpc result is a TRANSIENT error so
+ * the tests below exercise the grants-read fallback path unless they seed an
+ * rpc answer explicitly.
+ */
+function makeSupabase(
+  byTable: Record<string, TableResult>,
+  rpcResult: TableResult = { data: null, error: { code: '57014', message: 'statement timeout' } },
+): SupabaseClient {
   const chainFor = (table: string) => {
     const result = byTable[table] ?? { data: null, error: null }
     const chain: unknown = new Proxy(
@@ -30,7 +39,10 @@ function makeSupabase(byTable: Record<string, TableResult>): SupabaseClient {
     )
     return chain
   }
-  return { from: (t: string) => chainFor(t) } as unknown as SupabaseClient
+  return {
+    from: (t: string) => chainFor(t),
+    rpc: async () => ({ data: rpcResult.data ?? null, error: rpcResult.error ?? null }),
+  } as unknown as SupabaseClient
 }
 
 beforeEach(() => {
@@ -163,6 +175,41 @@ describe('getMultiUserState', () => {
       companies: { data: { team_id: null } },
       capability_grants: { data: null, error: { message: 'boom' } },
     })
+    expect((await getMultiUserState(supabase, COMPANY)).state).toBe('entitled')
+  })
+
+  it('prefers the SECURITY DEFINER state RPC over the grants read (team grants hidden by RLS)', async () => {
+    // The tables would say frozen (no visible rows: the byrå-client shape);
+    // the RPC sees the team grant and must win.
+    const supabase = makeSupabase(
+      {
+        companies: { data: { team_id: null } },
+        capability_grants: { data: [] },
+      },
+      { data: [{ state: 'entitled', grace_ends_at: null }] },
+    )
+    expect((await getMultiUserState(supabase, COMPANY)).state).toBe('entitled')
+  })
+
+  it('passes the RPC grace deadline through', async () => {
+    const graceEnd = iso(5 * DAY_MS)
+    const supabase = makeSupabase({}, { data: [{ state: 'grace', grace_ends_at: graceEnd }] })
+    const access = await getMultiUserState(supabase, COMPANY)
+    expect(access.state).toBe('grace')
+    expect(access.graceEndsAt).toBe(graceEnd)
+  })
+
+  it('fails OPEN when the state RPC does not exist yet (deploy race, PGRST202)', async () => {
+    // Pre-migration there are no multi_user rows either, so the grants
+    // fallback would freeze every non-owner: PGRST202 must short-circuit to
+    // entitled instead of reaching the table path.
+    const supabase = makeSupabase(
+      {
+        companies: { data: { team_id: null } },
+        capability_grants: { data: [] }, // would read as frozen
+      },
+      { data: null, error: { code: 'PGRST202', message: 'function not found' } },
+    )
     expect((await getMultiUserState(supabase, COMPANY)).state).toBe('entitled')
   })
 })

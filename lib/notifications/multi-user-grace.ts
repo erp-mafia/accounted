@@ -46,6 +46,11 @@ interface GrantRow {
   company_id: string | null
   team_id: string | null
   expires_at: string | null
+  metadata: Record<string, unknown> | null
+}
+
+interface TrackedGrant extends MultiUserGrantRow {
+  metadata: Record<string, unknown> | null
 }
 
 export async function runMultiUserGraceReminders(
@@ -73,33 +78,36 @@ export async function runMultiUserGraceReminders(
   // idx_capability_grants_key index exists for.
   const { data: grantRows, error: grantsError } = await supabase
     .from('capability_grants')
-    .select('company_id, team_id, expires_at')
+    .select('company_id, team_id, expires_at, metadata')
     .eq('capability_key', CAPABILITY.multi_user)
   if (grantsError) {
     throw new Error(`multi-user grace: grants read failed: ${grantsError.message}`)
   }
   const grants = (grantRows ?? []) as GrantRow[]
 
-  const companyGrants = new Map<string, MultiUserGrantRow[]>()
-  const teamGrants = new Map<string, MultiUserGrantRow[]>()
+  const companyGrants = new Map<string, TrackedGrant[]>()
+  const teamGrants = new Map<string, TrackedGrant[]>()
   for (const g of grants) {
     if (g.company_id) {
       const list = companyGrants.get(g.company_id) ?? []
-      list.push({ expires_at: g.expires_at })
+      list.push({ expires_at: g.expires_at, metadata: g.metadata })
       companyGrants.set(g.company_id, list)
     }
     if (g.team_id) {
       const list = teamGrants.get(g.team_id) ?? []
-      list.push({ expires_at: g.expires_at })
+      list.push({ expires_at: g.expires_at, metadata: g.metadata })
       teamGrants.set(g.team_id, list)
     }
   }
 
-  if (companyGrants.size === 0) return summary
+  if (companyGrants.size === 0 && teamGrants.size === 0) return summary
 
-  // team_id + archived state for every company-scoped candidate.
+  // Candidate companies: company-scoped grant holders PLUS every company of
+  // a team that holds grants (a byrå whose team agreement lapses has client
+  // companies with zero company-scoped rows, and their owners must be mailed
+  // like anyone else's).
+  const companies = new Map<string, { id: string; name: string; team_id: string | null }>()
   const companyIds = [...companyGrants.keys()]
-  const companies: { id: string; name: string; team_id: string | null }[] = []
   for (let i = 0; i < companyIds.length; i += 200) {
     const chunk = companyIds.slice(i, i + 200)
     const { data, error } = await supabase
@@ -108,11 +116,26 @@ export async function runMultiUserGraceReminders(
       .in('id', chunk)
       .is('archived_at', null)
     if (error) throw new Error(`multi-user grace: companies read failed: ${error.message}`)
-    companies.push(...((data ?? []) as { id: string; name: string; team_id: string | null }[]))
+    for (const c of (data ?? []) as { id: string; name: string; team_id: string | null }[]) {
+      companies.set(c.id, c)
+    }
+  }
+  const teamIds = [...teamGrants.keys()]
+  for (let i = 0; i < teamIds.length; i += 200) {
+    const chunk = teamIds.slice(i, i + 200)
+    const { data, error } = await supabase
+      .from('companies')
+      .select('id, name, team_id, archived_at')
+      .in('team_id', chunk)
+      .is('archived_at', null)
+    if (error) throw new Error(`multi-user grace: team companies read failed: ${error.message}`)
+    for (const c of (data ?? []) as { id: string; name: string; team_id: string | null }[]) {
+      companies.set(c.id, c)
+    }
   }
 
   const nowMs = now.getTime()
-  for (const company of companies) {
+  for (const company of companies.values()) {
     const rows = [
       ...(companyGrants.get(company.id) ?? []),
       ...(company.team_id ? (teamGrants.get(company.team_id) ?? []) : []),
@@ -123,7 +146,17 @@ export async function runMultiUserGraceReminders(
 
     const graceEndMs = new Date(access.graceEndsAt).getTime()
     const lapseMs = graceEndMs - MULTI_USER_GRACE_DAYS * DAY_MS
-    const isStart = lapseMs > nowMs - DAY_MS && lapseMs <= nowMs
+    // The launch cohort's start mail is sent by hand (founder decision
+    // 2026-09-01): the grandfather backfill row expires at deploy time, so
+    // without this check the first cron run after deploy would re-mail the
+    // whole cohort. The day-19 final reminder still goes out.
+    const anchorIsGrandfather = rows.some(
+      (r) =>
+        r.expires_at !== null &&
+        new Date(r.expires_at).getTime() === lapseMs &&
+        (r.metadata as { reason?: string } | null)?.reason === 'multi_user_grandfather',
+    )
+    const isStart = !anchorIsGrandfather && lapseMs > nowMs - DAY_MS && lapseMs <= nowMs
     const isFinal = graceEndMs > nowMs && graceEndMs <= nowMs + DAY_MS
     if (!isStart && !isFinal) continue
 

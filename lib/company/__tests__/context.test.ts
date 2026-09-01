@@ -381,18 +381,38 @@ describe('multi-user seat gate', () => {
       { company_id: 'frozen-co', role: 'member', created_at: '2026-01-01', companies: { team_id: null } },
       { company_id: 'owned-co', role: 'owner', created_at: '2026-02-01', companies: { team_id: null } },
     ]
-    const { supabase } = buildSupabase({
-      user_preferences: { maybeSingle: { data: { active_company_id: 'frozen-co' } } },
-      // The gated path awaits the list query (no maybeSingle): seed the
-      // chain's `order` terminal.
-      company_members: { order: { data: memberships } },
-      // No multi_user grants at all -> frozen-co is frozen for the member.
-      capability_grants: { or: { data: [] } },
-    })
+    const { supabase } = buildSupabase(
+      {
+        user_preferences: { maybeSingle: { data: { active_company_id: 'frozen-co' } } },
+        // The gated path awaits the list query (no maybeSingle): seed the
+        // chain's `order` terminal.
+        company_members: { order: { data: memberships } },
+        // No multi_user grants at all -> frozen-co is frozen for the member
+        // (the shared rpc mock returns zero rows for company_multi_user_state
+        // too, so getMultiUserState falls through to this grants read).
+        capability_grants: { or: { data: [] } },
+      },
+      // Zero RPC rows = NULL auth.uid() (service-role client): routes to the
+      // GATED query path, unlike PGRST202 (migration absent), which fails open.
+      { data: [] },
+    )
 
     // Preference points at the frozen company: resolution must skip it and
     // land on the owned company instead of locking the user out.
     expect(await getActiveCompanyId(supabase as never, 'user-1')).toBe('owned-co')
+  })
+
+  it('PGRST202 on the gated rpc fails OPEN via the ungated query path (deploy race)', async () => {
+    multiUserSeam.enforced = true
+    // Default rpcResult is PGRST202. Pre-migration there are no multi_user
+    // rows, so the gated path would freeze this non-owner: the fallback must
+    // be the UNGATED path and still resolve their membership.
+    const { supabase } = buildSupabase({
+      user_preferences: { maybeSingle: { data: { active_company_id: 'company-1' } } },
+      company_members: { maybeSingle: { data: { company_id: 'company-1' } } },
+    })
+
+    expect(await getActiveCompanyId(supabase as never, 'user-1')).toBe('company-1')
   })
 })
 

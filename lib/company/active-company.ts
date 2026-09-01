@@ -1,11 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { CAPABILITY } from '@/lib/entitlements/keys'
-import { isMultiUserEnforced } from '@/lib/entitlements/multi-user'
-import {
-  computeMultiUserState,
-  isMembershipDormant,
-  MULTI_USER_GRACE_DAYS,
-} from '@/lib/entitlements/multi-user-state'
+import { getMultiUserState, isMultiUserEnforced } from '@/lib/entitlements/multi-user'
+import { isMembershipDormant, MULTI_USER_GRACE_DAYS } from '@/lib/entitlements/multi-user-state'
 
 /**
  * Active-company resolution with no Next.js request-scope dependency.
@@ -82,9 +77,20 @@ export async function getActiveCompanyId(
     // app/api/mcp-oauth/token/route.ts, app/api/events/route.ts (API-key
     // branch) and lib/auth/api-keys.ts call this with
     // createServiceClientNoCookies(), and must silently resolve via the query
-    // path or the OAuth token flow breaks. The query path applies the same
-    // seat-gate filter app-side, so both fallbacks stay gated.
-    if (error.code === 'PGRST202' || error.code === '42501') {
+    // path or the OAuth token flow breaks.
+    //
+    // The two fallbacks differ in seat-gate polarity ON PURPOSE:
+    //   PGRST202 = the gated function does not exist here, i.e. the paywall
+    //   migration has not reached this database (deploy race, self-host
+    //   mid-migration). There are no multi_user rows either, so the gated
+    //   query path would freeze every non-owner: fail OPEN via the ungated
+    //   path, matching the middleware's own PGRST202 handling.
+    //   42501 / zero rows = a migrated database reached with a service-role
+    //   client (API keys, MCP, OAuth): the gated query path enforces there.
+    if (error.code === 'PGRST202') {
+      return getActiveCompanyIdViaQueriesUngated(supabase, userId)
+    }
+    if (error.code === '42501') {
       return getActiveCompanyIdViaQueries(supabase, userId)
     }
     throw new CompanyContextError(
@@ -184,8 +190,13 @@ async function getActiveCompanyIdViaQueriesGated(
  * (owner rows are exempt by the caller): companies whose multi_user grants
  * (company- or team-scoped) are all lapsed past the grace window. Shared by
  * the gated query fallback here and the switcher's locked-state computation
- * in the dashboard layout. Fail-open: on a grants read error nothing is
- * reported dormant.
+ * in the dashboard layout.
+ *
+ * Resolved per company through getMultiUserState (RPC-first): the
+ * capability_grants SELECT policy hides team-scoped rows from users outside
+ * the team, so a direct grants read through a user-scoped client would mark
+ * every team-covered (byrå) company dormant. Fail-open by construction:
+ * getMultiUserState answers 'entitled' on any read failure.
  */
 export async function resolveDormantCompanyIds(
   supabase: SupabaseClient,
@@ -195,32 +206,13 @@ export async function resolveDormantCompanyIds(
   if (nonOwner.length === 0 || !isMultiUserEnforced()) return new Set()
 
   const companyIds = [...new Set(nonOwner.map((m) => m.company_id))]
-  const teamByCompany = new Map(
-    nonOwner.map((m) => [m.company_id, m.companies?.team_id ?? null])
+  const states = await Promise.all(
+    companyIds.map((companyId) => getMultiUserState(supabase, companyId))
   )
-  const teamIds = [...new Set([...teamByCompany.values()].filter((t): t is string => !!t))]
-
-  const orParts = [`company_id.in.(${companyIds.join(',')})`]
-  if (teamIds.length > 0) orParts.push(`team_id.in.(${teamIds.join(',')})`)
-  const { data: grants, error } = await supabase
-    .from('capability_grants')
-    .select('company_id, team_id, expires_at')
-    .eq('capability_key', CAPABILITY.multi_user)
-    .or(orParts.join(','))
-  if (error) return new Set() // fail-open
-
-  type GrantRow = { company_id: string | null; team_id: string | null; expires_at: string | null }
-  const rows = (grants ?? []) as GrantRow[]
-  const now = Date.now()
   const dormant = new Set<string>()
-  for (const companyId of companyIds) {
-    const teamId = teamByCompany.get(companyId) ?? null
-    const companyRows = rows.filter(
-      (g) => g.company_id === companyId || (teamId !== null && g.team_id === teamId)
-    )
-    const access = computeMultiUserState(companyRows, now)
-    if (isMembershipDormant('member', access.state)) dormant.add(companyId)
-  }
+  companyIds.forEach((companyId, index) => {
+    if (isMembershipDormant('member', states[index].state)) dormant.add(companyId)
+  })
   return dormant
 }
 

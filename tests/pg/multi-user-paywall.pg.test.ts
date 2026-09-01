@@ -128,6 +128,69 @@ describe('multi-user paywall (pg)', () => {
     })
   })
 
+  describe('company_multi_user_state (20260901083726 hardening)', () => {
+    async function stateOf(companyId: string): Promise<{ state: string; grace_ends_at: string | null }> {
+      const res = await getPool().query<{ state: string; grace_ends_at: string | null }>(
+        `SELECT * FROM public.company_multi_user_state($1, $2)`,
+        [companyId, GRACE_DAYS],
+      )
+      return res.rows[0]!
+    }
+
+    it('entitled while a grant is active, grace with the deadline after a lapse, frozen past it', async () => {
+      const userId = await insertAuthUser()
+      const companyId = await insertCompany({ createdBy: userId })
+      expect((await stateOf(companyId)).state).toBe('entitled')
+
+      await setMultiUserExpiry(companyId, '-5 days')
+      const grace = await stateOf(companyId)
+      expect(grace.state).toBe('grace')
+      expect(grace.grace_ends_at).not.toBeNull()
+
+      await setMultiUserExpiry(companyId, '-25 days')
+      const frozen = await stateOf(companyId)
+      expect(frozen.state).toBe('frozen')
+      expect(frozen.grace_ends_at).toBeNull()
+    })
+
+    it('frozen with no rows at all (never granted)', async () => {
+      const userId = await insertAuthUser()
+      const companyId = await insertCompany({ createdBy: userId })
+      await getPool().query(`DELETE FROM public.capability_grants WHERE company_id = $1`, [
+        companyId,
+      ])
+      expect((await stateOf(companyId)).state).toBe('frozen')
+    })
+
+    it('a byrå team is auto-granted multi_user on creation, entitling its client companies', async () => {
+      const userId = await insertAuthUser()
+      const teamRes = await getPool().query<{ id: string }>(
+        `INSERT INTO public.teams (name, created_by, kind) VALUES ('PG Byrå Auto', $1, 'byra') RETURNING id`,
+        [userId],
+      )
+      const teamId = teamRes.rows[0]!.id
+      // The trg_seed_byra_team_multi_user trigger wrote the standing grant.
+      const grant = await getPool().query(
+        `SELECT 1 FROM public.capability_grants
+          WHERE team_id = $1 AND capability_key = 'multi_user' AND expires_at IS NULL`,
+        [teamId],
+      )
+      expect(grant.rows).toHaveLength(1)
+
+      // A client company under the team is entitled with ZERO company-scoped
+      // rows (byrå companies get no trial: 20260826130300).
+      const companyId = await insertCompany({ createdBy: userId })
+      await getPool().query(`UPDATE public.companies SET team_id = $2 WHERE id = $1`, [
+        companyId,
+        teamId,
+      ])
+      await getPool().query(`DELETE FROM public.capability_grants WHERE company_id = $1`, [
+        companyId,
+      ])
+      expect((await stateOf(companyId)).state).toBe('entitled')
+    })
+  })
+
   describe('resolve_active_company_gated', () => {
     it('an OWNER resolves their frozen company (owners are never locked out)', async () => {
       const ownerId = await insertAuthUser()

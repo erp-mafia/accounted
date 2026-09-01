@@ -4,6 +4,7 @@ import { isBypassedFor } from './has-capability'
 import {
   computeMultiUserState,
   isMembershipDormant,
+  MULTI_USER_GRACE_DAYS,
   type MultiUserAccess,
   type MultiUserGrantRow,
 } from './multi-user-state'
@@ -36,6 +37,14 @@ export function isMultiUserEnforced(): boolean {
  * read errors: a transient grants failure must never lock people out of
  * their bookkeeping (the opposite polarity of hasCapability, which guards
  * paid external services and fails closed).
+ *
+ * RPC-FIRST: the company_multi_user_state() SECURITY DEFINER function is the
+ * primary path, because the capability_grants SELECT policy hides
+ * team-scoped rows from users who are not on the team: a byrå client company
+ * read through a user-scoped client would misread as frozen when its only
+ * coverage is the byrå team's grant. The raw grants read below is only the
+ * fallback for a database that does not have the function yet (deploy race,
+ * self-host mid-migration), where it fails toward access.
  */
 export async function getMultiUserState(
   supabase: SupabaseClient,
@@ -44,6 +53,26 @@ export async function getMultiUserState(
 ): Promise<MultiUserAccess> {
   if (!isMultiUserEnforced()) return { state: 'entitled', graceEndsAt: null }
   if (!UUID_RE.test(companyId)) return { state: 'frozen', graceEndsAt: null }
+
+  const { data: rpcData, error: rpcError } = await supabase.rpc('company_multi_user_state', {
+    p_company_id: companyId,
+    p_grace_days: MULTI_USER_GRACE_DAYS,
+  })
+  if (!rpcError) {
+    const row = (Array.isArray(rpcData) ? rpcData[0] : rpcData) as
+      | { state: string; grace_ends_at: string | null }
+      | null
+      | undefined
+    if (row?.state === 'entitled' || row?.state === 'grace' || row?.state === 'frozen') {
+      return { state: row.state, graceEndsAt: row.grace_ends_at ?? null }
+    }
+  } else if (rpcError.code === 'PGRST202') {
+    // Function absent = the paywall migration (and its backfills) has not
+    // reached this database yet: there are no multi_user rows to judge by, so
+    // the grants fallback would freeze every non-owner. Fail OPEN for the
+    // deploy-race window; the gate arms itself when the migration lands.
+    return { state: 'entitled', graceEndsAt: null }
+  }
 
   let teamId = options.teamId
   if (teamId === undefined) {
