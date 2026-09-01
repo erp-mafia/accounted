@@ -13,11 +13,6 @@ vi.mock('@/lib/auth/cron', () => ({
   verifyCronSecret: (...a: unknown[]) => mockVerifyCronSecret(...a),
 }))
 
-const mockFrom = vi.fn()
-vi.mock('@/lib/supabase/service-client', () => ({
-  createServiceRoleClient: () => ({ from: (...a: unknown[]) => mockFrom(...a) }),
-}))
-
 const mockMode = vi.fn()
 const mockConfigured = vi.fn()
 vi.mock('@/extensions/general/skatteverket/lib/system-auth/config', () => ({
@@ -47,44 +42,51 @@ vi.mock('@/extensions/general/skatteverket/lib/ombud-client', async (importOrigi
 
 import { GET } from '../route'
 
-const ENV_KEYS = ['SKATTEVERKET_ENABLED', 'NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY']
+const ENV_KEYS = ['SKATTEVERKET_ENABLED']
 let savedEnv: Record<string, string | undefined>
 
-function companySettings(rows: Array<{ company_id: string; org_number: string; entity_type: string }>) {
-  const builder: any = {}
-  for (const m of ['select', 'not', 'order']) builder[m] = vi.fn(() => builder)
-  builder.range = vi.fn(async () => ({ data: rows, error: null }))
-  mockFrom.mockImplementation((table: string) => {
-    if (table !== 'company_settings') throw new Error(`unexpected table ${table}`)
-    return builder
-  })
-}
-
-function connection(companyId: string, orgNumber: string, lasombud = 'granted', moms = 'granted') {
+type Status = 'unknown' | 'granted' | 'denied' | 'error'
+function connection(
+  companyId: string,
+  orgNumber: string,
+  lasombud: Status = 'granted',
+  moms: Status = 'granted',
+  status = 'verified'
+) {
   return {
     id: `conn-${companyId}`,
     company_id: companyId,
     environment: 'test',
     org_number: orgNumber,
-    status: 'verified',
+    status,
     lasombud_status: lasombud,
     moms_ombud_status: moms,
   }
 }
 
+const JLO = (huvudman: string) => ({
+  huvudman,
+  roll: 'JLO',
+  rollbeskrivning: 'Juridiskt läsombud',
+  giltigFrom: '2026-07-19',
+})
+const MOMS = (huvudman: string) => ({
+  huvudman,
+  roll: 'MOMS',
+  rollbeskrivning: 'Momsdeklaration, ombud',
+  giltigFrom: '2026-07-19',
+})
+
 beforeEach(() => {
   vi.clearAllMocks()
   savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]))
   process.env.SKATTEVERKET_ENABLED = 'true'
-  process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://test.supabase.co'
-  process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key'
   mockVerifyCronSecret.mockReturnValue(null)
   mockMode.mockReturnValue('shadow')
   mockConfigured.mockReturnValue(true)
   mockListConnections.mockResolvedValue([])
   mockRecordProbeResult.mockResolvedValue({ id: 'conn' })
   mockListOmbudGrants.mockResolvedValue([])
-  companySettings([])
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
@@ -97,6 +99,8 @@ afterEach(() => {
 })
 
 const request = () => new Request('http://localhost/api/extensions/skatteverket/ombud/sync/cron')
+const recordedFor = (companyId: string) =>
+  mockRecordProbeResult.mock.calls.map((c) => c[0]).filter((input) => input.companyId === companyId)
 
 describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
   it('401 without the cron secret', async () => {
@@ -135,76 +139,126 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
     expect(mockRecordProbeResult).not.toHaveBeenCalled()
   })
 
-  it('records granted/denied per matched company, creating rows nobody verified by hand', async () => {
-    companySettings([
-      { company_id: 'c-ab', org_number: '556000-0000', entity_type: 'aktiebolag' },
-      { company_id: 'c-ef', org_number: '5001011234', entity_type: 'enskild_firma' },
-      { company_id: 'c-none', org_number: '5590000000', entity_type: 'aktiebolag' },
+  it('asks the register with the cron-only empty-on-404 option', async () => {
+    await GET(request())
+    expect(mockListOmbudGrants).toHaveBeenCalledWith({}, { emptyOn404: true })
+  })
+
+  it('records grants only on rows that already exist (tenant opt-in); a listed huvudman without a row is ignored', async () => {
+    mockListConnections.mockResolvedValue([
+      connection('c-pending', '165560000000', 'unknown', 'unknown', 'pending'),
+      connection('c-partial', '195001011234', 'denied', 'denied', 'pending'),
     ])
     mockListOmbudGrants.mockResolvedValue([
-      { huvudman: '165560000000', roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-07-19' },
-      { huvudman: '165560000000', roll: 'MOMS', rollbeskrivning: 'Momsdeklaration, ombud', giltigFrom: '2026-07-19' },
-      { huvudman: '195001011234', roll: 'DEKL', rollbeskrivning: 'Deklarationsombud', giltigFrom: '2026-07-19' },
-      { huvudman: '165550000000', roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-07-19' },
+      JLO('165560000000'),
+      MOMS('165560000000'),
+      { ...JLO('195001011234'), roll: 'DEKL', rollbeskrivning: 'Deklarationsombud' },
+      MOMS('195001011234'),
+      JLO('165550000000'), // no row for this org number: the twin/unmatched case
     ])
 
     const body = await (await GET(request())).json()
 
-    expect(body).toMatchObject({ registryHuvudman: 3, granted: 1, denied: 1, unmatched: 1, revoked: 0, guardTripped: false })
+    expect(body).toMatchObject({ registryHuvudman: 3, rows: 2, granted: 2, denied: 0, revoked: 0, guardTripped: false })
     expect(mockRecordProbeResult).toHaveBeenCalledTimes(2)
-    expect(mockRecordProbeResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        companyId: 'c-ab',
-        environment: 'test',
-        orgNumber: '165560000000',
-        lasombud: expect.objectContaining({ status: 'granted' }),
-        momsOmbud: expect.objectContaining({ status: 'granted' }),
-      }),
-    )
-    expect(mockRecordProbeResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        companyId: 'c-ef',
-        orgNumber: '195001011234',
-        lasombud: expect.objectContaining({ status: 'denied' }),
-        momsOmbud: expect.objectContaining({ status: 'denied' }),
-      }),
-    )
+    expect(recordedFor('c-pending')[0]).toMatchObject({
+      environment: 'test',
+      orgNumber: '165560000000',
+      lasombud: expect.objectContaining({ status: 'granted' }),
+      momsOmbud: expect.objectContaining({ status: 'granted' }),
+    })
+    expect(recordedFor('c-partial')[0]).toMatchObject({
+      lasombud: expect.objectContaining({ status: 'denied' }),
+      momsOmbud: expect.objectContaining({ status: 'granted' }),
+    })
+    // Never creates a row for the unmatched huvudman.
+    expect(mockRecordProbeResult.mock.calls.some((c) => c[0].orgNumber === '165550000000')).toBe(false)
   })
 
-  it('downgrades rows the register no longer lists, but leaves already-denied rows alone', async () => {
-    companySettings([
-      { company_id: 'c-keep', org_number: '5560000000', entity_type: 'aktiebolag' },
-      { company_id: 'c-gone', org_number: '5590000000', entity_type: 'aktiebolag' },
-      { company_id: 'c-down', org_number: '5580000000', entity_type: 'aktiebolag' },
-    ])
-    mockListOmbudGrants.mockResolvedValue([
-      { huvudman: '165560000000', roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-07-19' },
-    ])
+  it('skips rows the tenant revoked locally even though the grant still stands at Skatteverket', async () => {
+    mockListConnections.mockResolvedValue([connection('c-off', '165560000000', 'unknown', 'unknown', 'revoked')])
+    mockListOmbudGrants.mockResolvedValue([JLO('165560000000'), MOMS('165560000000')])
+
+    const body = await (await GET(request())).json()
+
+    expect(body).toMatchObject({ rows: 0 })
+    expect(mockRecordProbeResult).not.toHaveBeenCalled()
+  })
+
+  it('leaves unchanged rows alone and downgrades one row the register no longer lists', async () => {
     mockListConnections.mockResolvedValue([
       connection('c-keep', '165560000000'),
+      connection('c-keep2', '165570000000'),
+      connection('c-keep3', '165580000000'),
       connection('c-gone', '165590000000'),
-      connection('c-down', '165580000000', 'denied', 'denied'),
+      connection('c-never', '165500000000', 'denied', 'denied', 'pending'),
+    ])
+    mockListOmbudGrants.mockResolvedValue([
+      JLO('165560000000'), MOMS('165560000000'),
+      JLO('165570000000'), MOMS('165570000000'),
+      JLO('165580000000'), MOMS('165580000000'),
     ])
 
     const body = await (await GET(request())).json()
 
-    expect(body).toMatchObject({ granted: 1, revoked: 1, guardTripped: false })
-    const revokedCall = mockRecordProbeResult.mock.calls.find((c) => c[0].companyId === 'c-gone')
-    expect(revokedCall?.[0]).toMatchObject({
+    expect(body).toMatchObject({ unchanged: 4, revoked: 1, granted: 0, guardTripped: false })
+    expect(mockRecordProbeResult).toHaveBeenCalledTimes(1)
+    expect(recordedFor('c-gone')[0]).toMatchObject({
       orgNumber: '165590000000',
-      lasombud: { status: 'denied' },
+      lasombud: { status: 'denied', detail: expect.stringContaining('huvudman saknas') },
       momsOmbud: { status: 'denied' },
     })
-    expect(mockRecordProbeResult.mock.calls.some((c) => c[0].companyId === 'c-down')).toBe(false)
   })
 
-  it('mass-revocation guard: an empty register with local rows downgrades nothing', async () => {
+  it('a failed upsert is counted once and never turns into a downgrade', async () => {
+    mockListConnections.mockResolvedValue([connection('c-1', '165560000000', 'unknown', 'unknown', 'pending')])
+    mockListOmbudGrants.mockResolvedValue([JLO('165560000000')])
+    mockRecordProbeResult.mockResolvedValue(null)
+
+    const body = await (await GET(request())).json()
+
+    expect(body).toMatchObject({ failed: 1, revoked: 0, granted: 0 })
+    expect(mockRecordProbeResult).toHaveBeenCalledTimes(1)
+  })
+
+  it('empty-register guard: no grants while rows exist downgrades nothing', async () => {
     mockListOmbudGrants.mockResolvedValue([])
     mockListConnections.mockResolvedValue([connection('c-1', '165560000000')])
 
     const body = await (await GET(request())).json()
 
-    expect(body).toMatchObject({ registryHuvudman: 0, revoked: 0, guardTripped: true })
+    expect(body).toMatchObject({ registryHuvudman: 0, revoked: 0, skipped: 1, guardTripped: true, guardReason: 'empty_register' })
     expect(mockRecordProbeResult).not.toHaveBeenCalled()
+  })
+
+  it('mass-downgrade guard: a run that would deny most granted rows applies no downgrade, but still records upgrades', async () => {
+    // Four granted rows; the register (say, with a mistyped pinned code) lists
+    // only one of them, plus a pending row that did get its grant.
+    mockListConnections.mockResolvedValue([
+      connection('c-1', '165510000000'),
+      connection('c-2', '165520000000'),
+      connection('c-3', '165530000000'),
+      connection('c-4', '165540000000'),
+      connection('c-new', '165550000000', 'unknown', 'unknown', 'pending'),
+    ])
+    mockListOmbudGrants.mockResolvedValue([JLO('165510000000'), MOMS('165510000000'), JLO('165550000000'), MOMS('165550000000')])
+
+    const body = await (await GET(request())).json()
+
+    expect(body).toMatchObject({ guardTripped: true, guardReason: 'mass_downgrade', revoked: 0, skipped: 3, granted: 1, unchanged: 1 })
+    expect(mockRecordProbeResult).toHaveBeenCalledTimes(1)
+    expect(recordedFor('c-new')[0]).toMatchObject({ lasombud: { status: 'granted' } })
+  })
+
+  it('mass-downgrade guard needs at least three planned downgrades', async () => {
+    mockListConnections.mockResolvedValue([
+      connection('c-1', '165510000000'),
+      connection('c-2', '165520000000'),
+    ])
+    mockListOmbudGrants.mockResolvedValue([JLO('165510000000'), MOMS('165510000000')])
+
+    const body = await (await GET(request())).json()
+
+    expect(body).toMatchObject({ guardTripped: false, revoked: 1 })
   })
 })

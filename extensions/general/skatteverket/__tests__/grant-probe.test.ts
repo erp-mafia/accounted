@@ -118,6 +118,34 @@ describe('probeCompanyGrants via the ombudsregister', () => {
     expect(active.result?.lasombud.status).toBe('granted')
   })
 
+  it('a register 404 is a transport fault: falls back to the service probes instead of denying', async () => {
+    mockSkvRequestWithAuth.mockResolvedValueOnce({ ok: false, status: 404, text: async () => '{"message":"Not found"}' })
+    mockSkvRequestWithAuth
+      .mockResolvedValueOnce({ ok: true, status: 200 })
+      .mockResolvedValueOnce({ ok: true, status: 200 })
+
+    const result = await probeCompanyGrants('company-1', ORG)
+
+    expect(result.source).toBe('service')
+    expect(result.lasombud.status).toBe('granted')
+    expect(result.lasombud.detail).toContain('OBR_HTTP_ERROR')
+  })
+
+  it('grants that classify as neither behörighet are an error (unrecognised role codes), never a denial', async () => {
+    registryAnswers([
+      { huvudman: ORG, roll: 'ZZ1', rollbeskrivning: 'Läsombud, juridisk person', giltigFrom: '2026-07-19' },
+      { huvudman: ORG, roll: 'ZZ2', rollbeskrivning: 'Ombud för momsdeklaration', giltigFrom: '2026-07-19' },
+    ])
+
+    const result = await probeCompanyGrants('company-1', ORG)
+
+    expect(result.source).toBe('registry')
+    expect(result.lasombud.status).toBe('error')
+    expect(result.momsOmbud.status).toBe('error')
+    expect(result.lasombud.detail).toContain('ZZ1, ZZ2')
+    expect(mockRecordProbeResult.mock.calls[0][0].error).toBeTruthy()
+  })
+
   it('a register 403 (scope/avtal missing) is an error, never a company denial', async () => {
     // api-client maps a system-mode 403 to OMBUD_GRANT_MISSING; on the register that is run-level.
     mockSkvRequestWithAuth.mockRejectedValueOnce(new SkatteverketAuthError('nope', 'OMBUD_GRANT_MISSING'))

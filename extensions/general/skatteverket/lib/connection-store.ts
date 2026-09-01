@@ -231,10 +231,10 @@ export async function listVerifiedCompanies(
 }
 
 /**
- * Every connection row for an environment, for the ombudsregister sync: the
- * rows the register no longer lists must be downgraded, whatever their
- * status. Explicitly revoked rows (user disconnect) are included so that a
- * re-grant at Skatteverket re-verifies them without a manual step.
+ * Every connection row for an environment, for the ombudsregister sync. The
+ * caller decides what a row's status means ('revoked' rows are the tenant's
+ * own disconnect and are skipped there). The select is spelled out rather
+ * than reusing CONNECTION_COLUMNS so the phantom-column scanner can check it.
  */
 export async function listConnections(
   environment: SkvEnvironment,
@@ -242,7 +242,7 @@ export async function listConnections(
 ): Promise<SkvCompanyConnection[]> {
   const { data, error } = await getServiceClient()
     .from('skatteverket_company_connections')
-    .select(CONNECTION_COLUMNS)
+    .select('id, company_id, environment, org_number, status, lasombud_status, lasombud_checked_at, moms_ombud_status, moms_ombud_checked_at, verified_at, last_probe_at, last_probe_detail, last_error')
     .eq('environment', environment)
     .order('created_at', { ascending: true })
     .limit(limit)

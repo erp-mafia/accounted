@@ -27,7 +27,7 @@ import {
 import { submitVatDeclarationChain } from './lib/vat-submit'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { getSystemAuthMode, isSystemAuthConfigured, getOmbudOrgNumber, getSystemCertInfo } from './lib/system-auth/config'
-import { getConnection, markConnectionRevoked } from './lib/connection-store'
+import { getConnection, markConnectionRevoked, recordProbeResult } from './lib/connection-store'
 import { currentSkvEnvironment, resolveReadAuth } from './lib/resolve-auth'
 import { probeCompanyGrants } from './lib/grant-probe'
 import { formatRedovisare } from '@/lib/skatteverket/format'
@@ -876,6 +876,16 @@ export const skatteverketExtension: Extension = {
 
         try {
           const link = await createUtseOmbudDeepLink(orgNumber, OMBUD_ROLE_KEYS)
+          // Minting the link is the tenant's opt-in: record a pending row
+          // (no grant state yet) so the nightly ombud sync, which only ever
+          // touches existing rows, picks the signed grant up on its own.
+          await recordProbeResult({
+            companyId: ctx.companyId,
+            environment: currentSkvEnvironment(),
+            orgNumber,
+            createdBy: ctx.userId,
+            error: null,
+          })
           await writeSkatteverketAudit(ctx, {
             endpoint: 'system-connection/deeplink',
             agRegistreradId: orgNumber,

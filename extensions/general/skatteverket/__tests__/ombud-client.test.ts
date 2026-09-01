@@ -92,9 +92,15 @@ describe('listOmbudGrants', () => {
     expect(mockSkvRequestWithAuth.mock.calls[1][2]).toBe('/ombud/autentisieratOmbud?huvudman=165560000000')
   })
 
-  it('treats 404 as an empty register', async () => {
+  it('404 throws by default (wrong URI per the spec) and is empty only with emptyOn404', async () => {
     mockSkvRequestWithAuth.mockResolvedValueOnce({ ok: false, status: 404, text: async () => '{"message":"Not found"}' })
-    expect(await listOmbudGrants()).toEqual([])
+    await expect(listOmbudGrants({ huvudman: '165560000000' })).rejects.toMatchObject({
+      code: 'OBR_HTTP_ERROR',
+      status: 404,
+    })
+
+    mockSkvRequestWithAuth.mockResolvedValueOnce({ ok: false, status: 404, text: async () => '{"message":"Not found"}' })
+    expect(await listOmbudGrants({}, { emptyOn404: true })).toEqual([])
   })
 
   it('rejects an unparsable body and other HTTP errors as OmbudApiError', async () => {
@@ -220,8 +226,16 @@ describe('pure helpers', () => {
       lasombud: true,
       moms_ombud: false,
       roles: ['JLO', 'MOMS', 'DEKL'],
+      recognized: true,
     })
-    expect(summary.get('195001011234')).toMatchObject({ lasombud: false, moms_ombud: true })
+    expect(summary.get('195001011234')).toMatchObject({ lasombud: false, moms_ombud: true, recognized: true })
     expect(summary.size).toBe(2)
+
+    // Only unknown roles: recognized stays false even though roles were listed.
+    const unknown = summarizeGrants(
+      [{ huvudman: '165560000000', roll: 'ZZ', rollbeskrivning: 'Något annat', giltigFrom: '2026-01-01' }],
+      '2026-09-01',
+    )
+    expect(unknown.get('165560000000')).toMatchObject({ roles: ['ZZ'], recognized: false, lasombud: false })
   })
 })

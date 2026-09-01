@@ -470,7 +470,11 @@ function SkatteverketSystemConnectionCard() {
    */
   async function openDeepLink() {
     setLinking(true)
-    const tab = window.open('', '_blank', 'noopener')
+    // No 'noopener' feature here: with it window.open returns null and the
+    // pre-opened tab (the popup-blocker mitigation) would never exist. The
+    // opener link is cut by hand instead.
+    const tab = window.open('', '_blank')
+    if (tab) tab.opener = null
     try {
       const res = await fetch('/api/extensions/ext/skatteverket/system-connection/deeplink', {
         method: 'POST',

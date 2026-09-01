@@ -228,14 +228,19 @@ export type ListOmbudGrantsFilter = {
  * identity (Accounted's org number) is the ombud. Skatteverket returns
  * current and FUTURE grants; use {@link isGrantActive} before trusting one.
  *
- * A 404 on this operation is read as "no grants": the service description's
- * 1..* multiplicity for the list and its generic 404 leave an empty register
- * and a wrong URI indistinguishable, and the callers guard the dangerous
- * direction (a zero result never mass-revokes, see the ombud sync cron).
+ * A 404 is "wrong URI" per the service description (4.7), yet its 1..*
+ * multiplicity for the list leaves an empty register indistinguishable from
+ * it. Default: a 404 throws like any other HTTP error, so a single-company
+ * probe falls back to the read-service probes instead of recording a denial
+ * on a transport fault. Only the sync cron opts into `emptyOn404`, and it
+ * pairs that with its empty-register guard (a zero result downgrades nothing).
  */
-export async function listOmbudGrants(filter: ListOmbudGrantsFilter = {}): Promise<Behorighetspost[]> {
+export async function listOmbudGrants(
+  filter: ListOmbudGrantsFilter = {},
+  options: { emptyOn404?: boolean } = {}
+): Promise<Behorighetspost[]> {
   const response = await ombudRequest('GET', `/ombud/autentisieratOmbud${buildQuery(filter)}`)
-  if (response.status === 404) return []
+  if (response.status === 404 && options.emptyOn404) return []
   const json = await readJsonOrThrow(response, 'ombud/autentisieratOmbud')
   const rows = unwrapList(json, ['behorighetsposter', 'Behorighetsposter', 'behorigheter'], 'ombud/autentisieratOmbud')
   const parsed = z.array(BehorighetspostSchema).safeParse(rows)
@@ -364,6 +369,13 @@ export interface HuvudmanGrantSummary {
   moms_ombud: boolean
   /** Every rollbeteckning seen for this huvudman, active or not: diagnostics. */
   roles: string[]
+  /**
+   * True when at least one post (active or not) classified as one of
+   * Accounted's behörigheter. False with a non-empty `roles` means the
+   * register lists roles we cannot name: a code-pinning problem, not a
+   * company decision.
+   */
+  recognized: boolean
 }
 
 /**
@@ -381,13 +393,14 @@ export function summarizeGrants(posts: Behorighetspost[], today: string): Map<st
     }
     let row = out.get(huvudman)
     if (!row) {
-      row = { huvudman, lasombud: false, moms_ombud: false, roles: [] }
+      row = { huvudman, lasombud: false, moms_ombud: false, roles: [], recognized: false }
       out.set(huvudman, row)
     }
     if (!row.roles.includes(post.roll)) row.roles.push(post.roll)
-    if (!isGrantActive(post, today)) continue
     const key = classifyOmbudRole(post)
-    if (key) row[key] = true
+    if (!key) continue
+    row.recognized = true
+    if (isGrantActive(post, today)) row[key] = true
   }
   return out
 }
