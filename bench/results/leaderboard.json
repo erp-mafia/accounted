@@ -1,6 +1,6 @@
 {
   "benchVersion": "v1.5",
-  "generatedAt": "2026-09-01T08:47:50.202Z",
+  "generatedAt": "2026-09-01T09:21:23.293Z",
   "suites": {
     "booking": [
       {
@@ -715,22 +715,22 @@
         "label": "Gemini 3.1 Pro",
         "vendor": "Google",
         "open_weights": false,
-        "n": 34,
-        "pass": 29,
-        "passRate": 0.853,
-        "wilsonLo": 0.782,
-        "wilsonHi": 0.904,
-        "totalCostUsd": 0.242,
-        "avgCostUsd": 0.00713,
+        "n": 36,
+        "pass": 31,
+        "passRate": 0.861,
+        "wilsonLo": 0.794,
+        "wilsonHi": 0.909,
+        "totalCostUsd": 0.261,
+        "avgCostUsd": 0.00724,
         "avgTurns": 1,
-        "avgDurationMs": 13323,
+        "avgDurationMs": 12844,
         "extras": {
-          "ece": 0.144,
+          "ece": 0.136,
           "freshness": {
             "n": 6,
             "pass": 4
           },
-          "stablePass": 0.893,
+          "stablePass": 0.9,
           "parseFailures": 0
         }
       },
@@ -1213,6 +1213,28 @@
         "extras": {
           "totalToolCalls": 69,
           "totalToolErrors": 0,
+          "invariantRefusals": 0,
+          "reliability": 1,
+          "reliabilityK": 3
+        }
+      },
+      {
+        "model": "claude-fable-5",
+        "label": "Claude Fable 5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 9,
+        "pass": 9,
+        "passRate": 1,
+        "wilsonLo": 0.9,
+        "wilsonHi": 1,
+        "totalCostUsd": 8.075,
+        "avgCostUsd": 0.89721,
+        "avgTurns": 4.667,
+        "avgDurationMs": 31550,
+        "extras": {
+          "totalToolCalls": 52,
+          "totalToolErrors": 3,
           "invariantRefusals": 0,
           "reliability": 1,
           "reliabilityK": 3
@@ -2759,7 +2781,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.75
+        "disc": 0.76
       },
       {
         "id": "reasoning-002",
@@ -2773,7 +2795,7 @@
           "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
-          "gemini-3-1-pro": null,
+          "gemini-3-1-pro": 1,
           "grok-4-6": 0,
           "deepseek-v4-pro": 0,
           "qwen3-8-2-4t": 0,
@@ -2782,7 +2804,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.79
+        "disc": 0.8
       },
       {
         "id": "reasoning-003",
@@ -2796,7 +2818,7 @@
           "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
-          "gemini-3-1-pro": null,
+          "gemini-3-1-pro": 1,
           "grok-4-6": 1,
           "deepseek-v4-pro": 1,
           "qwen3-8-2-4t": 1,
@@ -2805,7 +2827,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.66
+        "disc": 0.67
       },
       {
         "id": "reasoning-004",
@@ -2943,7 +2965,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.75
+        "disc": 0.76
       },
       {
         "id": "reasoning-010",
@@ -2989,7 +3011,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.67
+        "disc": 0.68
       },
       {
         "id": "reasoning-012",
@@ -3012,7 +3034,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.28
+        "disc": 0.27
       },
       {
         "id": "reasoning-013",
@@ -3219,7 +3241,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.17
+        "disc": 0.16
       },
       {
         "id": "reasoning-022",
@@ -3265,7 +3287,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.71
+        "disc": 0.72
       },
       {
         "id": "reasoning-024",
@@ -3288,7 +3310,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.81
+        "disc": 0.82
       },
       {
         "id": "reasoning-025",
@@ -3357,7 +3379,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.77
+        "disc": 0.78
       },
       {
         "id": "reasoning-028",
@@ -3380,7 +3402,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.71
+        "disc": 0.69
       },
       {
         "id": "reasoning-029",
@@ -3426,7 +3448,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.44
+        "disc": 0.42
       },
       {
         "id": "reasoning-031",
@@ -3449,7 +3471,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.76
+        "disc": 0.77
       },
       {
         "id": "reasoning-032",
@@ -3518,7 +3540,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.46
+        "disc": 0.47
       },
       {
         "id": "reasoning-035",
@@ -3541,7 +3563,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.69
+        "disc": 0.7
       },
       {
         "id": "reasoning-036",
@@ -3564,7 +3586,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.82
+        "disc": 0.83
       }
     ],
     "extraction": [
@@ -3855,7 +3877,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3878,7 +3900,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3901,7 +3923,7 @@
           "claude-sonnet-4-6": 1,
           "claude-sonnet-5": 1,
           "claude-opus-5": 1,
-          "claude-fable-5": null,
+          "claude-fable-5": 1,
           "gpt-5-6-terra-pro": 1,
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
@@ -3986,6 +4008,7 @@
         "claude-sonnet-4-6",
         "claude-sonnet-5",
         "claude-opus-5",
+        "claude-fable-5",
         "gpt-5-6-terra-pro",
         "gpt-5-6-luna",
         "gemini-3-1-pro",
@@ -4597,19 +4620,19 @@
       "agentClean": true
     },
     "claude-fable-5": {
-      "verdict": "ej_bedomd",
+      "verdict": "tillstyrks_med_reservation",
       "coverage99": 0.226,
       "coverage95": 1,
       "booking": 0.962,
       "reasoning": 0.944,
-      "agentClean": false
+      "agentClean": true
     },
     "gemini-3-1-pro": {
       "verdict": "tillstyrks_med_reservation",
       "coverage99": 0.151,
       "coverage95": 1,
       "booking": 0.962,
-      "reasoning": 0.853,
+      "reasoning": 0.861,
       "agentClean": true
     },
     "gpt-5-6-luna": {
