@@ -6,9 +6,13 @@ import type { CompanySettings, Invoice } from '@/types'
  * defective invoice and a defective input-VAT underlag for the buyer, so
  * issuance is gated the same way the payment account is.
  *
- * Proformas and delivery notes are not tax documents, and credit notes are
- * exempted like the payment-account gate exempts them: blocking a correction
- * of an already-issued invoice would trap the company.
+ * Proformas and delivery notes are not tax documents. Credit notes are
+ * exempted deliberately: an ändringsfaktura has its own mandatory-content
+ * list (ML 17 kap. 22-23 §§: unambiguous reference to the original, the
+ * change, own number and date, negative amounts, VAT per original rate)
+ * which does not include the seller's VAT number, and blocking a correction
+ * of an already-issued invoice would trap a company that only needs to fix
+ * its settings.
  */
 export function invoiceRequiresSellerVatNumber(
   invoice: Pick<Invoice, 'credited_invoice_id' | 'document_type'>,
