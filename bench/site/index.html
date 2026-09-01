@@ -185,6 +185,11 @@
   table.lb tbody tr:hover { background: var(--secondary-soft); }
   table.lb tr:last-child td { border-bottom: none; }
   table.lb tr.tiecut td { border-top: 2px solid var(--line-2); }
+  table.lb th.rk, table.lb td.rk { width: 34px; text-align: right; padding-right: 0; color: var(--faint); font-variant-numeric: tabular-nums; font-size: 12px; }
+  table.lb td.rk .tiemark { color: var(--line-2); }
+  table.lb th.sortable { cursor: pointer; user-select: none; }
+  table.lb th.sortable:hover { color: var(--ink); }
+  table.lb th.sortable.on { color: var(--ink); }
   .cellv { display: inline-flex; align-items: center; gap: 10px; justify-content: flex-end; }
   .cellv b { font-weight: 600; color: var(--ink); min-width: 46px; }
   .mini { width: 46px; height: 4px; border-radius: 999px; background: var(--secondary); overflow: hidden; }
@@ -705,6 +710,33 @@
 
   let active = 'booking';
   let segment = 'all';
+  let sortCol = null;
+  let sortDir = 'desc';
+
+  // Numeric value behind each column, so a click sorts by what is displayed.
+  function sortValue(r, col) {
+    const e = r.extras || {};
+    const cols = headerCols();
+    const name = cols[col];
+    switch (name) {
+      case 'Pass': return passOf(r);
+      case 'Strict': return e.strictPass ?? 0;
+      case 'Auto@99%': return e.coverage99 ?? -1;
+      case 'ECE': return -(e.ece ?? 1);
+      case 'Account': return (segmented(r)?.accountAccuracy ?? e.accountAccuracy) ?? 0;
+      case 'VAT': return (segmented(r)?.vatAccuracy ?? e.vatAccuracy) ?? 0;
+      case 'Fresh rules': return e.freshness ? e.freshness.pass / e.freshness.n : -1;
+      case 'Fields': return e.fieldAccuracy ?? 0;
+      case 'Pass^k': return e.reliability ?? -1;
+      case 'Turns': return -r.avgTurns;
+      case 'Cost': return -perTask(r);
+      case 'Per correct': {
+        const rate = active === 'booking' && e.strictPass != null ? e.strictPass : passOf(r);
+        return rate > 0 ? -(perTask(r) / rate) : -Infinity;
+      }
+      default: return 0;
+    }
+  }
   // Provider filter (vals.ai pattern): chips toggle vendors in and out of both
   // the chart and the table. Empty set means "all".
   const hiddenVendors = new Set();
@@ -780,7 +812,7 @@
     }
     renderVendors();
     const all = rowsOf(active).slice().sort((a,b) => passOf(b) - passOf(a));
-    const rows = visible(all);
+    let rows = visible(all);
     document.getElementById('scopeline').textContent =
       hiddenVendors.size === 0
         ? `Showing all ${all.length} models · ${rows[0] ? 'n=' + rows[0].n : ''} tasks per model`
@@ -788,14 +820,53 @@
     // Statistical tie groups apply to the unsegmented ranking only.
     const groups = (segment === 'all' && DATA.tieGroups) ? DATA.tieGroups[active] || [] : [];
     const groupStart = new Set(groups.slice(1).map((g) => g[0]));
-    let html = '<thead><tr>' + headerCols().map((c) => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
+    // Models inside a statistical tie share one rank: the order within a group
+    // is not a finding, and printing 1,2,3 through a tie invites reading noise
+    // as a result. A secondary sort can be chosen by clicking a column.
+    const rankOf = new Map();
+    if (groups.length) {
+      let rank = 1;
+      for (const g of groups) {
+        for (const m of g) rankOf.set(m, rank);
+        rank += g.length;
+      }
+    } else {
+      rows.forEach((r, i) => rankOf.set(r.model, i + 1));
+    }
+    if (sortCol !== null) {
+      const val = (r) => sortValue(r, sortCol);
+      rows = rows.slice().sort((a, b) => (val(b) - val(a)) * (sortDir === 'asc' ? -1 : 1));
+    }
+    const cols = headerCols();
+    let html = '<thead><tr><th class="rk"></th>' + cols.map((c, i) =>
+      i === 0 ? `<th>${c}</th>`
+        : `<th class="sortable${sortCol === i ? ' on' : ''}" data-col="${i}" title="Sort by ${c}">${c}${sortCol === i ? (sortDir === 'desc' ? ' ↓' : ' ↑') : ''}</th>`
+    ).join('') + '</tr></thead><tbody>';
+    let prevRank = null;
     for (const r of rows) {
-      const sep = groupStart.has(r.model) ? ' class="tiecut"' : '';
-      html += `<tr${sep} data-model="${r.model}"><td>${markFor(r.vendor)}${r.label}</td>` +
+      const sep = sortCol === null && groupStart.has(r.model) ? ' tiecut' : '';
+      const rk = rankOf.get(r.model);
+      const shown = sortCol === null && rk === prevRank ? '<span class="tiemark">=</span>' : rk;
+      prevRank = rk;
+      html += `<tr class="${sep.trim()}" data-model="${r.model}"><td class="rk">${shown}</td>` +
+        `<td>${markFor(r.vendor)}${r.label}</td>` +
         rowCols(r).map((c) => `<td>${c}</td>`).join('') + '</tr>';
     }
     tableEl.innerHTML = html + '</tbody>';
-    legendEl.innerHTML = SUITES.find((s) => s.id === active).legend;
+    for (const th of tableEl.querySelectorAll('th.sortable')) {
+      th.addEventListener('click', () => {
+        const col = Number(th.dataset.col);
+        if (sortCol === col) sortDir = sortDir === 'desc' ? 'asc' : 'desc';
+        else { sortCol = col; sortDir = 'desc'; }
+        renderBoard();
+      });
+    }
+    legendEl.innerHTML = SUITES.find((s) => s.id === active).legend +
+      (sortCol === null
+        ? ' · <b>Rank</b> models sharing a rank are a statistical tie: their order is not a result. Click a column to sort.'
+        : ' · sorted by ' + headerCols()[sortCol] + ' · <a href="#" id="resetsort">back to ranking</a>');
+    const reset = document.getElementById('resetsort');
+    if (reset) reset.addEventListener('click', (ev) => { ev.preventDefault(); sortCol = null; renderBoard(); });
     document.getElementById('charttitle').textContent =
       SUITES.find((x) => x.id === active).label + ' · score versus spend';
     document.getElementById('chartn').textContent =
