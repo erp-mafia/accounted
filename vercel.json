@@ -39,6 +39,10 @@
       "schedule": "0 3 * * *"
     },
     {
+      "path": "/api/documents/reanchor/cron",
+      "schedule": "30 3 * * *"
+    },
+    {
       "path": "/api/sandbox/cleanup/cron",
       "schedule": "0 4 * * *"
     },

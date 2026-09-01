@@ -80,6 +80,10 @@ export async function GET(request: Request) {
   const state = searchParams.get('state') // Cryptographic oauth_state token
   const error = searchParams.get('error')
   const errorDescription = searchParams.get('error_description')
+  // Present in connector mode only: the hosted callback echoes the signed
+  // connector state back to this instance so createSession can bind the proxy's
+  // /sessions exchange to the pending ledger row. Null on the direct path.
+  const connectorState = searchParams.get('connector_state')
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
 
@@ -269,7 +273,7 @@ export async function GET(request: Request) {
   // failures resolve to the cleanup redirect target.
   const finalizePromise = (async (): Promise<string> => {
     try {
-      return await finalizeConnection(supabase, pendingConnection, code)
+      return await finalizeConnection(supabase, pendingConnection, code, connectorState)
     } catch (finalizeError) {
       const reason =
         finalizeError instanceof Error ? finalizeError.message : String(finalizeError)
@@ -370,6 +374,7 @@ async function finalizeConnection(
   supabase: ServiceClient,
   pendingConnection: PendingConnection,
   code: string,
+  connectorState: string | null,
 ): Promise<string> {
   const userId = pendingConnection.user_id
 
@@ -379,7 +384,7 @@ async function finalizeConnection(
     codeLength: code.length,
   })
 
-  const sessionData = await createSession(code)
+  const sessionData = await createSession(code, connectorState ?? undefined)
   const { session_id, accounts, access } = sessionData
   const consentExpiresAt = access.valid_until
 
