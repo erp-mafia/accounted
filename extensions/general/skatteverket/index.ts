@@ -879,13 +879,22 @@ export const skatteverketExtension: Extension = {
           // Minting the link is the tenant's opt-in: record a pending row
           // (no grant state yet) so the nightly ombud sync, which only ever
           // touches existing rows, picks the signed grant up on its own.
-          await recordProbeResult({
+          const optIn = await recordProbeResult({
             companyId: ctx.companyId,
             environment: currentSkvEnvironment(),
             orgNumber,
             createdBy: ctx.userId,
             error: null,
           })
+          if (!optIn) {
+            // Handing out the link without the row would let the company
+            // sign at Skatteverket and never be picked up by the sync.
+            log.error('deep link minted but opt-in row could not be stored', { companyId: ctx.companyId })
+            return NextResponse.json(
+              { error: 'Anslutningen kunde inte sparas. Försök igen.' },
+              { status: 500 }
+            )
+          }
           await writeSkatteverketAudit(ctx, {
             endpoint: 'system-connection/deeplink',
             agRegistreradId: orgNumber,

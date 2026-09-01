@@ -162,6 +162,13 @@ describe('POST /system-connection/deeplink', () => {
     )
   })
 
+  it('500 when the opt-in row cannot be stored: the link is not handed out', async () => {
+    mockRecordProbeResult.mockResolvedValue(null)
+    const res = await findRoute().handler(request(), makeContext())
+    expect(res.status).toBe(500)
+    expect(mockWriteAudit).not.toHaveBeenCalled()
+  })
+
   it('502 with the error code when the register refuses or the role codes are unresolved', async () => {
     mockCreateDeepLink.mockRejectedValue(new OmbudApiError('Rollkod saknas', 'OBR_ROLE_UNRESOLVED'))
     const res = await findRoute().handler(request(), makeContext())

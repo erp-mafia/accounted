@@ -203,11 +203,9 @@ export function planDecisions(
     const detail = summary
       ? `ombudsregister ${today}: roller ${summary.roles.join(', ') || 'inga'}`
       : `ombudsregister ${today}: huvudman saknas`
-    if (!summary && !isAnyGranted(row)) {
-      // Never granted and still not listed: nothing to record, nothing to downgrade.
-      decisions.push({ kind: 'unchanged', row })
-      continue
-    }
+    // A row already showing exactly this state is left alone, so a never-listed
+    // company is written once (unknown -> denied, "Saknas" in settings) and
+    // then skipped every following night.
     if (row.lasombud_status === lasombud && row.moms_ombud_status === momsOmbud) {
       decisions.push({ kind: 'unchanged', row })
       continue

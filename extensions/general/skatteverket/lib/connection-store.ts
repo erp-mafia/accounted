@@ -1,5 +1,6 @@
 import { type SupabaseClient } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('skatteverket-connection-store')
@@ -233,24 +234,30 @@ export async function listVerifiedCompanies(
 /**
  * Every connection row for an environment, for the ombudsregister sync. The
  * caller decides what a row's status means ('revoked' rows are the tenant's
- * own disconnect and are skipped there). The select is spelled out rather
- * than reusing CONNECTION_COLUMNS so the phantom-column scanner can check it.
+ * own disconnect and are skipped there). Paginated through fetchAllRows on a
+ * stable (created_at, id) order so nothing past PostgREST's 1000-row page is
+ * silently left stale. The select is spelled out rather than reusing
+ * CONNECTION_COLUMNS so the phantom-column scanner can check it.
  */
-export async function listConnections(
-  environment: SkvEnvironment,
-  limit = 1000
-): Promise<SkvCompanyConnection[]> {
-  const { data, error } = await getServiceClient()
-    .from('skatteverket_company_connections')
-    .select('id, company_id, environment, org_number, status, lasombud_status, lasombud_checked_at, moms_ombud_status, moms_ombud_checked_at, verified_at, last_probe_at, last_probe_detail, last_error')
-    .eq('environment', environment)
-    .order('created_at', { ascending: true })
-    .limit(limit)
-  if (error) {
-    log.warn('listConnections failed', { environment, error: error.message })
+export async function listConnections(environment: SkvEnvironment): Promise<SkvCompanyConnection[]> {
+  try {
+    const client = getServiceClient()
+    return await fetchAllRows<SkvCompanyConnection>(({ from, to }) =>
+      client
+        .from('skatteverket_company_connections')
+        .select('id, company_id, environment, org_number, status, lasombud_status, lasombud_checked_at, moms_ombud_status, moms_ombud_checked_at, verified_at, last_probe_at, last_probe_detail, last_error')
+        .eq('environment', environment)
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to)
+    )
+  } catch (error) {
+    log.warn('listConnections failed', {
+      environment,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return []
   }
-  return (data ?? []) as unknown as SkvCompanyConnection[]
 }
 
 /** Test hook: reset the memoized service client. */

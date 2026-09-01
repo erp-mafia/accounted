@@ -73,13 +73,13 @@ const ROLE_CODE_ENV: Record<SkvBehorighet, string> = {
  * Description-text fallback. Skatteverket's own labels in the e-service are
  * "Juridiskt läsombud" and "Momsdeklaration, ombud"; the register returns a
  * rollbeskrivning with every behörighetspost, so the text is available even
- * before the codes are pinned. Matching is intentionally narrow: the moms
- * pattern requires "ombud" so "Momsdeklaration, deklarationsombud"-style
- * broader roles are not silently accepted as the narrower one.
+ * before the codes are pinned. Matching is exact on the whole label (case and
+ * whitespace aside): "Momsdeklaration, deklarationsombud" is a broader role
+ * and must never be read as "Momsdeklaration, ombud".
  */
 const ROLE_DESCRIPTION_PATTERNS: Record<SkvBehorighet, RegExp> = {
-  lasombud: /juridiskt\s+l[äa]sombud/i,
-  moms_ombud: /momsdeklaration.*ombud/i,
+  lasombud: /^juridiskt\s+l[äa]sombud$/i,
+  moms_ombud: /^momsdeklaration,\s*ombud$/i,
 }
 
 export function getPinnedRoleCode(key: SkvBehorighet): string | null {

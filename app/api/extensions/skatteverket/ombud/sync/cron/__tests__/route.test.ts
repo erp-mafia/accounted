@@ -185,13 +185,14 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
     expect(mockRecordProbeResult).not.toHaveBeenCalled()
   })
 
-  it('leaves unchanged rows alone and downgrades one row the register no longer lists', async () => {
+  it('leaves unchanged rows alone, records denial once for a never-listed pending row, downgrades one revoked-at-SKV row', async () => {
     mockListConnections.mockResolvedValue([
       connection('c-keep', '165560000000'),
       connection('c-keep2', '165570000000'),
       connection('c-keep3', '165580000000'),
       connection('c-gone', '165590000000'),
       connection('c-never', '165500000000', 'denied', 'denied', 'pending'),
+      connection('c-fresh', '165510000000', 'unknown', 'unknown', 'pending'),
     ])
     mockListOmbudGrants.mockResolvedValue([
       JLO('165560000000'), MOMS('165560000000'),
@@ -201,13 +202,16 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
 
     const body = await (await GET(request())).json()
 
-    expect(body).toMatchObject({ unchanged: 4, revoked: 1, granted: 0, guardTripped: false })
-    expect(mockRecordProbeResult).toHaveBeenCalledTimes(1)
+    expect(body).toMatchObject({ unchanged: 4, revoked: 1, denied: 1, granted: 0, guardTripped: false })
+    expect(mockRecordProbeResult).toHaveBeenCalledTimes(2)
     expect(recordedFor('c-gone')[0]).toMatchObject({
       orgNumber: '165590000000',
       lasombud: { status: 'denied', detail: expect.stringContaining('huvudman saknas') },
       momsOmbud: { status: 'denied' },
     })
+    // The deep-link row nobody signed yet: written once as "Saknas", not left "Inte verifierad".
+    expect(recordedFor('c-fresh')[0]).toMatchObject({ lasombud: { status: 'denied' }, momsOmbud: { status: 'denied' } })
+    expect(recordedFor('c-never')).toHaveLength(0)
   })
 
   it('a failed upsert is counted once and never turns into a downgrade', async () => {

@@ -490,8 +490,10 @@ function SkatteverketSystemConnectionCard() {
         })
         return
       }
+      // A blocked pre-open means a second window.open after the await would
+      // be blocked too: navigate this tab instead so the link is never lost.
       if (tab) tab.location.href = url
-      else window.open(url, '_blank', 'noopener')
+      else window.location.assign(url)
     } catch {
       tab?.close()
       toast({ title: t('system_deeplink_failed'), variant: 'destructive' })

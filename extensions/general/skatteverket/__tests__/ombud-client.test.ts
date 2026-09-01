@@ -65,6 +65,10 @@ describe('classifyOmbudRole', () => {
     expect(classifyOmbudRole({ roll: 'X2', rollbeskrivning: 'Momsdeklaration, ombud' })).toBe('moms_ombud')
     expect(classifyOmbudRole({ roll: 'X3', rollbeskrivning: 'Deklarationsombud' })).toBeNull()
     expect(classifyOmbudRole({ roll: 'X4' })).toBeNull()
+    // Broader roles that merely contain the words are not the narrow ones.
+    expect(classifyOmbudRole({ roll: 'X5', rollbeskrivning: 'Momsdeklaration, deklarationsombud' })).toBeNull()
+    expect(classifyOmbudRole({ roll: 'X6', rollbeskrivning: 'Juridiskt läsombud och skattekonto' })).toBeNull()
+    expect(classifyOmbudRole({ roll: 'X7', rollbeskrivning: ' momsdeklaration,ombud ' .trim() })).toBe('moms_ombud')
   })
 
   it('a pinned code wins and disables the text fallback for that key', () => {
