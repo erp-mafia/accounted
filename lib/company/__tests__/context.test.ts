@@ -6,6 +6,26 @@ vi.mock('next/headers', () => ({
   cookies: vi.fn(async () => ({ set: mockCookieSet })),
 }))
 
+// Multi-user seat gate seam. Default: NOT enforced and every membership
+// active, so the pre-existing tests keep documenting the ungated resolution
+// (the self-hosted / dev behavior, and the pre-gate semantics). The gated
+// tests at the bottom flip these; the gate's own logic is covered in
+// lib/entitlements/__tests__/multi-user.test.ts.
+const multiUserSeam = vi.hoisted(() => ({
+  enforced: false,
+  membershipActive: vi.fn().mockResolvedValue(true),
+}))
+vi.mock('@/lib/entitlements/multi-user', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/entitlements/multi-user')>(
+    '@/lib/entitlements/multi-user',
+  )
+  return {
+    ...actual,
+    isMultiUserEnforced: () => multiUserSeam.enforced,
+    isMembershipActive: (...args: unknown[]) => multiUserSeam.membershipActive(...args),
+  }
+})
+
 import { setActiveCompany, CompanyContextError, getCompanyDisplayName, getActiveCompanyId } from '../context'
 
 type CapturedCall = { table: string; method: string; args: unknown[] }
@@ -37,7 +57,7 @@ function buildSupabase(
 
   function makeChain(table: string) {
     const chain: Record<string, unknown> = {}
-    const methods = ['select', 'eq', 'is', 'order', 'limit', 'maybeSingle', 'single', 'insert', 'upsert', 'delete', 'update']
+    const methods = ['select', 'eq', 'is', 'or', 'order', 'limit', 'maybeSingle', 'single', 'insert', 'upsert', 'delete', 'update']
     for (const m of methods) {
       chain[m] = (...args: unknown[]) => {
         calls.push({ table, method: m, args })
@@ -66,6 +86,8 @@ function buildSupabase(
 
 beforeEach(() => {
   vi.clearAllMocks()
+  multiUserSeam.enforced = false
+  multiUserSeam.membershipActive.mockResolvedValue(true)
 })
 
 describe('setActiveCompany', () => {
@@ -319,6 +341,58 @@ describe('getActiveCompanyId via resolve_active_company RPC', () => {
     )
 
     expect(await getActiveCompanyId(supabase as never, 'user-1')).toBe('company-1')
+  })
+})
+
+describe('multi-user seat gate', () => {
+  it('setActiveCompany refuses a switch into a company frozen for the member', async () => {
+    multiUserSeam.membershipActive.mockResolvedValue(false)
+    const { supabase, calls } = buildSupabase({
+      company_members: { single: { data: { company_id: 'company-2', role: 'member' } } },
+    })
+
+    const err = await setActiveCompany(supabase as never, 'user-1', 'company-2').catch((e) => e)
+
+    expect(err).toBeInstanceOf(CompanyContextError)
+    expect(err.code).toBe('company_locked')
+    // The preference write must never land: a persisted frozen preference
+    // would silently bounce every later resolution.
+    expect(calls.find((c) => c.table === 'user_preferences')).toBeUndefined()
+    expect(mockCookieSet).not.toHaveBeenCalled()
+  })
+
+  it('getActiveCompanyId calls the GATED rpc when enforcement is on', async () => {
+    multiUserSeam.enforced = true
+    const { supabase } = buildSupabase(
+      {},
+      { data: [{ company_id: 'company-1', locale: 'sv', used_fallback: false }] },
+    )
+
+    expect(await getActiveCompanyId(supabase as never, 'user-1')).toBe('company-1')
+    expect(supabase.rpc).toHaveBeenCalledWith('resolve_active_company_gated', {
+      p_grace_days: 20,
+    })
+  })
+
+  it('gated query fallback resolves the first ACCESSIBLE membership (dormant skipped)', async () => {
+    multiUserSeam.enforced = true
+    const memberships = [
+      // Frozen for the user: non-owner and no grant rows will match below.
+      { company_id: 'frozen-co', role: 'member', created_at: '2026-01-01', companies: { team_id: null } },
+      { company_id: 'owned-co', role: 'owner', created_at: '2026-02-01', companies: { team_id: null } },
+    ]
+    const { supabase } = buildSupabase({
+      user_preferences: { maybeSingle: { data: { active_company_id: 'frozen-co' } } },
+      // The gated path awaits the list query (no maybeSingle): seed the
+      // chain's `order` terminal.
+      company_members: { order: { data: memberships } },
+      // No multi_user grants at all -> frozen-co is frozen for the member.
+      capability_grants: { or: { data: [] } },
+    })
+
+    // Preference points at the frozen company: resolution must skip it and
+    // land on the owned company instead of locking the user out.
+    expect(await getActiveCompanyId(supabase as never, 'user-1')).toBe('owned-co')
   })
 })
 

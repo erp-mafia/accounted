@@ -1833,6 +1833,8 @@
     "members_invite_link_copy_failed": "Länken kunde inte kopieras.",
     "members_invite_sent_description": "E-post skickad till {email}.",
     "members_invite_failed": "Kunde inte skicka inbjudan.",
+    "members_invite_upgrade": "Bjud in fler personer med betald plan.",
+    "members_invite_upgrade_cta": "Uppgradera",
     "members_removed": "Medlem borttagen",
     "members_remove_failed": "Kunde inte ta bort medlem.",
     "members_invite_revoked": "Inbjudan återkallad",
@@ -2241,6 +2243,8 @@
     "unlock_payments_gloss": "betallänkar på fakturorna, Stripe-saldot som bankflöde",
     "unlock_webshop": "Webshop",
     "unlock_webshop_gloss": "ordrar hämtas från WooCommerce och Shopify",
+    "unlock_users": "Fler användare",
+    "unlock_users_gloss": "bjud in kollegor, alla kan arbeta i företaget",
     "terms_deferred": "Första debiteringen {date}. Avsluta när du vill. Betalning via Stripe.",
     "terms_now": "Ingen bindningstid, avsluta när du vill. Betalning via Stripe.",
     "unlock_help": "Abonnemanget är de externa kopplingarna: assistenten, banken, Skatteverket, e-post, Stripe och webshoparna. Utan det fortsätter bokföring, fakturering, rapporter och SIE-export som vanligt, och allt finns kvar: räkenskapsinformation bevaras i sju år enligt bokföringslagen oavsett abonnemang. Startar du igen senare fortsätter kopplingarna där de slutade.",
@@ -5933,10 +5937,24 @@
     "add_company": "Lägg till företag",
     "error_no_access": "Du har inte tillgång till detta företag.",
     "error_switch_failed": "Företagsbytet kunde inte sparas. Försök igen.",
+    "error_locked": "Företaget är pausat för ditt konto. Be ägaren uppgradera till betald plan.",
     "search_placeholder": "Sök företag...",
     "no_results": "Inga företag matchar",
     "managed_elsewhere": "Hanteras via annan domän",
-    "managed_via": "Hanteras via {domain}"
+    "managed_via": "Hanteras via {domain}",
+    "locked_note": "Pausat: kräver betald plan"
+  },
+  "multi_user": {
+    "banner_owner": "{emails} pausas om {days, plural, =1 {1 dag} other {# dagar}}. Uppgradera för att behålla fler användare.",
+    "banner_affected": "Din åtkomst till {companyName} pausas om {days, plural, =1 {1 dag} other {# dagar}} om företaget inte uppgraderar.",
+    "banner_cta": "Uppgradera"
+  },
+  "paused": {
+    "title": "Ditt konto är pausat",
+    "body_single": "Ditt konto är pausat i {companyName}. Endast en person kan arbeta i företaget utan betald plan.",
+    "body_multiple": "Ditt konto är pausat i följande företag: {companyNames}. Endast en person kan arbeta i varje företag utan betald plan.",
+    "body_action": "Be ägaren uppgradera för att fortsätta.",
+    "sign_out": "Logga ut"
   },
   "company_tab_guard": {
     "title": "Aktivt företag har bytts i en annan flik",

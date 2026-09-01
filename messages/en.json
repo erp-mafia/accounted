@@ -1833,6 +1833,8 @@
     "members_invite_link_copy_failed": "The link could not be copied.",
     "members_invite_sent_description": "Email sent to {email}.",
     "members_invite_failed": "Could not send invitation.",
+    "members_invite_upgrade": "Invite more people with a paid plan.",
+    "members_invite_upgrade_cta": "Upgrade",
     "members_removed": "Member removed",
     "members_remove_failed": "Could not remove member.",
     "members_invite_revoked": "Invitation revoked",
@@ -2241,6 +2243,8 @@
     "unlock_payments_gloss": "payment links on invoices, Stripe balance as a bank feed",
     "unlock_webshop": "Webshop",
     "unlock_webshop_gloss": "orders pulled from WooCommerce and Shopify",
+    "unlock_users": "More users",
+    "unlock_users_gloss": "invite colleagues, everyone can work in the company",
     "terms_deferred": "First charge {date}. Cancel any time. Payment via Stripe.",
     "terms_now": "No lock-in, cancel any time. Payment via Stripe.",
     "unlock_help": "The subscription is the external connections: the assistant, your bank, Skatteverket, email, Stripe and the webshops. Without it, bookkeeping, invoicing, reports and SIE export keep working as usual and everything stays: accounting records are kept for seven years under the Swedish Bookkeeping Act regardless of subscription. Start again later and the connections pick up where they left off.",
@@ -5933,10 +5937,24 @@
     "add_company": "Add company",
     "error_no_access": "You don't have access to this company.",
     "error_switch_failed": "The company switch could not be saved. Please try again.",
+    "error_locked": "The company is paused for your account. Ask the owner to upgrade to a paid plan.",
     "search_placeholder": "Search companies...",
     "no_results": "No matching companies",
     "managed_elsewhere": "Managed on another domain",
-    "managed_via": "Managed via {domain}"
+    "managed_via": "Managed via {domain}",
+    "locked_note": "Paused: requires a paid plan"
+  },
+  "multi_user": {
+    "banner_owner": "{emails} will be paused in {days, plural, =1 {1 day} other {# days}}. Upgrade to keep multiple users.",
+    "banner_affected": "Your access to {companyName} will be paused in {days, plural, =1 {1 day} other {# days}} unless the company upgrades.",
+    "banner_cta": "Upgrade"
+  },
+  "paused": {
+    "title": "Your account is paused",
+    "body_single": "Your account is paused in {companyName}. Only one person can work in the company without a paid plan.",
+    "body_multiple": "Your account is paused in the following companies: {companyNames}. Only one person can work in each company without a paid plan.",
+    "body_action": "Ask the owner to upgrade to continue.",
+    "sign_out": "Sign out"
   },
   "company_tab_guard": {
     "title": "The active company was switched in another tab",

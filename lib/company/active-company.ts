@@ -1,4 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { CAPABILITY } from '@/lib/entitlements/keys'
+import { isMultiUserEnforced } from '@/lib/entitlements/multi-user'
+import {
+  computeMultiUserState,
+  isMembershipDormant,
+  MULTI_USER_GRACE_DAYS,
+} from '@/lib/entitlements/multi-user-state'
 
 /**
  * Active-company resolution with no Next.js request-scope dependency.
@@ -21,7 +28,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 export class CompanyContextError extends Error {
   constructor(
     message: string,
-    readonly code: 'not_member' | 'persist_failed' | 'resolution_failed'
+    readonly code: 'not_member' | 'persist_failed' | 'resolution_failed' | 'company_locked'
   ) {
     super(message)
     this.name = 'CompanyContextError'
@@ -55,7 +62,17 @@ export async function getActiveCompanyId(
   supabase: SupabaseClient,
   userId: string
 ): Promise<string | null> {
-  const { data, error } = await supabase.rpc('resolve_active_company')
+  // Multi-user seat gate (lib/entitlements/multi-user.ts): when enforced,
+  // resolution must skip memberships in companies frozen for this user
+  // (non-owner, multi_user lapsed past its grace window). The gated RPC is
+  // the zero-arg one plus exactly that predicate; self-hosted and dev keep
+  // calling the ungated function so the gate can never bite there.
+  const enforced = isMultiUserEnforced()
+  const { data, error } = enforced
+    ? await supabase.rpc('resolve_active_company_gated', {
+        p_grace_days: MULTI_USER_GRACE_DAYS,
+      })
+    : await supabase.rpc('resolve_active_company')
 
   if (error) {
     // PGRST202: function not in the schema cache (self-hosted instance not
@@ -65,7 +82,8 @@ export async function getActiveCompanyId(
     // app/api/mcp-oauth/token/route.ts, app/api/events/route.ts (API-key
     // branch) and lib/auth/api-keys.ts call this with
     // createServiceClientNoCookies(), and must silently resolve via the query
-    // path or the OAuth token flow breaks.
+    // path or the OAuth token flow breaks. The query path applies the same
+    // seat-gate filter app-side, so both fallbacks stay gated.
     if (error.code === 'PGRST202' || error.code === '42501') {
       return getActiveCompanyIdViaQueries(supabase, userId)
     }
@@ -91,10 +109,125 @@ export async function getActiveCompanyId(
 }
 
 /**
- * Query-path resolution: the pre-RPC implementation, kept verbatim as the
- * fallback for getActiveCompanyId (see the fallback conditions there).
+ * Query-path resolution: the pre-RPC implementation, kept as the fallback for
+ * getActiveCompanyId (see the fallback conditions there). With the seat gate
+ * enforced it routes to the gated variant below, because every service-role
+ * caller (API keys, MCP, OAuth token flow) lands on this path on EVERY
+ * request: leaving it ungated would make the API surface a paywall bypass.
  */
 async function getActiveCompanyIdViaQueries(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<string | null> {
+  if (isMultiUserEnforced()) {
+    return getActiveCompanyIdViaQueriesGated(supabase, userId)
+  }
+  return getActiveCompanyIdViaQueriesUngated(supabase, userId)
+}
+
+/**
+ * Gated query path: same resolution order (validated preference, else first
+ * membership by created_at) restricted to memberships the seat gate lets
+ * through: owner role, or a company whose multi_user grant is active or
+ * within its 20-day grace window. Mirrors resolve_active_company_gated().
+ *
+ * Fail-open on the grants read specifically: a transient capability_grants
+ * failure must never lock people out of their bookkeeping. The membership
+ * and preference reads keep the fail-loud behavior of the ungated path.
+ */
+async function getActiveCompanyIdViaQueriesGated(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<string | null> {
+  const [prefsRes, membershipsRes] = await Promise.all([
+    supabase
+      .from('user_preferences')
+      .select('active_company_id')
+      .eq('user_id', userId)
+      .maybeSingle(),
+    supabase
+      .from('company_members')
+      .select('company_id, role, created_at, companies!inner(archived_at, team_id)')
+      .eq('user_id', userId)
+      .is('companies.archived_at', null)
+      .order('created_at', { ascending: true }),
+  ])
+
+  const resolutionError = prefsRes.error ?? membershipsRes.error
+  if (resolutionError) {
+    throw new CompanyContextError(
+      `Active company resolution failed: ${resolutionError.message}`,
+      'resolution_failed'
+    )
+  }
+
+  type MembershipRow = {
+    company_id: string
+    role: string
+    companies: { team_id: string | null }
+  }
+  const memberships = (membershipsRes.data ?? []) as unknown as MembershipRow[]
+  if (memberships.length === 0) return null
+
+  const dormant = await resolveDormantCompanyIds(supabase, memberships)
+
+  const accessible = memberships.filter((m) => !dormant.has(m.company_id) || m.role === 'owner')
+  const preferred = prefsRes.data?.active_company_id
+  if (preferred && accessible.some((m) => m.company_id === preferred)) {
+    return preferred
+  }
+  return accessible[0]?.company_id ?? null
+}
+
+/**
+ * Which of these memberships' companies are dormant FOR THE MEMBER ROLE
+ * (owner rows are exempt by the caller): companies whose multi_user grants
+ * (company- or team-scoped) are all lapsed past the grace window. Shared by
+ * the gated query fallback here and the switcher's locked-state computation
+ * in the dashboard layout. Fail-open: on a grants read error nothing is
+ * reported dormant.
+ */
+export async function resolveDormantCompanyIds(
+  supabase: SupabaseClient,
+  memberships: readonly { company_id: string; role: string; companies: { team_id: string | null } }[]
+): Promise<Set<string>> {
+  const nonOwner = memberships.filter((m) => m.role !== 'owner')
+  if (nonOwner.length === 0 || !isMultiUserEnforced()) return new Set()
+
+  const companyIds = [...new Set(nonOwner.map((m) => m.company_id))]
+  const teamByCompany = new Map(
+    nonOwner.map((m) => [m.company_id, m.companies?.team_id ?? null])
+  )
+  const teamIds = [...new Set([...teamByCompany.values()].filter((t): t is string => !!t))]
+
+  const orParts = [`company_id.in.(${companyIds.join(',')})`]
+  if (teamIds.length > 0) orParts.push(`team_id.in.(${teamIds.join(',')})`)
+  const { data: grants, error } = await supabase
+    .from('capability_grants')
+    .select('company_id, team_id, expires_at')
+    .eq('capability_key', CAPABILITY.multi_user)
+    .or(orParts.join(','))
+  if (error) return new Set() // fail-open
+
+  type GrantRow = { company_id: string | null; team_id: string | null; expires_at: string | null }
+  const rows = (grants ?? []) as GrantRow[]
+  const now = Date.now()
+  const dormant = new Set<string>()
+  for (const companyId of companyIds) {
+    const teamId = teamByCompany.get(companyId) ?? null
+    const companyRows = rows.filter(
+      (g) => g.company_id === companyId || (teamId !== null && g.team_id === teamId)
+    )
+    const access = computeMultiUserState(companyRows, now)
+    if (isMembershipDormant('member', access.state)) dormant.add(companyId)
+  }
+  return dormant
+}
+
+/**
+ * Ungated query-path resolution: the pre-RPC implementation, kept verbatim.
+ */
+async function getActiveCompanyIdViaQueriesUngated(
   supabase: SupabaseClient,
   userId: string
 ): Promise<string | null> {

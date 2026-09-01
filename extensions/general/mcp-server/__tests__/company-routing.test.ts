@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   addCompanyToNextHint,
   addCompanyToTopLevelNext,
@@ -11,6 +11,25 @@ import {
 
 const DEFAULT_COMPANY_ID = '11111111-1111-4111-8111-111111111111'
 const OTHER_COMPANY_ID = '22222222-2222-4222-8222-222222222222'
+
+// Multi-user seat gate: mocked (real logic covered in
+// lib/entitlements/__tests__/multi-user.test.ts) so the membership chain mock
+// below stays single-purpose. Default entitled; individual tests flip it.
+const getMultiUserStateMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/entitlements/multi-user', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/entitlements/multi-user')>(
+    '@/lib/entitlements/multi-user',
+  )
+  return {
+    ...actual,
+    getMultiUserState: (...args: unknown[]) => getMultiUserStateMock(...args),
+  }
+})
+
+beforeEach(() => {
+  getMultiUserStateMock.mockReset()
+  getMultiUserStateMock.mockResolvedValue({ state: 'entitled', graceEndsAt: null })
+})
 
 function membershipClient(result: { data: unknown; error: unknown }) {
   const chain: Record<string, ReturnType<typeof vi.fn>> = {
@@ -131,6 +150,60 @@ describe('MCP company routing', () => {
       })
     ).rejects.toMatchObject({ code: 'NO_COMPANY_YET' })
     expect(chain.maybeSingle).not.toHaveBeenCalled()
+  })
+
+  it('refuses a NON-OWNER membership in a frozen company (multi-user seat gate)', async () => {
+    getMultiUserStateMock.mockResolvedValue({ state: 'frozen', graceEndsAt: null })
+    const { client } = membershipClient({
+      data: { company_id: OTHER_COMPANY_ID, role: 'admin' },
+      error: null,
+    })
+
+    await expect(
+      resolveMcpCompanyContext({
+        supabase: client as never,
+        userId: 'user-1',
+        defaultCompanyId: DEFAULT_COMPANY_ID,
+        requestedCompanyId: OTHER_COMPANY_ID,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' })
+  })
+
+  it('lets an OWNER through without consulting the seat gate', async () => {
+    getMultiUserStateMock.mockResolvedValue({ state: 'frozen', graceEndsAt: null })
+    const { client } = membershipClient({
+      data: { company_id: DEFAULT_COMPANY_ID, role: 'owner' },
+      error: null,
+    })
+
+    await expect(
+      resolveMcpCompanyContext({
+        supabase: client as never,
+        userId: 'user-1',
+        defaultCompanyId: DEFAULT_COMPANY_ID,
+      })
+    ).resolves.toMatchObject({ role: 'owner' })
+    expect(getMultiUserStateMock).not.toHaveBeenCalled()
+  })
+
+  it('lets a non-owner through while the company is in its grace window', async () => {
+    getMultiUserStateMock.mockResolvedValue({
+      state: 'grace',
+      graceEndsAt: new Date(Date.now() + 5 * 86_400_000).toISOString(),
+    })
+    const { client } = membershipClient({
+      data: { company_id: OTHER_COMPANY_ID, role: 'member' },
+      error: null,
+    })
+
+    await expect(
+      resolveMcpCompanyContext({
+        supabase: client as never,
+        userId: 'user-1',
+        defaultCompanyId: DEFAULT_COMPANY_ID,
+        requestedCompanyId: OTHER_COMPANY_ID,
+      })
+    ).resolves.toMatchObject({ role: 'member' })
   })
 
   it('rejects companies without a current non-archived membership', async () => {

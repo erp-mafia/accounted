@@ -103,6 +103,10 @@
       "schedule": "45 5 * * *"
     },
     {
+      "path": "/api/notifications/multi-user-grace/cron",
+      "schedule": "0 7 * * *"
+    },
+    {
       "path": "/api/peppol/inbound/cron",
       "schedule": "*/10 * * * *"
     },

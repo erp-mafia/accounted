@@ -23,13 +23,14 @@ describe('parseCompanyMembersPayload', () => {
       members: [{ id: 'm1', email: 'anna@example.se' }],
       invitations: [{ id: 'i1', email: 'bo@example.se' }],
       canInvite: true,
+      inviteRequiresUpgrade: false,
     })
   })
 
   it('accepts a confirmed-empty roster (that is data, not a failure)', () => {
     expect(
       parseCompanyMembersPayload({ data: { members: [], invitations: [], canInvite: false } }),
-    ).toEqual({ members: [], invitations: [], canInvite: false })
+    ).toEqual({ members: [], invitations: [], canInvite: false, inviteRequiresUpgrade: false })
   })
 
   it('rejects a 200 with no data envelope instead of fabricating an empty roster', () => {
@@ -50,7 +51,22 @@ describe('parseCompanyMembersPayload', () => {
     // A truthy non-boolean must not unlock the invite form.
     expect(
       parseCompanyMembersPayload({ data: { members: [], invitations: [], canInvite: 'yes' } }),
-    ).toEqual({ members: [], invitations: [], canInvite: false })
+    ).toEqual({ members: [], invitations: [], canInvite: false, inviteRequiresUpgrade: false })
+  })
+
+  it('only swaps the invite form for the upsell on an explicit boolean true', () => {
+    // Multi-user seat gate: an older server without the field (or junk) keeps
+    // the form; the invite POST's own 403 is the real enforcement.
+    expect(
+      parseCompanyMembersPayload({
+        data: { members: [], invitations: [], canInvite: true, inviteRequiresUpgrade: 'yes' },
+      }),
+    ).toEqual({ members: [], invitations: [], canInvite: true, inviteRequiresUpgrade: false })
+    expect(
+      parseCompanyMembersPayload({
+        data: { members: [], invitations: [], canInvite: true, inviteRequiresUpgrade: true },
+      }),
+    ).toEqual({ members: [], invitations: [], canInvite: true, inviteRequiresUpgrade: true })
   })
 })
 
