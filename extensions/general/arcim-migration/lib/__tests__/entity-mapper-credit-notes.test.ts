@@ -35,6 +35,7 @@ function makeDto(over: {
   quantity?: number
   paid?: boolean
   balance?: number
+  note?: string
 } = {}): SalesInvoiceDto {
   const s = over.signOfAmounts ?? 1
   const net = (over.net ?? 1000) * s
@@ -71,6 +72,7 @@ function makeDto(over: {
       paid: over.paid ?? false,
       balance: { value: over.balance ?? gross, currencyCode: 'SEK' },
     },
+    note: over.note,
   }
 }
 
@@ -148,6 +150,26 @@ describe('mapSalesInvoice: kreditfaktura', () => {
     const { invoice, creditNoteUnlinked } = map({ invoiceTypeCode: '381' })
     expect(creditNoteUnlinked).toBe(true)
     expect(invoice).not.toHaveProperty('credited_invoice_id')
+  })
+
+  it('writes the missing-reference disclosure into notes, durably', () => {
+    // ML 17 kap 22-23 § wants a kreditfaktura to reference the invoice it
+    // credits, and BFL 5 kap 6-7 § wants a verifikation to reference its
+    // underlag. The wizard's count is an ephemeral result screen, so the gap
+    // has to be legible on the record itself years later.
+    const { invoice } = map({ invoiceTypeCode: '381' })
+    expect(invoice.notes).toContain('Referens till ursprungsfakturan')
+  })
+
+  it('preserves the provider note alongside the disclosure', () => {
+    const { invoice } = map({ invoiceTypeCode: '381', note: 'Kreditering enligt overenskommelse' })
+    expect(invoice.notes).toContain('Kreditering enligt overenskommelse')
+    expect(invoice.notes).toContain('Referens till ursprungsfakturan')
+  })
+
+  it('leaves an ordinary invoice note untouched', () => {
+    const { invoice } = map({ note: 'Tack for din bestallning' })
+    expect(invoice.notes).toBe('Tack for din bestallning')
   })
 
   it('rounds öre rather than carrying float drift', () => {

@@ -750,7 +750,7 @@ export function mapSalesInvoice(
     vat_rate: vat.rate,
     your_reference: null,
     our_reference: null,
-    notes: dto.note || null,
+    notes: isCreditNote ? creditNoteUnlinkedNote(dto.note) : (dto.note || null),
     // Always 'invoice'. invoices_document_type_check allows only
     // ('invoice', 'proforma', 'delivery_note'), and Accounted models a
     // kreditfaktura as an invoice row with reversed amounts plus
@@ -775,6 +775,27 @@ export function mapSalesInvoice(
     vatUnresolved: vat.unresolved,
     creditNoteUnlinked: isCreditNote,
   }
+}
+
+/**
+ * Durable note for a migrated kreditfaktura that carries no pointer at the
+ * invoice it credits.
+ *
+ * ML 17 kap 22-23 § requires a kreditfaktura to reference the original
+ * invoice, and BFL 5 kap 6-7 § requires a verifikation to reference its
+ * underlag. No provider DTO carries that reference (lib/providers/dto.ts), so
+ * the pairing cannot be resolved at import time and guessing it would corrupt
+ * the AR ledger. The wizard reports the count, but a wizard result screen is
+ * not rakenskapsinformation: the gap has to be legible on the record itself,
+ * years later, to whoever opens the invoice. So it is written into `notes`,
+ * preserving whatever note the provider sent.
+ */
+function creditNoteUnlinkedNote(providerNote: string | null | undefined): string {
+  const disclosure =
+    'Kreditfaktura importerad vid systembyte. Referens till ursprungsfakturan '
+    + 'saknas: kallsystemet skickade ingen sadan referens vid migreringen.'
+  const existing = (providerNote || '').trim()
+  return existing ? `${existing}\n\n${disclosure}` : disclosure
 }
 
 /**
@@ -911,7 +932,7 @@ export function mapSupplierInvoice(
     paid_amount: resolvedStatus === 'paid' ? total : Math.max(0, paidAmount),
     remaining_amount: resolvedStatus === 'paid' ? 0 : Math.max(0, balance),
     is_credit_note: isCreditNote,
-    notes: dto.note || null,
+    notes: isCreditNote ? creditNoteUnlinkedNote(dto.note) : (dto.note || null),
   }
 
   const items = dto.lines.map((line, idx) => mapSupplierInvoiceLine(line, idx, vat.rate))
