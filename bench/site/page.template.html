@@ -204,6 +204,7 @@
   .vendorbar button .mark { width: 13px; height: 13px; margin-right: 6px; }
   .vendorbar button[aria-pressed="false"] { opacity: .42; }
   .vendorbar button[aria-pressed="true"] { background: var(--secondary); color: var(--ink); border-color: transparent; }
+  .pickrow button[aria-pressed="true"] .mark { color: var(--bg) !important; }
   .scopeline { font-size: 12px; color: var(--faint); margin: 0 0 8px; font-family: "Geist Mono",monospace; }
   .chartmeta { display: flex; justify-content: space-between; font-size: 11px; color: var(--faint); font-family: "Geist Mono",monospace; margin-bottom: 6px; }
   .chartcard svg text { font-family: "Geist Mono",monospace; font-size: 10px; fill: var(--faint); }
@@ -664,10 +665,15 @@
   const vendorOf = (id) => { for (const s of SUITES) { const r = modelRow(s.id, id); if (r) return r.vendor; } return ''; };
 
   function markFor(vendor) {
-    const d = LOGOS[vendor];
-    if (d) return `<span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="currentColor" d="${d}"/></svg></span>`;
-    const mono = { 'xAI': 'xAI', 'Z.ai': 'Z' }[vendor] || vendor.slice(0, 2);
-    return `<span class="mark mono2" aria-hidden="true">${mono}</span>`;
+    const l = LOGOS[vendor];
+    if (!l) {
+      const mono = vendor.slice(0, 2);
+      return `<span class="mark mono2" aria-hidden="true">${mono}</span>`;
+    }
+    // Brand colour where the brand has one that survives both themes;
+    // otherwise inherit the page ink so black marks stay visible in dark mode.
+    const fill = l.hex ? `style="color:${l.hex}"` : '';
+    return `<span class="mark" ${fill} aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="currentColor" d="${l.d}"/></svg></span>`;
   }
 
   let active = 'booking';
@@ -842,10 +848,14 @@
     const placed = [];
     for (const r of rows) {
       const cx = x(perTask(r)), cy = y(passOf(r));
-      const d = LOGOS[r.vendor];
+      const l = LOGOS[r.vendor];
       out += `<g class="dm"><circle class="halo" cx="${cx}" cy="${cy}" r="11"></circle>`;
-      if (d) out += `<g transform="translate(${cx-6.5},${cy-6.5}) scale(0.54)"><path fill="currentColor" d="${d}"></path></g>`;
-      else out += `<text x="${cx}" y="${cy+3}" text-anchor="middle" style="font-size:7.5px;font-weight:600;fill:currentColor">${short(r.label).slice(0,2)}</text>`;
+      if (l) {
+        const fill = l.hex ? l.hex : 'currentColor';
+        out += `<g transform="translate(${cx-6.5},${cy-6.5}) scale(0.54)"><path fill="${fill}" d="${l.d}"></path></g>`;
+      } else {
+        out += `<text x="${cx}" y="${cy+3}" text-anchor="middle" style="font-size:7.5px;font-weight:600;fill:currentColor">${short(r.label).slice(0,2)}</text>`;
+      }
       out += `<title>${short(r.label)}: ${fmtPct1(passOf(r))}, ${fmtUsd(perTask(r))}/task</title></g>`;
       if (!labeled.has(r.model)) continue;
       let ly = cy - 15;
