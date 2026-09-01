@@ -201,7 +201,7 @@ describe('findDuplicatePaymentCandidatesForInvoice', () => {
       [],
     ])
     // An unevaluated candidate set is not a clean "no duplicate": the blind
-    // spot must be visible in behandlingshistorik (BFNAR 2013:2 kap 8), the
+    // spot must be visible in behandlingshistorik (BFNAR 2013:2 p. 9.16), the
     // same way the supplier-side twin logs it.
     const warn = captureWarnings()
 

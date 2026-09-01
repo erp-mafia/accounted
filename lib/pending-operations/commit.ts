@@ -2205,7 +2205,7 @@ async function commitMarkInvoicePaid(
   } else {
     // allow_duplicate=true bypassed the duplicate-payment guard. The decision
     // to book a payment over a possible existing one must leave a durable
-    // behandlingshistorik record (BFNAR 2013:2 kap 8) so an auditor can see why
+    // behandlingshistorik record (BFNAR 2013:2 p. 9.16) so an auditor can see why
     // the duplicate was allowed. Re-detect to capture the dismissed candidate;
     // best-effort, never blocks the payment. Payload stays PII-safe
     // (ids/amounts/dates only: no customer or merchant name).

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AuditLogEntry } from '@/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchAppReleases, type AppReleaseRow } from '@/lib/reports/app-releases'
 import {
   reportToWorkbook,
   textColumn,
@@ -84,6 +85,12 @@ export interface GenerateBehandlingshistorikOptions {
   resolveUserLabels?: UserLabelResolver
   appVersion?: string | null
   now?: Date
+  /**
+   * Service-role client for the global (company-less) system changes: the
+   * statutory payroll constants' audit rows, which RLS hides from session
+   * clients. Omit and those events are simply absent.
+   */
+  globalClient?: Pick<SupabaseClient, 'from'>
 }
 
 // ============================================================
@@ -196,7 +203,20 @@ export const AUDITED_TABLES = [
   'account_dimension_rules',
   'accrual_schedules',
   'document_attachments',
+  // Behandlingsregler and import logs (audited since migration 20260901103000).
+  'mapping_rules',
+  'categorization_templates',
+  'booking_template_library',
+  'sie_imports',
+  'bank_file_imports',
 ] as const
+
+/**
+ * Global (company-less) audit rows: statutory payroll constants. RLS hides
+ * NULL-company rows from session clients, so these are fetched through the
+ * service role when the caller provides one (`globalClient`).
+ */
+export const GLOBAL_AUDITED_TABLES = ['salary_payroll_config'] as const
 
 /** Actions that matter regardless of table (security / integrity / retention). */
 export const GLOBAL_ACTIONS = [
@@ -212,7 +232,7 @@ export const GLOBAL_ACTIONS = [
  * names statically; a unit test pins it to AUDITED_TABLES / GLOBAL_ACTIONS.
  */
 export const AUDIT_ROW_FILTER =
-  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)'
+  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,bank_file_imports),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)'
 
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   manual: 'Manuell',
@@ -369,6 +389,52 @@ const DIMENSION_FIELDS: Record<string, string> = {
   dimension_type: 'Typ',
   sie_dimension_number: 'SIE-dimension',
 }
+
+const MAPPING_RULE_FIELDS: Record<string, string> = {
+  rule_name: 'Namn',
+  rule_type: 'Typ',
+  priority: 'Prioritet',
+  merchant_pattern: 'Motpartsmönster',
+  description_pattern: 'Textmönster',
+  mcc_codes: 'MCC-koder',
+  amount_min: 'Belopp från',
+  amount_max: 'Belopp till',
+  debit_account: 'Debetkonto',
+  credit_account: 'Kreditkonto',
+  vat_treatment: 'Momshantering',
+  vat_debit_account: 'Momskonto debet',
+  vat_credit_account: 'Momskonto kredit',
+  capitalization_threshold: 'Aktiveringsgräns',
+  capitalized_debit_account: 'Konto vid aktivering',
+  requires_review: 'Kräver granskning',
+  default_private: 'Privat som standard',
+  is_active: 'Aktiv',
+}
+
+const CATEGORIZATION_TEMPLATE_FIELDS: Record<string, string> = {
+  counterparty_name: 'Motpart',
+  counterparty_aliases: 'Alias',
+  debit_account: 'Debetkonto',
+  credit_account: 'Kreditkonto',
+  vat_treatment: 'Momshantering',
+  vat_account: 'Momskonto',
+  category: 'Kategori',
+  line_pattern: 'Radmönster',
+  default_dimensions: 'Dimensioner',
+  is_active: 'Aktiv',
+}
+
+const BOOKING_TEMPLATE_FIELDS: Record<string, string> = {
+  name: 'Namn',
+  description: 'Beskrivning',
+  category: 'Kategori',
+  entity_type: 'Företagsform',
+  lines: 'Konteringsrader',
+  is_active: 'Aktiv',
+}
+
+/** Keys of salary_payroll_config that are bookkeeping constants (all but bookkeeping of the row itself). */
+const PAYROLL_CONFIG_EXCLUDED_KEYS = new Set(['id', 'created_at'])
 
 const ACCRUAL_FIELDS: Record<string, string> = {
   description: 'Beskrivning',
@@ -1034,6 +1100,103 @@ export function auditRowToEvent(
         event: 'Underlag borttaget',
         object: str(row.old_state?.file_name),
       })
+    // Behandlingsregler (BFNAR 2013:2 p. 9.9 / 9.16 second paragraph).
+    case 'mapping_rules':
+      return genericAuditEvent(row, {
+        category: 'installningar',
+        codePrefix: 'mapping_rule',
+        noun: 'Konteringsregel',
+        fields: MAPPING_RULE_FIELDS,
+        objectKeys: ['rule_name'],
+      })
+    case 'categorization_templates':
+      return genericAuditEvent(row, {
+        category: 'installningar',
+        codePrefix: 'categorization_template',
+        noun: 'Konteringsmall för motpart',
+        fields: CATEGORIZATION_TEMPLATE_FIELDS,
+        objectKeys: ['counterparty_name'],
+      })
+    case 'booking_template_library':
+      return genericAuditEvent(row, {
+        category: 'installningar',
+        codePrefix: 'booking_template',
+        noun: 'Konteringsmall',
+        fields: BOOKING_TEMPLATE_FIELDS,
+        objectKeys: ['name'],
+      })
+    case 'salary_payroll_config':
+      return payrollConfigAuditEvent(row)
+    // The import tables emit their own events from the rows themselves; the
+    // audit trail only adds what the rows can no longer show: a deletion.
+    case 'sie_imports':
+      if (row.action !== 'DELETE') return null
+      return auditEvent(row, {
+        category: 'import',
+        code: 'sie_import.deleted',
+        event: 'SIE-importlogg raderad',
+        object: str(row.old_state?.filename),
+      })
+    case 'bank_file_imports':
+      if (row.action !== 'DELETE') return null
+      return auditEvent(row, {
+        category: 'import',
+        code: 'bank_file_import.deleted',
+        event: 'Bankfilsimport raderad',
+        object: str(row.old_state?.filename),
+      })
+    default:
+      return null
+  }
+}
+
+/**
+ * Statutory payroll constants (arbetsgivaravgifter, prisbasbelopp, ...):
+ * exactly BFN's "procentsats för automatkontering av sociala avgifter"
+ * example. Global rows (no company), one per config year.
+ */
+function payrollConfigAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const state = row.new_state ?? row.old_state
+  const year = state?.config_year
+  const object = year !== undefined && year !== null ? `Löneår ${String(year)}` : null
+  const actor: RawActor = {
+    type: row.actor_type && row.actor_type !== 'user' ? normaliseActorType(row.actor_type) : row.user_id ? 'user' : 'system',
+    user_id: row.user_id ?? null,
+    actor_label: row.actor_label ?? null,
+  }
+  switch (row.action) {
+    case 'INSERT':
+      return auditEvent(row, {
+        category: 'installningar',
+        code: 'payroll_config.created',
+        event: 'Lönekonstanter tillagda (arbetsgivaravgifter, basbelopp, schabloner)',
+        object,
+        actor,
+      })
+    case 'UPDATE': {
+      const keys = Object.keys({ ...(row.old_state ?? {}), ...(row.new_state ?? {}) })
+        .filter((k) => !PAYROLL_CONFIG_EXCLUDED_KEYS.has(k))
+        .sort()
+      const labels = Object.fromEntries(keys.map((k) => [k, k]))
+      const { lines } = diffFields(row.old_state, row.new_state, labels)
+      if (lines.length === 0) return null
+      return auditEvent(row, {
+        category: 'installningar',
+        code: 'payroll_config.updated',
+        event: 'Lönekonstanter ändrade',
+        object,
+        details: lines,
+        actor,
+      })
+    }
+    case 'DELETE':
+      return auditEvent(row, {
+        category: 'installningar',
+        code: 'payroll_config.deleted',
+        event: 'Lönekonstanter borttagna',
+        object,
+        actor,
+      })
     default:
       return null
   }
@@ -1074,7 +1237,11 @@ function sieImportEvents(row: SieImportRow): RawBehandlingshistorikEvent[] {
   if (typeof row.accounts_count === 'number' || typeof row.transactions_count === 'number') {
     details.push(`${row.accounts_count ?? 0} konton, ${row.transactions_count ?? 0} transaktioner`)
   }
-  const completed = row.status === 'completed'
+  // undo_sie_import sets status = 'undone' + replaced_at: the import did
+  // complete, and was later reversed (the entry deletions carry their own
+  // audit rows).
+  const undone = row.status === 'undone'
+  const completed = row.status === 'completed' || undone
   const failed = row.status === 'failed'
   events.push({
     id: `sie:${row.id}`,
@@ -1093,8 +1260,8 @@ function sieImportEvents(row: SieImportRow): RawBehandlingshistorikEvent[] {
       id: `sie:${row.id}:replaced`,
       occurred_at: toIso(row.replaced_at)!,
       category: 'import',
-      code: 'sie_import.replaced',
-      event: 'SIE-import ersatt av ny import',
+      code: undone ? 'sie_import.undone' : 'sie_import.replaced',
+      event: undone ? 'SIE-import ångrad (importerade verifikationer raderade)' : 'SIE-import ersatt av ny import',
       object: row.filename,
       actor,
       details: [],
@@ -1129,6 +1296,100 @@ function bankFileImportEvent(row: BankFileImportRow): RawBehandlingshistorikEven
     source: 'bank_file_import',
     count: 1,
   }
+}
+
+/** A program version first seen in production (app_releases): p. 9.16 "nya programversioner". */
+export function appReleaseEvent(row: AppReleaseRow): RawBehandlingshistorikEvent {
+  return {
+    id: `release:${row.version}`,
+    occurred_at: toIso(row.first_seen_at)!,
+    category: 'ovrigt',
+    code: 'system.release',
+    event: 'Ny programversion i drift',
+    object: row.version,
+    actor: { type: 'system', user_id: null, actor_label: null },
+    details: [row.source === 'runtime' ? 'Registrerad av systemet när versionen började svara' : `Källa: ${row.source}`],
+    source: 'audit_log',
+    count: 1,
+  }
+}
+
+const STOCKHOLM_DAY = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Europe/Stockholm',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+
+/**
+ * Program versions, rolled up per calendar day.
+ *
+ * A single event per version is not viable: main takes ~570 merges a month, so
+ * a fiscal year is on the order of 7 000 deploys, which alone would exceed the
+ * PDF's 4 000-event guard and bury the ~400 events a real company's year
+ * actually contains. The statutory unit is the date ("när dessa förändringar
+ * infördes", p. 9.16), not the build id, and the qualifier in the same sentence
+ * is "förändringar ... som påverkar bokföringsposternas behandling", which a
+ * deploy list cannot distinguish anyway. So the day is the event and the build
+ * ids are its detail; app_releases keeps the per-version truth for anyone who
+ * needs to go deeper.
+ */
+export function appReleaseEvents(rows: AppReleaseRow[]): RawBehandlingshistorikEvent[] {
+  const byDay = new Map<string, AppReleaseRow[]>()
+  for (const row of rows) {
+    const iso = toIso(row.first_seen_at)
+    if (!iso) continue
+    const day = STOCKHOLM_DAY.format(new Date(iso))
+    const bucket = byDay.get(day)
+    if (bucket) bucket.push(row)
+    else byDay.set(day, [row])
+  }
+
+  const out: RawBehandlingshistorikEvent[] = []
+  for (const [day, group] of byDay) {
+    if (group.length === 1) {
+      out.push(appReleaseEvent(group[0]))
+      continue
+    }
+    const versions = group.map((r) => r.version)
+    const listed = versions.slice(0, MAX_LISTED_OBJECTS).join(', ')
+    const rest = versions.length - MAX_LISTED_OBJECTS
+    out.push({
+      id: `release:${day}:bulk`,
+      occurred_at: toIso(group[0].first_seen_at)!,
+      category: 'ovrigt',
+      code: 'system.release.bulk',
+      event: 'Nya programversioner i drift',
+      object: `${versions.length} versioner`,
+      actor: { type: 'system', user_id: null, actor_label: null },
+      details: [rest > 0 ? `${listed} och ${rest} till` : listed],
+      source: 'audit_log',
+      count: versions.length,
+    })
+  }
+  return out
+}
+
+/**
+ * Audit rows for the global tables (no company_id): only reachable with the
+ * service role, which the route supplies. Windowed on created_at.
+ */
+async function fetchGlobalAuditRows(
+  client: Pick<SupabaseClient, 'from'>,
+  window: { fromTs: string; toTs: string },
+): Promise<AuditLogEntry[]> {
+  return fetchAllRows<AuditLogEntry>(({ from, to }) =>
+    client
+      .from('audit_log')
+      .select('*')
+      .is('company_id', null)
+      .in('table_name', [...GLOBAL_AUDITED_TABLES])
+      .gte('created_at', window.fromTs)
+      .lte('created_at', window.toTs)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
 }
 
 // ============================================================
@@ -1318,7 +1579,7 @@ async function fetchAuditRows(
       // Literal on purpose (not AUDIT_ROW_FILTER): the schema guard only
       // resolves string literals here. A test pins the two to each other.
       .or(
-        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)',
+        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,bank_file_imports),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)',
       )
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
@@ -1476,15 +1737,25 @@ export async function generateBehandlingshistorik(
   const entryIds = entries.map((e) => e.id)
   const unionIds = mode === 'fiscal_year' ? entryIds : []
 
-  const [auditRows, rattelseRows, resets, sieImports, bankImports] = await Promise.all([
+  const [auditRows, rattelseRows, resets, sieImports, bankImports, releases, globalAuditRows] = await Promise.all([
     fetchAuditRows(supabase, companyId, window, unionIds),
     fetchRattelseRows(supabase, companyId, window, unionIds),
     fetchMigrationResets(supabase, companyId),
     fetchSieImports(supabase, companyId),
     fetchBankFileImports(supabase, companyId),
+    fetchAppReleases(supabase, window),
+    options.globalClient ? fetchGlobalAuditRows(options.globalClient, window) : Promise.resolve([] as AuditLogEntry[]),
   ])
 
   const raw: RawBehandlingshistorikEvent[] = []
+
+  // System-wide changes (p. 9.16 second paragraph): program versions and the
+  // statutory payroll constants, dated by when they entered production.
+  raw.push(...appReleaseEvents(releases))
+  for (const row of globalAuditRows) {
+    const ev = auditRowToEvent(row)
+    if (ev) raw.push(ev)
+  }
 
   // (a) bokföringsposter: from journal_entries, the complete source.
   for (const entry of entries) {

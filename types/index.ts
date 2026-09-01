@@ -3770,7 +3770,10 @@ export type AuditAction =
 
 export interface AuditLogEntry {
   id: string
-  user_id: string
+  // Nullable in the database and genuinely null in practice: write_audit_log()
+  // falls back to auth.uid(), which is NULL for a service-role or global write
+  // (the company-less salary_payroll_config rows are the standing example).
+  user_id: string | null
   company_id: string | null
   action: AuditAction
   table_name: string | null
