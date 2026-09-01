@@ -66,4 +66,71 @@ describe('processing_event_types catalog', () => {
       client.release()
     }
   })
+
+  // The application no longer sends `from` or `subject` for these two types,
+  // but migrations land minutes before the replacement build is live, so an
+  // old instance can still write them in that window. processing_history takes
+  // no UPDATE and no DELETE and is excluded from the archive erasure path, so
+  // such a row would be permanent. The strip is enforced in the database.
+  it.each(['RateLimitedDropped', 'AttachmentsTruncated'])(
+    'strips sender address and subject from a %s payload on insert',
+    async (eventType) => {
+      const { companyId } = await seedCompany()
+      const client = await getClient()
+      try {
+        await client.query('BEGIN')
+        const aggregateId = randomUUID()
+        const { rows } = await client.query<{ payload: Record<string, unknown> }>(
+          `INSERT INTO public.processing_history
+             (company_id, correlation_id, aggregate_type, aggregate_id, event_type,
+              payload, actor, occurred_at)
+           VALUES ($1, $2, 'System', $2, $3,
+                   $4::jsonb,
+                   '{"type":"system","id":"processing-event-types-test"}', now())
+           RETURNING payload`,
+          [
+            companyId,
+            aggregateId,
+            eventType,
+            JSON.stringify({
+              from: 'avsandare@example.com',
+              subject: 'Faktura 12345',
+              reason: 'rate_limited',
+              count: 3,
+            }),
+          ],
+        )
+        expect(rows[0].payload).not.toHaveProperty('from')
+        expect(rows[0].payload).not.toHaveProperty('subject')
+        // Everything that is not PII survives: this is a strip, not a wipe.
+        expect(rows[0].payload).toMatchObject({ reason: 'rate_limited', count: 3 })
+      } finally {
+        await client.query('ROLLBACK').catch(() => {})
+        client.release()
+      }
+    },
+  )
+
+  it('leaves payloads for other event types untouched', async () => {
+    const { companyId } = await seedCompany()
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const aggregateId = randomUUID()
+      const { rows } = await client.query<{ payload: Record<string, unknown> }>(
+        `INSERT INTO public.processing_history
+           (company_id, correlation_id, aggregate_type, aggregate_id, event_type,
+            payload, actor, occurred_at)
+         VALUES ($1, $2, 'System', $2, 'DocumentDuplicateSkipped',
+                 $3::jsonb,
+                 '{"type":"system","id":"processing-event-types-test"}', now())
+         RETURNING payload`,
+        [companyId, aggregateId, JSON.stringify({ from: 'keep-me', subject: 'keep-me-too' })],
+      )
+      expect(rows[0].payload).toMatchObject({ from: 'keep-me', subject: 'keep-me-too' })
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
+  })
 })

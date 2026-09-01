@@ -49,6 +49,15 @@
 -- Registering those two types is what switches their inserts on, and the old
 -- payloads carried the sender address and the mail subject into an append-only
 -- table whose UPDATE is trigger-blocked. Both changes ship in this one commit.
+--
+-- One commit is NOT the same as one instant. Migrations apply on merge, while
+-- the replacement build takes minutes, so there is a window in which an old
+-- instance is still serving against a database that has just registered these
+-- two types. A row written in that window is permanent: processing_history
+-- takes no UPDATE and no DELETE, and lib/reports/full-archive-export.ts
+-- excludes it from the erasure path. So the strip is enforced in the database
+-- as well, below, and kept afterwards: the invariant belongs to the table, not
+-- to one emitter's good behaviour.
 
 INSERT INTO public.processing_event_types (event_type) VALUES
   ('AttachmentsTruncated'),
@@ -62,5 +71,40 @@ INSERT INTO public.processing_event_types (event_type) VALUES
   ('RateLimitedDropped'),
   ('TransactionDocumentReplaced')
 ON CONFLICT (event_type) DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- Database-side PII strip for the two inbound-mail event types.
+--
+-- `payload - 'key'` removes a key from a jsonb object and raises on a jsonb
+-- array, so the object check is load bearing: payload is NOT NULL but its
+-- shape is not constrained.
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.strip_inbound_mail_pii_from_processing_history()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF NEW.event_type IN ('RateLimitedDropped', 'AttachmentsTruncated')
+     AND jsonb_typeof(NEW.payload) = 'object'
+  THEN
+    NEW.payload := NEW.payload - 'from' - 'subject';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS processing_history_strip_inbound_mail_pii ON public.processing_history;
+
+CREATE TRIGGER processing_history_strip_inbound_mail_pii
+  BEFORE INSERT ON public.processing_history
+  FOR EACH ROW
+  EXECUTE FUNCTION public.strip_inbound_mail_pii_from_processing_history();
+
+-- The sweep in 20260901100000 revokes PUBLIC/anon on definer writers; this one
+-- is a trigger function and is never called directly, so it needs no grant.
+REVOKE ALL ON FUNCTION public.strip_inbound_mail_pii_from_processing_history()
+  FROM PUBLIC, anon, authenticated;
 
 NOTIFY pgrst, 'reload schema';
