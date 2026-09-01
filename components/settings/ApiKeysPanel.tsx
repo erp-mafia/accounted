@@ -26,7 +26,7 @@ import {
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Loader2, Plus, Copy, Check, Trash2, Key, ChevronDown, AlertTriangle } from 'lucide-react'
+import { Loader2, Plus, Copy, Check, Trash2, Key, ChevronDown, AlertTriangle, ArrowUpRight } from 'lucide-react'
 import { cn, formatDateLong } from '@/lib/utils'
 import { copyToClipboard } from '@/lib/browser/copy-to-clipboard'
 import { getBranding } from '@/lib/branding/service'
@@ -302,9 +302,13 @@ export function ApiKeysPanel() {
   const mcpBase = typeof window !== 'undefined'
     ? `${window.location.origin}/api/extensions/ext/mcp-server/mcp`
     : '/api/extensions/ext/mcp-server/mcp'
-  // Telemetry-only distribution-channel marker (server reads the `client` query
-  // param; never used for auth). Lets us measure which Claude surface connected.
-  const mcpUrl = (client: string) => `${mcpBase}?client=${client}`
+  // `tool_namespace=accounted` is load-bearing: resolveMcpToolNamespace()
+  // falls back to the legacy `gnubok_` tool prefix when the param is absent,
+  // so a URL without it hands the client tool names that none of our docs,
+  // skills, or the Claude Code plugin reference. `client` is a telemetry-only
+  // distribution marker (server reads it; never used for auth).
+  const mcpUrl = (client: string) =>
+    `${mcpBase}?tool_namespace=accounted&client=${client}`
 
   return (
     <>
@@ -442,6 +446,23 @@ export function ApiKeysPanel() {
           </div>
         </SettingsRow>
 
+        {/* Claude Code only: the plugin bundles the MCP connection AND the
+            seven workflow commands, so it is the one path where a user gets
+            everything configured without copying a URL. Cursor and Codex have
+            no plugin format, which is why the row above stays. */}
+        <SettingsRow
+          label={t('claude_plugin_label')}
+          align="baseline"
+          help={t('claude_plugin_instructions')}
+        >
+          <div className="w-full min-w-0">
+            <CopyBlock
+              text={`/plugin marketplace add erp-mafia/accounted\n/plugin install accounted@accounted`}
+              copyAriaLabel={t('copy_aria')}
+            />
+          </div>
+        </SettingsRow>
+
         <button
           type="button"
           aria-expanded={showApiKeyMethods}
@@ -465,14 +486,19 @@ export function ApiKeysPanel() {
                   code: (chunks) => <code className="text-xs">{chunks}</code>,
                 })}
               </p>
+              {/* ACCOUNTED_URL is emitted so self-hosted and white-label
+                  instances get a config that points at their own host: the
+                  bridge otherwise defaults to the hosted endpoint. The key
+                  value keeps the `gnubok_sk_` wire prefix on purpose. */}
               <CopyBlock text={`{
   "mcpServers": {
     "${connectorName}": {
       "command": "npx",
-      "args": ["gnubok-mcp"],
+      "args": ["-y", "accounted-mcp"],
       "env": {
-        "GNUBOK_API_KEY": "gnubok_sk_...",
-        "GNUBOK_CLIENT": "claude-desktop"
+        "ACCOUNTED_API_KEY": "gnubok_sk_...",
+        "ACCOUNTED_URL": "${mcpUrl('claude-desktop')}",
+        "ACCOUNTED_CLIENT": "claude-desktop"
       }
     }
   }
@@ -490,6 +516,19 @@ export function ApiKeysPanel() {
             </div>
           </div>
         </SettingsReveal>
+
+        {/* The step-by-step guide is canonical on the docs site, in one
+            language per URL (the docs site has no locale routing). Root-relative
+            so the /docs/api/* 308 in next.config.ts forwards to docs.gnubok.se. */}
+        <a
+          href={locale === 'sv' ? '/docs/api/anslut-claude' : '/docs/api/connect-claude'}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 px-1 py-3 text-xs text-muted-foreground underline-offset-4 transition-colors duration-150 hover:text-foreground hover:underline"
+        >
+          {t('full_guide_link')}
+          <ArrowUpRight className="h-3 w-3" />
+        </a>
       </SettingsGroup>
 
       {/* Create key dialog */}

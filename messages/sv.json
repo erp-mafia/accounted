@@ -392,7 +392,7 @@
     "templates": "Återanvändbara konteringar och mönster som lärts in från din bokföring.",
     "banking": "Transaktioner hämtas automatiskt. {appName} kan bara läsa, aldrig flytta pengar.",
     "assistant": "Vad assistenten vet, minns och kan.",
-    "api": "Nycklar för MCP-klienter som Claude och Cursor, och för egna integrationer.",
+    "api": "Anslut Claude, Cursor och andra AI-assistenter via MCP. Här skapar du också API-nycklar för egna integrationer.",
     "whatsapp": "Koppla ditt mobilnummer och skicka kvitton som foto eller PDF direkt i WhatsApp."
   },
   "settings_nav": {
@@ -414,7 +414,7 @@
     "assistant": "Assistenten",
     "backup": "Säkerhetsbackup",
     "account": "Konto",
-    "api": "API",
+    "api": "API & MCP",
     "billing": "Abonnemang",
     "whatsapp": "WhatsApp",
     "group_account": "Konto",
@@ -2821,6 +2821,9 @@
     "terminal_runs_browser_login": "Kör i terminalen, loggar in via webbläsaren:",
     "connect_with_api_key": "Anslut med API-nyckel istället",
     "claude_desktop_instructions": "Lägg till i <code>claude_desktop_config.json</code> (Inställningar → Developer):",
+    "claude_plugin_label": "Claude Code-plugin",
+    "claude_plugin_instructions": "Installerar både anslutningen och sju färdiga arbetsflöden (/accounted:start, /accounted:vat, /accounted:year-end). Kör raderna i Claude Code och godkänn sedan inloggningen med /mcp.",
+    "full_guide_link": "Full guide: anslut Claude steg för steg",
     "terminal_with_api_key": "Kör i terminalen med en API-nyckel:",
     "create_dialog_title": "Skapa API-nyckel",
     "create_dialog_description": "Ge nyckeln ett namn så du vet vad den används till.",

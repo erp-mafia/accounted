@@ -1,7 +1,8 @@
 /**
  * One-shot script that exports the registry-derived docs content (errors +
  * reference) plus the static Connect-with-Claude page as TypeScript modules
- * into the gnubok-website repo.
+ * into the gnubok-website repo. Connect-with-Claude ships in both languages:
+ * the docs site has no locale routing, so each language is its own page.
  *
  * Run with `npx tsx scripts/export-docs-to-website.mts`. Re-run whenever
  * structured-errors, the v1 endpoint registry, or connect-claude materially
@@ -27,11 +28,12 @@ ModuleCtor._load = function (request: string, ...rest: unknown[]) {
   return originalLoad.call(this, request, ...rest)
 }
 
-let errors, reference, connectClaude
+let errors, reference, connectClaude, anslutClaude
 try {
   errors = await import('@/lib/docs/content/errors')
   reference = await import('@/lib/docs/content/reference')
   connectClaude = await import('@/lib/docs/content/connect-claude')
+  anslutClaude = await import('@/lib/docs/content/anslut-claude')
 } finally {
   // Scope the stub to the imports that need it: leaving a global loader hook
   // patched for the rest of the process would silently disarm the guard for
@@ -104,6 +106,16 @@ if (!connectClaudeMd) {
 write(
   'lib/docs/content/connect-claude.generated.ts',
   `// AUTO-GENERATED from erp-base: do not hand-edit.\n// Regenerate via \`npx tsx scripts/export-docs-to-website.mts\` in erp-base.\nexport const CONNECT_CLAUDE_MD = ${JSON.stringify(connectClaudeMd)}\n`,
+)
+
+const anslutClaudeMd = anslutClaude.ANSLUT_CLAUDE_MD && adaptForWebsite(anslutClaude.ANSLUT_CLAUDE_MD)
+if (!anslutClaudeMd) {
+  console.error('Missing ANSLUT_CLAUDE_MD export. Inspect:', { anslutClaudeKeys: Object.keys(anslutClaude) })
+  process.exit(1)
+}
+write(
+  'lib/docs/content/anslut-claude.generated.ts',
+  `// AUTO-GENERATED from erp-base: do not hand-edit.\n// Regenerate via \`npx tsx scripts/export-docs-to-website.mts\` in erp-base.\nexport const ANSLUT_CLAUDE_MD = ${JSON.stringify(anslutClaudeMd)}\n`,
 )
 
 console.log('done.')
