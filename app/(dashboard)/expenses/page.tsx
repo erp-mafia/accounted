@@ -154,6 +154,9 @@ export default function ExpenseClaimsPage() {
   const [bookingRows, setBookingRows] = useState<BookingRow[] | null>(null)
   const [showRowEditor, setShowRowEditor] = useState(false)
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
+  // The domestic cost account survives a round trip through EU/non-EU modes
+  // (which force the 45xx basis account into the same field).
+  const domesticAccountRef = useRef('5410')
   const [claimant, setClaimant] = useState(OWNER_VALUE)
   const [ownerName, setOwnerName] = useState('')
   const [inboxChoice, setInboxChoice] = useState(NO_RECEIPT_VALUE)
@@ -272,8 +275,6 @@ export default function ExpenseClaimsPage() {
   // Seller country resolves the VAT mechanics (the Bokio model): Sweden
   // books the receipt VAT on 2641; EU / outside EU books the gross as
   // reverse-charge basis on the ruta-bearing account with the 2614/2645 pair.
-  const basisAccount =
-    sellerCountry === 'se' ? expenseAccount : sellerCountry === 'eu' ? '4535' : '4531'
   const generatedRows = useMemo<BookingRow[]>(() => {
     if (sellerCountry === 'se') {
       return [
@@ -283,13 +284,16 @@ export default function ExpenseClaimsPage() {
           : []),
       ]
     }
-    const rc = roundOre(parsedAmount * 0.25)
+    // The calculated-VAT rate follows the basis account variant:
+    // 4535/4531 -> 25 %, 4536/4532 -> 12 %, 4537/4533 -> 6 %.
+    const rcRate = /^45(36|32)/.test(expenseAccount) ? 0.12 : /^45(37|33)/.test(expenseAccount) ? 0.06 : 0.25
+    const rc = roundOre(parsedAmount * rcRate)
     return [
-      { key: nextRowKey(), account: basisAccount, debit: parsedAmount.toFixed(2), credit: '' },
+      { key: nextRowKey(), account: expenseAccount, debit: parsedAmount.toFixed(2), credit: '' },
       { key: nextRowKey(), account: '2645', debit: rc.toFixed(2), credit: '' },
       { key: nextRowKey(), account: '2614', debit: '', credit: rc.toFixed(2) },
     ]
-  }, [sellerCountry, basisAccount, expenseAccount, netAmount, parsedAmount, parsedVat])
+  }, [sellerCountry, expenseAccount, netAmount, parsedAmount, parsedVat])
 
   const editorRows = bookingRows ?? generatedRows
   const rowSum = (side: 'debit' | 'credit') => sumOre(editorRows.map((r) => parseFloat(r[side]) || 0))
@@ -303,7 +307,13 @@ export default function ExpenseClaimsPage() {
   })
 
   const applyCountry = (country: SellerCountry) => {
-    setSellerCountry(country)
+    setSellerCountry((prev) => {
+      if (prev === 'se' && country !== 'se') domesticAccountRef.current = expenseAccount
+      return country
+    })
+    if (country === 'se') setExpenseAccount(domesticAccountRef.current || '5410')
+    else if (country === 'eu') setExpenseAccount('4535')
+    else setExpenseAccount('4531')
     setAppliedTemplate(null)
     setBookingRows(null)
   }
@@ -1089,26 +1099,18 @@ export default function ExpenseClaimsPage() {
                       </SelectContent>
                     </Select>
                   </div>
-                  {sellerCountry === 'se' ? (
-                    <div className="space-y-2">
-                      <Label>{t('form_expense_account')}</Label>
-                      <AccountCombobox
-                        value={expenseAccount}
-                        accounts={accounts}
-                        onChange={(v) => {
-                          setExpenseAccount(v)
-                          setBookingRows(null)
-                        }}
-                      />
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <Label>{t('form_expense_account')}</Label>
-                      <p className="flex min-h-10 items-center text-sm text-muted-foreground">
-                        {basisAccount} {accountName(basisAccount)}
-                      </p>
-                    </div>
-                  )}
+                  <div className="space-y-2">
+                    <Label>{t('form_expense_account')}</Label>
+                    <AccountCombobox
+                      value={expenseAccount}
+                      accounts={accounts}
+                      selectedName={accountName(expenseAccount)}
+                      onChange={(v) => {
+                        setExpenseAccount(v)
+                        setBookingRows(null)
+                      }}
+                    />
+                  </div>
                 </div>
               )}
               {!appliedTemplate && sellerCountry !== 'se' && (
@@ -1158,6 +1160,7 @@ export default function ExpenseClaimsPage() {
                           <AccountCombobox
                             value={row.account}
                             accounts={accounts}
+                            selectedName={accountName(row.account)}
                             onChange={(v) => editRow(row.key, { account: v })}
                           />
                         </td>
