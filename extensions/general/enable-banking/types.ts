@@ -31,6 +31,12 @@ export interface StoredAccount {
   // sees why the account is unchecked. Enabling one is a deliberate act.
   claimed_by_company_id?: string
   claimed_by_company_name?: string
+  // Set by the OAuth callback when the account arrived deselected because the
+  // user chose "Synkas ej" for the same IBAN on another connection row (any
+  // company). Rendered as a note in the picker so the unchecked box is never
+  // silent; cleared by the selection save when the user re-enables the
+  // account.
+  deselected_elsewhere?: boolean
 }
 
 // Re-export API types from the client

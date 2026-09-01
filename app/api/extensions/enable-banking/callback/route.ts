@@ -540,9 +540,21 @@ async function finalizeConnection(
     pendingConnection.company_id,
     pendingConnection.id,
   )
-  const foreignClaimedUids = new Set<string>()
+  // Every account the guard itself disabled, whatever the branch. These are
+  // excluded from the cash_accounts mirror below: mirroring enabled:false for
+  // a new-to-row account can PROMOTE an existing manual holder (the seeded
+  // primary 1930 included) and flip it to disabled with a foreign identity,
+  // and a claimed account's row would double-claim the IBAN besides. The
+  // selection save allocates + mirrors any of them the user turns on.
+  const guardDisabledUids = new Set<string>()
+  let claimedCount = 0
   for (const account of accountsMetadata) {
     const normalizedIban = normalizeIban(account.iban)
+    // Row-local memory only. The active company's standing state on OTHER
+    // rows (a bank-list renewal arrives on a fresh row while the old row is
+    // waiting to be superseded) is already folded into crossCompany:
+    // activeCompanyIbans outrank claims and deselections there, so such
+    // accounts fall through to the enabled default below.
     const seenOnThisRow =
       priorEnabledByUid.has(account.uid) ||
       (normalizedIban ? priorEnabledByIban.has(normalizedIban) : false) ||
@@ -554,6 +566,7 @@ async function finalizeConnection(
       // one another company books, and pre-checking a claimed account is the
       // one outcome this guard must never produce. The user just re-ticks.
       account.enabled = false
+      guardDisabledUids.add(account.uid)
       continue
     }
     const claim = normalizedIban ? crossCompany.claims.get(normalizedIban) : undefined
@@ -561,24 +574,29 @@ async function finalizeConnection(
       account.enabled = false
       account.claimed_by_company_id = claim.companyId
       if (claim.companyName) account.claimed_by_company_name = claim.companyName
-      foreignClaimedUids.add(account.uid)
+      guardDisabledUids.add(account.uid)
+      claimedCount += 1
       continue
     }
     if (normalizedIban && crossCompany.deselectedIbans.has(normalizedIban)) {
       // The user already said "Synkas ej" to this account on another
-      // connection row: a fresh row must not resurrect it pre-checked.
+      // connection row: a fresh row must not resurrect it pre-checked. The
+      // flag makes the picker say so; an unexplained unchecked box reads as
+      // a glitch and a silent one hides a sync gap.
       account.enabled = false
+      account.deselected_elsewhere = true
+      guardDisabledUids.add(account.uid)
     }
   }
   if (crossCompany === null) {
     log.error('cross-company claim lookup failed: storing new accounts deselected', {
       connectionId: pendingConnection.id,
     })
-  } else if (foreignClaimedUids.size > 0) {
+  } else if (claimedCount > 0) {
     log.warn('session covers accounts claimed by sibling companies', {
       connectionId: pendingConnection.id,
       companyId: pendingConnection.company_id,
-      claimedCount: foreignClaimedUids.size,
+      claimedCount,
       accountCount: accountsMetadata.length,
     })
   }
@@ -720,13 +738,14 @@ async function finalizeConnection(
   let accountsDataDirty = carriedScopeDirty
 
   for (const account of accountsMetadata) {
-    // An account another company books is not mirrored here at all: no
-    // cash_accounts row (an enabled one would double-claim the IBAN and block
-    // the reuse path; even a disabled one is another company's data in this
-    // company's routing table) and no 19xx slot burned in this chart. If the
-    // user deliberately enables it in the picker, the selection save allocates
-    // and mirrors it then.
-    if (foreignClaimedUids.has(account.uid)) continue
+    // Nothing the guard disabled is mirrored here: a claimed account's row
+    // would be another company's data in this routing table (and an enabled
+    // one would double-claim the IBAN), and mirroring enabled:false for any
+    // new-to-row account can promote an existing manual holder — the seeded
+    // primary 1930 included — flipping it to disabled under a foreign
+    // identity. No 19xx slot is burned either. The selection save allocates
+    // and mirrors whichever of them the user deliberately turns on.
+    if (guardDisabledUids.has(account.uid)) continue
     let targetLedger = mirroredByUid.get(account.uid)?.ledger_account
     let reuseCashAccountId: string | null = null
     if (!targetLedger) {

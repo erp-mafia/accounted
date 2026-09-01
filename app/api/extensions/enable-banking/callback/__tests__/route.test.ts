@@ -107,7 +107,11 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     mockUpsertFromPsd2.mockResolvedValue(undefined)
     mockSupersede.mockResolvedValue({ supersededIds: [], dedupScopeByIban: new Map() })
     // No sibling company claims anything by default; individual tests override.
-    mockCrossCompanyContext.mockResolvedValue({ claims: new Map(), deselectedIbans: new Set() })
+    mockCrossCompanyContext.mockResolvedValue({
+      claims: new Map(),
+      deselectedIbans: new Set(),
+      activeCompanyIbans: new Set(),
+    })
     // Allocator stand-in mirroring the real behavior: currency default first,
     // then the next free 1931–1959 slot (skipping other currency defaults).
     mockAllocate.mockImplementation(
@@ -326,6 +330,7 @@ describe('GET /api/extensions/enable-banking/callback', () => {
         ['SE9999', { companyId: 'company-2', companyName: 'Other Energy AB' }],
       ]),
       deselectedIbans: new Set(),
+      activeCompanyIbans: new Set(),
     })
     mockCreateSession.mockResolvedValue({
       session_id: 'sess-1',
@@ -376,6 +381,7 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     mockCrossCompanyContext.mockResolvedValue({
       claims: new Map([['SE1234', { companyId: 'company-2', companyName: 'Other AB' }]]),
       deselectedIbans: new Set(),
+      activeCompanyIbans: new Set(),
     })
     mockCreateSession.mockResolvedValue({
       session_id: 'sess-2',
@@ -409,6 +415,7 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     mockCrossCompanyContext.mockResolvedValue({
       claims: new Map(),
       deselectedIbans: new Set(['SE5555']),
+      activeCompanyIbans: new Set(),
     })
     mockCreateSession.mockResolvedValue({
       session_id: 'sess-1',
@@ -427,13 +434,17 @@ describe('GET /api/extensions/enable-banking/callback', () => {
       uid: string
       enabled: boolean
       claimed_by_company_id?: string
+      deselected_elsewhere?: boolean
     }>
     expect(accountsData[0].enabled).toBe(false)
-    // Not a claim: no company books it, it is just remembered as unwanted, so
-    // it is still mirrored (as disabled) like any other deselected account.
+    // Not a claim (no company books it), but flagged so the picker can say
+    // WHY the box is unchecked instead of leaving a silent gap.
     expect(accountsData[0].claimed_by_company_id).toBeUndefined()
-    expect(mockUpsertFromPsd2).toHaveBeenCalledTimes(1)
-    expect((mockUpsertFromPsd2.mock.calls[0][2] as { enabled: boolean }).enabled).toBe(false)
+    expect(accountsData[0].deselected_elsewhere).toBe(true)
+    // Guard-disabled accounts are never mirrored from the callback: writing
+    // enabled:false for a new-to-row account can promote an existing manual
+    // holder (the seeded primary 1930) and flip it to disabled.
+    expect(mockUpsertFromPsd2).not.toHaveBeenCalled()
   })
 
   it('fails closed when the claim lookup errors: new accounts stored deselected, unflagged', async () => {
@@ -464,8 +475,10 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     }>
     expect(accountsData[0].enabled).toBe(false)
     expect(accountsData[0].claimed_by_company_id).toBeUndefined()
-    // Unknown claim state is not a proven foreign claim: the mirror proceeds.
-    expect(mockUpsertFromPsd2).toHaveBeenCalledTimes(1)
+    // Fail-closed accounts are not mirrored either: enabled:false for a
+    // new-to-row account can promote and disable an existing manual holder.
+    // The selection save mirrors whatever the user enables.
+    expect(mockUpsertFromPsd2).not.toHaveBeenCalled()
   })
 
   it('preserves existing mirrored ledgers on reconnect instead of re-deriving them', async () => {

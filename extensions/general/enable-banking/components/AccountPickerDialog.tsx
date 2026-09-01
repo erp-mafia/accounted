@@ -912,6 +912,14 @@ export function AccountPickerDialog({
                         </span>
                       </p>
                     )}
+                    {/* Carried deselection: the user said "Synkas ej" to this
+                        IBAN on another connection. An unexplained unchecked
+                        box reads as a glitch; a silent one hides a sync gap. */}
+                    {!account.claimed_by_company_id && account.deselected_elsewhere && (
+                      <p className="text-xs text-muted-foreground">
+                        Tidigare bortvald: markera för att synka i detta bolag
+                      </p>
+                    )}
                   </div>
                   {account.balance !== undefined && (
                     <p className="text-sm font-medium tabular-nums shrink-0">
