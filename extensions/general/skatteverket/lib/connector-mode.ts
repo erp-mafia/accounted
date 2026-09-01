@@ -146,6 +146,9 @@ export async function startConnectorAuthorization(
         Authorization: `Bearer ${connector.key}`,
         'Content-Type': 'application/json',
       },
+      // redirect 'error': a followed 307/308 would resend the connector key
+      // to the redirect target (same rule as the broker's own postToken).
+      redirect: 'error',
       body: JSON.stringify({
         company_ref: args.companyRef,
         return_url: args.returnUrl,
@@ -196,6 +199,10 @@ async function connectorTokenRequest(
         Authorization: `Bearer ${connector.key}`,
         'Content-Type': 'application/json',
       },
+      // redirect 'error': a followed 307/308 would resend the connector key
+      // and the code/refresh token to the redirect target, and the token
+      // response must only ever come from the broker endpoint itself.
+      redirect: 'error',
       body: JSON.stringify(body),
     },
     { timeoutMs, description },

@@ -116,6 +116,7 @@ describe('startConnectorAuthorization', () => {
     })
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('https://app.hosted.example/api/connect/skv/oauth/authorize-url')
+    expect(init.redirect).toBe('error')
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer gnubok_ck_test')
     expect(JSON.parse(init.body as string)).toEqual({
       company_ref: 'company-1',
@@ -166,6 +167,9 @@ describe('exchangeConnectorCode / refreshConnectorToken', () => {
     expect(data.access_token).toBe('at')
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('https://app.hosted.example/api/connect/skv/oauth/token')
+    // The token response must come from the broker endpoint itself: a
+    // followed redirect would resend the connector key + code elsewhere.
+    expect(init.redirect).toBe('error')
     const body = JSON.parse(init.body as string)
     expect(body).toEqual({
       grant_type: 'authorization_code',
