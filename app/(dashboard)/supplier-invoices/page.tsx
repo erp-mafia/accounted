@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { Fragment, useMemo, useState, useEffect, useRef } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -145,8 +145,21 @@ function SortableHeader({
   )
 }
 
+
+// Row grouping (same pattern as the customer invoice list): 'status' is the
+// default and reproduces the payment-queue sections.
+const GROUP_MODES = ['status', 'supplier', 'month', 'none'] as const
+type GroupMode = (typeof GROUP_MODES)[number]
+const GROUP_LABEL_KEYS: Record<GroupMode, string> = {
+  status: 'group_status',
+  supplier: 'group_supplier',
+  month: 'group_month',
+  none: 'group_none',
+}
+
 export default function SupplierInvoicesPage() {
   const t = useTranslations('supplier_invoices')
+  const locale = useLocale()
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
   const router = useRouter()
@@ -158,6 +171,10 @@ export default function SupplierInvoicesPage() {
   const [searchTerm, setSearchTerm] = useState('')
   // null = the API's default order (förfallodatum stigande).
   const [sort, setSort] = useState<SupplierInvoiceListSort | null>(null)
+  const [groupMode, setGroupMode] = useState<GroupMode>(() => {
+    const param = searchParams.get('group')
+    return param && GROUP_MODES.includes(param as never) ? (param as GroupMode) : 'status'
+  })
   // Fiscal-year scope (convention 8): null = all years.
   const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
   const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
@@ -271,6 +288,7 @@ export default function SupplierInvoicesPage() {
     return matchesTab && matchesSearch && matchesFy
   })
 
+
   // Tri-state cycle: asc → desc → back to the API default (due date asc).
   const updateSort = (column: SupplierInvoiceListSortColumn) => {
     setSort((current) => {
@@ -281,11 +299,100 @@ export default function SupplierInvoicesPage() {
 
   const sortedInvoices = sort ? sortSupplierInvoiceList(filteredInvoices, sort) : filteredInvoices
 
-  // Detail-pager context: the list as rendered (filtered + sorted), written
-  // when the user navigates into a row.
+  // Grouping: bucket the sorted rows, keep the sort order inside each
+  // bucket, and flatten back so paging and the detail pager walk the exact
+  // rendered order. With no column sort active the status groups run newest
+  // first so recent activity is never buried; an active sort governs order
+  // inside every group.
+  const { orderedInvoices, rowGroupKeys, groupMeta } = useMemo(() => {
+    const isAwaitingPayment = (inv: (typeof sortedInvoices)[number]) =>
+      inv.status === 'registered' || inv.status === 'approved' || inv.status === 'overdue'
+    const byNewestFirst = (
+      a: (typeof sortedInvoices)[number],
+      b: (typeof sortedInvoices)[number],
+    ) =>
+      (b.invoice_date ?? '').localeCompare(a.invoice_date ?? '') ||
+      (b.arrival_number ?? 0) - (a.arrival_number ?? 0)
+    const keys = new Map<string, string | null>()
+    const meta = new Map<string, { label: string; count: number }>()
+    if (groupMode === 'none') {
+      for (const inv of sortedInvoices) keys.set(inv.id, null)
+      return { orderedInvoices: sortedInvoices, rowGroupKeys: keys, groupMeta: meta }
+    }
+    const base =
+      groupMode === 'status' && !sort ? [...sortedInvoices].sort(byNewestFirst) : sortedInvoices
+    const buckets = new Map<string, { label: string; rows: typeof sortedInvoices }>()
+    for (const inv of base) {
+      let key: string
+      let label: string
+      if (groupMode === 'status') {
+        key = isAwaitingPayment(inv) ? 'awaiting' : 'settled'
+        label = key
+      } else if (groupMode === 'supplier') {
+        label = inv.supplier?.name ?? '—'
+        key = label.toLocaleLowerCase('sv-SE')
+      } else {
+        key = (inv.invoice_date ?? '').slice(0, 7) || '—'
+        label = key
+      }
+      const bucket = buckets.get(key) ?? { label, rows: [] as typeof sortedInvoices }
+      bucket.rows.push(inv)
+      buckets.set(key, bucket)
+    }
+    let ordered = [...buckets.keys()]
+    if (groupMode === 'status') {
+      ordered = ['awaiting', 'settled'].filter((key) => buckets.has(key))
+    } else if (groupMode === 'supplier') {
+      ordered.sort((a, b) => a.localeCompare(b, 'sv'))
+    } else {
+      ordered.sort((a, b) => b.localeCompare(a))
+    }
+    const flat: typeof sortedInvoices = []
+    for (const key of ordered) {
+      const bucket = buckets.get(key)!
+      meta.set(key, { label: bucket.label, count: bucket.rows.length })
+      for (const inv of bucket.rows) {
+        keys.set(inv.id, key)
+        flat.push(inv)
+      }
+    }
+    return { orderedInvoices: flat, rowGroupKeys: keys, groupMeta: meta }
+  }, [groupMode, sort, sortedInvoices])
+  // Status sections only earn headers when there is more than one of them;
+  // supplier/month grouping is an explicit ask, so headers always show.
+  const showGroupHeaders = groupMode !== 'none' && (groupMode !== 'status' || groupMeta.size > 1)
+
+  const monthFormatter = useMemo(
+    () => new Intl.DateTimeFormat(locale === 'en' ? 'en-GB' : 'sv-SE', { month: 'long', year: 'numeric' }),
+    [locale],
+  )
+  function groupHeaderLabel(key: string): string {
+    const meta = groupMeta.get(key)
+    const count = meta?.count ?? 0
+    if (groupMode === 'status') {
+      return key === 'awaiting' ? t('section_awaiting', { count }) : t('section_settled', { count })
+    }
+    if (groupMode === 'month' && key !== '—') {
+      const label = monthFormatter.format(new Date(`${key}-01T00:00:00`))
+      return `${label.charAt(0).toLocaleUpperCase('sv-SE')}${label.slice(1)} (${count})`
+    }
+    return `${meta?.label ?? key} (${count})`
+  }
+
+  const updateGroup = (mode: GroupMode) => {
+    setGroupMode(mode)
+    const params = new URLSearchParams(searchParams.toString())
+    if (mode === 'status') params.delete('group')
+    else params.set('group', mode)
+    const qs = params.toString()
+    router.replace(qs ? `/supplier-invoices?${qs}` : '/supplier-invoices', { scroll: false })
+  }
+
+  // Detail-pager context: the list as rendered (filtered + sectioned +
+  // sorted), written when the user navigates into a row.
   const rememberListContext = () => {
     writeListContext(listContextKey('supplier-invoices', company?.id), {
-      ids: sortedInvoices.map((inv) => inv.id),
+      ids: orderedInvoices.map((inv) => inv.id),
     })
   }
 
@@ -409,6 +516,16 @@ export default function SupplierInvoicesPage() {
                 : tab === 'to_pay' && toPayCount > 0
                   ? String(toPayCount)
                   : undefined,
+          }))}
+        />
+        <ContextPicker
+          value={groupMode}
+          onChange={(id) => updateGroup(id as GroupMode)}
+          ariaLabel={t('group_picker_aria')}
+          triggerLabel={`${t('group_by')} · ${t(GROUP_LABEL_KEYS[groupMode])}`}
+          items={GROUP_MODES.map((mode) => ({
+            id: mode,
+            label: t(GROUP_LABEL_KEYS[mode]),
           }))}
         />
         <ToolbarSearch
@@ -561,7 +678,7 @@ export default function SupplierInvoicesPage() {
               </tr>
             </thead>
             <tbody className="stagger-enter">
-              {sortedInvoices.map((inv) => {
+              {orderedInvoices.map((inv, rowIndex) => {
                 const chipVariant = STATUS_VARIANTS[inv.status] || 'secondary'
                 const chipLabel =
                   inv.status === 'paid' && inv.paid_at
@@ -575,8 +692,26 @@ export default function SupplierInvoicesPage() {
                   canApproveSupplierInvoice(inv) && !inv.is_credit_note && canWrite
                 const selectable = canWrite && isBatchSelectable(inv)
                 return (
+                  <Fragment key={inv.id}>
+                    {(() => {
+                      const groupKey = rowGroupKeys.get(inv.id) ?? null
+                      const prevKey =
+                        rowIndex > 0 ? rowGroupKeys.get(orderedInvoices[rowIndex - 1].id) ?? null : undefined
+                      return showGroupHeaders && groupKey !== null && groupKey !== prevKey ? (
+                        <tr>
+                          <td
+                            colSpan={9}
+                            className={cn(
+                              'border-b border-border px-1 pb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground',
+                              rowIndex === 0 ? 'pt-4' : 'pt-6',
+                            )}
+                          >
+                            {groupHeaderLabel(groupKey)}
+                          </td>
+                        </tr>
+                      ) : null
+                    })()}
                   <tr
-                    key={inv.id}
                     className={cn(
                       'group cursor-pointer transition-colors duration-150 hover:bg-secondary/35',
                       selectedIds.has(inv.id) && 'bg-secondary/40',
@@ -601,10 +736,10 @@ export default function SupplierInvoicesPage() {
                             onCheckedChange={() => toggleSelect(inv.id, shiftHeld.current)}
                             aria-label={t('bulk_select_row')}
                             className={cn(
-                              'border-foreground duration-150',
+                              'transition-opacity duration-150',
                               selectedIds.has(inv.id) || selectedIds.size > 0
                                 ? 'opacity-100'
-                                : CHECKBOX_REVEAL_CLASS,
+                                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100',
                             )}
                           />
                         )}
@@ -676,6 +811,7 @@ export default function SupplierInvoicesPage() {
                       )}
                     </td>
                   </tr>
+                  </Fragment>
                 )
               })}
             </tbody>
