@@ -1844,6 +1844,18 @@ function ResultStep({
         failed: entityRowStatus(results.salesInvoices.imported, results.salesInvoices.skipReasons) === 'error',
       })
     }
+    if (results.salesInvoices?.creditNotesUnlinked) {
+      // Credit notes land as ordinary invoice rows with reversed amounts. The
+      // pairing to the invoice they credit cannot be resolved at import time:
+      // no provider DTO carries a reference to it. Say so rather than leaving
+      // the user to notice a kreditfaktura that points at nothing.
+      const count = results.salesInvoices.creditNotesUnlinked
+      entityLines.push({
+        label: t('ext_arcim_credit_notes_label'),
+        value: `${count} importerade`,
+        detail: t('ext_arcim_credit_notes_unlinked_detail', { count }),
+      })
+    }
     if (results.supplierInvoices && (results.supplierInvoices.imported > 0 || results.supplierInvoices.skipped > 0)) {
       entityLines.push({
         label: 'Leverantörsfakturor',

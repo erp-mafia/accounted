@@ -10,9 +10,16 @@
  */
 
 import { createLogger, type Logger } from '@/lib/logger'
+// Fortnox is the one provider with a typed predicate for "this account may not
+// read this resource" (403, or 400 with a permission body). classifyProviderError
+// reuses it instead of pattern-matching the Swedish sentence in the body, which
+// changes with the provider's locale and copy; import-documents.ts already
+// treats a Fortnox 403 the same way.
+import { isFortnoxPermissionError } from './fortnox/client'
 
 export type ProviderCallErrorCode =
   | 'PROVIDER_AUTH_EXPIRED'
+  | 'PROVIDER_RESOURCE_FORBIDDEN'
   | 'PROVIDER_LICENSE_MISSING'
   | 'PROVIDER_API_MODULE_INACTIVE'
   | 'PROVIDER_RATE_LIMITED'
@@ -172,12 +179,31 @@ function isNetworkError(err: Error): boolean {
   return false
 }
 
+export interface ClassifyProviderErrorOptions {
+  /**
+   * True when an earlier provider call in the same run already returned data.
+   * The access token is then provably alive, so a 403 after that point is the
+   * provider closing ONE resource, not the grant dying. Leave it false (the
+   * default) when the failing call is the first one: an opaque 403 there is
+   * indistinguishable from a revoked grant and must keep saying "reconnect".
+   *
+   * Data returned, not a promise that resolved: several fetchers answer with
+   * an empty list before issuing any request (a provider company id we do not
+   * have, a register the provider does not expose), and those prove nothing.
+   */
+  grantProven?: boolean
+}
+
 /**
  * Classify an error from a provider client (Fortnox/Bokio/Visma/Briox/BL) into
  * a structured error code. Reads `statusCode` (Fortnox client) or `status`
  * (other clients) off the thrown error and maps:
  *
- *   401/403 → PROVIDER_AUTH_EXPIRED
+ *   401     → PROVIDER_AUTH_EXPIRED
+ *   403     → PROVIDER_RESOURCE_FORBIDDEN when the provider answers 403 only
+ *             for the resource (Fortnox, see isFortnoxPermissionError), or
+ *             when `options.grantProven` says an earlier call in the same run
+ *             already succeeded on this token; otherwise PROVIDER_AUTH_EXPIRED
  *   429     → PROVIDER_RATE_LIMITED
  *   5xx     → PROVIDER_UPSTREAM_ERROR
  *   network → PROVIDER_UNREACHABLE
@@ -189,8 +215,16 @@ function isNetworkError(err: Error): boolean {
  * gått ut. Återanslut för att fortsätta." vs. "Försök igen om en stund.")
  * instead of the same generic message for every cause.
  */
-export function classifyProviderError(error: unknown): ProviderCallErrorCode | null {
+export function classifyProviderError(
+  error: unknown,
+  options: ClassifyProviderErrorOptions = {},
+): ProviderCallErrorCode | null {
   if (error instanceof ProviderCallError) {
+    // mapResponseError() sees one response and cannot know the run's history,
+    // so a 403 it already labelled AUTH_EXPIRED is re-read here with it.
+    if (error.code === 'PROVIDER_AUTH_EXPIRED' && error.status === 403 && options.grantProven) {
+      return 'PROVIDER_RESOURCE_FORBIDDEN'
+    }
     return error.code
   }
   if (!(error instanceof Error)) return null
@@ -212,6 +246,14 @@ export function classifyProviderError(error: unknown): ProviderCallErrorCode | n
   if (isMissingLicenseError(haystack)) return 'PROVIDER_LICENSE_MISSING'
 
   if (typeof status === 'number') {
+    // A 403 is only a dead grant when nothing else says otherwise: a provider
+    // that reserves 403 for the resource and answers 401 for a dead token
+    // (Fortnox), or the same token having already answered earlier in this
+    // run, both mean the grant is alive and one register is closed. 401 is
+    // never downgraded: that IS a dead token.
+    if (status === 403 && (options.grantProven || isFortnoxPermissionError(error))) {
+      return 'PROVIDER_RESOURCE_FORBIDDEN'
+    }
     if (status === 401 || status === 403) return 'PROVIDER_AUTH_EXPIRED'
     if (status === 429) return 'PROVIDER_RATE_LIMITED'
     if (status >= 500) return 'PROVIDER_UPSTREAM_ERROR'

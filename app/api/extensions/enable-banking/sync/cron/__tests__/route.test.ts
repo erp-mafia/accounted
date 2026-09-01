@@ -74,7 +74,10 @@ vi.mock('@/extensions/general/enable-banking/lib/api-client', async () => {
   }
 })
 
-import { REAUTH_REQUIRED_MESSAGE } from '@/extensions/general/enable-banking/lib/api-client'
+import {
+  REAUTH_REQUIRED_MESSAGE,
+  SessionExpiredError,
+} from '@/extensions/general/enable-banking/lib/api-client'
 import { GET } from '../route'
 
 function makeClient(state: ClientState) {
@@ -400,5 +403,48 @@ describe('GET /api/extensions/enable-banking/sync/cron: session health probe', (
     const response = await GET(cronRequest())
 
     await expect(response.json()).resolves.toMatchObject({ processed: 0, probedDead: 1 })
+  })
+})
+
+/**
+ * The cron used to log every per-connection failure at error level before it
+ * decided what the failure was, so an expired PSD2 consent (the normal end of
+ * a bank grant, answered with a reconnect prompt) filled the error panel the
+ * same way a broken sync does. The non-cron path was fixed first; this locks
+ * the cron half.
+ */
+describe('GET /api/extensions/enable-banking/sync/cron: failure log level', () => {
+  it('logs an expired bank session as a warning, not an error', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    state.active = [connection()]
+    mocks.syncAccountTransactions.mockRejectedValue(
+      new SessionExpiredError(401, '{"message":"Session has expired"}'),
+    )
+
+    const response = await GET(cronRequest())
+
+    // The connection still gets the re-auth state and its Swedish message.
+    expect(state.updates[0].payload).toMatchObject({
+      status: 'expired',
+      error_message: REAUTH_REQUIRED_MESSAGE,
+    })
+    await expect(response.json()).resolves.toMatchObject({ processed: 1 })
+
+    const lines = consoleError.mock.calls.map(call => String(call[0]))
+    expect(lines.some(line => line.includes('sync failed for connection'))).toBe(false)
+    consoleError.mockRestore()
+  })
+
+  it('still logs a genuine sync failure at error level', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    state.active = [connection()]
+    mocks.syncAccountTransactions.mockRejectedValue(new Error('ASPSP 500'))
+
+    await GET(cronRequest())
+
+    expect(state.updates[0].payload).toMatchObject({ status: 'error' })
+    const lines = consoleError.mock.calls.map(call => String(call[0]))
+    expect(lines.some(line => line.includes('sync failed for connection'))).toBe(true)
+    consoleError.mockRestore()
   })
 })

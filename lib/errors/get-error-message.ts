@@ -643,6 +643,38 @@ export function getBankConnectionErrorMessage(
   return description && description !== code ? `${base} (${description})` : base
 }
 
+const PROVIDER_REASON_PREFIX: Bilingual = {
+  sv: 'Leverantörens svar',
+  en: 'Provider response',
+}
+
+/**
+ * The provider refused ONE register while the grant itself keeps working: a
+ * Fortnox account without rights to leverantörsregistret, a Bokio token with a
+ * narrower scope. Never say "återanslut" here, the reconnect re-mints the same
+ * grant and hits the same 403.
+ *
+ * The base copy is the registry's PROVIDER_RESOURCE_FORBIDDEN entry, not a
+ * second copy of it: the same sentence has to reach the toast, the API
+ * envelope and the public error catalogue (lib/docs/content/errors.ts renders
+ * the registry verbatim). The entry's existence is locked by
+ * lib/errors/__tests__/structured-errors.test.ts.
+ *
+ * `reason` is the provider's own sentence (e.g. Fortnox'
+ * "Saknar behörighet för leverantörsregister."), appended verbatim because it
+ * is the only part that names the register. Omitted when the provider sent an
+ * opaque body, which Bokio does.
+ */
+export function getProviderResourceForbiddenMessage(
+  reason?: string | null,
+  locale: ErrorLocale = 'sv',
+): string {
+  const entry = getErrorEntry('PROVIDER_RESOURCE_FORBIDDEN')!
+  const base = pick({ sv: entry.message_sv, en: entry.message_en }, locale)
+  const detail = reason?.trim()
+  return detail ? `${base} ${pick(PROVIDER_REASON_PREFIX, locale)}: "${detail}"` : base
+}
+
 /**
  * Helper that parses a Response body and returns a user-friendly error message.
  */
