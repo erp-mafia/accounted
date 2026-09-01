@@ -3625,18 +3625,12 @@ export const tools: McpTool[] = [
               bank: { type: ['string', 'null'] },
               status: { type: 'string' },
               since: { type: 'string' },
-              last_synced_at: {
-                type: ['string', 'null'],
-                description: 'Last successful transaction sync. Null until the first sync completes.',
-              },
-              consent_expires: {
-                type: ['string', 'null'],
-                description: 'When the PSD2 consent expires; syncing stops then until the user re-authorises with BankID.',
-              },
-              error_message: {
-                type: ['string', 'null'],
-                description: 'Swedish user-facing message when the connection needs attention.',
-              },
+              // Semantics live in the instructions string (runtime output), not
+              // here: every byte of this schema is charged against the
+              // tools/list context-budget ceiling (payload-size.bench.test.ts).
+              last_synced_at: { type: ['string', 'null'] },
+              consent_expires: { type: ['string', 'null'] },
+              error_message: { type: ['string', 'null'] },
             },
           },
         },
