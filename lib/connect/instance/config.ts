@@ -17,6 +17,11 @@ const log = createLogger('connect/config')
  * ship the credential in plaintext. Plain http is allowed only for loopback
  * hosts (local development against a dev server). An invalid or non-https
  * URL disables the connector entirely (fail closed, nothing is sent).
+ *
+ * The returned baseUrl is rebuilt as origin + path: userinfo, query and
+ * fragment are stripped. They have no meaning in a base URL that gets paths
+ * appended to it, and /api/connector/status echoes baseUrl back to the
+ * operator, so anything secret-shaped pasted into the URL must not survive.
  */
 export interface ConnectorConfig {
   key: string
@@ -44,7 +49,15 @@ export function getConnectorConfig(): ConnectorConfig | null {
     })
     return null
   }
-  return { key, baseUrl: raw }
+  const baseUrl = `${url.origin}${url.pathname.replace(/\/+$/, '')}`
+  if (baseUrl !== raw) {
+    // Log only the surviving value: the dropped parts are exactly what an
+    // operator might have pasted a credential into.
+    log.warn('GNUBOK_CONNECT_URL normalized to origin + path (userinfo/query/fragment stripped)', {
+      baseUrl,
+    })
+  }
+  return { key, baseUrl }
 }
 
 export function isConnectorConfigured(): boolean {

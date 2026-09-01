@@ -16,10 +16,14 @@ import { getCompanyIdsWithCapability } from '@/lib/entitlements/has-capability'
  * Hosted returns { self_hosted: false }: the connector product is a
  * self-host-only concept. Any authenticated member may read it; it exposes no
  * secret (never the key itself), only booleans and the key's non-secret prefix.
+ * Still no-store: the key prefix and wiring layout have no business sitting in
+ * a shared browser cache.
  */
+const NO_STORE = { headers: { 'Cache-Control': 'no-store' } }
+
 export const GET = withRouteContext('connector.status', async (_request, { supabase, companyId }) => {
   if (!isSelfHosted()) {
-    return NextResponse.json({ data: { self_hosted: false } })
+    return NextResponse.json({ data: { self_hosted: false } }, NO_STORE)
   }
   const cfg = getConnectorConfig()
   const bank = bankConnectorMode()
@@ -41,7 +45,7 @@ export const GET = withRouteContext('connector.status', async (_request, { supab
       },
       granted_capabilities: grants,
     },
-  })
+  }, NO_STORE)
 })
 
 async function getConnectorGrantsFor(
