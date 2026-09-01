@@ -20,6 +20,10 @@
 import { formatCurrency } from '@/lib/utils'
 // Pure module (no next/server): safe for the client bundles this file lives in.
 import { formatDimensionValidationIssues } from '@/lib/bookkeeping/dimension-errors'
+import {
+  describeMissingInvoicePaymentAccount,
+  isInvoicePaymentAccountCurrency,
+} from '@/lib/invoices/payment-accounts'
 import { getErrorEntry, hasErrorEntry } from './structured-errors'
 
 type ErrorContext =
@@ -350,6 +354,20 @@ export function getErrorMessage(
         message_en?: unknown
         account_numbers?: unknown
         details?: unknown
+      }
+
+      // Say what is missing for THIS invoice's currency: on a SEK invoice the
+      // registry's currency-neutral text read as a foreign-currency account
+      // when the gap was the company's bankgiro (#2126). Before the English
+      // registry shortcut on purpose: both locales get the specific text.
+      if (structured.code === 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING') {
+        // Own local name on purpose: the sek-labelled-amount guard keys
+        // currency reads by owner path, and `details` is also the owner of
+        // the SEK-only journal totals formatted further down.
+        const paymentDetails = structured.details as { currency?: unknown } | undefined
+        if (isInvoicePaymentAccountCurrency(paymentDetails?.currency)) {
+          return pick(describeMissingInvoicePaymentAccount(paymentDetails.currency), locale)
+        }
       }
 
       // For English UI, return the registry's English message for any known

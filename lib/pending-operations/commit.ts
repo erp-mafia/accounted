@@ -125,6 +125,7 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import {
+  describeMissingInvoicePaymentAccount,
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
@@ -2472,9 +2473,7 @@ async function commitSendInvoice(
   const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
   if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
     return {
-      error:
-        getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')?.message_sv
-        ?? 'Betalningskonto saknas för fakturans valuta.',
+      error: describeMissingInvoicePaymentAccount((invoice as Invoice).currency).sv,
       status: 400,
     }
   }
@@ -2729,9 +2728,7 @@ async function commitMarkInvoiceSent(
 
   if (!hasRequiredInvoicePaymentAccount(settings as CompanySettings, invoice as Invoice)) {
     return {
-      error:
-        getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')?.message_sv
-        ?? 'Betalningskonto saknas för fakturans valuta.',
+      error: describeMissingInvoicePaymentAccount((invoice as Invoice).currency).sv,
       status: 400,
     }
   }
