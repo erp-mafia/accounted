@@ -1854,6 +1854,7 @@ function ResultStep({
         label: t('ext_arcim_credit_notes_label'),
         value: `${count} importerade`,
         detail: t('ext_arcim_credit_notes_unlinked_detail', { count }),
+        failed: false,
       })
     }
     if (results.supplierInvoices && (results.supplierInvoices.imported > 0 || results.supplierInvoices.skipped > 0)) {
