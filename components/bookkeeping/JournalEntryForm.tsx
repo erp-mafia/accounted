@@ -1412,9 +1412,9 @@ export default function JournalEntryForm({
           </div>
           {!embedded && (
             // Closed list, not free text: the letters carry fixed meanings
-            // (A = kundfakturor, B = leverantörsfakturor, ...) and a typo here
-            // silently starts a new series with its own number sequence.
-            <div className="w-full sm:w-60">
+            // (A = redovisning, B = kundfakturor, ...) and a typo here silently
+            // starts a new series with its own number sequence.
+            <div className="w-full sm:w-72">
               <Label className="text-xs text-muted-foreground">{t('series')}</Label>
               <Select value={voucherSeries} onValueChange={(v) => setVoucherSeries(v)}>
                 <SelectTrigger className="mt-1 h-8">

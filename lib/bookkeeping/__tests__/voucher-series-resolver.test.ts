@@ -197,14 +197,9 @@ describe('parseVoucher', () => {
 
 describe('VOUCHER_SERIES_PRESETS', () => {
   it('offers the conventional Swedish series in a stable order', () => {
-    expect(VOUCHER_SERIES_PRESETS.map((p) => p.letter)).toEqual([
-      'A',
-      'B',
-      'I',
-      'U',
-      'L',
-      'M',
-    ])
+    expect(VOUCHER_SERIES_PRESETS.map((p) => p.letter)).toEqual(
+      'ABCDEFGHIJKLM'.split(''),
+    )
   })
 
   it('gives every preset a non-empty label', () => {
@@ -224,11 +219,16 @@ describe('VOUCHER_SERIES_PRESETS', () => {
 
 describe('voucherSeriesLabel', () => {
   it('describes a preset letter', () => {
-    expect(voucherSeriesLabel('A')).toBe('Kundfakturor')
-    expect(voucherSeriesLabel('M')).toBe('Manuella verifikat')
+    // A is the general series manual entries land in, not kundfakturor: it is
+    // the shipped default for every source_type. Guards against a relabelling
+    // that would mislabel every existing company's history.
+    expect(voucherSeriesLabel('A')).toBe('Redovisning')
+    expect(voucherSeriesLabel('B')).toBe('Kundfakturor')
+    expect(voucherSeriesLabel('K')).toBe('Lön')
   })
 
   it('returns an empty string for a letter with no preset meaning', () => {
+    expect(voucherSeriesLabel('N')).toBe('')
     expect(voucherSeriesLabel('Z')).toBe('')
     expect(voucherSeriesLabel('')).toBe('')
   })
