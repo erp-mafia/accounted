@@ -131,10 +131,9 @@ export const undoingTheCreditKeepsBothVerifikat = env.test(
         from public.supplier_invoices where is_credit_note is not true`;
       return rows.unwrap()[0]?.status !== "credited" ? rows : null;
     });
-    // Back to its own status, which is overdue rather than approved: the due
-    // date has passed, and the undo restores the invoice to where it would
-    // have been rather than to where it was when it was credited.
-    expect(invoice[0]?.status).toBe("overdue");
+    // Back to approved, where it was before the credit. The undo restores the
+    // invoice's own status rather than dropping it to a generic one.
+    expect(invoice[0]?.status).toBe("approved");
 
     // The credit note is kept and marked reversed, not deleted. The in-app
     // help says "ta bort kreditfakturan", which reads as removal; what

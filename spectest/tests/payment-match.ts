@@ -13,6 +13,10 @@
 import { expect } from "@specific.dev/spectest";
 import { env, APP_URL } from "../index";
 import { connectBank } from "./bank";
+import { SEK_TX_COUNT, EUR_TRANSACTIONS } from "../fakes/enable-banking-data";
+
+/** Everything the consent imported, derived so a fixture change cannot rot it. */
+const TOTAL_TX = SEK_TX_COUNT + EUR_TRANSACTIONS.length;
 
 const PAYMENT_ROW = "2026-114";
 
@@ -41,7 +45,9 @@ export const paymentMatchesTheInvoice = env.test(
     // Gate on the page's own count before looking for a row. The header and
     // the filters render before the list resolves, so a row locator alone
     // races the fetch and fails as "not visible" rather than "still loading".
-    await expect(b.getByText("22 att hantera")).toBeVisible({ timeout: 45000 });
+    await expect(b.getByText(`${TOTAL_TX} att hantera`)).toBeVisible({
+      timeout: 45000,
+    });
 
     // One click, on the row itself, naming the invoice it found.
     const row = b.locator("tr").filter({ hasText: PAYMENT_ROW }).first();

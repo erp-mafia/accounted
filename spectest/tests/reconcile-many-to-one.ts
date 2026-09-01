@@ -21,7 +21,11 @@ import { env, APP_URL } from "../index";
 import { bookTransaction } from "./booking";
 
 const VOUCHER = { text: "Företagskort augusti", amount: "3736.5" };
-const ROWS = ["TELIA SVERIGE AB", "DUSTIN SVERIGE AB"];
+/** Counterparty plus amount: the name alone repeats across a whole year. */
+const ROWS: Array<[string, string]> = [
+  ["TELIA SVERIGE AB", "2 487,5"],
+  ["DUSTIN SVERIGE AB", "1 249"],
+];
 
 export const bookTheCardStatementAsOneVoucher = env.test(
   "one verifikat covers a month of card purchases",
@@ -73,11 +77,29 @@ export const twoRowsSettleTheOneVoucher = env.test(
     const b = await ctx.browser();
 
     await b.goto(`${APP_URL}/reconciliation`);
+    // Whole year, not the default window. The page opens on the current month
+    // and every bank row in the fixture is dated relative to today, so on the
+    // first of a month the left pane is empty and the worksheet has nothing
+    // to reconcile.
+    await b.getByRole("button", { name: "Hela året" }).click();
     await b.getByRole("button", { name: /^Företagskonto 1930/ }).click();
     await b.getByRole("tab", { name: "Matcha manuellt" }).click();
 
-    for (const row of ROWS) {
-      await b.getByRole("checkbox", { name: row }).check();
+    // Gate on the worksheet before reaching into it. The two panes are
+    // fetched after the tab renders, and under load the checkboxes are not
+    // there yet when the default 5 s locator timeout runs out.
+    // By counterparty and amount: over a whole year a supplier can appear
+    // more than once, and the name alone would not say which charge.
+    await expect(
+      b.getByRole("row", { name: /TELIA SVERIGE AB.*2 487,5/ }).first(),
+    ).toBeVisible({ timeout: 30000 });
+
+    for (const [name, amount] of ROWS) {
+      await b
+        .getByRole("row", { name: new RegExp(`${name}.*${amount}`) })
+        .first()
+        .getByRole("checkbox")
+        .check();
     }
     await b.getByRole("row", { name: new RegExp(VOUCHER.text) }).click();
 

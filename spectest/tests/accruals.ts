@@ -26,7 +26,24 @@ const LINE = {
   vat: "7500",
   total: "37500",
 };
-const PERIOD = { start: "2026-09-01", end: "2026-11-30", months: 3 };
+/**
+ * Three whole months starting next month. Fixed dates would put the first
+ * instalment in the past the moment the month turned, and the schedule would
+ * post it before the test looked.
+ */
+function monthStart(offset: number): string {
+  const d = new Date();
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + offset, 1))
+    .toISOString()
+    .slice(0, 10);
+}
+function monthEnd(offset: number): string {
+  const d = new Date();
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + offset + 1, 0))
+    .toISOString()
+    .slice(0, 10);
+}
+const PERIOD = { start: monthStart(1), end: monthEnd(3), months: 3 };
 
 export const invoiceALineOverThreeMonths = env.test(
   "an invoice line can be spread over three months",
@@ -187,9 +204,9 @@ export const theScheduleReleasesItInThreeEqualMonths = env.test(
 
     // Equal thirds, one per calendar month of the period.
     expect(rows[0]?.amount).toBe("10000");
-    expect(rows[0]?.month).toBe("2026-09");
-    expect(rows[1]?.month).toBe("2026-10");
-    expect(rows[2]?.month).toBe("2026-11");
+    expect(rows[0]?.month).toBe(PERIOD.start.slice(0, 7));
+    expect(rows[1]?.month).toBe(monthStart(2).slice(0, 7));
+    expect(rows[2]?.month).toBe(PERIOD.end.slice(0, 7));
 
     // And none of them is booked yet: a schedule is a plan, and the releases
     // happen when their months arrive.

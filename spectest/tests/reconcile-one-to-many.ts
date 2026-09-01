@@ -108,12 +108,28 @@ export const oneRowSettlesBothVouchers = env.test(
     await b.goto(`${APP_URL}/reconciliation`);
     // Pick the account first: the worksheet is per account, and 1930 is the
     // one the bank row and both vouchers live on.
+    // Whole year, not the default window. The page opens on the current month
+    // and every bank row in the fixture is dated relative to today, so on the
+    // first of a month the left pane is empty and the worksheet has nothing
+    // to reconcile.
+    await b.getByRole("button", { name: "Hela året" }).click();
     await b.getByRole("button", { name: /^Företagskonto 1930/ }).click();
     await b.getByRole("tab", { name: "Matcha manuellt" }).click();
 
+    // Gate on the worksheet before reaching into it. The two panes are
+    // fetched after the tab renders, and under load the checkboxes are not
+    // there yet when the default 5 s locator timeout runs out.
+    // By counterparty AND amount. Over a whole year this customer paid twice,
+    // so the name alone is ambiguous and the wrong row would be a different
+    // test.
+    const bankRow = b
+      .getByRole("row", { name: new RegExp(`${BANK_ROW.counterparty}.*18 750`) })
+      .first();
+    await expect(bankRow).toBeVisible({ timeout: 30000 });
+
     // Left pane: the bank row nobody has booked. Right pane follows the left,
     // and becomes multi-select precisely because exactly one row is picked.
-    await b.getByRole("checkbox", { name: BANK_ROW.counterparty }).check();
+    await bankRow.getByRole("checkbox").check();
     await b.getByRole("row", { name: new RegExp(FIRST.text) }).click();
     await b.getByRole("row", { name: new RegExp(SECOND.text) }).click();
 

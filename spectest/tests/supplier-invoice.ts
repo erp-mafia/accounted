@@ -13,6 +13,10 @@ import { expect } from "@specific.dev/spectest";
 import { env, APP_URL } from "../index";
 import { enrolMfa } from "./mfa";
 
+function isoDaysFromToday(days: number): string {
+  return new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+}
+
 const SUPPLIER = {
   name: "Hyresvärden Fastighets AB",
   bankgiro: "123-4566",
@@ -21,8 +25,11 @@ const SUPPLIER = {
 
 const INVOICE = {
   number: "2026-4471",
-  date: "2026-08-01",
-  dueDate: "2026-08-31",
+  // Relative to today. A fixed due date turns "approved" into "overdue" the
+  // morning after it passes, which is a test that only works on the day it
+  // was written.
+  date: isoDaysFromToday(-14),
+  dueDate: isoDaysFromToday(16),
   net: "12000",
   vat: "3000",
   total: "15000",
