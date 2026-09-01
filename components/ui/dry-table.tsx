@@ -33,6 +33,13 @@ export const HOVER_REVEAL_CLASS =
 // always-visible at muted opacity and go solid on hover/focus/coarse
 // pointers; call sites force opacity-100 when checked. Action controls
 // (chevrons, buttons) keep HOVER_REVEAL_CLASS above.
+//
+// Call sites must also put `border-foreground` (unconditionally) on the
+// Checkbox itself: the primitive's border-input is ~1.4:1 against the page,
+// which composited at opacity-50 lands ~1.2:1, under the WCAG 3:1 non-text
+// minimum. border-foreground composites to >=3.4:1 at rest in every theme.
+// It lives at the call site, not in this constant, because the constant is
+// sometimes applied to a borderless WRAPPER around the checkbox.
 export const CHECKBOX_REVEAL_CLASS =
   'opacity-50 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100'
 

@@ -297,7 +297,7 @@ export default function TransactionInboxCard({
               onCheckedChange={() => onToggleSelect(transaction.id)}
               aria-label="Välj transaktion"
               className={cn(
-                'absolute -left-5 top-1/2 -translate-y-1/2 duration-150 md:-left-6',
+                'absolute -left-5 top-1/2 -translate-y-1/2 border-foreground duration-150 md:-left-6',
                 isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
               )}
             />

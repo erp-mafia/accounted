@@ -2181,7 +2181,7 @@ function InboxRow({
             checked={isChecked}
             onCheckedChange={onToggleChecked}
             aria-label="Markera post"
-            className="h-3.5 w-3.5"
+            className="h-3.5 w-3.5 border-foreground"
           />
         </div>
       )}

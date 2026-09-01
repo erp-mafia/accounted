@@ -510,7 +510,7 @@ function OrderRow({
             onCheckedChange={() => onToggleSelect(order.id)}
             aria-label={t('select_order_aria', { number: order.order_number })}
             className={cn(
-              'absolute -left-5 top-1/2 -translate-y-1/2 duration-150 md:-left-6',
+              'absolute -left-5 top-1/2 -translate-y-1/2 border-foreground duration-150 md:-left-6',
               isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
             )}
           />

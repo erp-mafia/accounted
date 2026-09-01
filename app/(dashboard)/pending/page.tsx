@@ -1008,7 +1008,7 @@ export default function PendingOperationsPage() {
                         onCheckedChange={() => toggleSelected(op.id)}
                         aria-label={t('select_operation_aria')}
                         className={cn(
-                          'duration-150',
+                          'border-foreground duration-150',
                           isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
                         )}
                       />

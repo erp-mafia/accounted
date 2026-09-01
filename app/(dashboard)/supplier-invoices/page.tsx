@@ -588,7 +588,7 @@ export default function SupplierInvoicesPage() {
                             onCheckedChange={() => toggleSelect(inv.id)}
                             aria-label={t('bulk_select_row')}
                             className={cn(
-                              'duration-150',
+                              'border-foreground duration-150',
                               selectedIds.has(inv.id) || selectedIds.size > 0
                                 ? 'opacity-100'
                                 : CHECKBOX_REVEAL_CLASS,

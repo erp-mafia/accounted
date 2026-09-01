@@ -86,7 +86,7 @@ export default function SkattekontoInboxCard({
             onCheckedChange={() => onToggleSelect?.(row.id)}
             aria-label={t('select_row')}
             className={cn(
-              'absolute -left-5 top-1/2 -translate-y-1/2 duration-150 md:-left-6',
+              'absolute -left-5 top-1/2 -translate-y-1/2 border-foreground duration-150 md:-left-6',
               isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
             )}
           />

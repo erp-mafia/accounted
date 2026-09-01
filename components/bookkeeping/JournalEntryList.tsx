@@ -1546,7 +1546,7 @@ export default function JournalEntryList({
                             onCheckedChange={() => toggleSelect(entry.id)}
                             aria-label={t('batch_select_row')}
                             className={cn(
-                              'duration-150',
+                              'border-foreground duration-150',
                               selectedIds.has(entry.id)
                                 ? 'opacity-100'
                                 : CHECKBOX_REVEAL_CLASS,
