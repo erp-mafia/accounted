@@ -5599,7 +5599,8 @@
     "vat_review_confirm_all": "Confirm all suggested ({count})",
     "vat_review_filter": "{count} VAT treatments to review",
     "vat_treatment_column": "VAT treatment",
-    "vat_treatment_confirm": "Confirm"
+    "vat_treatment_confirm": "Confirm",
+    "vat_treatment_confirm_help": "Accept the VAT code for this row to mark it as reviewed. Change the VAT code or rate first if the suggestion is wrong."
   },
   "dimensions": {
     "new_value": "New value",
