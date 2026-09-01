@@ -87,6 +87,27 @@ export async function exchangeSkvCode(code: string, redirectUri: string, codeVer
   return postToken(body, SKATTEVERKET_EXCHANGE_TIMEOUT_MS, 'Skatteverket token exchange')
 }
 
+/**
+ * SKV's terminal dead-refresh-token dialects, matched against the error
+ * message postToken throws (which embeds status + body). The same set the
+ * instance-side extension classifies as SESSION_EXPIRED on the direct path:
+ * 404 id_not_found / "refresh token is not found", 400 "Refresh Token status
+ * is expired", and OAuth2's standard 400 invalid_grant. `per`-flow refresh
+ * tokens live 65 minutes, so this is the DOMINANT refresh outcome, not an
+ * edge case: the broker must distinguish it from transient failures or every
+ * connector instance loses its reconnect flow (skeptic refutation on PR6b-2).
+ * Config-shaped 400s (invalid_client, invalid_scope) deliberately do NOT
+ * match: a reconnect cannot fix those.
+ */
+export function isSkvDeadRefreshTokenError(message: string): boolean {
+  return (
+    (/\b404\b/.test(message) && /id_not_found|refresh token is not found/i.test(message)) ||
+    (/\b400\b/.test(message) &&
+      (/refresh token status is expired/i.test(message) ||
+        /"error"\s*:\s*"invalid_grant"/i.test(message)))
+  )
+}
+
 export async function refreshSkvToken(refreshToken: string): Promise<SkvTokenResponse> {
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
