@@ -3219,6 +3219,15 @@
     "error_toast": "Could not attach the document",
     "cancel": "Cancel"
   },
+  "tx_detach": {
+    "menu_item": "Remove document",
+    "confirm_title": "Remove the document?",
+    "confirm_body": "The document will be unlinked from {description}, {amount}. The file is not deleted and can be attached again.",
+    "confirm_label": "Remove document",
+    "cancel_label": "Cancel",
+    "toast_done": "Document removed",
+    "toast_failed": "Could not remove the document"
+  },
   "tx_underlag": {
     "attached_label": "Document",
     "attached_title": "Supporting document attached: click to open",

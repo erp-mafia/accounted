@@ -3219,6 +3219,15 @@
     "error_toast": "Kunde inte koppla underlaget",
     "cancel": "Avbryt"
   },
+  "tx_detach": {
+    "menu_item": "Ta bort underlag",
+    "confirm_title": "Ta bort underlaget?",
+    "confirm_body": "Underlaget kopplas loss från {description}, {amount}. Filen raderas inte och kan kopplas igen.",
+    "confirm_label": "Ta bort underlag",
+    "cancel_label": "Avbryt",
+    "toast_done": "Underlaget borttaget",
+    "toast_failed": "Kunde inte ta bort underlaget"
+  },
   "tx_underlag": {
     "attached_label": "Underlag",
     "attached_title": "Underlag bifogat: klicka för att öppna",
