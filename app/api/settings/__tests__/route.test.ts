@@ -811,6 +811,29 @@ describe('PUT /api/settings', () => {
     expect(supabase.from).toHaveBeenCalledTimes(1)
   })
 
+  it('rejects enabling periodisk sammanställning while the VAT registration is incomplete', async () => {
+    enqueue({
+      data: {
+        entity_type: 'aktiebolag',
+        vat_registered: true,
+        vat_number: null,
+        moms_period: 'quarterly',
+        vat_has_eu_trade: true,
+        onboarding_complete: true,
+      },
+    })
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { periodisk_sammanstallning_enabled: true },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain('Momsregistreringsnummer')
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
   it('allows an unrelated save when a stored 40m/period conflict already exists', async () => {
     // Stored state violates the 40m-monthly rule; a save that touches neither
     // group must still go through.

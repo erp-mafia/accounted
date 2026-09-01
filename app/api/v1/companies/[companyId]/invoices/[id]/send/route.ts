@@ -78,6 +78,7 @@ import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
+import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { eventBus } from '@/lib/events'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
@@ -354,6 +355,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
         requestId: ctx.requestId,
         details: { currency: typed.currency },
+      })
+    }
+
+    if (!hasRequiredSellerVatNumber(settings, typed)) {
+      return v1ErrorResponseFromCode('INVOICE_SEND_VAT_NUMBER_MISSING', ctx.log, {
+        requestId: ctx.requestId,
       })
     }
 
