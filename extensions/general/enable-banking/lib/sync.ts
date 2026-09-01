@@ -253,11 +253,17 @@ export async function syncAccountTransactions(
   } else {
     try {
       const balance = await getAccountBalance(account.uid)
-      account.balance = balance.amount
-      // Overwrite (not keep) on null: a stale available figure next to a
-      // fresh booked figure would misstate what can be spent.
-      account.available_balance = balance.available ?? undefined
-      account.balance_updated_at = new Date().toISOString()
+      // null = the ASPSP returned no balances at all. Keep the previous
+      // stored value and timestamp; writing a fabricated 0 with a fresh
+      // timestamp would pin "the bank reports 0 kr" for the next 12h on
+      // every balance surface.
+      if (balance) {
+        account.balance = balance.amount
+        // Overwrite (not keep) on null: a stale available figure next to a
+        // fresh booked figure would misstate what can be spent.
+        account.available_balance = balance.available ?? undefined
+        account.balance_updated_at = new Date().toISOString()
+      }
     } catch {
       // Keep previous balance, don't update timestamp
     }

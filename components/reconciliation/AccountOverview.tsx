@@ -481,21 +481,22 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
           bank_balance_updated_at?: string | null
         } | null)
       : null
+  // Both the amount and its fetch timestamp must exist: a balance of unknown
+  // age labeled with today's date is exactly the misleading staleness the
+  // timestamp exists to prevent, so without it the line is omitted entirely.
   const bankReportedLine =
-    bankReportedRaw && typeof bankReportedRaw.bank_reported_balance === 'number'
+    bankReportedRaw &&
+    typeof bankReportedRaw.bank_reported_balance === 'number' &&
+    bankReportedRaw.bank_balance_updated_at
       ? typeof bankReportedRaw.bank_reported_available_balance === 'number'
         ? t('bank_reported_line_available', {
             amount: formatCurrency(bankReportedRaw.bank_reported_balance, currency),
             available: formatCurrency(bankReportedRaw.bank_reported_available_balance, currency),
-            date: bankReportedRaw.bank_balance_updated_at
-              ? formatDate(bankReportedRaw.bank_balance_updated_at)
-              : formatDate(asOfDate),
+            date: formatDate(bankReportedRaw.bank_balance_updated_at),
           })
         : t('bank_reported_line', {
             amount: formatCurrency(bankReportedRaw.bank_reported_balance, currency),
-            date: bankReportedRaw.bank_balance_updated_at
-              ? formatDate(bankReportedRaw.bank_balance_updated_at)
-              : formatDate(asOfDate),
+            date: formatDate(bankReportedRaw.bank_balance_updated_at),
           })
       : null
 

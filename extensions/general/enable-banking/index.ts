@@ -1583,6 +1583,30 @@ export const enableBankingExtension: Extension = {
               }
             }
 
+            // Mirror the balances the backfill just fetched into cash_accounts.
+            // accounts_data is deliberately NOT re-written here (see below), so
+            // without this the balances fetched during the initial sync would
+            // reach neither store until the next scheduled sync.
+            try {
+              const { updateBalancesFromSync } = await import('@/lib/cash-accounts/service')
+              await updateBalancesFromSync(
+                supabase,
+                companyId,
+                connection.id,
+                updatedAccounts.map((a) => ({
+                  external_uid: a.uid,
+                  balance: a.balance,
+                  available_balance: a.available_balance,
+                  balance_updated_at: a.balance_updated_at,
+                })),
+              )
+            } catch (mirrorErr) {
+              log.error('[enable-banking] Balance mirror after initial backfill failed', {
+                connectionId: connection.id,
+                error: mirrorErr instanceof Error ? mirrorErr.message : String(mirrorErr),
+              })
+            }
+
             const completedAt = new Date().toISOString()
             // Don't re-write accounts_data here: the first update already wrote it.
             // Including it again races with any concurrent writer (e.g. cron firing in

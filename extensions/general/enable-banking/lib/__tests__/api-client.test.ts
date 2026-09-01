@@ -87,8 +87,8 @@ describe('api-client', () => {
       )
 
       const result = await getAccountBalance('acc-1')
-      expect(result.amount).toBe(500)
-      expect(result.available).toBe(450.25)
+      expect(result?.amount).toBe(500)
+      expect(result?.available).toBe(450.25)
     })
 
     it('returns available: null when the bank reports no available type', async () => {
@@ -114,6 +114,12 @@ describe('api-client', () => {
       expect(result).toEqual({ amount: 42, date: '2026-08-31', available: null })
     })
 
+    it('returns null (never a fabricated 0) when the bank reports no balances at all', async () => {
+      fetchSpy.mockResolvedValueOnce(balancesResponse([]))
+      const result = await getAccountBalance('acc-1')
+      expect(result).toBeNull()
+    })
+
     it('prefers expected over the first entry when closingBooked is missing', async () => {
       fetchSpy.mockResolvedValueOnce(
         balancesResponse([
@@ -123,7 +129,7 @@ describe('api-client', () => {
       )
 
       const result = await getAccountBalance('acc-1')
-      expect(result.amount).toBe(2)
+      expect(result?.amount).toBe(2)
     })
   })
 

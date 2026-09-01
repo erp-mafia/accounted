@@ -624,6 +624,26 @@ describe('syncAccountTransactions', () => {
     expect(account.balance_updated_at).not.toBe(staleAt)
   })
 
+  it('keeps the previous balance and timestamp when the bank reports no balances (null result)', async () => {
+    // A 200 with zero balances used to fabricate amount 0; with balances now
+    // user-facing that would pin "banken rapporterar 0 kr" for 12h.
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
+    mockGetAccountBalance.mockResolvedValue(null)
+
+    const staleAt = new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString()
+    const account = makeAccount({ balance: 500, available_balance: 480, balance_updated_at: staleAt })
+
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, account,
+      '2026-01-01', '2026-06-01', mockIngest
+    )
+
+    expect(mockGetAccountBalance).toHaveBeenCalledTimes(1)
+    expect(account.balance).toBe(500)
+    expect(account.available_balance).toBe(480)
+    expect(account.balance_updated_at).toBe(staleAt)
+  })
+
   it('clears a stored available balance when the refresh reports none', async () => {
     // A stale available figure next to a fresh booked figure would misstate
     // what can be spent: null from the bank overwrites, never keeps.

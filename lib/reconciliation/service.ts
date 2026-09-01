@@ -160,11 +160,23 @@ async function bankStatus(
   const syncedAt = await latestBankSyncAt(supabase, companyId, account.id)
   const stale = !syncedAt || daysBetween(today, syncedAt.slice(0, 10)) > STALE_AFTER_DAYS
   // The bank-reported (booked) balance, mirrored from the last PSD2 balance
-  // refresh. Point-in-time, unlike ledger_balance which is period movement:
-  // difference/unexplained stay transaction-based and never compare the two.
-  const reportedBalance = account.balance == null ? null : Number(account.balance)
+  // refresh. Point-in-time and dated by balance_updated_at, NOT by any
+  // through-date a caller asks for. It therefore lives ONLY in the bank block
+  // below, never in external_balance: sign-off persists external_balance into
+  // account_reconciliations and bokslutsbilagor computes closing - external
+  // from that row, so a today-balance stored on a balansdag sign-off would
+  // print a phantom differens in the year-end appendix (skeptic finding,
+  // PR #2118). difference/unexplained stay transaction-based for the same
+  // reason. A balance without its timestamp is unusable (age unknown), so
+  // both fields are exposed only as a pair.
+  const reportedBalance =
+    account.balance == null || account.balance_updated_at == null
+      ? null
+      : Number(account.balance)
   const reportedAvailable =
-    account.available_balance == null ? null : Number(account.available_balance)
+    reportedBalance == null || account.available_balance == null
+      ? null
+      : Number(account.available_balance)
   return {
     account_key: bankAccountKey(account.id),
     kind: 'bank',
@@ -173,7 +185,7 @@ async function bankStatus(
     window: { from: window.from, to: window.to },
     as_of: new Date().toISOString(),
     stale,
-    external_balance: reportedBalance,
+    external_balance: null,
     ledger_balance: raw.gl_1930_period_movement,
     difference: raw.difference,
     unexplained_difference: raw.unexplained_difference,
@@ -193,7 +205,7 @@ async function bankStatus(
       // available + when it was fetched. Distinct from the movement fields.
       bank_reported_balance: reportedBalance,
       bank_reported_available_balance: reportedAvailable,
-      bank_balance_updated_at: account.balance_updated_at ?? null,
+      bank_balance_updated_at: reportedBalance == null ? null : account.balance_updated_at,
     },
   }
 }

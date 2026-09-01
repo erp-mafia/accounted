@@ -1219,6 +1219,7 @@ describe('updateBalancesFromSync', () => {
   interface BalanceUpdate {
     payload: Record<string, unknown>
     filters: Array<[string, unknown]>
+    orFilters: string[]
   }
 
   function makeBalanceStub(updateError: { message: string } | null = null) {
@@ -1228,11 +1229,15 @@ describe('updateBalancesFromSync', () => {
         if (table !== 'cash_accounts') throw new Error(`unexpected table ${table}`)
         return {
           update: vi.fn((payload: Record<string, unknown>) => {
-            const entry: BalanceUpdate = { payload, filters: [] }
+            const entry: BalanceUpdate = { payload, filters: [], orFilters: [] }
             updates.push(entry)
             const chain = {
               eq: vi.fn((col: string, val: unknown) => {
                 entry.filters.push([col, val])
+                return chain
+              }),
+              or: vi.fn((expr: string) => {
+                entry.orFilters.push(expr)
                 return chain
               }),
               then: (onFulfilled: (value: unknown) => unknown) =>
@@ -1267,6 +1272,11 @@ describe('updateBalancesFromSync', () => {
       ['company_id', 'c1'],
       ['bank_connection_id', 'conn-1'],
       ['external_uid', 'uid-1'],
+    ])
+    // Stale-writer guard: an older sync run finishing later must not move the
+    // mirrored timestamp backwards.
+    expect(updates[0].orFilters).toEqual([
+      'balance_updated_at.is.null,balance_updated_at.lt.2026-09-01T05:00:00.000Z',
     ])
   })
 

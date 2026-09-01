@@ -1129,6 +1129,11 @@ export async function updateBalancesFromSync(
       .eq('company_id', companyId)
       .eq('bank_connection_id', bankConnectionId)
       .eq('external_uid', account.external_uid)
+      // Manual sync and cron are not serialized per connection: an older run
+      // finishing later must not overwrite a newer mirror (the timestamp
+      // would visibly move backwards). Only rows with an older-or-missing
+      // timestamp accept the write.
+      .or(`balance_updated_at.is.null,balance_updated_at.lt.${account.balance_updated_at}`)
     if (error) {
       log.error('updateBalancesFromSync failed', {
         companyId,

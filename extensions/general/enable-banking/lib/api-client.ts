@@ -767,17 +767,23 @@ function pickBalanceByType(balances: Balance[], preference: string[]): Balance |
  * to the first reported balance, as before) plus the available amount when the
  * ASPSP reports one. One call: both figures come from the same quota-limited
  * response, so exposing `available` costs nothing extra.
+ *
+ * Returns null when the ASPSP reports NO balances at all. The old behavior
+ * fabricated `amount: 0` here; once balances became user-facing ("how much
+ * money is in the bank", covering decisions before payment runs) a fabricated
+ * zero with a fresh timestamp is dangerous, so the caller keeps its previous
+ * stored value instead.
  */
 export async function getAccountBalance(
   accountUid: string
-): Promise<{ amount: number; date: string; available: number | null }> {
+): Promise<{ amount: number; date: string; available: number | null } | null> {
   const balances = await getAccountBalances(accountUid)
 
   // Prefer closingBooked, then expected, then first available
   const balance = pickBalanceByType(balances, BOOKED_BALANCE_TYPES) || balances[0]
 
   if (!balance) {
-    return { amount: 0, date: new Date().toISOString().split('T')[0], available: null }
+    return null
   }
 
   const availableBalance = pickBalanceByType(balances, AVAILABLE_BALANCE_TYPES)
