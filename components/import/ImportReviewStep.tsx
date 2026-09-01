@@ -350,7 +350,7 @@ export default function ImportReviewStep({
               </Label>
               <p className="text-sm text-muted-foreground">
                 {hasOpeningBalances
-                  ? `Skapar verifikation för IB på ${formatCurrency(preview.openingBalanceTotal)}`
+                  ? `Skapar IB-verifikation, summa debet ${formatCurrency(preview.openingBalanceTotal)}`
                   : 'Inga ingående balanser i filen'}
               </p>
               {existingIbCount > 0 && (

@@ -88,6 +88,8 @@ export function generateImportPreview(
     accountCount: parsed.stats.totalAccounts,
     voucherCount: parsed.stats.totalVouchers,
     transactionLineCount: parsed.stats.totalTransactionLines,
+    // Debit-side total of the IB voucher (shown as "IB, summa debet"), not a
+    // net opening balance: a balanced IB nets to zero.
     openingBalanceTotal: totalDebit,
     trialBalance: {
       totalDebit,
