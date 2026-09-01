@@ -3,6 +3,8 @@ import {
   InvoicePaymentAccountMissingError,
   assertInvoicePaymentAccountForRender,
   companyWithInvoicePaymentAccount,
+  describeMissingInvoicePaymentAccount,
+  isInvoicePaymentAccountCurrency,
   hasRequiredInvoicePaymentAccount,
   hasUsableInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
@@ -210,5 +212,44 @@ describe('invoice payment accounts', () => {
       makeInvoice({ document_type: 'proforma' }),
     )).toBe(true)
     expect(hasRequiredInvoicePaymentAccount(emptySettings, makeInvoice())).toBe(false)
+  })
+})
+
+describe('describeMissingInvoicePaymentAccount (#2126)', () => {
+  it('SEK: names the domestic options and never talks about currency accounts', () => {
+    const { sv, en } = describeMissingInvoicePaymentAccount('SEK')
+    expect(sv).toContain('bankgiro')
+    expect(sv).toContain('plusgiro')
+    expect(sv).toContain('Swish')
+    expect(sv).toContain('Inställningar → Fakturering')
+    expect(sv).not.toMatch(/valuta/i)
+    expect(sv).not.toMatch(/IBAN/)
+    expect(en).toContain('bankgiro')
+    expect(en).toContain('Settings → Invoicing')
+    expect(en).not.toMatch(/currency/i)
+  })
+
+  it('EUR: asks for an IBAN account in that currency', () => {
+    const { sv, en } = describeMissingInvoicePaymentAccount('EUR')
+    expect(sv).toContain('EUR')
+    expect(sv).toContain('IBAN')
+    expect(sv).not.toContain('routing number')
+    expect(sv).toContain('Inställningar → Fakturering')
+    expect(en).toContain('EUR')
+    expect(en).toContain('IBAN')
+  })
+
+  it('USD/GBP: also offers the non-IBAN routing path', () => {
+    expect(describeMissingInvoicePaymentAccount('USD').sv).toContain('routing number')
+    expect(describeMissingInvoicePaymentAccount('GBP').sv).toContain('sort code')
+    expect(describeMissingInvoicePaymentAccount('GBP').en).toContain('sort code')
+  })
+
+  it('isInvoicePaymentAccountCurrency guards the details field', () => {
+    expect(isInvoicePaymentAccountCurrency('SEK')).toBe(true)
+    expect(isInvoicePaymentAccountCurrency('NOK')).toBe(true)
+    expect(isInvoicePaymentAccountCurrency('JPY')).toBe(false)
+    expect(isInvoicePaymentAccountCurrency(undefined)).toBe(false)
+    expect(isInvoicePaymentAccountCurrency(42)).toBe(false)
   })
 })

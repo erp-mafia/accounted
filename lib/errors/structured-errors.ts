@@ -1145,10 +1145,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   INVOICE_SEND_PAYMENT_ACCOUNT_MISSING: {
     httpStatus: 400,
-    message_sv: 'Fakturan saknar ett betalningskonto för vald valuta. Lägg till kontot under Inställningar → Fakturering innan du skapar PDF-filen eller skickar fakturan.',
-    message_en: 'The invoice has no payment account for its currency. Add the account under Inställningar → Fakturering (Settings → Invoicing) before generating the PDF or sending the invoice.',
+    // Currency-neutral by necessity (the registry has no details). Surfaces
+    // that know the invoice currency say exactly what is missing through
+    // describeMissingInvoicePaymentAccount() (lib/invoices/payment-accounts.ts).
+    message_sv: 'Fakturan saknar betalningsuppgifter för sin valuta: bankgiro, plusgiro, Swish eller bankkonto för SEK, IBAN för andra valutor. Lägg till dem under Inställningar → Fakturering innan du skapar PDF-filen eller skickar fakturan.',
+    message_en: 'The invoice has no payment details for its currency: bankgiro, plusgiro, Swish or a bank account for SEK, an IBAN for other currencies. Add them under Inställningar → Fakturering (Settings → Invoicing) before generating the PDF or sending the invoice.',
     remediation: {
-      description: 'Lägg till ett betalningskonto med IBAN för fakturans valuta under Inställningar → Fakturering.',
+      description: 'Lägg till betalningsuppgifter för fakturans valuta under Inställningar → Fakturering: bankgiro, plusgiro, Swish eller bankkonto för SEK, IBAN för andra valutor.',
     },
   },
   INVOICE_SEND_VAT_NUMBER_MISSING: {
