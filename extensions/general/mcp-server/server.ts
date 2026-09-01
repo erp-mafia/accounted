@@ -48,7 +48,7 @@ import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
-import { dbError } from '@/lib/errors/db-error'
+import { dbError, errorCauseTag } from '@/lib/errors/db-error'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
@@ -20509,6 +20509,15 @@ function emitToolCallTelemetry(payload: {
    * message_sv is already the domain message costs nothing.
    */
   errorDetail?: string | null
+  /**
+   * Machine vocabulary for the unmapped failures (#2051): errorCauseTag(err),
+   * i.e. the SQLSTATE or coded-error code, else the error's class name. For
+   * UNKNOWN_ERROR rows message_sv is the constant "Något gick fel. Försök
+   * igen.", so without this the residue cannot be clustered at all. Never the
+   * raw driver message: that can quote row values from a constraint violation
+   * and belongs in the server log, not in event_log.
+   */
+  errorCause?: string | null
   requestId: string | number | null
   userId: string
   // null/empty while the key's user has no company yet (issue #1814): the
@@ -20542,6 +20551,9 @@ function emitToolCallTelemetry(payload: {
           payload.errorDetail && payload.errorDetail !== payload.errorMessage
             ? payload.errorDetail.slice(0, 500)
             : null,
+        // Protocol vocabulary only (a SQLSTATE, a code, a class name), capped
+        // hard: anything longer is a message pretending to be a tag.
+        errorCause: payload.errorCause ? payload.errorCause.slice(0, 64) : null,
         requestId: payload.requestId,
         userId: payload.userId,
         companyId,
@@ -21481,6 +21493,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               errorKind: 'execution',
               errorMessage: structured.error.message_sv,
               errorDetail: structured.error.message_en,
+              errorCause: errorCauseTag(err),
               requestId: id ?? null,
               userId,
               companyId: effectiveCompanyId,
@@ -21574,6 +21587,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           // clustering when mining failures for gotchas.
           errorMessage: structured.error.message_sv,
           errorDetail: structured.error.message_en,
+          errorCause: errorCauseTag(err),
           requestId: id ?? null,
           userId,
           companyId: effectiveCompanyId,
