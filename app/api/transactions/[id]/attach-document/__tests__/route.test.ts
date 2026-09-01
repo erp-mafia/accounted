@@ -6,7 +6,7 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -342,5 +342,44 @@ describe('DELETE /api/transactions/[id]/attach-document', () => {
     const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(200)
+    // Nothing was pinned, so there is no inbox back-link to undo.
+    expect(mockSupabase.from.mock.calls.map((c) => c[0])).not.toContain('invoice_inbox_items')
+  })
+
+  it('clears the inbox back-link for the detached document (else booking re-anchors it)', async () => {
+    // propagateUnderlagForBookedTransaction selects inbox items by
+    // matched_transaction_id at categorize time; a stale back-link would pin
+    // the rejected receipt onto the new verifikation as immutable underlag.
+    enqueue({ data: { id: 'tx-1', document_id: 'doc-1' }, error: null }) // tx fetch
+    enqueue({ data: { journal_entry_id: null }, error: null }) // doc fetch
+    enqueue({ data: null, error: null }) // transactions update
+    enqueue({ data: null, error: null }) // inbox unlink update
+    const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(200)
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([[{ matched_transaction_id: null }]])
+    const eqArgs = findCalls('invoice_inbox_items', 'eq')
+    expect(eqArgs).toContainEqual(['document_id', 'doc-1'])
+    expect(eqArgs).toContainEqual(['matched_transaction_id', 'tx-1'])
+    expect(eqArgs).toContainEqual(['company_id', 'company-1'])
+    // Items already consumed by a verifikat are left alone.
+    expect(findCalls('invoice_inbox_items', 'is')).toContainEqual(['created_journal_entry_id', null])
+  })
+
+  it('tolerates a failing inbox unlink: the pin removal is the primary effect', async () => {
+    enqueue({ data: { id: 'tx-1', document_id: 'doc-1' }, error: null }) // tx fetch
+    enqueue({ data: { journal_entry_id: null }, error: null }) // doc fetch
+    enqueue({ data: null, error: null }) // transactions update
+    enqueue({ data: null, error: { message: 'rls denied' } }) // inbox unlink fails
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ data: { document_id: string | null } }>(res)
+    expect(status).toBe(200)
+    expect(body.data.document_id).toBeNull()
+    expect(spy).toHaveBeenCalledWith(
+      '[attach-document] Failed to unlink inbox item:',
+      expect.objectContaining({ message: 'rls denied' }),
+    )
+    spy.mockRestore()
   })
 })

@@ -220,6 +220,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
  *
  * Detach a document from a transaction.
  *
+ * Also undoes the invoice_inbox_items back-link written by POST, so the next
+ * booking does not re-anchor the detached doc (see propagateUnderlag...).
+ *
  * Blocked once the document has propagated into a journal entry (BFL 5 kap 6 §
  * räkenskapsinformation immutability): at that point the doc is the
  * verifikation's underlag and can only be undone by reversing the entry.
@@ -282,6 +285,27 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
       }
       console.error('[attach-document] Failed to detach:', updateError)
       return NextResponse.json({ error: 'Failed to detach document' }, { status: 500 })
+    }
+
+    // Undo the inbox back-link the POST path wrote. Without this the item
+    // still says matched_transaction_id = this tx, and the next categorize /
+    // book / bulk-book runs propagateUnderlagForBookedTransaction, which
+    // anchors the DETACHED document onto the new verifikation as immutable
+    // underlag (BFL 5 kap 7 §: the verifikat would cite a receipt the user
+    // rejected). Scoped to the previously pinned doc and to items not yet
+    // consumed by a verifikat. Best-effort like the POST side: the pin
+    // removal is the primary effect and stays committed.
+    if (tx.document_id) {
+      const { error: inboxUnlinkErr } = await supabase
+        .from('invoice_inbox_items')
+        .update({ matched_transaction_id: null })
+        .eq('document_id', tx.document_id)
+        .eq('company_id', companyId)
+        .eq('matched_transaction_id', transactionId)
+        .is('created_journal_entry_id', null)
+      if (inboxUnlinkErr) {
+        console.error('[attach-document] Failed to unlink inbox item:', inboxUnlinkErr)
+      }
     }
 
     return NextResponse.json({ data: { transaction_id: transactionId, document_id: null } })
