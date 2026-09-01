@@ -407,7 +407,8 @@ export default function InvoicesPage() {
         label = key
       } else if (groupMode === 'customer') {
         label = (invoice.customer as { name: string })?.name ?? '—'
-        key = label.toLocaleLowerCase('sv-SE')
+        // Bucket by id, not display name: two customers can share a name.
+        key = invoice.customer_id ?? label
       } else {
         key = (invoice.invoice_date ?? '').slice(0, 7) || '—'
         label = key
@@ -420,7 +421,7 @@ export default function InvoicesPage() {
     if (groupMode === 'status') {
       keys = (['drafts', 'awaiting', 'settled'] as const).filter((key) => buckets.has(key))
     } else if (groupMode === 'customer') {
-      keys.sort((a, b) => a.localeCompare(b, 'sv'))
+      keys.sort((a, b) => (buckets.get(a)?.label ?? a).localeCompare(buckets.get(b)?.label ?? b, 'sv'))
     } else {
       keys.sort((a, b) => b.localeCompare(a))
     }
