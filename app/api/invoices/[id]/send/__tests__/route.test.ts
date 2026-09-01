@@ -390,6 +390,20 @@ describe('POST /api/invoices/[id]/send', () => {
     },
   )
 
+  it('does not allocate a number or send when the registered company has no VAT number', async () => {
+    enqueue({ data: makeInvoice({ ...invoice, invoice_number: null }), error: null })
+    enqueue({ data: { ...company, vat_registered: true, vat_number: null }, error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_SEND_VAT_NUMBER_MISSING')
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('rejects custom recipients from a non-admin company member before allocation', async () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: company, error: null })
