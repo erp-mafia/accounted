@@ -313,14 +313,16 @@ export function AccountPickerDialog({
   }, [open, isInitialSelection, company?.id, connectionId, supabase, accounts])
 
   // "Alla" means this company's accounts: a claimed account is only ever
-  // selected by an explicit tick inside the disclosure.
-  const allSelected =
-    ownAccounts.length > 0 && ownAccounts.every((a) => selected.has(a.uid))
+  // selected by an explicit tick inside the disclosure. Vacuously true when
+  // there are no own accounts, so "Markera alla" is disabled instead of
+  // being a live button that does nothing.
+  const allSelected = ownAccounts.every((a) => selected.has(a.uid))
   const noneSelected = selected.size === 0
-  // Denominator for the "x av y valda" line: own accounts plus any claimed
-  // account the user deliberately ticked, so the count never exceeds it.
-  const selectableCount =
-    ownAccounts.length + claimedElsewhere.filter((a) => selected.has(a.uid)).length
+  // Claimed accounts the user deliberately ticked inside the disclosure. They
+  // count in "x av y valda" and are named on the disclosure line even while
+  // it is collapsed, so the counter never exceeds what the user can see.
+  const selectedClaimedCount = claimedElsewhere.filter((a) => selected.has(a.uid)).length
+  const selectableCount = ownAccounts.length + selectedClaimedCount
 
   const byDisplayName = (a: StoredAccount, b: StoredAccount) =>
     (a.name || a.iban || '').localeCompare(b.name || b.iban || '')
@@ -989,9 +991,16 @@ export function AccountPickerDialog({
 
         <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-border divide-y divide-border">
           {sortedAccounts.map(renderAccountRow)}
+          {/* Two distinct empty states: every account in the consent belongs
+              to another company (the text below says so and points at the
+              disclosure), or the consent simply carries no accounts (a failed
+              connect, or nothing ticked at the bank), where a claim would be
+              a false statement. */}
           {sortedAccounts.length === 0 && (
             <p className="p-3 text-xs text-muted-foreground">
-              Inga konton att välja: alla konton i den här bankkopplingen synkas redan i andra bolag.
+              {claimedElsewhere.length > 0
+                ? 'Inga konton att välja: alla konton i den här bankkopplingen synkas redan i andra bolag.'
+                : 'Bankkopplingen innehåller inga konton. Förnya anslutningen och välj konton hos banken.'}
             </p>
           )}
         </div>
@@ -1012,7 +1021,10 @@ export function AccountPickerDialog({
               <ChevronRight
                 className={cn('h-3.5 w-3.5 transition-transform duration-150', claimedOpen && 'rotate-90')}
               />
-              <span className="tabular-nums">{describeClaimedElsewhere(claimedElsewhere)}</span>
+              <span className="tabular-nums" data-ph-mask="">
+                {describeClaimedElsewhere(claimedElsewhere)}
+                {selectedClaimedCount > 0 && ` (${selectedClaimedCount} valt här)`}
+              </span>
             </button>
             {claimedOpen && (
               <div className="max-h-[30vh] overflow-y-auto rounded-lg border border-border divide-y divide-border">

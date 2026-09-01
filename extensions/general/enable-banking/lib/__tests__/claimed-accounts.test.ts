@@ -33,6 +33,15 @@ describe('partitionByClaim', () => {
     expect(partitionByClaim([legacy]).claimedElsewhere).toEqual([])
   })
 
+  it('keeps a flagged account visible when it is enabled here (invariant breach must not hide a syncing feed)', () => {
+    const flaggedButEnabled = account({ uid: 'a', iban: 'SE1', enabled: true, claimed_by_company_id: 'x' })
+    const flaggedNoEnabledField = account({ uid: 'b', iban: 'SE2', claimed_by_company_id: 'x' })
+    const { own, claimedElsewhere } = partitionByClaim([flaggedButEnabled, flaggedNoEnabledField])
+    // enabled missing means enabled (back-compat default), so both stay own.
+    expect(own).toEqual([flaggedButEnabled, flaggedNoEnabledField])
+    expect(claimedElsewhere).toEqual([])
+  })
+
   it('treats a carried deselection without a claim as own', () => {
     const deselected = account({ uid: 'a', iban: 'SE1', enabled: false, deselected_elsewhere: true })
     expect(partitionByClaim([deselected]).own).toEqual([deselected])
@@ -41,7 +50,7 @@ describe('partitionByClaim', () => {
   it('preserves order within each partition and handles an empty list', () => {
     expect(partitionByClaim([])).toEqual({ own: [], claimedElsewhere: [] })
     const rows = ['1', '2', '3', '4'].map((n, i) =>
-      account({ uid: n, claimed_by_company_id: i % 2 ? 'x' : undefined }),
+      account({ uid: n, enabled: false, claimed_by_company_id: i % 2 ? 'x' : undefined }),
     )
     const { own, claimedElsewhere } = partitionByClaim(rows)
     expect(own.map((a) => a.uid)).toEqual(['1', '3'])
@@ -72,6 +81,14 @@ describe('describeClaimedElsewhere', () => {
 
     const unnamed = [account({ uid: 'a', claimed_by_company_id: 'x' })]
     expect(describeClaimedElsewhere(unnamed)).toBe('1 konto synkas i ett annat bolag')
+  })
+
+  it('does not merge two different companies that share a display name', () => {
+    const sameNameDifferentIds = [
+      account({ uid: 'a', claimed_by_company_id: 'x', claimed_by_company_name: 'Testbrand AB' }),
+      account({ uid: 'b', claimed_by_company_id: 'y', claimed_by_company_name: 'Testbrand AB' }),
+    ]
+    expect(describeClaimedElsewhere(sameNameDifferentIds)).toBe('2 konton synkas i andra bolag')
   })
 
   it('returns an empty string for no accounts', () => {

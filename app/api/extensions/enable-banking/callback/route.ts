@@ -559,7 +559,25 @@ async function finalizeConnection(
       priorEnabledByUid.has(account.uid) ||
       (normalizedIban ? priorEnabledByIban.has(normalizedIban) : false) ||
       pairedPriorUidByNewUid.has(account.uid)
-    if (seenOnThisRow) continue
+    if (seenOnThisRow) {
+      // The carried enabled/disabled state stands. The claim label is
+      // metadata on top of it: accountsMetadata is rebuilt without the prior
+      // flags, so without this an in-place renewal would drop the label and
+      // the picker would list the sibling's accounts as plain unchecked own
+      // accounts again. Re-stamp it only on an account that stays disabled
+      // here (an enabled one is the active company's standing state, which
+      // outranks any claim), and only from a fresh lookup, never from the
+      // stale prior flag.
+      if (account.enabled === false && crossCompany !== null) {
+        const claim = normalizedIban ? crossCompany.claims.get(normalizedIban) : undefined
+        if (claim) {
+          account.claimed_by_company_id = claim.companyId
+          if (claim.companyName) account.claimed_by_company_name = claim.companyName
+          claimedCount += 1
+        }
+      }
+      continue
+    }
 
     if (crossCompany === null) {
       // Fail closed: without the claim set a free account cannot be told from

@@ -189,7 +189,11 @@ export function BankConnectionStatus({
         )}
         {uiState === 'pending_selection' ? (
           <span className="text-xs text-muted-foreground">
-            {accounts.length} konton tillgängliga: inga transaktioner synkas ännu
+            {ownAccounts.length > 0
+              ? `${ownAccounts.length} konton tillgängliga: inga transaktioner synkas ännu`
+              : claimedElsewhere.length > 0
+                ? 'Alla konton i kopplingen synkas redan i andra bolag'
+                : 'Inga konton i kopplingen: inga transaktioner synkas ännu'}
           </span>
         ) : (
           <>
@@ -384,7 +388,7 @@ export function BankConnectionStatus({
                   account picker ("Hantera konton"), where it is a deliberate
                   tick inside a disclosure. */}
               {claimedElsewhere.length > 0 && (
-                <div className="py-2 text-xs text-muted-foreground tabular-nums">
+                <div className="py-2 text-xs text-muted-foreground tabular-nums" data-ph-mask="">
                   {describeClaimedElsewhere(claimedElsewhere)}
                 </div>
               )}
