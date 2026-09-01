@@ -590,7 +590,8 @@ export const enableBankingExtension: Extension = {
               redirectUrl,
               oauthState,
               psuType,
-              authMethod
+              authMethod,
+              companyId
             )
 
             // Record the bank's authorization_id for audit/traceability. The
@@ -623,7 +624,8 @@ export const enableBankingExtension: Extension = {
             redirectUrl,
             oauthState,
             psuType,
-            authMethod
+            authMethod,
+            companyId
           )
 
           const { data: connection, error } = await supabase
