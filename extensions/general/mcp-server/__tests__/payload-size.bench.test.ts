@@ -341,6 +341,47 @@ describe('tools/list payload size guard', () => {
     //     Cheaper than it looks per example, so the next batch should still
     //     demote a read first rather than assume there is room.
     //
+    //   * 61.5K to 58.9K by trimming the ONE schema 58 catalogued tools share
+    //     (2026-09-01). Measured first, which is what made it findable:
+    //     outputSchema is 38% of the whole catalog (23 290 tokens), and
+    //     STAGED_OPERATION_SCHEMA alone accounted for 14 736 of it, the same
+    //     envelope transmitted 58 times. Descriptions, which the three rounds
+    //     above trimmed, are only 10%.
+    //
+    //     Three edits, no tool demoted and no field removed: period_status
+    //     stops declaring its sub-shape as JSON Schema and carries it in one
+    //     sentence instead (actor, approve and preview were already bare
+    //     objects, so this makes the envelope internally consistent), the next
+    //     hint drops args' redundant additionalProperties: true, and
+    //     operation_id's description loses six words. Every
+    //     change is in the LOOSER direction: the server emits
+    //     structuredContent for every tool, and the documented failure mode is
+    //     a declaration too TIGHT making a strict client reject a successful
+    //     call. A looser declaration cannot do that.
+    //
+    //     next keeps additionalProperties: false: staging.test.ts pins it as a
+    //     closed shape, and a guard whose reason is not in front of you is not
+    //     a guard to loosen for 420 tokens.
+    //
+    //     Ceiling set to 60 000, not to 59 250. That leaves ~1 070 tokens of
+    //     deliberate working margin, about two or three ordinary tool
+    //     additions. The log above shows the tight-ratchet cycle: ratchet to
+    //     ~300 margin, block the next feature, bump, feel bad, demote. server.ts
+    //     took 70 commits in the 14 days before this change and the margin was
+    //     116 tokens, which is how that cycle starts. The margin is here so the
+    //     guard catches sustained growth rather than the next commit.
+    //
+    //     If more is needed, the lever is known and priced: the envelope still
+    //     costs ~11 800 tokens across those 58 tools, and the structural fix is
+    //     to stop repeating it, not to trim it further.
+    //
+    //   * 59.0K to 59.1K: second examples batch (2026-09-01, #2066), 7
+    //     examples on 5 more tools for 80 tokens, spending under half the
+    //     margin the envelope trim created. Picked by evidence: search_tools
+    //     was sent a nonexistent `offset` in prod the same day, the upload
+    //     pair's examples ARE the two-step flow, and
+    //     list_uncategorized_transactions is the highest-traffic read.
+    //
     // Long-term answer to growth is no longer a ceiling bump. gnubok_call_tool
     // makes `catalogVisibility: 'search'` usable for READ tools on hosts that
     // can only invoke what tools/list showed them, which is the constraint that
@@ -350,7 +391,7 @@ describe('tools/list payload size guard', () => {
     // Only READ tools may be demoted: gnubok_call_tool refuses writes, so a
     // search-only WRITE is uncallable on Claude.ai. That is why the three
     // bumps above happened instead of demotions.
-    expect(approxTokens).toBeLessThan(61_600)
+    expect(approxTokens).toBeLessThan(60_000)
   })
 
   /**
