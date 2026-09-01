@@ -3065,6 +3065,13 @@ export default function TransactionsPage() {
     }
   }
 
+  /**
+   * "Ta bort underlag" (#2132): confirm, then DELETE attach-document. On
+   * success the pin is cleared in the list, in the attach dialog's own row
+   * snapshot, and in the inbox card's optimistic override. A 409 (doc already
+   * on a verifikation, or the row changed under us) shows the route's Swedish
+   * message verbatim; other failures map through get-error-message.
+   */
   async function handleDetachDocument(tx: TransactionWithInvoice) {
     // Same idiom as Ignorera: the pin is reversible (re-attach), but the
     // indicator vanishes immediately, so confirm before the write.

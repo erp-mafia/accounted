@@ -4,6 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { AttachDocumentSchema } from '@/lib/api/schemas'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { errorCauseTag } from '@/lib/errors/db-error'
 import {
   completeInboxItemsForBookedTransaction,
   resolveVoucherLinkedEntryIds,
@@ -261,11 +262,57 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
       }
     }
 
-    const { error: updateError } = await supabase
+    // Step 1: release the inbox back-link the POST path wrote, BEFORE the pin.
+    // Without this the item still says matched_transaction_id = this tx, and
+    // the next categorize / book / bulk-book runs
+    // propagateUnderlagForBookedTransaction, which anchors the DETACHED
+    // document onto the new verifikation as immutable underlag (BFL 5 kap 7 §:
+    // the verifikat would cite a receipt the user rejected). Scoped by
+    // transaction, not by the pinned doc: the unique index on
+    // matched_transaction_id means at most one item points here, and a stale
+    // item whose doc differs from the pin (replace path) would re-anchor just
+    // the same. Items already consumed by a verifikat are left alone.
+    //
+    // Ordering: unlink first, then compare-and-set the pin (step 2). A POST
+    // that lands in between re-pins a new doc and its back-link, and the CAS
+    // below then refuses to clobber it (409), so the two writes cannot end up
+    // as "new doc pinned, its inbox item unlinked". A failed unlink returns
+    // before anything changed, so a retry is trivially idempotent.
+    const { error: inboxUnlinkErr } = await supabase
+      .from('invoice_inbox_items')
+      .update({ matched_transaction_id: null })
+      .eq('company_id', companyId)
+      .eq('matched_transaction_id', transactionId)
+      .is('created_journal_entry_id', null)
+    if (inboxUnlinkErr) {
+      // Not best-effort: a stale back-link is the exact defect this detach
+      // exists to prevent, so a "succeeded" response would hide a compliance
+      // hazard. Coded cause only: raw driver messages can quote row values.
+      console.error('[attach-document] Failed to unlink inbox item:', {
+        cause: errorCauseTag(inboxUnlinkErr),
+      })
+      return NextResponse.json(
+        {
+          error:
+            'Inkorgsposten kunde inte släppas, så underlaget är fortfarande kopplat. Försök igen.',
+        },
+        { status: 500 },
+      )
+    }
+
+    // Step 2: clear the pin, but only if it is still the doc we read above
+    // (or still empty). A concurrent POST that re-pinned in the meantime wins:
+    // we must not detach a document the user just attached, nor report
+    // success for a detach that did not happen.
+    let clearPin = supabase
       .from('transactions')
       .update({ document_id: null })
       .eq('id', transactionId)
       .eq('company_id', companyId)
+    clearPin = tx.document_id
+      ? clearPin.eq('document_id', tx.document_id)
+      : clearPin.is('document_id', null)
+    const { data: cleared, error: updateError } = await clearPin.select('id').maybeSingle()
 
     if (updateError) {
       // The enforce_transactions_document_immutability trigger raises a
@@ -287,36 +334,13 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: 'Failed to detach document' }, { status: 500 })
     }
 
-    // Undo the inbox back-link the POST path wrote. Without this the item
-    // still says matched_transaction_id = this tx, and the next categorize /
-    // book / bulk-book runs propagateUnderlagForBookedTransaction, which
-    // anchors the DETACHED document onto the new verifikation as immutable
-    // underlag (BFL 5 kap 7 §: the verifikat would cite a receipt the user
-    // rejected). Scoped by transaction, not by the pinned doc: the unique
-    // index on matched_transaction_id means at most one item points here, and
-    // a stale item whose doc differs from the pin (replace path) would
-    // re-anchor just the same. Runs even when nothing was pinned, so a retry
-    // after a partial failure below still clears the link. Items already
-    // consumed by a verifikat are left alone.
-    const { error: inboxUnlinkErr } = await supabase
-      .from('invoice_inbox_items')
-      .update({ matched_transaction_id: null })
-      .eq('company_id', companyId)
-      .eq('matched_transaction_id', transactionId)
-      .is('created_journal_entry_id', null)
-    if (inboxUnlinkErr) {
-      // Not best-effort: a stale back-link is the exact defect this detach
-      // exists to prevent, so a "succeeded" response here would hide a
-      // compliance hazard. The pin removal above is committed and stays;
-      // say so, and that a retry is idempotent (mirrors the POST side's
-      // propagation failure).
-      console.error('[attach-document] Failed to unlink inbox item:', inboxUnlinkErr)
+    if (!cleared) {
+      // Zero rows: the pin changed under us (concurrent attach) or the row
+      // vanished. Either way this detach did not happen; say so instead of
+      // reporting success for someone else's state.
       return NextResponse.json(
-        {
-          error:
-            'Underlaget kopplades loss från transaktionen men inkorgsposten kunde inte släppas. Försök igen: operationen är idempotent.',
-        },
-        { status: 500 },
+        { error: 'Transaktionen ändrades samtidigt. Ladda om sidan och försök igen.' },
+        { status: 409 },
       )
     }
 
