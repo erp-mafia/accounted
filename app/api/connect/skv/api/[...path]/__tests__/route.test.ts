@@ -89,6 +89,30 @@ describe('skv data proxy', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('https://api.skv/agd/inlamning/v1/underlag')
     expect(fetchMock.mock.calls[0][1].body).toBe('<xml/>')
   })
+  it('forwards SKV diagnostic headers (WWW-Authenticate, x-skv-*) but nothing else', async () => {
+    // The instance's 401 classifier reads WWW-Authenticate (insufficient_scope
+    // → MISSING_SCOPE) and the x-skv-* family on body-less gateway
+    // rejections; stripping them blinded connector-mode classification.
+    fetchMock.mockResolvedValueOnce(new Response('', {
+      status: 401,
+      headers: {
+        'content-type': 'application/json',
+        'WWW-Authenticate': 'Bearer error="insufficient_scope", scope="agd"',
+        'x-skv-trace': 'abc',
+        'x-amzn-requestid': 'req-1',
+        'set-cookie': 'secret=1',
+        'x-internal-other': 'nope',
+      },
+    }))
+    const res = await GET(req('GET', '/moms/x'))
+    expect(res.status).toBe(401)
+    expect(res.headers.get('WWW-Authenticate')).toBe('Bearer error="insufficient_scope", scope="agd"')
+    expect(res.headers.get('x-skv-trace')).toBe('abc')
+    expect(res.headers.get('x-amzn-requestid')).toBe('req-1')
+    expect(res.headers.get('set-cookie')).toBeNull()
+    expect(res.headers.get('x-internal-other')).toBeNull()
+  })
+
   it('429 when the budget is exhausted', async () => {
     hh.budget.mockResolvedValue({ ok: false, scope: 'hour', retryAfterSec: 3600 })
     const res = await GET(req('GET', '/moms/x'))

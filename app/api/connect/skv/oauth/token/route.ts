@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
 import { withConnectorAuth, type ConnectorContext } from '@/lib/connect/hosted/with-connector-auth'
-import { exchangeSkvCode, refreshSkvToken, type SkvTokenResponse } from '@/lib/connect/upstreams/skatteverket-oauth'
+import { exchangeSkvCode, isSkvDeadRefreshTokenError, refreshSkvToken, type SkvTokenResponse } from '@/lib/connect/upstreams/skatteverket-oauth'
 import { reserveUpstream } from '@/lib/connect/hosted/upstream-budget'
 import { activateByPendingState, findByRefreshHash, findPendingByState, hashHandle } from '@/lib/connect/hosted/ledger'
 import { verifyConnectorState } from '@/lib/connect/hosted/state'
@@ -140,7 +140,22 @@ export const POST = withConnectorAuth('connect.skv', async (request, ctx) => {
     }
     return tokenResponse(tokens)
   } catch (err) {
-    ctx.log.warn('skv token exchange failed', { err: err instanceof Error ? err.message : String(err) })
+    const message = err instanceof Error ? err.message : String(err)
+    // Ordinary session expiry must be distinguishable from a transient
+    // failure: SKV's per-flow refresh tokens live 65 minutes, so a dead
+    // refresh token is the DOMINANT outcome here, and collapsing it into the
+    // generic 502 stripped every connector instance of its reconnect flow
+    // (raw 500s, no banner, cron retry spam). The instance maps this code to
+    // SESSION_EXPIRED; everything else stays the opaque 502 so a transient
+    // SKV outage never masquerades as "reconnect needed".
+    if (parsed.data.grant_type === 'refresh_token' && isSkvDeadRefreshTokenError(message)) {
+      ctx.log.info('skv refresh token expired at upstream', { code: 'CONNECTOR_SKV_REFRESH_DEAD' })
+      return NextResponse.json(
+        { error: 'Skatteverket refresh token is no longer valid; a new BankID consent is required', code: 'CONNECTOR_SKV_REFRESH_DEAD' },
+        { status: 401 },
+      )
+    }
+    ctx.log.warn('skv token exchange failed', { err: message })
     return NextResponse.json({ error: 'Skatteverket token exchange failed', code: 'CONNECTOR_SKV_TOKEN_FAILED' }, { status: 502 })
   }
 })
