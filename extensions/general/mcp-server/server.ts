@@ -3033,6 +3033,9 @@ export const tools: McpTool[] = [
         scope: { type: 'string', description: 'Optional filter: only tools requiring this API key scope (e.g. "invoices:write").' },
         limit: { type: 'number', description: 'Max results, 1-50 (default 20).' },
       },
+      // No offset exists: a caller paged with one today (2026-09-01) and was
+      // rejected. Raise limit instead, or narrow the query.
+      examples: [{ query: 'moms', detail: 'summary' }, { query: 'faktura', limit: 50 }],
     },
     outputSchema: {
       type: 'object',
@@ -5106,6 +5109,7 @@ export const tools: McpTool[] = [
         offset: { type: 'number', description: 'Number of results to skip for pagination (default 0)' },
         cash_account_id: { type: 'string' },
       },
+      examples: [{}, { limit: 100, offset: 100 }],
     },
     outputSchema: paginatedSchema('transactions', {
       type: 'object',
@@ -12030,6 +12034,9 @@ export const tools: McpTool[] = [
         },
       },
       required: ['file_name'],
+      // Step 1 of 2: PUT the bytes to upload_url, then complete with the SAME
+      // upload_id and file_name.
+      examples: [{ file_name: 'kvitto-sl-2026-03-12.pdf' }],
     },
     outputSchema: {
       type: 'object',
@@ -12097,6 +12104,8 @@ export const tools: McpTool[] = [
         },
       },
       required: ['upload_id', 'file_name'],
+      // Step 2 of 2: same upload_id and file_name as gnubok_create_document_upload.
+      examples: [{ upload_id: 'f00d...', file_name: 'kvitto-sl-2026-03-12.pdf' }],
     },
     outputSchema: {
       type: 'object',
@@ -13170,6 +13179,7 @@ export const tools: McpTool[] = [
         dry_run: { type: 'boolean', description: 'Preview without staging' },
       },
       required: ['document_id', 'journal_entry_id'],
+      examples: [{ document_id: 'd0c1...', journal_entry_id: 'a44e...' }],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: {
