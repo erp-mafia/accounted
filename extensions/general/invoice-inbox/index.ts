@@ -1856,12 +1856,15 @@ export const invoiceInboxExtension: Extension = {
               aggregateType: 'System',
               aggregateId: email_id,
               eventType: 'RateLimitedDropped',
+              // No `from` / `subject`: processing_history is append-only
+              // (UPDATE is trigger-blocked) and outside the archive's erasure
+              // path, so the sender address and the free-text subject may not
+              // land here. correlationId is the Resend email_id, which reaches
+              // both through invoice_inbox_items.
               payload: {
                 scope: limit.scope,
                 retry_after_sec: limit.retryAfterSec,
                 attachment_count: rawAttachments.length,
-                from,
-                subject,
               },
               actor: { type: 'system', id: 'resend-inbound' },
               occurredAt: new Date(),
@@ -1886,12 +1889,11 @@ export const invoiceInboxExtension: Extension = {
               aggregateType: 'System',
               aggregateId: email_id,
               eventType: 'AttachmentsTruncated',
+              // Counts only, for the same reason as RateLimitedDropped above.
               payload: {
                 total: totalAttachments,
                 processed: attachments.length,
                 dropped: truncatedCount,
-                from,
-                subject,
               },
               actor: { type: 'system', id: 'resend-inbound' },
               occurredAt: new Date(),

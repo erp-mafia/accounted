@@ -13,6 +13,7 @@ import {
   FileText,
   Calendar,
   Plus,
+  TrendingUp,
   type LucideIcon,
 } from 'lucide-react'
 import { SupportLink } from '@/components/ui/support-link'
@@ -182,6 +183,28 @@ export function EmptyReports() {
       actionHref="/invoices?new=1"
       secondaryActionLabel={t('preset_reports_secondary')}
       secondaryActionHref="/import"
+    />
+  )
+}
+
+/**
+ * Byrå cockpit: no client companies yet. A preset, not a bare <EmptyState
+ * icon={TrendingUp} />, because the only caller is a Server Component: a
+ * lucide icon is a forwardRef object that cannot cross the RSC boundary as a
+ * prop, while a reference to this client component can. The copy lives in the
+ * byra namespace, where the byrå surfaces already keep it.
+ */
+export function EmptyByraClients() {
+  // Named tByra, not t: this is the only preset here that reads from a
+  // namespace other than `empty`, and i18n/__tests__/message-keys.test.ts maps
+  // one variable name to one namespace per file. Reusing `t` would silently
+  // re-point every other preset's key in this file at `byra`.
+  const tByra = useTranslations('byra')
+  return (
+    <EmptyState
+      icon={TrendingUp}
+      title={tByra('kpi_empty_title')}
+      description={tByra('kpi_empty_description')}
     />
   )
 }

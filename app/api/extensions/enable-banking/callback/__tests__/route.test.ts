@@ -9,13 +9,15 @@ vi.mock('@/extensions/general/enable-banking/lib/api-client', () => ({
 }))
 
 // Use hoisted to safely create mock objects referenced in vi.mock factories
-const { mockFrom, mockUpsertFromPsd2, mockAllocate, mockSupersede } = vi.hoisted(() => {
-  const mockFrom = vi.fn()
-  const mockUpsertFromPsd2 = vi.fn()
-  const mockAllocate = vi.fn()
-  const mockSupersede = vi.fn()
-  return { mockFrom, mockUpsertFromPsd2, mockAllocate, mockSupersede }
-})
+const { mockFrom, mockUpsertFromPsd2, mockAllocate, mockSupersede, mockCrossCompanyContext } =
+  vi.hoisted(() => {
+    const mockFrom = vi.fn()
+    const mockUpsertFromPsd2 = vi.fn()
+    const mockAllocate = vi.fn()
+    const mockSupersede = vi.fn()
+    const mockCrossCompanyContext = vi.fn()
+    return { mockFrom, mockUpsertFromPsd2, mockAllocate, mockSupersede, mockCrossCompanyContext }
+  })
 
 // The supersede pass has its own unit tests (extensions/general/enable-banking/
 // __tests__/supersede.test.ts); here it is mocked so these tests assert the
@@ -23,6 +25,19 @@ const { mockFrom, mockUpsertFromPsd2, mockAllocate, mockSupersede } = vi.hoisted
 vi.mock('@/extensions/general/enable-banking/lib/supersede', () => ({
   supersedeSiblingConnections: (...args: unknown[]) => mockSupersede(...args),
 }))
+
+// The cross-company claim lookup has its own unit tests (extensions/general/
+// enable-banking/lib/__tests__/session-sharing.test.ts); mocked here so the
+// per-test mockFrom scripts don't have to answer its queries too. Everything
+// else in session-sharing stays real.
+vi.mock('@/extensions/general/enable-banking/lib/session-sharing', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/extensions/general/enable-banking/lib/session-sharing')>()
+  return {
+    ...actual,
+    fetchCrossCompanyAccountContext: (...args: unknown[]) => mockCrossCompanyContext(...args),
+  }
+})
 
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn().mockResolvedValue({
@@ -91,6 +106,12 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     vi.clearAllMocks()
     mockUpsertFromPsd2.mockResolvedValue(undefined)
     mockSupersede.mockResolvedValue({ supersededIds: [], dedupScopeByIban: new Map() })
+    // No sibling company claims anything by default; individual tests override.
+    mockCrossCompanyContext.mockResolvedValue({
+      claims: new Map(),
+      deselectedIbans: new Set(),
+      activeCompanyIbans: new Set(),
+    })
     // Allocator stand-in mirroring the real behavior: currency default first,
     // then the next free 1931–1959 slot (skipping other currency defaults).
     mockAllocate.mockImplementation(
@@ -269,6 +290,195 @@ describe('GET /api/extensions/enable-banking/callback', () => {
       (c) => (c[2] as { ledger_account: string }).ledger_account,
     )
     expect(mirrorLedgers).toEqual(['1930', '1931'])
+  })
+
+  // The F1 scenario: at a one-session bank the PSU's single consent covers
+  // accounts another of the user's companies books (and, before this guard,
+  // stored them pre-enabled in the wrong company and mirrored them into its
+  // cash_accounts, one save away from cross-company bookkeeping).
+  function mockConnectionFlow(pendingRow: Record<string, unknown>) {
+    const capturedUpdates: Record<string, unknown>[] = []
+    let callIndex = 0
+    mockFrom.mockImplementation(() => {
+      callIndex++
+      if (callIndex === 1) {
+        return mockChain({ data: pendingRow, error: null })
+      }
+      const chain: Record<string, unknown> = {}
+      chain.update = vi.fn((payload: Record<string, unknown>) => {
+        capturedUpdates.push(payload)
+        return chain
+      })
+      chain.eq = vi.fn().mockReturnValue(chain)
+      chain.select = vi.fn().mockReturnValue(chain)
+      chain.single = vi.fn().mockResolvedValue({
+        data: { id: 'conn-1', bank_name: 'SEB', company_id: 'company-1', user_id: 'user-1' },
+        error: null,
+      })
+      chain.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: null })
+      return chain
+    })
+    return capturedUpdates
+  }
+
+  it('stores accounts claimed by a sibling company disabled + flagged and never mirrors them', async () => {
+    const capturedUpdates = mockConnectionFlow({
+      id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'SEB', status: 'pending',
+    })
+    mockCrossCompanyContext.mockResolvedValue({
+      claims: new Map([
+        ['SE9999', { companyId: 'company-2', companyName: 'Other Energy AB' }],
+      ]),
+      deselectedIbans: new Set(),
+      activeCompanyIbans: new Set(),
+    })
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-1',
+      accounts: [
+        { uid: 'acc-own', account_id: { iban: 'SE1234' }, name: 'Företagskonto', currency: 'SEK' },
+        { uid: 'acc-foreign', account_id: { iban: 'SE9999' }, name: 'Annat bolags konto', currency: 'SEK' },
+      ],
+      access: { valid_until: '2027-12-31T00:00:00Z' },
+      aspsp: { name: 'SEB', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+
+    expect(response.status).toBe(200)
+    // Drain the stream: the finalize work completes behind the interim page.
+    await response.text()
+    const accountsData = capturedUpdates[0].accounts_data as Array<{
+      uid: string
+      enabled: boolean
+      claimed_by_company_id?: string
+      claimed_by_company_name?: string
+    }>
+    const own = accountsData.find(a => a.uid === 'acc-own')
+    const foreign = accountsData.find(a => a.uid === 'acc-foreign')
+    expect(own?.enabled).toBe(true)
+    expect(own?.claimed_by_company_id).toBeUndefined()
+    expect(foreign?.enabled).toBe(false)
+    expect(foreign?.claimed_by_company_id).toBe('company-2')
+    expect(foreign?.claimed_by_company_name).toBe('Other Energy AB')
+
+    // The claimed account gets NO cash_accounts row and NO 19xx slot in this
+    // company's chart: only the own account is mirrored.
+    expect(mockUpsertFromPsd2).toHaveBeenCalledTimes(1)
+    expect((mockUpsertFromPsd2.mock.calls[0][2] as { external_uid: string }).external_uid).toBe('acc-own')
+    expect(mockAllocate).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps an account this row already carried enabled even when a sibling claims its IBAN', async () => {
+    // A standing feed in the active company outranks a sibling's claim: a
+    // renewal must never switch a working account off. (Legacy double-claims
+    // from the pre-session-sharing era make this overlap real.)
+    const capturedUpdates = mockConnectionFlow({
+      id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'SEB', status: 'expired',
+      accounts_data: [
+        { uid: 'acc-old', iban: 'SE1234', name: 'Företagskonto', currency: 'SEK', enabled: true },
+      ],
+    })
+    mockCrossCompanyContext.mockResolvedValue({
+      claims: new Map([['SE1234', { companyId: 'company-2', companyName: 'Other AB' }]]),
+      deselectedIbans: new Set(),
+      activeCompanyIbans: new Set(),
+    })
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-2',
+      accounts: [
+        { uid: 'acc-new', account_id: { iban: 'SE1234' }, name: 'Företagskonto', currency: 'SEK' },
+      ],
+      access: { valid_until: '2027-12-31T00:00:00Z' },
+      aspsp: { name: 'SEB', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+    // Drain the stream: the finalize work completes behind the interim page.
+    await response.text()
+
+    const accountsData = capturedUpdates[0].accounts_data as Array<{
+      uid: string
+      enabled: boolean
+      claimed_by_company_id?: string
+    }>
+    expect(accountsData[0].enabled).toBe(true)
+    expect(accountsData[0].claimed_by_company_id).toBeUndefined()
+    expect(mockUpsertFromPsd2).toHaveBeenCalledTimes(1)
+  })
+
+  it('carries a deselection made on another connection row onto a fresh connect', async () => {
+    // C2: "Synkas ej" chosen under one company must not come back pre-checked
+    // when a new connection row (any company) sees the same IBAN.
+    const capturedUpdates = mockConnectionFlow({
+      id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'SEB', status: 'pending',
+    })
+    mockCrossCompanyContext.mockResolvedValue({
+      claims: new Map(),
+      deselectedIbans: new Set(['SE5555']),
+      activeCompanyIbans: new Set(),
+    })
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-1',
+      accounts: [
+        { uid: 'acc-card', account_id: { iban: 'SE5555' }, name: 'Privat kreditkort', currency: 'SEK' },
+      ],
+      access: { valid_until: '2027-12-31T00:00:00Z' },
+      aspsp: { name: 'SEB', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+    // Drain the stream: the finalize work completes behind the interim page.
+    await response.text()
+
+    const accountsData = capturedUpdates[0].accounts_data as Array<{
+      uid: string
+      enabled: boolean
+      claimed_by_company_id?: string
+      deselected_elsewhere?: boolean
+    }>
+    expect(accountsData[0].enabled).toBe(false)
+    // Not a claim (no company books it), but flagged so the picker can say
+    // WHY the box is unchecked instead of leaving a silent gap.
+    expect(accountsData[0].claimed_by_company_id).toBeUndefined()
+    expect(accountsData[0].deselected_elsewhere).toBe(true)
+    // Guard-disabled accounts are never mirrored from the callback: writing
+    // enabled:false for a new-to-row account can promote an existing manual
+    // holder (the seeded primary 1930) and flip it to disabled.
+    expect(mockUpsertFromPsd2).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when the claim lookup errors: new accounts stored deselected, unflagged', async () => {
+    const capturedUpdates = mockConnectionFlow({
+      id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'SEB', status: 'pending',
+    })
+    mockCrossCompanyContext.mockResolvedValue(null)
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-1',
+      accounts: [
+        { uid: 'acc-1', account_id: { iban: 'SE1234' }, name: 'Företagskonto', currency: 'SEK' },
+      ],
+      access: { valid_until: '2027-12-31T00:00:00Z' },
+      aspsp: { name: 'SEB', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+
+    // The connect itself still succeeds: fail-closed costs a checkbox, not
+    // the connection.
+    expect(response.status).toBe(200)
+    // Drain the stream: the finalize work completes behind the interim page.
+    await response.text()
+    const accountsData = capturedUpdates[0].accounts_data as Array<{
+      uid: string
+      enabled: boolean
+      claimed_by_company_id?: string
+    }>
+    expect(accountsData[0].enabled).toBe(false)
+    expect(accountsData[0].claimed_by_company_id).toBeUndefined()
+    // Fail-closed accounts are not mirrored either: enabled:false for a
+    // new-to-row account can promote and disable an existing manual holder.
+    // The selection save mirrors whatever the user enables.
+    expect(mockUpsertFromPsd2).not.toHaveBeenCalled()
   })
 
   it('preserves existing mirrored ledgers on reconnect instead of re-deriving them', async () => {

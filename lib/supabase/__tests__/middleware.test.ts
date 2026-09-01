@@ -48,18 +48,44 @@ const state = vi.hoisted(() => ({
   // What the mocked isEmailOnBrandAllowlist returns (Rule 2 exemption).
   allowlisted: false,
   signOut: vi.fn(async () => ({ error: null })),
+  // Cookies auth-js writes through the `cookies.setAll` callback while
+  // getUser() runs: the ROTATED tokens after a successful refresh, and the
+  // maxAge-0 deletions when it removes a dead session. The middleware has to
+  // carry these onto whatever response it returns.
+  cookieWrites: [] as Array<{
+    name: string
+    value: string
+    options?: Record<string, unknown>
+  }>,
   // Row returned for user_preferences reads (the auto_logout mint lookup).
   userPreferences: null as null | { auto_logout: boolean },
   userPreferencesError: null as unknown,
 }))
 
 vi.mock('@supabase/ssr', () => ({
-  createServerClient: vi.fn(() => ({
+  createServerClient: vi.fn((
+    _url: string,
+    _key: string,
+    options: {
+      cookies: {
+        setAll: (
+          cookies: Array<{
+            name: string
+            value: string
+            options?: Record<string, unknown>
+          }>,
+        ) => void
+      }
+    },
+  ) => ({
     auth: {
-      getUser: vi.fn(async () => ({
-        data: { user: state.user },
-        error: state.authError,
-      })),
+      getUser: vi.fn(async () => {
+        if (state.cookieWrites.length > 0) options.cookies.setAll(state.cookieWrites)
+        return {
+          data: { user: state.user },
+          error: state.authError,
+        }
+      }),
       getClaims: vi.fn(async () => ({
         data: { claims: state.sessionId ? { session_id: state.sessionId } : {} },
       })),
@@ -176,6 +202,7 @@ describe('updateSession redirect destinations', () => {
     state.user = null
     state.sessionId = 'session-1'
     state.authError = null
+    state.cookieWrites = []
     state.aal = null
     state.factors = null
     state.company = {
@@ -479,6 +506,30 @@ describe('updateSession redirect destinations', () => {
       expect(locationOf(response)).toBe(`${ORIGIN}/login`)
     })
 
+    it('carries the cookies that clear a dead session', async () => {
+      // auth-js removes the session inside getUser() and queues the deletion
+      // on the response. Dropping it on the bounce made the browser replay
+      // the dead refresh token on /login, spending a second GoTrue 400 per
+      // expiry (paired 400s ~100 ms apart in production).
+      state.authError = { name: 'AuthApiError', code: 'refresh_token_not_found' }
+      state.cookieWrites = [
+        { name: 'sb-test-auth-token', value: '', options: { path: '/', maxAge: 0 } },
+      ]
+
+      const response = await run('/settings/tax', {
+        headers: {
+          cookie: `sb-test-auth-token=dead; ${SESSION_TIMEOUT_COOKIE}=stale`,
+        },
+      })
+
+      expect(response.status).toBe(307)
+      expect(new URL(locationOf(response)!).pathname).toBe('/login')
+      const cleared = response.cookies.get('sb-test-auth-token')
+      expect(cleared?.value).toBe('')
+      expect(cleared?.maxAge).toBe(0)
+      expect(response.cookies.get(SESSION_TIMEOUT_COOKIE)?.value).toBe('')
+    })
+
     it('drops a request path that normalises to a protocol-relative URL', async () => {
       // /..//evil.com normalises to the pathname //evil.com. Reflecting that
       // back as ?next= would hand the login page an off-origin destination.
@@ -594,6 +645,17 @@ describe('updateSession redirect destinations', () => {
       const url = new URL(locationOf(response)!)
       expect(url.pathname).toBe('/mfa/verify')
       expect(url.searchParams.get('returnTo')).toBeNull()
+    })
+
+    it('carries the rotated auth cookie instead of re-minting it next request', async () => {
+      state.cookieWrites = [
+        { name: 'sb-test-auth-token', value: 'rotated', options: { path: '/' } },
+      ]
+
+      const response = await run('/settings/tax')
+
+      expect(new URL(locationOf(response)!).pathname).toBe('/mfa/verify')
+      expect(response.cookies.get('sb-test-auth-token')?.value).toBe('rotated')
     })
   })
 
