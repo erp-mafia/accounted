@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { DataListEmpty } from '@/components/ui/data-list'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -588,10 +588,10 @@ export default function SupplierInvoicesPage() {
                             onCheckedChange={() => toggleSelect(inv.id)}
                             aria-label={t('bulk_select_row')}
                             className={cn(
-                              'transition-opacity duration-150',
+                              'border-foreground duration-150',
                               selectedIds.has(inv.id) || selectedIds.size > 0
                                 ? 'opacity-100'
-                                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100',
+                                : CHECKBOX_REVEAL_CLASS,
                             )}
                           />
                         )}
