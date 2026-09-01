@@ -196,23 +196,55 @@ describe('fetchCrossCompanyAccountContext', () => {
     expect(context!.deselectedIbans.has('SE11')).toBe(false)
   })
 
-  it('excludes pending_selection rows from both claims and deselection memory', async () => {
-    // A pending_selection row's flags are unconfirmed callback output
-    // (including this guard's own fail-closed writes): an abandoned picker
-    // must neither claim an account for a sibling nor poison later connects
-    // with remembered "deselections" nobody chose. The mock cannot filter,
-    // so assert the status filter itself.
+  it('treats pending_selection rows asymmetrically: enabled accounts claim, disabled flags are ignored', async () => {
+    // An attach-created row is pending_selection with deliberately-offered
+    // enabled accounts and NO cash rows until its picker is saved: those must
+    // claim, or a second company can take the same physical account inside
+    // that window. Its disabled flags are unconfirmed callback output
+    // (including the guard's own fail-closed writes) and must NOT feed the
+    // deselection memory.
     const { supabase, chainsByTable } = makeSupabase({
-      company_members: { data: [{ company_id: 'company-1' }] },
-      bank_connections: { data: [] },
+      company_members: {
+        data: [{ company_id: 'company-1' }, { company_id: 'company-2' }],
+      },
+      bank_connections: {
+        data: [
+          {
+            id: 'conn-attached',
+            company_id: 'company-2',
+            status: 'pending_selection',
+            accounts_data: [
+              { uid: 'a1', iban: 'SE11', currency: 'SEK', enabled: true },
+              { uid: 'a2', iban: 'SE22', currency: 'SEK', enabled: false },
+            ],
+          },
+        ],
+      },
       cash_accounts: { data: [] },
       companies: { data: [] },
     })
 
-    await fetchCrossCompanyAccountContext(supabase, 'user-1', 'company-1', 'conn-active')
+    const context = await fetchCrossCompanyAccountContext(
+      supabase,
+      'user-1',
+      'company-1',
+      'conn-active',
+    )
+
+    expect(context!.claims.has('SE11')).toBe(true)
+    expect(context!.deselectedIbans.has('SE22')).toBe(false)
 
     const connectionChain = chainsByTable.get('bank_connections')![0]
-    expect(connectionChain.in).toHaveBeenCalledWith('status', ['active', 'expired', 'error'])
+    expect(connectionChain.in).toHaveBeenCalledWith('status', [
+      'active',
+      'pending_selection',
+      'expired',
+      'error',
+    ])
+    // Paged reads must order on a unique column or rows can be silently
+    // skipped at page boundaries (a skipped row is a missed claim).
+    expect(connectionChain.order).toHaveBeenCalledWith('id')
+    expect(chainsByTable.get('cash_accounts')![0].order).toHaveBeenCalledWith('id')
   })
 
   it('reads cash_accounts for ALL member companies (active included)', async () => {

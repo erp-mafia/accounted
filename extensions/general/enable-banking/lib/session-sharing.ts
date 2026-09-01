@@ -346,27 +346,36 @@ export async function fetchCrossCompanyAccountContext(
   const deselectedIbans = new Set<string>()
   const activeCompanyIbans = new Set<string>()
 
-  // Statuses whose accounts count at all: a revoked row's accounts are
-  // released territory, and a 'pending_selection' row proves nothing in
-  // either direction — its enabled flags are unconfirmed callback output
-  // (findReusableSessions refuses such rows as sources for the same reason),
-  // so it neither claims an account for a sibling nor remembers a
-  // deselection. 'expired'/'error' still count: a sibling whose feed
-  // momentarily died (the common state at one-session banks right after
-  // another company authorized) has NOT given its accounts up.
+  // Statuses whose accounts count: a revoked row's accounts are released
+  // territory; 'expired'/'error' still count (a sibling whose feed
+  // momentarily died at a one-session bank has NOT given its accounts up).
+  // 'pending_selection' rows count ASYMMETRICALLY: their enabled accounts
+  // still claim, because an attach-created row holds deliberately-offered
+  // accounts with no cash_accounts rows until its picker is saved, and
+  // ignoring that window lets a second company take the same physical
+  // account (the exact failure fetchIbanCarriers documents). Their DISABLED
+  // flags are unconfirmed callback output though — including this guard's
+  // own fail-closed writes — so they never feed the deselection memory:
+  // one abandoned picker or transient lookup error must not poison every
+  // later connect.
   let connectionRows: Array<{
     id: string
     company_id: string
+    status: string
     accounts_data: StoredAccount[] | null
   }>
   try {
     connectionRows = await fetchAllRows(range =>
       serviceSupabase
         .from('bank_connections')
-        .select('id, company_id, accounts_data')
+        .select('id, company_id, status, accounts_data')
         .eq('user_id', userId)
         .neq('id', excludeConnectionId)
-        .in('status', ['active', 'expired', 'error'])
+        .in('status', ['active', 'pending_selection', 'expired', 'error'])
+        // Unique-column order: fetchAllRows pages with .range(), and an
+        // unordered paged read can silently SKIP rows at page boundaries —
+        // a skipped row here is a missed claim, which fails open.
+        .order('id')
         .range(range.from, range.to),
     )
   } catch (connectionError) {
@@ -382,7 +391,7 @@ export async function fetchCrossCompanyAccountContext(
       const iban = normalizeIban(account.iban)
       if (!iban) continue
       if (account.enabled === false) {
-        deselectedIbans.add(iban)
+        if (row.status !== 'pending_selection') deselectedIbans.add(iban)
       } else if (row.company_id === activeCompanyId) {
         activeCompanyIbans.add(iban)
       } else if (!claims.has(iban)) {
@@ -428,6 +437,8 @@ export async function fetchCrossCompanyAccountContext(
           .in('company_id', memberCompanyIds)
           .eq('enabled', true)
           .not('iban', 'is', null)
+          // Unique-column order: see the bank_connections page above.
+          .order('id')
           .range(range.from, range.to),
       )
     } catch (cashError) {
