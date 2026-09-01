@@ -15,6 +15,7 @@ import {
 import { cn, formatDate } from '@/lib/utils'
 import { ChevronRight, Loader2, MoreHorizontal } from 'lucide-react'
 import { getConnectionUiState } from '../lib/connection-state'
+import { describeClaimedElsewhere, partitionByClaim } from '../lib/claimed-accounts'
 import type { BankConnection } from '@/types'
 
 interface BankConnectionStatusProps {
@@ -56,8 +57,14 @@ export function BankConnectionStatus({
     balance?: number
     balance_updated_at?: string
     enabled?: boolean
+    claimed_by_company_id?: string
+    claimed_by_company_name?: string
   }>) || []
-  const enabledCount = accounts.filter((a) => a.enabled !== false).length
+  // Accounts another of the user's companies books (one SEB consent covers
+  // every company the signer represents) are not this company's accounts:
+  // they are left out of the list and the count, and summarised in one line.
+  const { own: ownAccounts, claimedElsewhere } = partitionByClaim(accounts)
+  const enabledCount = ownAccounts.filter((a) => a.enabled !== false).length
 
   function formatBalanceAge(updatedAt: string): string {
     const hoursAgo = Math.floor((now - new Date(updatedAt).getTime()) / (1000 * 60 * 60))
@@ -290,7 +297,7 @@ export function BankConnectionStatus({
               className={cn('h-3.5 w-3.5 transition-transform duration-150', detailsOpen && 'rotate-90')}
             />
             <span className="tabular-nums">
-              {enabledCount} av {accounts.length} konton synkas
+              {enabledCount} av {ownAccounts.length} konton synkas
             </span>
           </button>
 
@@ -331,7 +338,7 @@ export function BankConnectionStatus({
                   )
                 })()}
 
-              {accounts.map((account) => {
+              {ownAccounts.map((account) => {
                 const isDisabled = account.enabled === false
                 return (
                   <div
@@ -372,6 +379,15 @@ export function BankConnectionStatus({
                   </div>
                 )
               })}
+              {/* Sibling companies' accounts carried by this consent: one
+                  muted line, never rows. Moving one here is done in the
+                  account picker ("Hantera konton"), where it is a deliberate
+                  tick inside a disclosure. */}
+              {claimedElsewhere.length > 0 && (
+                <div className="py-2 text-xs text-muted-foreground tabular-nums">
+                  {describeClaimedElsewhere(claimedElsewhere)}
+                </div>
+              )}
             </div>
           )}
         </div>
