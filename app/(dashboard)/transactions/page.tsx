@@ -3165,17 +3165,30 @@ export default function TransactionsPage() {
     const bankIds = Array.from(selectedIds)
     // The selection can outlive a refetch: only rows that are still
     // ignorable go to the server (a booked skattekonto row would 409).
-    const skvIds = skvSelectedRows.filter(isSkvSelectable).map((r) => r.id)
+    const skvIgnorable = skvSelectedRows.filter(isSkvSelectable)
+    const skvIds = skvIgnorable.map((r) => r.id)
     const total = bankIds.length + skvIds.length
     if (total === 0) return
+    // Rows with a booking suggestion and no duplicate hint look like
+    // affärshändelser that should be booked (BFL 5 kap.), not ignored. The
+    // ignore stays allowed (a migrated backlog is exactly such rows, already
+    // in the imported books), but the dialog says how many of them there
+    // are so the choice is informed, not accidental.
+    const skvLikelyBusiness = skvIgnorable.filter(
+      (r) => r.booking_suggestion != null && r.match_suggestion == null,
+    ).length
+    const body =
+      bankIds.length > 0 && skvIds.length > 0
+        ? t('batch_ignore_confirm_body_mixed')
+        : skvIds.length > 0
+          ? t('batch_ignore_confirm_body_skv')
+          : t('batch_ignore_confirm_body_bank')
     const ok = await confirm({
       title: t('batch_ignore_confirm_title', { count: total }),
       description:
-        bankIds.length > 0 && skvIds.length > 0
-          ? t('batch_ignore_confirm_body_mixed')
-          : skvIds.length > 0
-            ? t('batch_ignore_confirm_body_skv')
-            : t('batch_ignore_confirm_body_bank'),
+        skvLikelyBusiness > 0
+          ? `${body} ${t('batch_ignore_confirm_skv_suggested', { count: skvLikelyBusiness })}`
+          : body,
       confirmLabel: t('batch_ignore_confirm_cta'),
       cancelLabel: t('batch_ignore_confirm_cancel'),
       variant: 'warning',
