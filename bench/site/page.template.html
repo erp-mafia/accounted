@@ -62,7 +62,12 @@
   /* ---------- full-bleed hero with strata ---------- */
   .hero { position: relative; min-height: 86vh; display: flex; flex-direction: column; overflow: hidden; }
   @media (max-width: 640px) { .hero { min-height: 72vh; } }
+  .hero { background: var(--frame); }
   .hero canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .hero::after {
+    content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none;
+    background: radial-gradient(ellipse 70% 55% at 50% 46%, var(--bg) 30%, transparent 78%);
+  }
   header.site {
     position: relative; z-index: 2;
     display: flex; justify-content: space-between; align-items: baseline;
@@ -205,11 +210,45 @@
   .chartcard svg .grid { stroke: var(--border); stroke-width: 1; }
   .chartcard svg .whisk { stroke: var(--faint); stroke-width: 1; opacity: .55; }
   .chartcard svg .frontier { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 5 4; fill: none; }
+  .chartcard svg .quad { fill: var(--sage); opacity: .045; }
+  .chartcard svg .qline { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 4; }
+  .chartcard svg .qlab { fill: var(--faint); font-size: 9.5px; letter-spacing: .08em; }
   .chartcard svg .halo { fill: var(--bg); stroke: var(--border); stroke-width: 1; }
   .chartcard svg .dm { color: var(--ink); }
   .chartcard svg .lab { fill: var(--ink); font-size: 10.5px; }
   .chartside h3 { font-family: "Hedvig Letters Serif",Georgia,serif; font-weight: 400; font-size: 18px; margin: 2px 0 6px; }
   .chartside p { font-size: 13px; }
+
+  /* model output examples */
+  .extabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 14px; }
+  .extabs button {
+    font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; color: var(--soft);
+    background: transparent; border: 1px solid var(--border); border-radius: 999px; padding: 5px 14px;
+    transition: background-color .15s ease, color .15s ease;
+  }
+  .extabs button[aria-selected="true"] { background: var(--secondary); color: var(--ink); font-weight: 600; border-color: transparent; }
+  .excard { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .exhead { padding: 16px 20px; border-bottom: 1px solid var(--border); }
+  .exlabel { font-family: "Geist Mono",monospace; font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin: 0 0 8px; }
+  .extxn { font-family: "Geist Mono",monospace; font-size: 13px; color: var(--ink); line-height: 1.75; }
+  .extxn .amt { font-variant-numeric: tabular-nums; }
+  .exmeta { font-size: 12.5px; color: var(--faint); margin: 8px 0 0; }
+  .exgold { padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--secondary-soft); font-size: 13px; color: var(--soft); }
+  .exgold b { color: var(--ink); font-family: "Geist Mono",monospace; }
+  .exrows { display: grid; }
+  .exrow { display: grid; grid-template-columns: minmax(0,1.4fr) 74px 1fr 58px 22px; align-items: center; gap: 10px; padding: 9px 20px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .exrow:last-child { border-bottom: none; }
+  .exrow .nm { display: flex; align-items: center; color: var(--ink); font-weight: 500; }
+  .exrow .acc { font-family: "Geist Mono",monospace; font-variant-numeric: tabular-nums; }
+  .exrow .vat { font-family: "Geist Mono",monospace; font-size: 11.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; }
+  .exrow .conf { font-family: "Geist Mono",monospace; font-size: 11.5px; color: var(--faint); text-align: right; font-variant-numeric: tabular-nums; }
+  .exrow .vd { text-align: center; font-size: 13px; }
+  .exrow.miss .acc { color: var(--terra); }
+  .exrow.hit .vd { color: var(--sage); }
+  .exrow.miss .vd { color: var(--terra); }
+  .exwhy { padding: 14px 20px; font-size: 13px; color: var(--soft); border-top: 1px solid var(--border); }
+  .exwhy b { color: var(--ink); }
+  @media (max-width: 640px) { .exrow { grid-template-columns: 1fr 62px 30px; } .exrow .vat, .exrow .conf { display: none; } }
 
   /* verdicts */
   .verdicts { display: grid; grid-template-columns: repeat(auto-fit,minmax(230px,1fr)); gap: 16px; }
@@ -270,6 +309,10 @@
   .method dd strong { color: var(--ink); font-weight: 600; }
   .prose p { font-size: 15px; color: var(--soft); margin: 0 0 14px; max-width: 68ch; }
   .prose p:last-child { margin-bottom: 0; }
+  .roadmap { display: grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap: 16px; }
+  .rcard { border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; }
+  .rcard h5 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
+  .rcard p { font-size: 13px; color: var(--soft); margin: 0; max-width: none; }
   ol.refs { margin: 6px 0 0; padding-left: 20px; }
   ol.refs li { font-size: 13.5px; color: var(--soft); padding: 6px 0; max-width: 76ch; }
   ol.refs li::marker { color: var(--faint); font-family: "Geist Mono",monospace; font-size: 12px; }
@@ -293,7 +336,7 @@
 </style>
 
 <div class="hero">
-  <canvas id="strata" aria-hidden="true"></canvas>
+  <canvas id="ledgerfield" aria-hidden="true"></canvas>
   <header class="site">
     <span><b>Accounted</b> · Labs</span>
     <span class="meta" id="metaline">Ledger-Bench</span>
@@ -315,10 +358,12 @@
       <a href="#takeaways">Takeaways</a>
       <a href="#background">Background</a>
       <a href="#board">Leaderboard</a>
+      <a href="#examples">Examples</a>
       <a href="#verdicts">Verdicts</a>
       <a href="#h2h">Head to head</a>
       <a href="#external">Cross-check</a>
       <a href="#method">Method</a>
+      <a href="#roadmap">Next</a>
     </div>
   </nav>
 
@@ -369,6 +414,13 @@
       <p class="legendline" id="legend"></p>
     </section>
 
+    <section id="examples">
+      <h2>Model output examples</h2>
+      <p class="sectiondesc">The booking tasks where models most disagree, exactly as posed, with every model's actual answer.</p>
+      <div class="extabs" id="extabs" role="tablist"></div>
+      <div class="excard" id="excard"></div>
+    </section>
+
     <section id="verdicts">
       <h2>Verdicts</h2>
       <p class="sectiondesc">Each model receives a revisor-style opinion on confidence-gated unattended booking, from published criteria.</p>
@@ -410,8 +462,29 @@
         <div class="mrow"><dt>Context</dt><dd>Closest public benchmarks: <a href="https://www.dualentry.com/accounting-ai-benchmark">DualEntry</a> tops out at 79.2% (US-GAAP, month-end close 50%), <a href="https://www.vals.ai/benchmarks/finance_agent">Vals Finance Agent</a> at 64.4%, <a href="https://taubench.com">τ²-bench</a> at 87.9%. None Swedish, none write-capable against a legally constrained ledger.</dd></div>
         <div class="mrow"><dt>Statistics</dt><dd>Wilson ±1σ intervals on every rate; paired <strong>McNemar exact tests</strong> group the ranking into statistical ties (models inside a group cannot be distinguished at p&lt;0.05, marked by rules in the table); every task carries a published <strong>discrimination index</strong> (point-biserial), and tasks with negative discrimination are retired in review, applied to all models equally. A k=3 repeat study found single-run pass rates moving up to 25 pp between identical runs for one model; the tie groups, not the raw order, are the citable result.</dd></div>
       <div class="mrow"><dt>Contamination</dt><dd>Every task file carries a <strong>canary string</strong> (BIG-bench convention) so future training-data filters can exclude it, and the public split's exposure is stated rather than hidden. The prod-derived private split is the contamination-free instrument.</dd></div>
+      <div class="mrow"><dt>Cost</dt><dd>Measured tokens at each vendor's first-party list price, standard tier, no cache, batch or promotional discounts; open-weights models without a vendor API are priced at a named serving provider. One artefact worth knowing: <strong>GPT-5.6 Terra Pro reports about four times the input tokens of GPT-5.6 Luna on the identical prompt</strong> (76 630 against 18 122), so the Pro tier evidently runs several internal passes and is billed for each. Its cost is what you would pay; its token count is not a prompt-size comparison.</dd></div>
       <div class="mrow"><dt>Disclosure</dt><dd>Tasks authored with Claude against cited law, machine-validated, public for review. Provider marks are their owners' trademarks, shown for identification only.</dd></div>
       </dl>
+    </section>
+
+    <section id="roadmap">
+      <h2>What this measures next</h2>
+      <p class="sectiondesc">v1.5 measures models. The axes that follow measure everything else in the sentence "this model, with these instructions, in this system".</p>
+      <div class="roadmap">
+        <div class="rcard">
+          <h5>Skills and instructions</h5>
+          <p>The same model, given different instruction sets, is a different bookkeeper. The next axis holds the model fixed and varies the skill: a bare prompt, a domain skill with the BAS chart and VAT rules loaded, a full agent briefing. What a skill is worth, in points and in kronor, is measurable.</p>
+        </div>
+        <div class="rcard">
+          <h5>Harnesses</h5>
+          <p>Ledger-Bench deliberately uses one minimal scaffold so models are comparable. That makes the scaffold itself an untested variable. Running the same tasks through retrieval-backed, self-consistency and staged-approval harnesses says how much of the remaining error is the model and how much is the plumbing around it.</p>
+        </div>
+        <div class="rcard">
+          <h5>Systems</h5>
+          <p>The end state is a sentence a buyer can act on: this model books at X% inside Accounted, and at Y% inside another Swedish ledger. Tool surfaces, account defaults and posting rules differ between systems, and that difference is a property of the system, not of the model. Measuring it is the point of owning the benchmark.</p>
+        </div>
+      </div>
+      <p class="vcriteria">Planned, not measured. Nothing in this section has been run; it is published so the direction is on the record before the numbers exist.</p>
     </section>
 
     <section id="references">
@@ -449,115 +522,128 @@
      a few thin seams in the semantic data colors (sage, ochre, terracotta),
      which in this design system are reserved for data, and the strata ARE
      the data: layers of bookkeeping history, append-only. */
-  (function strata() {
-    const cv = document.getElementById('strata');
+  /* ---------- hero: the double-entry field ----------
+     A quiet grid of BAS account numbers. Every couple of seconds one booking
+     happens: a debit and a credit illuminate together, joined by a hairline,
+     and fade. Nothing ever illuminates alone, because nothing in a ledger
+     ever does. */
+  (function doubleEntry() {
+    const cv = document.getElementById('ledgerfield');
+    if (!cv) return;
     const ctx = cv.getContext('2d');
-    const styles = getComputedStyle(document.documentElement);
-    const attr = document.documentElement.getAttribute('data-theme');
-    const dark = attr === 'dark' || (attr !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
-    let W, H, layers = [];
-    const N = 22;
-    function neutral(i) {
-      if (dark) { const l = 10 + i * 1.15; return `hsl(40 3% ${l}%)`; }
-      const l = 99 - i * 1.75, sat = 7 + i * 0.8;
-      return `hsl(40 ${sat}% ${l}%)`;
-    }
-    // Annotated seams: the ledger's strata, surveyed. Semantic colors are
-    // data-only in this design system, and these ARE the data.
-    const seams = {
-      8:  { color: styles.getPropertyValue('--sage').trim(),  label: '1930 · företagskonto' },
-      13: { color: styles.getPropertyValue('--ochre').trim(), label: '2611 · utgående moms' },
-      18: { color: styles.getPropertyValue('--terra').trim(), label: '2641 · ingående moms' },
-    };
+    const css = getComputedStyle(document.documentElement);
+    const ink = () => css.getPropertyValue('--faint').trim();
+    const debitColor = () => css.getPropertyValue('--sage').trim();
+    const creditColor = () => css.getPropertyValue('--ochre').trim();
+    // Real BAS accounts, in the pairs a Swedish booking actually uses.
+    const PAIRS = [
+      [['5420', 'Programvaror'], ['1930', 'Företagskonto']],
+      [['6110', 'Kontorsmateriel'], ['2440', 'Leverantörsskulder']],
+      [['1510', 'Kundfordringar'], ['3001', 'Försäljning']],
+      [['2641', 'Ingående moms'], ['1930', 'Företagskonto']],
+      [['5810', 'Biljetter'], ['1930', 'Företagskonto']],
+      [['7010', 'Löner'], ['2710', 'Personalskatt']],
+      [['2645', 'Beräknad ing. moms'], ['2614', 'Utg. moms omvänd']],
+      [['6212', 'Mobiltelefon'], ['2440', 'Leverantörsskulder']],
+      [['5010', 'Lokalhyra'], ['1930', 'Företagskonto']],
+      [['2611', 'Utgående moms'], ['2650', 'Redovisningskonto']],
+    ];
+    const FILL = ['1930', '2440', '2641', '5420', '6110', '3001', '2611', '7010',
+                  '1510', '5010', '2645', '2614', '6212', '5810', '6570', '5410',
+                  '2650', '2710', '6530', '4010'];
+    let W, H, cells = [], cols, rows;
+    const CW = 132, CH = 34;
     function build() {
       const r = cv.parentElement.getBoundingClientRect();
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       W = r.width; H = r.height;
       cv.width = W * dpr; cv.height = H * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      layers = [];
-      for (let i = 0; i < N; i++) {
-        const f = i / (N - 1);
-        const base = H * (0.34 + 0.64 * f * f);
-        layers.push({
-          base,
-          amp1: 8 + 16 * f, f1: 0.0028 + 0.0011 * (i % 3), p1: i * 1.7,
-          amp2: 3 + 7 * f, f2: 0.009 + 0.0022 * (i % 4), p2: i * 2.9,
-          amp3: 1.5 + 3 * f, f3: 0.021 + 0.003 * (i % 5), p3: i * 0.8,
-          drift: (0.05 + 0.05 * ((i * 7) % 5)) * (i % 2 ? 1 : -1),
-          color: neutral(i),
-          edge: dark ? 'hsl(40 3% 6% / .5)' : `hsl(40 10% ${86 - i * 1.4}% / .6)`,
-          seam: seams[i] || null,
-        });
-      }
-      ctx.textAlign = 'right';
-    }
-    // Pointer swell: the sediment responds, gently, where you touch it.
-    let mx = -1, mAmp = 0, mTargetAmp = 0;
-    function horizon(l, x, t) {
-      let y = l.base
-        + l.amp1 * Math.sin(x * l.f1 + l.p1 + t * l.drift)
-        + l.amp2 * Math.sin(x * l.f2 + l.p2 - t * l.drift * 1.6)
-        + l.amp3 * Math.sin(x * l.f3 + l.p3 + t * l.drift * 0.7);
-      if (mAmp > 0.01 && mx >= 0) {
-        const dx = (x - mx) / 170;
-        y -= mAmp * (l.base / H) * 26 * Math.exp(-dx * dx);
-      }
-      return y;
-    }
-    function trace(l, t) {
-      const STEP = 5;
-      ctx.moveTo(0, horizon(l, 0, t));
-      for (let x = STEP; x <= W + STEP; x += STEP) ctx.lineTo(x, horizon(l, x, t));
-    }
-    function draw(t) {
-      ctx.clearRect(0, 0, W, H);
-      for (const l of layers) {
-        ctx.beginPath();
-        trace(l, t);
-        ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath();
-        ctx.fillStyle = l.color;
-        ctx.fill();
-        ctx.beginPath();
-        trace(l, t);
-        ctx.strokeStyle = l.seam ? l.seam.color : l.edge;
-        ctx.globalAlpha = l.seam ? 0.65 : 1;
-        ctx.lineWidth = l.seam ? 1.6 : 1;
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-        if (l.seam) {
-          const yLab = horizon(l, W - 26, t);
-          ctx.font = '10.5px "Geist Mono", monospace';
-          ctx.fillStyle = l.seam.color;
-          ctx.globalAlpha = 0.9;
-          ctx.fillText(l.seam.label, W - 26, yLab - 7);
-          ctx.globalAlpha = 1;
+      cols = Math.ceil(W / CW) + 1;
+      rows = Math.ceil(H / CH) + 1;
+      cells = [];
+      for (let ry = 0; ry < rows; ry++) {
+        for (let cx = 0; cx < cols; cx++) {
+          cells.push({
+            x: cx * CW + 14,
+            y: ry * CH + 22,
+            text: FILL[(ry * 7 + cx * 3) % FILL.length],
+          });
         }
       }
     }
-    let t = 0, visible = true, last = 0;
+    // Active bookings: two cells, one pair of accounts, a shared lifetime.
+    const live = [];
+    function spawn() {
+      if (cells.length < 2) return;
+      const pair = PAIRS[(Math.random() * PAIRS.length) | 0];
+      const i = (Math.random() * cells.length) | 0;
+      // Partner sits on a nearby row so the connecting line stays short.
+      const near = cells
+        .map((c, idx) => ({ idx, d: Math.hypot(c.x - cells[i].x, (c.y - cells[i].y) * 2.4) }))
+        .filter((c) => c.idx !== i && c.d > 90 && c.d < 340);
+      if (near.length === 0) return;
+      const j = near[(Math.random() * near.length) | 0].idx;
+      live.push({ i, j, pair, t: 0 });
+      if (live.length > 3) live.shift();
+    }
+    function draw(dt) {
+      ctx.clearRect(0, 0, W, H);
+      ctx.font = '11px "Geist Mono", ui-monospace, monospace';
+      const base = ink();
+      // resting field
+      ctx.fillStyle = base;
+      ctx.globalAlpha = 0.16;
+      for (const c of cells) ctx.fillText(c.text, c.x, c.y);
+      ctx.globalAlpha = 1;
+      // bookings
+      for (let k = live.length - 1; k >= 0; k--) {
+        const b = live[k];
+        b.t += dt;
+        const life = 3.4;
+        if (b.t > life) { live.splice(k, 1); continue; }
+        // ease in fast, hold, fade out
+        const a = b.t < 0.4 ? b.t / 0.4 : b.t > life - 1.2 ? (life - b.t) / 1.2 : 1;
+        const A = cells[b.i], B = cells[b.j];
+        ctx.globalAlpha = a * 0.22;
+        ctx.strokeStyle = base;
+        ctx.beginPath();
+        ctx.moveTo(A.x + 30, A.y - 4);
+        ctx.lineTo(B.x + 30, B.y - 4);
+        ctx.stroke();
+        ctx.globalAlpha = a * 0.92;
+        ctx.fillStyle = debitColor();
+        ctx.fillText(`${b.pair[0][0]}  ${b.pair[0][1]}`, A.x, A.y);
+        ctx.fillStyle = creditColor();
+        ctx.fillText(`${b.pair[1][0]}  ${b.pair[1][1]}`, B.x, B.y);
+        ctx.globalAlpha = 1;
+      }
+    }
+    let last = 0, visible = true, acc = 0;
     function loop(now) {
       requestAnimationFrame(loop);
-      if (!visible || now - last < 40) return;
-      last = now; t += 0.055;
-      mAmp += (mTargetAmp - mAmp) * 0.06;
-      draw(t);
+      if (!visible) { last = now; return; }
+      const dt = Math.min((now - last) / 1000, 0.1);
+      if (dt < 0.05) return;
+      last = now;
+      acc += dt;
+      if (acc > 1.7) { acc = 0; spawn(); }
+      draw(dt);
     }
     build();
     if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      draw(3);
-      window.addEventListener('resize', () => { build(); draw(3); });
+      // Static: the field plus two settled bookings, no motion.
+      spawn(); spawn();
+      for (const b of live) b.t = 1;
+      draw(0);
+      window.addEventListener('resize', () => { build(); draw(0); });
       return;
     }
-    cv.parentElement.addEventListener('pointermove', (e) => {
-      const r = cv.getBoundingClientRect();
-      mx = e.clientX - r.left; mTargetAmp = 1;
-    });
-    cv.parentElement.addEventListener('pointerleave', () => { mTargetAmp = 0; });
     window.addEventListener('resize', build);
     if ('IntersectionObserver' in window) {
       new IntersectionObserver((e) => { visible = e[0].isIntersecting; }).observe(cv);
     }
+    spawn();
     requestAnimationFrame(loop);
   })();
 
@@ -722,6 +808,19 @@
       out += `<text x="${x(t)}" y="${H-m.b+18}" text-anchor="middle">${t >= 1 ? '$'+t.toFixed(2) : '$'+t.toFixed(3)}</text>`;
     }
     out += `<text x="${(W-m.r+m.l)/2}" y="${H-8}" text-anchor="middle">cost per task, vendor list price (average)</text>`;
+    // Quadrants: median cost and median pass rate divide the field. The
+    // top-left is where a model is both accurate and cheap.
+    const costs = rows.map(perTask).sort((a, b) => a - b);
+    const passes = rows.map(passOf).sort((a, b) => a - b);
+    if (costs.length > 2) {
+      const medCost = costs[Math.floor(costs.length / 2)];
+      const medPass = passes[Math.floor(passes.length / 2)];
+      out += `<rect class="quad" x="${m.l}" y="${y(1)}" width="${x(medCost)-m.l}" height="${y(medPass)-y(1)}"></rect>`;
+      out += `<line class="qline" x1="${x(medCost)}" y1="${y(0)}" x2="${x(medCost)}" y2="${y(1)}"></line>`;
+      out += `<line class="qline" x1="${m.l}" y1="${y(medPass)}" x2="${W-m.r}" y2="${y(medPass)}"></line>`;
+      out += `<text class="qlab" x="${m.l+10}" y="${y(1)+16}">EFFICIENT</text>`;
+      out += `<text class="qlab" x="${W-m.r-8}" y="${y(1)+16}" text-anchor="end">BEST PERFORMANCE</text>`;
+    }
     const usesSeg = active === 'booking' && segment !== 'all';
     const sorted = rows.map((r) => ({ c: perTask(r), p: passOf(r) })).sort((a,b) => a.c - b.c);
     let best = -1; const frontier = [];
@@ -890,6 +989,47 @@
   }
 
 
+  /* ---------- model output examples ---------- */
+  let exIndex = 0;
+  function renderExamples() {
+    const list = DATA.examples || [];
+    const tabs = document.getElementById('extabs');
+    if (!list.length) return;
+    tabs.innerHTML = '';
+    list.forEach((e, i) => {
+      const b = document.createElement('button');
+      const solved = e.answers.filter((a) => a.pass).length;
+      b.textContent = `${e.probe.split(':')[0]} · ${solved}/${e.answers.length}`;
+      b.setAttribute('role', 'tab');
+      b.setAttribute('aria-selected', String(i === exIndex));
+      b.addEventListener('click', () => { exIndex = i; renderExamples(); });
+      tabs.appendChild(b);
+    });
+    const e = list[exIndex];
+    const t = e.transaction;
+    const c = e.company;
+    const rows = e.answers
+      .slice()
+      .sort((a, b) => Number(b.pass) - Number(a.pass) || a.label.localeCompare(b.label))
+      .map((a) => `<div class="exrow ${a.pass ? 'hit' : 'miss'}">
+          <span class="nm">${markFor(a.vendor)}${short(a.label)}</span>
+          <span class="acc">${a.account || '—'}</span>
+          <span class="vat">${(a.vat || '').replace(/_/g, ' ')}</span>
+          <span class="conf">${a.confidence != null ? a.confidence.toFixed(2) : ''}</span>
+          <span class="vd">${a.pass ? '✓' : '✕'}</span>
+        </div>`).join('');
+    const accepted = [e.gold.account, ...(e.gold.acceptable_accounts || [])].join(' / ');
+    document.getElementById('excard').innerHTML = `
+      <div class="exhead">
+        <p class="exlabel">Transaction as posed</p>
+        <div class="extxn">${t.date} · <span class="amt">${t.amount.toFixed(2)} ${t.currency}</span> · ${t.counterpart}<br>${t.description}${t.underlag ? '<br><span style="color:var(--faint)">Underlag: ' + t.underlag + '</span>' : ''}</div>
+        <p class="exmeta">${c.business} · ${c.entity_type === 'aktiebolag' ? 'aktiebolag' : 'enskild firma'} · ${c.vat_registered ? 'VAT registered' : 'not VAT registered'} · ${c.accounting_method === 'invoice' ? 'accrual' : 'cash'} method</p>
+      </div>
+      <div class="exgold">Correct answer: account <b>${accepted}</b>, VAT treatment <b>${e.gold.vat_treatment.replace(/_/g, ' ')}</b></div>
+      <div class="exrows">${rows}</div>
+      <div class="exwhy"><b>Why:</b> ${e.rationale}${e.law_ref ? ' <span class="mono">(' + e.law_ref + ')</span>' : ''}</div>`;
+  }
+
   /* ---------- external cross-check ---------- */
   // Published by DualEntry (2026 Accounting AI Benchmark: 101 questions across
   // 8 US-GAAP categories, deterministic binary grading). Not measured by us.
@@ -973,6 +1113,7 @@
   })();
 
   renderBoard();
+  renderExamples();
   renderVerdicts();
   renderExternal();
   renderPickers();

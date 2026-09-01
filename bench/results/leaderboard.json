@@ -1,6 +1,6 @@
 {
   "benchVersion": "v1.5",
-  "generatedAt": "2026-09-01T08:11:12.442Z",
+  "generatedAt": "2026-09-01T08:18:26.880Z",
   "suites": {
     "booking": [
       {
@@ -3946,6 +3946,560 @@
       ]
     ]
   },
+  "examples": [
+    {
+      "id": "booking-027",
+      "probe": "Staff Christmas party: internal representation",
+      "difficulty": "hard",
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "IT-konsultbolag med 12 anställda"
+      },
+      "transaction": {
+        "date": "2026-01-09",
+        "amount": -14400,
+        "currency": "SEK",
+        "counterpart": "Restaurang Hasselbacken",
+        "description": "Julfest personal 12 personer",
+        "underlag": "Julbord 12 kuvert inkl dryck. Mat 12 000 inkl moms 12 %, alkohol 2 400 inkl moms 25 %."
+      },
+      "gold": {
+        "account": "7632",
+        "acceptable_accounts": [
+          "7631"
+        ],
+        "vat_treatment": "representation_capped"
+      },
+      "rationale": "Personalfest är personalrepresentation: måltidsdelen ej avdragsgill (7632), momsavdrag enligt schablon/tak.",
+      "law_ref": "ML 13 kap. 24-25 §§",
+      "answers": [
+        {
+          "model": "claude-haiku-4-5",
+          "label": "Claude Haiku 4.5",
+          "vendor": "Anthropic",
+          "pass": true,
+          "account": "7631",
+          "vat": "representation_capped",
+          "confidence": 0.75,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-sonnet-4-6",
+          "label": "Claude Sonnet 4.6",
+          "vendor": "Anthropic",
+          "pass": true,
+          "account": "7632",
+          "vat": "representation_capped",
+          "confidence": 0.85,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-sonnet-5",
+          "label": "Claude Sonnet 5",
+          "vendor": "Anthropic",
+          "pass": true,
+          "account": "7631",
+          "vat": "representation_capped",
+          "confidence": 0.75,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-opus-5",
+          "label": "Claude Opus 5",
+          "vendor": "Anthropic",
+          "pass": true,
+          "account": "7632",
+          "vat": "representation_capped",
+          "confidence": 0.82,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "gpt-5-6-terra-pro",
+          "label": "GPT-5.6 Terra Pro",
+          "vendor": "OpenAI",
+          "pass": true,
+          "account": "7632",
+          "vat": "representation_capped",
+          "confidence": 0.9,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "gpt-5-6-luna",
+          "label": "GPT-5.6 Luna",
+          "vendor": "OpenAI",
+          "pass": true,
+          "account": "7631",
+          "vat": "representation_capped",
+          "confidence": 0.98,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "gemini-3-1-pro",
+          "label": "Gemini 3.1 Pro",
+          "vendor": "Google",
+          "pass": true,
+          "account": "7632",
+          "vat": "representation_capped",
+          "confidence": 0.95,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "grok-4-6",
+          "label": "Grok 4.6",
+          "vendor": "xAI",
+          "pass": true,
+          "account": "7631",
+          "vat": "representation_capped",
+          "confidence": 0.82,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "deepseek-v4-pro",
+          "label": "DeepSeek V4 Pro",
+          "vendor": "DeepSeek",
+          "pass": false,
+          "account": "7630",
+          "vat": "representation_capped",
+          "confidence": 0.78,
+          "accountCorrect": false,
+          "vatCorrect": true
+        },
+        {
+          "model": "qwen3-8-2-4t",
+          "label": "Qwen3.8 2.4T",
+          "vendor": "Alibaba",
+          "pass": false,
+          "account": "",
+          "vat": "",
+          "confidence": null,
+          "accountCorrect": false,
+          "vatCorrect": false
+        },
+        {
+          "model": "llama-4-maverick",
+          "label": "Llama 4 Maverick",
+          "vendor": "Meta",
+          "pass": false,
+          "account": "6071",
+          "vat": "representation_capped",
+          "confidence": 0.9,
+          "accountCorrect": false,
+          "vatCorrect": true
+        },
+        {
+          "model": "kimi-k3",
+          "label": "Kimi K3",
+          "vendor": "Moonshot",
+          "pass": false,
+          "account": "7632",
+          "vat": "no_vat",
+          "confidence": 0.85,
+          "accountCorrect": true,
+          "vatCorrect": false
+        },
+        {
+          "model": "glm-5-3-flash",
+          "label": "GLM 5.3 Flash",
+          "vendor": "Z.ai",
+          "pass": false,
+          "account": "7631",
+          "vat": "domestic_12",
+          "confidence": 0.6,
+          "accountCorrect": true,
+          "vatCorrect": false
+        },
+        {
+          "model": "gpt-oss-120b",
+          "label": "GPT-OSS-120B",
+          "vendor": "OpenAI",
+          "pass": false,
+          "account": "6072",
+          "vat": "no_vat",
+          "confidence": 0.97,
+          "accountCorrect": false,
+          "vatCorrect": false
+        }
+      ]
+    },
+    {
+      "id": "booking-028",
+      "probe": "Laptop under the half price-base-amount threshold is an expense",
+      "difficulty": "hard",
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Arkitektkontor"
+      },
+      "transaction": {
+        "date": "2026-02-06",
+        "amount": -17500,
+        "currency": "SEK",
+        "counterpart": "Webhallen",
+        "description": "Bärbar dator till anställd",
+        "underlag": "MacBook Air 14 000,00 exkl moms, moms 25 % 3 500,00."
+      },
+      "gold": {
+        "account": "5410",
+        "acceptable_accounts": [
+          "5411"
+        ],
+        "vat_treatment": "domestic_25"
+      },
+      "rationale": "Dator 14 000 kr exkl moms understiger halvt prisbasbelopp (29 600 kr 2026): förbrukningsinventarie 5410, inte anläggningstillgång.",
+      "law_ref": "IL 18 kap. 4 §; halvt prisbasbelopp 2026 = 29 600 kr",
+      "answers": [
+        {
+          "model": "claude-haiku-4-5",
+          "label": "Claude Haiku 4.5",
+          "vendor": "Anthropic",
+          "pass": false,
+          "account": "1261",
+          "vat": "domestic_25",
+          "confidence": 0.92,
+          "accountCorrect": false,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-sonnet-4-6",
+          "label": "Claude Sonnet 4.6",
+          "vendor": "Anthropic",
+          "pass": false,
+          "account": "5420",
+          "vat": "domestic_25",
+          "confidence": 0.62,
+          "accountCorrect": false,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-sonnet-5",
+          "label": "Claude Sonnet 5",
+          "vendor": "Anthropic",
+          "pass": false,
+          "account": "1220",
+          "vat": "domestic_25",
+          "confidence": 0.75,
+          "accountCorrect": false,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-opus-5",
+          "label": "Claude Opus 5",
+          "vendor": "Anthropic",
+          "pass": true,
+          "account": "5410",
+          "vat": "domestic_25",
+          "confidence": 0.72,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "gpt-5-6-terra-pro",
+          "label": "GPT-5.6 Terra Pro",
+          "vendor": "OpenAI",
+          "pass": false,
+          "account": "1261",
+          "vat": "domestic_25",
+          "confidence": 0.98,
+          "accountCorrect": false,
+          "vatCorrect": true
+        },
+        {
+          "model": "gpt-5-6-luna",
+          "label": "GPT-5.6 Luna",
+          "vendor": "OpenAI",
+          "pass": false,
+          "account": "1261",
+          "vat": "domestic_25",
+          "confidence": 0.98,
+          "accountCorrect": false,
+          "vatCorrect": true
+        },
+        {
+          "model": "gemini-3-1-pro",
+          "label": "Gemini 3.1 Pro",
+          "vendor": "Google",
+          "pass": true,
+          "account": "5410",
+          "vat": "domestic_25",
+          "confidence": 0.95,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "grok-4-6",
+          "label": "Grok 4.6",
+          "vendor": "xAI",
+          "pass": true,
+          "account": "5411",
+          "vat": "domestic_25",
+          "confidence": 0.82,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "deepseek-v4-pro",
+          "label": "DeepSeek V4 Pro",
+          "vendor": "DeepSeek",
+          "pass": false,
+          "account": "1261",
+          "vat": "domestic_25",
+          "confidence": 0.9,
+          "accountCorrect": false,
+          "vatCorrect": true
+        },
+        {
+          "model": "qwen3-8-2-4t",
+          "label": "Qwen3.8 2.4T",
+          "vendor": "Alibaba",
+          "pass": true,
+          "account": "5410",
+          "vat": "domestic_25",
+          "confidence": 0.7,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "llama-4-maverick",
+          "label": "Llama 4 Maverick",
+          "vendor": "Meta",
+          "pass": false,
+          "account": "1261",
+          "vat": "domestic_25",
+          "confidence": 1,
+          "accountCorrect": false,
+          "vatCorrect": true
+        },
+        {
+          "model": "kimi-k3",
+          "label": "Kimi K3",
+          "vendor": "Moonshot",
+          "pass": true,
+          "account": "5411",
+          "vat": "domestic_25",
+          "confidence": 0.82,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "glm-5-3-flash",
+          "label": "GLM 5.3 Flash",
+          "vendor": "Z.ai",
+          "pass": false,
+          "account": "1261",
+          "vat": "domestic_25",
+          "confidence": 0.68,
+          "accountCorrect": false,
+          "vatCorrect": true
+        },
+        {
+          "model": "gpt-oss-120b",
+          "label": "GPT-OSS-120B",
+          "vendor": "OpenAI",
+          "pass": false,
+          "account": "1261",
+          "vat": "domestic_25",
+          "confidence": 0.8,
+          "accountCorrect": false,
+          "vatCorrect": true
+        }
+      ]
+    },
+    {
+      "id": "booking-118",
+      "probe": "Bank feed only: office furnishings under the asset threshold",
+      "difficulty": "core",
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "IT-konsultbolag, inreder kontor"
+      },
+      "transaction": {
+        "date": "2026-01-31",
+        "amount": -3200,
+        "currency": "SEK",
+        "counterpart": "IKEA SVERIGE",
+        "description": "IKEA KONTORSINREDNING"
+      },
+      "gold": {
+        "account": "5410",
+        "acceptable_accounts": [
+          "5411",
+          "6110"
+        ],
+        "vat_treatment": "domestic_25"
+      },
+      "rationale": "IKEA-köp för kontoret på 3 200 kr: förbrukningsinventarier 5410, 25 % moms.",
+      "law_ref": null,
+      "answers": [
+        {
+          "model": "claude-haiku-4-5",
+          "label": "Claude Haiku 4.5",
+          "vendor": "Anthropic",
+          "pass": false,
+          "account": "1220",
+          "vat": "domestic_25",
+          "confidence": 0.85,
+          "accountCorrect": false,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-sonnet-4-6",
+          "label": "Claude Sonnet 4.6",
+          "vendor": "Anthropic",
+          "pass": true,
+          "account": "5410",
+          "vat": "domestic_25",
+          "confidence": 0.72,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-sonnet-5",
+          "label": "Claude Sonnet 5",
+          "vendor": "Anthropic",
+          "pass": false,
+          "account": "1220",
+          "vat": "domestic_25",
+          "confidence": 0.6,
+          "accountCorrect": false,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-opus-5",
+          "label": "Claude Opus 5",
+          "vendor": "Anthropic",
+          "pass": true,
+          "account": "5410",
+          "vat": "domestic_25",
+          "confidence": 0.75,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "gpt-5-6-terra-pro",
+          "label": "GPT-5.6 Terra Pro",
+          "vendor": "OpenAI",
+          "pass": true,
+          "account": "5410",
+          "vat": "domestic_25",
+          "confidence": 0.78,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "gpt-5-6-luna",
+          "label": "GPT-5.6 Luna",
+          "vendor": "OpenAI",
+          "pass": true,
+          "account": "5410",
+          "vat": "domestic_25",
+          "confidence": 0.88,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "gemini-3-1-pro",
+          "label": "Gemini 3.1 Pro",
+          "vendor": "Google",
+          "pass": true,
+          "account": "5410",
+          "vat": "domestic_25",
+          "confidence": 0.95,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "grok-4-6",
+          "label": "Grok 4.6",
+          "vendor": "xAI",
+          "pass": true,
+          "account": "5411",
+          "vat": "domestic_25",
+          "confidence": 0.82,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "deepseek-v4-pro",
+          "label": "DeepSeek V4 Pro",
+          "vendor": "DeepSeek",
+          "pass": true,
+          "account": "5410",
+          "vat": "domestic_25",
+          "confidence": 0.7,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "qwen3-8-2-4t",
+          "label": "Qwen3.8 2.4T",
+          "vendor": "Alibaba",
+          "pass": true,
+          "account": "5410",
+          "vat": "domestic_25",
+          "confidence": 0.65,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "llama-4-maverick",
+          "label": "Llama 4 Maverick",
+          "vendor": "Meta",
+          "pass": false,
+          "account": "1221",
+          "vat": "domestic_25",
+          "confidence": 0.9,
+          "accountCorrect": false,
+          "vatCorrect": true
+        },
+        {
+          "model": "kimi-k3",
+          "label": "Kimi K3",
+          "vendor": "Moonshot",
+          "pass": false,
+          "account": "1251",
+          "vat": "domestic_25",
+          "confidence": 0.72,
+          "accountCorrect": false,
+          "vatCorrect": true
+        },
+        {
+          "model": "glm-5-3-flash",
+          "label": "GLM 5.3 Flash",
+          "vendor": "Z.ai",
+          "pass": true,
+          "account": "5410",
+          "vat": "domestic_25",
+          "confidence": 0.7,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "gpt-oss-120b",
+          "label": "GPT-OSS-120B",
+          "vendor": "OpenAI",
+          "pass": false,
+          "account": "1220",
+          "vat": "domestic_25",
+          "confidence": 0.73,
+          "accountCorrect": false,
+          "vatCorrect": true
+        }
+      ]
+    }
+  ],
   "verdicts": {
     "claude-opus-5": {
       "verdict": "tillstyrks",

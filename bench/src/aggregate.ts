@@ -440,6 +440,65 @@ function main() {
     }
   }
 
+  // Model output examples: the booking tasks where models most disagree are
+  // the informative ones. For each, carry the task as posed, the gold answer,
+  // and every model's stored answer verbatim from its run record.
+  {
+    const bookingTasks = suiteTasks.get('booking') as BookingTask[]
+    const matrix =
+      (leaderboard.taskMatrix as Record<
+        string,
+        { id: string; results: Record<string, number | null> }[]
+      >).booking ?? []
+    const split = matrix
+      .map((row) => {
+        const vals = Object.values(row.results).filter((v): v is number => v != null)
+        const rate = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0
+        return { id: row.id, spread: Math.abs(0.5 - rate) }
+      })
+      .sort((a, b) => a.spread - b.spread)
+      .slice(0, 3)
+    leaderboard.examples = split.map(({ id }) => {
+      const task = bookingTasks.find((t) => t.id === id)!
+      const answers = MODELS.filter((m) => m.enabled)
+        .map((m) => {
+          const rec = latest.find(
+            (r) =>
+              r.suite === 'booking' &&
+              r.taskId === id &&
+              r.model === m.id &&
+              !isHarnessError(r),
+          )
+          if (!rec) return null
+          const a = rec.answer as Record<string, unknown> | string | undefined
+          const obj = typeof a === 'object' && a !== null ? a : null
+          return {
+            model: m.id,
+            label: m.label,
+            vendor: m.vendor,
+            pass: rec.pass,
+            account: obj ? String(obj.konto ?? '') : '',
+            vat: obj ? String(obj.moms ?? '') : '',
+            confidence: obj && typeof obj.confidence === 'number' ? obj.confidence : null,
+            accountCorrect: rec.score.accountCorrect === true,
+            vatCorrect: rec.score.vatCorrect === true,
+          }
+        })
+        .filter((x): x is NonNullable<typeof x> => x !== null)
+      return {
+        id,
+        probe: task.probe,
+        difficulty: task.difficulty,
+        company: task.input.company,
+        transaction: task.input.transaction,
+        gold: task.gold,
+        rationale: task.rationale,
+        law_ref: task.law_ref ?? null,
+        answers,
+      }
+    })
+  }
+
   // Verdict per model, revisor-style, from published criteria (README).
   // tillstyrks: fit for confidence-gated unattended booking today.
   // reservation: usable with human review of everything below the gate.

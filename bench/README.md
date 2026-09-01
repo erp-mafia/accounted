@@ -169,6 +169,11 @@ on top; its accuracy is tracked separately by the backtest scripts).
   bins). An agent that books unattended is only as safe as its calibration:
   a model that is wrong at stated 0.95 is more dangerous than one that is
   wrong at stated 0.5. We know of no public leaderboard that ranks this.
+- **A billing artefact worth knowing:** GPT-5.6 Terra Pro reports ~4x the
+  input tokens of GPT-5.6 Luna on the identical prompt (76 630 vs 18 122
+  median on booking; 2 663 vs 252 on reasoning), so the Pro tier evidently
+  runs several internal passes and is billed per pass. Its cost figure is
+  what you would pay; its token count is not a prompt-size comparison.
 - **Cost per suite** computed from measured tokens at list prices, uncached,
   for every model. Provider-billed amounts stay in the raw records but are
   never compared: OpenAI's automatic prompt caching via OpenRouter made one
@@ -307,6 +312,26 @@ npx tsx bench/src/aggregate.ts
 Credentials come from the repo's `.env.local` (AWS keys for Bedrock EU,
 `ANTHROPIC_API_KEY` for first-party models, `OPENROUTER_API_KEY` for the
 rest). Results land as append-only JSONL under `bench/results/runs/`.
+
+## Roadmap: what this measures next
+
+v1.5 measures models. Three further axes are planned and explicitly not yet
+run, recorded here so the direction predates the numbers:
+
+1. **Skills and instructions.** Hold the model fixed, vary the instruction
+   set: bare prompt vs a domain skill carrying the BAS chart and VAT rules
+   vs a full agent briefing. This turns "is the skill worth its tokens" into
+   a measured quantity, and it is the axis closest to how Accounted actually
+   ships behaviour.
+2. **Harnesses.** The neutral scaffold makes models comparable and makes the
+   scaffold an untested variable. Running the same tasks under
+   retrieval-backed, self-consistency and staged-approval harnesses
+   attributes the remaining error between model and plumbing.
+3. **Systems.** The deliverable sentence is "this model books at X% inside
+   Accounted and Y% inside another Swedish ledger". Tool surfaces, account
+   defaults and posting rules are properties of the system, not the model,
+   and measuring that difference is the reason to own the benchmark rather
+   than cite someone else's.
 
 ## Future work
 
