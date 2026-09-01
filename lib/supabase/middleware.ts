@@ -267,7 +267,12 @@ async function updateSessionInner(
         supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
       )
       if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
-        return NextResponse.json({ error: 'MFA-verifiering krävs.' }, { status: 403 })
+        const response = NextResponse.json(
+          { error: 'MFA-verifiering krävs.' },
+          { status: 403 },
+        )
+        copyResponseCookies(supabaseResponse, response)
+        return response
       }
     }
     return supabaseResponse
@@ -352,14 +357,17 @@ async function updateSessionInner(
       const destination = carriesDestination
         ? safeReturnTo(request.nextUrl.searchParams.get('next'), '/')
         : '/'
-      return NextResponse.redirect(new URL(destination, request.url))
+      return redirectWithAuthCookies(
+        supabaseResponse,
+        new URL(destination, request.url),
+      )
     }
     return supabaseResponse
   }
 
   // Protected routes - require authentication
   if (!user) {
-    return bounceToAuth(request, '/login')
+    return bounceToAuth(request, supabaseResponse, '/login')
   }
 
   // ── Home-domain affinity (WL, founder call 2026-08-05) ──────────────────
@@ -380,7 +388,7 @@ async function updateSessionInner(
     request,
   )
   if (homeOutcome.redirectTo) {
-    return NextResponse.redirect(homeOutcome.redirectTo)
+    return redirectWithAuthCookies(supabaseResponse, homeOutcome.redirectTo)
   }
   if (homeOutcome.cacheOk) {
     supabaseResponse.cookies.set(
@@ -408,7 +416,8 @@ async function updateSessionInner(
       const mfaTarget = `/mfa/enroll${
         innerReturnTo ? `?returnTo=${encodeURIComponent(innerReturnTo)}` : ''
       }`
-      return NextResponse.redirect(
+      return redirectWithAuthCookies(
+        supabaseResponse,
         new URL(
           `/account/set-password?returnTo=${encodeURIComponent(mfaTarget)}`,
           request.url,
@@ -452,7 +461,7 @@ async function updateSessionInner(
 
     // User has MFA enrolled but hasn't verified this session → redirect to verify
     if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
-      return bounceToAuth(request, '/mfa/verify')
+      return bounceToAuth(request, supabaseResponse, '/mfa/verify')
     }
 
     // MFA required but user has no factor enrolled yet → force enrollment
@@ -476,7 +485,7 @@ async function updateSessionInner(
         const hasVerifiedFactor = factors?.totp?.some(f => f.status === 'verified')
 
         if (!hasVerifiedFactor) {
-          return bounceToAuth(request, '/mfa/enroll')
+          return bounceToAuth(request, supabaseResponse, '/mfa/enroll')
         }
       }
     }
@@ -568,7 +577,7 @@ async function updateSessionInner(
       if (isByraNoCompanyAllowed) {
         return supabaseResponse
       }
-      return NextResponse.redirect(new URL('/byra', request.url))
+      return redirectWithAuthCookies(supabaseResponse, new URL('/byra', request.url))
     }
 
     // Multi-user seat gate: memberships exist but every one is frozen for
@@ -593,7 +602,10 @@ async function updateSessionInner(
       .maybeSingle()
 
     const destination = enrichmentRow ? '/select-company' : '/onboarding'
-    return NextResponse.redirect(new URL(destination, request.url))
+    return redirectWithAuthCookies(
+      supabaseResponse,
+      new URL(destination, request.url),
+    )
   }
 
   // Set company cookie on the response so downstream requests have it
@@ -672,6 +684,28 @@ function copyResponseCookies(from: NextResponse, to: NextResponse): void {
   for (const cookie of from.cookies.getAll()) {
     to.cookies.set(cookie)
   }
+}
+
+/**
+ * Redirect that carries the auth cookies queued on `authResponse`.
+ *
+ * auth-js writes through the `setAll` callback while `getUser()` runs: a
+ * successful refresh puts the ROTATED tokens on the response, a dead session
+ * puts the cookie DELETIONS there. A bare `NextResponse.redirect()` throws
+ * both away, so the browser replays the old cookie on the very next request:
+ * a consumed refresh token on the happy path, and a dead one on the expiry
+ * path, where production showed the bounce and the following /login each
+ * spending their own GoTrue 400 about 100 ms apart. Every response that
+ * replaces `supabaseResponse` has to go through here (or through
+ * `copyResponseCookies`, for the non-redirect ones).
+ */
+function redirectWithAuthCookies(
+  authResponse: NextResponse,
+  url: URL | string,
+): NextResponse {
+  const response = NextResponse.redirect(url)
+  copyResponseCookies(authResponse, response)
+  return response
 }
 
 function sessionTimeoutResponse(
@@ -755,9 +789,14 @@ const AUTH_DESTINATION_PARAM = {
  * that was going to happen anyway, on exactly the same conditions. The auth
  * pages navigate to the destination only after the step-up succeeds, and the
  * next request re-runs this same gate regardless.
+ *
+ * The bounce also has to carry the cookies auth-js queued on the response
+ * while `getUser()` ran, hence `authResponse`: see
+ * `redirectWithAuthCookies`.
  */
 function bounceToAuth(
   request: NextRequest,
+  authResponse: NextResponse,
   target: keyof typeof AUTH_DESTINATION_PARAM,
 ) {
   // Absolute-path reference: replaces path AND clears query/fragment.
@@ -769,7 +808,7 @@ function bounceToAuth(
   if (destination !== '/') {
     url.search = `${AUTH_DESTINATION_PARAM[target]}=${encodeURIComponent(destination)}`
   }
-  return NextResponse.redirect(url)
+  return redirectWithAuthCookies(authResponse, url)
 }
 
 /**
