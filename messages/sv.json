@@ -2293,6 +2293,7 @@
     "connector_sync_failed": "Synkroniseringen misslyckades",
     "connector_sync_revoked_desc": "Nyckeln avvisades av värdtjänsten och connector-behörigheterna har tagits bort. Kontrollera abonnemanget eller nyckeln.",
     "connector_sync_unreachable_desc": "Värdtjänsten kunde inte nås. Befintliga behörigheter behålls och gäller tills de löper ut.",
+    "connector_sync_request_failed_desc": "Begäran misslyckades. Kontrollera att instansen är igång och försök igen.",
     "connector_load_failed": "Kunde inte läsa connector-status."
   },
   "settings_invoice_form": {

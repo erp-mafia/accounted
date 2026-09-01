@@ -90,12 +90,22 @@ export function ConnectorSettingsSection() {
       }
       const result = body.data
       if (result.outcome === 'synced') {
+        // Count capabilities, not grant rows: grantsUpserted is
+        // companies x scopes and reads absurd on a multi-company instance.
         toast({
           title: t('connector_sync_done'),
           description:
             (result.scopes?.length ?? 0) > 0
-              ? t('connector_sync_done_desc', { count: result.grantsUpserted })
+              ? t('connector_sync_done_desc', { count: result.scopes?.length ?? 0 })
               : t('connector_sync_done_empty'),
+        })
+      } else if (result.outcome === 'not_configured') {
+        // The key vanished after the page loaded (operator reconfigured):
+        // saying the hosted service was unreachable would be false.
+        toast({
+          title: t('connector_status_unconfigured'),
+          description: t('connector_status_unconfigured_note'),
+          variant: 'destructive',
         })
       } else if (result.outcome === 'revoked') {
         // The grants were just deleted: this must not read as a generic error.
@@ -112,6 +122,14 @@ export function ConnectorSettingsSection() {
         })
       }
       setReloadKey((k) => k + 1)
+    } catch {
+      // fetch itself rejected (instance restarting, network drop): without
+      // this the click is a silent no-op and the rejection goes unhandled.
+      toast({
+        title: t('connector_sync_failed'),
+        description: t('connector_sync_request_failed_desc'),
+        variant: 'destructive',
+      })
     } finally {
       setSyncing(false)
     }

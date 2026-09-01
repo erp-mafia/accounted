@@ -2293,6 +2293,7 @@
     "connector_sync_failed": "Sync failed",
     "connector_sync_revoked_desc": "The key was rejected by the hosted service and the connector capabilities were removed. Check the subscription or the key.",
     "connector_sync_unreachable_desc": "The hosted service could not be reached. Existing capabilities are kept and remain valid until they expire.",
+    "connector_sync_request_failed_desc": "The request failed. Check that the instance is running and try again.",
     "connector_load_failed": "Could not read connector status."
   },
   "settings_invoice_form": {
