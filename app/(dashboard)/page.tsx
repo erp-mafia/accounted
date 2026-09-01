@@ -88,7 +88,7 @@ export default async function DashboardPage() {
     { data: profile },
     agentProfile,
     { count: skatteverketTokenCount },
-    { count: oauthKeyCount },
+    { count: oauthKeyCount, error: oauthKeyError },
   ] =
     await Promise.all([
       getDashboardSettings(),
@@ -119,6 +119,12 @@ export default async function DashboardPage() {
   const { data: settings, error: settingsError } = settingsRes
   if (settingsError) {
     throw new Error(`company_settings fetch failed: ${settingsError.message}`)
+  }
+  // Same rule for the OAuth-key count: a failed query answers count null,
+  // which claudeStepDone would read as "never connected" and re-open the
+  // Claude step for a connected user. Surface it instead of guessing.
+  if (oauthKeyError) {
+    throw new Error(`api_keys count failed: ${oauthKeyError.message}`)
   }
 
   // If onboarding is not complete, redirect to onboarding. Exception: a byrå

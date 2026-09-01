@@ -51,7 +51,9 @@ export function createServiceClientNoCookies() {
  * (app/api/mcp-oauth/token). It is the only marker those rows carry (there
  * is no source column), so the Hem checklist's "Anslut till Claude" step
  * matches on it to know a client completed its first sign-in. Renaming it
- * would untick the step for every existing connection.
+ * would untick the step for every existing connection. The manual create
+ * route (app/api/settings/api-keys) rejects this name so a hand-minted key
+ * cannot fake the connection.
  */
 export const OAUTH_MCP_KEY_NAME = 'MCP-klient (OAuth)'
 
