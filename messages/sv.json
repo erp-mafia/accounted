@@ -7844,6 +7844,7 @@
     "th_status": "Status",
     "th_amount": "Belopp",
     "select_claim": "Välj utlägg för utbetalning",
+    "select_all_claims": "Markera alla",
     "receipt_attached": "Bifogat",
     "receipt_missing": "Saknas",
     "created": "Utlägg registrerat och bokfört",

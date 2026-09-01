@@ -7844,6 +7844,7 @@
     "th_status": "Status",
     "th_amount": "Amount",
     "select_claim": "Select claim for payout",
+    "select_all_claims": "Select all",
     "receipt_attached": "Attached",
     "receipt_missing": "Missing",
     "created": "Expense claim registered and booked",

@@ -259,6 +259,12 @@ export default function ExpenseClaimsPage() {
     return [...sums.entries()].sort((a, b) => b[1] - a[1])
   }, [claims])
 
+  const selectableIds = useMemo(
+    () => visibleClaims.filter((c) => c.status === 'registered').map((c) => c.id),
+    [visibleClaims],
+  )
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id))
+  const someSelected = selectableIds.some((id) => selected.has(id))
   const selectedClaims = useMemo(
     () => claims.filter((c) => selected.has(c.id)),
     [claims, selected],
@@ -938,7 +944,17 @@ export default function ExpenseClaimsPage() {
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
-              <th className={TH_CLASS} />
+              <th className={`${TH_CLASS} w-8`}>
+                {canWrite && selectableIds.length > 0 ? (
+                  <Checkbox
+                    checked={allSelected ? true : someSelected ? 'indeterminate' : false}
+                    onCheckedChange={() =>
+                      setSelected(allSelected ? new Set() : new Set(selectableIds))
+                    }
+                    aria-label={t('select_all_claims')}
+                  />
+                ) : null}
+              </th>
               <th className={TH_CLASS}>{t('th_date')}</th>
               <th className={TH_CLASS}>{t('th_description')}</th>
               <th className={TH_CLASS}>{t('th_claimant')}</th>
