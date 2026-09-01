@@ -23,6 +23,7 @@ import {
   type SkattekontoReconciliationLatest,
 } from '@/lib/reconciliation/skattekonto-latest'
 import { expiringBankConnectionsFrom, skvStatusNeedsReconnect } from './predicates'
+import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
 import type { Notice } from './types'
 
 // The pure decision layer lives in ./predicates (client-safe: 'use client'
@@ -190,7 +191,16 @@ export async function detectSkvDisconnected(
     const status = (data.status as string | null) ?? 'active'
     const expiresAt = data.expires_at as string | null
     const expired = expiresAt !== null && new Date(expiresAt).getTime() < now.getTime()
-    const canRefresh = data.refresh_token !== null && ((data.refresh_count as number | null) ?? 0) < 10
+    // Same rule as the extension's /status route: a refresh token past its
+    // 65-minute life does not count as refreshable (lib/skatteverket/session-lifetime).
+    const canRefresh = isSkvSessionRefreshable(
+      {
+        expiresAt,
+        hasRefreshToken: data.refresh_token !== null,
+        refreshCount: data.refresh_count as number | null,
+      },
+      now,
+    )
     const needsReconsent = status === 'needs_reconsent'
     if (!skvStatusNeedsReconnect({ connected: true, needsReconsent, expired, canRefresh })) {
       return null
