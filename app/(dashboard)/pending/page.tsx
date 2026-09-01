@@ -10,7 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { DataListEmpty, DataListLoading } from '@/components/ui/data-list'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { CHECKBOX_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
   SlideOver,
   SlideOverContent,
@@ -997,7 +997,7 @@ export default function PendingOperationsPage() {
                     isSelected && 'bg-secondary/40',
                   )}
                 >
-                  {/* Hover-revealed selection checkbox (concept .cb) */}
+                  {/* Always-visible selection checkbox (concept .cb) */}
                   <span
                     className="w-[18px] shrink-0 pt-1.5"
                     onClick={(e) => e.stopPropagation()}
@@ -1009,7 +1009,7 @@ export default function PendingOperationsPage() {
                         aria-label={t('select_operation_aria')}
                         className={cn(
                           'duration-150',
-                          isSelected ? 'opacity-100' : HOVER_REVEAL_CLASS,
+                          isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
                         )}
                       />
                     )}

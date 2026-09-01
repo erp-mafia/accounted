@@ -40,6 +40,7 @@ import {
   VTH_CLASS,
   VTD_CLASS,
   QUIET_LINK_CLASS,
+  CHECKBOX_REVEAL_CLASS,
   RowFoldout,
 } from '@/components/ui/dry-table'
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal, RotateCcw } from 'lucide-react'
@@ -1545,10 +1546,10 @@ export default function JournalEntryList({
                             onCheckedChange={() => toggleSelect(entry.id)}
                             aria-label={t('batch_select_row')}
                             className={cn(
-                              'transition-opacity duration-150',
+                              'duration-150',
                               selectedIds.has(entry.id)
                                 ? 'opacity-100'
-                                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                                : CHECKBOX_REVEAL_CLASS,
                             )}
                           />
                         )}
