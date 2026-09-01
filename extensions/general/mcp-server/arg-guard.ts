@@ -26,3 +26,23 @@ export function findUnknownArgKeys(
   const allowed = new Set(listArgKeys(inputSchema))
   return Object.keys(args).filter((key) => key !== 'company_id' && !allowed.has(key))
 }
+
+/**
+ * The shortest worked example a tool publishes, serialized for an error
+ * message, or '' when it has none or the shortest is too long to help.
+ *
+ * "Valid parameters: period_id" told DueCue's agent which key was wrong but
+ * not what a correct call looks like, and the same rejected call repeated for
+ * seven days (604 of them). One example costs nothing in tools/list, because
+ * it only ships on the response to a call that already failed.
+ */
+export function shortestExampleFor(inputSchema: Record<string, unknown>, maxChars = 200): string {
+  const examples = inputSchema.examples
+  if (!Array.isArray(examples) || examples.length === 0) return ''
+  const serialized = examples
+    .map((e) => JSON.stringify(e))
+    .filter((json): json is string => typeof json === 'string')
+    .sort((a, b) => a.length - b.length)
+  const shortest = serialized.find((json) => json.length <= maxChars)
+  return shortest ?? ''
+}
