@@ -744,7 +744,11 @@ export async function getAccountBalances(accountUid: string): Promise<Balance[]>
 // names or ISO 20022 codes; both spellings of each type are accepted,
 // case-insensitively. Booked answers "what has the bank settled", available
 // answers "what can be spent right now" (the covering-decision number).
-const BOOKED_BALANCE_TYPES = ['closingbooked', 'clbd', 'expected', 'xpcd']
+// closingBooked (settled, definitive) wins over expected, which wins over
+// interimBooked (intraday booked): fall through to less-final booked types
+// only when the stabler one is absent, and to the generic first-entry
+// fallback only when no booked type exists at all.
+const BOOKED_BALANCE_TYPES = ['closingbooked', 'clbd', 'expected', 'xpcd', 'interimbooked', 'itbd']
 const AVAILABLE_BALANCE_TYPES = [
   'interimavailable',
   'itav',

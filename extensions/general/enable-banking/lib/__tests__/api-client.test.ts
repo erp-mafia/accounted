@@ -114,6 +114,18 @@ describe('api-client', () => {
       expect(result).toEqual({ amount: 42, date: '2026-08-31', available: null })
     })
 
+    it('prefers interimBooked (ITBD) over the generic first-entry fallback', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'somethingElse', balance_amount: { amount: '1.00', currency: 'SEK' } },
+          { balance_type: 'ITBD', balance_amount: { amount: '3.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result?.amount).toBe(3)
+    })
+
     it('returns null (never a fabricated 0) when the bank reports no balances at all', async () => {
       fetchSpy.mockResolvedValueOnce(balancesResponse([]))
       const result = await getAccountBalance('acc-1')
