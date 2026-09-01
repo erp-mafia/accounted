@@ -1,6 +1,6 @@
 {
   "benchVersion": "v1.5",
-  "generatedAt": "2026-09-01T08:18:26.880Z",
+  "generatedAt": "2026-09-01T08:28:40.740Z",
   "suites": {
     "booking": [
       {
@@ -20,6 +20,7 @@
         "extras": {
           "accountAccuracy": 0.962,
           "strictAccountAccuracy": 0.717,
+          "strictPass": 0.717,
           "vatAccuracy": 1,
           "ece": 0.096,
           "coverage95": 1,
@@ -58,6 +59,7 @@
         "extras": {
           "accountAccuracy": 0.962,
           "strictAccountAccuracy": 0.698,
+          "strictPass": 0.698,
           "vatAccuracy": 1,
           "ece": 0.008,
           "coverage95": 1,
@@ -96,6 +98,7 @@
         "extras": {
           "accountAccuracy": 0.943,
           "strictAccountAccuracy": 0.642,
+          "strictPass": 0.642,
           "vatAccuracy": 1,
           "ece": 0.045,
           "coverage95": 0.774,
@@ -134,6 +137,7 @@
         "extras": {
           "accountAccuracy": 0.925,
           "strictAccountAccuracy": 0.66,
+          "strictPass": 0.66,
           "vatAccuracy": 1,
           "ece": 0.06,
           "coverage95": 0.774,
@@ -172,6 +176,7 @@
         "extras": {
           "accountAccuracy": 0.925,
           "strictAccountAccuracy": 0.623,
+          "strictPass": 0.623,
           "vatAccuracy": 1,
           "ece": 0.082,
           "coverage95": 0.943,
@@ -210,6 +215,7 @@
         "extras": {
           "accountAccuracy": 0.925,
           "strictAccountAccuracy": 0.604,
+          "strictPass": 0.604,
           "vatAccuracy": 0.981,
           "ece": 0.114,
           "coverage95": 0.642,
@@ -248,6 +254,7 @@
         "extras": {
           "accountAccuracy": 0.925,
           "strictAccountAccuracy": 0.642,
+          "strictPass": 0.623,
           "vatAccuracy": 0.962,
           "ece": 0.067,
           "coverage95": 0.642,
@@ -286,6 +293,7 @@
         "extras": {
           "accountAccuracy": 0.906,
           "strictAccountAccuracy": 0.623,
+          "strictPass": 0.604,
           "vatAccuracy": 0.962,
           "ece": 0.053,
           "coverage95": 0.642,
@@ -324,6 +332,7 @@
         "extras": {
           "accountAccuracy": 0.887,
           "strictAccountAccuracy": 0.547,
+          "strictPass": 0.547,
           "vatAccuracy": 0.981,
           "ece": 0.028,
           "coverage95": 0.396,
@@ -362,6 +371,7 @@
         "extras": {
           "accountAccuracy": 0.868,
           "strictAccountAccuracy": 0.547,
+          "strictPass": 0.528,
           "vatAccuracy": 0.906,
           "ece": 0.069,
           "coverage95": 0.314,
@@ -400,6 +410,7 @@
         "extras": {
           "accountAccuracy": 0.868,
           "strictAccountAccuracy": 0.566,
+          "strictPass": 0.528,
           "vatAccuracy": 0.925,
           "ece": 0.044,
           "coverage95": 0.113,
@@ -438,6 +449,7 @@
         "extras": {
           "accountAccuracy": 0.679,
           "strictAccountAccuracy": 0.415,
+          "strictPass": 0.34,
           "vatAccuracy": 0.887,
           "ece": 0.243,
           "coverage95": 0,
@@ -476,6 +488,7 @@
         "extras": {
           "accountAccuracy": 0.528,
           "strictAccountAccuracy": 0.245,
+          "strictPass": 0.208,
           "vatAccuracy": 0.906,
           "ece": 0.399,
           "coverage95": 0,
@@ -514,6 +527,7 @@
         "extras": {
           "accountAccuracy": 0.547,
           "strictAccountAccuracy": 0.264,
+          "strictPass": 0.17,
           "vatAccuracy": 0.868,
           "ece": 0.425,
           "coverage95": 0,

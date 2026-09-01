@@ -153,20 +153,22 @@
   }
 
   /* controls */
-  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; background: var(--secondary-soft); border-radius: 999px; padding: 3px; width: fit-content; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; background: var(--secondary-soft); border-radius: 999px; padding: 3px; width: fit-content; }
   .tabs button {
     font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; color: var(--soft);
     background: transparent; border: none; border-radius: 999px; padding: 6px 15px; height: 32px;
     transition: background-color .15s ease, color .15s ease;
   }
   .tabs button[aria-selected="true"] { color: var(--ink); background: var(--bg); font-weight: 600; box-shadow: inset 0 0 0 1px var(--border); }
-  .segbar { display: flex; gap: 6px; margin: 0 0 18px; flex-wrap: wrap; }
+  .controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 14px; }
+  .segbar { display: flex; gap: 6px; background: var(--secondary-soft); border-radius: 999px; padding: 3px; }
   .segbar button {
     font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; color: var(--soft);
-    background: transparent; border: 1px solid var(--border); border-radius: 999px; padding: 4px 13px;
+    background: transparent; border: none; border-radius: 999px; padding: 5px 13px; height: 28px;
     transition: background-color .15s ease, color .15s ease;
   }
-  .segbar button[aria-pressed="true"] { background: var(--secondary); color: var(--ink); font-weight: 600; border-color: transparent; }
+  .segbar button[aria-pressed="true"] { background: var(--bg); color: var(--ink); font-weight: 600; box-shadow: inset 0 0 0 1px var(--border); }
+  .filterrow { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 18px 0 10px; }
 
   /* table: dry-table style, straight on the panel */
   table.lb { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 620px; }
@@ -194,7 +196,7 @@
   .chartcard { border: 1px solid var(--border); border-radius: 8px; padding: 18px 18px 10px; }
   .chartcard.lead { margin: 4px 0 20px; }
   .chartmeta b { color: var(--ink); font-weight: 600; }
-  .vendorbar { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+  .vendorbar { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; }
   .vendorbar button {
     font-family: inherit; font-size: 12px; font-weight: 500; cursor: pointer; color: var(--soft);
     background: transparent; border: 1px solid var(--border); border-radius: 999px;
@@ -205,7 +207,7 @@
   .vendorbar button[aria-pressed="false"] { opacity: .42; }
   .vendorbar button[aria-pressed="true"] { background: var(--secondary); color: var(--ink); border-color: transparent; }
   .pickrow button[aria-pressed="true"] .mark { color: var(--bg) !important; }
-  .scopeline { font-size: 12px; color: var(--faint); margin: 0 0 8px; font-family: "Geist Mono",monospace; }
+  .scopeline { font-size: 11.5px; color: var(--faint); margin: 0; font-family: "Geist Mono",monospace; white-space: nowrap; }
   .chartmeta { display: flex; justify-content: space-between; font-size: 11px; color: var(--faint); font-family: "Geist Mono",monospace; margin-bottom: 6px; }
   .chartcard svg text { font-family: "Geist Mono",monospace; font-size: 10px; fill: var(--faint); }
   .chartcard svg .grid { stroke: var(--border); stroke-width: 1; }
@@ -217,6 +219,21 @@
   .chartcard svg .halo { fill: var(--bg); stroke: var(--border); stroke-width: 1; }
   .chartcard svg .dm { color: var(--ink); }
   .chartcard svg .lab { fill: var(--ink); font-size: 10.5px; }
+  .chartbody { position: relative; }
+  .chartcard svg .dm { cursor: default; }
+  .chartcard svg .dm .halo { transition: stroke .12s ease, stroke-width .12s ease; }
+  .chartcard svg .dm.hi .halo { stroke: var(--ink); stroke-width: 2; }
+  .chartcard svg .dm.dim { opacity: .32; }
+  .tip {
+    position: absolute; pointer-events: none; z-index: 4;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 9px 12px; font-size: 12.5px; color: var(--ink); min-width: 168px;
+    box-shadow: 0 2px 6px rgba(20,24,27,.06), 0 12px 28px rgba(20,24,27,.1);
+  }
+  .tip .tname { display: flex; align-items: center; font-weight: 600; margin-bottom: 6px; }
+  .tip .trow { display: flex; justify-content: space-between; gap: 16px; color: var(--soft); font-size: 12px; line-height: 1.7; }
+  .tip .trow b { color: var(--ink); font-variant-numeric: tabular-nums; font-family: "Geist Mono",monospace; font-size: 11.5px; }
+  table.lb tbody tr.hi { background: var(--secondary); }
   .chartside h3 { font-family: "Hedvig Letters Serif",Georgia,serif; font-weight: 400; font-size: 18px; margin: 2px 0 6px; }
   .chartside p { font-size: 13px; }
 
@@ -376,6 +393,7 @@
         <li><span><strong>Three models are fit for confidence-gated unattended booking:</strong> Claude Sonnet 5 (64% of transactions auto-bookable at 99% precision), Claude Opus 5 and GPT-5.6 Luna (53% each). Luna does it at about $0.004 per transaction at list price, roughly 1/40th of Opus.</span></li>
         <li><span><strong>Accuracy without calibration cannot automate.</strong> Gemini 3.1 Pro ties Opus 5 at the top of the booking table (96.2%), yet its flat confidence supports auto-booking only 15% of transactions at 99% precision, a quarter of what Sonnet 5's calibration unlocks at lower accuracy. The gate, not the score, is what lets a model work alone.</span></li>
         <li><span><strong>Open weights arrived.</strong> Kimi K3 books 90.6%, level with Claude Sonnet 5 (the two are a statistical tie), with 9/9 agent reliability and a 60% automation gate. The open-closed gap on Swedish accounting is now a few points at the top, not forty.</span></li>
+        <li><span><strong>Read the strict column before believing the headline.</strong> Booking's pass rate credits any chart-defensible account, and those acceptance lists grew during curation partly in response to model answers. Requiring the single gold account and the right VAT drops every model by 25-32 points: Opus 5 from 96% to 72%, Sonnet 5 from 91% to 60%. The strict column carries no such bias and is the conservative reading.</span></li>
         <li><span><strong>The ledger is the honesty test.</strong> Ten of fourteen models solved every agent task on every repeat attempt; Llama 4 Maverick managed 1 of 9, GPT-OSS-120B 6 of 9, Haiku 4.5 4 of 9. Chat quality does not predict who can keep books.</span></li>
       </ol></div>
     </section>
@@ -394,11 +412,13 @@
       <h2>Leaderboard</h2>
       <p class="sectiondesc">Four suites, four separate rankings, deliberately unblended: a model that reads receipts well but books reverse charge wrong is exactly the distinction an operator needs to see.</p>
 
-      <div class="tabs" role="tablist" id="tabs"></div>
-      <div class="segbar" id="segbar" hidden>
-        <button data-seg="all" aria-pressed="true">All tasks</button>
-        <button data-seg="underlag" aria-pressed="false">Invoice attached</button>
-        <button data-seg="bank_only" aria-pressed="false">Bank feed only</button>
+      <div class="controls">
+        <div class="tabs" role="tablist" id="tabs"></div>
+        <div class="segbar" id="segbar" hidden>
+          <button data-seg="all" aria-pressed="true">All tasks</button>
+          <button data-seg="underlag" aria-pressed="false">Invoice attached</button>
+          <button data-seg="bank_only" aria-pressed="false">Bank feed only</button>
+        </div>
       </div>
 
       <div class="chartcard lead">
@@ -406,11 +426,16 @@
           <span><b id="charttitle">Score versus spend</b> · pass rate against cost per task, Wilson ±1σ</span>
           <span id="chartn"></span>
         </div>
-        <svg id="scatter" viewBox="0 0 900 440" width="100%" role="img" aria-label="Pass rate against cost per task with efficiency frontier and confidence whiskers"></svg>
+        <div class="chartbody">
+          <svg id="scatter" viewBox="0 0 900 440" width="100%" role="img" aria-label="Pass rate against cost per task with efficiency frontier and confidence whiskers"></svg>
+          <div class="tip" id="tip" hidden></div>
+        </div>
       </div>
 
-      <div class="vendorbar" id="vendorbar" aria-label="Filter by provider"></div>
-      <p class="scopeline" id="scopeline"></p>
+      <div class="filterrow">
+        <div class="vendorbar" id="vendorbar" aria-label="Filter by provider"></div>
+        <span class="scopeline" id="scopeline"></span>
+      </div>
       <div class="tablewrap"><table class="lb stagger" id="lbtable"></table></div>
       <p class="legendline" id="legend"></p>
     </section>
@@ -459,7 +484,8 @@
         <div class="mrow"><dt>What</dt><dd><strong>Booking</strong> (53): pick the BAS account + VAT treatment for a bank transaction. <strong>Reasoning</strong> (36): Swedish VAT/BFL law with one deterministic answer. <strong>Extraction</strong> (12): read fields off rendered Swedish documents. <strong>Ledger-agent</strong> (3, run three times each): multi-turn tool use against a real Postgres ledger.</dd></div>
         <div class="mrow"><dt>Oracle</dt><dd>Deterministic throughout. The agent suite is graded on the <strong>SQL end state of the books</strong>; the production database triggers (balance, immutability, period locks) stay live and refuse illegal writes. A self-test proves the oracle can detect failure before any model runs.</dd></div>
         <div class="mrow"><dt>Fairness</dt><dd>Byte-identical prompts and tools for every model, vendor-default settings, pass@1, no fallbacks. Runs that never reached a model (rate limits, provider credits) are quarantined as <em>not run</em>, never scored as failures. Costs are measured tokens at each vendor's first-party list price (standard tier, no cache, batch or promo discounts); open-weights models without a vendor API are priced at Fireworks, following Ramp's convention.</dd></div>
-        <div class="mrow"><dt>Evidence split</dt><dd>Booking reports two segments: <strong>invoice attached</strong> (the invoice states the VAT: measures reading) and <strong>bank feed only</strong> (counterparty and amount alone: measures knowing). v1.0 published only the blend and its VAT column saturated; v1.1 fixed that.</dd></div>
+        <div class="mrow"><dt>Lenient and strict</dt><dd>Booking is scored twice. <strong>Pass</strong> accepts the gold account or any alternative listed on the task; <strong>Strict</strong> requires the single gold account and the right VAT. The acceptance lists were extended during curation when a model's answer proved defensible against the BAS chart, which makes the lenient number partly a function of what models answered: a known upward bias, stated rather than hidden. Strict carries no such bias and sits 25-32 points lower, in the range other accounting benchmarks report.</dd></div>
+      <div class="mrow"><dt>Evidence split</dt><dd>Booking reports two segments: <strong>invoice attached</strong> (the invoice states the VAT: measures reading) and <strong>bank feed only</strong> (counterparty and amount alone: measures knowing). v1.0 published only the blend and its VAT column saturated; v1.1 fixed that.</dd></div>
         <div class="mrow"><dt>Context</dt><dd>Closest public benchmarks: <a href="https://www.dualentry.com/accounting-ai-benchmark">DualEntry</a> tops out at 79.2% (US-GAAP, month-end close 50%), <a href="https://www.vals.ai/benchmarks/finance_agent">Vals Finance Agent</a> at 64.4%, <a href="https://taubench.com">τ²-bench</a> at 87.9%. None Swedish, none write-capable against a legally constrained ledger.</dd></div>
         <div class="mrow"><dt>Statistics</dt><dd>Wilson ±1σ intervals on every rate; paired <strong>McNemar exact tests</strong> group the ranking into statistical ties (models inside a group cannot be distinguished at p&lt;0.05, marked by rules in the table); every task carries a published <strong>discrimination index</strong> (point-biserial), and tasks with negative discrimination are retired in review, applied to all models equally. A k=3 repeat study found single-run pass rates moving up to 25 pp between identical runs for one model; the tie groups, not the raw order, are the citable result.</dd></div>
       <div class="mrow"><dt>Contamination</dt><dd>Every task file carries a <strong>canary string</strong> (BIG-bench convention) so future training-data filters can exclude it, and the public split's exposure is stated rather than hidden. The prod-derived private split is the contamination-free instrument.</dd></div>
@@ -650,7 +676,7 @@
 
   /* ---------- shared ---------- */
   const SUITES = [
-    { id: 'booking', label: 'Booking', legend: '<b>Pass</b> account and VAT both right · <b>Strict</b> exact gold account, no accepted alternatives · <b>Auto@99%</b> share auto-bookable at 99% precision, gated on stated confidence · <b>ECE</b> calibration error, 0 = perfect · <b>Cost</b> per task · a horizontal rule separates statistical tie groups (paired McNemar, p<0.05)' },
+    { id: 'booking', label: 'Booking', legend: '<b>Pass</b> account and VAT both right · <b>Strict</b> the single gold account and the right VAT, with no credit for defensible alternatives · <b>Auto@99%</b> share auto-bookable at 99% precision, gated on stated confidence · <b>ECE</b> calibration error, 0 = perfect · <b>Cost</b> per task · a horizontal rule separates statistical tie groups (paired McNemar, p<0.05)' },
     { id: 'reasoning', label: 'Reasoning', legend: '<b>Pass</b> exact deterministic answer · <b>Fresh rules</b> the six tasks on rules that changed in 2025-2026 · <b>ECE</b> calibration error, lower is better · <b>Cost</b> per task · rules separate statistical tie groups' },
     { id: 'extraction', label: 'Extraction', legend: '<b>Pass</b> every field on the document right · <b>Fields</b> mean per-field accuracy · <b>Cost</b> per task · models without vision are absent' },
     { id: 'ledger-agent', label: 'Ledger-agent', legend: '<b>Pass</b> all end-state assertions hold on the real ledger · <b>Pass^k</b> share of tasks solved on EVERY repeat attempt · <b>Turns</b> model turns used · <b>Cost</b> per task' },
@@ -715,7 +741,7 @@
     if (active === 'booking') {
       if (segment === 'all') {
         return [passCell(p),
-          e.strictAccountAccuracy == null ? '—' : fmtPct0(e.strictAccountAccuracy),
+          e.strictPass == null ? '—' : fmtPct0(e.strictPass),
           e.coverage99 == null ? '—' : fmtPct0(e.coverage99),
           e.ece == null ? '—' : e.ece.toFixed(2), cost];
       }
@@ -759,7 +785,7 @@
     let html = '<thead><tr>' + headerCols().map((c) => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
     for (const r of rows) {
       const sep = groupStart.has(r.model) ? ' class="tiecut"' : '';
-      html += `<tr${sep}><td>${markFor(r.vendor)}${r.label}</td>` +
+      html += `<tr${sep} data-model="${r.model}"><td>${markFor(r.vendor)}${r.label}</td>` +
         rowCols(r).map((c) => `<td>${c}</td>`).join('') + '</tr>';
     }
     tableEl.innerHTML = html + '</tbody>';
@@ -844,19 +870,28 @@
         out += `<line class="whisk" x1="${cx-3.5}" y1="${y(r.wilsonHi)}" x2="${cx+3.5}" y2="${y(r.wilsonHi)}"></line>`;
       }
     }
-    const labeled = new Set(rows.slice().sort((a,b) => passOf(b)-passOf(a)).slice(0,10).map((r)=>r.model));
+    // Label the efficiency frontier plus the leader; everything else is a
+    // hover away, which keeps a 15-model field readable.
+    const frontierModels = new Set();
+    { let best2 = -1;
+      for (const r of rows.slice().sort((a,b) => perTask(a)-perTask(b))) {
+        if (passOf(r) > best2) { frontierModels.add(r.model); best2 = passOf(r); }
+      } }
+    const leader = rows.slice().sort((a,b) => passOf(b)-passOf(a))[0];
+    if (leader) frontierModels.add(leader.model);
+    const labeled = frontierModels;
     const placed = [];
     for (const r of rows) {
       const cx = x(perTask(r)), cy = y(passOf(r));
       const l = LOGOS[r.vendor];
-      out += `<g class="dm"><circle class="halo" cx="${cx}" cy="${cy}" r="11"></circle>`;
+      out += `<g class="dm" data-model="${r.model}" tabindex="0" role="img" aria-label="${short(r.label)}: ${fmtPct1(passOf(r))} at ${fmtUsd(perTask(r))} per task"><circle class="halo" cx="${cx}" cy="${cy}" r="11"></circle>`;
       if (l) {
         const fill = l.hex ? l.hex : 'currentColor';
         out += `<g transform="translate(${cx-6.5},${cy-6.5}) scale(0.54)"><path fill="${fill}" d="${l.d}"></path></g>`;
       } else {
         out += `<text x="${cx}" y="${cy+3}" text-anchor="middle" style="font-size:7.5px;font-weight:600;fill:currentColor">${short(r.label).slice(0,2)}</text>`;
       }
-      out += `<title>${short(r.label)}: ${fmtPct1(passOf(r))}, ${fmtUsd(perTask(r))}/task</title></g>`;
+      out += `</g>`;
       if (!labeled.has(r.model)) continue;
       let ly = cy - 15;
       while (placed.some((p) => Math.abs(p - ly) < 14)) ly -= 14;
@@ -864,6 +899,70 @@
       out += `<text class="lab" x="${Math.min(cx+14, W-m.r-4)}" y="${ly}" text-anchor="${cx > W-200 ? 'end' : 'start'}">${short(r.label)}</text>`;
     }
     svg.innerHTML = out;
+    wireHover(rows);
+  }
+
+  // Hover links the chart and the table both ways: pointing at a dot lifts its
+  // row, pointing at a row lifts its dot, and either shows the full numbers.
+  function wireHover(rows) {
+    const svg = document.getElementById('scatter');
+    const tip = document.getElementById('tip');
+    const byModel = new Map(rows.map((r) => [r.model, r]));
+
+    function show(model, point) {
+      const r = byModel.get(model);
+      if (!r) return;
+      const e = r.extras || {};
+      const extra =
+        active === 'booking' && e.coverage99 != null
+          ? `<div class="trow"><span>Auto @99%</span><b>${fmtPct0(e.coverage99)}</b></div>`
+          : active === 'ledger-agent' && e.reliability != null
+            ? `<div class="trow"><span>Pass^k</span><b>${fmtPct0(e.reliability)}</b></div>`
+            : '';
+      tip.innerHTML =
+        `<div class="tname">${markFor(r.vendor)}${r.label}</div>` +
+        `<div class="trow"><span>Pass</span><b>${fmtPct1(passOf(r))}</b></div>` +
+        `<div class="trow"><span>Interval</span><b>${fmtPct0(r.wilsonLo)}\u2013${fmtPct0(r.wilsonHi)}</b></div>` +
+        `<div class="trow"><span>Cost / task</span><b>${fmtUsd(perTask(r))}</b></div>` +
+        extra +
+        `<div class="trow"><span>Tasks</span><b>${r.n}</b></div>`;
+      tip.hidden = false;
+      const box = svg.getBoundingClientRect();
+      const tb = tip.getBoundingClientRect();
+      let left = point.x - box.left + 16;
+      const top = point.y - box.top - tb.height / 2;
+      if (left + tb.width > box.width) left = point.x - box.left - tb.width - 16;
+      tip.style.left = Math.max(4, left) + 'px';
+      tip.style.top = Math.max(4, Math.min(box.height - tb.height - 4, top)) + 'px';
+    }
+    function highlight(model) {
+      for (const g of svg.querySelectorAll('.dm')) {
+        g.classList.toggle('hi', g.dataset.model === model);
+        g.classList.toggle('dim', model !== null && g.dataset.model !== model);
+      }
+      for (const tr of document.querySelectorAll('#lbtable tbody tr')) {
+        tr.classList.toggle('hi', tr.dataset.model === model);
+      }
+    }
+    function clear() { tip.hidden = true; highlight(null); }
+
+    for (const g of svg.querySelectorAll('.dm')) {
+      const model = g.dataset.model;
+      g.addEventListener('pointerenter', (ev) => { highlight(model); show(model, { x: ev.clientX, y: ev.clientY }); });
+      g.addEventListener('pointermove', (ev) => show(model, { x: ev.clientX, y: ev.clientY }));
+      g.addEventListener('pointerleave', clear);
+      g.addEventListener('focus', () => {
+        const b = g.getBoundingClientRect();
+        highlight(model);
+        show(model, { x: b.left + b.width / 2, y: b.top + b.height / 2 });
+      });
+      g.addEventListener('blur', clear);
+    }
+    for (const tr of document.querySelectorAll('#lbtable tbody tr')) {
+      const model = tr.dataset.model;
+      tr.addEventListener('pointerenter', () => highlight(model));
+      tr.addEventListener('pointerleave', () => highlight(null));
+    }
   }
 
   /* ---------- verdicts ---------- */

@@ -138,10 +138,15 @@ on top; its accuracy is tracked separately by the backtest scripts).
   worse) is the signature of defective gold: booking-040 was retired this
   way (r = -0.51), applied to all models equally by the curation-safe
   aggregator.
-- **Strict and lenient dual scoring (booking).** Exact-gold-account accuracy
-  is reported next to acceptable-set accuracy (the SQuAD EM-vs-F1 pattern),
-  so convention-following and defensible-alternative booking are visible
-  separately.
+- **Strict and lenient dual scoring (booking), and the bias between them.**
+  `Pass` accepts the gold account or any alternative listed on the task;
+  `strictPass` requires the single gold account and the right VAT (the SQuAD
+  EM-vs-F1 pattern). The acceptance lists were extended during curation when
+  a model's answer proved defensible against the BAS chart, so the lenient
+  rate is partly a function of what models answered: a known upward bias,
+  worth ~25-32 points (Opus 96.2% lenient vs 71.7% strict; Sonnet 5 90.6% vs
+  60.4%). Strict carries no such bias, sits in the range other accounting
+  benchmarks report, and is the number to quote when comparing outward.
 - **Regelverksfarskhet (reasoning).** The tasks about rules that changed in
   2025-2026 (marked `fresh: true`) are reported as their own subscore next
   to stable law: whether a model knows THIS YEAR's rates is a different

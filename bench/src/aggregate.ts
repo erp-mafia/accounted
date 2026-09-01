@@ -224,6 +224,14 @@ function suiteExtras(
       strictAccountAccuracy: round3(
         records.filter((r) => r.score.exactAccount === true).length / records.length,
       ),
+      // Strict pass: the single gold account AND the right VAT treatment, with
+      // no credit for chart-defensible alternatives. The acceptance lists grew
+      // during curation partly in response to model answers, so the lenient
+      // pass rate carries that bias and this one does not.
+      strictPass: round3(
+        records.filter((r) => r.score.exactAccount === true && r.score.vatCorrect === true)
+          .length / records.length,
+      ),
       vatAccuracy: round3(vatAcc),
       ece: ece(calibration),
       coverage95: coverageAtPrecision(
