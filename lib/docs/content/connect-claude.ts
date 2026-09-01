@@ -12,22 +12,25 @@ https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accoun
 
 There are three ways to connect, depending on your client. All three reach the same tools and the same approval model: read tools answer immediately, write tools (categorise, mark paid, create voucher, year-end) **stage a pending operation** that you confirm in chat or in the **/pending** web UI before anything is booked.
 
-## Path A: claude.ai / Claude Desktop custom connector (OAuth 2.1)
+## Path A: claude.ai or Claude Desktop (one click)
 
-Best for most users. No API key to manage: you authorise Accounted the same way you'd authorise any OAuth app.
+**[→ Connect Accounted to Claude](https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=Accounted&connectorUrl=https%3A%2F%2Fapp.accounted.se%2Fapi%2Fextensions%2Fext%2Fmcp-server%2Fmcp%3Ftool_namespace%3Daccounted%26client%3Dclaude-connector)**
 
-1. In **claude.ai** (Settings → Connectors) or **Claude Desktop** (Settings → Connectors → Add custom connector), choose **Add custom connector**.
-2. Paste the connector URL:
-   \`\`\`
-   https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-connector
-   \`\`\`
-   _The "client=claude-connector" parameter is telemetry-only. Keep "tool_namespace=accounted": it selects the Accounted tool names._
-   If the dialog asks about authentication, choose **"Required when the server asks"** (not the auto-detected "None") and let Claude register an OAuth client automatically.
-3. You do not need an Accounted account yet. The connector works as soon as it is added: the server answers the handshake and the documentation tools (search tools, list and load skills) without credentials, and the first company-scoped call opens the Accounted sign-in. A new user creates the account right there (BankID or e-mail + 2FA), no visit to the website first.
-4. Sign in and pick the company you want Claude to act on. On the consent screen you grant **read-only scopes by default** (list invoices, read reports, compute VAT). Write scopes (create invoice, categorise, book vouchers, run year-end) are **listed separately and must be ticked explicitly**: leave them unchecked for a read-only review session.
-5. Approve. Claude now lists the Accounted tools and you can start asking questions.
+The link opens claude.ai with the connector name and URL already filled in. You review the values and confirm; the link only prefills the dialog, it grants nothing on its own. No API key to manage.
 
-Because the consent is per-company and scoped, you can connect a read-only key for a reviewer and a separate write-enabled connection for day-to-day bookkeeping.
+**You do not need an Accounted account yet.** The connector works as soon as it is added: the server answers the handshake and the documentation tools without credentials, and the first company-scoped call opens the Accounted sign-in, where a new user creates the account (BankID or e-mail + 2FA).
+
+**Read-only by default.** On the consent screen you pick the company and grant read scopes (list invoices, read reports, compute VAT). Write scopes (create invoice, categorise, book vouchers, run year-end) are listed separately and must be ticked explicitly, so a reviewer can connect read-only while you keep a write-enabled connection for daily work.
+
+#### Adding it by hand instead
+
+In **claude.ai** (Settings → Connectors) or **Claude Desktop** (Settings → Connectors → Add custom connector), choose **Add custom connector** and paste:
+
+\`\`\`
+https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-connector
+\`\`\`
+
+Keep \`tool_namespace=accounted\`: it selects the tool names this guide uses. \`client=claude-connector\` is telemetry-only. If the dialog asks about authentication, choose **"Required when the server asks"**, not the auto-detected "None".
 
 ## Path B: Claude Code (plugin)
 

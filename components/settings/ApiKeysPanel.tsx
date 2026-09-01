@@ -22,8 +22,6 @@ import { useToast } from '@/components/ui/use-toast'
 import {
   SettingsGroup,
   SettingsReveal,
-  SettingsRow,
-  SettingsRowNote,
 } from '@/components/settings/SettingsRows'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Loader2, Plus, Copy, Check, Trash2, Key, ChevronDown, AlertTriangle, ArrowUpRight } from 'lucide-react'
@@ -175,6 +173,7 @@ export function ApiKeysPanel() {
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [showKeyDialog, setShowKeyDialog] = useState(false)
   const [showApiKeyMethods, setShowApiKeyMethods] = useState(false)
+  const [showOtherClients, setShowOtherClients] = useState(false)
   const [newKeyName, setNewKeyName] = useState('')
   // 'live' by default: this is the general MCP-key surface and the dominant case
   // is a key for the user's real company. 'test' is an explicit opt-in: a
@@ -310,8 +309,195 @@ export function ApiKeysPanel() {
   const mcpUrl = (client: string) =>
     `${mcpBase}?tool_namespace=accounted&client=${client}`
 
+  // claude.ai install link: opens Add-custom-connector with name and URL
+  // prefilled. It only prefills the dialog, so the user still reviews and
+  // confirms, and Anthropic's cloud must be able to reach the URL: on
+  // localhost or a firewalled self-host the manual paste below is the path.
+  // https://claude.com/docs/connectors/building/directory-vs-custom
+  const claudeInstallUrl =
+    'https://claude.ai/customize/connectors?modal=add-custom-connector' +
+    `&connectorName=${encodeURIComponent(branding.appName)}` +
+    `&connectorUrl=${encodeURIComponent(mcpUrl('claude-connector'))}`
+
   return (
     <>
+      <SettingsGroup label={t('connect_mcp_title')}>
+        {/* The marketing site's halftone AI marks (Claude, OpenAI): a quiet
+            "works with" cue, not chrome. Text carries the meaning; the marks
+            are decorative. */}
+        <div className="flex items-center gap-3 px-1 pb-1 pt-3">
+          <div aria-hidden className="flex shrink-0 items-center gap-2">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={illustrationSrc('logo-claude')}
+              width={ILLUSTRATIONS['logo-claude'].w}
+              height={ILLUSTRATIONS['logo-claude'].h}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              className="h-5 w-auto"
+            />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={illustrationSrc('logo-openai')}
+              width={ILLUSTRATIONS['logo-openai'].w}
+              height={ILLUSTRATIONS['logo-openai'].h}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              className="h-5 w-auto"
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">{t('works_with_ai')}</p>
+        </div>
+        {/* claude.ai is the path for nearly everyone, and the install link
+            makes it one click, so it is the only thing above the fold. Every
+            other client needs a config file or a terminal, which is a
+            different job: it lives behind one disclosure instead of four
+            code blocks competing with the button. */}
+        <div className="px-1 pb-4 pt-2">
+          <Button asChild size="lg">
+            <a href={claudeInstallUrl} target="_blank" rel="noopener noreferrer">
+              {t('connect_to_claude')}
+              <ArrowUpRight className="ml-1.5 h-4 w-4" />
+            </a>
+          </Button>
+          <p className="mt-2 max-w-prose text-xs text-muted-foreground">
+            {t('connect_to_claude_help')}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          aria-expanded={showOtherClients}
+          onClick={() => setShowOtherClients(!showOtherClients)}
+          className="flex w-full items-center gap-2 border-t border-border px-1 py-3 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
+        >
+          <ChevronDown
+            className={cn(
+              'h-3.5 w-3.5 transition-transform duration-150',
+              !showOtherClients && '-rotate-90',
+            )}
+          />
+          {t('other_clients')}
+        </button>
+        <SettingsReveal open={showOtherClients}>
+          <div className="space-y-6 pb-3 pt-1">
+            <div>
+              <p className="mb-1 text-sm">{t('claude_ai_manual')}</p>
+              <p className="mb-2 text-xs text-muted-foreground">
+                {t.rich('claude_ai_instructions', {
+                  // Prose gets the brand's real casing; `connectorName` is the
+                  // lowercased config key and reads wrong in a sentence.
+                  connectorName: branding.appName,
+                  path: (chunks) => <strong>{chunks}</strong>,
+                })}
+              </p>
+              <CopyBlock text={mcpUrl('claude-connector')} copyAriaLabel={t('copy_aria')} />
+            </div>
+
+            <div>
+              <p className="mb-1 text-sm">{t('claude_plugin_label')}</p>
+              <p className="mb-2 text-xs text-muted-foreground">{t('claude_plugin_instructions')}</p>
+              <CopyBlock
+                text={`/plugin marketplace add erp-mafia/accounted\n/plugin install accounted@accounted`}
+                copyAriaLabel={t('copy_aria')}
+              />
+            </div>
+
+            <div>
+              <p className="mb-1 text-sm">Claude Code</p>
+              <p className="mb-2 text-xs text-muted-foreground">{t('terminal_runs_browser_login')}</p>
+              {/* URL is quoted: unquoted `?` in the query string trips zsh globbing. */}
+              <CopyBlock text={`claude mcp add ${connectorName} --transport http "${mcpUrl('claude-code')}"`} copyAriaLabel={t('copy_aria')} />
+            </div>
+
+            <div>
+              <p className="mb-1 text-sm">Cursor</p>
+              <p className="mb-2 text-xs text-muted-foreground">
+                {t.rich('cursor_instructions', {
+                  code: (chunks) => <code className="text-xs">{chunks}</code>,
+                })}
+              </p>
+              <CopyBlock text={`{
+  "mcpServers": {
+    "${connectorName}": {
+      "url": "${mcpUrl('cursor')}"
+    }
+  }
+}`} copyAriaLabel={t('copy_aria')} />
+            </div>
+          </div>
+        </SettingsReveal>
+
+        <button
+          type="button"
+          aria-expanded={showApiKeyMethods}
+          onClick={() => setShowApiKeyMethods(!showApiKeyMethods)}
+          className="flex w-full items-center gap-2 border-t border-border px-1 py-3 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
+        >
+          <ChevronDown
+            className={cn(
+              'h-3.5 w-3.5 transition-transform duration-150',
+              !showApiKeyMethods && '-rotate-90',
+            )}
+          />
+          {t('connect_with_api_key')}
+        </button>
+        <SettingsReveal open={showApiKeyMethods}>
+          <div className="space-y-6 pb-3 pt-1">
+            <div>
+              <p className="mb-1 text-sm">Claude Desktop</p>
+              <p className="mb-2 text-xs text-muted-foreground">
+                {t.rich('claude_desktop_instructions', {
+                  code: (chunks) => <code className="text-xs">{chunks}</code>,
+                })}
+              </p>
+              {/* ACCOUNTED_URL is emitted so self-hosted and white-label
+                  instances get a config that points at their own host: the
+                  bridge otherwise defaults to the hosted endpoint. The key
+                  value keeps the `gnubok_sk_` wire prefix on purpose. */}
+              <CopyBlock text={`{
+  "mcpServers": {
+    "${connectorName}": {
+      "command": "npx",
+      "args": ["-y", "accounted-mcp"],
+      "env": {
+        "ACCOUNTED_API_KEY": "gnubok_sk_...",
+        "ACCOUNTED_URL": "${mcpUrl('claude-desktop')}",
+        "ACCOUNTED_CLIENT": "claude-desktop"
+      }
+    }
+  }
+}`} copyAriaLabel={t('copy_aria')} />
+            </div>
+
+            <div>
+              <p className="mb-1 text-sm">Claude Code</p>
+              <p className="mb-2 text-xs text-muted-foreground">
+                {t('terminal_with_api_key')}
+              </p>
+              <CopyBlock text={`claude mcp add ${connectorName} --transport http \\
+  --url "${mcpUrl('claude-code')}" \\
+  --header "Authorization: Bearer gnubok_sk_..."`} copyAriaLabel={t('copy_aria')} />
+            </div>
+          </div>
+        </SettingsReveal>
+
+        {/* The step-by-step guide is canonical on the docs site, in one
+            language per URL (the docs site has no locale routing). Root-relative
+            so the /docs/api/* 308 in next.config.ts forwards to docs.gnubok.se. */}
+        <a
+          href={locale === 'sv' ? '/docs/api/anslut-claude' : '/docs/api/connect-claude'}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 px-1 py-3 text-xs text-muted-foreground underline-offset-4 transition-colors duration-150 hover:text-foreground hover:underline"
+        >
+          {t('full_guide_link')}
+          <ArrowUpRight className="h-3 w-3" />
+        </a>
+      </SettingsGroup>
+
       <SettingsGroup>
         {/* Group eyebrow with the group's primary action on the right. Styling
             mirrors SettingsGroup's label line; the "?" holds the old panel
@@ -390,163 +576,6 @@ export function ApiKeysPanel() {
             )
           })
         )}
-      </SettingsGroup>
-
-      <SettingsGroup label={t('connect_mcp_title')}>
-        {/* The marketing site's halftone AI marks (Claude, OpenAI): a quiet
-            "works with" cue, not chrome. Text carries the meaning; the marks
-            are decorative. */}
-        <div className="flex items-center gap-3 px-1 pb-1 pt-3">
-          <div aria-hidden className="flex shrink-0 items-center gap-2">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={illustrationSrc('logo-claude')}
-              width={ILLUSTRATIONS['logo-claude'].w}
-              height={ILLUSTRATIONS['logo-claude'].h}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              className="h-5 w-auto"
-            />
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={illustrationSrc('logo-openai')}
-              width={ILLUSTRATIONS['logo-openai'].w}
-              height={ILLUSTRATIONS['logo-openai'].h}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              className="h-5 w-auto"
-            />
-          </div>
-          <p className="text-xs text-muted-foreground">{t('works_with_ai')}</p>
-        </div>
-        <SettingsRow
-          label="Claude.ai"
-          align="baseline"
-          help={t.rich('claude_ai_instructions', {
-            connectorName,
-            path: (chunks) => <strong>{chunks}</strong>,
-          })}
-        >
-          <SettingsRowNote>{t('recommended_badge')}</SettingsRowNote>
-          <div className="w-full min-w-0">
-            <CopyBlock text={mcpUrl('claude-connector')} copyAriaLabel={t('copy_aria')} />
-          </div>
-        </SettingsRow>
-
-        <SettingsRow
-          label="Claude Code"
-          align="baseline"
-          help={t('terminal_runs_browser_login')}
-        >
-          {/* URL is quoted: unquoted `?` in the query string trips zsh globbing. */}
-          <div className="w-full min-w-0">
-            <CopyBlock text={`claude mcp add ${connectorName} --transport http "${mcpUrl('claude-code')}"`} copyAriaLabel={t('copy_aria')} />
-          </div>
-        </SettingsRow>
-
-        {/* Claude Code only: the plugin bundles the MCP connection AND the
-            seven workflow commands, so it is the one path where a user gets
-            everything configured without copying a URL. Cursor and Codex have
-            no plugin format, which is why the row above stays. */}
-        <SettingsRow
-          label={t('claude_plugin_label')}
-          align="baseline"
-          help={t('claude_plugin_instructions')}
-        >
-          <div className="w-full min-w-0">
-            <CopyBlock
-              text={`/plugin marketplace add erp-mafia/accounted\n/plugin install accounted@accounted`}
-              copyAriaLabel={t('copy_aria')}
-            />
-          </div>
-        </SettingsRow>
-
-        <SettingsRow
-          label="Cursor"
-          align="baseline"
-          help={t.rich('cursor_instructions', {
-            code: (chunks) => <code className="text-xs">{chunks}</code>,
-          })}
-        >
-          <div className="w-full min-w-0">
-            <CopyBlock text={`{
-  "mcpServers": {
-    "${connectorName}": {
-      "url": "${mcpUrl('cursor')}"
-    }
-  }
-}`} copyAriaLabel={t('copy_aria')} />
-          </div>
-        </SettingsRow>
-
-        <button
-          type="button"
-          aria-expanded={showApiKeyMethods}
-          onClick={() => setShowApiKeyMethods(!showApiKeyMethods)}
-          className="flex items-center gap-2 px-1 py-3 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
-        >
-          <ChevronDown
-            className={cn(
-              'h-3.5 w-3.5 transition-transform duration-150',
-              !showApiKeyMethods && '-rotate-90',
-            )}
-          />
-          {t('connect_with_api_key')}
-        </button>
-        <SettingsReveal open={showApiKeyMethods}>
-          <div className="space-y-6 pb-3 pt-1">
-            <div>
-              <p className="mb-1 text-sm">Claude Desktop</p>
-              <p className="mb-2 text-xs text-muted-foreground">
-                {t.rich('claude_desktop_instructions', {
-                  code: (chunks) => <code className="text-xs">{chunks}</code>,
-                })}
-              </p>
-              {/* ACCOUNTED_URL is emitted so self-hosted and white-label
-                  instances get a config that points at their own host: the
-                  bridge otherwise defaults to the hosted endpoint. The key
-                  value keeps the `gnubok_sk_` wire prefix on purpose. */}
-              <CopyBlock text={`{
-  "mcpServers": {
-    "${connectorName}": {
-      "command": "npx",
-      "args": ["-y", "accounted-mcp"],
-      "env": {
-        "ACCOUNTED_API_KEY": "gnubok_sk_...",
-        "ACCOUNTED_URL": "${mcpUrl('claude-desktop')}",
-        "ACCOUNTED_CLIENT": "claude-desktop"
-      }
-    }
-  }
-}`} copyAriaLabel={t('copy_aria')} />
-            </div>
-
-            <div>
-              <p className="mb-1 text-sm">Claude Code</p>
-              <p className="mb-2 text-xs text-muted-foreground">
-                {t('terminal_with_api_key')}
-              </p>
-              <CopyBlock text={`claude mcp add ${connectorName} --transport http \\
-  --url "${mcpUrl('claude-code')}" \\
-  --header "Authorization: Bearer gnubok_sk_..."`} copyAriaLabel={t('copy_aria')} />
-            </div>
-          </div>
-        </SettingsReveal>
-
-        {/* The step-by-step guide is canonical on the docs site, in one
-            language per URL (the docs site has no locale routing). Root-relative
-            so the /docs/api/* 308 in next.config.ts forwards to docs.gnubok.se. */}
-        <a
-          href={locale === 'sv' ? '/docs/api/anslut-claude' : '/docs/api/connect-claude'}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 px-1 py-3 text-xs text-muted-foreground underline-offset-4 transition-colors duration-150 hover:text-foreground hover:underline"
-        >
-          {t('full_guide_link')}
-          <ArrowUpRight className="h-3 w-3" />
-        </a>
       </SettingsGroup>
 
       {/* Create key dialog */}

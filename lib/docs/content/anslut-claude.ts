@@ -19,22 +19,25 @@ https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accoun
 
 Det finns tre vägar in, beroende på vilken klient du använder. Alla tre når samma verktyg och samma godkännandemodell: läsverktyg svarar direkt, medan skrivverktyg (kontera, markera betald, skapa verifikat, bokslut) **lägger upp en pending operation** som du bekräftar i chatten eller i webbgränssnittet under **/pending** innan något bokförs.
 
-## Väg A: claude.ai eller Claude Desktop (OAuth 2.1)
+## Väg A: claude.ai eller Claude Desktop (ett klick)
 
-Bäst för de flesta. Ingen API-nyckel att hålla reda på: du godkänner Accounted precis som vilken annan OAuth-app som helst.
+**[→ Anslut Accounted till Claude](https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=Accounted&connectorUrl=https%3A%2F%2Fapp.accounted.se%2Fapi%2Fextensions%2Fext%2Fmcp-server%2Fmcp%3Ftool_namespace%3Daccounted%26client%3Dclaude-connector)**
 
-1. I **claude.ai** (Inställningar → Connectors) eller **Claude Desktop** (Inställningar → Connectors → Add custom connector), välj **Add custom connector**.
-2. Klistra in adressen:
-   \`\`\`
-   https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-connector
-   \`\`\`
-   _Parametern \`client=claude-connector\` är bara statistik. Behåll \`tool_namespace=accounted\`: den väljer verktygsnamnen som resten av den här guiden utgår från._
-   Frågar dialogen om autentisering, välj **"Required when the server asks"** (inte det automatiskt föreslagna "None") och låt Claude registrera en OAuth-klient åt dig.
-3. Du behöver inget Accounted-konto ännu. Anslutningen fungerar direkt: servern svarar på handskakningen och dokumentationsverktygen (söka verktyg, lista och ladda skills) utan inloggning, och första anropet som rör ett bolag öppnar Accounteds inloggning. Är du ny skapar du kontot där och då (BankID eller e-post + 2FA), utan att behöva besöka webbplatsen först.
-4. Logga in och välj vilket bolag Claude ska arbeta mot. På godkännandesidan får du **läsrättigheter som standard** (lista fakturor, läsa rapporter, räkna moms). Skrivrättigheter (skapa faktura, kontera, bokföra verifikat, köra bokslut) **listas separat och måste bockas i uttryckligen**. Lämna dem tomma för en ren granskningssession.
-5. Godkänn. Claude listar nu Accounteds verktyg och du kan börja fråga.
+Länken öppnar claude.ai med namn och adress ifyllda. Du granskar värdena och godkänner; länken fyller bara i formuläret och ger ingenting i sig. Ingen API-nyckel att hålla reda på.
 
-Eftersom godkännandet gäller per bolag och per rättighet kan du ge en granskare en läsande anslutning och samtidigt ha en egen med skrivrättigheter för det dagliga arbetet.
+**Du behöver inget Accounted-konto ännu.** Anslutningen fungerar direkt: servern svarar på handskakningen och dokumentationsverktygen utan inloggning, och första anropet som rör ett bolag öppnar Accounteds inloggning, där du som ny skapar kontot (BankID eller e-post + 2FA).
+
+**Läsrättigheter som standard.** På godkännandesidan väljer du bolag och ger läsrättigheter (lista fakturor, läsa rapporter, räkna moms). Skrivrättigheter (skapa faktura, kontera, bokföra verifikat, köra bokslut) listas separat och måste bockas i uttryckligen. Så kan en granskare ansluta läsande medan du själv har en anslutning med skrivrättigheter för det dagliga arbetet.
+
+#### Lägga till manuellt i stället
+
+I **claude.ai** (Inställningar → Connectors) eller **Claude Desktop** (Inställningar → Connectors → Add custom connector), välj **Add custom connector** och klistra in:
+
+\`\`\`
+https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-connector
+\`\`\`
+
+Behåll \`tool_namespace=accounted\`: den väljer verktygsnamnen som guiden utgår från. \`client=claude-connector\` är bara statistik. Frågar dialogen om autentisering, välj **"Required when the server asks"**, inte det automatiskt föreslagna "None".
 
 ## Väg B: Claude Code (plugin)
 
