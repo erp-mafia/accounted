@@ -1119,7 +1119,13 @@ export async function updateBalancesFromSync(
 ): Promise<void> {
   for (const account of accounts) {
     if (account.balance == null || !account.balance_updated_at) continue
-    const { error } = await supabase
+    // Manual sync and cron are not serialized per connection: an older run
+    // finishing later must not overwrite a newer mirror (the timestamp would
+    // visibly move backwards). Only rows with an older-or-missing timestamp
+    // accept the write. Two literal predicates instead of one .or(), and the
+    // payload inlined twice: the schema guard cannot resolve dynamically-built
+    // logical expressions or payload variables.
+    const { error: staleError } = await supabase
       .from('cash_accounts')
       .update({
         balance: account.balance,
@@ -1129,11 +1135,19 @@ export async function updateBalancesFromSync(
       .eq('company_id', companyId)
       .eq('bank_connection_id', bankConnectionId)
       .eq('external_uid', account.external_uid)
-      // Manual sync and cron are not serialized per connection: an older run
-      // finishing later must not overwrite a newer mirror (the timestamp
-      // would visibly move backwards). Only rows with an older-or-missing
-      // timestamp accept the write.
-      .or(`balance_updated_at.is.null,balance_updated_at.lt.${account.balance_updated_at}`)
+      .lt('balance_updated_at', account.balance_updated_at)
+    const { error: nullError } = await supabase
+      .from('cash_accounts')
+      .update({
+        balance: account.balance,
+        available_balance: account.available_balance ?? null,
+        balance_updated_at: account.balance_updated_at,
+      })
+      .eq('company_id', companyId)
+      .eq('bank_connection_id', bankConnectionId)
+      .eq('external_uid', account.external_uid)
+      .is('balance_updated_at', null)
+    const error = staleError ?? nullError
     if (error) {
       log.error('updateBalancesFromSync failed', {
         companyId,

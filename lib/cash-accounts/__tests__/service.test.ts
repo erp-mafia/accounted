@@ -1219,7 +1219,6 @@ describe('updateBalancesFromSync', () => {
   interface BalanceUpdate {
     payload: Record<string, unknown>
     filters: Array<[string, unknown]>
-    orFilters: string[]
   }
 
   function makeBalanceStub(updateError: { message: string } | null = null) {
@@ -1229,15 +1228,19 @@ describe('updateBalancesFromSync', () => {
         if (table !== 'cash_accounts') throw new Error(`unexpected table ${table}`)
         return {
           update: vi.fn((payload: Record<string, unknown>) => {
-            const entry: BalanceUpdate = { payload, filters: [], orFilters: [] }
+            const entry: BalanceUpdate = { payload, filters: [] }
             updates.push(entry)
             const chain = {
               eq: vi.fn((col: string, val: unknown) => {
                 entry.filters.push([col, val])
                 return chain
               }),
-              or: vi.fn((expr: string) => {
-                entry.orFilters.push(expr)
+              lt: vi.fn((col: string, val: unknown) => {
+                entry.filters.push([`lt:${col}`, val])
+                return chain
+              }),
+              is: vi.fn((col: string, val: unknown) => {
+                entry.filters.push([`is:${col}`, val])
                 return chain
               }),
               then: (onFulfilled: (value: unknown) => unknown) =>
@@ -1262,21 +1265,28 @@ describe('updateBalancesFromSync', () => {
       },
     ])
 
-    expect(updates).toHaveLength(1)
-    expect(updates[0].payload).toEqual({
-      balance: 1000.5,
-      available_balance: 950.25,
-      balance_updated_at: '2026-09-01T05:00:00.000Z',
-    })
+    // Two writes per account: one for rows with an OLDER timestamp, one for
+    // rows with NO timestamp. Together they are the stale-writer guard: an
+    // older sync run finishing later must not move the mirror backwards.
+    expect(updates).toHaveLength(2)
+    for (const u of updates) {
+      expect(u.payload).toEqual({
+        balance: 1000.5,
+        available_balance: 950.25,
+        balance_updated_at: '2026-09-01T05:00:00.000Z',
+      })
+    }
     expect(updates[0].filters).toEqual([
       ['company_id', 'c1'],
       ['bank_connection_id', 'conn-1'],
       ['external_uid', 'uid-1'],
+      ['lt:balance_updated_at', '2026-09-01T05:00:00.000Z'],
     ])
-    // Stale-writer guard: an older sync run finishing later must not move the
-    // mirrored timestamp backwards.
-    expect(updates[0].orFilters).toEqual([
-      'balance_updated_at.is.null,balance_updated_at.lt.2026-09-01T05:00:00.000Z',
+    expect(updates[1].filters).toEqual([
+      ['company_id', 'c1'],
+      ['bank_connection_id', 'conn-1'],
+      ['external_uid', 'uid-1'],
+      ['is:balance_updated_at', null],
     ])
   })
 
@@ -1288,7 +1298,7 @@ describe('updateBalancesFromSync', () => {
       { external_uid: 'uid-ok', balance: 200, balance_updated_at: '2026-09-01T05:00:00.000Z' },
     ])
 
-    expect(updates).toHaveLength(1)
+    expect(updates).toHaveLength(2)
     expect(updates[0].filters).toContainEqual(['external_uid', 'uid-ok'])
     // A refresh without an available type writes null: a stale available
     // figure next to a fresh booked figure would misstate what can be spent.
