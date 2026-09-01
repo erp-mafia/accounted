@@ -53,6 +53,7 @@ import {
 import {
   hasRequiredInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
+import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { createLogger } from '@/lib/logger'
 import type {
   Invoice,
@@ -578,6 +579,12 @@ async function sendInvoiceFromSchedule(
     log.warn('invoice currency has no usable payment account; recurring schedule cannot auto-send', {
       invoiceId: invoice.id,
       currency: invoice.currency,
+    })
+    return false
+  }
+  if (!hasRequiredSellerVatNumber(company, invoice)) {
+    log.warn('registered company has no VAT number; recurring schedule cannot auto-send', {
+      invoiceId: invoice.id,
     })
     return false
   }

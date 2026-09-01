@@ -5495,7 +5495,7 @@
     "toast_draft_missing_docs_title": "Draft saved, but documents are missing",
     "toast_draft_missing_docs_description": "The draft was saved, but {count} document(s) could not be attached: {files}. Open the draft to attach them again.",
     "toast_open_entry": "Open the entry",
-    "fill_balance_tooltip": "Double-click to fill the balancing amount",
+    "fill_balance_tooltip": "The balancing amount is proposed automatically. Double-click to fill it again.",
     "keyboard_hint": "Enter jumps to the next field: once the entry balances, Enter opens the review.",
     "review_month_changed": "Note: different month than the previous voucher ({prev} → {current}).",
     "review_period_locked": "This period is closed or locked: posting may be rejected.",
