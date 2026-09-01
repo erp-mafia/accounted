@@ -531,9 +531,14 @@ export async function startAuthorization(
   }
 
   // In connector mode the hosted bank proxy meters the per-company connection
-  // quota, so it needs to know which company this authorization is for. The
-  // header is ignored on the direct path (EB never reads it).
-  const authHeaders = companyId ? { [CONNECTOR_COMPANY_HEADER]: companyId } : undefined
+  // quota, so it needs to know which company this authorization is for. This is
+  // gated on bankConnectorMode(), NOT merely on companyId: on hosted and on
+  // own-credentials self-hosts companyId is always set, and sending an internal
+  // company UUID to the real Enable Banking API is both a needless behavior
+  // change and an identifier leak to a third-party processor. Off the connector
+  // path the direct request stays byte-identical.
+  const authHeaders =
+    companyId && bankConnectorMode() ? { [CONNECTOR_COMPANY_HEADER]: companyId } : undefined
 
   const response = await authenticatedFetch('/auth', {
     method: 'POST',

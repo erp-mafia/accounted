@@ -656,4 +656,17 @@ describe('connector mode', () => {
     expect(url).toContain('enablebanking.com')
     expect(headers['Authorization']).toBe('Bearer test-jwt-token')
   })
+
+  it('never sends X-Connector-Company on the direct path, even with companyId passed', async () => {
+    // Own EB credentials → direct path. companyId is always set on hosted /auth,
+    // so the header must be gated on connector mode, not on companyId: leaking
+    // the internal company UUID to the real Enable Banking API is a regression.
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    fetchSpy.mockResolvedValue(okJson({ url: 'https://bank/auth', authorization_id: 'a1' }))
+    await startAuthorization('Bank', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', undefined, 'company-42')
+    const { url, headers } = lastCall()
+    expect(url).toContain('enablebanking.com')
+    expect(headers['X-Connector-Company']).toBeUndefined()
+    expect(headers['Authorization']).toBe('Bearer test-jwt-token')
+  })
 })
