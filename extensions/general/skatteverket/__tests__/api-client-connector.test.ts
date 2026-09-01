@@ -158,6 +158,82 @@ describe('skvRequestWithAuth: connector mode', () => {
     }
   })
 
+  it('keeps the passed-through WWW-Authenticate classification: insufficient_scope → MISSING_SCOPE', async () => {
+    // The proxy forwards SKV's diagnostic headers, so the direct path's
+    // scope classification must keep working through the connector.
+    mockFetchStatus(401, '', {
+      'WWW-Authenticate': 'Bearer error="insufficient_scope", scope="agd"',
+    })
+    try {
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect((e as SkatteverketAuthError).code).toBe('MISSING_SCOPE')
+    }
+  })
+
+  it('gives connector guidance (never APIGW/Utvecklarportalen) on a body-less passthrough 401', async () => {
+    // An empty 401 through the proxy means the HOSTED gateway config
+    // refused; the operator's instance has no SKATTEVERKET_APIGW_CLIENT_ID
+    // to check, so the direct path's guidance would be a dead end.
+    mockFetchStatus(401, '')
+    try {
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect((e as SkatteverketAuthError).code).toBe('ACCESS_DENIED')
+      const { message } = e as SkatteverketAuthError
+      expect(message).toMatch(/connectorn/)
+      expect(message).not.toMatch(/SKATTEVERKET_APIGW_CLIENT_ID|Utvecklarportalen/)
+    }
+  })
+
+  it('gives connector guidance on the APIGW scope-contract 403 passthrough', async () => {
+    mockFetchStatus(403, '{"error": "The required scopes are not authorized"}')
+    try {
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect((e as SkatteverketAuthError).code).toBe('ACCESS_DENIED')
+      const { message } = e as SkatteverketAuthError
+      expect(message).toMatch(/connectorn/)
+      expect(message).not.toMatch(/Utvecklarportalen/)
+    }
+  })
+
+  it('classifies the broker CONNECTOR_SKV_REFRESH_DEAD dialect as SESSION_EXPIRED', async () => {
+    // The everyday case: SKV per-flow refresh tokens die after 65 minutes;
+    // the broker re-codes SKV's dead-token dialects as 401
+    // CONNECTOR_SKV_REFRESH_DEAD, and the reconnect flow must fire exactly
+    // as it does on the direct path.
+    const { getTokens } = await import('../lib/token-store')
+    const { refreshAccessToken } = await import('../lib/oauth')
+    const expiredTokens = {
+      access_token: 'stale',
+      refresh_token: 'old-refresh',
+      expires_at: Date.now() - 60_000,
+      refresh_count: 1,
+      scope: 'momsdeklaration',
+    }
+    vi.mocked(getTokens)
+      .mockResolvedValueOnce(expiredTokens)
+      .mockResolvedValueOnce(expiredTokens)
+    vi.mocked(refreshAccessToken).mockRejectedValueOnce(
+      new Error(
+        'Skatteverket token refresh failed (401): {"error":"Skatteverket refresh token is no longer valid; a new BankID consent is required","code":"CONNECTOR_SKV_REFRESH_DEAD"}',
+      ),
+    )
+
+    try {
+      await skvRequest(fakeSupabase, 'user-connector-dead', 'comp-1', 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(SkatteverketAuthError)
+      expect((e as SkatteverketAuthError).code).toBe('SESSION_EXPIRED')
+      expect((e as SkatteverketAuthError).message).toMatch(/Sessionen har gått ut/)
+    }
+  })
+
   it('classifies the broker refresh dialect (404 CONNECTOR_NOT_OWNED) as SESSION_EXPIRED', async () => {
     const { getTokens } = await import('../lib/token-store')
     const { refreshAccessToken } = await import('../lib/oauth')

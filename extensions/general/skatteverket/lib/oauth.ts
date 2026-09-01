@@ -217,12 +217,13 @@ export async function refreshAccessToken(
 ): Promise<SkatteverketTokens> {
   const connector = skatteverketConnectorMode()
   if (connector) {
-    // Broker refresh rotates the hosted ledger's token hashes; a 404
-    // CONNECTOR_NOT_OWNED means the ledger no longer vouches for this
-    // refresh token (rotated away or revoked) and only a fresh BankID
-    // consent recovers: api-client classifies that dialect as
-    // SESSION_EXPIRED. A 502 stays a raw error (transient SKV outage must
-    // not flag the row for reconnect, the #1155 lesson).
+    // Broker refresh rotates the hosted ledger's token hashes. Terminal
+    // failures come back as broker dialects api-client classifies as
+    // SESSION_EXPIRED: 401 CONNECTOR_SKV_REFRESH_DEAD (SKV declared the
+    // refresh token dead: the dominant outcome, per-flow tokens live 65
+    // minutes) and 404 CONNECTOR_NOT_OWNED (the ledger no longer vouches for
+    // it). The generic 502 stays a raw error (transient SKV outage must not
+    // flag the row for reconnect, the #1155 lesson).
     const data = await refreshConnectorToken(connector, refreshToken)
     return {
       access_token: data.access_token,
