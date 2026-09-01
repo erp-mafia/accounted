@@ -172,12 +172,14 @@ export function orderImports(order: Pick<WooOrder, 'status'>): boolean {
 
 /**
  * Orders whose already-imported rows should be REMOVED on re-poll: a pending
- * order that transitions to failed would otherwise sit stale forever. Trash
- * keeps its long-standing skip-only semantics (a trashed order can be
- * restored in wp-admin, and its row may mirror a real paid event).
+ * order that transitions to failed would otherwise sit stale forever. A
+ * failed order that has a date_paid is NOT removed (skeptic finding): money
+ * moved at some point (gateway void, admin bulk-edit mistake), and deleting
+ * the row would hide a possibly real money event, the same reason trash
+ * keeps its long-standing skip-only semantics.
  */
-export function orderRemoves(order: Pick<WooOrder, 'status'>): boolean {
-  return order.status === 'failed'
+export function orderRemoves(order: Pick<WooOrder, 'status' | 'date_paid_gmt'>): boolean {
+  return order.status === 'failed' && !orderIsPaid(order)
 }
 
 /**
@@ -518,8 +520,10 @@ async function buildPageRows(
       outcome.removalExternalIds.push(wooOrderExternalId(storeScope, order.id))
     }
     // Non-importing orders contribute nothing else; skipping here also keeps
-    // their refunds out (a refund row parented to an order that never
-    // imports, or is being removed, would be an unexplainable negative).
+    // their refunds out of the feed. Unreachable for trash in practice (the
+    // list call asks for status=any, which excludes trash), and a failed
+    // order's refund would parent to a row being removed: an unexplainable
+    // negative either way.
     if (!orderImports(order)) continue
     // A corrupt total is counted and logged, never silently identical to a
     // zero-total order. Deliberately NOT held via the cursor: a permanently

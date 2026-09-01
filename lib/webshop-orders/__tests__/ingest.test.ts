@@ -337,12 +337,25 @@ describe('removeWebshopOrders', () => {
 
     expect(result).toEqual({ removed: 2, errors: 0 })
     expect(mock.findCall('webshop_orders', 'delete')).toBeDefined()
-    // The candidate select carries the freeze guards; a frozen row never
-    // reaches the delete.
-    expect(mock.findCalls('webshop_orders', 'is').map((args) => args[0])).toEqual([
+    // The freeze guards run on the candidate select AND are repeated on the
+    // delete statement itself: a row frozen between the two round trips must
+    // survive (TOCTOU skeptic finding).
+    const guardColumns = [
       'journal_entry_id',
       'invoice_id',
       'manually_booked_at',
+      'legacy_transaction_id',
+    ]
+    expect(mock.findCalls('webshop_orders', 'is').map((args) => args[0])).toEqual([
+      ...guardColumns,
+      ...guardColumns,
+    ])
+    // Paid rows are never deleted, on both statements.
+    expect(
+      mock.findCalls('webshop_orders', 'eq').filter((args) => args[0] === 'is_paid'),
+    ).toEqual([
+      ['is_paid', false],
+      ['is_paid', false],
     ])
   })
 

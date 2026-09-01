@@ -465,9 +465,17 @@ export async function upsertWebshopOrders(
  * delete-protection trigger:
  *
  * - a frozen row (booked / invoiced / manually marked) is never deleted;
- * - a parent whose refund CHILD is frozen is never deleted either, because
- *   parent_order_id cascades and the delete would take the booked refund
- *   row with it. Unfrozen children cascading away is intended.
+ * - a paid row is never deleted: money moved at some point, and a paid row
+ *   is also the only kind that can have refund children (parent_order_id
+ *   cascades, so deleting one could take a booked refund row with it);
+ * - a cross-marked row (legacy_transaction_id) is never deleted: the order
+ *   may be booked via the retired transactions feed without any freeze
+ *   column set on this row;
+ * - every guard is repeated ON THE DELETE STATEMENT itself, not only on the
+ *   candidate select (skeptic finding): a row booked between the select and
+ *   the delete must survive, exactly like the conditional booking claim in
+ *   book-order.ts. The frozen-child veto select below is defense in depth
+ *   on top of the is_paid guard.
  */
 export async function removeWebshopOrders(
   supabase: SupabaseClient,
@@ -494,9 +502,11 @@ export async function removeWebshopOrders(
       .select('id')
       .eq('company_id', companyId)
       .in('external_id', batch)
+      .eq('is_paid', false)
       .is('journal_entry_id', null)
       .is('invoice_id', null)
       .is('manually_booked_at', null)
+      .is('legacy_transaction_id', null)
     if (candidateError) {
       recordError(candidateError)
       continue
@@ -527,6 +537,11 @@ export async function removeWebshopOrders(
       .delete()
       .eq('company_id', companyId)
       .in('id', deletableIds)
+      .eq('is_paid', false)
+      .is('journal_entry_id', null)
+      .is('invoice_id', null)
+      .is('manually_booked_at', null)
+      .is('legacy_transaction_id', null)
       .select('id')
     if (deleteError) {
       recordError(deleteError)

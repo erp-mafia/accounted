@@ -188,9 +188,11 @@ describe('orderImports / orderRemoves / orderIsPaid', () => {
     expect(orderImports(makeOrder({ status: 'failed', date_paid_gmt: null }))).toBe(false)
   })
 
-  it('only failed orders trigger removal of an existing row', () => {
-    expect(orderRemoves(makeOrder({ status: 'failed' }))).toBe(true)
-    expect(orderRemoves(makeOrder({ status: 'trash' }))).toBe(false)
+  it('only unpaid failed orders trigger removal of an existing row', () => {
+    expect(orderRemoves(makeOrder({ status: 'failed', date_paid_gmt: null }))).toBe(true)
+    // A failed order that was at some point paid keeps its row: money moved.
+    expect(orderRemoves(makeOrder({ status: 'failed' }))).toBe(false)
+    expect(orderRemoves(makeOrder({ status: 'trash', date_paid_gmt: null }))).toBe(false)
     expect(orderRemoves(makeOrder())).toBe(false)
     expect(orderRemoves(makeOrder({ status: 'cancelled' }))).toBe(false)
   })
@@ -599,6 +601,17 @@ describe('syncWooCommerceOrders', () => {
     const cursors = cursorUpdates(updates)
     expect(cursors).toHaveLength(1)
     expect(cursors[0].values.last_order_synced_at).toBe('2026-08-01T09:05:00.000Z')
+  })
+
+  it('neither imports nor removes a paid order the store reports as failed', async () => {
+    const { client } = makeSupabaseMock()
+    listOrdersPage.mockResolvedValueOnce([makeOrder({ status: 'failed' })])
+
+    const summary = await syncWooCommerceOrders(client, makeConnection())
+
+    expect(summary).toMatchObject({ fetched: 1, inserted: 0, removed: 0, errors: 0 })
+    expect(upsertWebshopOrders).not.toHaveBeenCalled()
+    expect(removeWebshopOrders).not.toHaveBeenCalled()
   })
 
   it('holds the cursor below a page whose removal reported errors', async () => {
