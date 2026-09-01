@@ -298,7 +298,7 @@ function main() {
   const latest = latestPerKey(loadAllRecords())
   const suites: SuiteId[] = ['booking', 'reasoning', 'extraction', 'ledger-agent']
   const leaderboard: Record<string, unknown> = {
-    benchVersion: 'v1.5',
+    benchVersion: 'v1.6',
     generatedAt: new Date().toISOString(),
     suites: {},
     taskMatrix: {},
@@ -518,7 +518,6 @@ function main() {
   )
   for (const id of allModelIds) {
     const booking = suitesObj['booking']?.find((r) => r.model === id)
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const reasoning = suitesObj['reasoning']?.find((r) => r.model === id)
     const agent = suitesObj['ledger-agent']?.find((r) => r.model === id)
     const cov99 = (booking?.extras.coverage99 as number | null) ?? 0

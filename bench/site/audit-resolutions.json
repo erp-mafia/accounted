@@ -1,0 +1,49 @@
+{
+  "note": "What the independent gold audit changed. Each row is a gold answer another vendor's model disputed, the substance of the objection, and what we did after reading the statute. The agreement rate published beside this list is measured on the gold the auditors actually saw, before these changes, so it reports what the process earned rather than what it was left with; the corrected gold has not yet been re-audited. Flags whose proposed account was already on the task's acceptance list are not listed: they cost the answering model nothing and changed nothing.",
+  "rounds": [
+    {
+      "date": "2026-09-01",
+      "auditors": [
+        "Gemini 3.1 Pro",
+        "GPT-5.6 Terra Pro"
+      ],
+      "findings": [
+        {
+          "taskId": "booking-011",
+          "verdict": "incorrect",
+          "finding": "The task put an office-cleaning invoice in a dental clinic and let it deduct the full 25% input VAT. Dental care is exempt from VAT, so a clinic has no full right of deduction on shared costs like cleaning. The gold was wrong on the law, not merely arguable.",
+          "action": "Accepted. The probe is about classifying cleaning as 5060, not about mixed activity, so the company became a VAT-liable engineering firm and the gold VAT treatment now holds. All 15 models re-ran the corrected task; the old answers were deleted rather than carried over."
+        },
+        {
+          "taskId": "booking-024",
+          "verdict": "defensible",
+          "finding": "Flagged by both auditors independently. An import of goods from outside the EU was gold-labelled 4010, a generic purchase account, when BAS carries import-specific accounts (4545 for 25% import) that the Ruta 50 mapping is built on.",
+          "action": "Accepted, and confirmed against our own VAT reference, which maps Ruta 50 to 4545/4546/4547 and lists generic purchase accounts on imports as a known error class. Gold moved to 4545; 4010 and 4000 stay acceptable. Strict scoring had been rewarding the weaker account."
+        },
+        {
+          "taskId": "booking-029",
+          "verdict": "defensible",
+          "finding": "A CNC mill in a joinery was gold-labelled 1221 (Inventarier). A production machine belongs in 1211 (Maskiner), which was not even on the acceptance list, so a model answering more precisely than the gold was marked wrong.",
+          "action": "Accepted. Gold moved to 1211, with 1221, 1220 and 1210 kept acceptable because small firms routinely book all equipment as inventarier. Stored answers were re-graded against the new key, equally for every model."
+        },
+        {
+          "taskId": "booking-027",
+          "verdict": "incorrect",
+          "finding": "The auditor agreed with the gold account for a staff Christmas party (7632, ej avdragsgill) but objected that we also accepted 7631, avdragsgill personalrepresentation, for a meal costing 1 200 kr a head.",
+          "action": "Accepted, and the audit here made the benchmark harder rather than easier. The income-tax deduction for representation meals was abolished in 2017 and survives only for enklare fortaring and event costs, so 7631 was removed from the acceptance list. Nine stored verdicts flipped from pass to fail on re-grade, across several vendors."
+        },
+        {
+          "taskId": "booking-037",
+          "verdict": "incorrect",
+          "finding": "An employee's own restaurant meal on a business trip was gold-labelled with a 12% input VAT deduction. The auditor argued the VAT is not deductible because the meal is a private living expense that triggers a kostformon for the employee.",
+          "action": "Task retired. Nothing we hold settles the employer's input-VAT position on that meal, and the scenario is entangled with a benefit the task never models. Contested gold is not a measurement: the same call was made in v1.1 for an Apple B2B VAT task. Booking drops from 53 tasks to 52 for every model at once."
+        }
+      ],
+      "auditedTasks": 53,
+      "agreement": {
+        "GPT-5.6 Terra Pro": "45/53",
+        "Gemini 3.1 Pro": "50/53 (1 unparsed)"
+      }
+    }
+  ]
+}

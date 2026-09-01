@@ -310,13 +310,13 @@
     "data_class": "public",
     "difficulty": "core",
     "probe": "Cleaning service for the office",
-    "rationale": "Städning och renhållning är 5060.",
+    "rationale": "Städning och renhållning är 5060. Företaget bedriver momspliktig verksamhet, så ingående moms är avdragsgill. (Gold corrected 2026-09-01 after an independent audit flagged that the previous company, a dental clinic, runs VAT-exempt care and could not deduct the input VAT.)",
     "input": {
       "company": {
         "entity_type": "aktiebolag",
         "vat_registered": true,
         "accounting_method": "invoice",
-        "business": "Tandläkarklinik"
+        "business": "Ingenjörsfirma"
       },
       "transaction": {
         "date": "2026-05-30",

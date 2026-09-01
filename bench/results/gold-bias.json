@@ -1,0 +1,18 @@
+{
+  "generatedAt": "2026-09-01T10:48:41.088Z",
+  "method": "Strict pass (exact gold account and exact VAT treatment) per model, averaged within family, on tasks whose acceptance list was extended during curation vs tasks whose gold was never revisited. Circularity in favour of the authoring family predicts a LARGER Claude edge on the extended set.",
+  "extended": {
+    "tasks": 39,
+    "models": 15,
+    "claudeStrict": 0.5333333333333333,
+    "othersStrict": 0.4461538461538462,
+    "edgePp": 8.717948717948715
+  },
+  "untouched": {
+    "tasks": 13,
+    "models": 15,
+    "claudeStrict": 0.9230769230769231,
+    "othersStrict": 0.8153846153846155,
+    "edgePp": 10.769230769230765
+  }
+}

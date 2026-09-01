@@ -1,0 +1,1383 @@
+{
+  "generatedAt": "2026-09-01T10:43:13.316Z",
+  "results": [
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-020",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Google Workspace är en löpande programvaru-/IT-tjänst där 5420 är en försvarbar BAS-klassificering och EU-förvärvet ska hanteras med omvänd betalningsskyldighet.",
+      "gold": {
+        "account": "5420",
+        "vat": "reverse_charge_services"
+      },
+      "probe": "EU SaaS under reverse charge (the 2614-vs-5420 production failure class)"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-021",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Facebook Ads är en annonseringstjänst som normalt bokförs på 5910 och vid B2B-köp från Meta Ireland ska svensk moms redovisas genom omvänd betalningsskyldighet.",
+      "gold": {
+        "account": "5910",
+        "vat": "reverse_charge_services"
+      },
+      "probe": "EU ad platform under reverse charge"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-022",
+      "verdict": "defensible",
+      "betterAccount": "4531",
+      "betterVat": null,
+      "reason": "Omvänd betalningsskyldighet för tjänst från USA är korrekt, men 4531 är det mest träffsäkra BAS-kontot för API-tjänsten medan 5420 kan försvaras som programvarurelaterad kostnad.",
+      "gold": {
+        "account": "5420",
+        "vat": "reverse_charge_services"
+      },
+      "probe": "Non-EU service still self-assessed under the main rule"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-023",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Det är ett unionsinternt förvärv av varor med korrekt omvänd momsredovisning, och konto 4515 är ett direkt avsett och korrekt BAS-konto för varuinköp från annat EU-land med 25 procent moms.",
+      "gold": {
+        "account": "4515",
+        "vat": "reverse_charge_goods"
+      },
+      "probe": "Intra-EU goods acquisition"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-024",
+      "verdict": "defensible",
+      "betterAccount": "4545",
+      "betterVat": null,
+      "reason": "4010 kan försvaras som generellt varuinköpskonto om importmomsen hanteras separat, men 4545 är BAS-kontot som tydligast avser import av varor med 25 procent moms och underlättar rapportering i ruta 50, 60 och 48.",
+      "gold": {
+        "account": "4010",
+        "vat": "import"
+      },
+      "probe": "Import of goods from outside the EU"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-025",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Elinstallationsarbetet är en byggtjänst som köps in som underentreprenad och konto 4610 är lämpligt, medan omvänd betalningsskyldighet för byggtjänster innebär att köparen redovisar utgående och avdragsgill ingående moms trots att fakturan saknar moms.",
+      "gold": {
+        "account": "4610",
+        "vat": "reverse_charge_construction"
+      },
+      "probe": "Domestic reverse charge for construction services"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-026",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Lunchen är extern representation och måltidskostnaden bokförs därför normalt på 6072 som ej skattemässigt avdragsgill, medan ingående moms får dras av endast inom representationsgränsen om 300 kr exklusive moms per person.",
+      "gold": {
+        "account": "6072",
+        "vat": "representation_capped"
+      },
+      "probe": "Client lunch: representation with capped VAT"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-027",
+      "verdict": "incorrect",
+      "betterAccount": "7632",
+      "betterVat": "representation_capped",
+      "reason": "7632 med avdragsrätt för ingående moms begränsad till representationsbeloppet är rätt, men 7631 är inte godtagbart för julbordets måltidskostnad eftersom den är skattemässigt ej avdragsgill.",
+      "gold": {
+        "account": "7632",
+        "vat": "representation_capped"
+      },
+      "probe": "Staff Christmas party: internal representation"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-028",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "MacBooken kostar 14 000 kr exklusive moms och understiger därmed gränsen för inventarier av mindre värde (halvt prisbasbelopp 29 600 kr år 2026), varför 5410 och avdrag för svensk 25-procentig ingående moms är korrekt.",
+      "gold": {
+        "account": "5410",
+        "vat": "domestic_25"
+      },
+      "probe": "Laptop under the half price-base-amount threshold is an expense"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-029",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "CNC-fräsen är en stadigvarande produktionsmaskin med flerårig nyttjandeperiod och ska aktiveras som maskin/teknisk anläggning, med avdragsgill svensk ingående moms 25 procent.",
+      "gold": {
+        "account": "1211",
+        "vat": "domestic_25"
+      },
+      "probe": "Machine above the threshold is a fixed asset"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-030",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "5615 är ett tydligt BAS-konto för leasing av personbil och avdrag för ingående moms på hyra/leasing av personbil är normalt begränsat till 50 procent när bilen används i momspliktig verksamhet.",
+      "gold": {
+        "account": "5615",
+        "vat": "domestic_25_half_deduction"
+      },
+      "probe": "Passenger car lease: only half the VAT is deductible"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-031",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Diesel till tjänstebil bokförs normalt på 5611 (alternativt 5610) och ingående moms är fullt avdragsgill för drivmedel som används i den momspliktiga verksamheten.",
+      "gold": {
+        "account": "5611",
+        "vat": "domestic_25"
+      },
+      "probe": "Fuel for company cars"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-032",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Medlemsavgift till Byggföretagen är en momsfri föreningsavgift och bokförs korrekt som ej avdragsgill föreningsavgift på 6982.",
+      "gold": {
+        "account": "6982",
+        "vat": "no_vat"
+      },
+      "probe": "Membership fee: non-deductible, no VAT"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-033",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Gymkort till samtliga anställda är en skattefri personalvårdsförmån som kan bokföras på 7699 eller 7690, och avdragsgill ingående moms är 6 procent för motionstjänsten.",
+      "gold": {
+        "account": "7699",
+        "vat": "domestic_6"
+      },
+      "probe": "Gym membership for staff: wellness benefit at 6 % VAT"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-034",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Kaffe, te och frukt för personalens trivsel är avdragsgill personalomkostnad och kan bokföras på 7690, med avdrag för ingående livsmedelsmoms om 12 procent vid inköp i mars 2026.",
+      "gold": {
+        "account": "7690",
+        "vat": "domestic_12"
+      },
+      "probe": "Coffee and fika for the office"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-035",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "5420 är ett lämpligt konto för den tidsbegränsade programvarulicensen, 6540 är också acceptabelt, och svensk debiterad moms från Dustin ska hanteras som avdragsgill ingående moms enligt domestic_25.",
+      "gold": {
+        "account": "5420",
+        "vat": "domestic_25"
+      },
+      "probe": "Foreign-brand software bought via Swedish reseller: read the underlag, not the pattern"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-036",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Taxiresa i näringsverksamheten bokförs försvarbart på 5810 med avdrag för ingående moms 6 procent.",
+      "gold": {
+        "account": "5810",
+        "vat": "domestic_6"
+      },
+      "probe": "Taxi receipt at 6 % VAT"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-037",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Egen måltid under en verklig tjänsteresa är en avdragsgill resekostnad och bokförs lämpligen på 5830 eller 5831 med avdrag för svensk ingående moms 12 procent.",
+      "gold": {
+        "account": "5830",
+        "vat": "domestic_12"
+      },
+      "probe": "Restaurant meal on a business trip is NOT representation"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-038",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Kontorsmaterial bokförs försvarbart på 6110 och eftersom tandvårdskliniken bedriver momsfri sjukvård utan avdragsrätt kostnadsförs hela fakturabeloppet inklusive moms utan ingående momsavdrag.",
+      "gold": {
+        "account": "6110",
+        "vat": "no_vat"
+      },
+      "probe": "Non-VAT-registered company: VAT is part of the cost"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-039",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Borrmaskin och handverktyg för 1 200 kr exklusive moms ligger klart under gränsen för inventarier av mindre värde och kan kostnadsföras på 5410 med avdrag för 25 procent ingående moms.",
+      "gold": {
+        "account": "5410",
+        "vat": "domestic_25"
+      },
+      "probe": "Consumables for a construction firm"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-101",
+      "verdict": "defensible",
+      "betterAccount": "6540",
+      "betterVat": "reverse_charge_services",
+      "reason": "Google Workspace är normalt en löpande IT-/programvarutjänst där 6540 IT-tjänster är mest träffande, men 5420 kan försvaras för programvara av mindre värde och omvänd skattskyldighet gäller vid köp från Google Ireland.",
+      "gold": {
+        "account": "5420",
+        "vat": "reverse_charge_services"
+      },
+      "probe": "Bank feed only: Google Workspace from Ireland, no receipt attached"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-102",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Meta Platforms Ireland tillhandahåller normalt B2B-annonseringstjänster som förvärvas från annat EU-land med omvänd betalningsskyldighet, och 5910 Annonsering är ett uppenbart korrekt kostnadskonto.",
+      "gold": {
+        "account": "5910",
+        "vat": "reverse_charge_services"
+      },
+      "probe": "Bank feed only: Meta ads, no receipt attached"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-103",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "AWS EMEA SARL:s moln- och IT-tjänster till ett svenskt momsregistrerat bolag är normalt tjänsteförvärv från annat EU-land med omvänd betalningsskyldighet, och 6540 är ett lämpligt kostnadskonto.",
+      "gold": {
+        "account": "6540",
+        "vat": "reverse_charge_services"
+      },
+      "probe": "Bank feed only: AWS infrastructure, no receipt attached"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-104",
+      "verdict": "defensible",
+      "betterAccount": "6540",
+      "betterVat": null,
+      "reason": "Adobe Creative Cloud är normalt en löpande SaaS/IT-tjänst och 6540 är därför minst lika träffsäkert som 5420, medan omvänd betalningsskyldighet för tjänst från Irland är korrekt.",
+      "gold": {
+        "account": "5420",
+        "vat": "reverse_charge_services"
+      },
+      "probe": "Bank feed only: Adobe subscription, no receipt attached"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-106",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "En SJ-biljett för en tjänsteresa är en resekostnad som lämpligen bokförs på 5810 och svensk persontransport omfattas normalt av 6 % avdragsgill ingående moms.",
+      "gold": {
+        "account": "5810",
+        "vat": "domestic_6"
+      },
+      "probe": "Bank feed only: train ticket"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-107",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "SL:s 30-dagarskort för tjänsteresor är en biljettkostnad som kan bokföras på 5810 och omfattas av 6 procent svensk moms för persontransport.",
+      "gold": {
+        "account": "5810",
+        "vat": "domestic_6"
+      },
+      "probe": "Bank feed only: public transport card for business travel"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-108",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "En hotellnatt vid tjänsteresa klassificeras korrekt som logikostnad på 5830 och avdragsgill ingående moms är 12 procent för hotellrum.",
+      "gold": {
+        "account": "5830",
+        "vat": "domestic_12"
+      },
+      "probe": "Bank feed only: hotel night"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-109",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Premie för företagsförsäkring bokförs normalt på 6310 Företagsförsäkringar och försäkringstjänster är undantagna från momsplikt, varför ingen ingående moms ska bokföras.",
+      "gold": {
+        "account": "6310",
+        "vat": "no_vat"
+      },
+      "probe": "Bank feed only: insurance premium"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-110",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Avgift för företagsinternetbank är en momsundantagen banktjänst och konteras korrekt som bankkostnad på 6570 utan moms.",
+      "gold": {
+        "account": "6570",
+        "vat": "no_vat"
+      },
+      "probe": "Bank feed only: bank charges"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-111",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Drivmedel till företagets personbilar bokförs normalt på 5611 (alternativt 5610) och ingående moms är i regel fullt avdragsgill vid inköp av drivmedel för bil i verksamheten.",
+      "gold": {
+        "account": "5611",
+        "vat": "domestic_25"
+      },
+      "probe": "Bank feed only: fuel, company runs passenger cars"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-112",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Diesel till företagets lätta lastbil är en driftkostnad för lastbil på konto 5621 (alternativt 5620), och normalt avdragsgill svensk ingående moms är 25 procent.",
+      "gold": {
+        "account": "5621",
+        "vat": "domestic_25"
+      },
+      "probe": "Bank feed only: fuel, company runs a light truck"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-113",
+      "verdict": "defensible",
+      "betterAccount": "6210",
+      "betterVat": null,
+      "reason": "6212 är försvarbart om Telia-autogirot avser mobiltelefoni, men bankraden ensam visar inte tjänstetypen och 6210 är minst lika rimligt medan svensk ingående moms normalt är 25 %.",
+      "gold": {
+        "account": "6212",
+        "vat": "domestic_25"
+      },
+      "probe": "Bank feed only: mobile subscription"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-114",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Företagsbetalda träningskort för anställda är en personalkostnad som kan bokföras på 7699 eller 7690, och ingående moms på gymtjänsten är normalt avdragsgill med 6 procent.",
+      "gold": {
+        "account": "7699",
+        "vat": "domestic_6"
+      },
+      "probe": "Bank feed only: gym membership for staff wellness"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-115",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "En bankinbetalning till Skatteverkets skattekonto bokförs normalt som en ökning av tillgången på konto 1630 utan moms.",
+      "gold": {
+        "account": "1630",
+        "vat": "no_vat"
+      },
+      "probe": "Bank feed only: payment to the tax account"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-116",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "FORA:s premie för kollektivavtalade arbetsmarknadsförsäkringar bokförs normalt på 7570 (alternativt mer detaljerat 7571 eller 7590) och försäkringstjänsten är momsfri.",
+      "gold": {
+        "account": "7570",
+        "vat": "no_vat"
+      },
+      "probe": "Bank feed only: Fora premiums"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-117",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Bolagsverkets ärendeavgift för en ändringsanmälan är en avdragsgill extern kostnad och ligger utanför momsens tillämpningsområde, varför 6991 och no_vat är korrekt.",
+      "gold": {
+        "account": "6991",
+        "vat": "no_vat"
+      },
+      "probe": "Bank feed only: Bolagsverket filing fee"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-118",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Kontorsinredning med ett anskaffningsvärde om 2 560 kr exklusive moms är normalt en förbrukningsinventarie på 5410 och har avdragsgill svensk moms om 25 %.",
+      "gold": {
+        "account": "5410",
+        "vat": "domestic_25"
+      },
+      "probe": "Bank feed only: office furnishings under the asset threshold"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-001",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Redovisningstjänster är en extern tjänst som normalt kostnadsförs på 6530 Redovisningstjänster, med avdrag för debiterad svensk ingående moms 25 %.",
+      "gold": {
+        "account": "6530",
+        "vat": "domestic_25"
+      },
+      "probe": "Standard domestic service invoice: accounting services"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-002",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "6212 Avancerad mobiltelefoni (alternativt 6210 Telekommunikation) är korrekt för företagets mobilabonnemang och ingående moms om 124,75 kr är avdragsgill med 25 procent.",
+      "gold": {
+        "account": "6212",
+        "vat": "domestic_25"
+      },
+      "probe": "Mobile subscription"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-003",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Bredbandsabonnemang för kontoret är en kostnad för datakommunikation på BAS 6230 och ingående moms om 25 procent är avdragsgill vid verksamhetsanvändning.",
+      "gold": {
+        "account": "6230",
+        "vat": "domestic_25"
+      },
+      "probe": "Broadband for the office"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-004",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Pärmar, pennor och skrivarpapper är kontorsmaterial och bokförs korrekt på 6110 med avdragsgill svensk moms 25 procent.",
+      "gold": {
+        "account": "6110",
+        "vat": "domestic_25"
+      },
+      "probe": "Office supplies"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-005",
+      "verdict": "defensible",
+      "betterAccount": "6540",
+      "betterVat": "domestic_25",
+      "reason": "Svensk 25-procentig ingående moms är korrekt, medan Fortnox abonnemang normalt är en löpande IT-/programtjänst som typiskt bokförs på 6540 men 5420 är försvarbart för programvara av mindre värde.",
+      "gold": {
+        "account": "5420",
+        "vat": "domestic_25"
+      },
+      "probe": "Swedish SaaS subscription with Swedish VAT"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-006",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Avgiften för SEB:s företagspaket är en bankkostnad som normalt bokförs på 6570 och bank-/finansiella tjänster är undantagna från momsplikt.",
+      "gold": {
+        "account": "6570",
+        "vat": "no_vat"
+      },
+      "probe": "Bank fees are VAT exempt"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-007",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Premie för företagsförsäkring bokförs normalt på 6310 Företagsförsäkringar och försäkringstjänster är undantagna från momsplikt.",
+      "gold": {
+        "account": "6310",
+        "vat": "no_vat"
+      },
+      "probe": "Business insurance is VAT exempt"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-008",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Tågresan är en avdragsgill tjänsteresa till kund och 5810 Resekostnader är rätt konto med avdragsgill ingående svensk moms om 6 procent.",
+      "gold": {
+        "account": "5810",
+        "vat": "domestic_6"
+      },
+      "probe": "Train ticket at 6 % VAT"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-009",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Hotellogi vid tjänsteresa bokförs korrekt på 5830 Kost och logi och den svenska hotellmomsen är avdragsgill ingående moms med 12 procent.",
+      "gold": {
+        "account": "5830",
+        "vat": "domestic_12"
+      },
+      "probe": "Hotel night at 12 % VAT"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-010",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Elkostnad för verksamhetslokal bokförs normalt på 5020 El för belysning och 25 procent ingående moms är avdragsgill.",
+      "gold": {
+        "account": "5020",
+        "vat": "domestic_25"
+      },
+      "probe": "Electricity for business premises"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-011",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Kontorsstädning är en kostnad för städning och renhållning på konto 5060 (alternativt 5061) och den svenska ingående momsen är avdragsgill i den momspliktiga verksamheten.",
+      "gold": {
+        "account": "5060",
+        "vat": "domestic_25"
+      },
+      "probe": "Cleaning service for the office"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-012",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Juridisk facklitteratur för verksamheten kan bokföras på 6970 Tidningar, tidskrifter och facklitteratur och ingående moms är avdragsgill med 6 procent.",
+      "gold": {
+        "account": "6970",
+        "vat": "domestic_6"
+      },
+      "probe": "Trade literature at 6 % VAT"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-013",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Juridisk avtalsgranskning är en extern tjänst som korrekt kan bokföras på 6580 Advokat- och rättegångskostnader (alternativt 6550 Konsultarvoden) med avdragsgill ingående moms 25 procent.",
+      "gold": {
+        "account": "6580",
+        "vat": "domestic_25"
+      },
+      "probe": "Legal services"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-014",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Kursavgift för anställdas yrkesrelevanta Kubernetes-utbildning är en avdragsgill utbildningskostnad på 7610 och svensk moms om 25 procent är avdragsgill.",
+      "gold": {
+        "account": "7610",
+        "vat": "domestic_25"
+      },
+      "probe": "Staff training"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-015",
+      "verdict": "defensible",
+      "betterAccount": "6230",
+      "betterVat": "domestic_25",
+      "reason": "6540 är försvarbart för webbhotell som IT-tjänst, men 6230 är minst lika träffsäkert för webbhotell/domän medan svensk 25-procentig ingående moms är korrekt.",
+      "gold": {
+        "account": "6540",
+        "vat": "domestic_25"
+      },
+      "probe": "Web hosting from a Swedish provider"
+    },
+    {
+      "auditor": "gpt-5-6-terra-pro",
+      "taskId": "booking-016",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 6250 Postbefordran är rätt för frimärken/porto och inköpet är undantaget från moms som samhällsomfattande posttjänst.",
+      "gold": {
+        "account": "6250",
+        "vat": "no_vat"
+      },
+      "probe": "Postage stamps are VAT exempt"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-020",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Både konto 5420 för molntjänster/programvara och hanteringen med omvänd betalningsskyldighet för tjänst från annat EU-land stämmer helt överens med regelverket.",
+      "gold": {
+        "account": "5420",
+        "vat": "reverse_charge_services"
+      },
+      "probe": "EU SaaS under reverse charge (the 2614-vs-5420 production failure class)"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-021",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 5910 är helt rätt för annonsering, och omvänd skattskyldighet för import av tjänst från annat EU-land är korrekt momsbehandling.",
+      "gold": {
+        "account": "5910",
+        "vat": "reverse_charge_services"
+      },
+      "probe": "EU ad platform under reverse charge"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-022",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Facit anger helt rätt konton för inköp av mjukvarurelaterade tjänster och tillämpar korrekt reglerna om omvänd skattskyldighet för tjänster förvärvade från land utanför EU.",
+      "gold": {
+        "account": "5420",
+        "vat": "reverse_charge_services"
+      },
+      "probe": "Non-EU service still self-assessed under the main rule"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-023",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Inköp av komponenter från ett annat EU-land utgör ett unionsinternt förvärv och konteras helt i enlighet med reglerna för omvänd skattskyldighet för varor, företrädesvis på konto 4515.",
+      "gold": {
+        "account": "4515",
+        "vat": "reverse_charge_goods"
+      },
+      "probe": "Intra-EU goods acquisition"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-024",
+      "verdict": "defensible",
+      "betterAccount": "4545",
+      "betterVat": null,
+      "reason": "Även om 4010 fungerar ifall rätt momskod anges manuellt, är 4545 (Import av varor, 25 % moms) ett betydligt bättre och säkrare val eftersom det är specifikt avsett för import från land utanför EU och automatiskt styr beskattningsunderlaget till rätt ruta (50) i momsdeklarationen.",
+      "gold": {
+        "account": "4010",
+        "vat": "import"
+      },
+      "probe": "Import of goods from outside the EU"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-025",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Kontering av underentreprenad på 4610 med omvänd skattskyldighet för byggtjänster är helt i linje med både BAS-praxis och momslagen (16 kap.).",
+      "gold": {
+        "account": "4610",
+        "vat": "reverse_charge_construction"
+      },
+      "probe": "Domestic reverse charge for construction services"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-026",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 6072 är standard för ej avdragsgill extern representation (måltider), och momsavdraget ska korrekt begränsas då kostnaden överstiger 300 kr exklusive moms per person.",
+      "gold": {
+        "account": "6072",
+        "vat": "representation_capped"
+      },
+      "probe": "Client lunch: representation with capped VAT"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-027",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 7632 är helt rätt för ej avdragsgill personalrepresentation (måltider), och momsavdraget för representation är begränsat till ett underlag på 300 kr per person och tillfälle.",
+      "gold": {
+        "account": "7632",
+        "vat": "representation_capped"
+      },
+      "probe": "Staff Christmas party: internal representation"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-028",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Datorns anskaffningsvärde understiger gränsen för inventarier av mindre värde (ett halvt prisbasbelopp) och ska därmed kostnadsföras direkt, med full avdragsrätt för ingående moms.",
+      "gold": {
+        "account": "5410",
+        "vat": "domestic_25"
+      },
+      "probe": "Laptop under the half price-base-amount threshold is an expense"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-029",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Aktivering som maskin på konto 1211 med 25 % avdragsgill ingående moms är helt korrekt för en tillverkningsmaskin över beloppsgränsen med flerårig livslängd.",
+      "gold": {
+        "account": "1211",
+        "vat": "domestic_25"
+      },
+      "probe": "Machine above the threshold is a fixed asset"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-030",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 5615 är helt rätt för leasing av personbilar och momskoden hanterar korrekt regeln om 50 % avdragsrätt för moms på hyra av personbil.",
+      "gold": {
+        "account": "5615",
+        "vat": "domestic_25_half_deduction"
+      },
+      "probe": "Passenger car lease: only half the VAT is deductible"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-031",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 5611 är standardkontot för drivmedel till personbilar och momsen på driftskostnader är fullt avdragsgill även för personbilar som används i verksamheten.",
+      "gold": {
+        "account": "5611",
+        "vat": "domestic_25"
+      },
+      "probe": "Fuel for company cars"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-032",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Medlemsavgifter till branschorganisationer är inte skattemässigt avdragsgilla och konteras därför korrekt på konto 6982, samt saknar momsavdrag.",
+      "gold": {
+        "account": "6982",
+        "vat": "no_vat"
+      },
+      "probe": "Membership fee: non-deductible, no VAT"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-033",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Friskvård i form av gymkort till samtliga anställda är en avdragsgill personalvårdsförmån som bokförs på 7699/7690 med 6 % avdragsgill moms.",
+      "gold": {
+        "account": "7699",
+        "vat": "domestic_6"
+      },
+      "probe": "Gym membership for staff: wellness benefit at 6 % VAT"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-034",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 7690 är helt rätt för skattefria personalvårdsförmåner som kaffe och frukt till kontoret, och momsen på livsmedel är 12 %.",
+      "gold": {
+        "account": "7690",
+        "vat": "domestic_12"
+      },
+      "probe": "Coffee and fika for the office"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-035",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Både 5420 och 6540 är helt korrekta för programvarulicenser/molntjänster, och svensk moms gäller eftersom säljaren är en svensk återförsäljare.",
+      "gold": {
+        "account": "5420",
+        "vat": "domestic_25"
+      },
+      "probe": "Foreign-brand software bought via Swedish reseller: read the underlag, not the pattern"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-036",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Taxiresor för tjänsteärenden klassificeras korrekt som resekostnad (ofta 5810) och svensk persontransport medför 6 % moms.",
+      "gold": {
+        "account": "5810",
+        "vat": "domestic_6"
+      },
+      "probe": "Taxi receipt at 6 % VAT"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-037",
+      "verdict": "incorrect",
+      "betterAccount": "5831",
+      "betterVat": "none",
+      "reason": "Ingående moms på en anställds vanliga måltid under tjänsteresa är inte avdragsgill eftersom det klassas som en privat levnadskostnad (och utlöser kostförmån), varför hela beloppet ska kostnadsföras brutto.",
+      "gold": {
+        "account": "5830",
+        "vat": "domestic_12"
+      },
+      "probe": "Restaurant meal on a business trip is NOT representation"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-038",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 6110 är helt rätt för kontorsmaterial och hela beloppet inklusive moms utgör en kostnad eftersom företaget bedriver momsfri verksamhet och saknar avdragsrätt för ingående moms.",
+      "gold": {
+        "account": "6110",
+        "vat": "no_vat"
+      },
+      "probe": "Non-VAT-registered company: VAT is part of the cost"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-039",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Verktyg av mindre värde ska kostnadsföras direkt, och 5410 är helt rätt konto för förbrukningsinventarier med 25 % avdragsgill ingående moms.",
+      "gold": {
+        "account": "5410",
+        "vat": "domestic_25"
+      },
+      "probe": "Consumables for a construction firm"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-101",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Google Workspace från Irland utgör förvärv av tjänst från annat EU-land med omvänd skattskyldighet för köparen, och utgiften bokförs lämpligen som programvara (5420) eller IT-tjänster (6540).",
+      "gold": {
+        "account": "5420",
+        "vat": "reverse_charge_services"
+      },
+      "probe": "Bank feed only: Google Workspace from Ireland, no receipt attached"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-102",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 5910 är helt rätt för Facebook-annonsering, och inköp av B2B-tjänster från Irland ska redovisas med omvänd betalningsskyldighet (förvärv av tjänst från annat EU-land) enligt huvudregeln i mervärdesskattelagen.",
+      "gold": {
+        "account": "5910",
+        "vat": "reverse_charge_services"
+      },
+      "probe": "Bank feed only: Meta ads, no receipt attached"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-103",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Förvärv av molntjänster (IT-tjänster) från AWS i Luxemburg bokförs korrekt på 6540 med omvänd skattskyldighet för tjänster inom EU.",
+      "gold": {
+        "account": "6540",
+        "vat": "reverse_charge_services"
+      },
+      "probe": "Bank feed only: AWS infrastructure, no receipt attached"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-104",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Programvaruprenumerationer (molntjänster) från leverantörer inom EU bokförs normalt på 5420 eller 6540 och omfattas av omvänd skattskyldighet för tjänster (reverse charge).",
+      "gold": {
+        "account": "5420",
+        "vat": "reverse_charge_services"
+      },
+      "probe": "Bank feed only: Adobe subscription, no receipt attached"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-106",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Tågbiljetter för inrikes tjänsteresor bokförs korrekt som resekostnader (exempelvis på konto 5810 eller 5811) och inrikes persontransport omfattas av 6 % moms.",
+      "gold": {
+        "account": "5810",
+        "vat": "domestic_6"
+      },
+      "probe": "Bank feed only: train ticket"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-107",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Lokaltrafik för tjänsteresor bokförs korrekt som resekostnad (konto 5810) med 6 % avdragsgill ingående moms (persontransport).",
+      "gold": {
+        "account": "5810",
+        "vat": "domestic_6"
+      },
+      "probe": "Bank feed only: public transport card for business travel"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-108",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Hotellövernattning under tjänsteresa i Sverige konteras korrekt på 5830 (eller 5831) med 12 % avdragsgill moms.",
+      "gold": {
+        "account": "5830",
+        "vat": "domestic_12"
+      },
+      "probe": "Bank feed only: hotel night"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-109",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 6310 är det korrekta kontot för företagsförsäkringar och försäkringspremier är momsfria.",
+      "gold": {
+        "account": "6310",
+        "vat": "no_vat"
+      },
+      "probe": "Bank feed only: insurance premium"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-110",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Bankavgifter för internetbank bokförs på konto 6570 och är momsfria finansiella tjänster.",
+      "gold": {
+        "account": "6570",
+        "vat": "no_vat"
+      },
+      "probe": "Bank feed only: bank charges"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-111",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 5611 är standard för drivmedel till personbilar och momsen på driftskostnader är, till skillnad från själva bilköpet, avdragsgill för den del som avser körning i den momspliktiga rörelsen.",
+      "gold": {
+        "account": "5611",
+        "vat": "domestic_25"
+      },
+      "probe": "Bank feed only: fuel, company runs passenger cars"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-112",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Drivmedel till företagets lätta lastbil bokförs helt riktigt på 5621 och momsen på diesel är 25 % samt fullt avdragsgill.",
+      "gold": {
+        "account": "5621",
+        "vat": "domestic_25"
+      },
+      "probe": "Bank feed only: fuel, company runs a light truck"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-113",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 6212 (eller det övergripande 6210) tillsammans med 25 % ingående moms är helt korrekt för ett företags löpande telekomkostnader.",
+      "gold": {
+        "account": "6212",
+        "vat": "domestic_25"
+      },
+      "probe": "Bank feed only: mobile subscription"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-114",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Företagsbetald friskvård (naturaförmån) bokförs som övrig personalkostnad och momsen på 6 % (idrottstjänster) är avdragsgill när företaget är avtalspart.",
+      "gold": {
+        "account": "7699",
+        "vat": "domestic_6"
+      },
+      "probe": "Bank feed only: gym membership for staff wellness"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-115",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "En inbetalning till skattekontot ska bokföras på konto 1630 (Avräkning för skatter och avgifter) och utgör ingen momspliktig händelse.",
+      "gold": {
+        "account": "1630",
+        "vat": "no_vat"
+      },
+      "probe": "Bank feed only: payment to the tax account"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-116",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 7570 för arbetsmarknadsförsäkringar via Fora och momsfrihet är helt korrekt enligt BAS.",
+      "gold": {
+        "account": "7570",
+        "vat": "no_vat"
+      },
+      "probe": "Bank feed only: Fora premiums"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-117",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Bolagsverkets registrerings- och ärendeavgifter är momsfria och utgör avdragsgilla förvaltningskostnader som helt korrekt kan bokföras på 6991.",
+      "gold": {
+        "account": "6991",
+        "vat": "no_vat"
+      },
+      "probe": "Bank feed only: Bolagsverket filing fee"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-118",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Köp av kontorsinredning av mindre värde ska kostnadsföras direkt som förbrukningsinventarier med 25 % avdragsgill ingående moms.",
+      "gold": {
+        "account": "5410",
+        "vat": "domestic_25"
+      },
+      "probe": "Bank feed only: office furnishings under the asset threshold"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-001",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 6530 är standardkontot för inköp av redovisningstjänster och avdrag för ingående moms med 25 % är helt i sin ordning.",
+      "gold": {
+        "account": "6530",
+        "vat": "domestic_25"
+      },
+      "probe": "Standard domestic service invoice: accounting services"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-002",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 6212 är standardkontot i BAS-kontoplanen för mobiltelefoni och 25 % moms är korrekt för telekomtjänster i Sverige.",
+      "gold": {
+        "account": "6212",
+        "vat": "domestic_25"
+      },
+      "probe": "Mobile subscription"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-003",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Bredband för kontoret bokförs helt riktigt på 6230 Datakommunikation med 25 % avdragsgill ingående moms.",
+      "gold": {
+        "account": "6230",
+        "vat": "domestic_25"
+      },
+      "probe": "Broadband for the office"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-004",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 6110 är det helt korrekta standardkontot i BAS-kontoplanen för förbrukningsmaterial som pärmar och pennor, och momsen på dessa varor är 25 %.",
+      "gold": {
+        "account": "6110",
+        "vat": "domestic_25"
+      },
+      "probe": "Office supplies"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-005",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Både 5420 (Programvaror) och 6540 (IT-tjänster) är helt korrekta och vedertagna val för abonnemang på molnbaserade affärssystem, med 25 % svensk ingående moms.",
+      "gold": {
+        "account": "5420",
+        "vat": "domestic_25"
+      },
+      "probe": "Swedish SaaS subscription with Swedish VAT"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-006",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Bankens avgift för företagspaket är en finansiell tjänst som är momsfri och bokförs normalt och korrekt på konto 6570 Bankkostnader.",
+      "gold": {
+        "account": "6570",
+        "vat": "no_vat"
+      },
+      "probe": "Bank fees are VAT exempt"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-007",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Företagsförsäkringar konteras korrekt på 6310 och försäkringspremier är momsfria enligt momslagen.",
+      "gold": {
+        "account": "6310",
+        "vat": "no_vat"
+      },
+      "probe": "Business insurance is VAT exempt"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-008",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 5810 är standardkontot för tågbiljetter och inrikes persontransporter beläggs med 6 % avdragsgill moms.",
+      "gold": {
+        "account": "5810",
+        "vat": "domestic_6"
+      },
+      "probe": "Train ticket at 6 % VAT"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-009",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Logi vid tjänsteresa i Sverige bokförs helt rätt på 5830 (eller underkontot 5831) med 12 % avdragsgill ingående moms.",
+      "gold": {
+        "account": "5830",
+        "vat": "domestic_12"
+      },
+      "probe": "Hotel night at 12 % VAT"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-010",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 5020 är standardkontot för elförbrukning, och momsen är 25 % avdragsgill för en fullt momspliktig restaurangverksamhet.",
+      "gold": {
+        "account": "5020",
+        "vat": "domestic_25"
+      },
+      "probe": "Electricity for business premises"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-011",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 5060 är standardkontot för städning och momsbehandlingen är korrekt då bolaget bedriver fullt momspliktig verksamhet.",
+      "gold": {
+        "account": "5060",
+        "vat": "domestic_25"
+      },
+      "probe": "Cleaning service for the office"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-012",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Facklitteratur som är relevant för verksamheten bokförs på konto 6970 och böcker omfattas av 6 % moms.",
+      "gold": {
+        "account": "6970",
+        "vat": "domestic_6"
+      },
+      "probe": "Trade literature at 6 % VAT"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-013",
+      "verdict": "unparsed",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": null,
+      "gold": {
+        "account": "6580",
+        "vat": "domestic_25"
+      },
+      "probe": "Legal services"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-014",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 7610 är standardkontot för personalutbildning och momsen är avdragsgill med 25 % eftersom kursen är relevant för företagets verksamhet.",
+      "gold": {
+        "account": "7610",
+        "vat": "domestic_25"
+      },
+      "probe": "Staff training"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-015",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 6540 är helt rätt för IT-tjänster som webbhotell och domännamn från en svensk leverantör, med avdragsgill ingående moms på 25 %.",
+      "gold": {
+        "account": "6540",
+        "vat": "domestic_25"
+      },
+      "probe": "Web hosting from a Swedish provider"
+    },
+    {
+      "auditor": "gemini-3-1-pro",
+      "taskId": "booking-016",
+      "verdict": "correct",
+      "betterAccount": null,
+      "betterVat": null,
+      "reason": "Konto 6250 är standardkontot för porto, och frimärken för samhällsomfattande posttjänst är undantagna från moms.",
+      "gold": {
+        "account": "6250",
+        "vat": "no_vat"
+      },
+      "probe": "Postage stamps are VAT exempt"
+    }
+  ]
+}

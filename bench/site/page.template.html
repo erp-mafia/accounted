@@ -337,6 +337,15 @@
   .lim { padding: 13px 0; border-bottom: 1px solid var(--border); font-size: 14px; color: var(--soft); max-width: 80ch; }
   .lim:last-child { border-bottom: none; }
   .lim b { color: var(--ink); font-weight: 600; }
+  .vgrid { display: grid; grid-template-columns: repeat(auto-fit,minmax(320px,1fr)); gap: 16px; margin-bottom: 28px; }
+  .vcard { border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; }
+  .vcard h5 { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
+  .vcard p { font-size: 13px; color: var(--soft); margin: 12px 0 0; max-width: none; }
+  .vstat { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .vstat:last-of-type { border-bottom: none; }
+  .vstat .vlabel { font-size: 12.5px; color: var(--soft); display: flex; align-items: center; gap: 7px; }
+  .vstat .vnum { font-family: "Geist Mono",monospace; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+  .vsub { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
   .roadmap { display: grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap: 16px; }
   .rcard { border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; }
   .rcard h5 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
@@ -389,7 +398,7 @@
       <a href="#examples">Examples</a>
       <a href="#verdicts">Verdicts</a>
       <a href="#h2h">Head to head</a>
-      <a href="#external">Cross-check</a>
+      <a href="#validity">Validity</a>
       <a href="#method">Method</a>
       <a href="#limitations">Limits</a>
       <a href="#roadmap">Next</a>
@@ -400,14 +409,7 @@
 
     <section id="takeaways">
       <h2>Key takeaways</h2>
-      <div class="takeaways"><ol>
-        <li><span><strong>Three models are fit for confidence-gated unattended booking:</strong> Claude Sonnet 5 (64% of transactions auto-bookable at 99% precision), Claude Opus 5 and GPT-5.6 Luna (53% each). Luna does it at about $0.004 per transaction at list price, roughly 1/40th of Opus.</span></li>
-        <li><span><strong>Accuracy without calibration cannot automate.</strong> Gemini 3.1 Pro ties Opus 5 at the top of the booking table (96.2%), yet its flat confidence supports auto-booking only 15% of transactions at 99% precision, a quarter of what Sonnet 5's calibration unlocks at lower accuracy. The gate, not the score, is what lets a model work alone.</span></li>
-        <li><span><strong>Open weights arrived.</strong> Kimi K3 books 90.6%, level with Claude Sonnet 5 (the two are a statistical tie), with 9/9 agent reliability and a 60% automation gate. The open-closed gap on Swedish accounting is now a few points at the top, not forty.</span></li>
-        <li><span><strong>Two independent benchmarks agree on the frontier and disagree below it.</strong> Scored strictly, our figures land within about two points of DualEntry's US-GAAP board for Opus 5, Gemini 3.1 Pro and GPT-5.6 Luna, while Haiku 4.5 scores 36 points lower here. Frontier models appear to carry accounting competence across jurisdictions; weaker ones do not survive the translation to Swedish accounts and moms.</span></li>
-        <li><span><strong>Read the strict column before believing the headline.</strong> Booking's pass rate credits any chart-defensible account, and those acceptance lists grew during curation partly in response to model answers. Requiring the single gold account and the right VAT drops every model by 25-32 points: Opus 5 from 96% to 72%, Sonnet 5 from 91% to 60%. The strict column carries no such bias and is the conservative reading.</span></li>
-        <li><span><strong>The ledger is the honesty test.</strong> Eleven of fifteen models solved every agent task on every repeat attempt; Llama 4 Maverick managed 1 of 9, GPT-OSS-120B 6 of 9, Haiku 4.5 4 of 9. Chat quality does not predict who can keep books.</span></li>
-      </ol></div>
+      <div class="takeaways"><ol id="takeawaylist"></ol></div>
     </section>
 
     <section id="background">
@@ -463,7 +465,7 @@
       <h2>Verdicts</h2>
       <p class="sectiondesc">Each model receives a revisor-style opinion on confidence-gated unattended booking, from published criteria.</p>
       <div class="verdicts" id="verdictcards"></div>
-      <p class="vcriteria"><b>Criteria (published, retunable):</b> <em>Approved</em> requires booking ≥85%, automation coverage ≥50% at 99% precision, VAT law ≥80%, and a clean ledger-agent record. <em>Approved with reservation</em> requires booking ≥75%, law ≥60%, and a usable confidence gate. <em>Not assessed</em> means too few clean runs for an opinion. Verdicts concern unattended booking, not assisted use. A model can be blocked by the coverage criterion while ranking at the very top: Claude Fable 5 ties for first on booking, yet its mistakes carry 0.95 stated confidence while its clean answers carry 0.97, so a 99%-precision gate can only trust 12 of its 53 bookings. Claude Sonnet 5 is less accurate and puts its mistakes at 0.60 to 0.75, well clear of its good work, so the same gate trusts 64%. Separation, not accuracy, is what earns an unattended verdict. The Swedish terms beneath each heading are the auditor's own vocabulary (<span class="mono">tillstyrks</span> / <span class="mono">avstyrks</span> in a revisionsberättelse), kept as provenance.</p>
+      <p class="vcriteria"><b>Criteria (published, retunable):</b> <em>Approved</em> requires booking ≥85%, automation coverage ≥50% at 99% precision, VAT law ≥80%, and a clean ledger-agent record. <em>Approved with reservation</em> requires booking ≥75%, law ≥60%, and a usable confidence gate. <em>Not assessed</em> means too few clean runs for an opinion. Verdicts concern unattended booking, not assisted use. A model can be blocked by the coverage criterion while ranking at the very top: Claude Fable 5 ties for first on booking, yet its mistakes carry 0.95 stated confidence while its clean answers carry 0.97, so a 99%-precision gate can only trust <span id="vfable">12 of its 52</span> bookings. Claude Sonnet 5 is less accurate and puts its mistakes at 0.60 to 0.75, well clear of its good work, so the same gate trusts <span id="vsonnet">65%</span>. Separation, not accuracy, is what earns an unattended verdict. The Swedish terms beneath each heading are the auditor's own vocabulary (<span class="mono">tillstyrks</span> / <span class="mono">avstyrks</span> in a revisionsberättelse), kept as provenance.</p>
     </section>
 
     <section id="h2h">
@@ -482,26 +484,39 @@
       </div>
     </section>
 
-    <section id="external">
-      <h2>Cross-check against DualEntry</h2>
-      <p class="sectiondesc">The nearest comparable public benchmark. Their figures are published by DualEntry and are not measured by us; the agreement is reported honestly, including where it is weak.</p>
-      <div class="tablewrap"><table class="lb" id="exttable"></table></div>
-      <p class="legendline" id="extnote"></p>
+    <section id="validity">
+      <h2>Is the gold actually right?</h2>
+      <p class="sectiondesc">The booking tasks and their answers were authored with Claude, and Claude models are then ranked on them. That is the sharpest objection to this board, and it is testable rather than arguable. Both checks below are scripts in the repo, re-runnable against the same data.</p>
+      <div class="vgrid">
+        <div class="vcard">
+          <h5>Every gold answer, audited by another vendor's model</h5>
+          <div id="auditstats"></div>
+          <p id="auditnote"></p>
+        </div>
+        <div class="vcard">
+          <h5>Did curation favour the authoring family?</h5>
+          <div id="biasstats"></div>
+          <p id="biasnote"></p>
+        </div>
+      </div>
+      <p class="vsub">What the audit changed</p>
+      <p class="sectiondesc">The agreement rate above is measured on the gold <em>as the auditors saw it</em>, before these changes, so it is the score the process earned rather than the score it was left with. Every disagreement that survived review is listed; the ones omitted proposed an account the task already accepted, so they cost the answering model nothing.</p>
+      <div class="limits" id="auditlog"></div>
     </section>
 
     <section class="method" id="method">
       <h2>Method, in short</h2>
       <p class="sectiondesc">Every task, every raw run record and the source of this page are public in <a href="https://github.com/erp-mafia/accounted/tree/main/bench">the Accounted repository</a>, under <span class="mono">bench/</span>: tasks in <span class="mono">tasks/</span>, one JSON line per model call in <span class="mono">results/runs/</span>, the scoring in <span class="mono">src/aggregate.ts</span>, and the full methodology in <span class="mono">bench/README.md</span>.</p>
       <dl>
-        <div class="mrow"><dt>What</dt><dd><strong>Booking</strong> (53): pick the BAS account + VAT treatment for a bank transaction. <strong>Reasoning</strong> (36): Swedish VAT/BFL law with one deterministic answer. <strong>Extraction</strong> (12): read fields off rendered Swedish documents. <strong>Ledger-agent</strong> (3, run three times each): multi-turn tool use against a real Postgres ledger.</dd></div>
+        <div class="mrow"><dt>What</dt><dd><strong>Booking</strong> (52): pick the BAS account + VAT treatment for a bank transaction. <strong>Reasoning</strong> (36): Swedish VAT/BFL law with one deterministic answer. <strong>Extraction</strong> (12): read fields off rendered Swedish documents. <strong>Ledger-agent</strong> (3, run three times each): multi-turn tool use against a real Postgres ledger.</dd></div>
         <div class="mrow"><dt>Oracle</dt><dd>Deterministic throughout. The agent suite is graded on the <strong>SQL end state of the books</strong>; the production database triggers (balance, immutability, period locks) stay live and refuse illegal writes. A self-test proves the oracle can detect failure before any model runs.</dd></div>
         <div class="mrow"><dt>Fairness</dt><dd>Byte-identical prompts and tools for every model, vendor-default settings, pass@1, no fallbacks. Runs that never reached a model (rate limits, provider credits) are quarantined as <em>not run</em>, never scored as failures. Costs are measured tokens at each vendor's first-party list price (standard tier, no cache, batch or promo discounts); open-weights models without a vendor API are priced at Fireworks, following Ramp's convention.</dd></div>
-        <div class="mrow"><dt>Lenient and strict</dt><dd>Booking is scored twice. <strong>Pass</strong> accepts the gold account or any alternative listed on the task; <strong>Strict</strong> requires the single gold account and the right VAT. The acceptance lists were extended during curation when a model's answer proved defensible against the BAS chart, which makes the lenient number partly a function of what models answered: a known upward bias, stated rather than hidden. Strict carries no such bias and sits 25-32 points lower, in the range other accounting benchmarks report.</dd></div>
+        <div class="mrow"><dt>Lenient and strict</dt><dd>Booking is scored twice. <strong>Pass</strong> accepts the gold account or any alternative listed on the task; <strong>Strict</strong> requires the single gold account and the right VAT. The acceptance lists were extended during curation when a model's answer proved defensible against the BAS chart, which makes the lenient number partly a function of what models answered: a known upward bias, stated rather than hidden. Strict carries no such bias and sits 21-31 points lower, in the range other accounting benchmarks report.</dd></div>
       <div class="mrow"><dt>Evidence split</dt><dd>Booking reports two segments: <strong>invoice attached</strong> (the invoice states the VAT: measures reading) and <strong>bank feed only</strong> (counterparty and amount alone: measures knowing). v1.0 published only the blend and its VAT column saturated; v1.1 fixed that.</dd></div>
-        <div class="mrow"><dt>Context</dt><dd>Closest public benchmarks: <a href="https://www.dualentry.com/accounting-ai-benchmark">DualEntry</a> tops out at 79.2% (US-GAAP, month-end close 50%), <a href="https://www.vals.ai/benchmarks/finance_agent">Vals Finance Agent</a> at 64.4%, <a href="https://taubench.com">τ²-bench</a> at 87.9%. None Swedish, none write-capable against a legally constrained ledger.</dd></div>
+        <div class="mrow"><dt>Context</dt><dd>The closest public benchmarks are <a href="https://www.vals.ai/benchmarks/finance_agent">Vals Finance Agent</a>, which tops out at 64.4%, and <a href="https://taubench.com">τ²-bench</a> at 87.9%. Neither is Swedish and neither is write-capable against a legally constrained ledger, so neither is a board this one can be scored against; the numbers here stand on their own oracle.</dd></div>
         <div class="mrow"><dt>Statistics</dt><dd>Wilson ±1σ intervals on every rate; paired <strong>McNemar exact tests</strong> group the ranking into statistical ties (models inside a group cannot be distinguished at p&lt;0.05, marked by rules in the table); every task carries a published <strong>discrimination index</strong> (point-biserial), and tasks with negative discrimination are retired in review, applied to all models equally. A k=3 repeat study found single-run pass rates moving up to 25 pp between identical runs for one model; the tie groups, not the raw order, are the citable result.</dd></div>
       <div class="mrow"><dt>Contamination</dt><dd>Every task file carries a <strong>canary string</strong> (BIG-bench convention) so future training-data filters can exclude it, and the public split's exposure is stated rather than hidden. The prod-derived private split is the contamination-free instrument.</dd></div>
-      <div class="mrow"><dt>Cost</dt><dd>Measured tokens at each vendor's first-party list price, standard tier, no cache, batch or promotional discounts; open-weights models without a vendor API are priced at a named serving provider. <strong>Platform neutrality, verified:</strong> Anthropic models were measured on Bedrock and the others through OpenRouter, which invites the objection that the serving platform biases the comparison. It does not: the price applied is always the vendor's own list rate, never the platform's bill. To check that token <em>counting</em> also agrees, Claude Fable 5 was run on the identical booking task through both routes: Bedrock reported 27 475 input tokens and OpenRouter reported 27 475, a difference of zero. What does differ between vendors is the tokenizer, and that is a real cost: the same Swedish chart of accounts costs Claude about 27 000 tokens and GPT-5.6 Luna about 18 000. <strong>What this cost is:</strong> the price of running these tasks through the neutral scaffold, where every booking ships the entire 1 290-account BAS chart as context, roughly 18 000 to 27 000 input tokens per task. Input therefore dominates, and the cost ranking is close to the input-price ranking. <strong>What it is not:</strong> the price of booking a transaction in production, where a retrieval step puts perhaps twenty candidate accounts in front of the model instead of all of them, and caching applies. Read it as a comparable price of the same work, not as an invoice. <strong>Per correct</strong> divides it by the strict pass rate, because a model that fails cheaply is not cheap. In units a practitioner buys: booking a thousand transactions costs about <strong>$3 with GPT-OSS-120B, $4 with GLM 5.3 Flash, $57 with Claude Sonnet 5 and $279 with Claude Fable 5</strong>; per thousand <em>correct</em> bookings that becomes $14, $7, $95 and $389, which reorders them, because the cheapest model here is right half the time. A cheaper model can also cost more than a dearer one: Qwen3.8 lists at $2/$6 against Opus 5's $5/$25 yet costs six times as much per reasoning task, because it spends about 5 700 output tokens per answer on hidden thinking where Opus spends 300. One artefact worth knowing: <strong>GPT-5.6 Terra Pro reports about four times the input tokens of GPT-5.6 Luna on the identical prompt</strong> (76 630 against 18 122), so the Pro tier evidently runs several internal passes and is billed for each. Its cost is what you would pay; its token count is not a prompt-size comparison.</dd></div>
+      <div class="mrow"><dt>Cost</dt><dd>Measured tokens at each vendor's first-party list price, standard tier, no cache, batch or promotional discounts; open-weights models without a vendor API are priced at a named serving provider. <strong>Platform neutrality, verified:</strong> Anthropic models were measured on Bedrock and the others through OpenRouter, which invites the objection that the serving platform biases the comparison. It does not: the price applied is always the vendor's own list rate, never the platform's bill. To check that token <em>counting</em> also agrees, Claude Fable 5 was run on the identical booking task through both routes: Bedrock reported 27 475 input tokens and OpenRouter reported 27 475, a difference of zero. What does differ between vendors is the tokenizer, and that is a real cost: the same Swedish chart of accounts costs Claude about 27 000 tokens and GPT-5.6 Luna about 18 000. <strong>What this cost is:</strong> the price of running these tasks through the neutral scaffold, where every booking ships the entire 1 290-account BAS chart as context, roughly 18 000 to 27 000 input tokens per task. Input therefore dominates, and the cost ranking is close to the input-price ranking. <strong>What it is not:</strong> the price of booking a transaction in production, where a retrieval step puts perhaps twenty candidate accounts in front of the model instead of all of them, and caching applies. Read it as a comparable price of the same work, not as an invoice. <strong>Per correct</strong> divides it by the strict pass rate, because a model that fails cheaply is not cheap. In units a practitioner buys: booking a thousand transactions costs about <strong><span id="cost1k"></span></strong>; per thousand <em>correct</em> bookings that becomes <span id="cost1kcorrect"></span>, which reorders them, because the cheapest model here is right half the time. A cheaper model can also cost more than a dearer one: Qwen3.8 lists at $2/$6 against Opus 5's $5/$25 yet costs six times as much per reasoning task, because it spends about 5 700 output tokens per answer on hidden thinking where Opus spends 300. One artefact worth knowing: <strong>GPT-5.6 Terra Pro reports about four times the input tokens of GPT-5.6 Luna on the identical prompt</strong> (76 630 against 18 122), so the Pro tier evidently runs several internal passes and is billed for each. Its cost is what you would pay; its token count is not a prompt-size comparison.</dd></div>
       <div class="mrow"><dt>Disclosure</dt><dd>Tasks authored with Claude against cited law, machine-validated, public for review. Provider marks are their owners' trademarks, shown for identification only.</dd></div>
       </dl>
     </section>
@@ -510,9 +525,10 @@
       <h2>How to argue with this benchmark</h2>
       <p class="sectiondesc">The strongest objections we know of, stated by us rather than left for someone else to find.</p>
       <div class="limits">
-        <div class="lim"><b>It cannot rank the frontier.</b> With 53 booking tasks the top ten models are a single statistical tie. Nothing about the ordering inside that group is a result, and no presentation fixes it: only more tasks will.</div>
-        <div class="lim"><b>The gold was written by a ranked model.</b> Tasks and answers were authored with Claude against the cited statutes, and Claude Fable 5 then ties for first. Machine validation, the discrimination audit and the retirement of a defective task reduce that risk; they do not remove it. Only expert-labelled tasks would.</div>
-        <div class="lim"><b>The lenient score is biased upward by construction.</b> Acceptance lists grew during curation partly in response to model answers, worth 25 to 32 points. The strict column exists because of this, and is the number to quote.</div>
+        <div class="lim"><b>It cannot rank the frontier.</b> With 52 booking tasks the top ten models are a single statistical tie. Nothing about the ordering inside that group is a result, and no presentation fixes it: only more tasks will.</div>
+        <div class="lim"><b>Our own gold has been wrong, and probably still is somewhere.</b> The first independent audit of these answers found a task that let a VAT-exempt dental practice deduct full input VAT, an import booked to a generic purchase account instead of the import account the VAT return is built on, and a machine filed as an inventory item. One further task was retired outright because nothing we hold settles it. Those are the errors a single audit pass caught in 53 tasks; the honest inference is not that the remainder is clean, but that the error rate is low and the process for finding them is public. Every one of them is listed <a href="#validity">above</a>.</div>
+        <div class="lim"><b>The gold was written by a ranked model.</b> Tasks and answers were authored with Claude against the cited statutes, and Claude Fable 5 then ties for first. Machine validation, the discrimination audit, the retirement of a defective task, an <a href="#validity">independent cross-vendor audit of every gold answer</a> and a bias test on curated versus untouched tasks all reduce that risk; none of them removes it. Only expert-labelled tasks would.</div>
+        <div class="lim"><b>The lenient score is biased upward by construction.</b> Acceptance lists grew during curation partly in response to model answers, worth 21 to 31 points. The strict column exists because of this, and is the number to quote.</div>
         <div class="lim"><b>Confidence is self-reported.</b> Automation coverage, the metric the verdicts turn on, rests entirely on a number the model writes about itself, which is known to be format-sensitive. A logprob-based check would be stronger and has not been run.</div>
         <div class="lim"><b>Single run, and runs move.</b> Results are pass@1, while our own repeat study found aggregate pass rates moving up to 25 points between identical runs for one model. Only the agent suite is repeated.</div>
         <div class="lim"><b>One prompt, one scaffold.</b> Every score is conditional on a single prompt and a minimal harness. A different prompt could plausibly reorder the field, and no prompt-sensitivity analysis has been run.</div>
@@ -525,7 +541,7 @@
 
     <section id="roadmap">
       <h2>What this measures next</h2>
-      <p class="sectiondesc">v1.5 measures models. The axes that follow measure everything else in the sentence "this model, with these instructions, in this system".</p>
+      <p class="sectiondesc">v1.6 measures models. The axes that follow measure everything else in the sentence "this model, with these instructions, in this system".</p>
       <div class="roadmap">
         <div class="rcard">
           <h5>Skills and instructions</h5>
@@ -554,7 +570,6 @@
         <li>Gebru, T., et al. (2021). <em>Datasheets for Datasets.</em> <a href="https://arxiv.org/abs/1803.09010">arXiv:1803.09010</a> — the datasheet shipped at <span class="mono">bench/DATASHEET.md</span>.</li>
         <li>Ramp (2026). <em>Ramp SWE-Bench.</em> <a href="https://labs.ramp.com/swebench">labs.ramp.com/swebench</a> — private production tasks, public aggregates, behavioral metrics.</li>
         <li>Vals AI (2026). <em>Finance Agent v1.1.</em> <a href="https://www.vals.ai/benchmarks/finance_agent">vals.ai</a> — read-only financial analyst tasks.</li>
-        <li>DualEntry (2026). <em>Accounting AI Benchmark.</em> <a href="https://www.dualentry.com/accounting-ai-benchmark">dualentry.com</a> — 101 US-GAAP questions; cross-checked above.</li>
       </ol>
     </section>
 
@@ -572,6 +587,7 @@
 <script>
   const DATA = __LEADERBOARD_JSON__;
   const LOGOS = __LOGOS_JSON__;
+  const VALIDITY = __VALIDITY_JSON__;
 
   /* ---------- strata: the ledger as sediment ----------
      Layered horizons drifting almost imperceptibly. Warm neutral bands;
@@ -777,7 +793,7 @@
   const tableEl = document.getElementById('lbtable');
   const legendEl = document.getElementById('legend');
 
-  // A percentage on 12 or 53 tasks reads better with the raw count beside it:
+  // A percentage on 12 or 52 tasks reads better with the raw count beside it:
   // "83.3%" is opaque, "10/12" is not.
   function passCell(p, solved, n) {
     const w = Math.max(0, Math.min(1, p)) * 100;
@@ -887,7 +903,8 @@
         const col = Number(th.dataset.col);
         if (sortCol === col) sortDir = sortDir === 'desc' ? 'asc' : 'desc';
         else { sortCol = col; sortDir = 'desc'; }
-        renderBoard();
+        renderTakeaways();
+  renderBoard();
       });
     }
     legendEl.innerHTML = SUITES.find((s) => s.id === active).legend +
@@ -1081,6 +1098,20 @@
   /* ---------- verdicts ---------- */
   const allModels = rowsOf('booking').map((r) => ({ id: r.model, label: r.label, vendor: r.vendor }));
   function renderVerdicts() {
+    // These two figures are the section's whole argument, so they are read off
+    // the results file rather than typed into the prose.
+    const fable = modelRow('booking', 'claude-fable-5');
+    const sonnet = modelRow('booking', 'claude-sonnet-5');
+    if (fable) {
+      const n = fable.n;
+      document.getElementById('vfable').textContent =
+        `${Math.round((fable.extras.coverage99 ?? 0) * n)} of its ${n}`;
+    }
+    if (sonnet) {
+      document.getElementById('vsonnet').textContent =
+        Math.round((sonnet.extras.coverage99 ?? 0) * 100) + '%';
+    }
+
     const host = document.getElementById('verdictcards');
     const groups = [
       { key: 'tillstyrks', cls: '', title: 'Approved', sv: 'tillstyrks', desc: 'Fit for confidence-gated unattended booking today.' },
@@ -1263,75 +1294,108 @@
   }
 
   /* ---------- external cross-check ---------- */
-  // Published by DualEntry (2026 Accounting AI Benchmark: 101 questions across
-  // 8 US-GAAP categories, deterministic binary grading). Not measured by us.
-  const EXTERNAL = {
-    source: 'DualEntry Accounting AI Benchmark 2026',
-    url: 'https://www.dualentry.com/accounting-ai-benchmark',
-    n: 101,
-    scores: {
-      'grok-4-6': 82.2, 'deepseek-v4-pro': 78.2, 'kimi-k3': 77.2,
-      'claude-sonnet-5': 73.3, 'claude-opus-5': 72.3, 'gemini-3-1-pro': 71.3,
-      'claude-haiku-4-5': 70.3, 'claude-sonnet-4-6': 70.3, 'gpt-5-6-luna': 66.3,
-      'gpt-oss-120b': 49.5, 'claude-fable-5': 83.2,
-    },
-  };
 
-  function spearman(pairs) {
-    const n = pairs.length;
-    const rank = (vals) => {
-      const order = [...vals.keys()].sort((a, b) => vals[a] - vals[b]);
-      const rk = new Array(n);
-      let i = 0;
-      while (i < n) {
-        let j = i;
-        while (j + 1 < n && vals[order[j + 1]] === vals[order[i]]) j++;
-        const avg = (i + j) / 2 + 1;
-        for (let k = i; k <= j; k++) rk[order[k]] = avg;
-        i = j + 1;
-      }
-      return rk;
-    };
-    const xs = rank(pairs.map((p) => p[0]));
-    const ys = rank(pairs.map((p) => p[1]));
-    const mx = xs.reduce((a, b) => a + b, 0) / n;
-    const my = ys.reduce((a, b) => a + b, 0) / n;
-    let cov = 0, sx = 0, sy = 0;
-    for (let i = 0; i < n; i++) {
-      cov += (xs[i] - mx) * (ys[i] - my);
-      sx += (xs[i] - mx) ** 2;
-      sy += (ys[i] - my) ** 2;
-    }
-    return sx > 0 && sy > 0 ? cov / Math.sqrt(sx * sy) : 0;
+  // Takeaways are generated, not typed. Every number in them moved at least
+  // once while the gold was being corrected, so the prose reads the results
+  // file rather than remembering an older board.
+  function renderTakeaways() {
+    const B = DATA.suites.booking.slice();
+    const A = DATA.suites['ledger-agent'] || [];
+    const cov = (r) => (r.extras.coverage99 ?? 0) * 100;
+    const strict = (r) => (r.extras.strictPass ?? r.passRate) * 100;
+    const pct = (x) => x.toFixed(1).replace(/\.0$/, '') + '%';
+    const byCov = B.slice().sort((a, b) => cov(b) - cov(a));
+    // Approved is the published verdict, not the coverage number alone: it also
+    // requires booking accuracy, VAT-law accuracy and a clean agent record.
+    const gated = byCov.filter((r) => (DATA.verdicts?.[r.model] || {}).verdict === 'tillstyrks');
+    const cheapest = gated.slice().sort((a, b) => a.avgCostUsd - b.avgCostUsd)[0];
+    const dearest = gated.slice().sort((a, b) => b.avgCostUsd - a.avgCostUsd)[0];
+    const top = B[0];
+    const flat = B.slice(0, 4).sort((a, b) => cov(a) - cov(b))[0];
+    const best = byCov[0];
+    const open = B.filter((r) => r.open_weights)[0];
+    const openAgent = A.find((r) => r.model === open.model);
+    const drops = B.map((r) => r.passRate * 100 - strict(r));
+    const perfect = A.filter((r) => r.extras.reliability === 1).length;
+    const worst = A.slice().sort((a, b) => a.pass - b.pass).slice(0, 3);
+    const list = (rs, f) => rs.map(f).join(', ').replace(/, ([^,]*)$/, ' and $1');
+
+    const items = [
+      `<strong>${gated.length} of ${B.length} models are approved for confidence-gated unattended booking:</strong> ` +
+        list(gated, (r) => `${r.label} (${pct(cov(r))})`) +
+        ` of transactions auto-bookable at 99% precision. ${cheapest.label} does it for about $${cheapest.avgCostUsd.toFixed(3)} a transaction at list price, roughly 1/${Math.round(dearest.avgCostUsd / cheapest.avgCostUsd)}th of ${dearest.label}.`,
+      `<strong>Accuracy without calibration cannot automate.</strong> ${flat.label} sits in the top four on booking (${pct(flat.passRate * 100)}), yet its flat confidence supports auto-booking only ${pct(cov(flat))} of transactions at 99% precision, against ${pct(cov(best))} for ${best.label} at ${pct(best.passRate * 100)}. The gate, not the score, is what lets a model work alone.`,
+      `<strong>Open weights arrived.</strong> ${open.label} books ${pct(open.passRate * 100)}, inside the leading tie group, with ${openAgent ? `${openAgent.pass}/${openAgent.n} agent reliability and ` : ''}a ${pct(cov(open))} automation gate. The open-closed gap on Swedish accounting is now a few points at the top, not forty.`,
+      `<strong>Read the strict column before believing the headline.</strong> Booking's pass rate credits any chart-defensible account, and those acceptance lists grew during curation partly in response to model answers. Requiring the single gold account and the right VAT drops every model by ${Math.round(Math.min(...drops))} to ${Math.round(Math.max(...drops))} points: ${top.label} from ${pct(top.passRate * 100)} to ${pct(strict(top))}. The strict column carries no such bias and is the conservative reading.`,
+      `<strong>The ledger is the honesty test.</strong> ${perfect} of ${A.length} models solved every agent task on every repeat attempt; ` +
+        list(worst, (r) => `${r.label} managed ${r.pass} of ${r.n}`) + `. Chat quality does not predict who can keep books.`,
+    ];
+    document.getElementById('takeawaylist').innerHTML =
+      items.map((t) => `<li><span>${t}</span></li>`).join('');
   }
 
-  function renderExternal() {
-    const rows = [];
-    for (const [id, theirs] of Object.entries(EXTERNAL.scores)) {
-      const r = modelRow('booking', id);
-      if (!r) continue; // no booking run on this board: nothing comparable
-      rows.push({
-        label: r.label, vendor: r.vendor,
-        ours: r.passRate * 100,
-        strict: (r.extras.strictPass ?? r.passRate) * 100,
-        theirs,
-      });
-    }
-    rows.sort((a, b) => b.theirs - a.theirs);
-    let html = '<thead><tr><th>Model</th><th>Strict (ours)</th><th>Lenient (ours)</th><th>DualEntry</th><th>Strict − DualEntry</th></tr></thead><tbody>';
+  function renderCostUnits() {
+    // Same four models, prices read from the run records rather than typed.
+    const ids = ['gpt-oss-120b', 'glm-5-3-flash', 'claude-sonnet-5', 'claude-fable-5'];
+    const rows = ids.map((id) => modelRow('booking', id)).filter(Boolean);
+    const money = (x) => '$' + (x >= 10 ? Math.round(x) : x.toFixed(1).replace(/\.0$/, ''));
+    const join = (xs) => xs.join(', ').replace(/, ([^,]*)$/, ' and $1');
+    document.getElementById('cost1k').textContent =
+      join(rows.map((r) => `${money(r.avgCostUsd * 1000)} with ${r.label}`));
+    document.getElementById('cost1kcorrect').textContent =
+      join(rows.map((r) => money((r.avgCostUsd / (r.extras.strictPass || 1)) * 1000)));
+  }
+
+  // The validity section is rendered from the audit and bias-test output files,
+  // so the numbers in it cannot drift from what the scripts actually produced.
+  function renderValidity() {
+    const rows = VALIDITY.audit.results || [];
+    const byAuditor = new Map();
     for (const r of rows) {
-      const d = r.strict - r.theirs;
-      const near = Math.abs(d) <= 3 ? ' style="color:var(--sage);font-weight:600"' : '';
-      html += `<tr><td>${markFor(r.vendor)}${r.label}</td><td>${r.strict.toFixed(1)}%</td>` +
-        `<td>${r.ours.toFixed(1)}%</td><td>${r.theirs.toFixed(1)}%</td>` +
-        `<td${near}>${d >= 0 ? '+' : ''}${d.toFixed(1)} pp</td></tr>`;
+      if (!byAuditor.has(r.auditor)) byAuditor.set(r.auditor, []);
+      byAuditor.get(r.auditor).push(r);
     }
-    document.getElementById('exttable').innerHTML = html + '</tbody>';
-    const rho = spearman(rows.map((r) => [r.strict, r.theirs]));
-    document.getElementById('extnote').innerHTML =
-      `<b>Three models coincide closely; treat that as weak evidence, not validation.</b> Scored strictly, Claude Opus 5 lands within 0.6 points of DualEntry's figure, Gemini 3.1 Pro within 1.5 and GPT-5.6 Luna within 2.1. It is tempting to call that independent corroboration, but our strict scores compress into a 60 to 72 band while theirs spread from 66 to 84, so the models that coincide are the ones whose DualEntry score happens to fall inside our range, and the models they rate higher (Claude Fable 5 −11.5, Kimi K3 −14.9, Grok 4.6 −19.9) diverge simply because we have a ceiling near 72. Range overlap explains the agreement at least as well as genuine convergence does. ` +
-      `<b>Below the frontier we are markedly harder.</b> Claude Haiku 4.5 scores 36 points lower here than there, GPT-OSS-120B 29 lower, DeepSeek V4 Pro 25 lower. The plausible reading is jurisdiction transfer: naming one BAS account out of 1 290 and one VAT treatment out of ten punishes a weak model far more than US-GAAP questions do, while a frontier model carries its accounting competence across the border. ` +
-      `Rank agreement stays weak on that account (Spearman ρ = ${rho >= 0 ? '+' : ''}${rho.toFixed(2)}, 95% interval roughly [−0.46, +0.75] at ${rows.length} shared models, not distinguishable from zero), because the mid-field orders differently on each board. Neither validates the other; both are small enough that adjacent ranks differ by single questions.`;
+    let html = '';
+    let totalJudged = 0, totalCorrect = 0, totalIncorrect = 0;
+    for (const [id, rs] of byAuditor) {
+      const row = modelRow('booking', id);
+      const judged = rs.filter((r) => r.verdict !== 'unparsed').length;
+      const correct = rs.filter((r) => r.verdict === 'correct').length;
+      totalJudged += judged; totalCorrect += correct;
+      totalIncorrect += rs.filter((r) => r.verdict === 'incorrect').length;
+      const label = row ? row.label : id;
+      const mark = row ? markFor(row.vendor) : '';
+      html += `<div class="vstat"><span class="vlabel">${mark}${label}</span>` +
+        `<span class="vnum">${judged ? ((correct / judged) * 100).toFixed(0) : '-'}% <span style="color:var(--faint);font-weight:400">${correct}/${judged}</span></span></div>`;
+    }
+    document.getElementById('auditstats').innerHTML = html;
+    const auditors = [...byAuditor.keys()].length;
+    const nTasks = Math.max(...[...byAuditor.values()].map((rs) => rs.length));
+    document.getElementById('auditnote').innerHTML =
+      `Every booking gold (${nTasks}) was shown to ${auditors === 1 ? 'a model' : auditors + ' models'} from ${auditors === 1 ? 'another vendor' : 'other vendors'}, with the task, our answer and our stated reason, and asked whether it holds under Swedish rules. ` +
+      `Across both auditors, <b>${totalCorrect} of ${totalJudged}</b> judgements said the gold was outright correct. Every flag was then read by hand against the statute: judges never share a vendor with a model they validate, and disagreement is a prompt to go read the law, not an automatic edit. ` +
+      `Most flags proposed an account the task already accepted and changed nothing. The rest changed the benchmark, in both directions: one gold was wrong on the law, two named a less precise account than the chart offers, one acceptance list was too generous and was tightened, and one task was retired because nothing we hold settles it. ` +
+      `The gold has since been corrected accordingly, and the corrected version has not yet been re-audited.`;
+
+    const b = VALIDITY.bias;
+    const fmt = (x) => (x >= 0 ? '+' : '') + x.toFixed(1) + ' pp';
+    document.getElementById('biasstats').innerHTML =
+      `<div class="vstat"><span class="vlabel">Claude edge, gold curation touched (${b.extended.tasks} tasks)</span><span class="vnum">${fmt(b.extended.edgePp)}</span></div>` +
+      `<div class="vstat"><span class="vlabel">Claude edge, gold never revisited (${b.untouched.tasks} tasks)</span><span class="vnum">${fmt(b.untouched.edgePp)}</span></div>`;
+    const larger = b.extended.edgePp > b.untouched.edgePp;
+    document.getElementById('biasnote').innerHTML =
+      `Some tasks had their acceptance lists extended during curation, after we read model answers and checked the alternative against the chart; the rest kept the answer they were written with. If curation had quietly bent the gold toward the authoring family, the Claude advantage would be <em>larger</em> where curation reached. ` +
+      (larger
+        ? `<b>It is larger there, which is consistent with author-family bias.</b> Treat the Claude figures accordingly.`
+        : `<b>It is not: the advantage is ${fmt(b.extended.edgePp)} on curated tasks against ${fmt(b.untouched.edgePp)} on untouched ones</b>, the opposite of what the objection predicts. That is evidence against this particular failure, measured on the strict score, which ignores acceptance lists entirely. It does not clear the wider circularity: only expert-labelled tasks would.`);
+
+    let log = '';
+    for (const round of VALIDITY.resolutions.rounds || []) {
+      for (const f of round.findings) {
+        log += `<div class="lim"><b>${f.taskId} · ${f.verdict}</b> ${f.finding} <span style="color:var(--ink)">What we did:</span> ${f.action}</div>`;
+      }
+    }
+    document.getElementById('auditlog').innerHTML = log;
   }
 
   // Version and date come from the results file, so they can never go stale.
@@ -1343,7 +1407,9 @@
     for (const suite of Object.keys(DATA.suites || {})) {
       for (const r of DATA.suites[suite]) models.add(r.model);
       const top = (DATA.suites[suite] || [])[0];
-      if (top) tasks += top.n;
+      // The agent suite runs each task k times, so its n counts runs. The hero
+      // line counts distinct tasks.
+      if (top) tasks += Math.round(top.n / (top.extras?.reliabilityK || 1));
     }
     document.getElementById('metaline').textContent = `Ledger-Bench v${v} · ${date}`;
     document.getElementById('footversion').textContent = `ACCOUNTED LEDGER-BENCH V${v}`;
@@ -1354,7 +1420,8 @@
   renderBoard();
   renderExamples();
   renderVerdicts();
-  renderExternal();
+  renderCostUnits();
+  renderValidity();
   renderPickers();
   renderDuel();
 </script>

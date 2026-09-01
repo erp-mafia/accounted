@@ -128,7 +128,7 @@ on top; its accuracy is tracked separately by the backtest scripts).
   McNemar tests on paired task outcomes. The published ranking is grouped
   into statistical ties by leader-chaining (a model joins the group above it
   while McNemar vs the group leader gives p >= 0.05); a simplification of a
-  compact letter display, stated as such. At v1.3's n=53 booking tasks, the
+  compact letter display, stated as such. At v1.6's n=52 booking tasks, the
   top NINE models are one tie group: differences under ~8 points are noise
   at this size, which is said on the page rather than hidden, and is the
   standing argument for growing the task set.
@@ -144,7 +144,7 @@ on top; its accuracy is tracked separately by the backtest scripts).
   EM-vs-F1 pattern). The acceptance lists were extended during curation when
   a model's answer proved defensible against the BAS chart, so the lenient
   rate is partly a function of what models answered: a known upward bias,
-  worth ~25-32 points (Opus 96.2% lenient vs 71.7% strict; Sonnet 5 90.6% vs
+  worth ~21-31 points (Opus 96.2% lenient vs 71.7% strict; Sonnet 5 90.6% vs
   60.4%). Strict carries no such bias, sits in the range other accounting
   benchmarks report, and is the number to quote when comparing outward.
 - **Regelverksfarskhet (reasoning).** The tasks about rules that changed in
@@ -217,8 +217,49 @@ reliability (pass^k) is future work.
   without re-spending model calls, and the aggregator only counts records
   whose task still exists, so a task removed for defective gold drops out of
   every model's aggregates at once.
+- `bench/scripts/audit-gold.ts`: **independent cross-vendor audit of the gold
+  itself.** The booking tasks were authored with Claude and Claude models are
+  ranked on them, so every gold answer is shown to models from other vendors,
+  together with the task and our stated reason, and they judge whether it
+  holds under Swedish rules. Judges never share a vendor with a model they
+  validate. Output lands in `results/gold-audit.json`; disagreements are read
+  by hand against the statute and nothing is edited automatically. What the
+  audit changed is kept permanently in `site/audit-resolutions.json`. The
+  published agreement rate is measured on the gold the auditors saw, before
+  the fixes, so it reports what the process earned rather than what it was
+  left with; the corrected gold has not yet been re-audited. First pass, on
+  the 53-task version: GPT-5.6 Terra Pro judged 45 of 53 outright correct,
+  Gemini 3.1 Pro 50 of 53. Six flags proposed an account the task already
+  accepted and changed nothing; five produced real corrections, including a
+  task that let a VAT-exempt dental practice deduct full input VAT.
+- `bench/scripts/gold-bias-test.ts`: tests whether curation favoured the
+  authoring family. Author-family bias predicts a *larger* Claude advantage on
+  tasks whose acceptance lists were extended during curation than on tasks
+  whose gold was never revisited. Measured on the strict score, which ignores
+  acceptance lists entirely: the advantage is smaller on the curated set, so
+  the prediction fails. This rules out one specific mechanism, not
+  circularity in general; only expert-labelled tasks would do that.
 
 ## Changelog
+
+**v1.6 (2026-09-01).** Validity release. Every booking gold was audited by
+models from other vendors (`scripts/audit-gold.ts`), which produced five
+substantive changes: booking-011 deducted full input VAT for a dental clinic
+whose care is VAT-exempt (company corrected, re-run for all 15 models);
+booking-024 used a generic purchase account for an import instead of the
+import-specific 4545 that Ruta 50 maps to; booking-029 labelled a production
+machine 1221 rather than 1211, which was not even on its acceptance list;
+booking-027 wrongly accepted 7631 for a representation meal that lost its
+income-tax deduction in 2017 (nine stored verdicts flipped to fail on
+re-grade, in every direction); and booking-037 was retired because whether an
+employer may deduct input VAT on an employee's own meal on a business trip is
+not settled by anything we hold. Booking is now 52 tasks. Added
+`scripts/gold-bias-test.ts`, which tests whether curation favoured the
+authoring family and finds the Claude advantage smaller, not larger, where
+curation reached. Removed the model-by-model cross-check against another
+benchmark's published board: the agreement it showed was explained as well by
+overlapping score ranges as by convergence, and rank correlation was
+indistinguishable from zero, so it was decoration rather than evidence.
 
 **v1.1 (2026-08-31).** Added the bank-feed-only booking segment (18 new
 tasks) after v1.0's VAT column saturated at 100 % via underlag leakage;
@@ -249,49 +290,25 @@ price of booking in production, where retrieval puts ~20 candidate accounts
 in front of the model and caching applies. The comparison across models is
 sound; the absolute number is not a production forecast. `Per correct`
 divides cost by the strict pass rate, since a model that fails cheaply is
-not cheap: GPT-5.6 Luna books a correct entry for $0.006, Opus 5 for $0.194,
+not cheap: GPT-5.6 Luna books a correct entry for $0.006, Opus 5 for $0.185,
 a 33x spread that the raw cost-per-task column understates.
-
-## External cross-check (published numbers, not measured by us)
-
-DualEntry's 2026 Accounting AI Benchmark is the nearest comparable public
-board and the page reports the agreement directly. **Three models coincide closely, but this is weak evidence, not validation.**
-Scored strictly, Claude Opus 5 differs from DualEntry's figure by -0.6 pp,
-Gemini 3.1 Pro by -1.5 and GPT-5.6 Luna by -2.1: two benchmarks built
-independently, in different jurisdictions, from different task types,
-coinciding to inside a rounding error. Do not read that as corroboration
-without the caveat: our strict scores compress into a 60-72 band while
-DualEntry's spread from 66 to 84, so the models that coincide are exactly
-the ones whose DualEntry score falls inside our range, and models they rate
-higher (Fable 5 -11.5, Kimi K3 -14.9, Grok 4.6 -19.9) diverge because we
-have a ceiling near 72. Range overlap explains the agreement at least as
-well as genuine convergence does.
-
-**Below the frontier Ledger-Bench is markedly harder**: Haiku 4.5 -36.3 pp,
-GPT-OSS-120B -28.7, DeepSeek V4 Pro -25.4. The plausible reading is
-jurisdiction transfer: naming one BAS account out of 1 290 and one VAT
-treatment out of ten punishes a weak model far more than US-GAAP questions
-do, while a frontier model carries its accounting competence across the
-border. Rank agreement stays weak for that reason (Spearman rho = +0.22,
-95% CI roughly [-0.46, +0.75] at n=10: not distinguishable from zero),
-because the mid-field orders differently on each board.
-
-Do not "correct" our numbers toward theirs. Their benchmark is **101
-questions across 8 US-GAAP categories** (12-13 per category, deterministic
-binary grading); Ledger-Bench is 104 Swedish-law tasks with 53 on booking
-alone. At those sizes adjacent ranks on either board differ by single
-questions, and the two measure different jurisdictions and task mixes.
-Divergence is the expected result, not an error to tune away.
 
 ## External context (published numbers, not measured by us)
 
-For placing these results among public instruments: DualEntry's vendor-run
-US-GAAP benchmark (19 models, 101 ERP tasks) tops out at 79.2 % (Claude
-Opus 4.7) with month-end close at 50 %; Vals AI's Finance Agent v1.1
-(read-only analyst Q&A, 537 tasks) tops out at 64.4 %; tau2-bench (agentic
-dual-control, no finance domain) has Qwen 3.5-397B at 87.9 %. None are
-Swedish, none write against a legally constrained ledger, which is the gap
-this benchmark exists to measure.
+For placing these results among public instruments: Vals AI's Finance Agent
+v1.1 (read-only analyst Q&A, 537 tasks) tops out at 64.4 %; tau2-bench
+(agentic dual-control, no finance domain) has Qwen 3.5-397B at 87.9 %.
+Neither is Swedish, and neither writes against a legally constrained ledger,
+which is the gap this benchmark exists to measure.
+
+Ledger-Bench deliberately publishes **no model-by-model comparison against
+another benchmark's board**. A v1.5 draft carried one and it did not survive
+its own scrutiny: agreement on three frontier models was explained at least
+as well by overlapping score ranges as by genuine convergence, rank
+correlation on shared models was indistinguishable from zero, and the
+jurisdictions and task mixes differ enough that divergence is the expected
+result rather than a finding. A comparison that cannot be interpreted is
+decoration. These numbers stand on their own oracle, or not at all.
 
 ## Disclosure and limitations
 
@@ -316,11 +333,18 @@ this benchmark exists to measure.
 ## Building the public page
 
 The results page source is committed at `bench/site/page.template.html`
-(two placeholders: `__LEADERBOARD_JSON__`, `__LOGOS_JSON__`).
-`npx tsx bench/scripts/build-site.ts` injects the current
-`results/leaderboard.json` and writes `bench/site/index.html`, so the
-published page is always reproducible from the repo and can never drift
-from the results it reports.
+(three placeholders: `__LEADERBOARD_JSON__`, `__LOGOS_JSON__`,
+`__VALIDITY_JSON__`). `npx tsx bench/scripts/build-site.ts` injects the
+current `results/leaderboard.json`, the gold-audit and bias-test output and
+the audit resolutions, then writes `bench/site/index.html`, so the published
+page is always reproducible from the repo and can never drift from the
+results it reports.
+
+Figures in the prose are generated, not typed: the takeaways, the verdict
+criteria's worked example, the hero facts and the whole validity section read
+the results files at render time. Every one of them went stale at least once
+while the gold was being corrected, which is the argument for not typing
+them.
 
 ## Running it
 
@@ -339,6 +363,17 @@ npx tsx bench/src/run.ts --suite booking --model claude-sonnet-5 --limit 5
 
 # Aggregate results into results/leaderboard.json:
 npx tsx bench/src/aggregate.ts
+
+# Re-grade stored answers against current gold, without re-spending calls:
+npx tsx bench/scripts/regrade-booking.ts
+
+# Validity: audit every booking gold with other vendors' models, and test
+# whether curation favoured the authoring family:
+npx tsx bench/scripts/audit-gold.ts --model gpt-5-6-terra-pro,gemini-3-1-pro
+npx tsx bench/scripts/gold-bias-test.ts
+
+# Rebuild the public page from whatever the above produced:
+npx tsx bench/scripts/build-site.ts
 ```
 
 Credentials come from the repo's `.env.local` (AWS keys for Bedrock EU,
@@ -347,7 +382,7 @@ rest). Results land as append-only JSONL under `bench/results/runs/`.
 
 ## Roadmap: what this measures next
 
-v1.5 measures models. Three further axes are planned and explicitly not yet
+v1.6 measures models. Three further axes are planned and explicitly not yet
 run, recorded here so the direction predates the numbers:
 
 1. **Skills and instructions.** Hold the model fixed, vary the instruction
@@ -368,10 +403,14 @@ run, recorded here so the direction predates the numbers:
 ## How to argue with this benchmark
 
 The strongest objections we know of, published rather than left to be found:
-it cannot rank the frontier (53 booking tasks put the top ten in one
+it cannot rank the frontier (52 booking tasks put the top ten in one
 statistical tie); the gold was authored by a model that then ties for first;
-the lenient score is biased upward by construction (25-32 points) because
-acceptance lists grew in response to model answers; automation coverage
+our own gold has been wrong (the first independent audit found a VAT-exempt
+practice deducting full input VAT, an import on a generic purchase account,
+and a machine filed as an inventory item, and retired a fourth task as
+unsettleable, all listed in the validity section of the page); the lenient
+score is biased upward by construction (21-31 points) because acceptance
+lists grew in response to model answers; automation coverage
 rests on self-reported confidence and no logprob check has been run; results
 are pass@1 while our own repeat study found up to 25 points of run-to-run
 movement; every score is conditional on one prompt and one scaffold with no

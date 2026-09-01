@@ -14,7 +14,7 @@ Accounted; used both for public reporting and internal model routing.
 
 ## Composition
 
-104 tasks in four suites (booking 53, reasoning 36, extraction 12,
+103 tasks in four suites (booking 52, reasoning 36, extraction 12,
 ledger-agent 3), all `data_class: public`. Every instance is synthetic:
 invented suppliers and amounts, Luhn-valid but fake org numbers and OCR
 references, program-rendered documents whose gold labels are emitted from
@@ -34,9 +34,21 @@ arithmetic invariants, enum validity) and curated under a published
 discipline: acceptable-alternative accounts are explicit per task; tasks
 with negative discrimination (better models scoring worse) are retired in
 review; every gold change is re-graded retroactively for all models
-equally and recorded in the changelog. Known bias: authorship by a model
-family that is also ranked; the planned prod-derived private split (human
-bookings as labels) does not share this bias.
+equally and recorded in the changelog.
+
+Known bias: authorship by a model family that is also ranked. Two controls
+test it rather than assert it away. Every gold answer is audited by models
+from other vendors (`bench/scripts/audit-gold.ts`), which found and fixed a
+substantive error (full input VAT deducted in a VAT-exempt dental practice)
+and a gold that was less precise than an unlisted alternative; the record of
+what the audit changed is kept in `bench/site/audit-resolutions.json`, since
+the published agreement rate is measured after those fixes. Separately,
+`bench/scripts/gold-bias-test.ts` compares the Claude advantage on tasks
+curation touched against tasks it never revisited: author-family bias
+predicts a larger advantage where curation reached, and the advantage is
+smaller there. Neither control removes the bias, only two of its mechanisms.
+The planned prod-derived private split (human bookings as labels) does not
+share it.
 
 ## Recommended uses
 

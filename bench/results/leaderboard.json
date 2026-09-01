@@ -1,6 +1,6 @@
 {
-  "benchVersion": "v1.5",
-  "generatedAt": "2026-09-01T09:21:23.293Z",
+  "benchVersion": "v1.6",
+  "generatedAt": "2026-09-01T11:16:58.370Z",
   "suites": {
     "booking": [
       {
@@ -8,68 +8,29 @@
         "label": "Claude Opus 5",
         "vendor": "Anthropic",
         "open_weights": false,
-        "n": 53,
-        "pass": 51,
+        "n": 52,
+        "pass": 50,
         "passRate": 0.962,
-        "wilsonLo": 0.926,
+        "wilsonLo": 0.925,
         "wilsonHi": 0.981,
-        "totalCostUsd": 7.368,
-        "avgCostUsd": 0.13902,
+        "totalCostUsd": 7.222,
+        "avgCostUsd": 0.13889,
         "avgTurns": 1,
-        "avgDurationMs": 2568,
+        "avgDurationMs": 2505,
         "extras": {
           "accountAccuracy": 0.962,
-          "strictAccountAccuracy": 0.717,
-          "strictPass": 0.717,
+          "strictAccountAccuracy": 0.75,
+          "strictPass": 0.75,
           "vatAccuracy": 1,
-          "ece": 0.096,
+          "ece": 0.094,
           "coverage95": 1,
-          "coverage99": 0.528,
+          "coverage99": 0.538,
           "parseFailures": 0,
           "segments": {
             "underlag": {
-              "n": 34,
-              "pass": 0.971,
-              "accountAccuracy": 0.971,
-              "vatAccuracy": 1
-            },
-            "bank_only": {
-              "n": 19,
-              "pass": 0.947,
-              "accountAccuracy": 0.947,
-              "vatAccuracy": 1
-            }
-          }
-        }
-      },
-      {
-        "model": "claude-fable-5",
-        "label": "Claude Fable 5",
-        "vendor": "Anthropic",
-        "open_weights": false,
-        "n": 53,
-        "pass": 51,
-        "passRate": 0.962,
-        "wilsonLo": 0.926,
-        "wilsonHi": 0.981,
-        "totalCostUsd": 14.799,
-        "avgCostUsd": 0.27923,
-        "avgTurns": 1,
-        "avgDurationMs": 4817,
-        "extras": {
-          "accountAccuracy": 0.962,
-          "strictAccountAccuracy": 0.717,
-          "strictPass": 0.717,
-          "vatAccuracy": 1,
-          "ece": 0.054,
-          "coverage95": 1,
-          "coverage99": 0.226,
-          "parseFailures": 0,
-          "segments": {
-            "underlag": {
-              "n": 34,
-              "pass": 0.971,
-              "accountAccuracy": 0.971,
+              "n": 33,
+              "pass": 0.97,
+              "accountAccuracy": 0.97,
               "vatAccuracy": 1
             },
             "bank_only": {
@@ -86,29 +47,29 @@
         "label": "Gemini 3.1 Pro",
         "vendor": "Google",
         "open_weights": false,
-        "n": 53,
-        "pass": 51,
+        "n": 52,
+        "pass": 50,
         "passRate": 0.962,
-        "wilsonLo": 0.926,
+        "wilsonLo": 0.925,
         "wilsonHi": 0.981,
-        "totalCostUsd": 2.704,
-        "avgCostUsd": 0.05102,
+        "totalCostUsd": 2.646,
+        "avgCostUsd": 0.05088,
         "avgTurns": 1,
-        "avgDurationMs": 12734,
+        "avgDurationMs": 12516,
         "extras": {
           "accountAccuracy": 0.962,
-          "strictAccountAccuracy": 0.698,
-          "strictPass": 0.698,
+          "strictAccountAccuracy": 0.712,
+          "strictPass": 0.712,
           "vatAccuracy": 1,
-          "ece": 0.008,
+          "ece": 0.007,
           "coverage95": 1,
-          "coverage99": 0.151,
+          "coverage99": 0.173,
           "parseFailures": 0,
           "segments": {
             "underlag": {
-              "n": 34,
-              "pass": 0.941,
-              "accountAccuracy": 0.941,
+              "n": 33,
+              "pass": 0.939,
+              "accountAccuracy": 0.939,
               "vatAccuracy": 1
             },
             "bank_only": {
@@ -121,33 +82,33 @@
         }
       },
       {
-        "model": "gpt-5-6-luna",
-        "label": "GPT-5.6 Luna",
-        "vendor": "OpenAI",
+        "model": "claude-fable-5",
+        "label": "Claude Fable 5",
+        "vendor": "Anthropic",
         "open_weights": false,
-        "n": 53,
-        "pass": 50,
-        "passRate": 0.943,
-        "wilsonLo": 0.903,
-        "wilsonHi": 0.968,
-        "totalCostUsd": 0.198,
-        "avgCostUsd": 0.00374,
+        "n": 52,
+        "pass": 49,
+        "passRate": 0.942,
+        "wilsonLo": 0.901,
+        "wilsonHi": 0.967,
+        "totalCostUsd": 14.509,
+        "avgCostUsd": 0.27901,
         "avgTurns": 1,
-        "avgDurationMs": 12386,
+        "avgDurationMs": 4738,
         "extras": {
-          "accountAccuracy": 0.943,
-          "strictAccountAccuracy": 0.642,
-          "strictPass": 0.642,
+          "accountAccuracy": 0.942,
+          "strictAccountAccuracy": 0.731,
+          "strictPass": 0.731,
           "vatAccuracy": 1,
-          "ece": 0.045,
-          "coverage95": 0.774,
-          "coverage99": 0.528,
+          "ece": 0.034,
+          "coverage95": 0.981,
+          "coverage99": 0.231,
           "parseFailures": 0,
           "segments": {
             "underlag": {
-              "n": 34,
-              "pass": 0.941,
-              "accountAccuracy": 0.941,
+              "n": 33,
+              "pass": 0.939,
+              "accountAccuracy": 0.939,
               "vatAccuracy": 1
             },
             "bank_only": {
@@ -164,29 +125,29 @@
         "label": "GPT-5.6 Terra Pro",
         "vendor": "OpenAI",
         "open_weights": false,
-        "n": 53,
-        "pass": 49,
-        "passRate": 0.925,
-        "wilsonLo": 0.88,
+        "n": 52,
+        "pass": 48,
+        "passRate": 0.923,
+        "wilsonLo": 0.878,
         "wilsonHi": 0.953,
-        "totalCostUsd": 8.25,
-        "avgCostUsd": 0.15566,
+        "totalCostUsd": 8.094,
+        "avgCostUsd": 0.15565,
         "avgTurns": 1,
-        "avgDurationMs": 12701,
+        "avgDurationMs": 12512,
         "extras": {
-          "accountAccuracy": 0.925,
-          "strictAccountAccuracy": 0.66,
-          "strictPass": 0.66,
+          "accountAccuracy": 0.923,
+          "strictAccountAccuracy": 0.692,
+          "strictPass": 0.692,
           "vatAccuracy": 1,
-          "ece": 0.06,
-          "coverage95": 0.774,
-          "coverage99": 0.358,
+          "ece": 0.061,
+          "coverage95": 0.769,
+          "coverage99": 0.365,
           "parseFailures": 0,
           "segments": {
             "underlag": {
-              "n": 34,
-              "pass": 0.882,
-              "accountAccuracy": 0.882,
+              "n": 33,
+              "pass": 0.879,
+              "accountAccuracy": 0.879,
               "vatAccuracy": 1
             },
             "bank_only": {
@@ -199,33 +160,33 @@
         }
       },
       {
-        "model": "grok-4-6",
-        "label": "Grok 4.6",
-        "vendor": "xAI",
+        "model": "gpt-5-6-luna",
+        "label": "GPT-5.6 Luna",
+        "vendor": "OpenAI",
         "open_weights": false,
-        "n": 53,
-        "pass": 49,
-        "passRate": 0.925,
-        "wilsonLo": 0.88,
+        "n": 52,
+        "pass": 48,
+        "passRate": 0.923,
+        "wilsonLo": 0.878,
         "wilsonHi": 0.953,
-        "totalCostUsd": 2.194,
-        "avgCostUsd": 0.04139,
+        "totalCostUsd": 0.194,
+        "avgCostUsd": 0.00374,
         "avgTurns": 1,
-        "avgDurationMs": 21809,
+        "avgDurationMs": 11926,
         "extras": {
-          "accountAccuracy": 0.925,
-          "strictAccountAccuracy": 0.623,
-          "strictPass": 0.623,
+          "accountAccuracy": 0.923,
+          "strictAccountAccuracy": 0.673,
+          "strictPass": 0.673,
           "vatAccuracy": 1,
-          "ece": 0.082,
-          "coverage95": 0.943,
-          "coverage99": 0.491,
+          "ece": 0.066,
+          "coverage95": 0.538,
+          "coverage99": 0.538,
           "parseFailures": 0,
           "segments": {
             "underlag": {
-              "n": 34,
-              "pass": 0.912,
-              "accountAccuracy": 0.912,
+              "n": 33,
+              "pass": 0.909,
+              "accountAccuracy": 0.909,
               "vatAccuracy": 1
             },
             "bank_only": {
@@ -238,39 +199,39 @@
         }
       },
       {
-        "model": "claude-sonnet-5",
-        "label": "Claude Sonnet 5",
-        "vendor": "Anthropic",
+        "model": "grok-4-6",
+        "label": "Grok 4.6",
+        "vendor": "xAI",
         "open_weights": false,
-        "n": 53,
-        "pass": 48,
-        "passRate": 0.906,
-        "wilsonLo": 0.858,
-        "wilsonHi": 0.939,
-        "totalCostUsd": 3.024,
-        "avgCostUsd": 0.05706,
-        "avgTurns": 1.019,
-        "avgDurationMs": 3460,
+        "n": 52,
+        "pass": 47,
+        "passRate": 0.904,
+        "wilsonLo": 0.855,
+        "wilsonHi": 0.937,
+        "totalCostUsd": 2.151,
+        "avgCostUsd": 0.04136,
+        "avgTurns": 1,
+        "avgDurationMs": 21610,
         "extras": {
-          "accountAccuracy": 0.925,
-          "strictAccountAccuracy": 0.604,
-          "strictPass": 0.604,
-          "vatAccuracy": 0.981,
-          "ece": 0.114,
-          "coverage95": 0.642,
-          "coverage99": 0.642,
+          "accountAccuracy": 0.904,
+          "strictAccountAccuracy": 0.635,
+          "strictPass": 0.635,
+          "vatAccuracy": 1,
+          "ece": 0.061,
+          "coverage95": 0.846,
+          "coverage99": 0.5,
           "parseFailures": 0,
           "segments": {
             "underlag": {
-              "n": 34,
-              "pass": 0.941,
-              "accountAccuracy": 0.971,
-              "vatAccuracy": 0.971
+              "n": 33,
+              "pass": 0.879,
+              "accountAccuracy": 0.879,
+              "vatAccuracy": 1
             },
             "bank_only": {
               "n": 19,
-              "pass": 0.842,
-              "accountAccuracy": 0.842,
+              "pass": 0.947,
+              "accountAccuracy": 0.947,
               "vatAccuracy": 1
             }
           }
@@ -281,30 +242,30 @@
         "label": "Kimi K3",
         "vendor": "Moonshot",
         "open_weights": true,
-        "n": 53,
-        "pass": 48,
-        "passRate": 0.906,
-        "wilsonLo": 0.858,
-        "wilsonHi": 0.939,
-        "totalCostUsd": 3.858,
+        "n": 52,
+        "pass": 47,
+        "passRate": 0.904,
+        "wilsonLo": 0.855,
+        "wilsonHi": 0.937,
+        "totalCostUsd": 3.785,
         "avgCostUsd": 0.07279,
         "avgTurns": 1,
-        "avgDurationMs": 19040,
+        "avgDurationMs": 19079,
         "extras": {
-          "accountAccuracy": 0.925,
-          "strictAccountAccuracy": 0.642,
-          "strictPass": 0.623,
+          "accountAccuracy": 0.923,
+          "strictAccountAccuracy": 0.654,
+          "strictPass": 0.635,
           "vatAccuracy": 0.962,
           "ece": 0.067,
-          "coverage95": 0.642,
-          "coverage99": 0.604,
+          "coverage95": 0.635,
+          "coverage99": 0.596,
           "parseFailures": 0,
           "segments": {
             "underlag": {
-              "n": 34,
-              "pass": 0.912,
-              "accountAccuracy": 0.941,
-              "vatAccuracy": 0.971
+              "n": 33,
+              "pass": 0.909,
+              "accountAccuracy": 0.939,
+              "vatAccuracy": 0.97
             },
             "bank_only": {
               "n": 19,
@@ -316,33 +277,72 @@
         }
       },
       {
+        "model": "claude-sonnet-5",
+        "label": "Claude Sonnet 5",
+        "vendor": "Anthropic",
+        "open_weights": false,
+        "n": 52,
+        "pass": 46,
+        "passRate": 0.885,
+        "wilsonLo": 0.833,
+        "wilsonHi": 0.922,
+        "totalCostUsd": 2.966,
+        "avgCostUsd": 0.05704,
+        "avgTurns": 1.019,
+        "avgDurationMs": 3385,
+        "extras": {
+          "accountAccuracy": 0.904,
+          "strictAccountAccuracy": 0.673,
+          "strictPass": 0.673,
+          "vatAccuracy": 0.981,
+          "ece": 0.131,
+          "coverage95": 0.654,
+          "coverage99": 0.654,
+          "parseFailures": 0,
+          "segments": {
+            "underlag": {
+              "n": 33,
+              "pass": 0.909,
+              "accountAccuracy": 0.939,
+              "vatAccuracy": 0.97
+            },
+            "bank_only": {
+              "n": 19,
+              "pass": 0.842,
+              "accountAccuracy": 0.842,
+              "vatAccuracy": 1
+            }
+          }
+        }
+      },
+      {
         "model": "claude-sonnet-4-6",
         "label": "Claude Sonnet 4.6",
         "vendor": "Anthropic",
         "open_weights": false,
-        "n": 53,
-        "pass": 46,
-        "passRate": 0.868,
-        "wilsonLo": 0.815,
-        "wilsonHi": 0.908,
-        "totalCostUsd": 3.655,
-        "avgCostUsd": 0.06897,
+        "n": 52,
+        "pass": 45,
+        "passRate": 0.865,
+        "wilsonLo": 0.811,
+        "wilsonHi": 0.906,
+        "totalCostUsd": 3.585,
+        "avgCostUsd": 0.06893,
         "avgTurns": 1,
-        "avgDurationMs": 2013,
+        "avgDurationMs": 1969,
         "extras": {
-          "accountAccuracy": 0.906,
-          "strictAccountAccuracy": 0.623,
-          "strictPass": 0.604,
+          "accountAccuracy": 0.904,
+          "strictAccountAccuracy": 0.654,
+          "strictPass": 0.635,
           "vatAccuracy": 0.962,
-          "ece": 0.053,
-          "coverage95": 0.642,
-          "coverage99": 0.057,
+          "ece": 0.049,
+          "coverage95": 0.673,
+          "coverage99": 0.058,
           "parseFailures": 0,
           "segments": {
             "underlag": {
-              "n": 34,
-              "pass": 0.853,
-              "accountAccuracy": 0.853,
+              "n": 33,
+              "pass": 0.848,
+              "accountAccuracy": 0.848,
               "vatAccuracy": 1
             },
             "bank_only": {
@@ -359,30 +359,30 @@
         "label": "GLM 5.3 Flash",
         "vendor": "Z.ai",
         "open_weights": true,
-        "n": 53,
-        "pass": 46,
-        "passRate": 0.868,
-        "wilsonLo": 0.815,
-        "wilsonHi": 0.908,
-        "totalCostUsd": 0.192,
+        "n": 52,
+        "pass": 45,
+        "passRate": 0.865,
+        "wilsonLo": 0.811,
+        "wilsonHi": 0.906,
+        "totalCostUsd": 0.189,
         "avgCostUsd": 0.00363,
         "avgTurns": 1.019,
-        "avgDurationMs": 35710,
+        "avgDurationMs": 34844,
         "extras": {
-          "accountAccuracy": 0.887,
-          "strictAccountAccuracy": 0.547,
-          "strictPass": 0.547,
+          "accountAccuracy": 0.865,
+          "strictAccountAccuracy": 0.577,
+          "strictPass": 0.577,
           "vatAccuracy": 0.981,
-          "ece": 0.028,
-          "coverage95": 0.396,
-          "coverage99": 0.094,
+          "ece": 0.046,
+          "coverage95": 0.423,
+          "coverage99": 0.115,
           "parseFailures": 0,
           "segments": {
             "underlag": {
-              "n": 34,
-              "pass": 0.824,
-              "accountAccuracy": 0.853,
-              "vatAccuracy": 0.971
+              "n": 33,
+              "pass": 0.818,
+              "accountAccuracy": 0.818,
+              "vatAccuracy": 0.97
             },
             "bank_only": {
               "n": 19,
@@ -394,73 +394,34 @@
         }
       },
       {
-        "model": "qwen3-8-2-4t",
-        "label": "Qwen3.8 2.4T",
-        "vendor": "Alibaba",
-        "open_weights": true,
-        "n": 53,
-        "pass": 44,
-        "passRate": 0.83,
-        "wilsonLo": 0.773,
-        "wilsonHi": 0.876,
-        "totalCostUsd": 3.001,
-        "avgCostUsd": 0.05662,
-        "avgTurns": 1.038,
-        "avgDurationMs": 42830,
-        "extras": {
-          "accountAccuracy": 0.868,
-          "strictAccountAccuracy": 0.547,
-          "strictPass": 0.528,
-          "vatAccuracy": 0.906,
-          "ece": 0.069,
-          "coverage95": 0.314,
-          "coverage99": 0.314,
-          "parseFailures": 2,
-          "segments": {
-            "underlag": {
-              "n": 34,
-              "pass": 0.794,
-              "accountAccuracy": 0.824,
-              "vatAccuracy": 0.912
-            },
-            "bank_only": {
-              "n": 19,
-              "pass": 0.895,
-              "accountAccuracy": 0.947,
-              "vatAccuracy": 0.895
-            }
-          }
-        }
-      },
-      {
         "model": "deepseek-v4-pro",
         "label": "DeepSeek V4 Pro",
         "vendor": "DeepSeek",
         "open_weights": true,
-        "n": 53,
+        "n": 52,
         "pass": 43,
-        "passRate": 0.811,
-        "wilsonLo": 0.752,
-        "wilsonHi": 0.859,
-        "totalCostUsd": 0.523,
-        "avgCostUsd": 0.00986,
+        "passRate": 0.827,
+        "wilsonLo": 0.768,
+        "wilsonHi": 0.873,
+        "totalCostUsd": 0.51,
+        "avgCostUsd": 0.0098,
         "avgTurns": 1.019,
-        "avgDurationMs": 22674,
+        "avgDurationMs": 21004,
         "extras": {
-          "accountAccuracy": 0.868,
-          "strictAccountAccuracy": 0.566,
-          "strictPass": 0.528,
-          "vatAccuracy": 0.925,
-          "ece": 0.044,
-          "coverage95": 0.113,
-          "coverage99": 0.113,
+          "accountAccuracy": 0.865,
+          "strictAccountAccuracy": 0.577,
+          "strictPass": 0.538,
+          "vatAccuracy": 0.942,
+          "ece": 0.048,
+          "coverage95": 0.115,
+          "coverage99": 0.115,
           "parseFailures": 0,
           "segments": {
             "underlag": {
-              "n": 34,
-              "pass": 0.794,
-              "accountAccuracy": 0.824,
-              "vatAccuracy": 0.971
+              "n": 33,
+              "pass": 0.818,
+              "accountAccuracy": 0.818,
+              "vatAccuracy": 1
             },
             "bank_only": {
               "n": 19,
@@ -472,33 +433,72 @@
         }
       },
       {
+        "model": "qwen3-8-2-4t",
+        "label": "Qwen3.8 2.4T",
+        "vendor": "Alibaba",
+        "open_weights": true,
+        "n": 52,
+        "pass": 43,
+        "passRate": 0.827,
+        "wilsonLo": 0.768,
+        "wilsonHi": 0.873,
+        "totalCostUsd": 2.95,
+        "avgCostUsd": 0.05673,
+        "avgTurns": 1.038,
+        "avgDurationMs": 43088,
+        "extras": {
+          "accountAccuracy": 0.865,
+          "strictAccountAccuracy": 0.558,
+          "strictPass": 0.538,
+          "vatAccuracy": 0.904,
+          "ece": 0.071,
+          "coverage95": 0.32,
+          "coverage99": 0.32,
+          "parseFailures": 2,
+          "segments": {
+            "underlag": {
+              "n": 33,
+              "pass": 0.788,
+              "accountAccuracy": 0.818,
+              "vatAccuracy": 0.909
+            },
+            "bank_only": {
+              "n": 19,
+              "pass": 0.895,
+              "accountAccuracy": 0.947,
+              "vatAccuracy": 0.895
+            }
+          }
+        }
+      },
+      {
         "model": "claude-haiku-4-5",
         "label": "Claude Haiku 4.5",
         "vendor": "Anthropic",
         "open_weights": false,
-        "n": 53,
-        "pass": 31,
-        "passRate": 0.585,
-        "wilsonLo": 0.516,
-        "wilsonHi": 0.65,
-        "totalCostUsd": 1.272,
-        "avgCostUsd": 0.024,
+        "n": 52,
+        "pass": 30,
+        "passRate": 0.577,
+        "wilsonLo": 0.508,
+        "wilsonHi": 0.643,
+        "totalCostUsd": 1.248,
+        "avgCostUsd": 0.02401,
         "avgTurns": 1,
-        "avgDurationMs": 3874,
+        "avgDurationMs": 3858,
         "extras": {
-          "accountAccuracy": 0.679,
-          "strictAccountAccuracy": 0.415,
-          "strictPass": 0.34,
-          "vatAccuracy": 0.887,
-          "ece": 0.243,
+          "accountAccuracy": 0.673,
+          "strictAccountAccuracy": 0.442,
+          "strictPass": 0.365,
+          "vatAccuracy": 0.885,
+          "ece": 0.25,
           "coverage95": 0,
           "coverage99": 0,
           "parseFailures": 0,
           "segments": {
             "underlag": {
-              "n": 34,
-              "pass": 0.588,
-              "accountAccuracy": 0.588,
+              "n": 33,
+              "pass": 0.576,
+              "accountAccuracy": 0.576,
               "vatAccuracy": 1
             },
             "bank_only": {
@@ -515,30 +515,30 @@
         "label": "GPT-OSS-120B",
         "vendor": "OpenAI",
         "open_weights": true,
-        "n": 53,
+        "n": 52,
         "pass": 26,
-        "passRate": 0.491,
-        "wilsonLo": 0.423,
-        "wilsonHi": 0.559,
-        "totalCostUsd": 0.158,
+        "passRate": 0.5,
+        "wilsonLo": 0.431,
+        "wilsonHi": 0.569,
+        "totalCostUsd": 0.156,
         "avgCostUsd": 0.00299,
         "avgTurns": 1.019,
-        "avgDurationMs": 18344,
+        "avgDurationMs": 18411,
         "extras": {
-          "accountAccuracy": 0.528,
-          "strictAccountAccuracy": 0.245,
-          "strictPass": 0.208,
-          "vatAccuracy": 0.906,
-          "ece": 0.399,
+          "accountAccuracy": 0.538,
+          "strictAccountAccuracy": 0.231,
+          "strictPass": 0.192,
+          "vatAccuracy": 0.904,
+          "ece": 0.39,
           "coverage95": 0,
           "coverage99": 0,
           "parseFailures": 0,
           "segments": {
             "underlag": {
-              "n": 34,
-              "pass": 0.471,
-              "accountAccuracy": 0.471,
-              "vatAccuracy": 0.971
+              "n": 33,
+              "pass": 0.485,
+              "accountAccuracy": 0.485,
+              "vatAccuracy": 0.97
             },
             "bank_only": {
               "n": 19,
@@ -554,30 +554,30 @@
         "label": "Llama 4 Maverick",
         "vendor": "Meta",
         "open_weights": true,
-        "n": 53,
+        "n": 52,
         "pass": 23,
-        "passRate": 0.434,
-        "wilsonLo": 0.368,
-        "wilsonHi": 0.503,
-        "totalCostUsd": 0.187,
+        "passRate": 0.442,
+        "wilsonLo": 0.375,
+        "wilsonHi": 0.512,
+        "totalCostUsd": 0.183,
         "avgCostUsd": 0.00353,
         "avgTurns": 1,
-        "avgDurationMs": 13053,
+        "avgDurationMs": 13041,
         "extras": {
-          "accountAccuracy": 0.547,
-          "strictAccountAccuracy": 0.264,
-          "strictPass": 0.17,
-          "vatAccuracy": 0.868,
-          "ece": 0.425,
+          "accountAccuracy": 0.558,
+          "strictAccountAccuracy": 0.269,
+          "strictPass": 0.192,
+          "vatAccuracy": 0.865,
+          "ece": 0.413,
           "coverage95": 0,
           "coverage99": 0,
           "parseFailures": 0,
           "segments": {
             "underlag": {
-              "n": 34,
-              "pass": 0.412,
-              "accountAccuracy": 0.441,
-              "vatAccuracy": 0.971
+              "n": 33,
+              "pass": 0.424,
+              "accountAccuracy": 0.455,
+              "vatAccuracy": 0.97
             },
             "bank_only": {
               "n": 19,
@@ -1532,7 +1532,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.73
+        "disc": 0.74
       },
       {
         "id": "booking-022",
@@ -1580,7 +1580,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.47
+        "disc": 0.49
       },
       {
         "id": "booking-024",
@@ -1604,7 +1604,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.13
+        "disc": 0.1
       },
       {
         "id": "booking-025",
@@ -1628,7 +1628,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.58
+        "disc": 0.59
       },
       {
         "id": "booking-026",
@@ -1652,7 +1652,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.28
+        "disc": 0.27
       },
       {
         "id": "booking-027",
@@ -1660,15 +1660,15 @@
         "probe": "Staff Christmas party: internal representation",
         "segment": "underlag",
         "results": {
-          "claude-haiku-4-5": 1,
+          "claude-haiku-4-5": 0,
           "claude-sonnet-4-6": 1,
-          "claude-sonnet-5": 1,
+          "claude-sonnet-5": 0,
           "claude-opus-5": 1,
-          "claude-fable-5": 1,
+          "claude-fable-5": 0,
           "gpt-5-6-terra-pro": 1,
-          "gpt-5-6-luna": 1,
+          "gpt-5-6-luna": 0,
           "gemini-3-1-pro": 1,
-          "grok-4-6": 1,
+          "grok-4-6": 0,
           "deepseek-v4-pro": 0,
           "qwen3-8-2-4t": 0,
           "llama-4-maverick": 0,
@@ -1676,7 +1676,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.49
+        "disc": 0.4
       },
       {
         "id": "booking-028",
@@ -1796,7 +1796,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.34
+        "disc": 0.33
       },
       {
         "id": "booking-033",
@@ -1820,7 +1820,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.39
+        "disc": 0.37
       },
       {
         "id": "booking-034",
@@ -1868,7 +1868,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.39
+        "disc": 0.37
       },
       {
         "id": "booking-036",
@@ -1892,31 +1892,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.27
-      },
-      {
-        "id": "booking-037",
-        "difficulty": "hard",
-        "probe": "Restaurant meal on a business trip is NOT representation",
-        "segment": "underlag",
-        "results": {
-          "claude-haiku-4-5": 0,
-          "claude-sonnet-4-6": 1,
-          "claude-sonnet-5": 1,
-          "claude-opus-5": 1,
-          "claude-fable-5": 1,
-          "gpt-5-6-terra-pro": 1,
-          "gpt-5-6-luna": 1,
-          "gemini-3-1-pro": 1,
-          "grok-4-6": 1,
-          "deepseek-v4-pro": 1,
-          "qwen3-8-2-4t": 1,
-          "llama-4-maverick": 0,
-          "kimi-k3": 1,
-          "glm-5-3-flash": 1,
-          "gpt-oss-120b": 0
-        },
-        "disc": 0.95
+        "disc": 0.26
       },
       {
         "id": "booking-038",
@@ -1940,7 +1916,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.53
+        "disc": 0.52
       },
       {
         "id": "booking-039",
@@ -1964,7 +1940,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.95
+        "disc": 0.96
       },
       {
         "id": "booking-101",
@@ -2012,7 +1988,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.54
+        "disc": 0.57
       },
       {
         "id": "booking-103",
@@ -2084,7 +2060,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.29
+        "disc": 0.28
       },
       {
         "id": "booking-107",
@@ -2132,7 +2108,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.62
+        "disc": 0.63
       },
       {
         "id": "booking-109",
@@ -2228,7 +2204,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.53
+        "disc": 0.52
       },
       {
         "id": "booking-113",
@@ -2252,7 +2228,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.38
+        "disc": 0.4
       },
       {
         "id": "booking-114",
@@ -2276,7 +2252,7 @@
           "glm-5-3-flash": 0,
           "gpt-oss-120b": 0
         },
-        "disc": 0.4
+        "disc": 0.41
       },
       {
         "id": "booking-115",
@@ -2324,7 +2300,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.95
+        "disc": 0.96
       },
       {
         "id": "booking-117",
@@ -2348,7 +2324,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.23
+        "disc": 0.21
       },
       {
         "id": "booking-118",
@@ -2372,7 +2348,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.67
+        "disc": 0.69
       },
       {
         "id": "booking-001",
@@ -2396,7 +2372,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.53
+        "disc": 0.52
       },
       {
         "id": "booking-002",
@@ -2444,7 +2420,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.87
+        "disc": 0.86
       },
       {
         "id": "booking-004",
@@ -2492,7 +2468,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.53
+        "disc": 0.52
       },
       {
         "id": "booking-006",
@@ -2540,7 +2516,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.53
+        "disc": 0.52
       },
       {
         "id": "booking-008",
@@ -2588,7 +2564,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.73
+        "disc": 0.74
       },
       {
         "id": "booking-010",
@@ -2629,14 +2605,14 @@
           "gpt-5-6-luna": 1,
           "gemini-3-1-pro": 1,
           "grok-4-6": 1,
-          "deepseek-v4-pro": 0,
+          "deepseek-v4-pro": 1,
           "qwen3-8-2-4t": 1,
           "llama-4-maverick": 1,
           "kimi-k3": 1,
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.02
+        "disc": null
       },
       {
         "id": "booking-012",
@@ -2708,7 +2684,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 1
         },
-        "disc": 0.73
+        "disc": 0.74
       },
       {
         "id": "booking-015",
@@ -2732,7 +2708,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.95
+        "disc": 0.96
       },
       {
         "id": "booking-016",
@@ -2756,7 +2732,7 @@
           "glm-5-3-flash": 1,
           "gpt-oss-120b": 0
         },
-        "disc": 0.53
+        "disc": 0.52
       }
     ],
     "reasoning": [
@@ -3943,19 +3919,19 @@
     "booking": [
       [
         "claude-opus-5",
-        "claude-fable-5",
         "gemini-3-1-pro",
-        "gpt-5-6-luna",
+        "claude-fable-5",
         "gpt-5-6-terra-pro",
+        "gpt-5-6-luna",
         "grok-4-6",
-        "claude-sonnet-5",
         "kimi-k3",
+        "claude-sonnet-5",
         "claude-sonnet-4-6",
         "glm-5-3-flash"
       ],
       [
-        "qwen3-8-2-4t",
-        "deepseek-v4-pro"
+        "deepseek-v4-pro",
+        "qwen3-8-2-4t"
       ],
       [
         "claude-haiku-4-5",
@@ -4024,201 +4000,6 @@
     ]
   },
   "examples": [
-    {
-      "id": "booking-027",
-      "probe": "Staff Christmas party: internal representation",
-      "difficulty": "hard",
-      "company": {
-        "entity_type": "aktiebolag",
-        "vat_registered": true,
-        "accounting_method": "invoice",
-        "business": "IT-konsultbolag med 12 anställda"
-      },
-      "transaction": {
-        "date": "2026-01-09",
-        "amount": -14400,
-        "currency": "SEK",
-        "counterpart": "Restaurang Hasselbacken",
-        "description": "Julfest personal 12 personer",
-        "underlag": "Julbord 12 kuvert inkl dryck. Mat 12 000 inkl moms 12 %, alkohol 2 400 inkl moms 25 %."
-      },
-      "gold": {
-        "account": "7632",
-        "acceptable_accounts": [
-          "7631"
-        ],
-        "vat_treatment": "representation_capped"
-      },
-      "rationale": "Personalfest är personalrepresentation: måltidsdelen ej avdragsgill (7632), momsavdrag enligt schablon/tak.",
-      "law_ref": "ML 13 kap. 24-25 §§",
-      "answers": [
-        {
-          "model": "claude-haiku-4-5",
-          "label": "Claude Haiku 4.5",
-          "vendor": "Anthropic",
-          "pass": true,
-          "account": "7631",
-          "vat": "representation_capped",
-          "confidence": 0.75,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "claude-sonnet-4-6",
-          "label": "Claude Sonnet 4.6",
-          "vendor": "Anthropic",
-          "pass": true,
-          "account": "7632",
-          "vat": "representation_capped",
-          "confidence": 0.85,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "claude-sonnet-5",
-          "label": "Claude Sonnet 5",
-          "vendor": "Anthropic",
-          "pass": true,
-          "account": "7631",
-          "vat": "representation_capped",
-          "confidence": 0.75,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "claude-opus-5",
-          "label": "Claude Opus 5",
-          "vendor": "Anthropic",
-          "pass": true,
-          "account": "7632",
-          "vat": "representation_capped",
-          "confidence": 0.82,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "claude-fable-5",
-          "label": "Claude Fable 5",
-          "vendor": "Anthropic",
-          "pass": true,
-          "account": "7631",
-          "vat": "representation_capped",
-          "confidence": 0.95,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "gpt-5-6-terra-pro",
-          "label": "GPT-5.6 Terra Pro",
-          "vendor": "OpenAI",
-          "pass": true,
-          "account": "7632",
-          "vat": "representation_capped",
-          "confidence": 0.9,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "gpt-5-6-luna",
-          "label": "GPT-5.6 Luna",
-          "vendor": "OpenAI",
-          "pass": true,
-          "account": "7631",
-          "vat": "representation_capped",
-          "confidence": 0.98,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "gemini-3-1-pro",
-          "label": "Gemini 3.1 Pro",
-          "vendor": "Google",
-          "pass": true,
-          "account": "7632",
-          "vat": "representation_capped",
-          "confidence": 0.95,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "grok-4-6",
-          "label": "Grok 4.6",
-          "vendor": "xAI",
-          "pass": true,
-          "account": "7631",
-          "vat": "representation_capped",
-          "confidence": 0.82,
-          "accountCorrect": true,
-          "vatCorrect": true
-        },
-        {
-          "model": "deepseek-v4-pro",
-          "label": "DeepSeek V4 Pro",
-          "vendor": "DeepSeek",
-          "pass": false,
-          "account": "7630",
-          "vat": "representation_capped",
-          "confidence": 0.78,
-          "accountCorrect": false,
-          "vatCorrect": true
-        },
-        {
-          "model": "qwen3-8-2-4t",
-          "label": "Qwen3.8 2.4T",
-          "vendor": "Alibaba",
-          "pass": false,
-          "account": "",
-          "vat": "",
-          "confidence": null,
-          "accountCorrect": false,
-          "vatCorrect": false
-        },
-        {
-          "model": "llama-4-maverick",
-          "label": "Llama 4 Maverick",
-          "vendor": "Meta",
-          "pass": false,
-          "account": "6071",
-          "vat": "representation_capped",
-          "confidence": 0.9,
-          "accountCorrect": false,
-          "vatCorrect": true
-        },
-        {
-          "model": "kimi-k3",
-          "label": "Kimi K3",
-          "vendor": "Moonshot",
-          "pass": false,
-          "account": "7632",
-          "vat": "no_vat",
-          "confidence": 0.85,
-          "accountCorrect": true,
-          "vatCorrect": false
-        },
-        {
-          "model": "glm-5-3-flash",
-          "label": "GLM 5.3 Flash",
-          "vendor": "Z.ai",
-          "pass": false,
-          "account": "7631",
-          "vat": "domestic_12",
-          "confidence": 0.6,
-          "accountCorrect": true,
-          "vatCorrect": false
-        },
-        {
-          "model": "gpt-oss-120b",
-          "label": "GPT-OSS-120B",
-          "vendor": "OpenAI",
-          "pass": false,
-          "account": "6072",
-          "vat": "no_vat",
-          "confidence": 0.97,
-          "accountCorrect": false,
-          "vatCorrect": false
-        }
-      ]
-    },
     {
       "id": "booking-028",
       "probe": "Laptop under the half price-base-amount threshold is an expense",
@@ -4608,102 +4389,297 @@
           "vatCorrect": true
         }
       ]
+    },
+    {
+      "id": "booking-031",
+      "probe": "Fuel for company cars",
+      "difficulty": "core",
+      "company": {
+        "entity_type": "aktiebolag",
+        "vat_registered": true,
+        "accounting_method": "invoice",
+        "business": "Säljbolag"
+      },
+      "transaction": {
+        "date": "2026-05-11",
+        "amount": -1125,
+        "currency": "SEK",
+        "counterpart": "OKQ8",
+        "description": "Tankning tjänstebil",
+        "underlag": "Diesel 900,00 exkl moms, moms 25 % 225,00."
+      },
+      "gold": {
+        "account": "5611",
+        "acceptable_accounts": [
+          "5610"
+        ],
+        "vat_treatment": "domestic_25"
+      },
+      "rationale": "Drivmedel för personbil: 5611. Momsen på drivmedel är fullt avdragsgill när bilen används i verksamheten.",
+      "law_ref": null,
+      "answers": [
+        {
+          "model": "claude-haiku-4-5",
+          "label": "Claude Haiku 4.5",
+          "vendor": "Anthropic",
+          "pass": false,
+          "account": "5621",
+          "vat": "domestic_25",
+          "confidence": 0.95,
+          "accountCorrect": false,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-sonnet-4-6",
+          "label": "Claude Sonnet 4.6",
+          "vendor": "Anthropic",
+          "pass": true,
+          "account": "5611",
+          "vat": "domestic_25",
+          "confidence": 0.9,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-sonnet-5",
+          "label": "Claude Sonnet 5",
+          "vendor": "Anthropic",
+          "pass": true,
+          "account": "5611",
+          "vat": "domestic_25",
+          "confidence": 0.85,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-opus-5",
+          "label": "Claude Opus 5",
+          "vendor": "Anthropic",
+          "pass": true,
+          "account": "5611",
+          "vat": "domestic_25",
+          "confidence": 0.93,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "claude-fable-5",
+          "label": "Claude Fable 5",
+          "vendor": "Anthropic",
+          "pass": true,
+          "account": "5611",
+          "vat": "domestic_25",
+          "confidence": 0.9,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "gpt-5-6-terra-pro",
+          "label": "GPT-5.6 Terra Pro",
+          "vendor": "OpenAI",
+          "pass": true,
+          "account": "5611",
+          "vat": "domestic_25",
+          "confidence": 0.97,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "gpt-5-6-luna",
+          "label": "GPT-5.6 Luna",
+          "vendor": "OpenAI",
+          "pass": true,
+          "account": "5611",
+          "vat": "domestic_25",
+          "confidence": 0.93,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "gemini-3-1-pro",
+          "label": "Gemini 3.1 Pro",
+          "vendor": "Google",
+          "pass": true,
+          "account": "5611",
+          "vat": "domestic_25",
+          "confidence": 0.95,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "grok-4-6",
+          "label": "Grok 4.6",
+          "vendor": "xAI",
+          "pass": true,
+          "account": "5611",
+          "vat": "domestic_25",
+          "confidence": 0.9,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "deepseek-v4-pro",
+          "label": "DeepSeek V4 Pro",
+          "vendor": "DeepSeek",
+          "pass": true,
+          "account": "5611",
+          "vat": "domestic_25",
+          "confidence": 0.95,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "qwen3-8-2-4t",
+          "label": "Qwen3.8 2.4T",
+          "vendor": "Alibaba",
+          "pass": false,
+          "account": "5611",
+          "vat": "domestic_25_half_deduction",
+          "confidence": 0.78,
+          "accountCorrect": true,
+          "vatCorrect": false
+        },
+        {
+          "model": "llama-4-maverick",
+          "label": "Llama 4 Maverick",
+          "vendor": "Meta",
+          "pass": false,
+          "account": "5601",
+          "vat": "domestic_25",
+          "confidence": 1,
+          "accountCorrect": false,
+          "vatCorrect": true
+        },
+        {
+          "model": "kimi-k3",
+          "label": "Kimi K3",
+          "vendor": "Moonshot",
+          "pass": true,
+          "account": "5611",
+          "vat": "domestic_25",
+          "confidence": 0.95,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "glm-5-3-flash",
+          "label": "GLM 5.3 Flash",
+          "vendor": "Z.ai",
+          "pass": true,
+          "account": "5611",
+          "vat": "domestic_25",
+          "confidence": 0.92,
+          "accountCorrect": true,
+          "vatCorrect": true
+        },
+        {
+          "model": "gpt-oss-120b",
+          "label": "GPT-OSS-120B",
+          "vendor": "OpenAI",
+          "pass": false,
+          "account": "4820",
+          "vat": "domestic_25",
+          "confidence": 0.97,
+          "accountCorrect": false,
+          "vatCorrect": true
+        }
+      ]
     }
   ],
   "verdicts": {
     "claude-opus-5": {
       "verdict": "tillstyrks",
-      "coverage99": 0.528,
+      "coverage99": 0.538,
       "coverage95": 1,
       "booking": 0.962,
       "reasoning": 0.889,
       "agentClean": true
     },
-    "claude-fable-5": {
-      "verdict": "tillstyrks_med_reservation",
-      "coverage99": 0.226,
-      "coverage95": 1,
-      "booking": 0.962,
-      "reasoning": 0.944,
-      "agentClean": true
-    },
     "gemini-3-1-pro": {
       "verdict": "tillstyrks_med_reservation",
-      "coverage99": 0.151,
+      "coverage99": 0.173,
       "coverage95": 1,
       "booking": 0.962,
       "reasoning": 0.861,
       "agentClean": true
     },
-    "gpt-5-6-luna": {
-      "verdict": "tillstyrks",
-      "coverage99": 0.528,
-      "coverage95": 0.774,
-      "booking": 0.943,
-      "reasoning": 0.861,
+    "claude-fable-5": {
+      "verdict": "tillstyrks_med_reservation",
+      "coverage99": 0.231,
+      "coverage95": 0.981,
+      "booking": 0.942,
+      "reasoning": 0.944,
       "agentClean": true
     },
     "gpt-5-6-terra-pro": {
       "verdict": "tillstyrks_med_reservation",
-      "coverage99": 0.358,
-      "coverage95": 0.774,
-      "booking": 0.925,
+      "coverage99": 0.365,
+      "coverage95": 0.769,
+      "booking": 0.923,
       "reasoning": 0.944,
+      "agentClean": true
+    },
+    "gpt-5-6-luna": {
+      "verdict": "tillstyrks",
+      "coverage99": 0.538,
+      "coverage95": 0.538,
+      "booking": 0.923,
+      "reasoning": 0.861,
       "agentClean": true
     },
     "grok-4-6": {
       "verdict": "tillstyrks_med_reservation",
-      "coverage99": 0.491,
-      "coverage95": 0.943,
-      "booking": 0.925,
+      "coverage99": 0.5,
+      "coverage95": 0.846,
+      "booking": 0.904,
       "reasoning": 0.75,
-      "agentClean": true
-    },
-    "claude-sonnet-5": {
-      "verdict": "tillstyrks",
-      "coverage99": 0.642,
-      "coverage95": 0.642,
-      "booking": 0.906,
-      "reasoning": 0.861,
       "agentClean": true
     },
     "kimi-k3": {
       "verdict": "tillstyrks_med_reservation",
-      "coverage99": 0.604,
-      "coverage95": 0.642,
-      "booking": 0.906,
+      "coverage99": 0.596,
+      "coverage95": 0.635,
+      "booking": 0.904,
       "reasoning": 0.694,
+      "agentClean": true
+    },
+    "claude-sonnet-5": {
+      "verdict": "tillstyrks",
+      "coverage99": 0.654,
+      "coverage95": 0.654,
+      "booking": 0.885,
+      "reasoning": 0.861,
       "agentClean": true
     },
     "claude-sonnet-4-6": {
       "verdict": "tillstyrks_med_reservation",
-      "coverage99": 0.057,
-      "coverage95": 0.642,
-      "booking": 0.868,
+      "coverage99": 0.058,
+      "coverage95": 0.673,
+      "booking": 0.865,
       "reasoning": 0.722,
       "agentClean": true
     },
     "glm-5-3-flash": {
       "verdict": "avstyrks",
-      "coverage99": 0.094,
-      "coverage95": 0.396,
-      "booking": 0.868,
+      "coverage99": 0.115,
+      "coverage95": 0.423,
+      "booking": 0.865,
       "reasoning": 0.444,
       "agentClean": false
     },
-    "qwen3-8-2-4t": {
-      "verdict": "tillstyrks_med_reservation",
-      "coverage99": 0.314,
-      "coverage95": 0.314,
-      "booking": 0.83,
+    "deepseek-v4-pro": {
+      "verdict": "avstyrks",
+      "coverage99": 0.115,
+      "coverage95": 0.115,
+      "booking": 0.827,
       "reasoning": 0.611,
       "agentClean": true
     },
-    "deepseek-v4-pro": {
-      "verdict": "avstyrks",
-      "coverage99": 0.113,
-      "coverage95": 0.113,
-      "booking": 0.811,
+    "qwen3-8-2-4t": {
+      "verdict": "tillstyrks_med_reservation",
+      "coverage99": 0.32,
+      "coverage95": 0.32,
+      "booking": 0.827,
       "reasoning": 0.611,
       "agentClean": true
     },
@@ -4711,7 +4687,7 @@
       "verdict": "avstyrks",
       "coverage99": 0,
       "coverage95": 0,
-      "booking": 0.585,
+      "booking": 0.577,
       "reasoning": 0.222,
       "agentClean": false
     },
@@ -4719,7 +4695,7 @@
       "verdict": "avstyrks",
       "coverage99": 0,
       "coverage95": 0,
-      "booking": 0.491,
+      "booking": 0.5,
       "reasoning": 0.361,
       "agentClean": false
     },
@@ -4727,7 +4703,7 @@
       "verdict": "avstyrks",
       "coverage99": 0,
       "coverage95": 0,
-      "booking": 0.434,
+      "booking": 0.442,
       "reasoning": 0.361,
       "agentClean": false
     }
