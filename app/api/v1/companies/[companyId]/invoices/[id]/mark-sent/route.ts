@@ -51,6 +51,7 @@ import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
 import {
   hasRequiredInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
+import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { eventBus } from '@/lib/events'
 import type { CompanySettings, EntityType, Invoice } from '@/types'
 
@@ -217,7 +218,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // decision, payable invoices need a currency-matching account.
     const { data: settings, error: settingsError } = await ctx.supabase
       .from('company_settings')
-      .select('accounting_method, defer_invoice_booking, entity_type, invoice_payment_accounts, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic')
+      .select('accounting_method, defer_invoice_booking, entity_type, invoice_payment_accounts, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, vat_registered, vat_number')
       .eq('company_id', ctx.companyId!)
       .maybeSingle()
     if (settingsError || !settings) {
@@ -236,6 +237,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
         requestId: ctx.requestId,
         details: { currency: typed.currency },
+      })
+    }
+    if (!hasRequiredSellerVatNumber(companySettings, typed)) {
+      return v1ErrorResponseFromCode('INVOICE_SEND_VAT_NUMBER_MISSING', ctx.log, {
+        requestId: ctx.requestId,
       })
     }
     const accountingMethod = companySettings.accounting_method ?? 'accrual'

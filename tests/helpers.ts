@@ -534,8 +534,11 @@ export function makeCompanySettings(
     website: null,
     pays_salaries: false,
     f_skatt: true,
+    // A coherent momsregistrerad company: registered implies a number on file
+    // (ML 17 kap. 24 §). Tests exercising the missing-number state override
+    // vat_number to null explicitly.
     vat_registered: true,
-    vat_number: null,
+    vat_number: 'SE556012579001',
     moms_period: 'quarterly',
     periodisk_sammanstallning_period: 'quarterly',
     vat_taxable_base_over_40m: false,

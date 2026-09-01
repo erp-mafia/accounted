@@ -508,6 +508,22 @@ describe('executeRecurringSchedule auto-send', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
+  it('keeps the invoice a draft when the registered company has no VAT number', async () => {
+    enqueue({ data: customer, error: null })
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings VAT gate
+    enqueue({ data: makeInsertedInvoice(), error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: makeCompleteInvoice(), error: null })
+    enqueue({ data: { ...company, vat_registered: true, vat_number: null }, error: null }) // company_settings (auto-send)
+
+    const result = await executeRecurringSchedule(client, makeSchedule(), today)
+
+    expect(result.autoSent).toBe(false)
+    expect(result.warning).toContain('Auto-utskick misslyckades')
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('does not reserve an auto-send delivery when configured recipients exceed the limit', async () => {
     enqueue({ data: customer, error: null })
     enqueue({ data: { vat_registered: true }, error: null }) // company_settings VAT gate

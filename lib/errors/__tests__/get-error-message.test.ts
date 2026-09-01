@@ -285,7 +285,7 @@ describe('getErrorMessage: payment-file route messages surface (issue #945)', ()
 
   it('surfaces a "... krävs ..." message instead of the generic 400', () => {
     const msg = getErrorMessage(
-      { error: 'Momsregistreringsnummer krävs när företaget är momsregistrerat (ML 11 kap. 8§)' },
+      { error: 'Momsregistreringsnummer krävs när företaget är momsregistrerat (ML 17 kap. 24 §)' },
       { context: 'settings', statusCode: 400 },
     )
     expect(msg).toContain('krävs')

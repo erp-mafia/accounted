@@ -41,6 +41,7 @@ import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
+import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
@@ -195,6 +196,10 @@ export const POST = withRouteContext(
         requestId,
         details: { currency: invoiceCurrency },
       })
+    }
+
+    if (!hasRequiredSellerVatNumber(company as CompanySettings, invoice as Invoice)) {
+      return errorResponseFromCode('INVOICE_SEND_VAT_NUMBER_MISSING', opLog, { requestId })
     }
 
     const hasAdditionalRecipients =
