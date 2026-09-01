@@ -848,6 +848,23 @@ export const enableBankingExtension: Extension = {
           }
 
           const syncedAt = new Date().toISOString()
+          // Mirror refreshed balances into cash_accounts: the Bank-page source
+          // picker and the reconciliation status read that table, and without
+          // this the balance there froze at connect time.
+          {
+            const { updateBalancesFromSync } = await import('@/lib/cash-accounts/service')
+            await updateBalancesFromSync(
+              supabase,
+              companyId,
+              connection.id,
+              allAccounts.map((a) => ({
+                external_uid: a.uid,
+                balance: a.balance,
+                available_balance: a.available_balance,
+                balance_updated_at: a.balance_updated_at,
+              })),
+            )
+          }
           await supabase
             .from('bank_connections')
             .update({
@@ -1376,6 +1393,7 @@ export const enableBankingExtension: Extension = {
                 iban: a.iban ?? null,
                 name: a.name ?? null,
                 balance: a.balance ?? null,
+                available_balance: a.available_balance ?? null,
                 balance_updated_at: a.balance_updated_at ?? null,
                 enabled: a.enabled ?? true,
                 reuse_cash_account_id: reuseCashAccountId,
@@ -1596,6 +1614,30 @@ export const enableBankingExtension: Extension = {
                   // Non-critical: rows stay unmatched for manual review.
                 }
               }
+            }
+
+            // Mirror the balances the backfill just fetched into cash_accounts.
+            // accounts_data is deliberately NOT re-written here (see below), so
+            // without this the balances fetched during the initial sync would
+            // reach neither store until the next scheduled sync.
+            try {
+              const { updateBalancesFromSync } = await import('@/lib/cash-accounts/service')
+              await updateBalancesFromSync(
+                supabase,
+                companyId,
+                connection.id,
+                updatedAccounts.map((a) => ({
+                  external_uid: a.uid,
+                  balance: a.balance,
+                  available_balance: a.available_balance,
+                  balance_updated_at: a.balance_updated_at,
+                })),
+              )
+            } catch (mirrorErr) {
+              log.error('[enable-banking] Balance mirror after initial backfill failed', {
+                connectionId: connection.id,
+                error: mirrorErr instanceof Error ? mirrorErr.message : String(mirrorErr),
+              })
             }
 
             const completedAt = new Date().toISOString()

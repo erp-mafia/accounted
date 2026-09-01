@@ -6,6 +6,9 @@ export interface StoredAccount {
   name?: string
   currency: string
   balance?: number
+  // Bank-reported available balance from the same BALANCES response as
+  // `balance` (booked). Absent when the ASPSP returns no available type.
+  available_balance?: number
   balance_updated_at?: string
   // When false, the account is part of the PSD2 consent but the user has
   // chosen not to sync transactions from it. Treated as true if missing
