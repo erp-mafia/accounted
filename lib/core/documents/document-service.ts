@@ -834,6 +834,17 @@ export async function uploadDocument(
 
   if (error) {
     if (reservedDocumentId && error.code === '23505') {
+      // The column list mirrors the DocumentAttachment interface one for one,
+      // so the row this returns is the stored row and nothing else.
+      // last_integrity_check_at stays in it even though it is now legacy
+      // (migration 20260901130000 moved the verification stamp to
+      // document_integrity_checks, and nothing writes this column any more):
+      // this branch re-reads a row a concurrent request inserted seconds ago,
+      // where the column is NULL by construction, and no caller interprets the
+      // value. Dropping it would leave the returned object short of a key the
+      // type declares; joining the new ledger for it would fetch a check that
+      // cannot exist yet. Whoever wants "when was this document last verified"
+      // reads document_integrity_checks, never this field.
       const { data: concurrent, error: concurrentError } = await supabase
         .from('document_attachments')
         .select('id, user_id, company_id, storage_path, file_name, file_size_bytes, mime_type, sha256_hash, version, original_id, superseded_by_id, is_current_version, uploaded_by, upload_source, digitization_date, journal_entry_id, journal_entry_line_id, prev_version_hash, last_integrity_check_at, created_at, updated_at')
