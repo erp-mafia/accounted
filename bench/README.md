@@ -239,15 +239,37 @@ MIT) shown for identification only.
 
 **v1.0 (2026-08-31).** First full campaign: 4 suites, 4 models on Bedrock EU.
 
+## What the cost axis is, and is not
+
+Cost is measured tokens at vendor list price. In the neutral scaffold every
+booking task ships the entire 1 290-account BAS chart as context (18 000 to
+27 000 input tokens), so input dominates and the cost ranking is close to the
+input-price ranking. That is the price of running *this benchmark*, not the
+price of booking in production, where retrieval puts ~20 candidate accounts
+in front of the model and caching applies. The comparison across models is
+sound; the absolute number is not a production forecast. `Per correct`
+divides cost by the strict pass rate, since a model that fails cheaply is
+not cheap: GPT-5.6 Luna books a correct entry for $0.006, Opus 5 for $0.194,
+a 33x spread that the raw cost-per-task column understates.
+
 ## External cross-check (published numbers, not measured by us)
 
 DualEntry's 2026 Accounting AI Benchmark is the nearest comparable public
-board and the page reports the agreement directly. On the shared models,
-Spearman rank agreement with our booking suite is **rho = +0.24** (95% CI
-roughly [-0.46, +0.75] at n=10 shared models: not distinguishable from
-zero). Their strict-vs-lenient hypothesis was tested and rejected: our
-strict scores sit nearer their numeric range (57.8% vs 71.1%, against 83.6%
-lenient) but agree no better (rho = +0.18).
+board and the page reports the agreement directly. **At the frontier the two boards converge to within about two points.**
+Scored strictly, Claude Opus 5 differs from DualEntry's figure by -0.6 pp,
+Gemini 3.1 Pro by -1.5 and GPT-5.6 Luna by -2.1: two benchmarks built
+independently, in different jurisdictions, from different task types,
+agreeing on the top of the field to inside a rounding error. That is the
+strongest external validity evidence this benchmark has.
+
+**Below the frontier Ledger-Bench is markedly harder**: Haiku 4.5 -36.3 pp,
+GPT-OSS-120B -28.7, DeepSeek V4 Pro -25.4. The plausible reading is
+jurisdiction transfer: naming one BAS account out of 1 290 and one VAT
+treatment out of ten punishes a weak model far more than US-GAAP questions
+do, while a frontier model carries its accounting competence across the
+border. Rank agreement stays weak for that reason (Spearman rho = +0.22,
+95% CI roughly [-0.46, +0.75] at n=10: not distinguishable from zero),
+because the mid-field orders differently on each board.
 
 Do not "correct" our numbers toward theirs. Their benchmark is **101
 questions across 8 US-GAAP categories** (12-13 per category, deterministic

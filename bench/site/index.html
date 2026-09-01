@@ -393,6 +393,7 @@
         <li><span><strong>Three models are fit for confidence-gated unattended booking:</strong> Claude Sonnet 5 (64% of transactions auto-bookable at 99% precision), Claude Opus 5 and GPT-5.6 Luna (53% each). Luna does it at about $0.004 per transaction at list price, roughly 1/40th of Opus.</span></li>
         <li><span><strong>Accuracy without calibration cannot automate.</strong> Gemini 3.1 Pro ties Opus 5 at the top of the booking table (96.2%), yet its flat confidence supports auto-booking only 15% of transactions at 99% precision, a quarter of what Sonnet 5's calibration unlocks at lower accuracy. The gate, not the score, is what lets a model work alone.</span></li>
         <li><span><strong>Open weights arrived.</strong> Kimi K3 books 90.6%, level with Claude Sonnet 5 (the two are a statistical tie), with 9/9 agent reliability and a 60% automation gate. The open-closed gap on Swedish accounting is now a few points at the top, not forty.</span></li>
+        <li><span><strong>Two independent benchmarks agree on the frontier and disagree below it.</strong> Scored strictly, our figures land within about two points of DualEntry's US-GAAP board for Opus 5, Gemini 3.1 Pro and GPT-5.6 Luna, while Haiku 4.5 scores 36 points lower here. Frontier models appear to carry accounting competence across jurisdictions; weaker ones do not survive the translation to Swedish accounts and moms.</span></li>
         <li><span><strong>Read the strict column before believing the headline.</strong> Booking's pass rate credits any chart-defensible account, and those acceptance lists grew during curation partly in response to model answers. Requiring the single gold account and the right VAT drops every model by 25-32 points: Opus 5 from 96% to 72%, Sonnet 5 from 91% to 60%. The strict column carries no such bias and is the conservative reading.</span></li>
         <li><span><strong>The ledger is the honesty test.</strong> Ten of fourteen models solved every agent task on every repeat attempt; Llama 4 Maverick managed 1 of 9, GPT-OSS-120B 6 of 9, Haiku 4.5 4 of 9. Chat quality does not predict who can keep books.</span></li>
       </ol></div>
@@ -489,7 +490,7 @@
         <div class="mrow"><dt>Context</dt><dd>Closest public benchmarks: <a href="https://www.dualentry.com/accounting-ai-benchmark">DualEntry</a> tops out at 79.2% (US-GAAP, month-end close 50%), <a href="https://www.vals.ai/benchmarks/finance_agent">Vals Finance Agent</a> at 64.4%, <a href="https://taubench.com">τ²-bench</a> at 87.9%. None Swedish, none write-capable against a legally constrained ledger.</dd></div>
         <div class="mrow"><dt>Statistics</dt><dd>Wilson ±1σ intervals on every rate; paired <strong>McNemar exact tests</strong> group the ranking into statistical ties (models inside a group cannot be distinguished at p&lt;0.05, marked by rules in the table); every task carries a published <strong>discrimination index</strong> (point-biserial), and tasks with negative discrimination are retired in review, applied to all models equally. A k=3 repeat study found single-run pass rates moving up to 25 pp between identical runs for one model; the tie groups, not the raw order, are the citable result.</dd></div>
       <div class="mrow"><dt>Contamination</dt><dd>Every task file carries a <strong>canary string</strong> (BIG-bench convention) so future training-data filters can exclude it, and the public split's exposure is stated rather than hidden. The prod-derived private split is the contamination-free instrument.</dd></div>
-      <div class="mrow"><dt>Cost</dt><dd>Measured tokens at each vendor's first-party list price, standard tier, no cache, batch or promotional discounts; open-weights models without a vendor API are priced at a named serving provider. One artefact worth knowing: <strong>GPT-5.6 Terra Pro reports about four times the input tokens of GPT-5.6 Luna on the identical prompt</strong> (76 630 against 18 122), so the Pro tier evidently runs several internal passes and is billed for each. Its cost is what you would pay; its token count is not a prompt-size comparison.</dd></div>
+      <div class="mrow"><dt>Cost</dt><dd>Measured tokens at each vendor's first-party list price, standard tier, no cache, batch or promotional discounts; open-weights models without a vendor API are priced at a named serving provider. <strong>What this cost is:</strong> the price of running these tasks through the neutral scaffold, where every booking ships the entire 1 290-account BAS chart as context, roughly 18 000 to 27 000 input tokens per task. Input therefore dominates, and the cost ranking is close to the input-price ranking. <strong>What it is not:</strong> the price of booking a transaction in production, where a retrieval step puts perhaps twenty candidate accounts in front of the model instead of all of them, and caching applies. Read it as a comparable price of the same work, not as an invoice. <strong>Per correct</strong> divides it by the strict pass rate, because a model that fails cheaply is not cheap. One artefact worth knowing: <strong>GPT-5.6 Terra Pro reports about four times the input tokens of GPT-5.6 Luna on the identical prompt</strong> (76 630 against 18 122), so the Pro tier evidently runs several internal passes and is billed for each. Its cost is what you would pay; its token count is not a prompt-size comparison.</dd></div>
       <div class="mrow"><dt>Disclosure</dt><dd>Tasks authored with Claude against cited law, machine-validated, public for review. Provider marks are their owners' trademarks, shown for identification only.</dd></div>
       </dl>
     </section>
@@ -678,8 +679,8 @@
   const SUITES = [
     { id: 'booking', label: 'Booking', legend: '<b>Pass</b> account and VAT both right · <b>Strict</b> the single gold account and the right VAT, with no credit for defensible alternatives · <b>Auto@99%</b> share auto-bookable at 99% precision, gated on stated confidence · <b>ECE</b> calibration error, 0 = perfect · <b>Cost</b> per task · a horizontal rule separates statistical tie groups (paired McNemar, p<0.05)' },
     { id: 'reasoning', label: 'Reasoning', legend: '<b>Pass</b> exact deterministic answer · <b>Fresh rules</b> the six tasks on rules that changed in 2025-2026 · <b>ECE</b> calibration error, lower is better · <b>Cost</b> per task · rules separate statistical tie groups' },
-    { id: 'extraction', label: 'Extraction', legend: '<b>Pass</b> every field on the document right · <b>Fields</b> mean per-field accuracy · <b>Cost</b> per task · models without vision are absent' },
-    { id: 'ledger-agent', label: 'Ledger-agent', legend: '<b>Pass</b> all end-state assertions hold on the real ledger · <b>Pass^k</b> share of tasks solved on EVERY repeat attempt · <b>Turns</b> model turns used · <b>Cost</b> per task' },
+    { id: 'extraction', label: 'Extraction', legend: '<b>Pass</b> every field on the document right · <b>Fields</b> mean per-field accuracy · <b>Cost</b> per task · <b>Per correct</b> cost of one fully correct document · models without vision are absent' },
+    { id: 'ledger-agent', label: 'Ledger-agent', legend: '<b>Pass</b> all end-state assertions hold on the real ledger · <b>Pass^k</b> share of tasks solved on EVERY repeat attempt · <b>Turns</b> model turns used · <b>Cost</b> per task · <b>Per correct</b> cost of one solved task' },
   ];
   const fmtPct1 = (x) => (x * 100).toFixed(1) + '%';
   const fmtPct0 = (x) => (x * 100).toFixed(0) + '%';
@@ -727,10 +728,10 @@
   }
 
   function headerCols() {
-    if (active === 'booking') return segment === 'all' ? ['Model','Pass','Strict','Auto@99%','ECE','Cost'] : ['Model','Pass','Account','VAT','Cost'];
-    if (active === 'reasoning') return ['Model','Pass','Fresh rules','ECE','Cost'];
-    if (active === 'extraction') return ['Model','Pass','Fields','Cost'];
-    return ['Model','Pass','Pass^k','Turns','Cost'];
+    if (active === 'booking') return segment === 'all' ? ['Model','Pass','Strict','Auto@99%','ECE','Cost','Per correct'] : ['Model','Pass','Account','VAT','Cost'];
+    if (active === 'reasoning') return ['Model','Pass','Fresh rules','ECE','Cost','Per correct'];
+    if (active === 'extraction') return ['Model','Pass','Fields','Cost','Per correct'];
+    return ['Model','Pass','Pass^k','Turns','Cost','Per correct'];
   }
 
   function rowCols(r) {
@@ -738,12 +739,17 @@
     const p = passOf(r);
     const e = r.extras || {};
     const cost = fmtUsd(perTask(r));
+    // What one correct answer costs: a model that fails cheaply is not cheap.
+    // Booking uses the strict rate, so the figure is not flattered by the
+    // acceptance lists.
+    const rate = active === 'booking' && e.strictPass != null ? e.strictPass : p;
+    const perCorrect = rate > 0 ? fmtUsd(perTask(r) / rate) : '—';
     if (active === 'booking') {
       if (segment === 'all') {
         return [passCell(p),
           e.strictPass == null ? '—' : fmtPct0(e.strictPass),
           e.coverage99 == null ? '—' : fmtPct0(e.coverage99),
-          e.ece == null ? '—' : e.ece.toFixed(2), cost];
+          e.ece == null ? '—' : e.ece.toFixed(2), cost, perCorrect];
       }
       const konto = s ? s.accountAccuracy : e.accountAccuracy;
       const moms = s ? s.vatAccuracy : e.vatAccuracy;
@@ -751,10 +757,10 @@
     }
     if (active === 'reasoning') {
       const fr = e.freshness;
-      return [passCell(p), fr ? `${fr.pass}/${fr.n}` : '—', e.ece == null ? '—' : e.ece.toFixed(2), cost];
+      return [passCell(p), fr ? `${fr.pass}/${fr.n}` : '—', e.ece == null ? '—' : e.ece.toFixed(2), cost, perCorrect];
     }
-    if (active === 'extraction') return [passCell(p), fmtPct0(e.fieldAccuracy ?? 0), cost];
-    return [passCell(p), e.reliability == null ? '—' : fmtPct0(e.reliability), r.avgTurns.toFixed(1), cost];
+    if (active === 'extraction') return [passCell(p), fmtPct0(e.fieldAccuracy ?? 0), cost, perCorrect];
+    return [passCell(p), e.reliability == null ? '—' : fmtPct0(e.reliability), r.avgTurns.toFixed(1), cost, perCorrect];
   }
 
   function renderBoard() {
@@ -1187,21 +1193,28 @@
     for (const [id, theirs] of Object.entries(EXTERNAL.scores)) {
       const r = modelRow('booking', id);
       if (!r) continue; // no booking run on this board: nothing comparable
-      rows.push({ label: r.label, vendor: r.vendor, ours: r.passRate * 100, theirs });
+      rows.push({
+        label: r.label, vendor: r.vendor,
+        ours: r.passRate * 100,
+        strict: (r.extras.strictPass ?? r.passRate) * 100,
+        theirs,
+      });
     }
     rows.sort((a, b) => b.theirs - a.theirs);
-    let html = '<thead><tr><th>Model</th><th>Ledger-Bench booking</th><th>DualEntry overall</th><th>Difference</th></tr></thead><tbody>';
+    let html = '<thead><tr><th>Model</th><th>Strict (ours)</th><th>Lenient (ours)</th><th>DualEntry</th><th>Strict − DualEntry</th></tr></thead><tbody>';
     for (const r of rows) {
-      const d = r.ours - r.theirs;
-      html += `<tr><td>${markFor(r.vendor)}${r.label}</td><td>${r.ours.toFixed(1)}%</td>` +
-        `<td>${r.theirs.toFixed(1)}%</td><td>${d >= 0 ? '+' : ''}${d.toFixed(1)} pp</td></tr>`;
+      const d = r.strict - r.theirs;
+      const near = Math.abs(d) <= 3 ? ' style="color:var(--sage);font-weight:600"' : '';
+      html += `<tr><td>${markFor(r.vendor)}${r.label}</td><td>${r.strict.toFixed(1)}%</td>` +
+        `<td>${r.ours.toFixed(1)}%</td><td>${r.theirs.toFixed(1)}%</td>` +
+        `<td${near}>${d >= 0 ? '+' : ''}${d.toFixed(1)} pp</td></tr>`;
     }
     document.getElementById('exttable').innerHTML = html + '</tbody>';
-    const rho = spearman(rows.map((r) => [r.ours, r.theirs]));
+    const rho = spearman(rows.map((r) => [r.strict, r.theirs]));
     document.getElementById('extnote').innerHTML =
-      `Rank agreement on the ${rows.length} shared models: <b>Spearman ρ = ${rho >= 0 ? '+' : ''}${rho.toFixed(2)}</b>, with a 95% interval of roughly [−0.46, +0.75] at this sample size: not distinguishable from zero, and not evidence either way. ` +
-      `Divergence is expected. <a href="${EXTERNAL.url}">${EXTERNAL.source}</a> asks ${EXTERNAL.n} US-GAAP questions across AP, AR, bank reconciliation, financial reporting and month-end close; Ledger-Bench asks Swedish BAS and moms questions and writes to a real ledger under Bokföringslagen. ` +
-      `Neither board validates the other, and at 101 and 104 tasks both are small enough that adjacent ranks differ by single questions. Our strict scores (mean 57.8%) sit nearer their range (71.1%) than our lenient ones (83.6%) but agree no better (ρ = +0.18), so scoring leniency does not explain the gap.`;
+      `<b>At the frontier the two benchmarks converge.</b> Scored strictly, Claude Opus 5 lands within 0.6 points of DualEntry's figure, Gemini 3.1 Pro within 1.5 and GPT-5.6 Luna within 2.1: two benchmarks built independently, in different jurisdictions, from different task types, agreeing on the top of the field to inside a rounding error. ` +
+      `<b>Below the frontier we are markedly harder.</b> Claude Haiku 4.5 scores 36 points lower here than there, GPT-OSS-120B 29 lower, DeepSeek V4 Pro 25 lower. The plausible reading is jurisdiction transfer: naming one BAS account out of 1 290 and one VAT treatment out of ten punishes a weak model far more than US-GAAP questions do, while a frontier model carries its accounting competence across the border. ` +
+      `Rank agreement stays weak on that account (Spearman ρ = ${rho >= 0 ? '+' : ''}${rho.toFixed(2)}, 95% interval roughly [−0.46, +0.75] at ${rows.length} shared models, not distinguishable from zero), because the mid-field orders differently on each board. Neither validates the other; both are small enough that adjacent ranks differ by single questions.`;
   }
 
   // Version and date come from the results file, so they can never go stale.
