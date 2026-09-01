@@ -159,16 +159,43 @@ export async function POST(
     { table: 'stripe_connections', clear: { oauth_state: null } },
   ]
   for (const { table, clear } of connectionTables) {
-    const { error: revokeError } = await service
+    // .neq('revoked') rather than pending/active: 'error'-state rows also
+    // carry credentials and are just as unreachable after the archive.
+    const { data: revoked, error: revokeError } = await service
       .from(table)
       .update({ status: 'revoked', disconnected_at: archivedAt, ...clear })
       .eq('company_id', companyId)
-      .in('status', ['pending', 'active'])
+      .neq('status', 'revoked')
+      .select('id')
     if (revokeError) {
       log.error('Failed to revoke store connections on company archive', {
         companyId,
         table,
         error: revokeError.message,
+      })
+      continue
+    }
+    if (!revoked || revoked.length === 0) continue
+    // Credential revocation is a compliance-critical mutation: audit it like
+    // the archive itself (the tables have no auto-audit trigger). Non-fatal,
+    // same doctrine as the archive's own audit write below.
+    const { error: revokeAuditError } = await service.from('audit_log').insert(
+      revoked.map((row) => ({
+        user_id: user.id,
+        company_id: companyId,
+        action: 'UPDATE',
+        table_name: table,
+        record_id: row.id,
+        actor_id: user.id,
+        new_state: { status: 'revoked', disconnected_at: archivedAt },
+        description: `Store connection revoked on company archive: ${company.name}`,
+      })),
+    )
+    if (revokeAuditError) {
+      log.error('Failed to write audit_log rows for connection revocation', {
+        companyId,
+        table,
+        error: revokeAuditError.message,
       })
     }
   }
