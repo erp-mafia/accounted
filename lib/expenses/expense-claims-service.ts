@@ -26,6 +26,7 @@ import { createJournalEntry, findFiscalPeriod, reverseEntry } from '@/lib/bookke
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { roundOre, sumOre } from '@/lib/money'
+import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('expenses/claims')
@@ -140,7 +141,7 @@ export async function registerExpenseClaim(
     for (const line of lines) {
       const debit = line.debit_amount || 0
       const credit = line.credit_amount || 0
-      if (!/^[0-9]{4}$/.test(line.account_number)) {
+      if (!ACCOUNT_NUMBER_RE.test(line.account_number)) {
         return { ok: false, code: 'INVALID_LINES', detail: `account ${line.account_number}` }
       }
       if (debit < 0 || credit < 0 || (debit > 0) === (credit > 0)) {

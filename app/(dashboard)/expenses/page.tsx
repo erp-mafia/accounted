@@ -31,16 +31,18 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import InboxDocumentPicker, { type AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
-import { fetchBookingTemplates, type BookingTemplateWithUsage } from '@/lib/reference-data/fetchers'
+import { useAccounts, useBookingTemplates } from '@/lib/reference-data/hooks'
+import type { BookingTemplateWithUsage } from '@/lib/reference-data/fetchers'
 import { TemplateForm } from '@/components/settings/TemplateForm'
 import { applyTemplate, deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
-import { findMatchingTemplates } from '@/lib/bookkeeping/booking-templates'
+import { BOOKING_TEMPLATES, findMatchingTemplates } from '@/lib/bookkeeping/booking-templates'
 import { roundOre, sumOre } from '@/lib/money'
+import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import type { BASAccount, BookingTemplateLibrary } from '@/types'
+import type { BookingTemplateLibrary } from '@/types'
 
 interface ExpenseClaim {
   id: string
@@ -127,7 +129,7 @@ export default function ExpenseClaimsPage() {
 
   const [claims, setClaims] = useState<ExpenseClaim[]>([])
   const [employees, setEmployees] = useState<EmployeeOption[]>([])
-  const [accounts, setAccounts] = useState<BASAccount[]>([])
+  const { accounts } = useAccounts()
   const [inboxOptions, setInboxOptions] = useState<InboxOption[]>([])
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState<'all' | 'registered' | 'paid'>('all')
@@ -151,7 +153,7 @@ export default function ExpenseClaimsPage() {
   // template owns them, OR a manual edit freezes them into `bookingRows`.
   const [sellerCountry, setSellerCountry] = useState<SellerCountry>('se')
   const [bookingMode, setBookingMode] = useState<'choose' | 'book'>('choose')
-  const [templates, setTemplates] = useState<BookingTemplateWithUsage[]>([])
+  const { templates } = useBookingTemplates()
   const [templateSearch, setTemplateSearch] = useState('')
   const [appliedTemplate, setAppliedTemplate] = useState<{ name: string; description: string } | null>(null)
   const [bookingRows, setBookingRows] = useState<BookingRow[] | null>(null)
@@ -222,10 +224,6 @@ export default function ExpenseClaimsPage() {
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => setEmployees(json?.data ?? []))
       .catch(() => setEmployees([]))
-    fetch('/api/bookkeeping/accounts')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => setAccounts(json?.data ?? []))
-      .catch(() => setAccounts([]))
   }, [load, loadInbox])
 
   const cashAccounts = useMemo(
@@ -318,89 +316,168 @@ export default function ExpenseClaimsPage() {
   const bookingRowsValid = editorRows.every((r) => {
     const d = parseFloat(r.debit) || 0
     const c = parseFloat(r.credit) || 0
-    return /^[0-9]{4}$/.test(r.account) && (d > 0) !== (c > 0)
+    return ACCOUNT_NUMBER_RE.test(r.account) && (d > 0) !== (c > 0)
   })
 
-  useEffect(() => {
-    if (!creating || templates.length > 0) return
-    fetchBookingTemplates()
-      .then((rows) => setTemplates(rows))
-      .catch(() => {})
-  }, [creating, templates.length])
-
   const EXCLUDED_TEMPLATE_CATEGORIES = ['salary', 'year_end', 'vat', 'tax_account', 'private_transfer']
-  /** Expense-shaped: every business line is a debit (no income templates),
-   *  and no 45xx business line: those are the country-variant purchase
-   *  templates the Säljarens land selector replaces. */
-  const isExpenseTemplate = (tpl: BookingTemplateWithUsage) => {
+  /** Expense-shaped library template: every business line is a debit and no
+   *  2614/2645 legs: the country selector owns the reverse-charge variant. */
+  const isExpenseLibraryTemplate = (tpl: BookingTemplateWithUsage) => {
     const business = tpl.lines.filter((l) => l.type === 'business')
     if (business.length === 0) return false
     if (!business.every((l) => l.side === 'debit')) return false
-    if (business.some((l) => /^45/.test(l.account))) return false
+    if (tpl.lines.some((l) => l.account === '2614' || l.account === '2645')) return false
     return true
   }
-  const templateSections = useMemo(() => {
-    const q = templateSearch.trim().toLocaleLowerCase('sv-SE')
-    const pool = templates
+  interface ChooserItem {
+    id: string
+    name: string
+    description: string
+    lastUsedAt: string | null
+    library?: BookingTemplateWithUsage
+    staticAccount?: string
+  }
+  const chooserPool = useMemo<ChooserItem[]>(() => {
+    const libraryItems: ChooserItem[] = templates
       .filter((tpl) => tpl.is_active && !tpl.is_hidden)
       .filter((tpl) => !EXCLUDED_TEMPLATE_CATEGORIES.includes(tpl.category))
-      .filter(isExpenseTemplate)
-      .filter(
-        (tpl) =>
-          !q ||
-          tpl.name.toLocaleLowerCase('sv-SE').includes(q) ||
-          (tpl.description ?? '').toLocaleLowerCase('sv-SE').includes(q),
-      )
-    if (q) return { recommended: [], recent: [], all: pool.slice(0, 30) }
-    // Recommendations ride the transaction-categorization matcher (keyword +
-    // direction scoring) against the step-1 description, mapped back onto the
-    // library by Swedish name.
-    const matches = description.trim()
-      ? findMatchingTemplates(
-          {
-            description,
-            merchant_name: null,
-            amount: -(parsedAmount || 1),
-            mcc_code: null,
-          } as never,
-        )
-      : []
-    const byName = new Map(pool.map((tpl) => [tpl.name, tpl]))
-    const recommended = matches
-      .map((m) => byName.get(m.template.name_sv))
-      .filter((tpl): tpl is BookingTemplateWithUsage => Boolean(tpl))
-      .slice(0, 3)
-    const taken = new Set(recommended.map((tpl) => tpl.id))
-    const recent = pool
-      .filter((tpl) => tpl.last_used_at && !taken.has(tpl.id))
-      .sort((a, b) => (b.last_used_at ?? '').localeCompare(a.last_used_at ?? ''))
-      .slice(0, 3)
-    for (const tpl of recent) taken.add(tpl.id)
-    const all = pool.filter((tpl) => !taken.has(tpl.id)).slice(0, 30)
-    return { recommended, recent, all }
+      .filter(isExpenseLibraryTemplate)
+      .map((tpl) => ({
+        id: tpl.id,
+        name: tpl.name,
+        description: tpl.description ?? '',
+        lastUsedAt: tpl.last_used_at,
+        library: tpl,
+      }))
+    const libraryNames = new Set(libraryItems.map((item) => item.name))
+    // The static categorization catalog carries the everyday cost templates
+    // the seeded library lacks (Programvara/SaaS, IT-tjänster, ...): expose
+    // them as account-picking templates. Reverse-charge variants stay out:
+    // Säljarens land owns that axis.
+    const staticItems: ChooserItem[] = BOOKING_TEMPLATES.filter(
+      (tpl) =>
+        tpl.direction === 'expense' &&
+        tpl.vat_treatment !== 'reverse_charge' &&
+        !libraryNames.has(tpl.name_sv),
+    ).map((tpl) => ({
+      id: `static:${tpl.id}`,
+      name: tpl.name_sv,
+      description: tpl.description_sv,
+      lastUsedAt: null,
+      staticAccount: tpl.debit_account_ab ?? tpl.debit_account,
+    }))
+    return [...libraryItems, ...staticItems]
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [templates, templateSearch, description, parsedAmount])
+  }, [templates])
+
+  // Recommendations ride the categorization matcher against the step-1
+  // description; static hits map by id, library hits by Swedish name.
+  const localRecommendedIds = useMemo(() => {
+    if (!description.trim()) return [] as string[]
+    const byId = new Map(chooserPool.map((item) => [item.id, item]))
+    const byName = new Map(chooserPool.map((item) => [item.name, item]))
+    return findMatchingTemplates(
+      {
+        description,
+        merchant_name: null,
+        amount: -(parsedAmount || 1),
+        mcc_code: null,
+      } as never,
+    )
+      .map((m) => (byId.get(`static:${m.template.id}`) ?? byName.get(m.template.name_sv))?.id)
+      .filter((id): id is string => Boolean(id))
+      .slice(0, 3)
+  }, [chooserPool, description, parsedAmount])
+
+  // AI fallback: only when the chooser is open and the keyword matcher drew a
+  // blank (unknown merchants like "Supabase Pte. Ltd."). Debounced; an empty
+  // answer is a valid answer, and a stale response for an edited description
+  // is dropped.
+  const [aiSuggestedIds, setAiSuggestedIds] = useState<string[]>([])
+  const aiRequestKey = useRef<string | null>(null)
+  useEffect(() => {
+    const desc = description.trim()
+    const chooserVisible = creating && step === 2 && bookingMode === 'choose'
+    if (!chooserVisible || desc.length < 2 || localRecommendedIds.length > 0 || chooserPool.length === 0) return
+    const key = desc.toLocaleLowerCase('sv-SE')
+    if (aiRequestKey.current === key) return
+    const timer = setTimeout(() => {
+      aiRequestKey.current = key
+      fetch('/api/expense-claims/suggest-template', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          description: desc,
+          amount: parsedAmount || undefined,
+          candidates: chooserPool.slice(0, 80).map((item) => ({
+            id: item.id,
+            name: item.name,
+            hint: item.description ? item.description.slice(0, 240) : undefined,
+          })),
+        }),
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((json) => {
+          if (aiRequestKey.current !== key) return
+          setAiSuggestedIds(json?.data?.template_ids ?? [])
+        })
+        .catch(() => {})
+    }, 600)
+    return () => clearTimeout(timer)
+  }, [creating, step, bookingMode, description, parsedAmount, localRecommendedIds, chooserPool])
+
+  const templateSections = useMemo(() => {
+    const q = templateSearch.trim().toLocaleLowerCase('sv-SE')
+    const pool = chooserPool.filter(
+      (item) =>
+        !q ||
+        item.name.toLocaleLowerCase('sv-SE').includes(q) ||
+        item.description.toLocaleLowerCase('sv-SE').includes(q),
+    )
+    if (q) return { recommended: [], recent: [], all: pool.slice(0, 30) }
+    const byId = new Map(pool.map((item) => [item.id, item]))
+    // The keyword matcher wins; the AI route only fills in when it drew blank.
+    const sourceIds = localRecommendedIds.length > 0 ? localRecommendedIds : aiSuggestedIds
+    const recommended = sourceIds
+      .map((id) => byId.get(id))
+      .filter((item): item is ChooserItem => Boolean(item))
+      .slice(0, 3)
+    const taken = new Set(recommended.map((item) => item.id))
+    const recent = pool
+      .filter((item) => item.lastUsedAt && !taken.has(item.id))
+      .sort((a, b) => (b.lastUsedAt ?? '').localeCompare(a.lastUsedAt ?? ''))
+      .slice(0, 3)
+    for (const item of recent) taken.add(item.id)
+    const all = pool.filter((item) => !taken.has(item.id)).slice(0, 30)
+    return { recommended, recent, all }
+  }, [chooserPool, templateSearch, localRecommendedIds, aiSuggestedIds])
 
   /** Bokio's semantic: the template picks the account/type, the country picks
-   *  the VAT variant. Single-cost templates map onto the generator; multi-line
-   *  templates apply their rows verbatim and own the verifikat. */
-  const chooseTemplate = (tpl: BookingTemplateWithUsage) => {
-    const businessDebits = tpl.lines.filter((l) => l.type === 'business' && l.side === 'debit')
-    setAppliedTemplate({ name: tpl.name, description: tpl.description ?? '' })
-    if (businessDebits.length === 1) {
-      setExpenseAccount(businessDebits[0].account)
+   *  the VAT variant. Static and single-cost library templates map onto the
+   *  generator; multi-line library templates apply their rows verbatim. */
+  const chooseTemplate = (item: ChooserItem) => {
+    setAppliedTemplate({ name: item.name, description: item.description })
+    if (item.staticAccount) {
+      setExpenseAccount(item.staticAccount)
       setBookingRows(null)
-    } else {
-      setBookingRows(
-        applyTemplate(tpl.lines, parsedAmount)
-          .filter((l) => !/^(15|19|24)/.test(l.account_number) && l.account_number !== liabilityAccount)
-          .map((l) => ({
-            key: nextRowKey(),
-            account: l.account_number,
-            debit: l.debit_amount || '',
-            credit: l.credit_amount || '',
-          })),
-      )
+    } else if (item.library) {
+      const tpl = item.library
+      const businessDebits = tpl.lines.filter((l) => l.type === 'business' && l.side === 'debit')
+      if (businessDebits.length === 1) {
+        setExpenseAccount(businessDebits[0].account)
+        setBookingRows(null)
+      } else {
+        setBookingRows(
+          applyTemplate(tpl.lines, parsedAmount)
+            .filter((l) => !/^(15|19|24)/.test(l.account_number) && l.account_number !== liabilityAccount)
+            .map((l) => ({
+              key: nextRowKey(),
+              account: l.account_number,
+              debit: l.debit_amount || '',
+              credit: l.credit_amount || '',
+            })),
+        )
+      }
     }
     setBookingMode('book')
   }
@@ -957,7 +1034,7 @@ export default function ExpenseClaimsPage() {
                         setDragOver(false)
                         onFileChosen(e.dataTransfer.files)
                       }}
-                      className={`flex w-full items-center justify-center gap-2 rounded-md border border-dashed px-4 py-6 text-sm text-muted-foreground transition-colors duration-150 hover:border-foreground/40 hover:text-foreground ${
+                      className={`flex w-full items-center justify-center gap-2 rounded-lg border border-dashed px-4 py-6 text-sm text-muted-foreground transition-colors duration-150 hover:border-foreground/40 hover:text-foreground ${
                         dragOver ? 'border-foreground/60 text-foreground' : 'border-border'
                       }`}
                     >
@@ -980,7 +1057,7 @@ export default function ExpenseClaimsPage() {
                     )}
                   </>
                 ) : (
-                  <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+                  <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
                     {upload.phase === 'done' ? (
                       <Sparkles className="h-4 w-4 shrink-0" />
                     ) : (
@@ -1153,7 +1230,7 @@ export default function ExpenseClaimsPage() {
                   />
                   <button
                     type="button"
-                    className="flex w-full items-center gap-3 rounded-md border border-border px-3 py-2.5 text-left transition-colors hover:bg-secondary/35"
+                    className="flex w-full items-center gap-3 rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:bg-secondary/35"
                     onClick={chooseManual}
                   >
                     <NotebookPen className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -1180,7 +1257,7 @@ export default function ExpenseClaimsPage() {
                             <button
                               key={tpl.id}
                               type="button"
-                              className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left transition-colors hover:bg-secondary/35"
+                              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-secondary/35"
                               onClick={() => chooseTemplate(tpl)}
                             >
                               <span className="flex-1">
@@ -1206,7 +1283,7 @@ export default function ExpenseClaimsPage() {
                 <div className="space-y-4">
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 rounded-md bg-secondary/40 px-3 py-2.5 text-left"
+                    className="flex w-full items-center gap-2 rounded-lg bg-secondary/40 px-3 py-2.5 text-left"
                     onClick={() => setBookingMode('choose')}
                   >
                     <ChevronLeft className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -1378,11 +1455,11 @@ export default function ExpenseClaimsPage() {
                     </td>
                     <td className={TD_CLASS}>
                       {bookingBalanced && bookingRowsValid ? (
-                        <Badge variant="outline" className="whitespace-nowrap font-normal text-positive">
+                        <Badge variant="outline" className="font-normal text-positive">
                           {t('balanced')}
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className="whitespace-nowrap font-normal text-attn">
+                        <Badge variant="outline" className="font-normal text-attn">
                           {t('unbalanced')}
                         </Badge>
                       )}
