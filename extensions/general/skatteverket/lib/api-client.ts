@@ -384,7 +384,7 @@ export async function skvRequestWithAuth(
   method: string,
   path: string,
   body?: unknown,
-  options?: { baseUrl?: string; contentType?: string }
+  options?: { baseUrl?: string; contentType?: string; accept?: string }
 ): Promise<Response> {
   if (isDisabled()) {
     throw new SkatteverketAuthError(
@@ -434,6 +434,9 @@ export async function skvRequestWithAuth(
     headers['Client_Secret'] = getApiGwClientSecret()
     headers['skv_client_correlation_id'] = crypto.randomUUID()
   }
+  // Ombudshantering lists Accept as a required header (406 otherwise); the
+  // moms/skattekonto/AGI services never needed it, so it stays opt-in.
+  if (options?.accept) headers['Accept'] = options.accept
 
   // contentType defaults to application/json, which is right for moms +
   // skattekonto. AGI's POST /underlag takes application/xml: callers pass
