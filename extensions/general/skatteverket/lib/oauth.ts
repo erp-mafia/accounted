@@ -5,6 +5,11 @@ import {
   OAUTH_TIMEOUT_MS,
   SKATTEVERKET_EXCHANGE_TIMEOUT_MS,
 } from '@/lib/http/fetch-with-timeout'
+import {
+  skatteverketConnectorMode,
+  exchangeConnectorCode,
+  refreshConnectorToken,
+} from './connector-mode'
 
 /**
  * Skatteverket OAuth2 helpers for the `per` (BankID) flow.
@@ -15,6 +20,15 @@ import {
  *
  * The `per` flow is user-facing BankID authentication.
  * No mTLS required (unlike the `org` flow).
+ *
+ * Connector mode (self-host with GNUBOK_CONNECTOR_KEY and no own SKV
+ * credentials): the token functions route through the hosted broker's
+ * /api/connect/skv/oauth/token instead; client_id/client_secret never leave
+ * the instance because the instance never has them (the broker holds Arcim's
+ * registered client). buildAuthorizeUrl stays direct-only: connector-mode
+ * authorization starts via startConnectorAuthorization (connector-mode.ts),
+ * which returns the broker-built URL plus the connector state and hosted
+ * redirect_uri the caller must persist for the exchange.
  */
 
 const DEFAULT_OAUTH_BASE_URL = 'https://peroauth2.test.skatteverket.se/oauth2/v1/per'
@@ -124,7 +138,32 @@ export async function exchangeCodeForTokens(
   code: string,
   redirectUri: string,
   codeVerifier?: string,
+  connectorState?: string,
 ): Promise<SkatteverketTokens> {
+  const connector = skatteverketConnectorMode()
+  if (connector) {
+    if (!connectorState) {
+      // A flow started before connector mode was enabled (or a state row that
+      // lost its connector_state) cannot be exchanged through the broker.
+      throw new Error(
+        'connector_state saknas: anslutningsflödet startades inte via connectorn. Starta om anslutningen.',
+      )
+    }
+    const data = await exchangeConnectorCode(connector, {
+      code,
+      redirectUri,
+      codeVerifier,
+      connectorState,
+    })
+    return {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token ?? null,
+      expires_at: Date.now() + (data.expires_in ?? 3600) * 1000,
+      refresh_count: 0,
+      scope: data.scope ?? DEFAULT_SCOPES,
+    }
+  }
+
   const base = getOAuthBaseUrl()
 
   const body = new URLSearchParams({
@@ -176,6 +215,24 @@ export async function refreshAccessToken(
   refreshToken: string,
   previousRefreshCount: number
 ): Promise<SkatteverketTokens> {
+  const connector = skatteverketConnectorMode()
+  if (connector) {
+    // Broker refresh rotates the hosted ledger's token hashes; a 404
+    // CONNECTOR_NOT_OWNED means the ledger no longer vouches for this
+    // refresh token (rotated away or revoked) and only a fresh BankID
+    // consent recovers: api-client classifies that dialect as
+    // SESSION_EXPIRED. A 502 stays a raw error (transient SKV outage must
+    // not flag the row for reconnect, the #1155 lesson).
+    const data = await refreshConnectorToken(connector, refreshToken)
+    return {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token ?? null,
+      expires_at: Date.now() + (data.expires_in ?? 3600) * 1000,
+      refresh_count: previousRefreshCount + 1,
+      scope: data.scope ?? '',
+    }
+  }
+
   const base = getOAuthBaseUrl()
 
   const body = new URLSearchParams({
