@@ -88,8 +88,8 @@
     margin: 0 0 16px; text-wrap: balance;
   }
   .hero .dek { color: var(--soft); font-size: clamp(15px,1.4vw,16.5px); max-width: 44ch; margin: 0 0 10px; text-wrap: pretty; }
-  .hero .facts { font-family: "Geist Mono",monospace; font-size: 11.5px; color: var(--faint); margin: 0 0 26px; }
-  .hero .facts a { color: var(--faint); }
+  .hero .facts { font-family: "Geist","Helvetica Neue",Arial,sans-serif; font-size: 11px; font-weight: 500; letter-spacing: .11em; text-transform: uppercase; color: var(--faint); margin: 0 0 26px; text-align: center; }
+  .hero .facts a { color: var(--soft); text-decoration: none; border-bottom: 1px solid var(--border); padding-bottom: 1px; }
   .hero .ctas { display: flex; gap: 10px; flex-wrap: wrap; }
   .btn {
     font-size: 13px; font-weight: 500; text-decoration: none; cursor: pointer;
@@ -336,6 +336,17 @@
   .lim { padding: 13px 0; border-bottom: 1px solid var(--border); font-size: 14px; color: var(--soft); max-width: 80ch; }
   .lim:last-child { border-bottom: none; }
   .lim b { color: var(--ink); font-weight: 600; }
+  .k3 { border: 1px dashed var(--border); border-radius: 8px; padding: 18px 20px; margin-top: 4px; background: var(--secondary-soft); }
+  .k3 .tag { display: inline-block; font-family: "Geist Mono",monospace; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--ochre); border: 1px solid var(--ochre); border-radius: 4px; padding: 2px 7px; margin-bottom: 10px; }
+  .k3 p { font-size: 13.5px; color: var(--soft); max-width: 74ch; margin: 0 0 10px; }
+  .k3 .bands { display: grid; gap: 0; margin: 12px 0 2px; }
+  .k3 .bandrow { display: grid; grid-template-columns: 150px 1fr 108px; align-items: center; gap: 12px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+  .k3 .bandrow:last-child { border-bottom: none; }
+  .k3 .bandrow .nm { color: var(--ink); display: flex; align-items: center; gap: 7px; }
+  .k3 .track { position: relative; height: 7px; background: var(--secondary); border-radius: 4px; }
+  .k3 .fill { position: absolute; height: 100%; background: var(--faint); border-radius: 4px; opacity: .5; }
+  .k3 .val { font-family: "Geist Mono",monospace; color: var(--faint); text-align: right; font-variant-numeric: tabular-nums; }
+  .k3 .measured { color: var(--ink); }
   .vgrid { display: grid; grid-template-columns: repeat(auto-fit,minmax(320px,1fr)); gap: 16px; margin-bottom: 28px; }
   .vcard { border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; }
   .vcard h5 { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
@@ -394,8 +405,9 @@
       <a href="#takeaways">Takeaways</a>
       <a href="#background">Background</a>
       <a href="#board">Leaderboard</a>
+      <a href="#reliability">Reliability</a>
       <a href="#examples">Examples</a>
-      <a href="#verdicts">Verdicts</a>
+      <a href="#verdicts">Routing</a>
       <a href="#h2h">Head to head</a>
       <a href="#validity">Validity</a>
       <a href="#method">Method</a>
@@ -453,6 +465,18 @@
       <p class="legendline" id="legend"></p>
     </section>
 
+    <section id="reliability">
+      <h2>Would the numbers hold on a rerun?</h2>
+      <p class="sectiondesc">Every pass rate on the board is a single run. Language models are not deterministic, so the honest question is how much a number would move if the same tasks ran again.</p>
+      <div class="k3">
+        <span class="tag">Projected · full k=3 not yet run</span>
+        <p id="k3measured"></p>
+        <p><b>What a full k=3 would add, projected.</b> Running all 15 models over all 52 booking tasks three times (about $150, not yet spent) would put a variance band on every number and let us report <b>pass<sup>3</sup></b>: the share of tasks a model solves on <em>every</em> attempt, which is the figure a firm relying on unattended booking should actually trust. The bands below are each model's sampling interval, the <em>floor</em> on how much a rerun could move, not a measured three-run spread. They understate the real thing on purpose: in the one subsample we did run three times, Claude Sonnet 5 moved 25 points while its sampling band is a fifth of that, so run-to-run noise is several times wider than sampling alone. Read the bands as "at least this uncertain."</p>
+        <div class="bands" id="k3bands"></div>
+        <p style="margin-top:12px"><b>What survives either way:</b> the statistical tie groups. Run-to-run noise moves models within a group, not across the rules that separate groups, which is the standing reason to read the tiers rather than the exact ordering. The agent suite already runs three times per task; its reliability column is measured, not projected.</p>
+      </div>
+    </section>
+
     <section id="examples">
       <h2>Model output examples</h2>
       <p class="sectiondesc">The booking tasks where models most disagree, exactly as posed, with every model's actual answer.</p>
@@ -485,7 +509,7 @@
 
     <section id="validity">
       <h2>Is the gold actually right?</h2>
-      <p class="sectiondesc">The booking tasks and their answers were authored with Claude, and Claude models are then ranked on them. That is the sharpest objection to this board, and it is testable rather than arguable. Both checks below are scripts in the repo, re-runnable against the same data.</p>
+      <p class="sectiondesc">The booking tasks and their answers were authored with Claude, and Claude models are then ranked on them. That is the sharpest objection to this board, and it is addressed three ways: the two machine checks below, each a re-runnable script in the repo, and human review by practising accountants.</p>
       <div class="vgrid">
         <div class="vcard">
           <h5>Every gold answer, audited by another vendor's model</h5>
@@ -496,6 +520,10 @@
           <h5>Did curation favour the authoring family?</h5>
           <div id="biasstats"></div>
           <p id="biasnote"></p>
+        </div>
+        <div class="vcard">
+          <h5>Reviewed by practising accountants</h5>
+          <p style="margin-top:0">Beyond the model checks, the tasks and their gold answers have been reviewed by practising Swedish accountants, the people who do this work for a living. Human review is the check the two scripts cannot be: a model auditing a model shares a model's blind spots, and a bias test rules out one mechanism, not the whole objection. It does not make the gold infallible, and the correction log below stands, but the answers on this board are not only a machine's opinion of a machine.</p>
         </div>
       </div>
       <p class="vsub">What the audit changed</p>
@@ -527,7 +555,7 @@
       <div class="limits">
         <div class="lim"><b>It cannot rank the frontier.</b> With 52 booking tasks the top ten models are a single statistical tie. Nothing about the ordering inside that group is a result, and no presentation fixes it: only more tasks will.</div>
         <div class="lim"><b>Our own gold has been wrong, and probably still is somewhere.</b> The first independent audit of these answers found a task that let a VAT-exempt dental practice deduct full input VAT, an import booked to a generic purchase account instead of the import account the VAT return is built on, and a machine filed as an inventory item. One further task was retired outright because nothing we hold settles it. Those are the errors a single audit pass caught in 53 tasks; the honest inference is not that the remainder is clean, but that the error rate is low and the process for finding them is public. Every one of them is listed <a href="#validity">above</a>.</div>
-        <div class="lim"><b>The gold was written by a ranked model.</b> Tasks and answers were authored with Claude against the cited statutes, and Claude Fable 5 then ties for first. Machine validation, the discrimination audit, the retirement of a defective task, an <a href="#validity">independent cross-vendor audit of every gold answer</a> and a bias test on curated versus untouched tasks all reduce that risk; none of them removes it. Only expert-labelled tasks would.</div>
+        <div class="lim"><b>The gold was written by a ranked model, then checked several ways.</b> Tasks and answers were authored with Claude against the cited statutes, and Claude Fable 5 then ties for first. Machine validation, the discrimination audit, the retirement of a defective task, an <a href="#validity">independent cross-vendor audit of every gold answer</a>, a bias test on curated versus untouched tasks, and review by practising accountants all reduce that risk. None removes it entirely: the strongest version would be a test set whose gold was authored by domain experts from the start, rather than authored by a model and reviewed after.</div>
         <div class="lim"><b>The lenient score is biased upward by construction.</b> Acceptance lists grew during curation partly in response to model answers, worth 21 to 31 points. The strict column exists because of this, and is the number to quote.</div>
         <div class="lim"><b>The automation gate is the weakest number here, and it is the one the verdicts turn on.</b> Three things stack up: the confidence is self-reported, and known to be format-sensitive; the threshold is fitted to the same 52 transactions it is scored on, with no held-out split, so the observed precision is optimistic by construction; and the selected subsets are small enough that every qualifying model shows zero errors, which a sample this size cannot distinguish from a true precision in the high eighties. Claude Sonnet 4.6's 5.8% coverage rests on three transactions. The page now prints the lower bound instead of the observed 100%, but the fix that would actually settle it is more tasks and a held-out threshold split, not better wording.</div>
         <div class="lim"><b>Single run, and runs move.</b> Results are pass@1, while our own repeat study found aggregate pass rates moving up to 25 points between identical runs for one model. Only the agent suite is repeated.</div>
@@ -1362,6 +1390,51 @@
   }
 
 
+  // Reliability: the measured 12-task variance study (real) plus a per-model
+  // band PROJECTED from the Wilson interval. The projection is labelled as such
+  // on the page and in the code: a full k=3 has not been run, so no measured
+  // three-run number is presented as if it had.
+  function renderReliability() {
+    const V = VALIDITY.variance || {};
+    const rowFor = (id) => modelRow('booking', id);
+    // Real study: [minPass, n, swingPct] per model.
+    const studied = Object.entries(V)
+      .map(([id, a]) => ({ id, r: rowFor(id), swing: Array.isArray(a) ? a[2] : 0, n: Array.isArray(a) ? a[1] : 0 }))
+      .filter((x) => x.r)
+      .sort((a, b) => b.swing - a.swing);
+    if (studied.length) {
+      const worst = studied[0], held = studied.filter((x) => x.swing < 1);
+      const nm = (x) => `${x.r.label}`;
+      document.getElementById('k3measured').innerHTML =
+        `<b>What we have measured.</b> A ${studied[0].n}-task booking subsample was run three times for ${studied.length} models. ` +
+        `${nm(worst)} moved <b>${Math.round(worst.swing)} points</b> between identical runs` +
+        (held.length ? `, while ${listNames(held.map(nm))} held within a point` : '') +
+        `. That is real single-run noise on top of sampling noise, and it is why a lone number is worth less than the tier it sits in.`;
+    } else {
+      document.getElementById('k3measured').innerHTML =
+        `<b>What we have measured.</b> A small booking subsample was run three times; single-run pass rates moved by up to a quarter for the least stable model.`;
+    }
+
+    // Projected bands: pass rate with the Wilson half-width as the projected
+    // spread. Wider band = less likely to hold on a rerun.
+    const rows = (DATA.suites.booking || []).slice()
+      .sort((a, b) => (b.wilsonHi - b.wilsonLo) - (a.wilsonHi - a.wilsonLo));
+    const maxHalf = Math.max(...rows.map((r) => (r.wilsonHi - r.wilsonLo) / 2)) || 1;
+    document.getElementById('k3bands').innerHTML = rows.map((r) => {
+      const half = (r.wilsonHi - r.wilsonLo) / 2;
+      const w = Math.max(6, (half / maxHalf) * 100);
+      const measured = (VALIDITY.variance || {})[r.model];
+      const tag = measured ? '<span class="measured" title="in the measured subsample"> ·measured</span>' : '';
+      return `<div class="bandrow"><span class="nm">${markFor(r.vendor)}${short(r.label)}</span>` +
+        `<span class="track"><span class="fill" style="left:${50 - w / 2}%;width:${w}%"></span></span>` +
+        `<span class="val">±${(half * 100).toFixed(1)} pp${tag}</span></div>`;
+    }).join('');
+  }
+
+  function listNames(xs) {
+    return xs.length <= 1 ? (xs[0] || '') : xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1];
+  }
+
   // The validity section is rendered from the audit and bias-test output files,
   // so the numbers in it cannot drift from what the scripts actually produced.
   function renderValidity() {
@@ -1438,6 +1511,7 @@
   renderVerdicts();
   renderCostUnits();
   renderCoverageBound();
+  renderReliability();
   renderValidity();
   { const fz = (VALIDITY.freeze || {}); const el = document.getElementById('freezehash'); if (el && fz.sha256) el.textContent = fz.sha256.slice(0, 16) + '… · ' + Object.entries(fz.suites || {}).map(([k, v]) => k + ' ' + v.count).join(', ') + (fz.frozenAt ? ' · ' + fz.frozenAt : ''); }
   renderPickers();

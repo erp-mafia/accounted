@@ -28,6 +28,7 @@ const validity = {
   bias: readJson(path.join(BENCH_ROOT, 'results', 'gold-bias.json')),
   resolutions: readJson(path.join(siteDir, 'audit-resolutions.json')),
   freeze: readJson(path.join(BENCH_ROOT, 'freeze.json')),
+  variance: readJson(path.join(BENCH_ROOT, 'results', 'variance', 'summary.json')),
 }
 
 for (const token of ['__LEADERBOARD_JSON__', '__LOGOS_JSON__', '__VALIDITY_JSON__']) {
