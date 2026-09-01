@@ -1461,13 +1461,20 @@ const PAGINATION_PROPS = {
   next_offset: { type: 'number', description: 'Offset for the next page (omitted on last page)' },
 } as const
 
+// Declared loosely on purpose. Every field here is transmitted once per
+// staged-write tool, and there are 58 of them in the default catalog, so a
+// character in this constant costs 58 characters of every agent's context.
+// `additionalProperties: false` stays: staging.test.ts pins the next hint as a
+// closed shape, and a guard whose reason is not in front of me is not a guard
+// to loosen for 420 tokens. Only args' redundant `additionalProperties: true`
+// went, which is the JSON Schema default anyway.
 const NEXT_ACTION_HINT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
     description: { type: 'string' },
     tool: { type: 'string' },
-    args: { type: 'object', additionalProperties: true },
+    args: { type: 'object' },
     resource: { type: 'string' },
   },
   required: ['description'],
@@ -1477,7 +1484,7 @@ const STAGED_OPERATION_SCHEMA = {
   type: 'object',
   properties: {
     staged: { type: 'boolean' },
-    operation_id: { type: 'string', description: 'UUID of the staged operation, present once persisted' },
+    operation_id: { type: 'string', description: 'Staged operation UUID, once persisted' },
     risk_level: { type: 'string', enum: ['low', 'medium', 'high'] },
     actor: { type: 'object' },
     dry_run: { type: 'boolean' },
@@ -1485,14 +1492,13 @@ const STAGED_OPERATION_SCHEMA = {
     message: { type: 'string' },
     approve: { type: 'object' },
     preview: { type: 'object' },
+    // Shape carried in prose rather than declared: the same three properties
+    // spelled out as JSON Schema cost 58x what one sentence costs, and the
+    // model reads the sentence either way. Same reason actor/approve/preview
+    // above have always been bare objects.
     period_status: {
       type: 'object',
-      description: 'Fiscal period covering the affärshändelse date. Use to detect locked/closed periods without a round-trip.',
-      properties: {
-        period_id: { type: ['string', 'null'] },
-        status: { type: 'string', enum: ['open', 'locked', 'closed'] },
-        lock_date: { type: ['string', 'null'] },
-      },
+      description: 'Period of the affärshändelse: period_id, status (open|locked|closed), lock_date. Detects a locked period without a round-trip.',
     },
     next: NEXT_ACTION_HINT_SCHEMA,
   },
