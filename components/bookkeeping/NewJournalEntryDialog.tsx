@@ -64,7 +64,11 @@ export default function NewJournalEntryDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
+        // Wide: the konteringsrader table (konto, radtext, debet, kredit,
+        // saldo) is the point of this dialog, and at 3xl the amount columns
+        // were squeezed against the account search. Capped at 6xl so it stays
+        // a dialog on an ultrawide screen.
+        className="sm:max-w-5xl lg:max-w-6xl max-h-[95dvh] sm:max-h-[92vh] overflow-y-auto"
         // A half-typed verifikat must survive an accidental backdrop click or a
         // stray Escape (easy to hit across multiple windows/screens, or when you
         // only meant to dismiss a combobox dropdown). Closing is explicit: the

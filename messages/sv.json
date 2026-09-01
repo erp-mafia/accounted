@@ -5489,7 +5489,7 @@
     "toast_draft_missing_docs_title": "Utkast sparat, men underlag saknas",
     "toast_draft_missing_docs_description": "Utkastet sparades, men {count} underlag kunde inte bifogas: {files}. Öppna utkastet för att bifoga på nytt.",
     "toast_open_entry": "Öppna verifikatet",
-    "fill_balance_tooltip": "Dubbelklicka för att fylla i balanserande belopp",
+    "fill_balance_tooltip": "Balanserande belopp föreslås automatiskt. Dubbelklicka för att fylla i det igen.",
     "keyboard_hint": "Enter hoppar till nästa fält: när verifikatet balanserar öppnar Enter granskningen.",
     "review_month_changed": "Obs: annan månad än föregående verifikat ({prev} → {current}).",
     "review_period_locked": "Perioden är stängd eller låst: bokföring kan nekas.",

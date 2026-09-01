@@ -22,6 +22,32 @@ export type VoucherSeriesMap = Partial<Record<JournalEntrySourceType, string>> &
 const SERIES_LETTER_RE = /^[A-Z]$/
 
 /**
+ * The conventional Swedish verifikationsserier and what each one is for.
+ *
+ * The column accepts any A-Z letter, but a free-text field invites typos and
+ * lets the same letter mean different things across a company's ledger, so the
+ * entry form offers this fixed set (plus whatever series the company has
+ * already configured or used).
+ *
+ * The labels are bookkeeping-domain terms that stay Swedish in both locales,
+ * same convention as VoucherSeriesPerSourceTypeForm.
+ */
+export const VOUCHER_SERIES_PRESETS: ReadonlyArray<{ letter: string; label: string }> = [
+  { letter: 'A', label: 'Kundfakturor' },
+  { letter: 'B', label: 'Leverantörsfakturor' },
+  { letter: 'I', label: 'Inbetalningar' },
+  { letter: 'U', label: 'Utbetalningar' },
+  { letter: 'L', label: 'Löner' },
+  { letter: 'M', label: 'Manuella verifikat' },
+]
+
+/** Swedish description for a preset series letter; empty for unknown letters. */
+export function voucherSeriesLabel(letter: string): string {
+  const match = VOUCHER_SERIES_PRESETS.find((p) => p.letter === letter)
+  return match ? match.label : ''
+}
+
+/**
  * Resolve the default voucher_series letter for a given source_type from a
  * company_settings row. Returns 'A' as a safe fallback when no mapping is
  * configured for that source_type.
