@@ -72,8 +72,16 @@ export function unclaimedAccountsFor(
     seen.add(iban)
     // The source company's enable/disable choice is its own; company B starts
     // with everything on and unchecks in the picker. Drop the source's ledger
-    // mapping too: that number belongs to the other company's chart.
-    const { ledger_account: _ledger, ...rest } = account
+    // mapping too: that number belongs to the other company's chart. The
+    // claimed_by_* flags are likewise the source row's history: everything
+    // offered here is unclaimed by definition, so a stale flag must not
+    // render a "synkas i annat bolag" note on a genuinely free account.
+    const {
+      ledger_account: _ledger,
+      claimed_by_company_id: _claimedId,
+      claimed_by_company_name: _claimedName,
+      ...rest
+    } = account
     out.push({ ...rest, enabled: true })
   }
   return out
@@ -269,6 +277,153 @@ async function fetchCompanyNames(
       .filter((c): c is { id: string; name: string } => !!c.name)
       .map(c => [c.id, c.name]),
   )
+}
+
+/** The company whose books an IBAN is already synced into. */
+export interface ForeignIbanClaim {
+  companyId: string
+  companyName: string | null
+}
+
+export interface CrossCompanyAccountContext {
+  /**
+   * Normalized IBAN → the OTHER company of this user that already books it
+   * (enabled cash_accounts row, or an enabled account on a live-ish
+   * connection). First claimant wins; which sibling is named is cosmetic.
+   */
+  claims: Map<string, ForeignIbanClaim>
+  /**
+   * Normalized IBANs the user has deselected ("Synkas ej") on ANY of their
+   * other connection rows, in any company. A per-row memory only: the OAuth
+   * callback consults this so a fresh connection row does not resurrect an
+   * account the user already opted out of elsewhere (the recurring
+   * came-back-pre-checked complaint).
+   */
+  deselectedIbans: Set<string>
+}
+
+/**
+ * What the user's OTHER companies already do with each IBAN, for the OAuth
+ * callback's cross-company guard. At one-session banks (SEB) the PSU's single
+ * consent can cover accounts that belong in a sibling company's books, and the
+ * callback stores whatever the session returns: without this lookup those
+ * accounts land pre-enabled in the wrong company.
+ *
+ * Runs on the callback's SERVICE-ROLE client, so nothing is RLS-scoped:
+ * every query below filters on the user's own rows explicitly
+ * (bank_connections.user_id, cash_accounts.company_id via company_members).
+ *
+ * Returns null when any lookup failed. The caller must fail closed (treat
+ * every unrecognized account as not-safe-to-pre-check): an empty result is
+ * indistinguishable from "nothing is claimed", which is the one answer this
+ * guard must never invent.
+ */
+export async function fetchCrossCompanyAccountContext(
+  serviceSupabase: SupabaseClient,
+  userId: string,
+  activeCompanyId: string,
+  excludeConnectionId: string,
+): Promise<CrossCompanyAccountContext | null> {
+  const claims = new Map<string, ForeignIbanClaim>()
+  const deselectedIbans = new Set<string>()
+
+  // Live-ish statuses only: a revoked row's accounts are released territory.
+  // 'expired'/'error' still claim: a sibling whose feed momentarily died (the
+  // common state at one-session banks right after another company authorized)
+  // has NOT given its accounts up.
+  const { data: connectionRows, error: connectionError } = await serviceSupabase
+    .from('bank_connections')
+    .select('id, company_id, accounts_data')
+    .eq('user_id', userId)
+    .neq('id', excludeConnectionId)
+    .in('status', ['active', 'pending_selection', 'expired', 'error'])
+
+  if (connectionError) {
+    log.error('cross-company claim lookup failed (bank_connections)', {
+      activeCompanyId,
+      error: connectionError.message,
+    })
+    return null
+  }
+
+  for (const row of (connectionRows ?? []) as Array<{
+    id: string
+    company_id: string
+    accounts_data: StoredAccount[] | null
+  }>) {
+    for (const account of row.accounts_data ?? []) {
+      const iban = normalizeIban(account.iban)
+      if (!iban) continue
+      if (account.enabled === false) {
+        deselectedIbans.add(iban)
+      } else if (row.company_id !== activeCompanyId && !claims.has(iban)) {
+        claims.set(iban, { companyId: row.company_id, companyName: null })
+      }
+    }
+  }
+
+  // cash_accounts catches claims the connection rows no longer carry (older
+  // connects, CSV-era rows promoted onto a feed). Scoped to the user's other
+  // companies via their memberships, since the service client sees everything.
+  const { data: membershipRows, error: membershipError } = await serviceSupabase
+    .from('company_members')
+    .select('company_id')
+    .eq('user_id', userId)
+
+  if (membershipError) {
+    log.error('cross-company claim lookup failed (company_members)', {
+      activeCompanyId,
+      error: membershipError.message,
+    })
+    return null
+  }
+
+  const otherCompanyIds = [
+    ...new Set(
+      ((membershipRows ?? []) as Array<{ company_id: string }>)
+        .map(r => r.company_id)
+        .filter(id => id !== activeCompanyId),
+    ),
+  ]
+
+  if (otherCompanyIds.length > 0) {
+    const { data: cashRows, error: cashError } = await serviceSupabase
+      .from('cash_accounts')
+      .select('company_id, iban')
+      .in('company_id', otherCompanyIds)
+      .eq('enabled', true)
+      .not('iban', 'is', null)
+
+    if (cashError) {
+      log.error('cross-company claim lookup failed (cash_accounts)', {
+        activeCompanyId,
+        error: cashError.message,
+      })
+      return null
+    }
+
+    for (const row of (cashRows ?? []) as Array<{ company_id: string; iban: string | null }>) {
+      const iban = normalizeIban(row.iban)
+      if (iban && !claims.has(iban)) {
+        claims.set(iban, { companyId: row.company_id, companyName: null })
+      }
+    }
+  }
+
+  // A claim outranks a remembered deselection: the picker note ("synkas i X")
+  // is strictly more information than a bare unchecked box.
+  for (const iban of claims.keys()) deselectedIbans.delete(iban)
+
+  if (claims.size > 0) {
+    const names = await fetchCompanyNames(serviceSupabase, [
+      ...new Set([...claims.values()].map(c => c.companyId)),
+    ])
+    for (const claim of claims.values()) {
+      claim.companyName = names.get(claim.companyId) ?? null
+    }
+  }
+
+  return { claims, deselectedIbans }
 }
 
 /**

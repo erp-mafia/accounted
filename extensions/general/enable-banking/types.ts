@@ -23,6 +23,14 @@ export interface StoredAccount {
   // the whole history. lib/sync.ts falls back to IBAN-then-uid when unset
   // (rows that predate this field) and stamps it on the next sync.
   dedup_scope?: string
+  // Set by the OAuth callback when the account's IBAN is already booked by
+  // ANOTHER of the user's companies. At one-session banks (SEB) the PSU's
+  // single consent can cover accounts that belong in a sibling company's
+  // books; such accounts are stored disabled and never mirrored into this
+  // company's cash_accounts, and the picker renders the claim so the user
+  // sees why the account is unchecked. Enabling one is a deliberate act.
+  claimed_by_company_id?: string
+  claimed_by_company_name?: string
 }
 
 // Re-export API types from the client
