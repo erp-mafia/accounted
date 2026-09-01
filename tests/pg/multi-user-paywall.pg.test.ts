@@ -191,6 +191,62 @@ describe('multi-user paywall (pg)', () => {
     })
   })
 
+  describe('membership guard on the entitlement helpers (20260901091752)', () => {
+    it('a NON-MEMBER cannot read another company state (no cross-tenant probe)', async () => {
+      const ownerId = await insertAuthUser()
+      const strangerId = await insertAuthUser()
+      const companyId = await insertCompany({ createdBy: ownerId })
+      await insertCompanyMember({ companyId, userId: ownerId, role: 'owner' })
+
+      await withUserContext(strangerId, async (client) => {
+        const ok = await client.query<{ ok: boolean }>(
+          `SELECT public.company_multi_user_ok($1, $2) AS ok`,
+          [companyId, GRACE_DAYS],
+        )
+        expect(ok.rows[0]!.ok).toBe(false)
+
+        const state = await client.query<{ state: string | null; grace_ends_at: string | null }>(
+          `SELECT * FROM public.company_multi_user_state($1, $2)`,
+          [companyId, GRACE_DAYS],
+        )
+        // The trial grant is active, but a stranger must not learn that:
+        // state comes back NULL, grace deadline NULL.
+        expect(state.rows[0]?.state ?? null).toBeNull()
+        expect(state.rows[0]?.grace_ends_at ?? null).toBeNull()
+      })
+    })
+
+    it('a MEMBER reads their own company state normally', async () => {
+      const ownerId = await insertAuthUser()
+      const memberId = await insertAuthUser()
+      const companyId = await insertCompany({ createdBy: ownerId })
+      await insertCompanyMember({ companyId, userId: ownerId, role: 'owner' })
+      await insertCompanyMember({ companyId, userId: memberId, role: 'member' })
+
+      await withUserContext(memberId, async (client) => {
+        const state = await client.query<{ state: string | null }>(
+          `SELECT * FROM public.company_multi_user_state($1, $2)`,
+          [companyId, GRACE_DAYS],
+        )
+        expect(state.rows[0]!.state).toBe('entitled')
+      })
+    })
+
+    it('clamps the grace window: a huge p_grace_days cannot widen the probe', async () => {
+      const ownerId = await insertAuthUser()
+      const companyId = await insertCompany({ createdBy: ownerId })
+      await insertCompanyMember({ companyId, userId: ownerId, role: 'owner' })
+      await setMultiUserExpiry(companyId, '-25 days')
+      // 25-day-old lapse: frozen at the clamped 20-day window even when the
+      // caller asks for 1000 days.
+      const res = await getPool().query<{ ok: boolean }>(
+        `SELECT public.company_multi_user_ok($1, 1000) AS ok`,
+        [companyId],
+      )
+      expect(res.rows[0]!.ok).toBe(false)
+    })
+  })
+
   describe('resolve_active_company_gated', () => {
     it('an OWNER resolves their frozen company (owners are never locked out)', async () => {
       const ownerId = await insertAuthUser()
