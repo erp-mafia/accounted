@@ -66,7 +66,6 @@ import {
   bokforSkattekontoTransactionsBatch,
   SkattekontoBookingError,
 } from './lib/skattekonto-booking'
-import { handleSkattekontoDriftDetected } from './lib/skattekonto-drift-email'
 import {
   findMatchCandidates,
   findMatchSuggestionsBulk,
@@ -2687,16 +2686,14 @@ export const skatteverketExtension: Extension = {
     },
   ],
 
-  // skattekonto.connection.expired is still emitted (needs_reconsent flagging,
-  // UI banner, agent briefing) but has no email consumer: with SKV's 65-minute
-  // personal sessions a per-episode expiry mail is one mail per connect, which
-  // trains users to ignore it. See DECISIONS.md 2026-08-25.
-  eventHandlers: [
-    {
-      eventType: 'skattekonto.drift_detected',
-      handler: handleSkattekontoDriftDetected,
-    },
-  ],
+  // No email consumers. skattekonto.connection.expired is still emitted
+  // (needs_reconsent flagging, UI banner, agent briefing) but a per-episode
+  // expiry mail is one mail per connect with SKV's 65-minute sessions, which
+  // trains users to ignore it (DECISIONS.md 2026-08-25). The skattekonto
+  // drift mail was removed 2026-09-02: the reconciliation page and the Hem
+  // notice (lib/notices/categories.ts detectSkvUnexplained) are the surface,
+  // and the mail alerted on raw saldo-vs-1630 gaps that unbooked rows explain.
+  eventHandlers: [],
 
   // Registry-resolved commit services for the MCP submit tools. The core
   // pending-operations dispatcher (lib/pending-operations/commit.ts) cannot
