@@ -31,3 +31,26 @@ export function ledgerKey(raw: string | null | undefined): string {
     .trim()
   return stripped === '' ? k : stripped
 }
+
+const CORE_AP_PREFIX = /^(levfakt|levfkt|lev\.?fakt\.?|leverantörsfaktura från|leverantörsfaktura|levbet\.?|kvitto|faktura|utgift|inköp)\s+/
+const CORE_LEGAL_FORM = /\b(ab|aktiebolag|hb|kb|sverige|sweden|ltd|limited|oy|gmbh|inc|sarl|publ|filial)\b/g
+
+/**
+ * The "core" of a key: what is left when AP prefixes, digit runs and legal
+ * form suffixes are gone. Two keys with one core are the same trade name,
+ * which is NOT the same party (Fortnox AB and Fortnox Finans AB share one),
+ * so the core only ever ranks or annotates candidates; it never merges.
+ * Measured on the document-anchored gold set 2026-09-02: pair precision
+ * 0.909, recall 0.776 (scripts/parties/README.md).
+ */
+export function coreKey(key: string): string {
+  return key
+    .toLowerCase()
+    .replace(CORE_AP_PREFIX, '')
+    .replace(/\b\d+\b/g, '')
+    .replace(CORE_LEGAL_FORM, '')
+    .replace(/[^a-zåäöé ]+/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(' ')
+}
