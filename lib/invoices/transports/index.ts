@@ -5,11 +5,14 @@
  * configured (for the probe script, for a preview) without being switched on.
  */
 
+import { peppolConnectorMode } from '@/lib/connect/instance/upstreams'
 import {
+  CONNECTOR_PEPPOL_PROVIDER,
   getPeppolTransport,
   registerPeppolTransport,
   type PeppolTransport,
 } from '@/lib/invoices/peppol-transport'
+import { createConnectorPeppolTransport } from '@/lib/invoices/transports/connector'
 import {
   QVALIA_PROVIDER,
   createQvaliaTransport,
@@ -25,6 +28,18 @@ export function registerConfiguredPeppolTransports(
     const qvaliaConfig = readQvaliaConfigFromEnv(env)
     if (qvaliaConfig) {
       const transport = createQvaliaTransport(qvaliaConfig)
+      registerPeppolTransport(transport)
+      registered.push(transport)
+    }
+  }
+
+  // Self-hosted instance in connector mode (connector key, no own Qvalia
+  // keys): reach Arcim's access point through the hosted proxy. Hosted has
+  // its own keys, so peppolConnectorMode() is null there and nothing changes.
+  if (!getPeppolTransport(CONNECTOR_PEPPOL_PROVIDER)) {
+    const connector = peppolConnectorMode()
+    if (connector) {
+      const transport = createConnectorPeppolTransport(connector)
       registerPeppolTransport(transport)
       registered.push(transport)
     }

@@ -27,7 +27,7 @@ describe('validate_and_increment_connector_key v2', () => {
   it('returns the key limits (default when unset)', async () => {
     const { hash: h } = await insertKey()
     const { rows } = await getPool().query(`SELECT * FROM public.validate_and_increment_connector_key($1)`, [h])
-    expect(rows[0].limits).toEqual({ bank_connections_per_company: 1, skv_connections_per_company: 1, sync_min_interval_s: 0 })
+    expect(rows[0].limits).toEqual({ bank_connections_per_company: 1, skv_connections_per_company: 1, peppol_connections_per_company: 1, sync_min_interval_s: 0 })
   })
 
   it('returns custom limits verbatim', async () => {
@@ -64,6 +64,23 @@ describe('connector_reserve_upstream', () => {
 })
 
 describe('connector_connections ledger', () => {
+  it('accepts peppol as a ledger service (migration 20260902190000)', async () => {
+    const { id: keyId } = await insertKey()
+    const participant = `0007:${randomBytes(6).toString('hex')}`
+    const { rows } = await getPool().query<{ id: string }>(
+      `INSERT INTO public.connector_connections (connector_key_id, service, company_ref, handle_hash, account_uids, status)
+       VALUES ($1, 'peppol', 'c1', $2, ARRAY[$3::text], 'active') RETURNING id`,
+      [keyId, hash(participant), participant],
+    )
+    expect(rows[0].id).toBeTruthy()
+    await expect(
+      getPool().query(
+        `INSERT INTO public.connector_connections (connector_key_id, service, company_ref, status) VALUES ($1, 'kivra', 'c1', 'pending')`,
+        [keyId],
+      ),
+    ).rejects.toThrow(/connector_connections_service_check|check constraint/)
+  })
+
   it('enforces the handle uniqueness per service and cascades with the key', async () => {
     const { id: keyId } = await insertKey()
     await getPool().query(
@@ -94,5 +111,31 @@ describe('connector_connections ledger', () => {
       const r = await client.query(`SELECT id FROM public.connector_connections`)
       expect(r.rowCount).toBe(0)
     })
+  })
+})
+
+describe('connector_peppol_submissions (migration 20260902190000)', () => {
+  it('is unique per provider submission, cascades with the key, and is invisible to authenticated', async () => {
+    const { id: keyId } = await insertKey()
+    const submissionId = `int-${randomBytes(6).toString('hex')}`
+    await getPool().query(
+      `INSERT INTO public.connector_peppol_submissions (connector_key_id, company_ref, provider_submission_id, idempotency_key)
+       VALUES ($1, 'c1', $2, 'idem-1')`,
+      [keyId, submissionId],
+    )
+    await expect(
+      getPool().query(
+        `INSERT INTO public.connector_peppol_submissions (connector_key_id, company_ref, provider_submission_id) VALUES ($1, 'c2', $2)`,
+        [keyId, submissionId],
+      ),
+    ).rejects.toThrow(/connector_peppol_submissions_provider_submission_unique|duplicate key/)
+    const userId = await insertAuthUser()
+    await withUserContext(userId, async (client) => {
+      const r = await client.query(`SELECT id FROM public.connector_peppol_submissions`)
+      expect(r.rows).toEqual([])
+    })
+    await getPool().query(`DELETE FROM public.connector_keys WHERE id = $1`, [keyId])
+    const { rows } = await getPool().query(`SELECT count(*)::int AS n FROM public.connector_peppol_submissions WHERE connector_key_id = $1`, [keyId])
+    expect(rows[0].n).toBe(0)
   })
 })
