@@ -7912,6 +7912,8 @@
     "seller_country_noneu": "From outside the EU",
     "seller_country_abroad": "Abroad",
     "rc_region_label": "Inside or outside the EU?",
+    "rc_region_placeholder": "Select region",
+    "rc_region_required": "Choose whether the seller is inside or outside the EU: the choice decides whether the basis lands in box 21 or box 22.",
     "seller_country_eu_hint": "Reverse charge: the cost stays on the cost account, the box 21 base is booked as a 4535/4598 pair and calculated VAT as 2614/2645. The VAT field from step 1 is not used.",
     "seller_country_noneu_hint": "Reverse charge: the cost stays on the cost account, the box 22 base is booked as a 4531/4598 pair and calculated VAT as 2614/2645. The VAT field from step 1 is not used.",
     "seller_country_gross_hint": "Foreign VAT is not deductible: the full amount including local VAT is booked as cost. Applies to e.g. hotels, restaurants and taxis, taxed where performed.",

@@ -114,6 +114,31 @@ describe('registerExpenseClaim', () => {
     expect(insert?.[0]).toMatchObject({ claimant_name: 'Sofie Persson', liability_account: '2820' })
   })
 
+  it('takes the claimant name from the employee row, ignoring a mismatched one', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { id: 'emp-1', first_name: 'Sofie', last_name: 'Persson' } }) // employee
+    enqueue({ data: { id: 'claim-x', amount_sek: 500, vat_sek: 100 } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'USB-hubb',
+      expense_date: '2026-09-01',
+      amount: 500,
+      vat_amount: 100,
+      currency: 'SEK',
+      expense_account: '5410',
+      employee_id: 'emp-1',
+      claimant_name: 'Någon Annan',
+    })
+
+    expect(result.ok).toBe(true)
+    const insert = findCall('expense_claims', 'insert')
+    expect(insert?.[0]).toMatchObject({
+      claimant_name: 'Sofie Persson',
+      liability_account: '2820',
+    })
+  })
+
   it('converts foreign currency at the explicit rate, VAT included', async () => {
     enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
     enqueue({ data: { id: 'claim-1' } }) // insert

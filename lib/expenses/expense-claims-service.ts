@@ -138,7 +138,10 @@ export async function registerExpenseClaim(
       .maybeSingle()
     if (!emp) return { ok: false, code: 'EMPLOYEE_NOT_FOUND' }
     employeeId = emp.id
-    claimantName = claimantName || `${emp.first_name} ${emp.last_name}`
+    // The employee row is the authority: a caller must not be able to pair
+    // one employee_id with another person's name, which would book 2820 for
+    // the employee while payout lists and descriptions name someone else.
+    claimantName = `${emp.first_name} ${emp.last_name}`.trim()
     liability = '2820'
   }
   if (!claimantName) return { ok: false, code: 'CLAIMANT_REQUIRED' }

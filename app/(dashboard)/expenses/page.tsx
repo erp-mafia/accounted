@@ -101,7 +101,14 @@ const STATUS_VARIANT: Record<ExpenseClaim['status'], 'secondary' | 'success'> = 
 
 const OWNER_VALUE = 'owner'
 const NO_RECEIPT_VALUE = 'none'
-type SellerCountry = 'se' | 'eu' | 'noneu'
+type SellerCountry = 'se' | 'abroad' | 'eu' | 'noneu'
+
+/** Today in the viewer's own timezone: toISOString() converts to UTC first,
+ *  which picks yesterday's date for anyone east of Greenwich before 02:00. */
+function todayLocal(): string {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
 interface BookingRow {
   key: number
   account: string
@@ -169,7 +176,7 @@ export default function ExpenseClaimsPage() {
 
   // Create form
   const [description, setDescription] = useState('')
-  const [expenseDate, setExpenseDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [expenseDate, setExpenseDate] = useState(todayLocal)
   const [amount, setAmount] = useState('')
   const [vatAmount, setVatAmount] = useState('')
   const [currency, setCurrency] = useState('SEK')
@@ -199,7 +206,7 @@ export default function ExpenseClaimsPage() {
   const pollAbort = useRef<{ cancelled: boolean }>({ cancelled: false })
 
   // Payout form
-  const [payoutDate, setPayoutDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [payoutDate, setPayoutDate] = useState(todayLocal)
   const [cashAccount, setCashAccount] = useState('')
 
   const load = useCallback(async () => {
@@ -350,7 +357,7 @@ export default function ExpenseClaimsPage() {
           : []),
       ]
     }
-    if (!reverseCharge) {
+    if (!reverseCharge || sellerCountry === 'abroad') {
       return [
         { key: -1, account: expenseAccount, debit: parsedAmount.toFixed(2), credit: '' },
       ]
@@ -629,7 +636,7 @@ export default function ExpenseClaimsPage() {
     setInboxChoice(NO_RECEIPT_VALUE)
     setUpload({ phase: 'idle' })
     setShowReceipt(true)
-    setExpenseDate(new Date().toISOString().slice(0, 10))
+    setExpenseDate(todayLocal())
     setSellerCountry('se')
     setReverseCharge(false)
     setBookingMode('choose')
@@ -661,7 +668,7 @@ export default function ExpenseClaimsPage() {
       setVatAmount((prev) => (vat == null ? prev : force || !prev ? String(vat) : prev))
       if (date) {
         setExpenseDate((prev) =>
-          force || prev === new Date().toISOString().slice(0, 10) ? date : prev,
+          force || prev === todayLocal() ? date : prev,
         )
       }
       if (curr && (CURRENCIES as readonly string[]).includes(curr)) {
@@ -915,6 +922,10 @@ export default function ExpenseClaimsPage() {
       setSubmitting(false)
     }
   }
+
+  // Reverse charge picks the ruta 21 (EU) or ruta 22 (non-EU) basis pair, so
+  // it cannot be booked while the region is still unanswered.
+  const regionUnanswered = reverseCharge && sellerCountry === 'abroad'
 
   const stepOneValid =
     description.trim().length > 0 && parsedAmount > 0 && parsedVat < parsedAmount
@@ -1526,7 +1537,7 @@ export default function ExpenseClaimsPage() {
                             (ruta 21 vs 22) and is asked when RC is opted in. */}
                         <Select
                           value={sellerCountry === 'se' ? 'se' : 'abroad'}
-                          onValueChange={(v) => applyCountry(v === 'se' ? 'se' : 'eu')}
+                          onValueChange={(v) => applyCountry(v === 'se' ? 'se' : 'abroad')}
                         >
                           <SelectTrigger>
                             <SelectValue />
@@ -1569,14 +1580,14 @@ export default function ExpenseClaimsPage() {
                         <div className="max-w-xs space-y-2">
                           <Label>{t('rc_region_label')}</Label>
                           <Select
-                            value={sellerCountry}
+                            value={sellerCountry === 'abroad' ? undefined : sellerCountry}
                             onValueChange={(v) => {
                               setSellerCountry(v as SellerCountry)
                               setBookingRows(null)
                             }}
                           >
                             <SelectTrigger>
-                              <SelectValue />
+                              <SelectValue placeholder={t('rc_region_placeholder')} />
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="eu">{t('seller_country_eu')}</SelectItem>
@@ -1590,7 +1601,9 @@ export default function ExpenseClaimsPage() {
                           ? t('seller_country_gross_hint')
                           : sellerCountry === 'eu'
                             ? t('seller_country_eu_hint')
-                            : t('seller_country_noneu_hint')}
+                            : sellerCountry === 'noneu'
+                              ? t('seller_country_noneu_hint')
+                              : t('rc_region_required')}
                       </p>
                     </div>
                   )}
@@ -1774,6 +1787,7 @@ export default function ExpenseClaimsPage() {
                   submitting ||
                   upload.phase === 'uploading' ||
                   bookingMode !== 'book' ||
+                  regionUnanswered ||
                   !bookingBalanced ||
                   !bookingRowsValid
                 }
