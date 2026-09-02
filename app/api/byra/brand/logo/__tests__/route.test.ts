@@ -70,8 +70,8 @@ function ownerMembership() {
 // The route decides the type by magic bytes (never by the declared type), so
 // the default fixture is a real PNG signature padded to `size`.
 const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
-function fixtureBytes(magic: number[] | null, size: number): Uint8Array {
-  const bytes = new Uint8Array(Math.max(size, magic?.length ?? 0))
+function fixtureBytes(magic: number[] | null, size: number): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(new ArrayBuffer(Math.max(size, magic?.length ?? 0)))
   if (magic) bytes.set(magic, 0)
   return bytes
 }

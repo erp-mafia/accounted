@@ -42,8 +42,8 @@ const WEBP_MAGIC = [0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 
 const SVG_SOURCE = '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(document.cookie)</script></svg>'
 
 /** A buffer of `size` bytes that starts with `magic` (zero-padded). */
-function withMagic(magic: number[], size = 64): Uint8Array {
-  const bytes = new Uint8Array(Math.max(size, magic.length))
+function withMagic(magic: number[], size = 64): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(new ArrayBuffer(Math.max(size, magic.length)))
   bytes.set(magic)
   return bytes
 }
