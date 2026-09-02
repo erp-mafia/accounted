@@ -4,6 +4,13 @@ import { useTranslations } from 'next-intl'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { cn, formatCurrency } from '@/lib/utils'
 import type { KPIReport, KPIPreferences } from '@/types'
+import {
+  allLabelsFit,
+  barLabel,
+  compactKr,
+  BAR_LABEL_FONT_PX,
+  LATEST_LABEL_FONT_PX,
+} from './month-values'
 
 /**
  * Nyckeltal as the founder-picked "Instrumentbrädan" layout: a grid of
@@ -16,10 +23,6 @@ import type { KPIReport, KPIPreferences } from '@/types'
 const SAGE = 'hsl(155 25% 40%)'
 
 type TFn = (key: string, values?: Record<string, string | number>) => string
-
-function compactKr(n: number): string {
-  return new Intl.NumberFormat('sv-SE', { notation: 'compact', maximumFractionDigits: 1 }).format(n)
-}
 
 /** Shared pane chrome: hairline border, compact metric padding. */
 function Pane({
@@ -60,7 +63,9 @@ function Pane({
 }
 
 /** Monthly net result as plain SVG bars: muted months, the latest in sage
- *  (terracotta when negative), a compact value label on the endpoint. */
+ *  (terracotta when negative). Every non-zero bar carries a compact value
+ *  label when they fit side by side, otherwise only the latest does; the
+ *  exact amounts always follow in a two-column list under the axis. */
 function ResultBarsPane({ report }: { report: KPIReport }) {
   const t = useTranslations('kpi')
   const months = report.months
@@ -89,9 +94,18 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
   const baseline = maxPos + maxNeg === 0 ? H - bottomPad : topPad + maxPos * pxPerKr
   const slot = W / months.length
   const barW = Math.min(30, slot * 0.62)
+  const labels = months.map((m) => barLabel(m.net))
+  const labelAll = allLabelsFit(labels, slot, lastActive)
+  // Exact amounts as two columns of the year's months, read top to bottom.
+  const half = Math.ceil(months.length / 2)
+  const columns = [months.slice(0, half), months.slice(half)]
+  // A month with no result movement at all reads muted, whether it lies
+  // ahead of the last booking or before the first one (a mid-year start).
+  const inactive = (m: KPIReport['months'][number]) =>
+    m.income === 0 && m.expenses === 0 && m.net === 0
 
   return (
-    <Pane title={t('bars_title')} annotation={t('bars_unit')}>
+    <Pane title={t('bars_title')} annotation={t('bars_unit')} className="sm:row-span-2">
       <svg
         viewBox={`0 0 ${W} ${H + 8}`}
         className="mt-3 h-auto w-full"
@@ -120,14 +134,17 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
               <rect x={x} y={y} width={barW} height={h} rx={3} fill={fill}>
                 <title>{`${m.label}: ${formatCurrency(m.net)}`}</title>
               </rect>
-              {isLast && (
+              {(isLast || (labelAll && labels[i] !== '')) && (
                 <text
                   x={x + barW / 2}
                   y={m.net >= 0 ? y - 5 : y + h + 11}
                   textAnchor="middle"
-                  style={{ font: '10.5px var(--font-body, ui-sans-serif)', fill: 'hsl(var(--muted-foreground))' }}
+                  style={{
+                    font: `${isLast ? LATEST_LABEL_FONT_PX : BAR_LABEL_FONT_PX}px var(--font-body, ui-sans-serif)`,
+                    fill: 'hsl(var(--muted-foreground))',
+                  }}
                 >
-                  {compactKr(m.net)}
+                  {labels[i] || compactKr(m.net)}
                 </text>
               )}
             </g>
@@ -137,6 +154,28 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
       <div className="mt-1 flex justify-between px-1 text-[10.5px] text-muted-foreground">
         {months.map((m) => (
           <span key={m.label}>{m.label}</span>
+        ))}
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-x-6 border-t border-border pt-3 text-xs">
+        {columns.map((column, c) => (
+          <dl key={c} className="space-y-1">
+            {column.map((m, j) => {
+              return (
+                <div key={`${m.label}-${c * half + j}`} className="flex items-baseline justify-between gap-3">
+                  <dt className="text-muted-foreground">{m.label}</dt>
+                  <dd
+                    className={cn(
+                      'tabular-nums',
+                      m.net < 0 && 'text-destructive',
+                      inactive(m) && 'text-muted-foreground/60',
+                    )}
+                  >
+                    {formatCurrency(m.net)}
+                  </dd>
+                </div>
+              )
+            })}
+          </dl>
         ))}
       </div>
     </Pane>
