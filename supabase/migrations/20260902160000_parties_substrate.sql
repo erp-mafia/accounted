@@ -269,6 +269,11 @@ DECLARE
   v_name text := btrim(coalesce(p_name, ''));
   v_id uuid;
 BEGIN
+  -- Authenticated callers write under their own identity; only the service
+  -- role (auth.uid() NULL: migrations, MCP, cron) may act for another user.
+  IF auth.uid() IS NOT NULL AND auth.uid() <> p_user_id THEN
+    RAISE EXCEPTION 'ensure_party: p_user_id must be the caller' USING ERRCODE = '42501';
+  END IF;
   IF v_name = '' THEN
     RAISE EXCEPTION 'ensure_party: name is required';
   END IF;
