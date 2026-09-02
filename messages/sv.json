@@ -2335,7 +2335,16 @@
     "series_prefix": "Serie",
     "default_badge": "standard",
     "latest_number": "Senaste nr",
-    "footnote": "Nya serier skapas automatiskt första gången de används vid bokföring."
+    "footnote": "Nya serier skapas automatiskt första gången de används vid bokföring.",
+    "per_account_heading": "Verifikationsserier per bankkonto",
+    "per_account_help": "Låt ett bankkonto bokföra i en egen serie, till exempel huvudbanken på A och företagskortet på M. Standard följer serien för banktransaktioner ovan. Gäller bokföring av banktransaktioner; fakturamatchningar behåller sin betalningsserie.",
+    "per_account_follow_default": "Standard",
+    "per_account_loading": "Hämtar bankkonton",
+    "per_account_empty": "Inga aktiva bankkonton ännu. Konton skapas när du kopplar en bank eller importerar transaktioner.",
+    "per_account_saved_title": "Verifikationsserie sparad",
+    "per_account_saved_set": "Nya verifikat från {account} hamnar i serie {series}.",
+    "per_account_saved_cleared": "{account} följer nu standardserien för banktransaktioner.",
+    "per_account_save_failed": "Kunde inte spara"
   },
   "settings_team_panel": {
     "role_owner": "Ägare",

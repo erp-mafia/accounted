@@ -243,6 +243,36 @@ describe('GET /api/bookkeeping/voucher-sequences/next', () => {
     expect(body.data).toEqual({ next: 1, series: 'B', fiscal_period_id: 'period-1' })
   })
 
+  it('ignores the cash account override for source types other than bank_transaction', async () => {
+    mockAuth.mockResolvedValue({ data: { user: { id: 'user-1' } } })
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'fiscal_periods') {
+        return mockChain({ data: { id: 'period-1' }, error: null })
+      }
+      if (table === 'company_settings') {
+        return mockChain({
+          data: { default_voucher_series: 'A', default_voucher_series_per_source_type: { manual: 'V' } },
+          error: null,
+        })
+      }
+      if (table === 'voucher_sequences') {
+        return mockChain({ data: { last_number: 2 }, error: null })
+      }
+      throw new Error(`Unexpected table: ${table}`)
+    })
+
+    const response = await GET(
+      mkReq('?source_type=manual&cash_account_id=11111111-1111-4111-8111-111111111111'),
+      mkParams(),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.data).toEqual({ next: 3, series: 'V', fiscal_period_id: 'period-1' })
+    // cash_accounts was never consulted (the mock would have thrown).
+  })
+
   it('rejects a malformed cash_account_id with 400 before touching the database', async () => {
     mockAuth.mockResolvedValue({ data: { user: { id: 'user-1' } } })
     const response = await GET(mkReq('?source_type=bank_transaction&cash_account_id=nope'), mkParams())

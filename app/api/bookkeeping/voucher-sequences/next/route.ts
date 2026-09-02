@@ -67,8 +67,10 @@ export const GET = withRouteContext(
     // preview can never disagree with the verifikat that actually gets created.
     // Without a source_type, keep the legacy generic default for callers that
     // just want "the next number".
+    // The account override only applies to entries booked from bank
+    // transactions; for any other source type it must not colour the preview.
     const cashAccountSeries =
-      !overrideSeries && cashAccountId
+      !overrideSeries && cashAccountId && sourceType === 'bank_transaction'
         ? await resolveCashAccountVoucherSeries(supabase, companyId, cashAccountId)
         : undefined
     const series = overrideSeries

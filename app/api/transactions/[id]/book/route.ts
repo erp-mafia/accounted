@@ -168,15 +168,17 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       })
     }
 
-    // Series: the dialog's explicit pick wins; otherwise the transaction's
-    // bank account may carry its own verifikationsserie; otherwise the engine
-    // falls back to the per-source-type default.
+    // Series: the dialog's explicit pick wins; otherwise the bank account the
+    // row will sit on after this booking (the live sibling when the guard
+    // re-points a stranded row, else its own) may carry its own
+    // verifikationsserie; otherwise the engine falls back to the
+    // per-source-type default.
     const voucherSeries =
       validation.data.voucher_series ??
       (await resolveCashAccountVoucherSeries(
         supabase,
         companyId,
-        (transaction as Transaction).cash_account_id,
+        repointCashAccountId ?? (transaction as Transaction).cash_account_id,
       ))
 
     // Create journal entry via the engine

@@ -19,7 +19,9 @@
  * the payment kind, not the account the money moved through.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createLogger } from '@/lib/logger'
 
+const log = createLogger('cash-account-voucher-series')
 const SERIES_LETTER_RE = /^[A-Z]$/
 
 /** Pure: the override letter of a cash account row, or undefined. */
@@ -47,9 +49,23 @@ export async function resolveCashAccountVoucherSeries(
       .eq('company_id', companyId)
       .eq('id', cashAccountId)
       .maybeSingle()
-    if (error) return undefined
+    if (error) {
+      // Fail open, but never silently: the entry lands in the per-type
+      // default and the log says why.
+      log.warn('cash_accounts voucher_series lookup failed; using per-type default', {
+        companyId,
+        cashAccountId,
+        error: error.message,
+      })
+      return undefined
+    }
     return cashAccountSeriesOverride(data as { voucher_series?: string | null } | null)
-  } catch {
+  } catch (err) {
+    log.warn('cash_accounts voucher_series lookup threw; using per-type default', {
+      companyId,
+      cashAccountId,
+      error: err instanceof Error ? err.message : String(err),
+    })
     return undefined
   }
 }

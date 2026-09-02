@@ -366,7 +366,7 @@ describe('POST /api/transactions/[id]/book', () => {
       ],
     }) // cash_accounts topology
     enqueue({ data: [{ id: 'conn-live', status: 'active' }] }) // bank_connections statuses
-    enqueue({ data: { voucher_series: null } }) // cash account series override (none)
+    enqueue({ data: { voucher_series: 'M' } }) // series override of the LIVE twin the row moves to
     mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
     enqueue({ data: [{ id: 'tx-1' }], error: null }) // link update
 
@@ -387,6 +387,14 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(findCalls('transactions', 'update')).toContainEqual([
       expect.objectContaining({ journal_entry_id: 'je-new', cash_account_id: 'ca-live' }),
     ])
+    // The series follows the account the row ends up on, not the stale one.
+    expect(findCalls('cash_accounts', 'eq')).toContainEqual(['id', 'ca-live'])
+    expect(mockCreateJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ voucher_series: 'M' }),
+    )
   })
 
   it('returns 400 TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT when the single bank line sits on a dead twin of the live own row (#1643 round 5)', async () => {

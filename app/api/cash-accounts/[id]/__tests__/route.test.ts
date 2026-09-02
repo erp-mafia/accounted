@@ -28,6 +28,9 @@ vi.mock('@/lib/auth/require-auth', () => ({
 import { PATCH } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 
+const CA_1 = '11111111-1111-4111-8111-111111111111'
+const CA_OTHER = '22222222-2222-4222-8222-222222222222'
+
 describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -57,7 +60,7 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
 
-    const response = await PATCH(patchReq({ voucher_series: 'M' }), createMockRouteParams({ id: 'ca-1' }))
+    const response = await PATCH(patchReq({ voucher_series: 'M' }), createMockRouteParams({ id: CA_1 }))
     expect(response.status).toBe(401)
   })
 
@@ -67,40 +70,49 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
       response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
     })
 
-    const response = await PATCH(patchReq({ voucher_series: 'M' }), createMockRouteParams({ id: 'ca-1' }))
+    const response = await PATCH(patchReq({ voucher_series: 'M' }), createMockRouteParams({ id: CA_1 }))
     expect(response.status).toBe(403)
   })
 
   it('returns 400 on a malformed series (must be one uppercase letter)', async () => {
     for (const bad of ['m', 'AB', '', 7]) {
-      const response = await PATCH(patchReq({ voucher_series: bad }), createMockRouteParams({ id: 'ca-1' }))
+      const response = await PATCH(patchReq({ voucher_series: bad }), createMockRouteParams({ id: CA_1 }))
       expect(response.status).toBe(400)
     }
     expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
   })
 
   it('returns 400 when voucher_series is missing entirely', async () => {
-    const response = await PATCH(patchReq({}), createMockRouteParams({ id: 'ca-1' }))
+    const response = await PATCH(patchReq({}), createMockRouteParams({ id: CA_1 }))
     expect(response.status).toBe(400)
+  })
+
+  it('returns 404 for an id that is not a UUID, without touching the database', async () => {
+    const response = await PATCH(patchReq({ voucher_series: 'M' }), createMockRouteParams({ id: 'not-a-uuid' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('CASH_ACCOUNT_NOT_FOUND')
+    expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
   })
 
   it('returns 404 when the account does not belong to the company', async () => {
     enqueue({ data: null, error: null })
 
-    const response = await PATCH(patchReq({ voucher_series: 'M' }), createMockRouteParams({ id: 'ca-other' }))
+    const response = await PATCH(patchReq({ voucher_series: 'M' }), createMockRouteParams({ id: CA_OTHER }))
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
     expect(status).toBe(404)
     expect(body.error.code).toBe('CASH_ACCOUNT_NOT_FOUND')
     const eqCalls = findCalls('cash_accounts', 'eq')
     expect(eqCalls).toContainEqual(['company_id', 'company-1'])
-    expect(eqCalls).toContainEqual(['id', 'ca-other'])
+    expect(eqCalls).toContainEqual(['id', CA_OTHER])
   })
 
   it('sets the series and returns the updated account (happy path)', async () => {
     enqueue({ data: { id: 'ca-1', ledger_account: '1931', voucher_series: 'M' }, error: null })
 
-    const response = await PATCH(patchReq({ voucher_series: 'M' }), createMockRouteParams({ id: 'ca-1' }))
+    const response = await PATCH(patchReq({ voucher_series: 'M' }), createMockRouteParams({ id: CA_1 }))
     const { status, body } = await parseJsonResponse<{ data: { voucher_series: string } }>(response)
 
     expect(status).toBe(200)
@@ -111,7 +123,7 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
   it('clears the override with null so the account follows the per-type default again', async () => {
     enqueue({ data: { id: 'ca-1', ledger_account: '1931', voucher_series: null }, error: null })
 
-    const response = await PATCH(patchReq({ voucher_series: null }), createMockRouteParams({ id: 'ca-1' }))
+    const response = await PATCH(patchReq({ voucher_series: null }), createMockRouteParams({ id: CA_1 }))
     const { status, body } = await parseJsonResponse<{ data: { voucher_series: string | null } }>(response)
 
     expect(status).toBe(200)
@@ -122,7 +134,7 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
   it('maps a database error to the canonical error envelope', async () => {
     enqueue({ data: null, error: { message: 'boom', code: '42P01' } })
 
-    const response = await PATCH(patchReq({ voucher_series: 'M' }), createMockRouteParams({ id: 'ca-1' }))
+    const response = await PATCH(patchReq({ voucher_series: 'M' }), createMockRouteParams({ id: CA_1 }))
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
     expect(status).toBeGreaterThanOrEqual(400)

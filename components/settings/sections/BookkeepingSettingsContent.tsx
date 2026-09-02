@@ -170,7 +170,7 @@ export function BookkeepingSettingsContent() {
         onSettingsUpdated={updateSettings}
       />
 
-      <VoucherSeriesPerCashAccountForm />
+      <VoucherSeriesPerCashAccountForm settings={settings} />
 
       <VoucherSeriesManager defaultSeries={settings.default_voucher_series || 'A'} />
 

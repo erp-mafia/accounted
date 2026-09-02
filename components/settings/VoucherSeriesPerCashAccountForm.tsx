@@ -1,19 +1,27 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Loader2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsGroup, SettingsRow, SettingsSelect } from '@/components/settings/SettingsRows'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import type { CashAccount } from '@/types'
-
-const SERIES_OPTIONS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+import { VOUCHER_SERIES_PRESETS } from '@/lib/bookkeeping/voucher-series-resolver'
+import type { CashAccount, CompanySettings } from '@/types'
 
 // Sentinel for "no override" in the <select>: an empty option value renders
 // as the placeholder in some browsers, so use an explicit token instead.
 const FOLLOW_DEFAULT = '__default__'
 
+const SERIES_LETTER_RE = /^[A-Z]$/
+
+interface Props {
+  /** Company settings, for the letters the company has already configured. */
+  settings: Pick<CompanySettings, 'default_voucher_series' | 'default_voucher_series_per_source_type'>
+}
+
+/** "Företagskort (1931)" or the bare ledger account when the row has no name. */
 function accountLabel(account: CashAccount): string {
   const name = account.name?.trim()
   return name ? `${name} (${account.ledger_account})` : account.ledger_account
@@ -26,14 +34,35 @@ function accountLabel(account: CashAccount): string {
  * Saves per row on change, no separate save button: each row is one field on
  * one account, and the bank-transaction booking dialog reads it live.
  *
- * Labels are bookkeeping-domain terms that stay Swedish across locales, same
- * convention as VoucherSeriesPerSourceTypeForm.
+ * The picker is the same closed list as the manual verifikat form: the fixed
+ * Swedish presets plus every letter the company already uses. A free A-Z list
+ * would let a typo start an undocumented series (BFNAR 2013:2 p. 9.2-9.15
+ * wants the series in use enumerated in the systemdokumentation).
  */
-export function VoucherSeriesPerCashAccountForm() {
+export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
+  const t = useTranslations('settings_voucher_series')
   const { toast } = useToast()
   const { cashAccounts, isLoading, refresh } = useCashAccounts({ enabledOnly: true })
   const [savingId, setSavingId] = useState<string | null>(null)
 
+  // Presets first, then any configured or already-assigned letter the presets
+  // do not cover, so a Select never renders blank on a value it does not offer.
+  const seriesOptions = useMemo(() => {
+    const preset = new Set(VOUCHER_SERIES_PRESETS.map((p) => p.letter))
+    const extras = [
+      settings.default_voucher_series,
+      ...Object.values(settings.default_voucher_series_per_source_type ?? {}),
+      ...cashAccounts.map((a) => a.voucher_series),
+    ]
+      .filter((v): v is string => typeof v === 'string' && SERIES_LETTER_RE.test(v) && !preset.has(v))
+    const uniqueExtras = Array.from(new Set(extras)).sort()
+    return [
+      ...VOUCHER_SERIES_PRESETS,
+      ...uniqueExtras.map((letter) => ({ letter, label: '' })),
+    ]
+  }, [settings.default_voucher_series, settings.default_voucher_series_per_source_type, cashAccounts])
+
+  /** PATCH one account's override, then refresh the shared cash-account cache. */
   const handleChange = async (account: CashAccount, value: string) => {
     const next = value === FOLLOW_DEFAULT ? null : value
     if ((account.voucher_series ?? null) === next) return
@@ -47,7 +76,7 @@ export function VoucherSeriesPerCashAccountForm() {
       const json = await res.json().catch(() => null)
       if (!res.ok) {
         toast({
-          title: 'Kunde inte spara',
+          title: t('per_account_save_failed'),
           description: getErrorMessage(json, { context: 'settings', statusCode: res.status }),
           variant: 'destructive',
         })
@@ -55,14 +84,14 @@ export function VoucherSeriesPerCashAccountForm() {
       }
       await refresh()
       toast({
-        title: 'Verifikationsserie sparad',
+        title: t('per_account_saved_title'),
         description: next
-          ? `Nya verifikat från ${accountLabel(account)} hamnar i serie ${next}.`
-          : `${accountLabel(account)} följer nu standardserien för banktransaktioner.`,
+          ? t('per_account_saved_set', { account: accountLabel(account), series: next })
+          : t('per_account_saved_cleared', { account: accountLabel(account) }),
       })
     } catch (err) {
       toast({
-        title: 'Kunde inte spara',
+        title: t('per_account_save_failed'),
         description: getErrorMessage(err, { context: 'settings' }),
         variant: 'destructive',
       })
@@ -72,19 +101,14 @@ export function VoucherSeriesPerCashAccountForm() {
   }
 
   return (
-    <SettingsGroup
-      label="Verifikationsserier per bankkonto"
-      help="Låt ett bankkonto bokföra i en egen serie, till exempel huvudbanken på A och företagskortet på M. Tomt fält följer serien för banktransaktioner ovan. Gäller bokföring av banktransaktioner; fakturamatchningar behåller sin betalningsserie."
-    >
+    <SettingsGroup label={t('per_account_heading')} help={t('per_account_help')}>
       {isLoading ? (
         <div className="flex items-center gap-2 px-1 py-3 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-          Hämtar bankkonton
+          {t('per_account_loading')}
         </div>
       ) : cashAccounts.length === 0 ? (
-        <p className="px-1 py-3 text-sm text-muted-foreground">
-          Inga aktiva bankkonton ännu. Konton skapas när du kopplar en bank eller importerar transaktioner.
-        </p>
+        <p className="px-1 py-3 text-sm text-muted-foreground">{t('per_account_empty')}</p>
       ) : (
         cashAccounts.map((account, i) => (
           <SettingsRow
@@ -100,10 +124,10 @@ export function VoucherSeriesPerCashAccountForm() {
               disabled={savingId === account.id}
               className="font-mono"
             >
-              <option value={FOLLOW_DEFAULT}>Standard</option>
-              {SERIES_OPTIONS.map((letter) => (
-                <option key={letter} value={letter}>
-                  {letter}
+              <option value={FOLLOW_DEFAULT}>{t('per_account_follow_default')}</option>
+              {seriesOptions.map((option) => (
+                <option key={option.letter} value={option.letter}>
+                  {option.label ? `${option.letter}  ${option.label}` : option.letter}
                 </option>
               ))}
             </SettingsSelect>
