@@ -161,7 +161,9 @@ describe('DELETE /api/salary/employees/[id]/recurring-lines/[lineId]', () => {
   })
 
   it('deactivates instead of deleting when derived rows reference the line', async () => {
-    enqueue({ data: { id: 'sli-1' } }) // derived-row reference check → found
+    // The FK is NO ACTION: the delete itself fails with 23503 and the route
+    // falls back to deactivation, race-free by construction.
+    enqueue({ error: { code: '23503', message: 'violates foreign key constraint' } })
     enqueue({ data: null }) // is_active=false update resolves
 
     const request = createMockRequest('/api/salary/employees/emp-1/recurring-lines/line-1', {

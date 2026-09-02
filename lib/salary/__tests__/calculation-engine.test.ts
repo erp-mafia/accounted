@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   calculateSalary,
   calculateKarensavdrag,
@@ -8,6 +8,7 @@ import {
   prorateBaseSalaryForPeriod,
 } from '../calculation-engine'
 import { calculateVacationPay } from '../absence-calculator'
+import { recurringLineFlags } from '../recurring-lines'
 import type { PayrollConfig } from '../payroll-config'
 import type { TaxTableRate } from '../tax-tables'
 
@@ -1459,5 +1460,68 @@ describe('öresavrundning (roundNetToWholeKrona)', () => {
           result.vacationAccrualAvgifter,
       ),
     )
+  })
+})
+
+describe('recurring line flags through the engine', () => {
+  // Pins the payroll math for derived recurring rows: the flags produced by
+  // recurringLineFlags must actually move gross, the tax base and the AGA
+  // base when run through calculateSalary (regression guard for #2044).
+  it('a recurring gross deduction reduces gross, tax base and AGA base, not the semester base', () => {
+    const flags = recurringLineFlags('gross_deduction_other')
+    const base = calculateSalary(makeBasicInput(), config2026, emptyTaxRates)
+    const withDeduction = calculateSalary(
+      makeBasicInput({
+        lineItems: [
+          {
+            itemType: 'gross_deduction_other' as const,
+            amount: -500,
+            isTaxable: flags.is_taxable,
+            isAvgiftBasis: flags.is_avgift_basis,
+            isVacationBasis: flags.is_vacation_basis,
+            isGrossDeduction: flags.is_gross_deduction,
+            isNetDeduction: flags.is_net_deduction,
+          },
+        ],
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+
+    expect(withDeduction.grossDeductions).toBe(500)
+    expect(withDeduction.grossSalary).toBe(base.grossSalary - 500)
+    expect(withDeduction.taxableIncome).toBe(base.taxableIncome - 500)
+    expect(withDeduction.avgifterBasis).toBe(base.avgifterBasis - 500)
+    expect(withDeduction.avgifterAmount).toBeLessThan(base.avgifterAmount)
+    // The DECISIONS.md judgment call: the semester base stays untouched.
+    expect(withDeduction.vacationAccrual).toBe(base.vacationAccrual)
+  })
+
+  it('a recurring net deduction reduces only the paid-out net', () => {
+    const flags = recurringLineFlags('net_deduction_union')
+    const base = calculateSalary(makeBasicInput(), config2026, emptyTaxRates)
+    const withDeduction = calculateSalary(
+      makeBasicInput({
+        lineItems: [
+          {
+            itemType: 'net_deduction_union' as const,
+            amount: -300,
+            isTaxable: flags.is_taxable,
+            isAvgiftBasis: flags.is_avgift_basis,
+            isVacationBasis: flags.is_vacation_basis,
+            isGrossDeduction: flags.is_gross_deduction,
+            isNetDeduction: flags.is_net_deduction,
+          },
+        ],
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+
+    expect(withDeduction.grossSalary).toBe(base.grossSalary)
+    expect(withDeduction.taxableIncome).toBe(base.taxableIncome)
+    expect(withDeduction.avgifterBasis).toBe(base.avgifterBasis)
+    expect(withDeduction.netDeductions).toBe(300)
+    expect(withDeduction.netSalary).toBe(base.netSalary - 300)
   })
 })

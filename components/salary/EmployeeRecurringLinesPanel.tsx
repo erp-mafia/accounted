@@ -28,7 +28,6 @@ type RecurringLineType =
   | 'net_deduction_union'
   | 'net_deduction_benefit_payment'
   | 'net_deduction_other'
-  | 'other'
 
 interface EmployeeRecurringLine {
   id: string
@@ -50,7 +49,6 @@ const LINE_LABELS: Record<RecurringLineType, string> = {
   net_deduction_union: 'Fackavgift',
   net_deduction_benefit_payment: 'Nettolöneavdrag förmån',
   net_deduction_other: 'Nettolöneavdrag',
-  other: 'Återkommande tillägg',
 }
 
 // In-row text action: same idiom as EmployeeBenefitsPanel.
@@ -74,7 +72,6 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
   const [validFrom, setValidFrom] = useState(() => new Date().toISOString().slice(0, 10))
   const [validTo, setValidTo] = useState('')
 
-  const isDeduction = type !== 'other'
 
   async function load() {
     const seq = ++loadSeq.current
@@ -110,13 +107,14 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
   async function handleAdd() {
     setSubmitting(true)
     try {
-      // The field takes a positive number; deductions are stored negative so
-      // the payslip math reads the sign from the row.
+      // The field takes a positive number; every recurring line is a
+      // deduction and is stored negative so the payslip math reads the sign
+      // from the row.
       const magnitude = Math.abs(parseFloat(amount) || 0)
       const body: Record<string, unknown> = {
         item_type: type,
         description: description || LINE_LABELS[type],
-        amount: isDeduction ? -magnitude : magnitude,
+        amount: -magnitude,
         valid_from: validFrom,
       }
       if (validTo) body.valid_to = validTo
@@ -260,9 +258,7 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="recurring_amount">
-                {isDeduction ? t('recurring_amount_deduction') : t('recurring_amount_addition')}
-              </Label>
+              <Label htmlFor="recurring_amount">{t('recurring_amount_deduction')}</Label>
               <Input
                 id="recurring_amount"
                 type="number"
@@ -273,9 +269,7 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
                 placeholder={t('recurring_amount_placeholder')}
                 className="max-w-xs"
               />
-              <p className="text-xs text-muted-foreground">
-                {isDeduction ? t('recurring_deduction_hint') : t('recurring_addition_hint')}
-              </p>
+              <p className="text-xs text-muted-foreground">{t('recurring_deduction_hint')}</p>
             </div>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -288,6 +282,7 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
                 <Input id="recurring_valid_to" type="date" value={validTo} onChange={e => setValidTo(e.target.value)} />
               </div>
             </div>
+            <p className="text-xs text-muted-foreground">{t('recurring_window_hint')}</p>
           </div>
 
           <DialogFooter>

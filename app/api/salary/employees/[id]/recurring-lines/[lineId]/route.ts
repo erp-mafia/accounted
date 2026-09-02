@@ -117,35 +117,12 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string; lineId: s
   async (_request, { supabase, companyId }, { params }) => {
     const { id, lineId } = await params
 
-    // A line that has already been derived into a run is deactivated, not
-    // deleted: the FK is ON DELETE SET NULL so booked history survives a
-    // delete, but a nulled back-link would make a DRAFT run's derived row
-    // look manual, and the next recalculation would keep it forever instead
-    // of removing it. Deactivating keeps the provenance link intact; the
-    // recalculation then drops the draft rows and never re-derives.
-    const { data: derivedRef, error: refError } = await supabase
-      .from('salary_line_items')
-      .select('id')
-      .eq('source_recurring_line_id', lineId)
-      .limit(1)
-      .maybeSingle()
-    if (refError) {
-      return NextResponse.json({ error: getUserErrorMessage(refError) }, { status: 500 })
-    }
-
-    if (derivedRef) {
-      const { error } = await supabase
-        .from('employee_recurring_lines')
-        .update({ is_active: false })
-        .eq('id', lineId)
-        .eq('employee_id', id)
-        .eq('company_id', companyId)
-
-      if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
-
-      return NextResponse.json({ data: { id: lineId, deleted: false, deactivated: true } })
-    }
-
+    // Delete-first, no pre-check: the FK from salary_line_items is NO
+    // ACTION, so the database itself refuses (23503) whenever any derived
+    // row references the line, including one inserted by a calculation
+    // racing this request. A referenced line is deactivated instead: the
+    // provenance link stays intact, the next recalculation drops draft
+    // derived rows and never re-derives.
     const { error } = await supabase
       .from('employee_recurring_lines')
       .delete()
@@ -153,7 +130,24 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string; lineId: s
       .eq('employee_id', id)
       .eq('company_id', companyId)
 
-    if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
+    if (error && error.code !== '23503') {
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
+    }
+
+    if (error) {
+      const { error: deactivateError } = await supabase
+        .from('employee_recurring_lines')
+        .update({ is_active: false })
+        .eq('id', lineId)
+        .eq('employee_id', id)
+        .eq('company_id', companyId)
+
+      if (deactivateError) {
+        return NextResponse.json({ error: getUserErrorMessage(deactivateError) }, { status: 500 })
+      }
+
+      return NextResponse.json({ data: { id: lineId, deleted: false, deactivated: true } })
+    }
 
     return NextResponse.json({ data: { id: lineId, deleted: true } })
   },

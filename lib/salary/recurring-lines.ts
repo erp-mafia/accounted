@@ -18,7 +18,6 @@ export const RECURRING_LINE_ITEM_TYPES = [
   'net_deduction_union',
   'net_deduction_benefit_payment',
   'net_deduction_other',
-  'other',
 ] as const satisfies readonly SalaryLineItemType[]
 
 export type RecurringLineItemType = (typeof RECURRING_LINE_ITEM_TYPES)[number]
@@ -40,8 +39,13 @@ export interface RecurringLineFlags {
  * Gross deductions carry the sick-karens convention: negative amount with
  * is_taxable + is_avgift_basis true, so they reduce both the tax base and the
  * arbetsgivaravgift base. Net deductions only move money after tax. Neither
- * accrues semester; a recurring 'other' addition follows the benefit rows in
- * that respect.
+ * touches the semester base (is_vacation_basis false on the deduction row:
+ * the loneväxling-style choice recorded in DECISIONS.md).
+ *
+ * Recurring ADDITIONS ('other') are deliberately not supported: the engine's
+ * calculateSalary only treats ADDITION_TYPES as additions and never reads a
+ * generic taxable row into gross/tax/AGA, so a recurring 'other' would show
+ * on the payslip without being paid or declared. Teach the engine first.
  */
 export function recurringLineFlags(itemType: RecurringLineItemType): RecurringLineFlags {
   if (itemType === 'gross_deduction_pension' || itemType === 'gross_deduction_other') {
@@ -50,15 +54,6 @@ export function recurringLineFlags(itemType: RecurringLineItemType): RecurringLi
       is_avgift_basis: true,
       is_vacation_basis: false,
       is_gross_deduction: true,
-      is_net_deduction: false,
-    }
-  }
-  if (itemType === 'other') {
-    return {
-      is_taxable: true,
-      is_avgift_basis: true,
-      is_vacation_basis: false,
-      is_gross_deduction: false,
       is_net_deduction: false,
     }
   }
@@ -73,7 +68,7 @@ export function recurringLineFlags(itemType: RecurringLineItemType): RecurringLi
 
 /** Shared 400 copy: schema, route backstop and UI hint say the same thing. */
 export const RECURRING_LINE_AMOUNT_SIGN_MESSAGE =
-  'Avdragsrader måste ha negativt belopp och tilläggsrader positivt belopp.'
+  'Återkommande rader är avdrag och måste ha negativt belopp.'
 
 /**
  * Validate the amount sign for an item type. Returns an error message or
@@ -84,9 +79,7 @@ export function validateRecurringLineAmount(
   itemType: RecurringLineItemType,
   amount: number,
 ): string | null {
-  if (!Number.isFinite(amount) || amount === 0) return RECURRING_LINE_AMOUNT_SIGN_MESSAGE
-  const isDeduction = itemType !== 'other'
-  if (isDeduction && amount >= 0) return RECURRING_LINE_AMOUNT_SIGN_MESSAGE
-  if (!isDeduction && amount <= 0) return RECURRING_LINE_AMOUNT_SIGN_MESSAGE
+  void itemType // every supported type is a deduction; kept for call-site shape
+  if (!Number.isFinite(amount) || amount >= 0) return RECURRING_LINE_AMOUNT_SIGN_MESSAGE
   return null
 }

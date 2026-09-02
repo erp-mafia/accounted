@@ -20,21 +20,23 @@ ALTER TABLE public.employees
 
 CREATE TABLE public.employee_recurring_lines (
   id          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  employee_id uuid NOT NULL REFERENCES public.employees(id) ON DELETE CASCADE,
+  -- No single-column employees FK: the composite FK below carries both the
+  -- integrity and the cascade (the dimensions-tables convention).
+  employee_id uuid NOT NULL,
   company_id  uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
   FOREIGN KEY (employee_id, company_id)
     REFERENCES public.employees(id, company_id) ON DELETE CASCADE,
   user_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
 
   -- Reuses existing salary_line_items item types; no CHECK expansion needed
-  -- there. Deductions must be negative; 'other' is a recurring addition.
+  -- there. Only deductions: the engine does not treat a generic 'other'
+  -- addition as pay, so recurring additions are excluded until it does.
   item_type   text NOT NULL CHECK (item_type IN (
     'gross_deduction_pension',
     'gross_deduction_other',
     'net_deduction_union',
     'net_deduction_benefit_payment',
-    'net_deduction_other',
-    'other'
+    'net_deduction_other'
   )),
   description text NOT NULL,
   amount      numeric NOT NULL,
@@ -50,10 +52,7 @@ CREATE TABLE public.employee_recurring_lines (
   updated_at  timestamptz NOT NULL DEFAULT now(),
 
   CHECK (valid_to IS NULL OR valid_to >= valid_from),
-  CONSTRAINT employee_recurring_lines_amount_sign CHECK (
-    (item_type LIKE '%deduction%' AND amount < 0)
-    OR (item_type = 'other' AND amount > 0)
-  ),
+  CONSTRAINT employee_recurring_lines_amount_sign CHECK (amount < 0),
   CONSTRAINT employee_recurring_lines_account_format CHECK (
     account_number IS NULL OR account_number ~ '^[0-9]{4}$'
   )
@@ -91,10 +90,15 @@ CREATE TRIGGER audit_employee_recurring_lines
   FOR EACH ROW EXECUTE FUNCTION public.write_audit_log();
 
 -- Back-link so the calculation can replace derived rows idempotently,
--- mirroring salary_line_items.source_benefit_id.
+-- mirroring salary_line_items.source_benefit_id but with NO ACTION instead
+-- of SET NULL: a deletion racing a concurrent derivation must fail (23503)
+-- rather than silently orphan the derived row into an apparent manual row.
+-- The DELETE route catches 23503 and falls back to deactivating the line.
+-- Company deletion still cascades cleanly: NO ACTION defers the check to
+-- statement end, by which time the same cascade removed both sides.
 ALTER TABLE public.salary_line_items
   ADD COLUMN source_recurring_line_id uuid
-    REFERENCES public.employee_recurring_lines(id) ON DELETE SET NULL;
+    REFERENCES public.employee_recurring_lines(id);
 
 CREATE INDEX idx_salary_line_items_source_recurring_line
   ON public.salary_line_items (source_recurring_line_id)

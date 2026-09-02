@@ -3189,11 +3189,10 @@ export const RecurringLineItemTypeSchema = z.enum([
   'net_deduction_union',
   'net_deduction_benefit_payment',
   'net_deduction_other',
-  'other',
 ])
 
 /** Same inclusive-bound semantics as BENEFIT_PERIOD_ORDER_MESSAGE, for
- * employee_recurring_lines (migration 20260830140000). */
+ * employee_recurring_lines (migration 20260831210000). */
 export const RECURRING_LINE_PERIOD_ORDER_MESSAGE =
   '"Gäller till" måste vara samma dag som eller efter "Gäller från". Lämna fältet tomt för en löpande rad.'
 
@@ -3201,13 +3200,11 @@ const recurringLineAmountIssue = (
   data: { item_type?: string; amount?: number },
   ctx: z.RefinementCtx,
 ) => {
-  // Mirrors the employee_recurring_lines_amount_sign CHECK: deductions are
-  // negative, 'other' additions positive, zero never legal. Kept in the schema
-  // so the violation is a field-level 400 instead of a Postgres 23514.
+  // Mirrors the employee_recurring_lines_amount_sign CHECK: every supported
+  // type is a deduction and must be negative. Kept in the schema so the
+  // violation is a field-level 400 instead of a Postgres 23514.
   if (data.amount === undefined || data.item_type === undefined) return
-  const isDeduction = data.item_type !== 'other'
-  const bad =
-    data.amount === 0 || (isDeduction ? data.amount >= 0 : data.amount <= 0)
+  const bad = data.amount >= 0
   if (bad) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,

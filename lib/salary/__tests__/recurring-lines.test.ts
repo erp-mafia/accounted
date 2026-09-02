@@ -35,25 +35,14 @@ describe('recurringLineFlags', () => {
     }
   })
 
-  it('marks a recurring addition like a benefit row: taxable, no deduction flags', () => {
-    expect(recurringLineFlags('other')).toEqual({
-      is_taxable: true,
-      is_avgift_basis: true,
-      is_vacation_basis: false,
-      is_gross_deduction: false,
-      is_net_deduction: false,
-    })
-  })
-
-  it('exactly one of gross/net deduction is set for deduction types, none for other', () => {
+  it('every supported type is a deduction with exactly one deduction flag set', () => {
+    // 'other' (recurring addition) is deliberately absent: the engine does
+    // not treat generic taxable rows as additions, see recurring-lines.ts.
+    expect(RECURRING_LINE_ITEM_TYPES).not.toContain('other')
     for (const t of RECURRING_LINE_ITEM_TYPES) {
       const flags = recurringLineFlags(t)
       expect(flags.is_gross_deduction && flags.is_net_deduction).toBe(false)
-      if (t === 'other') {
-        expect(flags.is_gross_deduction || flags.is_net_deduction).toBe(false)
-      } else {
-        expect(flags.is_gross_deduction || flags.is_net_deduction).toBe(true)
-      }
+      expect(flags.is_gross_deduction || flags.is_net_deduction).toBe(true)
     }
   })
 })
@@ -70,20 +59,14 @@ describe('validateRecurringLineAmount', () => {
     )
   })
 
-  it('requires additions to be positive', () => {
-    expect(validateRecurringLineAmount('other', 500)).toBeNull()
-    expect(validateRecurringLineAmount('other', -500)).toBe(RECURRING_LINE_AMOUNT_SIGN_MESSAGE)
-  })
-
-  it('never accepts zero or non-finite amounts', () => {
-    expect(validateRecurringLineAmount('other', 0)).toBe(RECURRING_LINE_AMOUNT_SIGN_MESSAGE)
+  it('never accepts zero, positive or non-finite amounts', () => {
     expect(validateRecurringLineAmount('gross_deduction_other', 0)).toBe(
       RECURRING_LINE_AMOUNT_SIGN_MESSAGE,
     )
-    expect(validateRecurringLineAmount('other', Number.NaN)).toBe(
+    expect(validateRecurringLineAmount('net_deduction_other', Number.NaN)).toBe(
       RECURRING_LINE_AMOUNT_SIGN_MESSAGE,
     )
-    expect(validateRecurringLineAmount('other', Number.POSITIVE_INFINITY)).toBe(
+    expect(validateRecurringLineAmount('gross_deduction_pension', Number.POSITIVE_INFINITY)).toBe(
       RECURRING_LINE_AMOUNT_SIGN_MESSAGE,
     )
   })

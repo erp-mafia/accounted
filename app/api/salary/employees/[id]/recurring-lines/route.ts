@@ -4,6 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateEmployeeRecurringLineSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { roundOre } from '@/lib/money'
 
 ensureInitialized()
 
@@ -55,7 +56,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         user_id: user.id,
         item_type: body.item_type,
         description: body.description,
-        amount: body.amount,
+        amount: roundOre(body.amount),
         account_number: body.account_number ?? null,
         valid_from: body.valid_from,
         valid_to: body.valid_to ?? null,

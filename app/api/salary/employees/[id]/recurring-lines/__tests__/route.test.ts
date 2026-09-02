@@ -112,9 +112,9 @@ describe('POST /api/salary/employees/[id]/recurring-lines', () => {
       expect(supabase.from).not.toHaveBeenCalled()
     })
 
-    it('rejects a negative amount on a recurring addition', async () => {
+    it("rejects the removed 'other' addition type", async () => {
       const response = await POST(
-        post({ ...validLine, item_type: 'other', amount: -500 }),
+        post({ ...validLine, item_type: 'other', amount: 500 }),
         params,
       )
       expect(response.status).toBe(400)
