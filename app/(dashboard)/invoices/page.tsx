@@ -2,6 +2,7 @@
 
 import { Fragment, useState, useEffect, useMemo, useRef } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
+import { groupRows, ungrouped } from '@/lib/lists/group-rows'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -125,6 +126,10 @@ function matchesListTab(invoice: Invoice, tab: ListTab): boolean {
 // mirrors the supplier-invoices layout (payment queue as its own section).
 const GROUP_MODES = ['status', 'customer', 'month', 'none'] as const
 type GroupMode = (typeof GROUP_MODES)[number]
+const STATUS_SECTION_ORDER = ['drafts', 'awaiting', 'settled'] as const
+/** Sentinel bucket for rows with no customer or no date. Not a display
+ *  string: the header renders t('group_unknown') for it. */
+const UNKNOWN_GROUP_KEY = 'unknown'
 const GROUP_LABEL_KEYS: Record<GroupMode, string> = {
   status: 'group_status',
   customer: 'group_customer',
@@ -133,17 +138,11 @@ const GROUP_LABEL_KEYS: Record<GroupMode, string> = {
 }
 
 type StatusGroup = 'drafts' | 'awaiting' | 'settled'
+/** Sections reuse the tab predicates so the two can never drift: what the
+ *  Utkast and Obetalda tabs show is what the sections bucket. */
 function statusGroupOf(invoice: Invoice): StatusGroup {
-  if (invoice.status === 'draft') return 'drafts'
-  const isCreditNote = !!invoice.credited_invoice_id
-  const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
-  if (
-    ['sent', 'overdue', 'partially_paid'].includes(invoice.status) &&
-    !isCreditNote &&
-    docType === 'invoice'
-  ) {
-    return 'awaiting'
-  }
+  if (matchesListTab(invoice, 'draft')) return 'drafts'
+  if (matchesListTab(invoice, 'unpaid')) return 'awaiting'
   return 'settled'
 }
 
@@ -250,7 +249,7 @@ export default function InvoicesPage() {
   })
   const [groupMode, setGroupMode] = useState<GroupMode>(() => {
     const param = searchParams.get('group')
-    return param && GROUP_MODES.includes(param as never) ? (param as GroupMode) : 'status'
+    return param && GROUP_MODES.includes(param as never) ? (param as GroupMode) : 'none'
   })
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
   // Fiscal-year scope (convention 8): null = all years.
@@ -388,51 +387,37 @@ export default function InvoicesPage() {
     () => (sort ? sortInvoiceList(filteredInvoices, sort, oreRounding) : filteredInvoices),
     [filteredInvoices, oreRounding, sort],
   )
-  // Grouping: bucket the sorted rows, keep the sort order inside each
-  // bucket, and flatten back to one list so paging and the detail pager
-  // walk the exact rendered order.
+  // Grouping: bucket the sorted rows through the shared helper, then flatten
+  // back to one list so paging, range selection and the detail pager walk the
+  // exact rendered order. Sorting stays above; the helper only sections.
   const { flatRows, groupMeta } = useMemo(() => {
     if (groupMode === 'none') {
-      return {
-        flatRows: sortedInvoices.map((invoice) => ({ invoice, groupKey: null as string | null })),
-        groupMeta: new Map<string, { label: string; count: number }>(),
-      }
+      const flat = ungrouped(sortedInvoices)
+      return { flatRows: flat.rows, groupMeta: flat.meta }
     }
-    const buckets = new Map<string, { label: string; rows: Invoice[] }>()
-    for (const invoice of sortedInvoices) {
-      let key: string
-      let label: string
-      if (groupMode === 'status') {
-        key = statusGroupOf(invoice)
-        label = key
-      } else if (groupMode === 'customer') {
-        label = (invoice.customer as { name: string })?.name ?? '—'
-        // Bucket by id, not display name: two customers can share a name.
-        key = invoice.customer_id ?? label
-      } else {
-        key = (invoice.invoice_date ?? '').slice(0, 7) || '—'
-        label = key
-      }
-      const bucket = buckets.get(key) ?? { label, rows: [] }
-      bucket.rows.push(invoice)
-      buckets.set(key, bucket)
-    }
-    let keys = [...buckets.keys()]
-    if (groupMode === 'status') {
-      keys = (['drafts', 'awaiting', 'settled'] as const).filter((key) => buckets.has(key))
-    } else if (groupMode === 'customer') {
-      keys.sort((a, b) => (buckets.get(a)?.label ?? a).localeCompare(buckets.get(b)?.label ?? b, 'sv'))
-    } else {
-      keys.sort((a, b) => b.localeCompare(a))
-    }
-    const flat: Array<{ invoice: Invoice; groupKey: string | null }> = []
-    const meta = new Map<string, { label: string; count: number }>()
-    for (const key of keys) {
-      const bucket = buckets.get(key)!
-      meta.set(key, { label: bucket.label, count: bucket.rows.length })
-      for (const invoice of bucket.rows) flat.push({ invoice, groupKey: key })
-    }
-    return { flatRows: flat, groupMeta: meta }
+    const grouped =
+      groupMode === 'status'
+        ? groupRows(sortedInvoices, {
+            keyOf: (invoice) => ({ key: statusGroupOf(invoice), label: statusGroupOf(invoice) }),
+            order: STATUS_SECTION_ORDER,
+          })
+        : groupMode === 'customer'
+          ? groupRows(sortedInvoices, {
+              keyOf: (invoice) => {
+                const label = (invoice.customer as { name: string })?.name ?? UNKNOWN_GROUP_KEY
+                // Bucket by id, not display name: two customers can share one.
+                return { key: invoice.customer_id ?? label, label }
+              },
+              order: (a, b) => a.label.localeCompare(b.label, 'sv'),
+            })
+          : groupRows(sortedInvoices, {
+              keyOf: (invoice) => {
+                const key = (invoice.invoice_date ?? '').slice(0, 7) || UNKNOWN_GROUP_KEY
+                return { key, label: key }
+              },
+              order: (a, b) => b.key.localeCompare(a.key),
+            })
+    return { flatRows: grouped.rows, groupMeta: grouped.meta }
   }, [groupMode, sortedInvoices])
 
   const visibleRows = flatRows.slice(0, visibleCount)
@@ -452,10 +437,11 @@ export default function InvoicesPage() {
       if (key === 'awaiting') return t('section_awaiting', { count })
       return t('section_settled', { count })
     }
-    if (groupMode === 'month' && key !== '—') {
+    if (groupMode === 'month' && key !== UNKNOWN_GROUP_KEY) {
       const label = monthFormatter.format(new Date(`${key}-01T00:00:00`))
       return `${label.charAt(0).toLocaleUpperCase('sv-SE')}${label.slice(1)} (${count})`
     }
+    if (key === UNKNOWN_GROUP_KEY) return `${t('group_unknown')} (${count})`
     return `${meta?.label ?? key} (${count})`
   }
 
@@ -463,7 +449,7 @@ export default function InvoicesPage() {
   // prev/next on the detail page can walk past the paging boundary.
   const rememberListContext = () => {
     writeListContext(listContextKey('invoices', company?.id), {
-      ids: flatRows.map((row) => row.invoice.id),
+      ids: flatRows.map((entry) => entry.row.id),
     })
   }
 
@@ -537,7 +523,9 @@ export default function InvoicesPage() {
   // Ranges walk the selectable rows that are actually rendered: the list is
   // sorted and cut at visibleCount, so rows below the fold are not in range.
   const range = useRangeSelect({
-    visibleIds: visibleInvoices.filter(isBulkSelectable).map((inv) => inv.id),
+    visibleIds: visibleRows
+      .filter((entry) => isBulkSelectable(entry.row))
+      .map((entry) => entry.row.id),
     selectedIds,
     setSelectedIds,
   })
@@ -877,7 +865,7 @@ export default function InvoicesPage() {
               </tr>
             </thead>
             <tbody className="stagger-enter">
-              {visibleRows.map(({ invoice, groupKey }, index) => {
+              {visibleRows.map(({ row: invoice, groupKey }, index) => {
                 const prevKey = index > 0 ? visibleRows[index - 1].groupKey : undefined
                 const showHeader = showGroupHeaders && groupKey !== null && groupKey !== prevKey
                 const status = statusDescriptor(invoice)
@@ -904,7 +892,7 @@ export default function InvoicesPage() {
                 return (
                   <Fragment key={invoice.id}>
                   {showHeader && (
-                    <tr>
+                    <tr data-no-stagger>
                       <td
                         colSpan={showSelection ? 6 : 5}
                         className={cn(
@@ -941,10 +929,10 @@ export default function InvoicesPage() {
                             onCheckedChange={() => toggleSelect(invoice.id, shiftHeld.current)}
                             aria-label={t('bulk_select_row')}
                             className={cn(
-                              'transition-opacity duration-150',
+                              'border-foreground duration-150',
                               selectedIds.has(invoice.id) || selectedIds.size > 0
                                 ? 'opacity-100'
-                                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100',
+                                : CHECKBOX_REVEAL_CLASS,
                             )}
                           />
                         )}

@@ -6429,6 +6429,7 @@
     "group_customer": "Kund",
     "group_month": "Månad",
     "group_none": "Ingen gruppering",
+    "group_unknown": "Saknas",
     "section_drafts": "Utkast ({count})",
     "section_awaiting": "Väntar på betalning ({count})",
     "section_settled": "Betalda och avslutade ({count})"

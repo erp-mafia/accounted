@@ -6429,6 +6429,7 @@
     "group_customer": "Customer",
     "group_month": "Month",
     "group_none": "No grouping",
+    "group_unknown": "Missing",
     "section_drafts": "Drafts ({count})",
     "section_awaiting": "Awaiting payment ({count})",
     "section_settled": "Paid and settled ({count})"
