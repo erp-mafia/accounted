@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { insertAuthUser, insertCompany } from './fixtures'
+import { insertAuthUser, insertCompany, insertCompanyMember } from './fixtures'
 import { getPool } from './setup'
 
 /**
@@ -28,6 +28,7 @@ describe('api_keys.unattended_commit_limit (pg)', () => {
   async function seedKey(limit: number | null = null) {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId, role: 'owner' })
     const apiKeyId = randomUUID()
     const keyHash = randomUUID().replaceAll('-', '')
     await getPool().query(
@@ -42,6 +43,7 @@ describe('api_keys.unattended_commit_limit (pg)', () => {
   it('defaults to NULL so pre-existing keys stay unlimited', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId, role: 'owner' })
     // Deliberately omits the column instead of storing an explicit NULL: this
     // test exists to pin the DATABASE DEFAULT, and passing NULL in would keep
     // it green even if the default changed to a positive ceiling, which is the
@@ -59,6 +61,7 @@ describe('api_keys.unattended_commit_limit (pg)', () => {
   it('rejects a zero or negative ceiling with the CHECK constraint', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId, role: 'owner' })
 
     for (const bad of [0, -1]) {
       await expect(
