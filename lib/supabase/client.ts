@@ -8,6 +8,8 @@ const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
 const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ''
 const isBuildPlaceholder = !url || url.startsWith('__')
 
+// Cookie encoding must match lib/supabase/server.ts (default
+// `user-and-tokens`); see the note there before switching to `tokens-only`.
 export function createClient() {
   return createBrowserClient(
     isBuildPlaceholder ? 'https://placeholder.supabase.co' : url,
