@@ -298,7 +298,9 @@ GRANT EXECUTE ON FUNCTION public.ensure_party(uuid, uuid, text, text, text, text
 -- Suppliers first (they carry payment data), then customers, so a company
 -- that both buys from and sells to the same organisation ends up with one
 -- party carrying both roles. Rows without a valid org number get their own
--- party; nothing is merged on name.
+-- party; nothing is merged on name. Rows with an empty name (three exist on
+-- prod: one supplier, two customers) keep party_id NULL: ensure_party
+-- refuses a nameless party, and the suggestion pipeline names them later.
 DO $$
 DECLARE
   r record;
@@ -307,6 +309,7 @@ BEGIN
     SELECT id, company_id, user_id, name, org_number
       FROM public.suppliers
      WHERE party_id IS NULL AND company_id IS NOT NULL
+       AND nullif(btrim(name), '') IS NOT NULL
      ORDER BY created_at, id
   LOOP
     UPDATE public.suppliers
@@ -318,6 +321,7 @@ BEGIN
     SELECT id, company_id, user_id, name, org_number
       FROM public.customers
      WHERE party_id IS NULL AND company_id IS NOT NULL
+       AND nullif(btrim(name), '') IS NOT NULL
      ORDER BY created_at, id
   LOOP
     UPDATE public.customers
