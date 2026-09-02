@@ -209,6 +209,10 @@ export const AUDITED_TABLES = [
   'booking_template_library',
   'sie_imports',
   'bank_file_imports',
+  // Verifikationsserie per bankkonto (audited since migration 20260902124513):
+  // the per-account override outranks the per-source-type map above, so it is
+  // a behandlingsregel in the same sense.
+  'cash_accounts',
 ] as const
 
 /**
@@ -232,7 +236,7 @@ export const GLOBAL_ACTIONS = [
  * names statically; a unit test pins it to AUDITED_TABLES / GLOBAL_ACTIONS.
  */
 export const AUDIT_ROW_FILTER =
-  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,bank_file_imports),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)'
+  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,bank_file_imports,cash_accounts),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)'
 
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   manual: 'Manuell',
@@ -409,6 +413,15 @@ const MAPPING_RULE_FIELDS: Record<string, string> = {
   requires_review: 'Kräver granskning',
   default_private: 'Privat som standard',
   is_active: 'Aktiv',
+}
+
+/**
+ * cash_accounts columns that are behandlingsregler. Only voucher_series: the
+ * trigger (20260902124513) fires on that column alone, and the read model
+ * must not resurrect balance/name churn from bank sync if a row slips through.
+ */
+const CASH_ACCOUNT_FIELDS: Record<string, string> = {
+  voucher_series: 'Verifikationsserie',
 }
 
 const CATEGORIZATION_TEMPLATE_FIELDS: Record<string, string> = {
@@ -1128,6 +1141,14 @@ export function auditRowToEvent(
         fields: BOOKING_TEMPLATE_FIELDS,
         objectKeys: ['name'],
       })
+    case 'cash_accounts':
+      return genericAuditEvent(row, {
+        category: 'installningar',
+        codePrefix: 'cash_account',
+        noun: 'Bankkonto',
+        fields: CASH_ACCOUNT_FIELDS,
+        objectKeys: ['name', 'ledger_account'],
+      })
     case 'salary_payroll_config':
       return payrollConfigAuditEvent(row)
     // The import tables emit their own events from the rows themselves; the
@@ -1584,7 +1605,7 @@ async function fetchAuditRows(
       // Literal on purpose (not AUDIT_ROW_FILTER): the schema guard only
       // resolves string literals here. A test pins the two to each other.
       .or(
-        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,bank_file_imports),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)',
+        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,bank_file_imports,cash_accounts),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)',
       )
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
