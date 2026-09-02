@@ -77,10 +77,12 @@ describe('gnubok_list_unmatched_documents', () => {
           email_subject: null,
           email_received_at: null,
           created_at: '2026-06-01T00:00:00Z',
+          document_attachments: { file_name: 'V82_2025-08-05_DNB-Finans.pdf' },
           extracted_data: {
             supplier: { name: 'DNB Finans', orgNumber: '5164060161' },
             invoice: { currency: 'SEK', invoiceDate: '2025-08-05', paymentReference: '9581810307' },
             totals: { total: 13428 },
+            pages: { total: 38, analyzed: 3 },
           },
         },
         {
@@ -100,7 +102,13 @@ describe('gnubok_list_unmatched_documents', () => {
     enqueue({ data: [{ document_id: 'doc-2' }], error: null })
 
     const result = (await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)) as {
-      items: Array<{ inbox_item_id: string; vendor_name: string | null; amount: number | null }>
+      items: Array<{
+        inbox_item_id: string
+        vendor_name: string | null
+        amount: number | null
+        file_name: string | null
+        pages: { total: number; analyzed: number } | null
+      }>
       count: number
     }
 
@@ -108,6 +116,39 @@ describe('gnubok_list_unmatched_documents', () => {
     expect(result.items[0].inbox_item_id).toBe('inbox-1')
     expect(result.items[0].vendor_name).toBe('DNB Finans')
     expect(result.items[0].amount).toBe(13428)
+    // The original file name and the page coverage of the extraction travel
+    // with the row (feedback seq 265062 / 288574): the agent must not have to
+    // fetch every document to learn what it is, and amount: null on a
+    // sliced 38-page PDF is not a fact about the file.
+    expect(result.items[0].file_name).toBe('V82_2025-08-05_DNB-Finans.pdf')
+    expect(result.items[0].pages).toEqual({ total: 38, analyzed: 3 })
+  })
+
+  it('tolerates the embed coming back as an array and a document with no page info', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        {
+          id: 'inbox-3',
+          document_id: 'doc-3',
+          source: 'email',
+          email_from: 'a@b.se',
+          email_subject: 'Kvitto',
+          email_received_at: '2026-06-02T00:00:00Z',
+          created_at: '2026-06-02T00:00:00Z',
+          document_attachments: [{ file_name: 'kvitto.jpg' }],
+          extracted_data: { totals: { total: 99 } },
+        },
+      ],
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+
+    const result = (await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)) as {
+      items: Array<{ file_name: string | null; pages: unknown }>
+    }
+    expect(result.items[0].file_name).toBe('kvitto.jpg')
+    expect(result.items[0].pages).toBeNull()
   })
 
   it('returns an empty result when the inbox query has nothing pending', async () => {

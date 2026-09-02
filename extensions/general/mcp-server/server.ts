@@ -5350,7 +5350,18 @@ export const tools: McpTool[] = [
         throw new Error(`transactions_without_documents failed: ${result?.code ?? 'unknown error'}`)
       }
 
-      const rows = result.transactions ?? []
+      // Every row here is booked by construction (the RPC joins
+      // journal_entries), but transactions.category keeps its column default
+      // 'uncategorized' when a row is booked by a manual voucher plus link
+      // (lib/transactions/link-journal-entry.ts never writes category).
+      // gnubok_list_uncategorized_transactions uses that same word to mean
+      // "no journal entry yet", so echoing it here made agents try to book an
+      // already-booked deposit (feedback seq 288574). null = no category
+      // label; the journal_entry_id is the booking truth.
+      const rows = (result.transactions ?? []).map((row) => {
+        const r = row as Record<string, unknown>
+        return r.category === 'uncategorized' ? { ...r, category: null } : r
+      })
       const total = result.total_count ?? 0
       return { transactions: rows, ...pageTail(rows, total, offset) }
     },
@@ -12479,7 +12490,7 @@ export const tools: McpTool[] = [
       const fetchSize = limit * 2
       let inboxQuery = supabase
         .from('invoice_inbox_items')
-        .select('id, document_id, source, email_from, email_subject, email_received_at, extracted_data, created_at')
+        .select('id, document_id, source, email_from, email_subject, email_received_at, extracted_data, created_at, document_attachments(file_name)')
         .eq('company_id', companyId)
         .not('document_id', 'is', null)
         .is('created_supplier_invoice_id', null)
@@ -12524,8 +12535,17 @@ export const tools: McpTool[] = [
           let currency: string | null = null
           let invoiceDate: string | null = null
           let paymentReference: string | null = null
+          // Page coverage of the extraction (set only when the PDF was sliced,
+          // extensions/general/invoice-inbox/lib/upload-and-extract.ts). Lets
+          // the agent tell "this document has no total" from "we read 3 of 38
+          // pages" instead of reading amount: null as a fact about the file.
+          let pages: { total: number; analyzed: number } | null = null
 
           if (extracted) {
+            const pageInfo = extracted.pages as { total?: unknown; analyzed?: unknown } | undefined
+            if (typeof pageInfo?.total === 'number' && typeof pageInfo?.analyzed === 'number') {
+              pages = { total: pageInfo.total, analyzed: pageInfo.analyzed }
+            }
             const supplier = extracted.supplier as Record<string, unknown> | undefined
             const invoice = extracted.invoice as Record<string, unknown> | undefined
             const totals = extracted.totals as Record<string, unknown> | undefined
@@ -12542,9 +12562,22 @@ export const tools: McpTool[] = [
             paymentReference = (invoice?.paymentReference as string) || null
           }
 
+          // Original file name, same embed gnubok_list_inbox_items uses: the
+          // archive file name was a better date signal than the OCR'd
+          // invoice_date in every case one reporter checked (feedback seq
+          // 265062), and without it the agent must fetch each document just
+          // to learn what it is.
+          const attachment = item.document_attachments as
+            | { file_name?: string | null }
+            | Array<{ file_name?: string | null }>
+            | null
+            | undefined
+          const fileName = (Array.isArray(attachment) ? attachment[0]?.file_name : attachment?.file_name) ?? null
+
           return {
             inbox_item_id: item.id,
             document_id: item.document_id,
+            file_name: fileName,
             source: item.source,
             created_at: item.created_at,
             email_from: item.email_from,
@@ -12556,6 +12589,7 @@ export const tools: McpTool[] = [
             currency,
             invoice_date: invoiceDate,
             payment_reference: paymentReference,
+            pages,
           }
         })
 

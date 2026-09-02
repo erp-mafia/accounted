@@ -3578,6 +3578,47 @@ async function precheckDocumentLink(
 }
 
 /**
+ * After a document is linked to a verifikat, stamp the inbox item it came
+ * from (if any) so the inbox reads "handled". Both inbox read surfaces derive
+ * "done" from the inbox row's own link columns, never from
+ * document_attachments.journal_entry_id: gnubok_list_inbox_items computes
+ * processed from matched_transaction_id / created_supplier_invoice_id /
+ * created_journal_entry_id, and gnubok_list_unmatched_documents filters on the
+ * same two nulls. Without this stamp a document attached through
+ * link_document_to_voucher stays "unprocessed" forever: agents re-see it as
+ * missing underlag, and one user read the five leftover rows as duplicates
+ * and nearly deleted the only copies of underlag sitting on posted verifikat
+ * (feedback 2026-08-24..26, three companies).
+ *
+ * Same shape as the create_voucher + inbox_item_id stamp: CAS on the null
+ * link columns so a concurrent claim stays a no-op, and unique_violation
+ * tolerated because the UNIQUE on created_journal_entry_id lets only one
+ * inbox item point at a samlingsverifikat. Best-effort by design: the link is
+ * already committed and inbox bookkeeping must not roll it back.
+ */
+async function stampInboxItemForLinkedDocument(
+  supabase: SupabaseClient,
+  companyId: string,
+  documentId: string,
+  journalEntryId: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from('invoice_inbox_items')
+    .update({ created_journal_entry_id: journalEntryId })
+    .eq('document_id', documentId)
+    .eq('company_id', companyId)
+    .is('created_journal_entry_id', null)
+    .is('created_supplier_invoice_id', null)
+  if (error && error.code !== '23505') {
+    log.warn('Failed to mark inbox item handled after document link (link still committed)', {
+      documentId,
+      journalEntryId,
+      error: error.message,
+    })
+  }
+}
+
+/**
  * Shared failure mapping for both link executors. A locked period is the one
  * case worth its own sentence: it is recoverable by unlocking, unlike the rest,
  * and the raw trigger text is English database prose. Everything else goes
@@ -3618,6 +3659,7 @@ async function commitLinkDocumentToVoucher(
       journalEntryId,
       journalEntryLineId,
     )
+    await stampInboxItemForLinkedDocument(supabase, companyId, documentId, journalEntryId)
     return {
       data: {
         document_id: updated.id,
@@ -3673,6 +3715,7 @@ async function commitLinkDocumentsToVouchers(
       const updated = await linkToJournalEntry(
         supabase, companyId, documentId, journalEntryId, link.journal_entry_line_id ?? undefined,
       )
+      await stampInboxItemForLinkedDocument(supabase, companyId, documentId, journalEntryId)
       linked.push({ document_id: updated.id, journal_entry_id: updated.journal_entry_id as string })
     } catch (err) {
       // Same mapping as the single executor, including its locked-period
