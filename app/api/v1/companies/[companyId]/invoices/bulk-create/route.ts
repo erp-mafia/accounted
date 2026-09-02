@@ -30,6 +30,11 @@
  *   - 50 invoices per request. Larger imports should be split.
  *   - No transactional guarantee between items today; the all_or_nothing
  *     flag is reserved for a future RPC implementation.
+ *   - Quotes (document_type 'quote') are not supported. A quote is a single
+ *     document with its own OF-number series, valid_until and quote_status,
+ *     none of which this path assigns; a quote item is refused per item as
+ *     VALIDATION_ERROR without inserting anything. Use POST /invoices with
+ *     document_type quote instead.
  */
 
 import { z } from 'zod'
@@ -91,6 +96,7 @@ registerEndpoint({
     'Passing all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist; omit the flag (or pass false).',
     'Each per-item invoice still goes through the same VAT-rule validation as POST /invoices. A mismatched per-item vat_rate produces a per-item failure, not a whole-batch failure.',
     'Currency conversion is best-effort PER ITEM. A failed Riksbanken fetch leaves that item\'s SEK columns null but does NOT fail the item.',
+    'Quotes (document_type: quote) are refused per item as VALIDATION_ERROR: a quote carries its own OF-number, valid_until and quote_status. Create quotes one at a time with POST /invoices.',
   ],
   example: {
     request: {
@@ -158,6 +164,25 @@ async function createOneInvoice(
   log: Logger,
 ): Promise<ResultItem> {
   const documentType: InvoiceDocumentType = input.document_type || 'invoice'
+
+  // CreateInvoiceSchema accepts document_type 'quote', but this path never
+  // assigns the OF-number, valid_until or quote_status the DB CHECK requires
+  // for a quote (pg 23514). Refuse before touching the database so the item
+  // fails cleanly and the rest of the batch is unaffected.
+  if (documentType === 'quote') {
+    return {
+      ok: false,
+      request_index: index,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Quotes are not supported by bulk-create.',
+        details: {
+          field: 'document_type',
+          message: 'Quotes are not supported by bulk-create; use POST /invoices with document_type quote.',
+        },
+      },
+    }
+  }
 
   // Customer fetch (scoped to company). We use the DB-returned `customer.id`
   // (not `input.customer_id`) downstream as defense in depth: the .eq()

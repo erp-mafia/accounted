@@ -163,4 +163,34 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
   // remaining balance (no custom amount param), so newStatus is always 'paid'.
   // The partial case is pinned on the surfaces that can produce it, e.g.
   // lib/invoices/__tests__/settle-invoice-payment.test.ts.
+
+  it('rejects a quote (offert) before creating a payment journal entry', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'q-1',
+        invoice_number: 'OF-001',
+        status: 'sent',
+        total: 2500,
+        remaining_amount: 0,
+        paid_amount: null,
+        credited_invoice_id: null,
+        document_type: 'quote',
+        quote_status: 'accepted',
+        journal_entry_id: null,
+        customer: { name: 'Test AB' },
+      },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({ params: { invoice_id: 'q-1', payment_date: '2026-06-30' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+    expect(mockCreateCashEntry).not.toHaveBeenCalled()
+  })
 })

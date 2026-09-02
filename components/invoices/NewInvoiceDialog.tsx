@@ -22,6 +22,7 @@ import {
 // "Ny faktura" opens instead of the dialog chunk followed by a second,
 // dependent editor chunk (and then the editor's own data fetches).
 import InvoiceEditor from '@/components/invoices/InvoiceEditor'
+import type { InvoiceDocumentType } from '@/types'
 
 interface Props {
   open: boolean
@@ -29,6 +30,8 @@ interface Props {
   copyFromId?: string | null
   /** Preselect the självfaktura tab (split-button entry on /invoices). */
   selfBilled?: boolean
+  /** Preselect a document type, e.g. 'quote' ("Ny offert" split-button entry). */
+  documentType?: InvoiceDocumentType
 }
 
 /**
@@ -38,11 +41,17 @@ interface Props {
  * (unmounting the host list page and this dialog with it).
  *
  * The accessible title is visually hidden: the bare editor renders its own
- * live heading, which tracks document type (faktura/proforma/följesedel) and
- * shows the invoice-number preview: a static DialogTitle would duplicate or
- * contradict it.
+ * live heading, which tracks document type (faktura/proforma/offert/följesedel)
+ * and shows the invoice-number preview: a static DialogTitle would duplicate
+ * or contradict it.
  */
-export default function NewInvoiceDialog({ open, onOpenChange, copyFromId = null, selfBilled = false }: Props) {
+export default function NewInvoiceDialog({
+  open,
+  onOpenChange,
+  copyFromId = null,
+  selfBilled = false,
+  documentType,
+}: Props) {
   const t = useTranslations('invoice_editor')
   const { company } = useCompany()
   const supabase = useMemo(() => createClient(), [])
@@ -133,7 +142,11 @@ export default function NewInvoiceDialog({ open, onOpenChange, copyFromId = null
         onInteractOutside={(e) => e.preventDefault()}
       >
         <DialogTitle className="sr-only">
-          {copyFromId ? t('title_copy') : t('title_invoice')}
+          {copyFromId
+            ? t('title_copy')
+            : documentType === 'quote' && !selfBilled
+              ? t('title_quote')
+              : t('title_invoice')}
         </DialogTitle>
         {copyFromId ? (
           copyLoadFailed ? (
@@ -154,7 +167,12 @@ export default function NewInvoiceDialog({ open, onOpenChange, copyFromId = null
             </div>
           )
         ) : (
-          <InvoiceEditor mode="create" bare initialSelfBilled={selfBilled} />
+          <InvoiceEditor
+            mode="create"
+            bare
+            initialSelfBilled={selfBilled}
+            initialDocumentType={documentType}
+          />
         )}
       </DialogContent>
     </Dialog>

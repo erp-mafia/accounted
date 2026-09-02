@@ -135,14 +135,24 @@ export const POST = withRouteContext(
       return errorResponseFromCode(build.code, log, { requestId, details: build.details })
     }
 
-    // Delivery notes are always numbered at insert (ignores save_as_draft);
-    // invoices/proformas get their F-number below or at finalize.
+    // Delivery notes and quotes are always numbered at insert from their own
+    // series (ignores save_as_draft): neither is a faktura, so no F-number is
+    // at stake. Invoices/proformas get their F-number below or at finalize.
     let invoiceNumber: string | null = null
     if (documentType === 'delivery_note') {
       const { data: dnNumber } = await supabase.rpc('generate_delivery_note_number', {
         p_company_id: companyId,
       })
       invoiceNumber = dnNumber
+    } else if (documentType === 'quote') {
+      const { data: quoteNumber, error: quoteNumberError } = await supabase.rpc('generate_quote_number', {
+        p_company_id: companyId,
+      })
+      if (quoteNumberError || !quoteNumber) {
+        log.error('quote number allocation failed', quoteNumberError ?? new Error('no number'))
+        return errorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', log, { requestId })
+      }
+      invoiceNumber = quoteNumber
     }
 
     const { data: invoice, error: invoiceError } = await supabase

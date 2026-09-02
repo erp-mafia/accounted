@@ -1217,6 +1217,59 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan kan inte markeras som betald i nuvarande status.',
     message_en: 'Invoice is not in a payable status.',
   },
+  INVOICE_QUOTE_NOT_PAYABLE: {
+    httpStatus: 400,
+    message_sv: 'En offert kan inte betalas. Skapa en faktura från offerten först.',
+    message_en: 'A quote cannot be paid. Convert it to an invoice first.',
+    remediation: {
+      description: 'Convert the accepted quote with POST /api/invoices/{id}/convert, then register the payment on the invoice.',
+    },
+  },
+  INVOICE_NOT_A_QUOTE: {
+    httpStatus: 400,
+    message_sv: 'Dokumentet är inte en offert.',
+    message_en: 'This document is not a quote.',
+  },
+  INVOICE_QUOTE_NOT_DECIDABLE: {
+    httpStatus: 400,
+    message_sv: 'Makulerade offerter kan inte accepteras eller avböjas.',
+    message_en: 'A cancelled quote cannot be accepted or declined.',
+  },
+  INVOICE_QUOTE_ALREADY_INVOICED: {
+    httpStatus: 409,
+    message_sv: 'Offerten är redan fakturerad och kan inte ändras.',
+    message_en: 'This quote has already been invoiced and can no longer change.',
+  },
+  INVOICE_CONVERT_NOT_CONVERTIBLE: {
+    httpStatus: 400,
+    message_sv: 'Endast proformafakturor och offerter kan omvandlas till faktura.',
+    message_en: 'Only proforma invoices and quotes can be converted to an invoice.',
+  },
+  INVOICE_CONVERT_SOURCE_CANCELLED: {
+    httpStatus: 409,
+    message_sv: 'Dokumentet är makulerat och kan inte omvandlas.',
+    message_en: 'This document is cancelled and cannot be converted.',
+  },
+  INVOICE_CONVERT_SOURCE_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Dokumentet ändrades samtidigt (makulerat, omvandlat eller beslutat på annat sätt). Ladda om och försök igen.',
+    message_en: 'The document changed concurrently (cancelled, converted or decided elsewhere). Reload and try again.',
+  },
+  INVOICE_QUOTE_CHANGED_CONCURRENTLY: {
+    httpStatus: 409,
+    message_sv: 'Offerten ändrades samtidigt (fakturerad, makulerad eller beslutad på annat sätt). Ladda om och försök igen.',
+    message_en: 'The quote changed concurrently (invoiced, cancelled or decided elsewhere). Reload and try again.',
+  },
+  INVOICE_CONVERT_QUOTE_DECLINED: {
+    httpStatus: 409,
+    message_sv: 'Offerten är avböjd. Markera den som accepterad innan du skapar en faktura.',
+    message_en: 'The quote was declined. Mark it accepted before creating an invoice.',
+  },
+  INVOICE_UPDATE_DOCUMENT_TYPE_LOCKED: {
+    httpStatus: 400,
+    message_sv: 'Dokumenttypen kan inte ändras på en offert eller följesedel: numret hör till serien. Skapa ett nytt dokument i stället.',
+    message_en: 'The document type of a quote or delivery note cannot change: its number belongs to that series. Create a new document instead.',
+  },
   INVOICE_PAYMENT_CONFIRMATION_NOT_PAID: {
     httpStatus: 409,
     message_sv:

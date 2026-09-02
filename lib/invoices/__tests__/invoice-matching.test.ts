@@ -170,6 +170,16 @@ describe('findMatchingInvoices', () => {
     expect(result).toEqual([])
   })
 
+  it('never proposes a quote or proforma: the candidate query is scoped to fakturor', async () => {
+    const queued = createQueuedMockSupabase()
+    queued.enqueue({ data: [], error: null })
+    const tx = makeTransaction({ amount: 12500 })
+
+    await findMatchingInvoices(queued.supabase as never, 'company-1', tx)
+
+    expect(queued.findCalls('invoices', 'eq')).toContainEqual(['document_type', 'invoice'])
+  })
+
   it('matches by OCR reference with confidence 0.99', async () => {
     const tx = makeTransaction({ amount: 12500, reference: 'F-2024001' })
     mockResult({

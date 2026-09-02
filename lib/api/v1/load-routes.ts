@@ -52,6 +52,7 @@ import '@/app/api/v1/companies/[companyId]/invoices/[id]/mark-sent/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/mark-paid/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/credit/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/send/route'
+import '@/app/api/v1/companies/[companyId]/invoices/[id]/quote-status/route'
 import '@/app/api/v1/companies/[companyId]/invoices/bulk-create/route'
 // Phase 2 PR-B-3: invoice PDF + customer bulk-create.
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/pdf/route'

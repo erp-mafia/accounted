@@ -87,13 +87,12 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
     if (!validation.success) return validation.response
     const input = validation.data
-    const documentType: InvoiceDocumentType = input.document_type || 'invoice'
 
     // Fetch the target. Only drafts (not sent, no committed verifikat, not a
     // received self-billing document) may be edited.
     const { data: existing, error: fetchError } = await supabase
       .from('invoices')
-      .select('id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, deduction_personnummer_encrypted, deduction_personnummer_last4')
+      .select('id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, document_type, quote_status, deduction_personnummer_encrypted, deduction_personnummer_last4')
       .eq('id', id)
       .eq('company_id', companyId!)
       .single()
@@ -108,6 +107,23 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     // truth the detail and edit pages also gate on, so the rule can't drift.
     if (!isEditableInvoiceDraft(existing)) {
       return errorResponseFromCode('INVOICE_UPDATE_NOT_DRAFT', ctxLog, { requestId })
+    }
+
+    // An omitted document_type means "unchanged", never "invoice": a client
+    // that only edits lines on a delivery-note or quote draft must not trip
+    // the series lock below.
+    const existingType: InvoiceDocumentType = existing.document_type ?? 'invoice'
+    const documentType: InvoiceDocumentType = input.document_type ?? existingType
+
+    // Quotes and delivery notes are numbered at insert from their own series,
+    // so their type is fixed: turning OF-007 into a faktura would carry a
+    // quote number into the F-series (and vice versa).
+    const seriesLocked = (t: InvoiceDocumentType) => t === 'quote' || t === 'delivery_note'
+    if (existingType !== documentType && (seriesLocked(existingType) || seriesLocked(documentType))) {
+      return errorResponseFromCode('INVOICE_UPDATE_DOCUMENT_TYPE_LOCKED', ctxLog, {
+        requestId,
+        details: { from: existingType, to: documentType },
+      })
     }
 
     // Resolve the (possibly changed) customer.
