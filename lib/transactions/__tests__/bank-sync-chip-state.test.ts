@@ -61,7 +61,7 @@ describe('getChipState', () => {
         row({ id: 'b', consent_expires: at(2 * DAY_MS) }),
         row({ id: 'c', consent_expires: at(30 * DAY_MS) }),
       ],
-      NOW,
+      { now: NOW },
     )
     expect(state).toEqual({ kind: 'expiring', daysLeft: 2, count: 2 })
   })
@@ -72,7 +72,7 @@ describe('getChipState', () => {
         row({ id: 'a', status: 'expired' }),
         row({ id: 'b', consent_expires: at(1 * DAY_MS) }),
       ],
-      NOW,
+      { now: NOW },
     )
     expect(state).toEqual({ kind: 'attention', count: 1 })
   })
@@ -80,7 +80,7 @@ describe('getChipState', () => {
   it('ranks expiring above stale: the deadline matters more than the age', () => {
     const state = getChipState(
       [row({ last_synced_at: at(-3 * DAY_MS), consent_expires: at(3 * DAY_MS) })],
-      NOW,
+      { now: NOW },
     )
     expect(state.kind).toBe('expiring')
   })
@@ -88,7 +88,7 @@ describe('getChipState', () => {
   it('ignores the consent on rows that are not live yet', () => {
     const state = getChipState(
       [row({ status: 'pending_selection', consent_expires: at(1 * DAY_MS), last_synced_at: null })],
-      NOW,
+      { now: NOW },
     )
     expect(state).toEqual({ kind: 'healthy', mostRecent: null })
   })
