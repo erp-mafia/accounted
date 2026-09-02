@@ -1355,7 +1355,9 @@
     "step_claude_chatgpt_link": "Using ChatGPT?",
     "step_claude_chatgpt_steps": "In ChatGPT (Plus, Pro or Business): Settings → Apps → Advanced settings → turn on Developer mode. Choose Add custom connector, name it {appName} and paste the server address. Then start a new chat and ask for a walkthrough of your books.",
     "step_claude_chatgpt_copy": "Copy server address",
-    "step_claude_chatgpt_copied": "Copied"
+    "step_claude_chatgpt_copied": "Copied",
+    "step_claude_expectation": "Claude lists the tools straight away. The first real question opens a login prompt: approve it and ask again.",
+    "step_claude_guide_link": "Guide: connect Claude step by step"
   },
   "tax_assessment_notices": {
     "title": "Final tax notices and remaining tax",
@@ -2595,7 +2597,7 @@
     "copy_failed": "Could not copy. Select the text above and copy it manually.",
     "connect_mcp_title": "Connect MCP client",
     "connect_to_claude": "Connect to Claude",
-    "connect_to_claude_help": "Opens claude.ai with the URL prefilled. You review and confirm there; no API key needed. Your instance must be reachable from the internet.",
+    "connect_to_claude_help": "Opens claude.ai with the URL prefilled. You review and confirm there; no API key needed. Your instance must be reachable from the internet. Claude lists the tools straight away; the first real question opens a login prompt, approve it and ask again.",
     "other_clients": "Other clients: Claude Code, Cursor, plugin",
     "claude_ai_manual": "claude.ai (manual)",
     "works_with_ai": "Works with Claude, ChatGPT, and other AI assistants.",
@@ -2717,6 +2719,10 @@
     "system_cert_expires_soon": "{appName}'s certificate with Skatteverket expires in {days} days.",
     "system_verify_failed": "Verification failed",
     "system_verify_rate_limited": "Wait a minute between verifications.",
+    "system_deeplink": "Appoint {appName} as ombud",
+    "system_deeplink_loading": "Creating link...",
+    "system_deeplink_failed": "The link could not be created",
+    "system_deeplink_hint": "The link opens Skatteverket's e-service with {appName} and the roles pre-selected. Sign there with BankID. The link is valid for three weeks.",
     "needs_reconsent_message": "The Skatteverket connection needs to be renewed. Automatic syncing is paused until you reconnect with BankID.",
     "missing_scope_message": "The connection lacks permission for one or more services, for example the tax account. Reconnect and approve all permissions on Skatteverket's consent page.",
     "connect_waiting": "Waiting for BankID…",
@@ -2743,7 +2749,8 @@
     "expires_in_minutes": "(in {minutes} min)",
     "refresh_label": "Refresh",
     "refresh_auto": "Refreshes automatically",
-    "refresh_exhausted": "Refresh exhausted: connect again",
+    "refresh_exhausted": "Can no longer be refreshed: connect again with BankID",
+    "session_lifetime_note": "The BankID session with Skatteverket lasts about one hour. After that a new login is needed before anything can be fetched or filed.",
     "permissions_label": "Permissions",
     "missing_skattekonto": "The Skattekonto permission is missing: disconnect and reconnect to enable the balance and transactions view.",
     "missing_agd": "The employer declaration (AGI) permission is missing: disconnect and reconnect to send AGI directly from accounted. Tokens issued before AGI support was activated lack this scope.",
@@ -2961,6 +2968,15 @@
     "success_toast": "Document attached",
     "error_toast": "Could not attach the document",
     "cancel": "Cancel"
+  },
+  "tx_detach": {
+    "menu_item": "Remove document",
+    "confirm_title": "Remove the document?",
+    "confirm_body": "The document will be unlinked from {description}, {amount}. The file is not deleted and can be attached again.",
+    "confirm_label": "Remove document",
+    "cancel_label": "Cancel",
+    "toast_done": "Document removed",
+    "toast_failed": "Could not remove the document"
   },
   "tx_underlag": {
     "attached_label": "Document",
@@ -3282,6 +3298,11 @@
     "doc_kind_supplier_invoice": "Supplier invoice",
     "doc_kind_government_letter": "Government letter",
     "doc_kind_other": "Other document",
+    "kind_filter_all": "All types",
+    "kind_filter_supplier_invoice": "Supplier invoices",
+    "kind_filter_underlag": "Receipts and other",
+    "empty_no_kind_hits": "No items of that type here. Pick All types to see the rest.",
+    "address_plus_hint": "Add +lev before the @ for supplier invoices and +ver for receipts: {lev} or {ver}",
     "payment_label": "Paid with",
     "payment_card": "Card",
     "payment_swish": "Swish",

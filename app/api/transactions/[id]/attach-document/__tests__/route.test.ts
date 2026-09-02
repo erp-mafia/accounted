@@ -6,7 +6,7 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -324,12 +324,16 @@ describe('DELETE /api/transactions/[id]/attach-document', () => {
     const { status, body } = await parseJsonResponse<{ error: string }>(res)
     expect(status).toBe(409)
     expect(body.error).toContain('verifikation')
+    // Nothing is written on the immutability path.
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
+    expect(findCalls('transactions', 'update')).toEqual([])
   })
 
   it('clears document_id when no journal entry link', async () => {
     enqueue({ data: { id: 'tx-1', document_id: 'doc-1' }, error: null }) // tx fetch
     enqueue({ data: { journal_entry_id: null }, error: null }) // doc fetch
-    enqueue({ data: null, error: null }) // update
+    enqueue({ data: null, error: null }) // inbox unlink
+    enqueue({ data: { id: 'tx-1' }, error: null }) // pin CAS (RETURNING id)
     const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
     const { status, body } = await parseJsonResponse<{ data: { document_id: string | null } }>(res)
     expect(status).toBe(200)
@@ -338,9 +342,78 @@ describe('DELETE /api/transactions/[id]/attach-document', () => {
 
   it('clears document_id when no doc was attached', async () => {
     enqueue({ data: { id: 'tx-1', document_id: null }, error: null }) // tx fetch
-    enqueue({ data: null, error: null }) // update
+    enqueue({ data: null, error: null }) // inbox unlink
+    enqueue({ data: { id: 'tx-1' }, error: null }) // pin CAS
     const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(200)
+    // The back-link is released even with nothing pinned (a stale item from
+    // the replace path would re-anchor just the same), and the CAS then
+    // requires the pin to still be empty.
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([[{ matched_transaction_id: null }]])
+    expect(findCalls('transactions', 'is')).toContainEqual(['document_id', null])
+  })
+
+  it('releases the inbox back-link BEFORE the pin, scoped by transaction (else booking re-anchors it)', async () => {
+    // propagateUnderlagForBookedTransaction selects inbox items by
+    // matched_transaction_id at categorize time; a stale back-link would pin
+    // the rejected receipt onto the new verifikation as immutable underlag.
+    enqueue({ data: { id: 'tx-1', document_id: 'doc-1' }, error: null }) // tx fetch
+    enqueue({ data: { journal_entry_id: null }, error: null }) // doc fetch
+    enqueue({ data: null, error: null }) // inbox unlink
+    enqueue({ data: { id: 'tx-1' }, error: null }) // pin CAS
+    const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(200)
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([[{ matched_transaction_id: null }]])
+    const eqArgs = findCalls('invoice_inbox_items', 'eq')
+    // Scoped by transaction (unique index: at most one item points here), not
+    // by the pinned doc, so a stale item from the replace path is cleared too.
+    expect(eqArgs).toContainEqual(['matched_transaction_id', 'tx-1'])
+    expect(eqArgs).toContainEqual(['company_id', 'company-1'])
+    expect(eqArgs).not.toContainEqual(['document_id', 'doc-1'])
+    // Items already consumed by a verifikat are left alone.
+    expect(findCalls('invoice_inbox_items', 'is')).toContainEqual(['created_journal_entry_id', null])
+    // Order: the unlink table is touched before the pin update.
+    const tables = mockSupabase.from.mock.calls.map((c) => c[0])
+    expect(tables.indexOf('invoice_inbox_items')).toBeLessThan(tables.lastIndexOf('transactions'))
+    // Compare-and-set: the pin is cleared only if it is still doc-1.
+    expect(findCalls('transactions', 'eq')).toContainEqual(['document_id', 'doc-1'])
+    expect(findCalls('transactions', 'update')).toEqual([[{ document_id: null }]])
+  })
+
+  it('refuses with 409 when the pin changed under us (concurrent re-attach)', async () => {
+    // Interleaving: we read doc-1, a POST pins doc-2 (and links its inbox
+    // item) before our CAS runs. Zero rows come back: the new pin is kept and
+    // the caller is told nothing happened, instead of a success for a state
+    // that is now "doc-2 pinned, doc-2 inbox item unlinked".
+    enqueue({ data: { id: 'tx-1', document_id: 'doc-1' }, error: null }) // tx fetch
+    enqueue({ data: { journal_entry_id: null }, error: null }) // doc fetch
+    enqueue({ data: null, error: null }) // inbox unlink
+    enqueue({ data: null, error: null }) // pin CAS: 0 rows
+    const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    expect(status).toBe(409)
+    expect(body.error).toContain('samtidigt')
+  })
+
+  it('reports a failing inbox unlink as 500 with nothing changed, logging a coded cause only', async () => {
+    // A stale back-link is the exact defect the detach exists to prevent, so
+    // a 200 here would hide a compliance hazard. Because the unlink runs
+    // first, the pin is untouched and a retry is trivially idempotent.
+    enqueue({ data: { id: 'tx-1', document_id: 'doc-1' }, error: null }) // tx fetch
+    enqueue({ data: { journal_entry_id: null }, error: null }) // doc fetch
+    enqueue({ data: null, error: { code: '42501', message: 'rls denied: row values here' } }) // unlink fails
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    expect(status).toBe(500)
+    expect(body.error).toContain('fortfarande kopplat')
+    expect(findCalls('transactions', 'update')).toEqual([])
+    // Raw driver messages can quote row values: only the coded cause is logged.
+    expect(spy).toHaveBeenCalledWith('[attach-document] Failed to unlink inbox item:', {
+      cause: '42501',
+    })
+    spy.mockRestore()
   })
 })

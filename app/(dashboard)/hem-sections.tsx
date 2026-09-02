@@ -62,7 +62,7 @@ export async function HemChecklistSection({
   userId,
   now,
   initialSetup,
-  agentBuilt,
+  hasMcpKey,
   vatRegistered,
   momsPeriod,
 }: {
@@ -70,7 +70,8 @@ export async function HemChecklistSection({
   userId: string
   now: Date
   initialSetup: InitialSetupState
-  agentBuilt: boolean
+  /** Live OAuth-minted MCP key exists for this user: see claudeStepDone(). */
+  hasMcpKey: boolean
   vatRegistered: boolean
   momsPeriod: MomsPeriod | null
 }) {
@@ -160,7 +161,7 @@ export async function HemChecklistSection({
       hasBankConnected={onboardingProgress.hasBankConnected}
       hasSkatteverketConnected={onboardingProgress.hasSkatteverketConnected}
       hasInboxItems={onboardingProgress.hasInboxItems}
-      hasAgentBuilt={agentBuilt}
+      hasMcpKey={hasMcpKey}
       vatLine={vatLine}
       sieSweep={
         sieSweep

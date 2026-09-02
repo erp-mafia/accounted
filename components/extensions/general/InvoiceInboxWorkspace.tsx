@@ -66,6 +66,12 @@ import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registr
 import type { AccountingMethod, InboxChannelContext, InvoiceExtractionResult, InboxItemSource } from '@/types'
 import { renderChannelParticipant } from '@/lib/documents/channel-context-notes'
 import { selectInboxFields } from '@/lib/documents/inbox-field-visibility'
+import {
+  matchesInboxKindFilter,
+  resolveInboxKind,
+  INBOX_KIND_FILTERS,
+  type InboxKindFilter,
+} from '@/lib/documents/inbox-kind'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
 import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplierInvoiceDialog'
 import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDialog'
@@ -169,6 +175,10 @@ interface InboxItem {
   email_body_text: string | null
   document_id: string | null
   extracted_data: InvoiceExtractionResult | null
+  // Sender-declared kind from the +lev / +ver plus-address tag. A column, so
+  // it survives re-extraction; wins over extracted_data.documentKind for the
+  // row badge and the type filter. Absent on client-side placeholders.
+  kind_hint?: 'supplier_invoice' | 'receipt' | null
   matched_supplier_id: string | null
   matched_transaction_id: string | null
   created_supplier_invoice_id: string | null
@@ -210,6 +220,15 @@ interface InboxAddress {
   address: string
   local_part: string
   status: string
+}
+
+// `acme-x7f2@inbox.example` + 'lev' → `acme-x7f2+lev@inbox.example`. The
+// webhook splits the local part at the first `+` and looks up what is before
+// it, so the tag never changes which company the mail reaches.
+function plusAddress(address: string, tag: string): string {
+  const at = address.indexOf('@')
+  if (at === -1) return address
+  return `${address.slice(0, at)}+${tag}${address.slice(at)}`
 }
 
 // How far the underlag behind the selected row got.
@@ -403,6 +422,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [filter, setFilter] = useState<
     'todo' | 'linked' | 'booked' | 'error' | 'all' | 'missing' | 'portal'
   >('todo')
+  // Document-type filter (#2129): leverantörsfakturor vs underlag, on top of
+  // the status filter. Not persisted, same as the status filter.
+  const [kindFilter, setKindFilter] = useState<InboxKindFilter>('all')
   const [searchTerm, setSearchTerm] = useState('')
   // Bulk selection. Items linked to a supplier invoice are skipped at delete
   // time (server returns 409); we still allow them to be selected so the
@@ -751,8 +773,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     )
   }, [portalPurchases, otherPurchases, filter, searchTerm])
 
-  const filteredItems = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase()
+  const statusFilteredItems = useMemo(() => {
     if (filter === 'missing' || filter === 'portal') return []
     return items.filter((item) => {
       // Status filter. "todo" is the active inbox: everything except booked.
@@ -762,6 +783,39 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       if (filter === 'booked' && status !== 'booked') return false
       if (filter === 'error' && status !== 'error') return false
       // 'all' → no status narrowing
+      return true
+    })
+  }, [items, filter])
+
+  // Per-kind counts for the type menu, over the status-filtered list so the
+  // numbers match what picking an entry would show.
+  const kindCounts = useMemo(() => {
+    const counts: Record<InboxKindFilter, number> = {
+      all: statusFilteredItems.length,
+      supplier_invoice: 0,
+      underlag: 0,
+    }
+    for (const item of statusFilteredItems) {
+      const kind = resolveInboxKind(item)
+      if (matchesInboxKindFilter(kind, 'supplier_invoice')) counts.supplier_invoice += 1
+      else if (matchesInboxKindFilter(kind, 'underlag')) counts.underlag += 1
+    }
+    return counts
+  }, [statusFilteredItems])
+
+  // The type menu only earns its row once something is classified (or the
+  // user has already narrowed): an inbox of unclassified rows has nothing to
+  // split.
+  const showKindFilter =
+    filter !== 'missing' &&
+    filter !== 'portal' &&
+    (kindFilter !== 'all' || kindCounts.supplier_invoice > 0 || kindCounts.underlag > 0)
+
+  const filteredItems = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase()
+    return statusFilteredItems.filter((item) => {
+      // Type filter: sender hint first, then the AI classification.
+      if (!matchesInboxKindFilter(resolveInboxKind(item), kindFilter)) return false
 
       // Search filter: supplier name, email subject/from, placeholder filename
       if (term === '') return true
@@ -776,7 +830,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         .toLowerCase()
       return haystack.includes(term)
     })
-  }, [items, filter, searchTerm])
+  }, [statusFilteredItems, kindFilter, searchTerm])
 
   // ── Selection ──────────────────────────────────────────────
 
@@ -1471,6 +1525,15 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               <div className="min-w-0 flex-1">
                 <span className="tabular-nums">{inboxAddress.address}</span>
+                {/* Plus-addressing (#2129): the sender sorts the mail by
+                    writing +lev or +ver before the @. Both variants spelled
+                    out, since a tag is easier to copy than to construct. */}
+                <p className="mt-1 text-muted-foreground break-all">
+                  {t('address_plus_hint', {
+                    lev: plusAddress(inboxAddress.address, 'lev'),
+                    ver: plusAddress(inboxAddress.address, 'ver'),
+                  })}
+                </p>
               </div>
               <InboxAddressBar
                 address={inboxAddress.address}
@@ -1608,6 +1671,48 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
+              {/* Document type (#2129): the Fortnox-style split between
+                  leverantörsfakturor and bokföringsunderlag, as a second
+                  menu in the same shape as the status one. */}
+              {showKindFilter && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full justify-between h-8 px-2.5 text-xs font-normal"
+                    >
+                      <span className="flex items-center gap-1.5 min-w-0">
+                        <span className="truncate">{t(`kind_filter_${kindFilter}`)}</span>
+                        <span className="tabular-nums text-muted-foreground">
+                          {kindCounts[kindFilter]}
+                        </span>
+                      </span>
+                      <ChevronDown className="h-3.5 w-3.5 opacity-60 shrink-0" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-[--radix-dropdown-menu-trigger-width]">
+                    {INBOX_KIND_FILTERS.map((key) => (
+                      <DropdownMenuItem
+                        key={key}
+                        onSelect={() => setKindFilter(key)}
+                        className="justify-between text-xs"
+                      >
+                        <span className="flex items-center gap-2">
+                          <Check
+                            className={cn(
+                              'h-3.5 w-3.5',
+                              kindFilter === key ? 'opacity-100' : 'opacity-0',
+                            )}
+                          />
+                          {t(`kind_filter_${key}`)}
+                        </span>
+                        <span className="tabular-nums text-muted-foreground">{kindCounts[key]}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
             </div>
           )}
           {selectedIds.size > 0 && (
@@ -1732,13 +1837,19 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   beside it reads 50. */}
               {searchTerm.trim() !== ''
                 ? `Inga träffar på ”${searchTerm.trim()}”.`
-                : filter === 'todo'
-                  ? 'Inget att åtgärda; allt är bearbetat.'
-                  : filter === 'portal'
-                    ? 'Inga köp väntar på en faktura från en portal.'
-                    : filter === 'missing'
-                      ? 'Varje köp har sitt underlag.'
-                      : 'Inga poster matchar filtret.'}
+                : kindFilter !== 'all' && filter !== 'missing' && filter !== 'portal'
+                  // Same trap as the search term: "allt är bearbetat" would be
+                  // false while the status trigger above still counts rows the
+                  // type menu is hiding. Purchase lists ignore the type menu,
+                  // so a leftover kind filter must not speak for them.
+                  ? t('empty_no_kind_hits')
+                  : filter === 'todo'
+                    ? 'Inget att åtgärda; allt är bearbetat.'
+                    : filter === 'portal'
+                      ? 'Inga köp väntar på en faktura från en portal.'
+                      : filter === 'missing'
+                        ? 'Varje köp har sitt underlag.'
+                        : 'Inga poster matchar filtret.'}
             </div>
           ) : (
             <ul>
@@ -2141,6 +2252,7 @@ function InboxRow({
   const supplierName = pickSupplierName(item)
   const invoiceDate = pickInvoiceDate(item)
   const isPlaceholder = !!item.isPlaceholder
+  const kind = resolveInboxKind(item)
   const status = deriveInboxStatus(item)
   const isErrored = status === 'error'
   const isBooked = status === 'booked'
@@ -2242,28 +2354,34 @@ function InboxRow({
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           {isPlaceholder ? (
             <span className="italic">Tolkar dokument med AI…</span>
-          ) : isExtracting ? (
+          ) : (
             <span className="flex items-center gap-1.5 min-w-0">
-              <Badge variant="outline" className="font-normal">
-                <Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />
-                {t('processing_chip')}
-              </Badge>
-              {receivedMeta}
-            </span>
-          ) : item.extraction_skipped || hasUnansweredQuestion ? (
-            <span className="flex items-center gap-1.5 min-w-0">
-              {item.extraction_skipped && (
-                <Badge variant="outline" className="font-normal">Inte AI-tolkad</Badge>
-              )}
-              {hasUnansweredQuestion && (
-                <Badge variant="outline" className="font-normal text-attn border-attn/40">
-                  {t('wa_question_badge')}
+              {/* Document kind (#2129): sender's +lev / +ver hint first, then
+                  the AI classification. Nothing when neither is known. */}
+              {kind && (
+                <Badge variant="outline" className="font-normal shrink-0">
+                  {t(`doc_kind_${kind}`)}
                 </Badge>
               )}
+              {isExtracting ? (
+                <Badge variant="outline" className="font-normal">
+                  <Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />
+                  {t('processing_chip')}
+                </Badge>
+              ) : (
+                <>
+                  {item.extraction_skipped && (
+                    <Badge variant="outline" className="font-normal">Inte AI-tolkad</Badge>
+                  )}
+                  {hasUnansweredQuestion && (
+                    <Badge variant="outline" className="font-normal text-attn border-attn/40">
+                      {t('wa_question_badge')}
+                    </Badge>
+                  )}
+                </>
+              )}
               {receivedMeta}
             </span>
-          ) : (
-            receivedMeta
           )}
           {!isPlaceholder && amount != null && (
             <span className="tabular-nums shrink-0">
@@ -2765,6 +2883,7 @@ function FieldsRail({
   const hasAi = useCapability(CAPABILITY.ai)
   const { appName } = useBranding()
   const data = item.extracted_data
+  const resolvedKind = resolveInboxKind(item)
   const [proposal, setProposal] = useState<SuggestedBooking | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   // A proposal belongs to one item; carrying it to the next would offer the
@@ -2926,16 +3045,18 @@ function FieldsRail({
       {/* AI classification: what kind of document this is and how it was
           paid. Read-only context above the editable fields; absent for
           extractions from before the fields existed. */}
-      {(data?.documentKind ||
+      {(resolvedKind ||
         data?.payment?.method ||
         data?.pages ||
         (data?.totals?.total == null &&
           (data?.prominentAmounts ?? []).some((a) => Number.isFinite(a.amount) && a.amount !== 0))) && (
         <div className="border-b px-4 py-3 text-xs space-y-1">
-          {data?.documentKind && (
+          {/* Same resolution as the list row (sender's +lev / +ver hint first,
+              then the AI), so the pane never contradicts the badge. */}
+          {resolvedKind && (
             <div className="flex gap-2">
               <span className="text-muted-foreground w-14 shrink-0">{t('doc_kind_label')}</span>
-              <span>{t(`doc_kind_${data.documentKind}`)}</span>
+              <span>{t(`doc_kind_${resolvedKind}`)}</span>
             </div>
           )}
           {data?.payment?.method && (

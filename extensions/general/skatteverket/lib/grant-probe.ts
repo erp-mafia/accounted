@@ -2,31 +2,38 @@ import { skvRequestWithAuth, SkatteverketAuthError } from './api-client'
 import { getSkattekontoBaseUrl } from './skattekonto-client'
 import { recordProbeResult, type GrantStatus, type SkvCompanyConnection } from './connection-store'
 import { currentSkvEnvironment } from './resolve-auth'
+import { isoDate, listOmbudGrants, OmbudApiError, summarizeGrants } from './ombud-client'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('skatteverket-grant-probe')
 
 /**
- * Behorighet verification probes.
+ * Behorighet verification.
  *
  * After the user grants Accounted's org number a behorighet in Skatteverket's
  * Ombud och behorigheter e-service, nothing tells us: there is no callback.
- * The probe makes one cheap read per behorighet with SYSTEM credentials and
- * classifies the outcome:
+ * Two ways to find out, tried in order:
  *
- *   lasombud   : GET skattekonto saldo for the company's org number.
- *                200 -> granted; felkod 3 (no skattekonto registered) also
- *                proves authorization passed -> granted-with-note;
- *                OMBUD_GRANT_MISSING (403) -> denied; anything transient
- *                (5xx, timeout, rate limit) -> error, which never downgrades
- *                a previously granted state (connection-store rule).
- *   moms_ombud : GET moms /utkast for the current period. 200 or 404 (no
- *                draft exists, but the gateway authorized us) -> granted;
- *                OMBUD_GRANT_MISSING -> denied.
+ *   1. The ombudsregister itself (Ombudshantering via API v2, scope `obr`):
+ *      GET /ombud/autentisieratOmbud?huvudman={orgNumber} on SYSTEM
+ *      credentials lists exactly which roles this company gave Accounted and
+ *      for how long. Authoritative: a role present and active today is
+ *      granted, a 200 without it is denied. Only a failure to ASK the
+ *      register (scope missing, 5xx, timeout, unparsable body) is an
+ *      'error', and then the service probes below decide instead.
  *
- * The classification heuristics live here, in one file, because they are
- * assumptions until validated against real sandbox 403 bodies (Phase 2 of
- * the rollout): expected churn stays contained.
+ *   2. Service probes (the pre-`obr` heuristic), one cheap read per
+ *      behorighet on SYSTEM credentials:
+ *      lasombud   : GET skattekonto saldo. 200 -> granted; felkod 3 (no
+ *                   skattekonto registered) also proves authorization ->
+ *                   granted-with-note; OMBUD_GRANT_MISSING (403) -> denied;
+ *                   transient (5xx, timeout, rate limit) -> error.
+ *      moms_ombud : GET moms /utkast for the current period. 200 or 404 (no
+ *                   draft, but the gateway authorized us) -> granted;
+ *                   OMBUD_GRANT_MISSING -> denied.
+ *
+ * 'error' never downgrades a previously granted state (connection-store
+ * rule); only an explicit 'denied' does.
  */
 
 export interface ProbeClassification {
@@ -96,14 +103,72 @@ async function probeMomsOmbud(orgNumber: string): Promise<ProbeClassification> {
   }
 }
 
-export interface GrantProbeResult {
-  connection: SkvCompanyConnection | null
+export interface RegistryProbe {
   lasombud: ProbeClassification
   momsOmbud: ProbeClassification
 }
 
 /**
- * Run both behorighet probes for a company and persist the outcome.
+ * Ask the ombudsregister about one huvudman. Returns null when the register
+ * could not be consulted (so the caller falls back to the service probes);
+ * the reason is logged, and surfaces in the probe detail of the fallback.
+ */
+export async function probeViaOmbudsregister(
+  orgNumber: string,
+  today: string = isoDate(new Date())
+): Promise<{ result: RegistryProbe; roles: string[] } | { result: null; reason: string }> {
+  try {
+    const posts = await listOmbudGrants({ huvudman: orgNumber })
+    const summary = summarizeGrants(posts, today).get(orgNumber)
+    const roles = summary?.roles ?? []
+    // The company granted Accounted something, but none of it classifies as
+    // either behörighet: far more likely an unrecognised rollbeteckning (codes
+    // not pinned yet, or a renamed rollbeskrivning) than a company that chose
+    // only unrelated roles. 'error' never downgrades a granted row; 'denied'
+    // would. Pin the codes and the ambiguity disappears.
+    if (roles.length > 0 && !summary?.recognized) {
+      const detail = `ombudsregister: roller okända (${roles.join(', ')}); pinna rollkoderna`
+      return {
+        result: {
+          lasombud: { status: 'error', detail },
+          momsOmbud: { status: 'error', detail },
+        },
+        roles,
+      }
+    }
+    const describe = (granted: boolean, key: 'lasombud' | 'moms_ombud'): ProbeClassification =>
+      granted
+        ? { status: 'granted', detail: `ombudsregister: ${key} aktiv ${today}` }
+        : { status: 'denied', detail: `ombudsregister: ${key} saknas (roller: ${roles.join(', ') || 'inga'})` }
+    return {
+      result: {
+        lasombud: describe(summary?.lasombud ?? false, 'lasombud'),
+        momsOmbud: describe(summary?.moms_ombud ?? false, 'moms_ombud'),
+      },
+      roles,
+    }
+  } catch (err) {
+    const reason =
+      err instanceof OmbudApiError || err instanceof SkatteverketAuthError
+        ? `${err.code}: ${err.message}`
+        : err instanceof Error
+          ? err.message
+          : String(err)
+    log.warn('ombudsregister lookup unavailable, falling back to service probes', { orgNumber, reason })
+    return { result: null, reason }
+  }
+}
+
+export interface GrantProbeResult {
+  connection: SkvCompanyConnection | null
+  lasombud: ProbeClassification
+  momsOmbud: ProbeClassification
+  /** 'registry' when the ombudsregister answered, 'service' when the read probes decided. */
+  source: 'registry' | 'service'
+}
+
+/**
+ * Verify both behorigheter for a company and persist the outcome.
  * The caller has already verified role + capability and resolved the
  * company's normalized 12-digit org number.
  */
@@ -112,10 +177,26 @@ export async function probeCompanyGrants(
   orgNumber: string,
   createdBy?: string
 ): Promise<GrantProbeResult> {
-  const [lasombud, momsOmbud] = [await probeLasombud(orgNumber), await probeMomsOmbud(orgNumber)]
+  const registry = await probeViaOmbudsregister(orgNumber)
+
+  let lasombud: ProbeClassification
+  let momsOmbud: ProbeClassification
+  let source: GrantProbeResult['source']
+  if (registry.result) {
+    ;({ lasombud, momsOmbud } = registry.result)
+    source = 'registry'
+  } else {
+    lasombud = await probeLasombud(orgNumber)
+    momsOmbud = await probeMomsOmbud(orgNumber)
+    source = 'service'
+    const note = ` (ombudsregister otillgängligt: ${registry.reason})`
+    lasombud = { ...lasombud, detail: lasombud.detail + note }
+    momsOmbud = { ...momsOmbud, detail: momsOmbud.detail + note }
+  }
 
   log.info('grant probe completed', {
     companyId,
+    source,
     lasombud: lasombud.status,
     momsOmbud: momsOmbud.status,
   })
@@ -136,5 +217,5 @@ export async function probeCompanyGrants(
         : null,
   })
 
-  return { connection, lasombud, momsOmbud }
+  return { connection, lasombud, momsOmbud, source }
 }

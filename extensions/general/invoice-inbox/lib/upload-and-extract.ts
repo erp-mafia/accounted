@@ -2,6 +2,7 @@ import { after } from 'next/server'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { extractInvoiceFields, emptyResult, fetchOwnCompanyIdentity } from './extract-invoice-fields'
 import { mirrorExtractionToDocument } from './mirror-extraction'
+import type { InboxKindHint } from './resend-inbound'
 import { getAiStatus } from '@/lib/ai'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -183,6 +184,10 @@ export interface EmailMeta {
   bodyText?: string | null
   resendEmailId?: string | null
   resendAttachmentId?: string | null
+  // Sender-declared document kind from the +lev / +ver plus-address tag.
+  // Lands in its own column (not extracted_data) so re-extraction cannot
+  // overwrite what the sender said.
+  kindHint?: InboxKindHint | null
 }
 
 // Chat-channel provenance (whatsapp-inbox extension). When present, the inbox
@@ -446,6 +451,7 @@ export async function processArchivedDocument(
         email_body_text: emailMeta?.bodyText || null,
         resend_email_id: emailMeta?.resendEmailId || null,
         resend_attachment_id: emailMeta?.resendAttachmentId || null,
+        kind_hint: emailMeta?.kindHint ?? null,
         raw_email_payload: emailMeta?.messageId
           ? { messageId: emailMeta.messageId, filename: file.name }
           : null,
@@ -540,6 +546,7 @@ export async function processArchivedDocument(
       email_body_text: emailMeta?.bodyText || null,
       resend_email_id: emailMeta?.resendEmailId || null,
       resend_attachment_id: emailMeta?.resendAttachmentId || null,
+      kind_hint: emailMeta?.kindHint ?? null,
       raw_email_payload: emailMeta?.messageId
         ? { messageId: emailMeta.messageId, filename: file.name }
         : null,
