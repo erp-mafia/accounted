@@ -30,23 +30,25 @@ interface State {
   sieOverlap: boolean
   updates: Record<string, unknown>[]
   /**
-   * The durable lease as the database holds it. The conditional UPDATE the
-   * runner issues (`sync_lease_until is null or <= now`) is reproduced here:
-   * a held lease makes the claim return no row.
+   * The durable lease as the database holds it (epoch when never claimed).
+   * The conditional UPDATE the runner issues (`sync_lease_until <= now`) is
+   * reproduced here: a held lease makes the claim return no row.
    */
-  leaseUntil: string | null
+  leaseUntil: string
 }
+
+const EPOCH = '1970-01-01T00:00:00.000Z'
 
 function makeClient(state: State) {
   return {
     from: (table: string) => {
       let updatePayload: Record<string, unknown> | null = null
-      let orFilter: string | null = null
+      let lteFilter: { column: string; value: string } | null = null
       const chain: Record<string, unknown> = {}
       const passthrough = ['select', 'eq', 'gte', 'order', 'limit', 'in']
       for (const m of passthrough) chain[m] = vi.fn(() => chain)
-      chain.or = vi.fn((filter: string) => {
-        orFilter = filter
+      chain.lte = vi.fn((column: string, value: string) => {
+        lteFilter = { column, value }
         return chain
       })
       chain.update = vi.fn((payload: Record<string, unknown>) => {
@@ -55,10 +57,11 @@ function makeClient(state: State) {
       })
       const resolve = () => {
         if (updatePayload && 'sync_lease_until' in updatePayload) {
-          // Atomic claim: `.or('sync_lease_until.is.null,sync_lease_until.lte.<now>')`.
-          const nowIso = orFilter?.match(/sync_lease_until\.lte\.([^,]+)$/)?.[1]
-          if (!nowIso) throw new Error('lease claim must carry the conditional filter')
-          if (state.leaseUntil && state.leaseUntil > nowIso) return { data: [], error: null }
+          // Atomic claim: `.lte('sync_lease_until', <now>)`.
+          if (lteFilter?.column !== 'sync_lease_until') {
+            throw new Error('lease claim must carry the conditional filter')
+          }
+          if (state.leaseUntil > lteFilter.value) return { data: [], error: null }
           state.leaseUntil = updatePayload.sync_lease_until as string
           state.updates.push(updatePayload)
           return { data: [{ id: CONNECTION_ID }], error: null }
@@ -93,7 +96,7 @@ function connection(overrides: Record<string, unknown> = {}) {
     ],
     last_synced_at: new Date(NOW - 2 * DAY_MS).toISOString(),
     error_message: null,
-    sync_lease_until: null,
+    sync_lease_until: EPOCH,
     ...overrides,
   }
 }
@@ -119,7 +122,7 @@ describe('triggerConnectionSync', () => {
       membershipRole: 'owner',
       sieOverlap: false,
       updates: [],
-      leaseUntil: null,
+      leaseUntil: EPOCH,
     }
     mocks.syncAccountTransactions.mockResolvedValue({ imported: 2, duplicates: 5, errors: 0 })
     mocks.updateBalancesFromSync.mockResolvedValue(undefined)

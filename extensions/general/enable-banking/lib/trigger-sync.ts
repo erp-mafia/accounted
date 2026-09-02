@@ -120,11 +120,12 @@ export async function triggerConnectionSync(
   }
 
   // Durable, atomic cooldown claim. One conditional UPDATE: the lease is
-  // taken only if none is held, and Postgres row locking serialises
-  // concurrent claimers, so two agent calls landing on different serverless
-  // instances (or retries of a failing connection after a cold start) can
-  // never both reach the bank. The lease stays for the full window whether
-  // the sync succeeds or fails: that IS the throttle.
+  // taken only if the current one has expired (the column defaults to epoch,
+  // so "never claimed" needs no NULL branch), and Postgres row locking
+  // serialises concurrent claimers, so two agent calls landing on different
+  // serverless instances (or retries of a failing connection after a cold
+  // start) can never both reach the bank. The lease stays for the full
+  // window whether the sync succeeds or fails: that IS the throttle.
   const nowIso = new Date(now).toISOString()
   const leaseUntil = now + SYNC_COOLDOWN_MS
   const { data: claimed, error: claimError } = await supabase
@@ -132,7 +133,7 @@ export async function triggerConnectionSync(
     .update({ sync_lease_until: new Date(leaseUntil).toISOString() })
     .eq('id', connectionId)
     .eq('company_id', companyId)
-    .or(`sync_lease_until.is.null,sync_lease_until.lte.${nowIso}`)
+    .lte('sync_lease_until', nowIso)
     .select('id')
   if (claimError) throw claimError
   if (!claimed || claimed.length === 0) {
