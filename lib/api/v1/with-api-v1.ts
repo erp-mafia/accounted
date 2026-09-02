@@ -608,7 +608,19 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       //     happen, and caching it under a real Idempotency-Key is exactly how
       //     the documented "preview, then commit with the same key" flow used
       //     to lose the commit. A simulation has nothing worth replaying.
-      if (idempotencyKey && isMutation && companyId && !dryRun && response.status < 500) {
+      //
+      //     Never cache a 429 either: a throttle says "not now", and replaying
+      //     it under the same key would turn a 15-minute cooldown into the
+      //     cache's 24-hour TTL (the documented retry is "same request after
+      //     Retry-After", which is exactly a same-key retry).
+      if (
+        idempotencyKey &&
+        isMutation &&
+        companyId &&
+        !dryRun &&
+        response.status < 500 &&
+        response.status !== 429
+      ) {
         try {
           const body = await response.clone().json().catch(() => ({}))
           const reqHash = buildRequestHash({
