@@ -181,7 +181,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    const decidedAt = nextStatus === 'open' ? null : new Date().toISOString()
+    // Re-sending the same decision keeps its original timestamp (idempotent).
+    const decidedAt =
+      nextStatus === 'open'
+        ? null
+        : nextStatus === typed.quote_status
+          ? (typed.quote_decided_at ?? new Date().toISOString())
+          : new Date().toISOString()
 
     if (ctx.dryRun) {
       return dryRunPreview(
@@ -209,6 +215,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .maybeSingle()
 
     if (updateError) {
+      // trg_invoices_quote_decision_guard: a conversion landed between the
+      // read above and this write, so the decision is locked in accepted.
+      if ((updateError as { message?: string }).message?.includes('INVOICE_QUOTE_ALREADY_INVOICED')) {
+        return v1ErrorResponseFromCode('INVOICE_QUOTE_ALREADY_INVOICED', ctx.log, {
+          requestId: ctx.requestId,
+        })
+      }
       ctx.log.error('invoices.quote-status: update failed', updateError as Error, {
         quoteId,
         companyId: ctx.companyId,

@@ -75,7 +75,13 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .from('invoices')
       .update({
         quote_status: nextStatus,
-        quote_decided_at: nextStatus === 'open' ? null : new Date().toISOString(),
+        // Re-sending the same decision keeps its original timestamp.
+        quote_decided_at:
+          nextStatus === 'open'
+            ? null
+            : nextStatus === quote.quote_status
+              ? (quote.quote_decided_at ?? new Date().toISOString())
+              : new Date().toISOString(),
         // undefined is dropped by supabase-js: only a supplied date moves.
         valid_until: nextValidUntil,
         updated_at: new Date().toISOString(),
@@ -88,6 +94,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .maybeSingle()
 
     if (updateError) {
+      // trg_invoices_quote_decision_guard: a conversion landed between the
+      // read above and this write, so the decision is locked in accepted.
+      if (updateError.message?.includes('INVOICE_QUOTE_ALREADY_INVOICED')) {
+        return errorResponseFromCode('INVOICE_QUOTE_ALREADY_INVOICED', log, { requestId })
+      }
       log.error('quote status update failed', updateError, { quoteId: id })
       return errorResponse(updateError, log, { requestId })
     }

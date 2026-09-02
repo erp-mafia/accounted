@@ -106,31 +106,6 @@ export async function convertToInvoice(params: {
   const today = isoDate(new Date())
   let dueDate: string = source.due_date
 
-  // The invoice is a new taxable event dated today (ML 8 kap 21-23 §): a
-  // quote can sit for weeks, so the SEK twins must use today's rate, not
-  // the one stamped when the offer was written. Fail closed if no rate can
-  // be had (the create paths refuse a NULL rate for the same reason).
-  let exchangeRate = source.exchange_rate
-  let exchangeRateDate = source.exchange_rate_date
-  let subtotalSek = source.subtotal_sek
-  let vatAmountSek = source.vat_amount_sek
-  let totalSek = source.total_sek
-  if (source.currency !== 'SEK') {
-    const rate = await fetchExchangeRate(source.currency, new Date(`${today}T00:00:00Z`), supabase)
-    if (!rate) {
-      return {
-        ok: false,
-        code: 'INVOICE_CONVERT_FAILED',
-        cause: { message: `Exchange rate for ${source.currency} unavailable; try again later` },
-      }
-    }
-    exchangeRate = rate.rate
-    exchangeRateDate = rate.date
-    subtotalSek = convertToSEK(source.subtotal, rate.rate)
-    vatAmountSek = convertToSEK(source.vat_amount, rate.rate)
-    totalSek = convertToSEK(source.total, rate.rate)
-  }
-
   if (isQuote) {
     if (source.quote_status === 'declined') {
       return { ok: false, code: 'INVOICE_CONVERT_QUOTE_DECLINED' }
@@ -157,14 +132,44 @@ export async function convertToInvoice(params: {
     // through to the company default and then to 30.
     let termsDays: number | null = source.customer?.default_payment_terms ?? null
     if (termsDays == null) {
-      const { data: settings } = await supabase
+      const { data: settings, error: settingsError } = await supabase
         .from('company_settings')
         .select('invoice_default_days')
         .eq('company_id', companyId)
         .maybeSingle()
+      // A failed read must not silently become "30 days": that would date
+      // the receivable wrong. Only a successful empty result falls back.
+      if (settingsError) {
+        return { ok: false, code: 'INVOICE_CONVERT_FAILED', cause: settingsError }
+      }
       termsDays = (settings as { invoice_default_days?: number | null } | null)?.invoice_default_days ?? null
     }
     dueDate = addDays(today, termsDays ?? DEFAULT_PAYMENT_TERMS_DAYS)
+  }
+
+  // The invoice is a new taxable event dated today (ML 8 kap 21-23 §): a
+  // quote can sit for weeks, so the SEK twins must use today's rate, not
+  // the one stamped when the offer was written. Fail closed if no rate can
+  // be had (the create paths refuse a NULL rate for the same reason).
+  let exchangeRate = source.exchange_rate
+  let exchangeRateDate = source.exchange_rate_date
+  let subtotalSek = source.subtotal_sek
+  let vatAmountSek = source.vat_amount_sek
+  let totalSek = source.total_sek
+  if (source.currency !== 'SEK') {
+    const rate = await fetchExchangeRate(source.currency, new Date(`${today}T00:00:00Z`), supabase)
+    if (!rate) {
+      return {
+        ok: false,
+        code: 'INVOICE_CONVERT_FAILED',
+        cause: { message: `Exchange rate for ${source.currency} unavailable; try again later` },
+      }
+    }
+    exchangeRate = rate.rate
+    exchangeRateDate = rate.date
+    subtotalSek = convertToSEK(source.subtotal, rate.rate)
+    vatAmountSek = convertToSEK(source.vat_amount, rate.rate)
+    totalSek = convertToSEK(source.total, rate.rate)
   }
 
   const { data: invoice, error: invoiceError } = await supabase

@@ -1410,8 +1410,8 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
           </View>
         )}
 
-        {/* Late fee & credit terms */}
-        {(company.invoice_late_fee_text || company.invoice_credit_terms_text) && (
+        {/* Late fee & credit terms: payment terms, so never on a quote */}
+        {!isQuote && (company.invoice_late_fee_text || company.invoice_credit_terms_text) && (
           <View style={{ marginTop: 10, marginBottom: 10 }}>
             {company.invoice_late_fee_text && (
               <Text style={{ fontSize: 8, color: '#666', marginBottom: 2 }}>{company.invoice_late_fee_text}</Text>

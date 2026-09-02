@@ -11411,6 +11411,11 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .single()
       if (error || !invoice) throw new Error('Invoice not found')
+      // Same gate as gnubok_link_invoice_to_voucher: proformas, delivery
+      // notes and quotes carry no receivable, so there is nothing to match.
+      if (invoice.document_type && invoice.document_type !== 'invoice') {
+        throw registryError('MATCH_INVOICE_NOT_INVOICE_TYPE')
+      }
 
       if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
         return {
@@ -17774,7 +17779,14 @@ export const tools: McpTool[] = [
         .from('invoices')
         .update({
           quote_status: nextStatus,
-          quote_decided_at: nextStatus === 'open' ? null : new Date().toISOString(),
+          // Re-sending the same decision keeps its original timestamp
+          // (idempotentHint on this tool is honest).
+          quote_decided_at:
+            nextStatus === 'open'
+              ? null
+              : nextStatus === quote.quote_status
+                ? (quote.quote_decided_at ?? new Date().toISOString())
+                : new Date().toISOString(),
           valid_until: nextValidUntil,
           updated_at: new Date().toISOString(),
         })
@@ -17784,7 +17796,13 @@ export const tools: McpTool[] = [
         .neq('status', 'cancelled')
         .select('id, invoice_number, document_type, status, quote_status, quote_decided_at, valid_until')
         .maybeSingle()
-      if (updateError) throw dbError(updateError)
+      if (updateError) {
+        // trg_invoices_quote_decision_guard: a conversion landed in between.
+        if (updateError.message?.includes('INVOICE_QUOTE_ALREADY_INVOICED')) {
+          throw registryError('INVOICE_QUOTE_ALREADY_INVOICED')
+        }
+        throw dbError(updateError)
+      }
       if (!updated) throw registryError('INVOICE_QUOTE_CHANGED_CONCURRENTLY')
 
       return {

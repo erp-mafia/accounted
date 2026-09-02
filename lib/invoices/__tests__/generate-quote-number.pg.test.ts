@@ -287,3 +287,62 @@ describe('invoices_quote_defaults trigger and one-live-conversion index (2026090
   })
 })
 })
+
+describe('quote decision guard and viewer gate (20260902222000)', () => {
+  it('refuses to move an accepted quote away from accepted while a live converted invoice exists', async () => {
+    const { userId, companyId } = await seedCompany()
+    const customerId = await insertCustomer(userId, companyId)
+    const quoteId = await insertInvoiceRow({
+      userId,
+      companyId,
+      customerId,
+      documentType: 'quote',
+      invoiceNumber: 'OF-020',
+      quoteStatus: 'accepted',
+      validUntil: '2026-07-01',
+    })
+    const invoiceId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.invoices
+         (id, user_id, company_id, customer_id, invoice_number, document_type, converted_from_id,
+          invoice_date, due_date, currency, subtotal, vat_amount, total, vat_treatment, vat_rate, moms_ruta, status)
+       VALUES ($1, $2, $3, $4, 'F-920', 'invoice', $5,
+               '2026-06-01', '2026-07-01', 'SEK', 1000, 250, 1250, 'standard_25', 25, '10', 'draft')`,
+      [invoiceId, userId, companyId, customerId, quoteId],
+    )
+
+    await expect(
+      getPool().query(`UPDATE public.invoices SET quote_status = 'declined' WHERE id = $1`, [quoteId]),
+    ).rejects.toThrow(/INVOICE_QUOTE_ALREADY_INVOICED/)
+
+    // Cancelling the invoice frees the decision again.
+    await getPool().query(`UPDATE public.invoices SET status = 'cancelled' WHERE id = $1`, [invoiceId])
+    await expect(
+      getPool().query(`UPDATE public.invoices SET quote_status = 'declined' WHERE id = $1`, [quoteId]),
+    ).resolves.toBeDefined()
+  })
+
+  it('leaves an accepted quote without a converted invoice free to change', async () => {
+    const { userId, companyId } = await seedCompany()
+    const customerId = await insertCustomer(userId, companyId)
+    const quoteId = await insertInvoiceRow({
+      userId,
+      companyId,
+      customerId,
+      documentType: 'quote',
+      invoiceNumber: 'OF-021',
+      quoteStatus: 'accepted',
+      validUntil: '2026-07-01',
+    })
+    await expect(
+      getPool().query(`UPDATE public.invoices SET quote_status = 'open' WHERE id = $1`, [quoteId]),
+    ).resolves.toBeDefined()
+  })
+
+  it('generate_quote_number requires a non-viewer membership under a user JWT', async () => {
+    const { rows } = await getPool().query<{ src: string }>(
+      `SELECT pg_get_functiondef('public.generate_quote_number(uuid)'::regprocedure) AS src`,
+    )
+    expect(rows[0]!.src).toContain("cm.role <> 'viewer'")
+  })
+})
