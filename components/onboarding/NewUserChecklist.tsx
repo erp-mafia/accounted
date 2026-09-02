@@ -17,6 +17,9 @@ import {
   checklistNumbers,
   claudeConnectorLink,
   completionPatchBody,
+  SIDE_DOORS,
+  sideDoorServerUrl,
+  type SideDoor,
   type VatDeadlineLine,
 } from '@/lib/onboarding/checklist'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -46,12 +49,6 @@ interface NewUserChecklistProps {
    *  also says nothing rather than presenting partial numbers as the result. */
   sieSweep?: { auto_linked: number; suggested: number; unmatched: number; errors: number } | null
 }
-
-/** Clients that get a collapsed "Using X?" side door under the Claude step.
- *  Each value keys the i18n strings step_claude_<door>_link / _steps and the
- *  telemetry step name. Order is display order. */
-const SIDE_DOORS = ['chatgpt', 'grok'] as const
-type SideDoor = (typeof SIDE_DOORS)[number]
 
 /**
  * Activation funnel events, mirroring the one existing product-event site
@@ -276,8 +273,8 @@ export default function NewUserChecklist({
       return open === door ? null : door
     })
   }
-  const copyServerUrl = async () => {
-    const serverUrl = `${window.location.origin}/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted`
+  const copyServerUrl = async (door: SideDoor) => {
+    const serverUrl = sideDoorServerUrl({ origin: window.location.origin, door })
     try {
       await navigator.clipboard.writeText(serverUrl)
       setServerUrlCopied(true)
@@ -495,7 +492,7 @@ export default function NewUserChecklist({
                   <p className="max-w-prose text-xs leading-5 text-muted-foreground">
                     {t(`step_claude_${sideDoor}_steps`, { appName })}
                   </p>
-                  <Button size="sm" variant="outline" onClick={() => void copyServerUrl()}>
+                  <Button size="sm" variant="outline" onClick={() => void copyServerUrl(sideDoor)}>
                     {serverUrlCopied
                       ? t('step_claude_chatgpt_copied')
                       : t('step_claude_chatgpt_copy')}

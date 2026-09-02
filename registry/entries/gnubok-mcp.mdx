@@ -65,14 +65,14 @@ verktyg den får exponera.
 ## Installera i Claude.ai
 
 1. I Claude → Settings → Connectors → Add custom connector.
-2. Ange URL: `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp`.
+2. Ange URL: `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp?auth=required` (utan `auth=required` föreslår dialogen "None" som autentisering och inloggningen öppnas aldrig).
 3. Claude öppnar accounted-OAuth i webbläsaren. Logga in. Godkänn anslutningen.
 4. Connectorn dyker upp i listan. Slå på för de chattar där du vill ha den aktiv.
 
 ## Installera i Grok
 
 1. På grok.com: Connectors → New Connector → Custom.
-2. Ange URL: `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp`.
+2. Ange URL: `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp?auth=required` (utan `auth=required` ser Grok servern som öppen och startar aldrig inloggningen).
 3. Grok registrerar sig själv och öppnar accounted-OAuth. Logga in. Godkänn anslutningen.
 4. Starta en ny chatt med connectorn påslagen.
 

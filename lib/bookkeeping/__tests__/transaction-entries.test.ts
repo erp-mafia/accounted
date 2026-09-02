@@ -468,6 +468,30 @@ describe('createTransactionJournalEntry', () => {
     expect(input.source_id).toBe('tx-abc-123')
   })
 
+  it("books into the cash account's verifikationsserie when the account carries one", async () => {
+    const { supabase, enqueue, reset } = createQueuedMockSupabase()
+    reset()
+    enqueue({ data: { voucher_series: 'M' }, error: null })
+    const tx = makeTransaction({ amount: -100, cash_account_id: 'ca-card' })
+
+    await createTransactionJournalEntry(supabase as never, 'company-1', 'user-1', tx, makeMappingResult())
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.voucher_series).toBe('M')
+  })
+
+  it('omits voucher_series (engine resolves the per-type default) when the account has no override', async () => {
+    const { supabase, enqueue, reset } = createQueuedMockSupabase()
+    reset()
+    enqueue({ data: { voucher_series: null }, error: null })
+    const tx = makeTransaction({ amount: -100, cash_account_id: 'ca-main' })
+
+    await createTransactionJournalEntry(supabase as never, 'company-1', 'user-1', tx, makeMappingResult())
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect('voucher_series' in input).toBe(false)
+  })
+
   it('uses transaction.date as entry_date', async () => {
     const tx = makeTransaction({ date: '2024-09-15', amount: -100 })
     const mapping = makeMappingResult()

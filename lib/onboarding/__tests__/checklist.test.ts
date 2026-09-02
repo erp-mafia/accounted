@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   checklistNumbers,
   claudeConnectorLink,
+  mcpServerUrl,
+  sideDoorServerUrl,
+  SIDE_DOORS,
   claudeStepDone,
   completionPatchBody,
   vatDeadlineLine,
@@ -105,17 +108,50 @@ describe('claudeStepDone', () => {
   })
 })
 
+describe('mcpServerUrl', () => {
+  it('builds the namespaced URL with the client marker and no auth flag by default', () => {
+    expect(mcpServerUrl({ origin: 'https://app.testbrand.example', client: 'cursor' })).toBe(
+      'https://app.testbrand.example/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=cursor',
+    )
+  })
+
+  it('appends auth=required when eagerAuth is set', () => {
+    const url = new URL(mcpServerUrl({ origin: 'http://localhost:3000', client: 'grok', eagerAuth: true }))
+    expect(url.searchParams.get('tool_namespace')).toBe('accounted')
+    expect(url.searchParams.get('client')).toBe('grok')
+    expect(url.searchParams.get('auth')).toBe('required')
+  })
+})
+
+describe('sideDoorServerUrl', () => {
+  it('lists chatgpt then grok', () => {
+    expect(SIDE_DOORS).toEqual(['chatgpt', 'grok'])
+  })
+
+  it('gives Grok the eager-auth flag: its dialog reads a 200 probe as "no auth" and never starts OAuth', () => {
+    const url = new URL(sideDoorServerUrl({ origin: 'https://app.testbrand.example', door: 'grok' }))
+    expect(url.searchParams.get('client')).toBe('grok')
+    expect(url.searchParams.get('auth')).toBe('required')
+  })
+
+  it('keeps ChatGPT on the lazy URL', () => {
+    const url = new URL(sideDoorServerUrl({ origin: 'https://app.testbrand.example', door: 'chatgpt' }))
+    expect(url.searchParams.get('client')).toBe('chatgpt')
+    expect(url.searchParams.get('auth')).toBeNull()
+  })
+})
+
 describe('claudeConnectorLink', () => {
-  it('builds the claude.ai deep link with namespace and client marker, from the page origin', () => {
+  it('builds the claude.ai deep link with namespace, client marker and eager-auth flag, from the page origin', () => {
     const link = claudeConnectorLink({ origin: 'https://app.testbrand.example', appName: 'Testbrand' })
     expect(link).toBe(
       'https://claude.ai/customize/connectors?modal=add-custom-connector' +
         '&connectorName=Testbrand' +
-        '&connectorUrl=https%3A%2F%2Fapp.testbrand.example%2Fapi%2Fextensions%2Fext%2Fmcp-server%2Fmcp%3Ftool_namespace%3Daccounted%26client%3Dclaude-connector',
+        '&connectorUrl=https%3A%2F%2Fapp.testbrand.example%2Fapi%2Fextensions%2Fext%2Fmcp-server%2Fmcp%3Ftool_namespace%3Daccounted%26client%3Dclaude-connector%26auth%3Drequired',
     )
   })
 
-  it('matches the Settings → API & MCP button shape (tool_namespace + client=claude-connector)', () => {
+  it('matches the Settings → API & MCP button shape (tool_namespace + client=claude-connector + auth=required)', () => {
     const link = claudeConnectorLink({ origin: 'http://localhost:3000', appName: 'Bokföring AB' })
     const url = new URL(link)
     expect(url.searchParams.get('connectorName')).toBe('Bokföring AB')
@@ -124,5 +160,9 @@ describe('claudeConnectorLink', () => {
     expect(server.pathname).toBe('/api/extensions/ext/mcp-server/mcp')
     expect(server.searchParams.get('tool_namespace')).toBe('accounted')
     expect(server.searchParams.get('client')).toBe('claude-connector')
+    // Without this flag claude.ai's Add-custom-connector dialog pre-fills
+    // Authentication "None" (the lazy handshake answers 200) and the sign-in
+    // never opens.
+    expect(server.searchParams.get('auth')).toBe('required')
   })
 })

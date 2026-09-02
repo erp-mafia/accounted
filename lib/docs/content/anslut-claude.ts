@@ -21,11 +21,11 @@ Det finns tre vägar in, beroende på vilken klient du använder. Alla tre når 
 
 ## Väg A: claude.ai eller Claude Desktop (ett klick)
 
-**[→ Anslut Accounted till Claude](https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=Accounted&connectorUrl=https%3A%2F%2Fapp.accounted.se%2Fapi%2Fextensions%2Fext%2Fmcp-server%2Fmcp%3Ftool_namespace%3Daccounted%26client%3Dclaude-connector)**
+**[→ Anslut Accounted till Claude](https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=Accounted&connectorUrl=https%3A%2F%2Fapp.accounted.se%2Fapi%2Fextensions%2Fext%2Fmcp-server%2Fmcp%3Ftool_namespace%3Daccounted%26client%3Dclaude-connector%26auth%3Drequired)**
 
 Länken öppnar claude.ai med namn och adress ifyllda. Du granskar värdena och godkänner; länken fyller bara i formuläret och ger ingenting i sig. Ingen API-nyckel att hålla reda på.
 
-**Du behöver inget Accounted-konto ännu.** Anslutningen fungerar direkt: servern svarar på handskakningen och dokumentationsverktygen utan inloggning, och första anropet som rör ett bolag öppnar Accounteds inloggning, där du som ny skapar kontot (BankID eller e-post + 2FA).
+**Du behöver inget Accounted-konto ännu.** Inloggningen öppnas direkt när du lägger till anslutningen, och där skapar du som ny kontot på plats (BankID eller e-post + 2FA).
 
 **Alla behörigheter förvalda, varje skrivning stannar ändå.** Godkännandesidan ger hela behörighetslistan med ett klick. Fäll ut **Behörigheter** och välj **Endast läs** för en läsande anslutning (lista fakturor, läsa rapporter, räkna moms): så kan en granskare ansluta läsande medan du själv har en anslutning med skrivrättigheter för det dagliga arbetet. Oavsett behörigheter lägger skrivverktygen (skapa faktura, kontera, bokföra verifikat, köra bokslut) bara upp en pending operation som du bekräftar innan något bokförs, och åtkomsten går att återkalla under Inställningar → API & MCP.
 
@@ -33,22 +33,21 @@ Länken öppnar claude.ai med namn och adress ifyllda. Du granskar värdena och 
 
 Resten av inställningarna görs på Claudes sida, i den här ordningen:
 
-1. **Connector-dialogen.** claude.ai öppnar **Add custom connector** med namn och adress ifyllda. Kontrollera adressen och klicka **Add**. Frågar dialogen om autentisering, välj **"Required when the server asks"**, inte det automatiskt föreslagna "None": servern kräver ingen inloggning när du ansluter, så "None" ser rätt ut men stoppar inloggningen i steg 3. Claude Desktop visar samma dialog under Inställningar → Connectors.
-2. **Verktygen dyker upp direkt.** Anslutningen visas som ansluten och Claude listar Accounteds verktyg innan du har loggat in. Det är avsiktligt: handskakningen och dokumentationsverktygen behöver inget konto.
-3. **Första riktiga frågan öppnar inloggningen.** Fråga något om bokföringen, till exempel *"Vilket bolag är jag ansluten till?"*. Servern svarar att inloggning krävs, och claude.ai öppnar Accounteds inloggning (BankID eller e-post + 2FA) följd av godkännandesidan. Den visar bolaget som just nu är aktivt i appen (byt bolag i appen först om du har flera) med alla behörigheter förvalda; fäll ut **Behörigheter** och välj **Endast läs** för en läsande anslutning. Godkänn och **ställ frågan igen**: frågan som väntade när inloggningen öppnades görs inte om av sig själv. Statusen "ansluten" med en obesvarad första fråga betyder "logga in och fråga igen", inte att anslutningen är trasig.
-4. **Klart.** Härifrån går varje fråga mot det bolaget, och skrivningar stannar under **/pending** tills du bekräftar.
+1. **Connector-dialogen.** claude.ai öppnar **Add custom connector** med namn och adress ifyllda. Kontrollera adressen och gå vidare: dialogen känner av att servern kräver inloggning (**Always required**) och att Claude kan registrera sig själv automatiskt. Behåll de valen och klicka **Add**. Claude Desktop visar samma dialog under Inställningar → Connectors.
+2. **Inloggningen öppnas.** claude.ai ber dig ansluta och öppnar Accounteds inloggning (BankID eller e-post + 2FA) följd av godkännandesidan. Den visar bolaget som just nu är aktivt i appen (byt bolag i appen först om du har flera) med alla behörigheter förvalda; fäll ut **Behörigheter** och välj **Endast läs** för en läsande anslutning. Godkänn, så visas anslutningen som ansluten med Accounteds verktyg listade.
+3. **Ställ din första fråga.** Till exempel *"Vilket bolag är jag ansluten till?"*. Härifrån går varje fråga mot det bolaget, och skrivningar stannar under **/pending** tills du bekräftar.
 
-Inloggad, men Claude säger fortfarande att servern inte går att nå? Fråga igen i samma chatt först. Hjälper inte det: öppna Inställningar → Connectors, ta bort anslutningen och lägg till den igen med autentisering satt till "Required when the server asks".
+Inloggad, men Claude säger fortfarande att servern inte går att nå? Fråga igen i samma chatt först. Hjälper inte det: öppna Inställningar → Connectors, ta bort anslutningen och lägg till den igen via länken ovan, med autentisering kvar på **Always required**.
 
 #### Lägga till manuellt i stället
 
 I **claude.ai** (Inställningar → Connectors) eller **Claude Desktop** (Inställningar → Connectors → Add custom connector), välj **Add custom connector** och klistra in:
 
 \`\`\`
-https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-connector
+https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-connector&auth=required
 \`\`\`
 
-Behåll \`tool_namespace=accounted\`: den väljer verktygsnamnen som guiden utgår från. \`client=claude-connector\` är bara statistik. Frågar dialogen om autentisering, välj **"Required when the server asks"**, inte det automatiskt föreslagna "None".
+Behåll alla tre parametrarna. \`tool_namespace=accounted\` väljer verktygsnamnen som guiden utgår från. \`auth=required\` gör att dialogen känner av inloggningen (**Always required**): utan den accepterar servern en anonym handskakning, dialogen föreslår **None**, och en anslutning som läggs till med det förvalet öppnar aldrig inloggningen. Lägger du ändå till adressen utan parametern, välj **Required when the server asks** själv. \`client=claude-connector\` är bara statistik.
 
 ## Väg B: Claude Code (plugin)
 
