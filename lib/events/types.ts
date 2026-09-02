@@ -251,7 +251,8 @@ export type CoreEvent =
       errorMessage: string | null                   // human-readable error message (truncated to 500 chars), null on success.
                                                     // Raw material for clustering real agent failures into curated gotchas:
                                                     // errorCode alone can't distinguish "period locked" from "unbalanced".
-      errorDetail: string | null                    // The specific English diagnostic, when message_sv is a generic registry
+      errorDetail: string | null
+      errorCause: string | null  // errorCauseTag(err): SQLSTATE / coded-error code / error class name, <= 64 chars. The clustering key for rows whose errorMessage is the UNKNOWN_ERROR constant (#2051); never a raw driver message, which can quote row values.                    // The specific English diagnostic, when message_sv is a generic registry
                                                     // default that says nothing (VALIDATION_ERROR -> "Förfrågan innehåller
                                                     // ogiltiga uppgifter."). Null when it would only repeat errorMessage.
                                                     // Without it a 604-call outage looked identical to a typo in the logs:

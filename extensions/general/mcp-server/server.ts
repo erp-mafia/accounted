@@ -48,7 +48,7 @@ import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
-import { dbError } from '@/lib/errors/db-error'
+import { dbError, errorCauseTag } from '@/lib/errors/db-error'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
@@ -1461,13 +1461,20 @@ const PAGINATION_PROPS = {
   next_offset: { type: 'number', description: 'Offset for the next page (omitted on last page)' },
 } as const
 
+// Declared loosely on purpose. Every field here is transmitted once per
+// staged-write tool, and there are 58 of them in the default catalog, so a
+// character in this constant costs 58 characters of every agent's context.
+// `additionalProperties: false` stays: staging.test.ts pins the next hint as a
+// closed shape, and a guard whose reason is not in front of me is not a guard
+// to loosen for 420 tokens. Only args' redundant `additionalProperties: true`
+// went, which is the JSON Schema default anyway.
 const NEXT_ACTION_HINT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
     description: { type: 'string' },
     tool: { type: 'string' },
-    args: { type: 'object', additionalProperties: true },
+    args: { type: 'object' },
     resource: { type: 'string' },
   },
   required: ['description'],
@@ -1477,7 +1484,7 @@ const STAGED_OPERATION_SCHEMA = {
   type: 'object',
   properties: {
     staged: { type: 'boolean' },
-    operation_id: { type: 'string', description: 'UUID of the staged operation, present once persisted' },
+    operation_id: { type: 'string', description: 'Staged operation UUID, once persisted' },
     risk_level: { type: 'string', enum: ['low', 'medium', 'high'] },
     actor: { type: 'object' },
     dry_run: { type: 'boolean' },
@@ -1485,14 +1492,13 @@ const STAGED_OPERATION_SCHEMA = {
     message: { type: 'string' },
     approve: { type: 'object' },
     preview: { type: 'object' },
+    // Shape carried in prose rather than declared: the same three properties
+    // spelled out as JSON Schema cost 58x what one sentence costs, and the
+    // model reads the sentence either way. Same reason actor/approve/preview
+    // above have always been bare objects.
     period_status: {
       type: 'object',
-      description: 'Fiscal period covering the affärshändelse date. Use to detect locked/closed periods without a round-trip.',
-      properties: {
-        period_id: { type: ['string', 'null'] },
-        status: { type: 'string', enum: ['open', 'locked', 'closed'] },
-        lock_date: { type: ['string', 'null'] },
-      },
+      description: 'Period of the affärshändelse: period_id, status (open|locked|closed), lock_date. Detects a locked period without a round-trip.',
     },
     next: NEXT_ACTION_HINT_SCHEMA,
   },
@@ -3027,6 +3033,9 @@ export const tools: McpTool[] = [
         scope: { type: 'string', description: 'Optional filter: only tools requiring this API key scope (e.g. "invoices:write").' },
         limit: { type: 'number', description: 'Max results, 1-50 (default 20).' },
       },
+      // No offset exists: a caller paged with one today (2026-09-01) and was
+      // rejected. Raise limit instead, or narrow the query.
+      examples: [{ query: 'moms', detail: 'summary' }, { query: 'faktura', limit: 50 }],
     },
     outputSchema: {
       type: 'object',
@@ -3616,7 +3625,24 @@ export const tools: McpTool[] = [
       type: 'object',
       properties: {
         connected: { type: 'boolean' },
-        connections: { type: 'array', items: { type: 'object' } },
+        connections: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              connection_id: { type: 'string' },
+              bank: { type: ['string', 'null'] },
+              status: { type: 'string' },
+              since: { type: 'string' },
+              // Semantics live in the instructions string (runtime output), not
+              // here: every byte of this schema is charged against the
+              // tools/list context-budget ceiling (payload-size.bench.test.ts).
+              last_synced_at: { type: ['string', 'null'] },
+              consent_expires: { type: ['string', 'null'] },
+              error_message: { type: ['string', 'null'] },
+            },
+          },
+        },
         connect_url: { type: 'string' },
         instructions: { type: 'string' },
       },
@@ -3632,12 +3658,20 @@ export const tools: McpTool[] = [
     async execute(args, companyId, _userId, supabase) {
       const { data, error } = await supabase
         .from('bank_connections')
-        .select('id, bank_name, status, created_at')
+        .select('id, bank_name, status, created_at, last_synced_at, consent_expires, error_message')
         .eq('company_id', companyId)
         .in('status', ['pending', 'pending_selection', 'active', 'expired', 'error'])
         .order('created_at', { ascending: false })
       if (error) throw error
-      const connections = (data ?? []) as Array<{ id: string; bank_name: string | null; status: string; created_at: string }>
+      const connections = (data ?? []) as Array<{
+        id: string
+        bank_name: string | null
+        status: string
+        created_at: string
+        last_synced_at: string | null
+        consent_expires: string | null
+        error_message: string | null
+      }>
       const active = connections.filter((c) => c.status === 'active')
       // A named bank deep-links straight into that bank's consent (the page
       // auto-starts it; unknown names fall back to the prefilled picker).
@@ -3652,11 +3686,14 @@ export const tools: McpTool[] = [
           bank: c.bank_name,
           status: c.status,
           since: c.created_at,
+          last_synced_at: c.last_synced_at,
+          consent_expires: c.consent_expires,
+          error_message: c.error_message,
         })),
         connect_url: connectUrl,
         instructions:
           active.length > 0
-            ? 'At least one bank is connected and syncing. To add another bank, give the user the connect_url.'
+            ? 'At least one bank is connected and syncing. Check last_synced_at on each connection: older than 36 hours means transactions and balances may be STALE; warn the user before building on them. A null last_synced_at right after connecting is normal (the first sync lands within a minute). Match the remedy to the cause: status expired/error or consent_expires near or past needs BankID re-authorisation via the connect_url; a stale last_synced_at while status is active usually means the subscription lapsed or every account is deselected, so point the user to Installningar -> Bank instead of re-authorising. To add another bank, give the user the connect_url.'
             : (requestedBank
                 ? ''
                 : 'BETTER LINK AVAILABLE: if you know (or can ask) which bank the company uses, call this tool again with bank=<name>; the link then opens that bank\'s consent directly instead of a picker. ') +
@@ -5072,6 +5109,7 @@ export const tools: McpTool[] = [
         offset: { type: 'number', description: 'Number of results to skip for pagination (default 0)' },
         cash_account_id: { type: 'string' },
       },
+      examples: [{}, { limit: 100, offset: 100 }],
     },
     outputSchema: paginatedSchema('transactions', {
       type: 'object',
@@ -11996,6 +12034,9 @@ export const tools: McpTool[] = [
         },
       },
       required: ['file_name'],
+      // Step 1 of 2: PUT the bytes to upload_url, then complete with the SAME
+      // upload_id and file_name.
+      examples: [{ file_name: 'kvitto-sl-2026-03-12.pdf' }],
     },
     outputSchema: {
       type: 'object',
@@ -12063,6 +12104,8 @@ export const tools: McpTool[] = [
         },
       },
       required: ['upload_id', 'file_name'],
+      // Step 2 of 2: same upload_id and file_name as gnubok_create_document_upload.
+      examples: [{ upload_id: 'f00d...', file_name: 'kvitto-sl-2026-03-12.pdf' }],
     },
     outputSchema: {
       type: 'object',
@@ -13136,6 +13179,7 @@ export const tools: McpTool[] = [
         dry_run: { type: 'boolean', description: 'Preview without staging' },
       },
       required: ['document_id', 'journal_entry_id'],
+      examples: [{ document_id: 'd0c1...', journal_entry_id: 'a44e...' }],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: {
@@ -20465,6 +20509,15 @@ function emitToolCallTelemetry(payload: {
    * message_sv is already the domain message costs nothing.
    */
   errorDetail?: string | null
+  /**
+   * Machine vocabulary for the unmapped failures (#2051): errorCauseTag(err),
+   * i.e. the SQLSTATE or coded-error code, else the error's class name. For
+   * UNKNOWN_ERROR rows message_sv is the constant "Något gick fel. Försök
+   * igen.", so without this the residue cannot be clustered at all. Never the
+   * raw driver message: that can quote row values from a constraint violation
+   * and belongs in the server log, not in event_log.
+   */
+  errorCause?: string | null
   requestId: string | number | null
   userId: string
   // null/empty while the key's user has no company yet (issue #1814): the
@@ -20498,6 +20551,9 @@ function emitToolCallTelemetry(payload: {
           payload.errorDetail && payload.errorDetail !== payload.errorMessage
             ? payload.errorDetail.slice(0, 500)
             : null,
+        // Protocol vocabulary only (a SQLSTATE, a code, a class name), capped
+        // hard: anything longer is a message pretending to be a tag.
+        errorCause: payload.errorCause ? payload.errorCause.slice(0, 64) : null,
         requestId: payload.requestId,
         userId: payload.userId,
         companyId,
@@ -21437,6 +21493,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               errorKind: 'execution',
               errorMessage: structured.error.message_sv,
               errorDetail: structured.error.message_en,
+              errorCause: errorCauseTag(err),
               requestId: id ?? null,
               userId,
               companyId: effectiveCompanyId,
@@ -21530,6 +21587,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           // clustering when mining failures for gotchas.
           errorMessage: structured.error.message_sv,
           errorDetail: structured.error.message_en,
+          errorCause: errorCauseTag(err),
           requestId: id ?? null,
           userId,
           companyId: effectiveCompanyId,

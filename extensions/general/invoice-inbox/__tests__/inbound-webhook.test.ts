@@ -178,6 +178,47 @@ describe('POST /inbound', () => {
     expect(vi.mocked(uploadAndExtract).mock.calls[0][2]).toBe('company-9')
   })
 
+  it('does not carry a shared-address tag onto a custom-domain match (#2129)', async () => {
+    // The tagged shared address is retired, so the custom domain resolves the
+    // company. The +lev tag belonged to the retired address and must not stamp
+    // the custom-domain company's row.
+    const to = ['old-inbox-abcd+lev@arcim.io', 'fakturor@hansbolag.example']
+    vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ to, attachments: [] }) as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-old', company_id: 'company-old', status: 'deprecated' } }) // shared lookup
+    enqueue({ data: [{ company_id: 'company-9', domain: 'hansbolag.example' }] }) // verified domain
+    enqueue({ data: { created_by: 'user-owner-9' } }) // company owner
+    enqueue({ data: null }) // body-document dedupe check finds nothing
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-9' } as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({
+      object: 'email',
+      id: 'em_123',
+      to,
+      from: 'billing@supplier.com',
+      created_at: '2026-04-20T10:00:00Z',
+      subject: 'Invoice #5678',
+      bcc: null,
+      cc: null,
+      reply_to: null,
+      html: null,
+      text: 'Body',
+      headers: {},
+      message_id: '<msg@x>',
+      raw: null,
+      attachments: [],
+    } as never)
+
+    const request = createMockRequest('/inbound', { method: 'POST', body: {} })
+    const res = await webhookRoute.handler(request)
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.reason).toBe('email_body')
+    const [, , companyId, , , emailMeta] = vi.mocked(uploadAndExtract).mock.calls[0]
+    expect(companyId).toBe('company-9')
+    expect(emailMeta?.kindHint).toBeNull()
+  })
+
   it('does not route mail for an unverified custom domain', async () => {
     vi.mocked(verifyInboundWebhook).mockReturnValue(
       mockReceivedEvent({ to: ['faktura@pending-bolag.example'] }) as never
@@ -277,6 +318,98 @@ describe('POST /inbound', () => {
     const request = createMockRequest('/inbound', { method: 'POST', body: {} })
     const res = await webhookRoute.handler(request)
     expect(res.status).toBe(404)
+  })
+
+  it('routes a +lev plus-address to the base inbox and hints supplier_invoice (#2129)', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(
+      mockReceivedEvent({ to: ['Acme-AB-x7f2+LEV@arcim.io'] }) as never,
+    )
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: null }) // per-attachment dup check finds nothing
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-lev-1' } as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({
+      object: 'email',
+      id: 'em_123',
+      to: ['Acme-AB-x7f2+LEV@arcim.io'],
+      from: 'billing@supplier.com',
+      created_at: '2026-04-20T10:00:00Z',
+      subject: 'Faktura',
+      bcc: null,
+      cc: null,
+      reply_to: null,
+      html: null,
+      text: 'Se bifogad faktura',
+      headers: {},
+      message_id: '<msg@x>',
+      raw: null,
+      attachments: [
+        { id: 'att_1', filename: 'faktura.pdf', size: 100, content_type: 'application/pdf', content_id: 'cid', content_disposition: 'attachment' },
+      ],
+    } as never)
+    vi.mocked(fetchInboundAttachment).mockResolvedValue({
+      id: 'att_1',
+      filename: 'faktura.pdf',
+      contentType: 'application/pdf',
+      buffer: new Uint8Array([0x25, 0x50, 0x44, 0x46]).buffer as ArrayBuffer,
+    })
+
+    const request = createMockRequest('/inbound', { method: 'POST', body: {} })
+    const res = await webhookRoute.handler(request)
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.results[0].inbox_item_id).toBe('item-lev-1')
+
+    // The lookup used the local part WITHOUT the tag; before the split this
+    // mail 404ed as "Address not found".
+    const lookup = calls.find((c) => c.table === 'company_inboxes' && c.method === 'eq')
+    expect(lookup?.args).toEqual(['local_part', 'acme-ab-x7f2'])
+
+    const [, , , , , emailMeta] = vi.mocked(uploadAndExtract).mock.calls[0]
+    expect(emailMeta?.kindHint).toBe('supplier_invoice')
+  })
+
+  it('routes an unknown plus-tag with no kind hint instead of dropping the mail (#2129)', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(
+      mockReceivedEvent({ to: ['acme-ab-x7f2+faktura@arcim.io'], attachments: [] }) as never,
+    )
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: null }) // body-document dup check finds nothing
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-body-1' } as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({
+      object: 'email',
+      id: 'em_123',
+      to: ['acme-ab-x7f2+faktura@arcim.io'],
+      from: 'billing@supplier.com',
+      created_at: '2026-04-20T10:00:00Z',
+      subject: 'Kvitto',
+      bcc: null,
+      cc: null,
+      reply_to: null,
+      html: '<p>Kvitto 120 kr</p>',
+      text: 'Kvitto 120 kr',
+      headers: {},
+      message_id: '<msg@x>',
+      raw: null,
+      attachments: [],
+    } as never)
+
+    const request = createMockRequest('/inbound', { method: 'POST', body: {} })
+    const res = await webhookRoute.handler(request)
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.reason).toBe('email_body')
+
+    const lookup = calls.find((c) => c.table === 'company_inboxes' && c.method === 'eq')
+    expect(lookup?.args).toEqual(['local_part', 'acme-ab-x7f2'])
+
+    const [, , , , , emailMeta] = vi.mocked(uploadAndExtract).mock.calls[0]
+    expect(emailMeta?.kindHint).toBeNull()
   })
 
   it('returns 410 when the address is deprecated', async () => {
@@ -539,9 +672,11 @@ describe('POST /inbound', () => {
     expect(stored).toContain('<div>Faktura 123: 500 kr</div>')
   })
 
-  it('still rejects attachment types outside the email allowlist', async () => {
-    vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
-    const { supabase, enqueue } = createQueuedMockSupabase()
+  it('still rejects attachment types outside the email allowlist, keeping the sender kind hint on the error row', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(
+      mockReceivedEvent({ to: ['acme-ab-x7f2+ver@arcim.io'] }) as never,
+    )
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
     enqueue({ data: { created_by: 'user-owner-1' } })
     enqueue({ data: null }) // per-attachment dup check finds nothing
@@ -550,7 +685,7 @@ describe('POST /inbound', () => {
     vi.mocked(fetchReceivingEmail).mockResolvedValue({
       object: 'email',
       id: 'em_123',
-      to: ['acme-ab-x7f2@arcim.io'],
+      to: ['acme-ab-x7f2+ver@arcim.io'],
       from: 'billing@supplier.com',
       created_at: '2026-04-20T10:00:00Z',
       subject: 'Zip',
@@ -579,5 +714,10 @@ describe('POST /inbound', () => {
     expect(res.status).toBe(200)
     expect(body.data.results[0].error).toBe('Unsupported type application/zip')
     expect(uploadAndExtract).not.toHaveBeenCalled()
+
+    // The rejected row still carries what the sender said (#2129), so it can
+    // be found under the Underlag filter like any other inbox item.
+    const rejection = calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')
+    expect(rejection?.args[0]).toMatchObject({ status: 'error', kind_hint: 'receipt' })
   })
 })

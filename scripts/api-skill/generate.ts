@@ -109,10 +109,11 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'banking.md',
     title: 'Banking',
-    members: ['transactions', 'cash-accounts', 'reconciliation', 'imports'],
+    members: ['transactions', 'cash-accounts', 'bank-connections', 'reconciliation', 'imports'],
     blurb:
       'Bank transactions (ingest, categorize, match against invoices), cash accounts with the ' +
-      'bank-reported balance, bank reconciliation runs, and file imports (SIE, bank statements).',
+      'bank-reported balance, PSD2 connection health (sync freshness, consent expiry), ' +
+      'bank reconciliation runs, and file imports (SIE, bank statements).',
   },
   {
     file: 'employees.md',

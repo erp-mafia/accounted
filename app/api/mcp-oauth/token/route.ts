@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { decryptAuthCode, verifyPkce, hashAuthCode } from '@/lib/auth/oauth-codes'
 import {
   generateApiKey,
+  OAUTH_MCP_KEY_NAME,
   generateRefreshToken,
   hashRefreshToken,
   createServiceClientNoCookies,
@@ -161,7 +162,7 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
       company_id: companyId,
       key_hash: hash,
       key_prefix: prefix,
-      name: 'MCP-klient (OAuth)',
+      name: OAUTH_MCP_KEY_NAME,
       scopes: grantedScopes,
       refresh_token_hash: refresh.hash,
     })

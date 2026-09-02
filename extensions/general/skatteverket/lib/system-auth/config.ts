@@ -46,11 +46,13 @@ export function getSystemClientId(): string | null {
 }
 
 /**
- * Default scopes for the system token. The real scope names for the org
- * flow are pending SKV docs; override via env when they land.
+ * Default scopes for the system token. `obr` is Ombudshantering (confirmed
+ * by Skatteverket 2026-09-01 when they added it to application id
+ * arcimtechnologyab_gnubok_1); the other names are pending SKV's org-flow
+ * docs. Override via env when they land.
  */
 export function getSystemScopes(): string[] {
-  const raw = process.env.SKATTEVERKET_SYSTEM_SCOPES ?? 'skattekonto agd:lasa momsdeklaration'
+  const raw = process.env.SKATTEVERKET_SYSTEM_SCOPES ?? 'skattekonto agd:lasa momsdeklaration obr'
   return raw.split(/\s+/).filter(Boolean)
 }
 
