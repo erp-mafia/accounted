@@ -147,7 +147,7 @@ describe('buildSuggestions', () => {
 
 describe('suggestPartiesForCompany', () => {
   function stubClient(opts: { observed: unknown[]; evidence: unknown[]; existing: unknown[]; apply: unknown }) {
-    const rpc = vi.fn(async (name: string) => {
+    const rpc = vi.fn(async (name: string, _args?: Record<string, unknown>) => {
       if (name === 'get_observed_parties') return { data: opts.observed, error: null }
       if (name === 'get_ledger_key_evidence') return { data: opts.evidence, error: null }
       if (name === 'apply_party_suggestions') return { data: opts.apply, error: null }
@@ -174,7 +174,7 @@ describe('suggestPartiesForCompany', () => {
     const summary = await suggestPartiesForCompany(client, 'co', 'user')
     expect(summary).toEqual({ observed: 2, suggested: 1, skipped: 1, created: 1, attached: 0, identities: 0, facts: 2 })
     const applyCall = rpc.mock.calls.find((c) => c[0] === 'apply_party_suggestions')!
-    const args = applyCall[1] as { p_company_id: string; p_user_id: string; p_items: Array<{ key: string }> }
+    const args = applyCall[1] as unknown as { p_company_id: string; p_user_id: string; p_items: Array<{ key: string }> }
     expect(args.p_company_id).toBe('co')
     expect(args.p_user_id).toBe('user')
     expect(args.p_items.map((i) => i.key)).toEqual(['beijer byggmaterial'])
