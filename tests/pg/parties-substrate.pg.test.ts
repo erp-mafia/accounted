@@ -139,6 +139,55 @@ describe('parties substrate (pg)', () => {
     expect(visibleToStranger).toBe(0)
   })
 
+  it('refuses to attach facts, identities, decisions, roles or merges to another company\'s party', async () => {
+    const mine = await seedCompany()
+    const theirs = await seedCompany()
+    const { rows } = await getPool().query<{ id: string }>(
+      `INSERT INTO public.parties (company_id, user_id, display_name) VALUES ($1, $2, 'Telenor Sverige AB') RETURNING id`,
+      [theirs.companyId, theirs.userId],
+    )
+    const foreignParty = rows[0]!.id
+    const fk = { code: '23503' }
+    await expect(
+      getPool().query(
+        `INSERT INTO public.party_facts (party_id, company_id, user_id, field, value, source)
+         VALUES ($1, $2, $3, 'legal_name', '"x"'::jsonb, 'user')`,
+        [foreignParty, mine.companyId, mine.userId],
+      ),
+    ).rejects.toMatchObject(fk)
+    await expect(
+      getPool().query(
+        `INSERT INTO public.party_identities (party_id, company_id, user_id, scheme, value, source)
+         VALUES ($1, $2, $3, 'bankgiro', '12345678', 'user')`,
+        [foreignParty, mine.companyId, mine.userId],
+      ),
+    ).rejects.toMatchObject(fk)
+    await expect(
+      getPool().query(
+        `INSERT INTO public.party_decisions (party_id, company_id, user_id, kind) VALUES ($1, $2, $3, 'confirm')`,
+        [foreignParty, mine.companyId, mine.userId],
+      ),
+    ).rejects.toMatchObject(fk)
+    await expect(
+      getPool().query(
+        `INSERT INTO public.suppliers (company_id, user_id, name, party_id) VALUES ($1, $2, 'Telenor', $3)`,
+        [mine.companyId, mine.userId, foreignParty],
+      ),
+    ).rejects.toMatchObject(fk)
+    await expect(
+      getPool().query(
+        `INSERT INTO public.customers (company_id, user_id, name, party_id) VALUES ($1, $2, 'Telenor', $3)`,
+        [mine.companyId, mine.userId, foreignParty],
+      ),
+    ).rejects.toMatchObject(fk)
+    await expect(
+      getPool().query(
+        `INSERT INTO public.parties (company_id, user_id, display_name, merged_into) VALUES ($1, $2, 'Telenor dup', $3)`,
+        [mine.companyId, mine.userId, foreignParty],
+      ),
+    ).rejects.toMatchObject(fk)
+  })
+
   it('customers and suppliers carry a nullable party_id that clears when the party goes', async () => {
     const c = await seedCompany()
     const party = await getPool().query<{ id: string }>(
@@ -170,5 +219,12 @@ describe('parties substrate (pg)', () => {
       [supplier.rows[0]!.id, customer.rows[0]!.id],
     )
     expect(after.rows[0]).toEqual({ s: null, c: null })
+    const companies = await getPool().query<{ s: string | null; c: string | null }>(
+      `SELECT (SELECT company_id FROM public.suppliers WHERE id = $1) AS s,
+              (SELECT company_id FROM public.customers WHERE id = $2) AS c`,
+      [supplier.rows[0]!.id, customer.rows[0]!.id],
+    )
+    // SET NULL names party_id only: the role row keeps its company.
+    expect(companies.rows[0]).toEqual({ s: c.companyId, c: c.companyId })
   })
 })

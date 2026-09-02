@@ -68,11 +68,18 @@ CREATE TABLE public.parties (
   alias_keys    text[] NOT NULL DEFAULT '{}',
   origin        text NOT NULL DEFAULT 'manual'
                   CHECK (origin IN ('manual', 'import', 'document', 'bank', 'ledger', 'backfill')),
-  merged_into   uuid REFERENCES public.parties(id) ON DELETE SET NULL,
+  merged_into   uuid,
   archived_at   timestamptz,
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now(),
-  CHECK (merged_into IS DISTINCT FROM id)
+  CHECK (merged_into IS DISTINCT FROM id),
+  -- (id, company_id) is the target every child and role link references, so
+  -- a row can only ever point at a party in its own company. A party UUID
+  -- from another tenant is useless to a caller by construction.
+  CONSTRAINT parties_id_company_unique UNIQUE (id, company_id),
+  CONSTRAINT parties_merged_into_same_company
+    FOREIGN KEY (merged_into, company_id) REFERENCES public.parties(id, company_id)
+    ON DELETE SET NULL (merged_into)
 );
 
 -- One live party per org number and company. Merged parties leave the index,
@@ -106,7 +113,7 @@ CREATE TRIGGER audit_parties
 -- ── party_facts: statements with provenance, never overwritten ──────────────
 CREATE TABLE public.party_facts (
   id                uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  party_id          uuid NOT NULL REFERENCES public.parties(id) ON DELETE CASCADE,
+  party_id          uuid NOT NULL,
   company_id        uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
   user_id           uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   field             text NOT NULL CHECK (length(field) BETWEEN 1 AND 64),
@@ -127,7 +134,9 @@ CREATE TABLE public.party_facts (
   created_at        timestamptz NOT NULL DEFAULT now(),
   updated_at        timestamptz NOT NULL DEFAULT now(),
   CHECK (valid_to IS NULL OR valid_from IS NULL OR valid_to >= valid_from),
-  CHECK (rank <> 'deprecated' OR deprecated_reason IS NOT NULL)
+  CHECK (rank <> 'deprecated' OR deprecated_reason IS NOT NULL),
+  CONSTRAINT party_facts_party_same_company
+    FOREIGN KEY (party_id, company_id) REFERENCES public.parties(id, company_id) ON DELETE CASCADE
 );
 CREATE INDEX idx_party_facts_party_field ON public.party_facts (party_id, field) WHERE superseded_at IS NULL;
 CREATE INDEX idx_party_facts_company_id ON public.party_facts (company_id);
@@ -152,7 +161,7 @@ CREATE TRIGGER audit_party_facts
 -- ── party_identities: how a party gets paid ─────────────────────────────────
 CREATE TABLE public.party_identities (
   id          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  party_id    uuid NOT NULL REFERENCES public.parties(id) ON DELETE CASCADE,
+  party_id    uuid NOT NULL,
   company_id  uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
   user_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   scheme      text NOT NULL
@@ -170,7 +179,9 @@ CREATE TABLE public.party_identities (
   paid_count  integer NOT NULL DEFAULT 0 CHECK (paid_count >= 0),
   created_at  timestamptz NOT NULL DEFAULT now(),
   updated_at  timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (party_id, scheme, value)
+  UNIQUE (party_id, scheme, value),
+  CONSTRAINT party_identities_party_same_company
+    FOREIGN KEY (party_id, company_id) REFERENCES public.parties(id, company_id) ON DELETE CASCADE
 );
 CREATE INDEX idx_party_identities_company_value ON public.party_identities (company_id, scheme, value);
 
@@ -194,7 +205,7 @@ CREATE TRIGGER audit_party_identities
 -- ── party_decisions: every human action is a labelled example ───────────────
 CREATE TABLE public.party_decisions (
   id          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  party_id    uuid NOT NULL REFERENCES public.parties(id) ON DELETE CASCADE,
+  party_id    uuid NOT NULL,
   company_id  uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
   user_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   kind        text NOT NULL
@@ -202,7 +213,9 @@ CREATE TABLE public.party_decisions (
   before      jsonb,
   after       jsonb,
   note        text,
-  created_at  timestamptz NOT NULL DEFAULT now()
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT party_decisions_party_same_company
+    FOREIGN KEY (party_id, company_id) REFERENCES public.parties(id, company_id) ON DELETE CASCADE
 );
 CREATE INDEX idx_party_decisions_party ON public.party_decisions (party_id, created_at);
 CREATE INDEX idx_party_decisions_company_id ON public.party_decisions (company_id);
@@ -222,8 +235,14 @@ CREATE TRIGGER audit_party_decisions
   FOR EACH ROW EXECUTE FUNCTION public.write_audit_log();
 
 -- ── Roles: customers and suppliers point at their party ─────────────────────
-ALTER TABLE public.customers ADD COLUMN party_id uuid REFERENCES public.parties(id) ON DELETE SET NULL;
-ALTER TABLE public.suppliers ADD COLUMN party_id uuid REFERENCES public.parties(id) ON DELETE SET NULL;
+-- Composite keys so a role can only point at a party in its own company.
+-- ON DELETE SET NULL names the column: a plain SET NULL would null company_id.
+ALTER TABLE public.customers ADD COLUMN party_id uuid;
+ALTER TABLE public.customers ADD CONSTRAINT customers_party_same_company
+  FOREIGN KEY (party_id, company_id) REFERENCES public.parties(id, company_id) ON DELETE SET NULL (party_id);
+ALTER TABLE public.suppliers ADD COLUMN party_id uuid;
+ALTER TABLE public.suppliers ADD CONSTRAINT suppliers_party_same_company
+  FOREIGN KEY (party_id, company_id) REFERENCES public.parties(id, company_id) ON DELETE SET NULL (party_id);
 CREATE INDEX idx_customers_party_id ON public.customers (party_id) WHERE party_id IS NOT NULL;
 CREATE INDEX idx_suppliers_party_id ON public.suppliers (party_id) WHERE party_id IS NOT NULL;
 
