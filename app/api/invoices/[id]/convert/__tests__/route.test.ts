@@ -368,9 +368,9 @@ describe('POST /api/invoices/[id]/convert', () => {
       const inserted = findCall('invoices', 'insert')?.[0] as Record<string, unknown>
       expect(inserted.exchange_rate).toBe(11.45)
       expect(inserted.exchange_rate_date).toBe('2026-07-28')
-      expect(inserted.subtotal_sek).toBe(Math.round(10000 * 11.45 * 100) / 100)
-      expect(inserted.vat_amount_sek).toBe(Math.round(2500 * 11.45 * 100) / 100)
-      expect(inserted.total_sek).toBe(Math.round(12500 * 11.45 * 100) / 100)
+      expect(inserted.subtotal_sek).toBeCloseTo(114500, 2)
+      expect(inserted.vat_amount_sek).toBeCloseTo(28625, 2)
+      expect(inserted.total_sek).toBeCloseTo(143125, 2)
     })
 
     it('fails closed before inserting anything when no rate can be fetched', async () => {

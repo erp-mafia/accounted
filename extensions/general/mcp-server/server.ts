@@ -6957,7 +6957,7 @@ export const tools: McpTool[] = [
 
       // Stage for user approval instead of creating directly
       return stagePendingOperation(supabase, companyId, userId, 'create_invoice',
-        `${isQuote ? 'Ny offert' : 'Ny faktura'}: ${customer.name} ${Math.round(total * 100) / 100} ${currency}`,
+        `${isQuote ? 'Ny offert' : 'Ny faktura'}: ${customer.name} ${roundOre(total)} ${currency}`,
         {
           customer_id: customerId,
           document_type: documentType,
@@ -17685,7 +17685,7 @@ export const tools: McpTool[] = [
       }
 
       const customerName = (inv.customer as { name?: string } | null)?.name ?? 'okänd kund'
-      const amount = `${Math.round(Number(inv.total) * 100) / 100} ${inv.currency}`
+      const amount = `${roundOre(Number(inv.total))} ${inv.currency}`
       return stagePendingOperation(supabase, companyId, userId, 'convert_invoice',
         isQuote
           ? `Konvertera offert → faktura: ${inv.invoice_number ?? ''} ${customerName} ${amount}`.replace(/\s+/g, ' ')
