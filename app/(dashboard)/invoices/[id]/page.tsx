@@ -28,6 +28,8 @@ import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { creditNoteNeedsJournalEntry } from '@/lib/invoices/issue-credit-note'
 import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
 import { canCopyInvoice } from '@/lib/invoices/copy-invoice'
+import { effectiveQuoteStatus, isQuoteExpired } from '@/lib/invoices/quote-status'
+import type { QuoteStatus } from '@/types'
 import {
   invoiceDocumentCaveat,
   invoiceRerenderUrl,
@@ -207,6 +209,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [creditNote, setCreditNote] = useState<Invoice | null>(null)
   const [originalInvoice, setOriginalInvoice] = useState<Invoice | null>(null)
   const [convertedFromInvoice, setConvertedFromInvoice] = useState<Invoice | null>(null)
+  // Offert: the invoice created from this quote (converted_from_id points
+  // back here), and the accept/decline round trip.
+  const [quoteInvoice, setQuoteInvoice] = useState<Invoice | null>(null)
+  const [isDeciding, setIsDeciding] = useState(false)
+  const [showExpiredAcceptDialog, setShowExpiredAcceptDialog] = useState(false)
+  const [showExpiredConvertDialog, setShowExpiredConvertDialog] = useState(false)
   const [showPaymentDialog, setShowPaymentDialog] = useState(false)
   const [showSendDialog, setShowSendDialog] = useState(false)
   const [sendDialogMode, setSendDialogMode] = useState<'email' | 'manual'>('email')
@@ -494,11 +502,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         data.converted_from_id
           ? supabase
               .from('invoices')
-              .select('id, invoice_number')
+              .select('id, invoice_number, document_type')
               .eq('id', data.converted_from_id)
               .single()
           : Promise.resolve(null),
-      ]).then(([personnummerMasked, creditNoteRes, originalRes, convertedRes]) => {
+        data.document_type === 'quote'
+          ? supabase
+              .from('invoices')
+              .select('id, invoice_number, status')
+              .eq('converted_from_id', id)
+              .neq('status', 'cancelled')
+              .order('created_at', { ascending: false })
+              .limit(1)
+          : Promise.resolve(null),
+      ]).then(([personnummerMasked, creditNoteRes, originalRes, convertedRes, invoicedRes]) => {
         // Deferred writes need the same guard: they land after first paint
         // and would otherwise attach the previous invoice's related documents
         // to the one the pager has since navigated to.
@@ -511,6 +528,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         if (convertedRes?.data) {
           setConvertedFromInvoice(convertedRes.data as Invoice)
         }
+        setQuoteInvoice((invoicedRes?.data?.[0] as Invoice | undefined) ?? null)
       })
   }
 
@@ -587,11 +605,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           throw new Error(data.error || t('mark_sent_failed_fallback'))
         }
       } else if (status === 'cancelled') {
-        // Only drafts and proformas can be cancelled directly: sent/overdue/paid
+        // Only drafts, proformas and quotes can be cancelled directly: sent/overdue/paid
         // invoices have committed journal entries and require a credit note instead
         if (invoice.status !== 'draft') {
           const docType = ((invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice') as InvoiceDocumentType
-          if (docType !== 'proforma') {
+          if (docType !== 'proforma' && docType !== 'quote') {
             throw new Error(t('cancel_posted_error'))
           }
         }
@@ -643,7 +661,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error || t('convert_failed_fallback'))
+        throw new Error(
+          getUserErrorMessage(data, { context: 'invoice', statusCode: response.status }) ||
+            t('convert_failed_fallback'),
+        )
       }
 
       toast({
@@ -661,6 +682,62 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
 
     setIsConverting(false)
+  }
+
+  /**
+   * Offert decision (open / accepted / declined). "Expired" is derived from
+   * valid_until and never stored, so accepting an expired quote is a plain
+   * accept: the confirm dialog only makes the lapse explicit first.
+   */
+  async function setQuoteDecision(status: QuoteStatus) {
+    if (!invoice) return
+    setIsDeciding(true)
+    try {
+      const response = await fetch(`/api/invoices/${invoice.id}/quote-status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) {
+        throw new Error(
+          getUserErrorMessage(data, { context: 'invoice', statusCode: response.status }) ||
+            t('quote_decision_failed_fallback'),
+        )
+      }
+      toast({
+        title: t('quote_decision_toast_title'),
+        description: t(`quote_decision_toast_${status}`),
+      })
+      await fetchInvoice()
+    } catch (error) {
+      toast({
+        title: t('quote_decision_failed_title'),
+        description: error instanceof Error ? getUserErrorMessage(error) : t('fallback_try_again'),
+        variant: 'destructive',
+      })
+    }
+    setIsDeciding(false)
+  }
+
+  function acceptQuote() {
+    if (!invoice) return
+    if (isQuoteExpired(invoice)) {
+      setShowExpiredAcceptDialog(true)
+      return
+    }
+    void setQuoteDecision('accepted')
+  }
+
+  /** "Skapa faktura" on an expired open quote confirms the lapse first; an
+   *  accepted quote past valid_until is not expired and converts directly. */
+  function startQuoteConvert() {
+    if (!invoice) return
+    if (isQuoteExpired(invoice)) {
+      setShowExpiredConvertDialog(true)
+      return
+    }
+    void convertToInvoice()
   }
 
   /**
@@ -1183,8 +1260,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const customerHasEmail = !!customer.email
   const docType = ((invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice') as InvoiceDocumentType
   const isProforma = docType === 'proforma'
+  const isQuote = docType === 'quote'
   const isDeliveryNote = docType === 'delivery_note'
   const isRealInvoice = docType === 'invoice'
+  // Offert: the effective status (expired is derived, never stored) and what
+  // can still happen to it. Once an invoice exists the decision is final.
+  const quoteStatus = isQuote ? effectiveQuoteStatus(invoice) : null
+  const canDecideQuote = isQuote && invoice.status !== 'cancelled' && !quoteInvoice
+  const canConvertQuote = canDecideQuote && quoteStatus !== 'declined'
   // #1693: only a fully paid faktura has a betalningsbekräftelse to offer.
   const canSendPaymentConfirmation = isPaymentConfirmationEligible(invoice)
   const isCreditNote = !!invoice.credited_invoice_id
@@ -1276,17 +1359,33 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         : t('title_credit_draft')
       : isProforma
         ? t('title_proforma', { number: invoiceDisplayNumber(invoice as Invoice) })
-        : isDeliveryNote
+        : isQuote
+          ? t('title_quote', { number: invoiceDisplayNumber(invoice as Invoice) })
+          : isDeliveryNote
           ? t('title_delivery_note', { number: invoiceDisplayNumber(invoice as Invoice) })
           : invoice.invoice_number
             ? t('title_invoice', { number: titleNumber })
             : t('title_draft')
 
+  // Offert: open and accepted are the normal states (muted text); declined
+  // and the derived expiry deviate and get a chip. Same map as the list page.
+  const quoteStatusDescriptor: { label: string; exception: boolean; variant?: 'secondary' | 'warning' } | null =
+    quoteStatus === 'expired'
+      ? { label: tInvoices('quote_status_expired'), exception: true, variant: 'warning' }
+      : quoteStatus === 'declined'
+        ? { label: tInvoices('quote_status_declined'), exception: true, variant: 'secondary' }
+        : quoteStatus === 'accepted'
+          ? { label: tInvoices('quote_status_accepted'), exception: false }
+          : quoteStatus === 'open'
+            ? { label: tInvoices('quote_status_open'), exception: false }
+            : null
   // One status element, same rule as the list page (chips mark exceptions):
   // sent and paid render as muted text, everything that deviates gets a chip.
   const status: { label: string; exception: boolean; variant?: 'secondary' | 'outline' | 'warning' } =
     invoice.status === 'cancelled'
       ? { label: statusLabel('cancelled'), exception: true, variant: 'secondary' }
+      : quoteStatusDescriptor
+        ? quoteStatusDescriptor
       : invoice.status === 'credited'
         ? { label: statusLabel('credited'), exception: true, variant: 'secondary' }
         : invoice.status === 'draft'
@@ -1322,6 +1421,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // obvious next step in the header, the alternatives behind a caret).
   const showManualSendAlternative =
     !isProforma &&
+    !isQuote &&
     !isDeliveryNote &&
     isUnsentNumberedInvoice &&
     preferredSendMode === 'email'
@@ -1349,7 +1449,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     invoice.status !== 'cancelled' &&
     invoice.status !== 'credited' &&
     (!invoice.credited_invoice_id || invoice.status === 'draft') &&
-    (isProforma || invoice.status === 'draft')
+    (isProforma || isQuote || invoice.status === 'draft')
   const hasMenu =
     !isSelfBilled ||
     (isCopyable && canWrite) ||
@@ -1472,6 +1572,37 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('convert_to_invoice')}
             </Button>
           )}
+          {canDecideQuote && quoteStatus !== 'accepted' && (
+            <Button
+              variant="outline"
+              onClick={acceptQuote}
+              disabled={isDeciding || isConverting || !canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {isDeciding ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <CheckCircle className="mr-2 h-4 w-4" />
+              )}
+              {t('quote_accept')}
+            </Button>
+          )}
+          {canConvertQuote && (
+            <Button
+              onClick={startQuoteConvert}
+              disabled={isConverting || isDeciding || !canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {isConverting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : !canWrite ? (
+                <Lock className="mr-2 h-4 w-4" />
+              ) : (
+                <FileText className="mr-2 h-4 w-4" />
+              )}
+              {t('quote_create_invoice')}
+            </Button>
+          )}
           {isUnnumberedDraft && (
             <Button
               onClick={openFinalizeDialog}
@@ -1490,7 +1621,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? <Mail className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                {t(booksOnIssue ? 'send_via_email_and_book' : 'send_via_email')}
+                {t(booksOnIssue && !isQuote ? 'send_via_email_and_book' : 'send_via_email')}
               </Button>
             ) : (
               <Button
@@ -1499,7 +1630,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? <Send className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                {t(booksOnIssue ? 'mark_sent_and_book' : 'mark_as_sent')}
+                {t(booksOnIssue && !isQuote ? 'mark_sent_and_book' : 'mark_as_sent')}
               </Button>
             )
           )}
@@ -1641,10 +1772,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     )}
                   </>
                 )}
+                {canDecideQuote && quoteStatus !== 'declined' && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onSelect={() => void setQuoteDecision('declined')}
+                      disabled={isDeciding || isConverting || !canWrite}
+                    >
+                      <XCircle className="h-4 w-4" />
+                      {t('quote_decline')}
+                    </DropdownMenuItem>
+                  </>
+                )}
                 {showDestructive && (
                   <>
                     <DropdownMenuSeparator />
-                    {isProforma ? (
+                    {isProforma || isQuote ? (
                       <DropdownMenuItem
                         onSelect={() => void updateStatus('cancelled')}
                         disabled={isUpdating || !canWrite}
@@ -1735,9 +1878,15 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           <DefRow label={t('invoice_date_label')}>
             <span className="tabular-nums">{formatDate(invoice.invoice_date)}</span>
           </DefRow>
-          <DefRow label={t('due_date_label')}>
-            <span className="tabular-nums">{formatDate(invoice.due_date)}</span>
-          </DefRow>
+          {isQuote ? (
+            <DefRow label={t('valid_until_label')}>
+              <span className="tabular-nums">{formatDate(invoice.valid_until ?? invoice.due_date)}</span>
+            </DefRow>
+          ) : (
+            <DefRow label={t('due_date_label')}>
+              <span className="tabular-nums">{formatDate(invoice.due_date)}</span>
+            </DefRow>
+          )}
           <DefRow label={t('currency_label')}>{invoice.currency}</DefRow>
           <DefRow label={t('vat_treatment_label')}>{getVatTreatmentLabel(invoice.vat_treatment)}</DefRow>
           {invoice.our_reference && (
@@ -1880,7 +2029,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           {convertedFromInvoice && (
             <DefRow label={t('def_converted_from')}>
               <Link href={`/invoices/${convertedFromInvoice.id}`} className="hover:underline">
-                {t('title_proforma', { number: convertedFromInvoice.invoice_number ?? '' })}
+                {t(convertedFromInvoice.document_type === 'quote' ? 'title_quote' : 'title_proforma', {
+                  number: convertedFromInvoice.invoice_number ?? '',
+                })}
+              </Link>
+            </DefRow>
+          )}
+          {isQuote && quoteInvoice && (
+            <DefRow label={t('def_invoiced')}>
+              <Link href={`/invoices/${quoteInvoice.id}`} className="hover:underline">
+                {t('title_invoice', { number: quoteInvoice.invoice_number ?? '' })}
               </Link>
             </DefRow>
           )}
@@ -2368,6 +2526,34 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       {/* Confirm-before-posting (convention 10): booking writes an immutable
           verifikat, so the outcome is described before the POST, not narrated
           in a toast afterwards. */}
+      <ConfirmDialog
+        open={showExpiredConvertDialog}
+        onOpenChange={setShowExpiredConvertDialog}
+        title={t('quote_expired_convert_title')}
+        description={t('quote_expired_convert_description', {
+          date: formatDate(invoice.valid_until ?? invoice.due_date),
+        })}
+        confirmLabel={t('quote_create_invoice')}
+        onConfirm={async () => {
+          setShowExpiredConvertDialog(false)
+          await convertToInvoice()
+        }}
+      />
+
+      <ConfirmDialog
+        open={showExpiredAcceptDialog}
+        onOpenChange={setShowExpiredAcceptDialog}
+        title={t('quote_expired_accept_title')}
+        description={t('quote_expired_accept_description', {
+          date: formatDate(invoice.valid_until ?? invoice.due_date),
+        })}
+        confirmLabel={t('quote_accept')}
+        onConfirm={async () => {
+          setShowExpiredAcceptDialog(false)
+          await setQuoteDecision('accepted')
+        }}
+      />
+
       <ConfirmDialog
         open={showConfirmationSendDialog}
         onOpenChange={setShowConfirmationSendDialog}
