@@ -9,6 +9,12 @@ import { fail, failDb, type ServiceResult } from './result'
  * header + lines into a new DRAFT order (source_invoice_id back-pointer)
  * and, like proforma -> invoice, marks the proforma cancelled: the order
  * now carries the agreement. Only one order per proforma.
+ *
+ * Order lines have no ROT/RUT or periodisering fields and no negative
+ * quantities. A proforma carrying any of those is refused outright
+ * (SALES_ORDER_SOURCE_UNSUPPORTED_LINES) instead of silently losing the
+ * skattereduktion or the accrual on the invoice that the order later
+ * produces.
  */
 export async function convertProformaToSalesOrder(
   supabase: SupabaseClient,
@@ -34,20 +40,39 @@ export async function convertProformaToSalesOrder(
   if ((count ?? 0) > 0) return fail('SALES_ORDER_SOURCE_ALREADY_CONVERTED')
   if (!proforma.customer_id) return fail('SALES_ORDER_CUSTOMER_MISSING')
 
-  const items = [...(proforma.items ?? [])]
-    .sort((a, b) => a.sort_order - b.sort_order)
-    .map((item) => ({
-      line_type: (item.line_type ?? 'product') as 'product' | 'text',
-      description: item.description,
-      quantity: item.line_type === 'text' ? 0 : item.quantity,
-      unit: item.unit ?? 'st',
-      unit_price: item.unit_price,
-      discount_percent: item.discount_percent ?? null,
-      vat_rate: item.vat_rate,
-      article_id: item.article_id ?? null,
-      revenue_account: item.revenue_account ?? null,
-      dimensions: item.dimensions ?? {},
-    }))
+  const sourceItems = [...(proforma.items ?? [])].sort((a, b) => a.sort_order - b.sort_order)
+  const unsupported = sourceItems.filter(
+    (item) =>
+      (item.line_type ?? 'product') === 'product' &&
+      (Boolean(item.deduction_type) ||
+        Boolean(item.accrual_period_start) ||
+        Boolean(item.accrual_period_end) ||
+        Boolean(item.accrual_balance_account) ||
+        item.quantity < 0),
+  )
+  if (unsupported.length > 0) {
+    return fail('SALES_ORDER_SOURCE_UNSUPPORTED_LINES', {
+      lines: unsupported.map((item) => ({
+        invoice_item_id: item.id,
+        deduction_type: item.deduction_type ?? null,
+        accrual: Boolean(item.accrual_period_start || item.accrual_period_end),
+        quantity: item.quantity,
+      })),
+    })
+  }
+
+  const items = sourceItems.map((item) => ({
+    line_type: (item.line_type ?? 'product') as 'product' | 'text',
+    description: item.description,
+    quantity: item.line_type === 'text' ? 0 : item.quantity,
+    unit: item.unit ?? 'st',
+    unit_price: item.unit_price,
+    discount_percent: item.discount_percent ?? null,
+    vat_rate: item.vat_rate,
+    article_id: item.article_id ?? null,
+    revenue_account: item.revenue_account ?? null,
+    dimensions: item.dimensions ?? {},
+  }))
   if (items.length === 0) return fail('SALES_ORDER_NOTHING_TO_INVOICE')
 
   const created = await createSalesOrder(supabase, {

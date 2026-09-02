@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, it, expect } from 'vitest'
 import { getClient, getPool, withUserContext } from './setup'
-import { seedCompany, insertAuthUser } from './fixtures'
+import { seedCompany, insertAuthUser, insertCompanyMember } from './fixtures'
 
 // pg-real coverage for the kundorder migration (20260902130000): the
 // generate_sales_order_number RPC (atomic, idempotent, membership-gated),
@@ -398,5 +398,69 @@ describe('sales_order_invoiced_quantities RPC', () => {
     const byItem = new Map(rows.map((r) => [r.sales_order_item_id, Number(r.invoiced_qty)]))
     expect(byItem.get(itemId)).toBe(3)
     expect(byItem.get(second)).toBe(5)
+  })
+})
+
+describe('hardening (20260902160000)', () => {
+  it('refuses an order line whose company differs from its parent order (composite FK)', async () => {
+    const victim = await seedOrderWithLine(1)
+    const attacker = await seedCompany()
+    await expect(
+      getPool().query(
+        `INSERT INTO public.sales_order_items (company_id, sales_order_id, description, quantity)
+         VALUES ($1, $2, 'Smuggled line', 1)`,
+        [attacker.companyId, victim.orderId],
+      ),
+    ).rejects.toThrow(/sales_order_items_order_company_fkey|foreign key/i)
+  })
+
+  it('blocks a viewer from writing orders and lines through the session client, and lets a member through', async () => {
+    const { userId, companyId, customerId } = await seedOrderWithLine(1)
+    const viewer = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: viewer, role: 'viewer' })
+    const member = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: member, role: 'member' })
+
+    await expect(
+      withUserContext(viewer, (client) =>
+        client.query(
+          `INSERT INTO public.sales_orders (company_id, user_id, customer_id) VALUES ($1, $2, $3)`,
+          [companyId, viewer, customerId],
+        ),
+      ),
+    ).rejects.toThrow(/no write access|row-level security/i)
+
+    const inserted = await withUserContext(member, async (client) => {
+      const res = await client.query<{ id: string }>(
+        `INSERT INTO public.sales_orders (company_id, user_id, customer_id) VALUES ($1, $2, $3) RETURNING id`,
+        [companyId, member, customerId],
+      )
+      return res.rows[0]!.id
+    })
+    expect(inserted).toBeTruthy()
+    expect(userId).toBeTruthy()
+  })
+
+  it('carries the per-line delivery date and the customer VAT snapshot columns', async () => {
+    const { orderId, itemId } = await seedOrderWithLine(2)
+    await getPool().query(
+      `UPDATE public.sales_order_items SET delivered_qty = 1, last_delivery_date = '2026-09-01' WHERE id = $1`,
+      [itemId],
+    )
+    await getPool().query(
+      `UPDATE public.sales_orders SET customer_type_snapshot = 'eu_business', customer_vat_validated_snapshot = true WHERE id = $1`,
+      [orderId],
+    )
+    const { rows } = await getPool().query<{ last_delivery_date: string; customer_type_snapshot: string }>(
+      `SELECT soi.last_delivery_date::text, so.customer_type_snapshot
+         FROM public.sales_order_items soi JOIN public.sales_orders so ON so.id = soi.sales_order_id
+        WHERE soi.id = $1`,
+      [itemId],
+    )
+    expect(rows[0]!.last_delivery_date).toBe('2026-09-01')
+    expect(rows[0]!.customer_type_snapshot).toBe('eu_business')
+    await expect(
+      getPool().query(`UPDATE public.sales_orders SET customer_type_snapshot = 'company' WHERE id = $1`, [orderId]),
+    ).rejects.toThrow(/check/i)
   })
 })

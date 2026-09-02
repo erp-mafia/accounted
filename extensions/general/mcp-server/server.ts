@@ -6514,7 +6514,7 @@ export const tools: McpTool[] = [
       const { data: invoice, error } = await supabase
         .from('invoices')
         .select(
-          'id, invoice_number, status, document_type, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, invoice_marking, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
+          'id, invoice_number, status, document_type, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, invoice_marking, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, sales_order_item_id, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
         )
         .eq('id', invoiceId)
         .eq('company_id', companyId)

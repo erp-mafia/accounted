@@ -1430,6 +1430,21 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bara en proformafaktura kan omvandlas till kundorder.',
     message_en: 'Only a proforma invoice can be converted into a sales order.',
   },
+  SALES_ORDER_SOURCE_UNSUPPORTED_LINES: {
+    httpStatus: 400,
+    message_sv: 'Proformafakturan innehåller rader som inte kan föras över till en kundorder (ROT/RUT-avdrag, periodisering eller negativt antal). Skapa kundordern manuellt.',
+    message_en: 'The proforma has lines that cannot be carried into a sales order (ROT/RUT deduction, accrual period or negative quantity). Create the sales order manually.',
+  },
+  SALES_ORDER_CUSTOMER_VAT_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Kundens momsuppgifter (kundtyp eller VAT-nummer) har ändrats sedan kundordern prissattes. Öppna och spara kundordern igen så att momssatserna kontrolleras innan du fakturerar.',
+    message_en: 'The customer VAT facts (customer type or VAT number validation) changed after the sales order was priced. Open and save the order again so the VAT rates are re-checked before invoicing.',
+  },
+  INVOICE_UPDATE_DROPS_ORDER_LINK: {
+    httpStatus: 409,
+    message_sv: 'Fakturan är skapad från en kundorder och ändringen skulle tappa kopplingen till orderraderna. Skicka med sales_order_item_id på raderna, eller makulera fakturan och skapa en ny från kundordern.',
+    message_en: 'The invoice was created from a sales order and this edit would drop the link to its order lines. Keep sales_order_item_id on the lines, or cancel the invoice and create a new one from the order.',
+  },
   SALES_ORDER_SOURCE_ALREADY_CONVERTED: {
     httpStatus: 409,
     message_sv: 'Proformafakturan har redan omvandlats till en kundorder.',

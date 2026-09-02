@@ -209,6 +209,50 @@ describe('DELETE /api/sales-orders/[id]', () => {
     expect(findCall('sales_orders', 'delete')).toBeUndefined()
   })
 
+  it('maps the RESTRICT FK on delete onto 409 SALES_ORDER_HAS_INVOICES (makulerad invoice still linked)', async () => {
+    // A cancelled invoice carries 0 invoiced quantity and is excluded from
+    // the header count, so the pre-checks let the delete through and the FK
+    // is the authority.
+    enqueue({ data: makeSalesOrder({ status: 'cancelled' }) })
+    enqueue({ data: [] })
+    enqueue({ data: [] }) // hasOpenInvoices rpc
+    enqueue({ data: null, count: 0 }) // no non-cancelled invoice
+    enqueue({
+      data: null,
+      error: {
+        code: '23503',
+        message:
+          'update or delete on table "sales_orders" violates foreign key constraint "invoices_sales_order_id_fkey" on table "invoices"',
+      },
+    })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await del())
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SALES_ORDER_HAS_INVOICES')
+    expect(findCall('sales_orders', 'delete')).toBeDefined()
+  })
+
+  it('maps the line-level RESTRICT FK on delete onto 409 SALES_ORDER_LINE_LOCKED', async () => {
+    enqueue({ data: makeSalesOrder({ status: 'draft' }) })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    enqueue({ data: null, count: 0 })
+    enqueue({
+      data: null,
+      error: {
+        code: '23503',
+        message:
+          'update or delete on table "sales_order_items" violates foreign key constraint "invoice_items_sales_order_item_id_fkey" on table "invoice_items"',
+      },
+    })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await del())
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SALES_ORDER_LINE_LOCKED')
+  })
+
   it('hard-deletes a draft with no invoices', async () => {
     enqueue({ data: makeSalesOrder({ status: 'draft' }) })
     enqueue({ data: [] })

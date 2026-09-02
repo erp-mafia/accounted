@@ -43,20 +43,18 @@ export async function transitionSalesOrder(
   }
   if (action === 'confirm' && !order.customer_id) return fail('SALES_ORDER_CUSTOMER_MISSING')
 
-  const patch: Record<string, unknown> = { status: rule.to }
-  if (action === 'confirm') patch.confirmed_at = new Date().toISOString()
-  if (action === 'cancel') patch.cancelled_at = new Date().toISOString()
-  if (action === 'reopen') {
-    patch.cancelled_at = null
-    patch.confirmed_at = null
-    patch.completed_at = null
-  }
-
+  const now = new Date().toISOString()
   // Compare-and-set on the status read above so two concurrent transitions
-  // cannot both win.
+  // cannot both win. Object literal on purpose (schema guard): undefined
+  // keys are dropped by JSON serialisation, null keys clear the column.
   const { data: updated, error } = await supabase
     .from('sales_orders')
-    .update(patch)
+    .update({
+      status: rule.to,
+      confirmed_at: action === 'confirm' ? now : action === 'reopen' ? null : undefined,
+      cancelled_at: action === 'cancel' ? now : action === 'reopen' ? null : undefined,
+      completed_at: action === 'reopen' ? null : undefined,
+    })
     .eq('id', orderId)
     .eq('company_id', companyId)
     .eq('status', order.status)

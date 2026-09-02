@@ -127,7 +127,12 @@ describe('registerSalesOrderDelivery', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.order.delivery_progress).toBe('partial')
-    expect(findCall('sales_order_items', 'update')![0]).toEqual({ delivered_qty: 6 })
+    // The line that increased records the delivery date as its own
+    // last_delivery_date: invoices later take leveransdatum from the lines.
+    expect(findCall('sales_order_items', 'update')![0]).toEqual({
+      delivered_qty: 6,
+      last_delivery_date: '2026-09-02',
+    })
     expect(findCalls('sales_order_items', 'eq')).toContainEqual(['id', IDS.item1])
     expect(findCalls('sales_order_items', 'eq')).toContainEqual(['company_id', IDS.company])
     expect(findCall('sales_orders', 'update')![0]).toEqual({ last_delivery_date: '2026-09-02' })
@@ -166,8 +171,53 @@ describe('registerSalesOrderDelivery', () => {
     })
 
     expect(result.ok).toBe(true)
-    expect(findCall('sales_order_items', 'update')).toBeDefined()
+    // The line is still written (cumulative value), but its last_delivery_date
+    // is left untouched: undefined drops out of the PostgREST payload.
+    const lineUpdate = findCall('sales_order_items', 'update')![0] as Record<string, unknown>
+    expect(lineUpdate).toEqual({ delivered_qty: 6, last_delivery_date: undefined })
+    expect(lineUpdate.last_delivery_date).toBeUndefined()
     expect(findCall('sales_orders', 'update')).toBeUndefined()
+  })
+
+  it('stamps last_delivery_date only on the lines that increased in a mixed delivery', async () => {
+    enqueue({
+      data: confirmedOrder([
+        makeSalesOrderItem({ id: IDS.item1, quantity: 10, delivered_qty: 4, last_delivery_date: '2026-08-20' }),
+        makeSalesOrderItem({ id: IDS.item2, sort_order: 1, quantity: 5, delivered_qty: 1 }),
+      ]),
+    })
+    enqueue({ data: [] })
+    enqueue({ data: null }) // item1 update (unchanged quantity)
+    enqueue({ data: null }) // item2 update (increased)
+    enqueue({ data: null }) // header update
+    enqueue({
+      data: confirmedOrder([
+        makeSalesOrderItem({ id: IDS.item1, quantity: 10, delivered_qty: 4 }),
+        makeSalesOrderItem({ id: IDS.item2, sort_order: 1, quantity: 5, delivered_qty: 3 }),
+      ]),
+    })
+    enqueue({ data: [] })
+
+    const result = await registerSalesOrderDelivery(sb, {
+      companyId: IDS.company,
+      orderId: IDS.order,
+      input: {
+        delivery_date: '2026-09-03',
+        lines: [
+          { sales_order_item_id: IDS.item1, delivered_qty: 4 },
+          { sales_order_item_id: IDS.item2, delivered_qty: 3 },
+        ],
+      },
+    })
+
+    expect(result.ok).toBe(true)
+    const updates = findCalls('sales_order_items', 'update').map((args) => args[0])
+    expect(updates).toEqual([
+      { delivered_qty: 4, last_delivery_date: undefined },
+      { delivered_qty: 3, last_delivery_date: '2026-09-03' },
+    ])
+    expect((updates[0] as Record<string, unknown>).last_delivery_date).toBeUndefined()
+    expect(findCall('sales_orders', 'update')![0]).toEqual({ last_delivery_date: '2026-09-03' })
   })
 
   it('skips text rows without writing them', async () => {

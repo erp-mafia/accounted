@@ -70,6 +70,7 @@ function createHarness(opts: {
   insertErrors?: (unknown | null)[]
 }) {
   const inserts: Record<string, unknown>[][] = []
+  const deletes: string[] = []
   let insertCall = 0
   const supabase = {
     from: vi.fn(() => ({
@@ -79,7 +80,10 @@ function createHarness(opts: {
         ),
       })),
       delete: vi.fn(() => ({
-        eq: vi.fn(() => Promise.resolve({ error: opts.deleteError ?? null })),
+        eq: vi.fn((_column: string, value: string) => {
+          deletes.push(value)
+          return Promise.resolve({ error: opts.deleteError ?? null })
+        }),
       })),
       insert: vi.fn((rows: Record<string, unknown>[]) => {
         inserts.push(rows)
@@ -89,10 +93,111 @@ function createHarness(opts: {
       }),
     })),
   }
-  return { supabase: supabase as unknown as SupabaseClient, inserts }
+  return { supabase: supabase as unknown as SupabaseClient, inserts, deletes }
 }
 
 const insertBoom = { message: 'insert boom', code: '23502' }
+
+const ORDER_LINE_1 = 'd1000000-0000-4000-8000-000000000001'
+const ORDER_LINE_2 = 'd1000000-0000-4000-8000-000000000002'
+
+const guardResult = {
+  ok: false,
+  stage: 'guard',
+  code: 'INVOICE_UPDATE_DROPS_ORDER_LINK',
+  messageSv: expect.stringContaining('kundorder'),
+}
+
+describe('replaceInvoiceItems order-link guard', () => {
+  it('refuses before deleting when the new lines drop a sales_order_item_id link', async () => {
+    const { supabase, inserts, deletes } = createHarness({
+      snapshot: [storedRow({ sales_order_item_id: ORDER_LINE_1 })],
+    })
+
+    const result = await replaceInvoiceItems(supabase, 'inv-1', [makeItem({ sales_order_item_id: null })])
+
+    expect(result).toEqual(guardResult)
+    expect(deletes).toHaveLength(0)
+    expect(inserts).toHaveLength(0)
+  })
+
+  it('proceeds when every existing link is kept on the new lines', async () => {
+    const { supabase, inserts, deletes } = createHarness({
+      snapshot: [
+        storedRow({ sales_order_item_id: ORDER_LINE_1 }),
+        storedRow({ id: 'item-old-2', sort_order: 1, sales_order_item_id: ORDER_LINE_2 }),
+      ],
+    })
+
+    const result = await replaceInvoiceItems(supabase, 'inv-1', [
+      // Reordered and with an extra unlinked line: still covers both links.
+      makeItem({ sort_order: 0, sales_order_item_id: ORDER_LINE_2 }),
+      makeItem({ sort_order: 1, description: 'Fri rad', sales_order_item_id: null }),
+      makeItem({ sort_order: 2, sales_order_item_id: ORDER_LINE_1 }),
+    ])
+
+    expect(result).toEqual({ ok: true })
+    expect(deletes).toEqual(['inv-1'])
+    expect(inserts).toHaveLength(1)
+    expect(inserts[0].map((r) => r.sales_order_item_id)).toEqual([ORDER_LINE_2, null, ORDER_LINE_1])
+  })
+
+  it('proceeds when the draft carries no order links at all', async () => {
+    const { supabase, inserts, deletes } = createHarness({
+      snapshot: [storedRow({ sales_order_item_id: null }), storedRow({ id: 'item-old-2', sort_order: 1 })],
+    })
+
+    const result = await replaceInvoiceItems(supabase, 'inv-1', [makeItem({ description: 'Ny rad' })])
+
+    expect(result).toEqual({ ok: true })
+    expect(deletes).toEqual(['inv-1'])
+    expect(inserts).toHaveLength(1)
+  })
+
+  it('compares links as a multiset: two rows on the same order line need two links back', async () => {
+    const { supabase, inserts } = createHarness({
+      snapshot: [
+        storedRow({ sales_order_item_id: ORDER_LINE_1 }),
+        storedRow({ id: 'item-old-2', sort_order: 1, sales_order_item_id: ORDER_LINE_1 }),
+      ],
+    })
+
+    const dropped = await replaceInvoiceItems(supabase, 'inv-1', [makeItem({ sales_order_item_id: ORDER_LINE_1 })])
+    expect(dropped).toEqual(guardResult)
+    expect(inserts).toHaveLength(0)
+
+    const kept = await replaceInvoiceItems(supabase, 'inv-1', [
+      makeItem({ sales_order_item_id: ORDER_LINE_1 }),
+      makeItem({ sort_order: 1, sales_order_item_id: ORDER_LINE_1 }),
+    ])
+    expect(kept).toEqual({ ok: true })
+    expect(inserts).toHaveLength(1)
+  })
+
+  it('refuses when a link is swapped for a different order line', async () => {
+    const { supabase, inserts } = createHarness({
+      snapshot: [storedRow({ sales_order_item_id: ORDER_LINE_1 })],
+    })
+
+    const result = await replaceInvoiceItems(supabase, 'inv-1', [makeItem({ sales_order_item_id: ORDER_LINE_2 })])
+
+    expect(result).toEqual(guardResult)
+    expect(inserts).toHaveLength(0)
+  })
+
+  it('does not guard when the snapshot could not be read (nothing to compare against)', async () => {
+    const { supabase, inserts, deletes } = createHarness({
+      snapshot: null,
+      snapshotError: { message: 'select boom' },
+    })
+
+    const result = await replaceInvoiceItems(supabase, 'inv-1', [makeItem()])
+
+    expect(result).toEqual({ ok: true })
+    expect(deletes).toEqual(['inv-1'])
+    expect(inserts).toHaveLength(1)
+  })
+})
 
 describe('replaceInvoiceItems', () => {
   it('replaces the rows and stamps invoice_id on the happy path', async () => {

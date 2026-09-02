@@ -17,7 +17,7 @@ vi.mock('@/lib/invoices/build-invoice-write', () => ({
   buildInvoiceWriteData: (...args: unknown[]) => mockBuildInvoiceWriteData(...args),
 }))
 
-import { createInvoiceFromSalesOrder, pickLines } from '../create-invoice-from-order'
+import { createInvoiceFromSalesOrder, deliveryDateFor, pickLines } from '../create-invoice-from-order'
 
 const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 const sb = supabase as unknown as SupabaseClient
@@ -123,6 +123,123 @@ describe('pickLines', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.picked.map((p) => p.item.id)).toEqual([IDS.item1])
+  })
+
+  it('sums duplicate picks of the same line into one invoice line', () => {
+    const result = pickLines(order, {
+      lines: [
+        { sales_order_item_id: IDS.item1, quantity: 3 },
+        { sales_order_item_id: IDS.item1, quantity: 5 },
+      ],
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.picked).toHaveLength(1)
+    expect(result.picked[0]).toMatchObject({ quantity: 8, item: { id: IDS.item1 } })
+  })
+
+  it('refuses duplicate picks whose SUM exceeds the remaining quantity', () => {
+    // 5 and 4 each fit within the remaining 8; together they do not.
+    const result = pickLines(order, {
+      lines: [
+        { sales_order_item_id: IDS.item1, quantity: 5 },
+        { sales_order_item_id: IDS.item1, quantity: 4 },
+      ],
+    })
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'SALES_ORDER_OVER_INVOICED',
+      details: { sales_order_item_id: IDS.item1, remaining_qty: 8, requested_qty: 9 },
+    })
+  })
+
+  it('accepts a pick equal to a float remainder (7.5 ordered, 6.9 invoiced, pick 0.6)', () => {
+    // 7.5 - 6.9 is 0.5999999999999996 in doubles; the pick must still fit.
+    const fractional = makeSalesOrder({
+      items: [makeSalesOrderItem({ id: IDS.item1, quantity: 7.5, invoiced_qty: 6.9 })],
+    })
+    const explicit = pickLines(fractional, { lines: [{ sales_order_item_id: IDS.item1, quantity: 0.6 }] })
+    expect(explicit.ok).toBe(true)
+    if (!explicit.ok) return
+    expect(explicit.picked[0].quantity).toBe(0.6)
+
+    const remaining = pickLines(fractional, {})
+    expect(remaining.ok).toBe(true)
+    if (!remaining.ok) return
+    expect(remaining.picked[0].quantity).toBe(0.6)
+  })
+
+  it('rounds a summed fractional pick before comparing it to the remainder', () => {
+    const fractional = makeSalesOrder({
+      items: [makeSalesOrderItem({ id: IDS.item1, quantity: 1, invoiced_qty: 0.7 })],
+    })
+    // 0.1 + 0.2 = 0.30000000000000004 in doubles; remaining is exactly 0.3.
+    const result = pickLines(fractional, {
+      lines: [
+        { sales_order_item_id: IDS.item1, quantity: 0.1 },
+        { sales_order_item_id: IDS.item1, quantity: 0.2 },
+      ],
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.picked[0].quantity).toBe(0.3)
+  })
+})
+
+describe('deliveryDateFor', () => {
+  it('is the latest per-line last_delivery_date when every pick is covered by deliveries', () => {
+    const picked = [
+      {
+        item: makeSalesOrderItem({ id: IDS.item1, quantity: 10, delivered_qty: 5, invoiced_qty: 2, last_delivery_date: '2026-08-20' }),
+        quantity: 3,
+      },
+      {
+        item: makeSalesOrderItem({ id: IDS.item2, quantity: 4, delivered_qty: 4, invoiced_qty: 0, last_delivery_date: '2026-08-30' }),
+        quantity: 4,
+      },
+    ]
+    expect(deliveryDateFor(picked)).toBe('2026-08-30')
+  })
+
+  it('is null when a pick exceeds what was delivered but not yet invoiced (advance invoice)', () => {
+    const picked = [
+      {
+        // delivered 5 - invoiced 2 = 3 available; picking 4 reaches undelivered quantity.
+        item: makeSalesOrderItem({ id: IDS.item1, quantity: 10, delivered_qty: 5, invoiced_qty: 2, last_delivery_date: '2026-08-20' }),
+        quantity: 4,
+      },
+    ]
+    expect(deliveryDateFor(picked)).toBeNull()
+    expect(
+      deliveryDateFor([
+        { item: makeSalesOrderItem({ quantity: 10, delivered_qty: 0, last_delivery_date: null }), quantity: 1 },
+      ]),
+    ).toBeNull()
+  })
+
+  it('is null when any covered line lacks a per-line delivery date', () => {
+    const picked = [
+      {
+        item: makeSalesOrderItem({ id: IDS.item1, quantity: 10, delivered_qty: 5, invoiced_qty: 0, last_delivery_date: '2026-08-20' }),
+        quantity: 5,
+      },
+      {
+        // Delivered before per-line dates existed: no date to anchor on.
+        item: makeSalesOrderItem({ id: IDS.item2, quantity: 4, delivered_qty: 4, invoiced_qty: 0, last_delivery_date: null }),
+        quantity: 4,
+      },
+    ]
+    expect(deliveryDateFor(picked)).toBeNull()
+  })
+
+  it('tolerates float drift in the covered check (7.5 delivered, 6.9 invoiced, pick 0.6)', () => {
+    const picked = [
+      {
+        item: makeSalesOrderItem({ id: IDS.item1, quantity: 7.5, delivered_qty: 7.5, invoiced_qty: 6.9, last_delivery_date: '2026-08-30' }),
+        quantity: 0.6,
+      },
+    ]
+    expect(deliveryDateFor(picked)).toBe('2026-08-30')
   })
 })
 
@@ -266,11 +383,14 @@ describe('createInvoiceFromSalesOrder', () => {
     expect(findCall('invoices', 'delete')).toBeUndefined()
   })
 
-  it('sets delivery_date from the order when a picked line has been delivered', async () => {
+  it('sets delivery_date from the picked lines when the pick is covered by deliveries', async () => {
+    // The header last_delivery_date is display-only and deliberately later
+    // than the line's date: the invoice must take the LINE date.
     enqueue({
-      data: orderWith([makeSalesOrderItem({ id: IDS.item1, quantity: 10, delivered_qty: 4 })], {
-        last_delivery_date: '2026-08-30',
-      }),
+      data: orderWith(
+        [makeSalesOrderItem({ id: IDS.item1, quantity: 10, delivered_qty: 4, last_delivery_date: '2026-08-30' })],
+        { last_delivery_date: '2026-09-01' },
+      ),
     })
     enqueue({ data: [] })
     enqueue({ data: makeOrderCustomer() })
@@ -289,6 +409,111 @@ describe('createInvoiceFromSalesOrder', () => {
     expect(buildArg.input.delivery_date).toBe('2026-08-30')
     expect(buildArg.input.due_date).toBe('2026-09-30')
     expect(buildArg.input.items[0].quantity).toBe(4)
+  })
+
+  it('leaves delivery_date null when the pick reaches undelivered quantity (advance invoice)', async () => {
+    enqueue({
+      data: orderWith(
+        [makeSalesOrderItem({ id: IDS.item1, quantity: 10, delivered_qty: 4, last_delivery_date: '2026-08-30' })],
+        { last_delivery_date: '2026-08-30' },
+      ),
+    })
+    enqueue({ data: [] })
+    enqueue({ data: makeOrderCustomer() })
+    enqueue({ data: { id: IDS.invoice, status: 'draft' } })
+    enqueue({ data: null })
+    enqueue({ data: orderWith() })
+    enqueue({ data: [] })
+
+    // mode remaining: all 10, of which only 4 were delivered.
+    const result = await createInvoiceFromSalesOrder(sb, { ...params, input: { due_date: '2026-09-30' } })
+
+    expect(result.ok).toBe(true)
+    const buildArg = mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { delivery_date: unknown; items: { quantity: number }[] } }
+    expect(buildArg.input.delivery_date).toBeNull()
+    expect(buildArg.input.items[0].quantity).toBe(10)
+  })
+
+  it('refuses with SALES_ORDER_CUSTOMER_VAT_CHANGED when the customer type differs from the order snapshot', async () => {
+    enqueue({
+      data: orderWith([makeSalesOrderItem()], {
+        customer_type_snapshot: 'swedish_business',
+        customer_vat_validated_snapshot: false,
+      }),
+    })
+    enqueue({ data: [] })
+    // Since validated as an EU business: the frozen 25 % line would pass the
+    // permitted-set gate but is no longer what the customer should be charged.
+    enqueue({
+      data: makeOrderCustomer({ customer_type: 'eu_business', vat_number: 'DE123456789', vat_number_validated: true }),
+    })
+
+    const result = await createInvoiceFromSalesOrder(sb, { ...params, input: {} })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'SALES_ORDER_CUSTOMER_VAT_CHANGED',
+      details: {
+        snapshot: { customer_type: 'swedish_business', vat_number_validated: false },
+        current: { customer_type: 'eu_business', vat_number_validated: true },
+      },
+    })
+    expect(mockBuildInvoiceWriteData).not.toHaveBeenCalled()
+    expect(findCall('invoices', 'insert')).toBeUndefined()
+  })
+
+  it('refuses when only the VAT-number validation flag changed since the snapshot', async () => {
+    enqueue({
+      data: orderWith([makeSalesOrderItem()], {
+        customer_type_snapshot: 'eu_business',
+        customer_vat_validated_snapshot: false,
+      }),
+    })
+    enqueue({ data: [] })
+    enqueue({ data: makeOrderCustomer({ customer_type: 'eu_business', vat_number_validated: true }) })
+
+    const result = await createInvoiceFromSalesOrder(sb, { ...params, input: {} })
+
+    expect(result).toMatchObject({ ok: false, code: 'SALES_ORDER_CUSTOMER_VAT_CHANGED' })
+    expect(mockBuildInvoiceWriteData).not.toHaveBeenCalled()
+  })
+
+  it('treats a null validation snapshot as false and passes when the customer still matches', async () => {
+    enqueue({
+      data: orderWith([makeSalesOrderItem()], {
+        customer_type_snapshot: 'swedish_business',
+        customer_vat_validated_snapshot: null,
+      }),
+    })
+    enqueue({ data: [] })
+    enqueue({ data: makeOrderCustomer({ customer_type: 'swedish_business', vat_number_validated: null as unknown as boolean }) })
+    enqueue({ data: { id: IDS.invoice, status: 'draft' } })
+    enqueue({ data: null })
+    enqueue({ data: orderWith() })
+    enqueue({ data: [] })
+
+    const result = await createInvoiceFromSalesOrder(sb, { ...params, input: {} })
+
+    expect(result.ok).toBe(true)
+    expect(mockBuildInvoiceWriteData).toHaveBeenCalledTimes(1)
+  })
+
+  it('passes without a snapshot check when the order carries no customer_type_snapshot (pre-snapshot orders)', async () => {
+    enqueue({
+      data: orderWith([makeSalesOrderItem()], { customer_type_snapshot: null, customer_vat_validated_snapshot: null }),
+    })
+    enqueue({ data: [] })
+    enqueue({ data: makeOrderCustomer({ customer_type: 'eu_business', vat_number_validated: true }) })
+    enqueue({ data: { id: IDS.invoice, status: 'draft' } })
+    enqueue({ data: null })
+    enqueue({ data: orderWith() })
+    enqueue({ data: [] })
+
+    const result = await createInvoiceFromSalesOrder(sb, { ...params, input: {} })
+
+    expect(result.ok).toBe(true)
+    expect(mockBuildInvoiceWriteData).toHaveBeenCalledTimes(1)
+    expect(findCall('invoices', 'insert')).toBeDefined()
   })
 
   it('propagates a builder domain failure without inserting', async () => {

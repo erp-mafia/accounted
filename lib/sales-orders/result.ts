@@ -35,5 +35,11 @@ export function codeFromPgError(error: unknown): string | null {
   if (message.includes('SALES_ORDER_QUANTITY_BELOW_INVOICED')) return 'SALES_ORDER_QUANTITY_BELOW_INVOICED'
   if (message.includes('sales_order_items_delivered_within_ordered')) return 'SALES_ORDER_OVER_DELIVERED'
   if (message.includes('SALES_ORDER_ITEM_NOT_FOUND')) return 'SALES_ORDER_LINE_NOT_FOUND'
+  // RESTRICT FKs: a line or order that a (possibly cancelled) invoice still
+  // references cannot be removed; the derived invoiced quantity is 0 for a
+  // cancelled invoice, so the service pre-checks let the delete through and
+  // the FK is the authority.
+  if (message.includes('invoice_items_sales_order_item_id_fkey')) return 'SALES_ORDER_LINE_LOCKED'
+  if (message.includes('invoices_sales_order_id_fkey')) return 'SALES_ORDER_HAS_INVOICES'
   return null
 }

@@ -4,6 +4,7 @@ import type { Currency, Customer, Invoice, SalesOrder, SalesOrderItem } from '@/
 import type { CreateInvoiceFromSalesOrderSchema } from '@/lib/api/schemas'
 import { buildInvoiceWriteData, type InvoiceWriteInput } from '@/lib/invoices/build-invoice-write'
 import { loadSalesOrder } from './load'
+import { qtyGreater, roundQty } from './progress'
 import { codeFromPgError, fail, failDb, type ServiceResult } from './result'
 
 export type CreateInvoiceFromOrderInput = z.infer<typeof CreateInvoiceFromSalesOrderSchema>
@@ -15,11 +16,14 @@ export interface PickedLine {
 
 /**
  * Resolve which order lines (and how much of each) go on the invoice.
- * Explicit picks win; otherwise `mode` selects:
+ * Explicit picks win (duplicates for the same line are summed); otherwise
+ * `mode` selects:
  *   remaining = everything not yet invoiced (default)
  *   delivered = delivered but not yet invoiced (delivered_qty - invoiced_qty)
- * Text rows are carried along as text lines when at least one product line
- * is picked, so the invoice reads like the order.
+ * Quantities are rounded to quantity precision so a float remainder such as
+ * 0.5999999999999996 never reaches the DB or the invoice. Text rows are
+ * carried along as text lines when at least one product line is picked, so
+ * the invoice reads like the order.
  */
 export function pickLines(
   order: SalesOrder,
@@ -30,31 +34,62 @@ export function pickLines(
   const picked: PickedLine[] = []
 
   if (input.lines && input.lines.length > 0) {
+    const requested = new Map<string, number>()
     for (const line of input.lines) {
-      const item = byId.get(line.sales_order_item_id)
-      if (!item) return fail('SALES_ORDER_LINE_NOT_FOUND', { sales_order_item_id: line.sales_order_item_id })
-      const remaining = item.remaining_qty ?? Math.max(0, item.quantity - (item.invoiced_qty ?? 0))
-      if (line.quantity > remaining) {
+      requested.set(line.sales_order_item_id, roundQty((requested.get(line.sales_order_item_id) ?? 0) + line.quantity))
+    }
+    for (const [itemId, quantity] of requested) {
+      const item = byId.get(itemId)
+      if (!item) return fail('SALES_ORDER_LINE_NOT_FOUND', { sales_order_item_id: itemId })
+      const remaining = remainingOf(item)
+      if (qtyGreater(quantity, remaining)) {
         return fail('SALES_ORDER_OVER_INVOICED', {
           sales_order_item_id: item.id,
           remaining_qty: remaining,
-          requested_qty: line.quantity,
+          requested_qty: quantity,
         })
       }
-      picked.push({ item, quantity: line.quantity })
+      if (quantity > 0) picked.push({ item, quantity })
     }
   } else {
     const mode = input.mode ?? 'remaining'
     for (const item of items) {
-      const invoiced = item.invoiced_qty ?? 0
-      const remaining = Math.max(0, item.quantity - invoiced)
-      const qty = mode === 'delivered' ? Math.max(0, Math.min(remaining, item.delivered_qty - invoiced)) : remaining
+      const invoiced = roundQty(item.invoiced_qty ?? 0)
+      const remaining = remainingOf(item)
+      const qty =
+        mode === 'delivered'
+          ? Math.max(0, Math.min(remaining, roundQty(item.delivered_qty - invoiced)))
+          : remaining
       if (qty > 0) picked.push({ item, quantity: qty })
     }
   }
 
   if (picked.length === 0) return fail('SALES_ORDER_NOTHING_TO_INVOICE')
   return { ok: true, picked }
+}
+
+function remainingOf(item: SalesOrderItem): number {
+  if (typeof item.remaining_qty === 'number') return roundQty(item.remaining_qty)
+  return Math.max(0, roundQty(item.quantity - roundQty(item.invoiced_qty ?? 0)))
+}
+
+/**
+ * Leveransdatum for the invoice (ML 17 kap 24 § p.7; also the FX anchor per
+ * ML 8 kap 21-23 §): the latest per-line delivery date over the lines the
+ * invoice covers, and only when every covered quantity has actually been
+ * delivered (delivered minus already invoiced covers the pick). An advance
+ * invoice for undelivered quantity gets no delivery date.
+ */
+export function deliveryDateFor(picked: PickedLine[]): string | null {
+  let latest: string | null = null
+  for (const { item, quantity } of picked) {
+    const undeliveredInvoiceable = roundQty(item.delivered_qty - roundQty(item.invoiced_qty ?? 0))
+    if (qtyGreater(quantity, undeliveredInvoiceable)) return null
+    const date = item.last_delivery_date ?? null
+    if (!date) return null
+    if (!latest || date > latest) latest = date
+  }
+  return latest
 }
 
 /**
@@ -66,6 +101,11 @@ export function pickLines(
  * sales_order_item_id; the order's invoiced quantity is derived from those
  * links and the DB trigger refuses over-invoicing even under a race. The
  * order's completion (confirmed -> completed) is maintained by the DB.
+ *
+ * Refuses when the customer's VAT facts (type, VAT-number validation) no
+ * longer match what the order lines were validated under: a frozen 25 %
+ * line can pass the permitted-set gate for a since-validated EU business
+ * and would otherwise land silently. Re-saving the order re-validates.
  */
 export async function createInvoiceFromSalesOrder(
   supabase: SupabaseClient,
@@ -93,6 +133,23 @@ export async function createInvoiceFromSalesOrder(
     .maybeSingle<Customer>()
   if (!customer) return fail('CUSTOMER_NOT_FOUND', { customerId: order.customer_id })
 
+  if (
+    order.customer_type_snapshot &&
+    (order.customer_type_snapshot !== customer.customer_type ||
+      (order.customer_vat_validated_snapshot ?? false) !== (customer.vat_number_validated ?? false))
+  ) {
+    return fail('SALES_ORDER_CUSTOMER_VAT_CHANGED', {
+      snapshot: {
+        customer_type: order.customer_type_snapshot,
+        vat_number_validated: order.customer_vat_validated_snapshot ?? false,
+      },
+      current: {
+        customer_type: customer.customer_type,
+        vat_number_validated: customer.vat_number_validated ?? false,
+      },
+    })
+  }
+
   const invoiceDate = input.invoice_date ?? new Date().toISOString().slice(0, 10)
   let dueDate = input.due_date
   if (!dueDate) {
@@ -100,20 +157,17 @@ export async function createInvoiceFromSalesOrder(
     due.setDate(due.getDate() + (customer.default_payment_terms ?? 30))
     dueDate = due.toISOString().slice(0, 10)
   }
-  // Delivery date only when the invoice covers delivered goods: an advance
-  // invoice for undelivered lines has no taxable-event date yet.
-  const anyDelivered = picked.some((p) => p.item.delivered_qty > 0)
-  const deliveryDate = anyDelivered ? order.last_delivery_date : null
+  const deliveryDate = deliveryDateFor(picked)
 
-  const pickedIds = new Set(picked.map((p) => p.item.id))
+  const pickedById = new Map(picked.map((p) => [p.item.id, p]))
   const items: InvoiceWriteInput['items'] = []
   for (const line of [...(order.items ?? [])].sort((a, b) => a.sort_order - b.sort_order)) {
     if (line.line_type === 'text') {
       items.push({ line_type: 'text', description: line.description, quantity: 0, unit: '', unit_price: 0 })
       continue
     }
-    if (!pickedIds.has(line.id)) continue
-    const pick = picked.find((p) => p.item.id === line.id) as PickedLine
+    const pick = pickedById.get(line.id)
+    if (!pick) continue
     items.push({
       line_type: 'product',
       description: line.description,

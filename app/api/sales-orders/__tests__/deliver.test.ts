@@ -134,7 +134,11 @@ describe('POST /api/sales-orders/[id]/deliver', () => {
     expect(body.data.last_delivery_date).toBe('2026-09-02')
     expect(body.data.delivery_progress).toBe('partial')
     expect(body.data.items?.[0].delivered_qty).toBe(6)
-    expect(findCall('sales_order_items', 'update')![0]).toEqual({ delivered_qty: 6 })
+    // The increased line gets the delivery date as its own last_delivery_date.
+    expect(findCall('sales_order_items', 'update')![0]).toEqual({
+      delivered_qty: 6,
+      last_delivery_date: '2026-09-02',
+    })
     expect(findCall('sales_orders', 'update')![0]).toEqual({ last_delivery_date: '2026-09-02' })
   })
 })

@@ -82,7 +82,7 @@ function makeProforma(overrides: Record<string, unknown> = {}) {
         revenue_account: '3011',
         dimensions: { project: 'P1' },
       },
-    ],
+    ] as Record<string, unknown>[],
     ...overrides,
   }
 }
@@ -152,6 +152,111 @@ describe('POST /api/invoices/[id]/convert-to-order', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await post())
     expect(status).toBe(409)
     expect(body.error.code).toBe('SALES_ORDER_CUSTOMER_MISSING')
+  })
+
+  it('returns 400 SALES_ORDER_SOURCE_UNSUPPORTED_LINES for a ROT line (order lines carry no skattereduktion)', async () => {
+    const proforma = makeProforma()
+    proforma.items[1] = {
+      ...proforma.items[1],
+      deduction_type: 'rot',
+      labor_hours: 8,
+      work_type: 'bygg',
+    }
+    enqueue({ data: proforma })
+    enqueue({ data: null, count: 0 })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { lines: Record<string, unknown>[] } } }>(
+      await post(),
+    )
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SALES_ORDER_SOURCE_UNSUPPORTED_LINES')
+    expect(body.error.details.lines).toEqual([
+      {
+        invoice_item_id: 'e2000000-0000-4000-8000-000000000001',
+        deduction_type: 'rot',
+        accrual: false,
+        quantity: 10,
+      },
+    ])
+    // Refused after the already-converted count, before the customer load and any insert.
+    expect(findCalls('sales_orders', 'eq')).toContainEqual(['source_invoice_id', IDS.invoice])
+    expect(findCall('customers', 'select')).toBeUndefined()
+    expect(findCall('sales_orders', 'insert')).toBeUndefined()
+    expect(findCall('invoices', 'update')).toBeUndefined()
+  })
+
+  it('returns 400 SALES_ORDER_SOURCE_UNSUPPORTED_LINES for a negative-quantity line', async () => {
+    const proforma = makeProforma()
+    proforma.items.push({
+      ...proforma.items[1],
+      id: 'e2000000-0000-4000-8000-000000000003',
+      sort_order: 2,
+      description: 'Rabatt',
+      quantity: -1,
+      unit_price: 200,
+    })
+    enqueue({ data: proforma })
+    enqueue({ data: null, count: 0 })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { lines: Record<string, unknown>[] } } }>(
+      await post(),
+    )
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SALES_ORDER_SOURCE_UNSUPPORTED_LINES')
+    expect(body.error.details.lines).toEqual([
+      {
+        invoice_item_id: 'e2000000-0000-4000-8000-000000000003',
+        deduction_type: null,
+        accrual: false,
+        quantity: -1,
+      },
+    ])
+    expect(findCall('sales_orders', 'insert')).toBeUndefined()
+  })
+
+  it('returns 400 SALES_ORDER_SOURCE_UNSUPPORTED_LINES for a periodised line', async () => {
+    const proforma = makeProforma()
+    proforma.items[1] = {
+      ...proforma.items[1],
+      accrual_period_start: '2026-09-01',
+      accrual_period_end: '2027-08-31',
+      accrual_balance_account: '2990',
+    }
+    enqueue({ data: proforma })
+    enqueue({ data: null, count: 0 })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { lines: Record<string, unknown>[] } } }>(
+      await post(),
+    )
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SALES_ORDER_SOURCE_UNSUPPORTED_LINES')
+    expect(body.error.details.lines[0]).toMatchObject({ deduction_type: null, accrual: true })
+    expect(findCall('sales_orders', 'insert')).toBeUndefined()
+  })
+
+  it('does not treat a text row as unsupported (text rows have no deduction or quantity)', async () => {
+    // Same happy path as below, with the text row carrying a stray negative
+    // quantity: text rows are copied as quantity 0 and never gate the convert.
+    const proforma = makeProforma()
+    proforma.items[0] = { ...proforma.items[0], quantity: -1 }
+    enqueue({ data: proforma })
+    enqueue({ data: null, count: 0 })
+    enqueue({ data: makeOrderCustomer() })
+    enqueue({ data: { id: IDS.order } })
+    enqueue({ data: null })
+    enqueue({ data: 'OR-1' })
+    enqueue({ data: makeSalesOrder({ source_invoice_id: IDS.invoice, order_number: 'OR-1' }) })
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: IDS.invoice }] })
+
+    const { status } = await parseJsonResponse(await post())
+
+    expect(status).toBe(201)
+    const lines = findCall('sales_order_items', 'insert')![0] as Record<string, unknown>[]
+    expect(lines[1]).toMatchObject({ line_type: 'text', quantity: 0 })
   })
 
   it('creates a draft order from the proforma, cancels the proforma and answers 201 with sales_order_id', async () => {

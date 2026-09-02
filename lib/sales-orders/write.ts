@@ -5,6 +5,7 @@ import type { CreateSalesOrderSchema, UpdateSalesOrderSchema } from '@/lib/api/s
 import { normalizeSalesOrderLines, type SalesOrderLineRow } from './lines'
 import { ensureSalesOrderNumber } from './ensure-order-number'
 import { fetchInvoicedQuantities, loadSalesOrder } from './load'
+import { qtyGreater } from './progress'
 import { codeFromPgError, fail, failDb, type ServiceResult } from './result'
 
 export type CreateSalesOrderInput = z.infer<typeof CreateSalesOrderSchema>
@@ -30,7 +31,9 @@ async function loadCustomer(
 /**
  * Create a draft order with its lines. Number allocated at creation (orders
  * are not verifikationer; gaps are irrelevant). A failed line insert rolls
- * the header back so no empty order survives.
+ * the header back so no empty order survives. The customer facts the lines
+ * were VAT-validated under are stored on the order; invoicing refuses when
+ * they have changed since (see create-invoice-from-order.ts).
  */
 export async function createSalesOrder(
   supabase: SupabaseClient,
@@ -39,8 +42,9 @@ export async function createSalesOrder(
   const { companyId, userId, input } = params
   const customerRes = await loadCustomer(supabase, companyId, input.customer_id)
   if (!customerRes.ok) return fail(customerRes.code, customerRes.details)
+  const customer = customerRes.customer
 
-  const lines = normalizeSalesOrderLines(input.items, customerRes.customer)
+  const lines = normalizeSalesOrderLines(input.items, customer)
   if (!lines.ok) return fail(lines.code, lines.details)
 
   const { data: header, error: headerError } = await supabase
@@ -49,6 +53,8 @@ export async function createSalesOrder(
       company_id: companyId,
       user_id: userId,
       customer_id: input.customer_id,
+      customer_type_snapshot: customer.customer_type,
+      customer_vat_validated_snapshot: customer.vat_number_validated ?? false,
       status: 'draft',
       source_invoice_id: params.sourceInvoiceId ?? null,
       order_date: input.order_date ?? new Date().toISOString().slice(0, 10),
@@ -58,7 +64,9 @@ export async function createSalesOrder(
       our_reference: input.our_reference ?? null,
       notes: input.notes ?? null,
       default_dimensions: input.default_dimensions ?? {},
-      ...lines.totals,
+      subtotal: lines.totals.subtotal,
+      vat_amount: lines.totals.vat_amount,
+      total: lines.totals.total,
     })
     .select('id')
     .single<{ id: string }>()
@@ -90,7 +98,11 @@ export async function createSalesOrder(
  * history on the lines that survive. A line that has been delivered or
  * invoiced cannot be dropped (SALES_ORDER_LINE_LOCKED) and cannot go below
  * its delivered quantity (SALES_ORDER_OVER_DELIVERED); the DB trigger
- * additionally refuses lowering below the invoiced quantity.
+ * additionally refuses lowering below the invoiced quantity. Once invoices
+ * exist, customer and currency are frozen (SALES_ORDER_HAS_INVOICES): a
+ * second partial invoice must go to the same customer in the same currency
+ * as the first. Every save re-validates the lines against the customer's
+ * current VAT rules and refreshes the stored snapshot.
  */
 export async function updateSalesOrder(
   supabase: SupabaseClient,
@@ -102,21 +114,46 @@ export async function updateSalesOrder(
   const order = current.order
   if (!EDITABLE_STATUSES.has(order.status)) return fail('SALES_ORDER_NOT_EDITABLE', { status: order.status })
 
+  const customerChanged = input.customer_id !== undefined && input.customer_id !== order.customer_id
+  const currencyChanged = input.currency !== undefined && input.currency !== order.currency
+  if (customerChanged || currencyChanged) {
+    const open = await hasOpenInvoices(supabase, companyId, orderId)
+    if (!open.ok) return failDb(open.dbError)
+    if (open.open) return fail('SALES_ORDER_HAS_INVOICES', { field: customerChanged ? 'customer_id' : 'currency' })
+  }
+
   const customerId = input.customer_id ?? order.customer_id
   if (!customerId) return fail('SALES_ORDER_CUSTOMER_MISSING')
   const customerRes = await loadCustomer(supabase, companyId, customerId)
   if (!customerRes.ok) return fail(customerRes.code, customerRes.details)
+  const customer = customerRes.customer
 
   const existing = new Map((order.items ?? []).map((i) => [i.id, i]))
-  let rows: SalesOrderLineRow[] | null = null
-  let totals = { subtotal: order.subtotal, vat_amount: order.vat_amount, total: order.total }
+  const lineInputs =
+    input.items ??
+    (order.items ?? []).map((i) => ({
+      id: i.id,
+      line_type: i.line_type,
+      description: i.description,
+      quantity: i.quantity,
+      unit: i.unit,
+      unit_price: i.unit_price,
+      discount_percent: i.discount_percent,
+      vat_rate: i.vat_rate,
+      article_id: i.article_id,
+      revenue_account: i.revenue_account,
+      dimensions: i.dimensions,
+    }))
+  // Always re-validate against the customer's CURRENT VAT rules, even for a
+  // header-only save: a stored rate the customer may no longer carry is
+  // refused (INVOICE_CREATE_VAT_RULE_VIOLATION) and the snapshot below is
+  // only refreshed once the lines pass.
+  const lines = normalizeSalesOrderLines(lineInputs, customer)
+  if (!lines.ok) return fail(lines.code, lines.details)
+  const rows: SalesOrderLineRow[] | null = input.items ? lines.rows : null
+  const totals = lines.totals
 
-  if (input.items) {
-    const lines = normalizeSalesOrderLines(input.items, customerRes.customer)
-    if (!lines.ok) return fail(lines.code, lines.details)
-    rows = lines.rows
-    totals = lines.totals
-
+  if (rows) {
     const incomingIds = new Set(rows.map((r) => r.id).filter((id): id is string => Boolean(id)))
     for (const id of incomingIds) {
       if (!existing.has(id)) return fail('SALES_ORDER_LINE_NOT_FOUND', { sales_order_item_id: id })
@@ -124,10 +161,10 @@ export async function updateSalesOrder(
     for (const row of rows) {
       if (!row.id) continue
       const prev = existing.get(row.id) as SalesOrderItem
-      if (row.quantity < prev.delivered_qty) {
+      if (qtyGreater(prev.delivered_qty, row.quantity)) {
         return fail('SALES_ORDER_OVER_DELIVERED', { sales_order_item_id: row.id, delivered_qty: prev.delivered_qty })
       }
-      if (row.quantity < (prev.invoiced_qty ?? 0)) {
+      if (qtyGreater(prev.invoiced_qty ?? 0, row.quantity)) {
         return fail('SALES_ORDER_QUANTITY_BELOW_INVOICED', { sales_order_item_id: row.id, invoiced_qty: prev.invoiced_qty })
       }
     }
@@ -137,41 +174,27 @@ export async function updateSalesOrder(
         return fail('SALES_ORDER_LINE_LOCKED', { sales_order_item_id: prev.id })
       }
     }
-  } else if (input.customer_id && input.customer_id !== order.customer_id) {
-    // Customer change without lines: re-validate the stored lines against
-    // the new customer's VAT rules so the order still converts cleanly.
-    const lines = normalizeSalesOrderLines(
-      (order.items ?? []).map((i) => ({
-        id: i.id,
-        line_type: i.line_type,
-        description: i.description,
-        quantity: i.quantity,
-        unit: i.unit,
-        unit_price: i.unit_price,
-        discount_percent: i.discount_percent,
-        vat_rate: i.vat_rate,
-        article_id: i.article_id,
-        revenue_account: i.revenue_account,
-        dimensions: i.dimensions,
-      })),
-      customerRes.customer,
-    )
-    if (!lines.ok) return fail(lines.code, lines.details)
   }
 
-  const headerPatch: Record<string, unknown> = { ...totals }
-  if (input.customer_id !== undefined) headerPatch.customer_id = input.customer_id
-  if (input.order_date !== undefined) headerPatch.order_date = input.order_date
-  if (input.requested_delivery_date !== undefined) headerPatch.requested_delivery_date = input.requested_delivery_date
-  if (input.currency !== undefined) headerPatch.currency = input.currency
-  if (input.your_reference !== undefined) headerPatch.your_reference = input.your_reference
-  if (input.our_reference !== undefined) headerPatch.our_reference = input.our_reference
-  if (input.notes !== undefined) headerPatch.notes = input.notes
-  if (input.default_dimensions !== undefined) headerPatch.default_dimensions = input.default_dimensions
-
+  // Object literal on purpose (schema guard): undefined keys are dropped by
+  // JSON serialisation, so an omitted field leaves the column untouched.
   const { error: headerError } = await supabase
     .from('sales_orders')
-    .update(headerPatch)
+    .update({
+      customer_id: input.customer_id,
+      customer_type_snapshot: customer.customer_type,
+      customer_vat_validated_snapshot: customer.vat_number_validated ?? false,
+      order_date: input.order_date,
+      requested_delivery_date: input.requested_delivery_date,
+      currency: input.currency,
+      your_reference: input.your_reference,
+      our_reference: input.our_reference,
+      notes: input.notes,
+      default_dimensions: input.default_dimensions,
+      subtotal: totals.subtotal,
+      vat_amount: totals.vat_amount,
+      total: totals.total,
+    })
     .eq('id', orderId)
     .eq('company_id', companyId)
   if (headerError) return failDb(headerError)
@@ -184,15 +207,26 @@ export async function updateSalesOrder(
       if (error) return mapPg(error)
     }
     for (const row of rows) {
-      if (row.id) {
-        const { id, ...patch } = row
-        const { error } = await supabase
-          .from('sales_order_items')
-          .update(patch)
-          .eq('id', id)
-          .eq('company_id', companyId)
-        if (error) return mapPg(error)
-      }
+      if (!row.id) continue
+      const { error } = await supabase
+        .from('sales_order_items')
+        .update({
+          sort_order: row.sort_order,
+          line_type: row.line_type,
+          description: row.description,
+          quantity: row.quantity,
+          unit: row.unit,
+          unit_price: row.unit_price,
+          discount_percent: row.discount_percent,
+          vat_rate: row.vat_rate,
+          line_total: row.line_total,
+          article_id: row.article_id,
+          revenue_account: row.revenue_account,
+          dimensions: row.dimensions,
+        })
+        .eq('id', row.id)
+        .eq('company_id', companyId)
+      if (error) return mapPg(error)
     }
     const inserts = rows.filter((r) => !r.id).map((r) => toInsertRow(r, companyId, orderId))
     if (inserts.length > 0) {
@@ -205,8 +239,22 @@ export async function updateSalesOrder(
 }
 
 function toInsertRow(row: SalesOrderLineRow, companyId: string, orderId: string) {
-  const { id: _id, ...rest } = row
-  return { ...rest, company_id: companyId, sales_order_id: orderId }
+  return {
+    company_id: companyId,
+    sales_order_id: orderId,
+    sort_order: row.sort_order,
+    line_type: row.line_type,
+    description: row.description,
+    quantity: row.quantity,
+    unit: row.unit,
+    unit_price: row.unit_price,
+    discount_percent: row.discount_percent,
+    vat_rate: row.vat_rate,
+    line_total: row.line_total,
+    article_id: row.article_id,
+    revenue_account: row.revenue_account,
+    dimensions: row.dimensions,
+  }
 }
 
 function mapPg(error: unknown): ServiceResult<never> {

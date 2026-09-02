@@ -968,8 +968,11 @@ export interface SalesOrder {
   source_invoice_id: string | null
   order_date: string
   requested_delivery_date: string | null
-  /** Latest registered delivery date; becomes delivery_date on invoices created from the order. */
+  /** Latest registered delivery date across all lines (display only; invoices use per-line dates). */
   last_delivery_date: string | null
+  /** Customer facts the lines were VAT-validated under; invoicing refuses when they changed. */
+  customer_type_snapshot?: CustomerType | null
+  customer_vat_validated_snapshot?: boolean | null
   currency: string
   subtotal: number
   vat_amount: number
@@ -1001,6 +1004,8 @@ export interface SalesOrderItem {
   quantity: number
   /** Stored: registered by the user via the deliver action. */
   delivered_qty: number
+  /** Latest delivery date registered for this line (null until delivered). */
+  last_delivery_date?: string | null
   unit: string
   unit_price: number
   discount_percent: number

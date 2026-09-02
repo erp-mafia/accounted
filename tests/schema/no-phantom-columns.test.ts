@@ -145,7 +145,14 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // lib/stripe/subscription-sync.ts scopes the cancel-time multi_user expiry
 // update with an .or() interpolating a timestamp; every column named in both
 // strings is a literal (company_id, team_id, expires_at).
-const UNRESOLVED_CEILING = 393
+// 2026-09-02: +2 for kundorder (lib/sales-orders): create-invoice-from-order.ts
+// spreads buildInvoiceWriteData()'s invoiceFields into the invoices insert and
+// maps its item rows into invoice_items, the exact shape the webshop
+// create-invoice route and POST /api/invoices already use (their columns are
+// pinned by build-invoice-write.ts and its tests); write.ts inserts order
+// lines as a row array built from one literal mapper (toInsertRow). Every
+// header/line update in the module is an object literal.
+const UNRESOLVED_CEILING = 395
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

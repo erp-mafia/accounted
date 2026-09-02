@@ -2,10 +2,16 @@
  * createSalesOrder / updateSalesOrder with the queued Supabase mock.
  *
  * updateSalesOrder queue order: loadSalesOrder (sales_orders select,
- * invoiced rpc), customers select, sales_orders update, then when lines
- * are given: sales_order_items delete (only if any dropped), one
- * sales_order_items update per kept line, one insert for new lines, and a
- * final loadSalesOrder.
+ * invoiced rpc), then ONLY when customer_id or currency changes:
+ * hasOpenInvoices (invoiced rpc, and an invoices head count when no line
+ * carries invoiced quantity), then customers select, sales_orders update,
+ * then when lines are given: sales_order_items delete (only if any
+ * dropped), one sales_order_items update per kept line, one insert for new
+ * lines, and a final loadSalesOrder.
+ *
+ * The header update is an object literal with every column present (an
+ * omitted input leaves undefined, which PostgREST drops), so assertions use
+ * toMatchObject and check the untouched keys are undefined explicitly.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -171,6 +177,8 @@ describe('updateSalesOrder', () => {
   it('re-validates stored lines when only the customer changes (25 % line to a validated EU business)', async () => {
     enqueue({ data: makeSalesOrder({ status: 'draft', items: [makeSalesOrderItem({ vat_rate: 25 })] }) })
     enqueue({ data: [] })
+    enqueue({ data: [] }) // hasOpenInvoices: invoiced rpc (nothing invoiced)
+    enqueue({ data: null, count: 0 }) // hasOpenInvoices: no header-linked invoice
     enqueue({
       data: makeOrderCustomer({
         id: IDS.otherCustomer,
@@ -190,10 +198,70 @@ describe('updateSalesOrder', () => {
     })
 
     // 25 % is permitted for a validated EU business (taxed where performed),
-    // so the customer change goes through and only the header is written.
+    // so the customer change goes through and only the header is written,
+    // with the snapshot refreshed to the NEW customer's VAT facts.
     expect(result.ok).toBe(true)
-    expect(findCall('sales_orders', 'update')![0]).toMatchObject({ customer_id: IDS.otherCustomer })
+    expect(findCall('sales_orders', 'update')![0]).toMatchObject({
+      customer_id: IDS.otherCustomer,
+      customer_type_snapshot: 'eu_business',
+      customer_vat_validated_snapshot: true,
+    })
     expect(findCall('sales_order_items', 'update')).toBeUndefined()
+    expect(findCalls('invoices', 'eq')).toContainEqual(['sales_order_id', IDS.order])
+  })
+
+  it('refuses a customer change with SALES_ORDER_HAS_INVOICES once a line has invoiced quantity', async () => {
+    enqueue({ data: makeSalesOrder({ status: 'confirmed', items: [makeSalesOrderItem({ id: IDS.item1 })] }) })
+    enqueue({ data: [invoicedRow(IDS.item1, 2)] }) // loadSalesOrder
+    enqueue({ data: [invoicedRow(IDS.item1, 2)] }) // hasOpenInvoices rpc
+
+    const result = await updateSalesOrder(sb, {
+      companyId: IDS.company,
+      orderId: IDS.order,
+      input: { customer_id: IDS.otherCustomer, notes: 'Byt kund' },
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'SALES_ORDER_HAS_INVOICES', details: { field: 'customer_id' } })
+    // The check runs before the customer is even loaded and nothing is written.
+    expect(findCall('customers', 'select')).toBeUndefined()
+    expect(findCall('sales_orders', 'update')).toBeUndefined()
+  })
+
+  it('refuses a currency change when a header-linked invoice exists even with zero invoiced quantity', async () => {
+    enqueue({ data: makeSalesOrder({ status: 'confirmed' }) })
+    enqueue({ data: [] })
+    enqueue({ data: [] }) // hasOpenInvoices rpc: nothing invoiced
+    enqueue({ data: null, count: 1 }) // but an invoice still points at the order
+
+    const result = await updateSalesOrder(sb, {
+      companyId: IDS.company,
+      orderId: IDS.order,
+      input: { currency: 'EUR' },
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'SALES_ORDER_HAS_INVOICES', details: { field: 'currency' } })
+    expect(findCall('customers', 'select')).toBeUndefined()
+    expect(findCall('sales_orders', 'update')).toBeUndefined()
+  })
+
+  it('skips the open-invoice check when customer_id and currency are unchanged', async () => {
+    enqueue({ data: makeSalesOrder({ status: 'confirmed' }) })
+    enqueue({ data: [invoicedRow(IDS.item1, 2)] })
+    enqueue({ data: makeOrderCustomer() })
+    enqueue({ data: null }) // header update
+    enqueue({ data: makeSalesOrder({ status: 'confirmed', notes: 'Samma kund' }) })
+    enqueue({ data: [invoicedRow(IDS.item1, 2)] })
+
+    const result = await updateSalesOrder(sb, {
+      companyId: IDS.company,
+      orderId: IDS.order,
+      input: { customer_id: IDS.customer, currency: 'SEK', notes: 'Samma kund' },
+    })
+
+    expect(result.ok).toBe(true)
+    // Two rpc calls: the two loadSalesOrder calls, no hasOpenInvoices in between.
+    expect(supabase.rpc).toHaveBeenCalledTimes(2)
+    expect(findCall('invoices', 'select')).toBeUndefined()
   })
 
   it('updates header only when no lines are given, keeping stored totals', async () => {
@@ -213,13 +281,21 @@ describe('updateSalesOrder', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.order.notes).toBe('Leverans till lagret')
-    expect(findCall('sales_orders', 'update')![0]).toEqual({
+    const headerUpdate = findCall('sales_orders', 'update')![0] as Record<string, unknown>
+    expect(headerUpdate).toMatchObject({
       subtotal: 1000,
       vat_amount: 250,
       total: 1250,
       notes: 'Leverans till lagret',
       requested_delivery_date: '2026-09-15',
+      customer_type_snapshot: 'swedish_business',
+      customer_vat_validated_snapshot: false,
     })
+    // Omitted inputs stay undefined so PostgREST leaves the columns alone.
+    for (const key of ['customer_id', 'currency', 'order_date', 'your_reference', 'our_reference', 'default_dimensions']) {
+      expect(headerUpdate).toHaveProperty(key)
+      expect(headerUpdate[key]).toBeUndefined()
+    }
     expect(findCall('sales_order_items', 'update')).toBeUndefined()
     expect(findCall('sales_order_items', 'insert')).toBeUndefined()
   })
@@ -256,7 +332,16 @@ describe('updateSalesOrder', () => {
 
     expect(result.ok).toBe(true)
     // 12 x 100 @ 25 % + 500 @ 6 %
-    expect(findCall('sales_orders', 'update')![0]).toEqual({ subtotal: 1700, vat_amount: 330, total: 2030 })
+    const headerUpdate = findCall('sales_orders', 'update')![0] as Record<string, unknown>
+    expect(headerUpdate).toMatchObject({
+      subtotal: 1700,
+      vat_amount: 330,
+      total: 2030,
+      customer_type_snapshot: 'swedish_business',
+      customer_vat_validated_snapshot: false,
+    })
+    expect(headerUpdate.customer_id).toBeUndefined()
+    expect(headerUpdate.notes).toBeUndefined()
     expect(findCall('sales_order_items', 'in')).toEqual(['id', [IDS.item2]])
     const lineUpdate = findCall('sales_order_items', 'update')![0] as Record<string, unknown>
     expect(lineUpdate).toMatchObject({ quantity: 12, sort_order: 0, line_total: 1200 })
@@ -351,6 +436,9 @@ describe('createSalesOrder', () => {
       subtotal: 1000,
       vat_amount: 250,
       total: 1250,
+      // The customer facts the lines were VAT-validated under travel with the order.
+      customer_type_snapshot: 'swedish_business',
+      customer_vat_validated_snapshot: false,
     })
     const lines = findCall('sales_order_items', 'insert')![0] as Record<string, unknown>[]
     expect(lines).toHaveLength(2)

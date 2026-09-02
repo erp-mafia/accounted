@@ -6,6 +6,7 @@ import { UpdateSalesOrderSchema } from '@/lib/api/schemas'
 import { loadSalesOrder } from '@/lib/sales-orders/load'
 import { hasOpenInvoices, updateSalesOrder } from '@/lib/sales-orders/write'
 import { serviceFailureResponse } from '@/lib/sales-orders/respond'
+import { codeFromPgError } from '@/lib/sales-orders/result'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 ensureInitialized()
@@ -61,7 +62,13 @@ export const DELETE = withRouteContext<Ctx>(
     if (open.open) return errorResponseFromCode('SALES_ORDER_HAS_INVOICES', log, { requestId })
 
     const { error } = await supabase.from('sales_orders').delete().eq('id', id).eq('company_id', companyId)
-    if (error) return errorResponse(error, log, { requestId })
+    if (error) {
+      // A makulerad (cancelled) invoice still references the order: the
+      // RESTRICT FK is the authority, surfaced as the structured code.
+      const code = codeFromPgError(error)
+      if (code) return errorResponseFromCode(code, log, { requestId })
+      return errorResponse(error, log, { requestId })
+    }
     return NextResponse.json({ data: { id, deleted: true } })
   },
   { requireWrite: true },

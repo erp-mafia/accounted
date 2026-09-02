@@ -25,6 +25,14 @@ import type { InvoiceWriteItemRow } from '@/lib/invoices/build-invoice-write'
  */
 export type ReplaceInvoiceItemsResult =
   | { ok: true }
+  /**
+   * Refused before any write: the draft was created from a kundorder and the
+   * new line set drops one or more sales_order_item_id links. The order's
+   * invoiced quantity is derived from those links, so losing them would free
+   * the quantity for a second invoice. Every caller (cookie PATCH, v1 PATCH,
+   * update_invoice executor) surfaces this as INVOICE_UPDATE_DROPS_ORDER_LINK.
+   */
+  | { ok: false; stage: 'guard'; code: 'INVOICE_UPDATE_DROPS_ORDER_LINK'; messageSv: string }
   | { ok: false; stage: 'delete'; error: PostgrestError }
   | {
       ok: false
@@ -54,6 +62,36 @@ export async function replaceInvoiceItems(
     .from('invoice_items')
     .select('*')
     .eq('invoice_id', invoiceId)
+
+  // Order-link guard: a line set that forgets sales_order_item_id (a client
+  // that read the lines through a projection without it, or a header-only
+  // edit path that re-reads a narrow column list) must not silently sever
+  // the kundorder link. Compare the link multiset before deleting anything.
+  if (!snapshotError && snapshotRows) {
+    const existingLinks = (snapshotRows as Array<{ sales_order_item_id?: string | null }>)
+      .map((row) => row.sales_order_item_id)
+      .filter((id): id is string => typeof id === 'string')
+    if (existingLinks.length > 0) {
+      const incoming = new Map<string, number>()
+      for (const item of items) {
+        const link = (item as { sales_order_item_id?: string | null }).sales_order_item_id
+        if (link) incoming.set(link, (incoming.get(link) ?? 0) + 1)
+      }
+      for (const link of existingLinks) {
+        const left = incoming.get(link) ?? 0
+        if (left === 0) {
+          return {
+            ok: false,
+            stage: 'guard',
+            code: 'INVOICE_UPDATE_DROPS_ORDER_LINK',
+            messageSv:
+              'Fakturan är skapad från en kundorder och ändringen skulle tappa kopplingen till orderraderna.',
+          }
+        }
+        incoming.set(link, left - 1)
+      }
+    }
+  }
 
   const { error: deleteError } = await supabase
     .from('invoice_items')

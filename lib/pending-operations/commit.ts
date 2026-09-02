@@ -2252,7 +2252,7 @@ async function commitUpdateInvoice(
     const { data: itemRows, error: itemsFetchError } = await supabase
       .from('invoice_items')
       .select(
-        'line_type, description, quantity, unit, unit_price, discount_percent, vat_rate, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions',
+        'line_type, description, quantity, unit, unit_price, discount_percent, vat_rate, article_id, revenue_account, sales_order_item_id, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions',
       )
       .eq('invoice_id', invoiceId)
       .order('sort_order', { ascending: true })
@@ -2341,6 +2341,9 @@ async function commitUpdateInvoice(
 
   const replaced = await replaceInvoiceItems(supabase, invoiceId, build.items)
   if (!replaced.ok) {
+    if (replaced.stage === 'guard') {
+      return { error: replaced.messageSv, errorCode: replaced.code, status: 409 }
+    }
     return {
       error: `Fakturaraderna kunde inte skrivas om (${replaced.stage}): ${replaced.error.message}`,
       status: 500,
