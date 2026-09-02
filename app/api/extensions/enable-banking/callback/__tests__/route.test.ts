@@ -451,6 +451,10 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(foreign?.enabled).toBe(false)
     expect(foreign?.claimed_by_company_id).toBe('company-2')
     expect(foreign?.claimed_by_company_name).toBe('Other AB')
+    // The re-stamped claim stays out of the mirror exactly like a fresh one:
+    // only the own account gets a cash_accounts row.
+    expect(mockUpsertFromPsd2).toHaveBeenCalledTimes(1)
+    expect((mockUpsertFromPsd2.mock.calls[0][2] as { external_uid: string }).external_uid).toBe('acc-own-new')
   })
 
   it('drops a stale claim on renewal when the sibling no longer books the account', async () => {

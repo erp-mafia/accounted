@@ -573,6 +573,11 @@ async function finalizeConnection(
         if (claim) {
           account.claimed_by_company_id = claim.companyId
           if (claim.companyName) account.claimed_by_company_name = claim.companyName
+          // Keep it out of the cash_accounts mirror too: the first connect
+          // never mirrored it (see guardDisabledUids below), and mirroring
+          // it now would plant the sibling's IBAN in this company's routing
+          // table and burn a 19xx slot for an account that stays off.
+          guardDisabledUids.add(account.uid)
           claimedCount += 1
         }
       }
