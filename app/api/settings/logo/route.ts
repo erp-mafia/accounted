@@ -3,8 +3,22 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { LOGO_UPLOAD_MAX_BYTES, LOGO_UPLOAD_MAX_MB } from '@/lib/invoices/branding-constants'
+import { detectFileMagic } from '@/lib/core/documents/document-service'
 
-const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/svg+xml', 'image/webp']
+/**
+ * Raster formats only, decided by the file's magic bytes (detectFileMagic),
+ * never by the client-declared Content-Type. The logos bucket is PUBLIC and
+ * the object is served under the type stored here: an SVG (or an HTML file
+ * declared as an image) would be a script-capable document on a public URL,
+ * so SVG is not accepted at all and a declared type that disagrees with the
+ * bytes is ignored in favour of the bytes.
+ */
+const LOGO_TYPE_EXTENSIONS: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+}
+const LOGO_TYPE_ERROR = 'Otillåten filtyp. Tillåtna: PNG, JPG, WebP.'
 
 export const POST = withRouteContext(
   'settings.logo.upload',
@@ -16,22 +30,16 @@ export const POST = withRouteContext(
       return NextResponse.json({ error: 'Ingen fil angiven' }, { status: 400 })
     }
 
-    if (!ALLOWED_TYPES.includes(file.type)) {
-      return NextResponse.json({ error: 'Otillåten filtyp. Tillåtna: PNG, JPG, SVG, WebP.' }, { status: 400 })
-    }
-
     if (file.size > LOGO_UPLOAD_MAX_BYTES) {
       return NextResponse.json({ error: `Filen är för stor (max ${LOGO_UPLOAD_MAX_MB} MB).` }, { status: 400 })
     }
 
     const buffer = Buffer.from(await file.arrayBuffer())
-    const mimeToExt: Record<string, string> = {
-      'image/png': 'png',
-      'image/jpeg': 'jpg',
-      'image/svg+xml': 'svg',
-      'image/webp': 'webp',
+    const detectedType = detectFileMagic(new Uint8Array(buffer))
+    const ext = detectedType ? LOGO_TYPE_EXTENSIONS[detectedType] : undefined
+    if (!detectedType || !ext) {
+      return NextResponse.json({ error: LOGO_TYPE_ERROR }, { status: 400 })
     }
-    const ext = mimeToExt[file.type] ?? 'png'
     const storagePath = `${companyId}/logo-${Date.now()}.${ext}`
 
     const serviceClient = createServiceClient()
@@ -49,7 +57,7 @@ export const POST = withRouteContext(
     const { error: uploadError } = await serviceClient.storage
       .from('logos')
       .upload(storagePath, buffer, {
-        contentType: file.type,
+        contentType: detectedType,
         upsert: true,
       })
 

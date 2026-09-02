@@ -14,6 +14,10 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { buildAuthorizeUrl, exchangeCodeForTokens, generatePkcePair } from './lib/oauth'
 import { skatteverketConnectorMode, startConnectorAuthorization } from './lib/connector-mode'
 import { isConnectorState, verifyConnectorState } from '@/lib/connect/hosted/state'
+import {
+  requireFlowInitiator,
+  FLOW_INITIATOR_MISMATCH_MESSAGE,
+} from '@/lib/auth/oauth-flow-binding'
 import { storeTokens, getTokens, deleteTokens, getTokenHealth } from './lib/token-store'
 import { skvRequest, skvRequestWithAuth, SkatteverketAuthError, getSkatteverketEnvironment } from './lib/api-client'
 import { writeSkatteverketAudit } from './lib/audit'
@@ -558,8 +562,43 @@ export const skatteverketExtension: Extension = {
         // Flows that started before oauth_user_id shipped ran on the same
         // domain as the app and still carry session cookies; fall back to
         // those so in-flight connects survive the deploy boundary.
-        let userId = await readSetting('oauth_user_id')
-        if (!userId) {
+        const storedUserId = await readSetting('oauth_user_id')
+        let userId = storedUserId
+        if (storedUserId) {
+          // The state row names the user who started the flow; the tokens
+          // below are stored for that user with the service client. Bind the
+          // completion to that user's own session so a victim lured into
+          // approving a Skatteverket consent someone else started cannot have
+          // their BankID-authorised access stored under that someone.
+          //
+          // Hosted, this callback is served on the pinned OAuth host
+          // (getSkvOauthBaseUrl, app.gnubok.se) where the app's session
+          // cookies never arrive: a missing session proves nothing there and
+          // the single-use state + membership check stay the guard. Where the
+          // OAuth host IS the app host (self-hosted, or the pin removed) the
+          // initiator's cookies do arrive, so no session means the initiator
+          // is not the one finishing the flow. A session for a DIFFERENT user
+          // is refused on every host.
+          const initiator = await requireFlowInitiator(request, storedUserId, {
+            flow: 'skatteverket.callback',
+          })
+          if (!initiator.ok) {
+            const sessionExpected =
+              new URL(getSkvOauthBaseUrl()).origin === new URL(appUrl).origin
+            if (initiator.reason === 'mismatch') {
+              return respondWithError(
+                FLOW_INITIATOR_MISMATCH_MESSAGE,
+                `/reports?tab=vat-declaration&skv_error=${encodeURIComponent(FLOW_INITIATOR_MISMATCH_MESSAGE)}`,
+              )
+            }
+            if (sessionExpected) {
+              // The state row is untouched until the exchange, so signing in
+              // and re-running this callback (the helper's /login?next=...)
+              // completes the flow for its initiator.
+              return initiator.response
+            }
+          }
+        } else {
           const cookieClient = await createClient()
           const { data: { user } } = await cookieClient.auth.getUser()
           userId = user?.id ?? null

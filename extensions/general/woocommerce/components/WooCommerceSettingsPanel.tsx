@@ -107,7 +107,10 @@ export default function WooCommerceSettingsPanel() {
       if (connected) {
         toast({ title: t('connected_toast_title'), description: t('connected_toast_description') })
       } else if (error) {
-        const message = error === 'denied' ? t('error_denied') : t('error_generic')
+        const message =
+          error === 'denied' ? t('error_denied')
+          : error === 'wrong_user' ? t('error_wrong_user')
+          : t('error_generic')
         toast({ title: t('connect_failed_title'), description: message, variant: 'destructive' })
       }
       router.replace('/import?mode=woocommerce')

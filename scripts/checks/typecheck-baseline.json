@@ -1,5 +1,5 @@
 {
-  "totalErrors": 538,
+  "totalErrors": 537,
   "perFile": {
     "app/api/assets/__tests__/id.test.ts": 9,
     "app/api/auth/email-hook/__tests__/route.test.ts": 1,
@@ -80,7 +80,7 @@
     "lib/invoices/__tests__/supplier-invoice-matching.test.ts": 1,
     "lib/pending-operations/__tests__/commit-authorization-recoverable.test.ts": 1,
     "lib/reports/__tests__/vat-declaration.test.ts": 5,
-    "lib/supabase/__tests__/middleware.test.ts": 2,
+    "lib/supabase/__tests__/middleware.test.ts": 1,
     "tests/pg/categorize-calibration-samples.pg.test.ts": 2,
     "tests/pg/match-batch-allocate.pg.test.ts": 1
   }
