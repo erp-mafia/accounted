@@ -34,6 +34,7 @@ import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/in
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { CreateInvoiceItemSchema } from '@/lib/api/schemas'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import type { Currency, Customer, InvoiceDocumentType } from '@/types'
@@ -72,6 +73,12 @@ const InvoiceDetail = z.object({
   due_date: z.string(),
   status: z.string(),
   document_type: z.string(),
+  // Quotes only (null otherwise). quote_status is the EFFECTIVE decision:
+  // open | accepted | declined | expired, where expired is derived from
+  // valid_until and never stored.
+  valid_until: z.string().nullable().optional(),
+  quote_status: z.string().nullable().optional(),
+  quote_decided_at: z.string().nullable().optional(),
   currency: z.string(),
   total: z.number(),
   remaining_amount: z.number(),
@@ -193,7 +200,13 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       })
     }
 
-    return ok(data, { requestId: ctx.requestId })
+    // Quotes: report the effective decision (expired is derived from
+    // valid_until, never stored). Null for every other document type.
+    const row = data as unknown as Record<string, unknown> & {
+      quote_status?: string | null
+      valid_until?: string | null
+    }
+    return ok({ ...row, quote_status: effectiveQuoteStatus(row) }, { requestId: ctx.requestId })
   },
 )
 

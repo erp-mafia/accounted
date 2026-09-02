@@ -60,6 +60,7 @@ import {
 } from '@/lib/supplier-invoices/lifecycle'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
+import { ISO_DATE_RE } from '@/lib/invariants/iso-date'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
@@ -139,6 +140,7 @@ import {
   resolveInvoiceEmailRecipients,
 } from '@/lib/invoices/email-recipients'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { convertToInvoice } from '@/lib/invoices/convert-to-invoice'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
   recordManualInvoiceDelivery,
@@ -1670,6 +1672,14 @@ async function commitCreateInvoice(
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
   const customerId = params.customer_id as string
+  // Offert (quote): own OF-series allocated at insert, never an F-number,
+  // never books, never emits invoice.created. Only 'quote' is honoured here;
+  // anything else stays an ordinary invoice (staged params are caller JSON).
+  const isQuote = params.document_type === 'quote'
+  const validUntil = typeof params.valid_until === 'string' ? params.valid_until : null
+  if (isQuote && (!validUntil || !ISO_DATE_RE.test(validUntil))) {
+    return { error: 'Giltig till (valid_until) krävs för en offert.', status: 400 }
+  }
   const items = params.items as Array<{
     description: string; quantity: number; unit: string; unit_price: number; vat_rate?: number
     discount_percent?: number | null
@@ -1849,15 +1859,37 @@ async function commitCreateInvoice(
     }
   })()
 
+  // Quotes are numbered at insert from their own OF-series (see
+  // generate_quote_number); ensureInvoiceNumber must never run on one.
+  let quoteNumber: string | null = null
+  if (isQuote) {
+    const { data: allocated, error: quoteNumberError } = await supabase.rpc('generate_quote_number', {
+      p_company_id: companyId,
+    })
+    if (quoteNumberError || !allocated) {
+      return {
+        error:
+          getErrorEntry('INVOICE_CREATE_NUMBER_ASSIGN_FAILED')?.message_sv ??
+          'Offertnumret kunde inte tilldelas.',
+        errorCode: 'INVOICE_CREATE_NUMBER_ASSIGN_FAILED',
+        status: 500,
+      }
+    }
+    quoteNumber = allocated as string
+  }
+
   const { data: invoice, error: invoiceError } = await supabase
     .from('invoices')
     .insert({
       user_id: userId,
       company_id: companyId,
       customer_id: customerId,
-      invoice_number: null,
+      invoice_number: quoteNumber,
       invoice_date: invoiceDate,
-      due_date: (params.due_date as string) || null,
+      // A quote has no payment due date: due_date mirrors valid_until
+      // (build-invoice-write parity).
+      due_date: isQuote ? validUntil : (params.due_date as string) || null,
+      ...(isQuote ? { document_type: 'quote', valid_until: validUntil, quote_status: 'open' } : {}),
       currency,
       exchange_rate: exchangeRate,
       exchange_rate_date: exchangeRateDate,
@@ -1941,20 +1973,24 @@ async function commitCreateInvoice(
     return { error: itemsError.message, status: 500 }
   }
 
-  const { data: completeInvoice } = await supabase
-    .from('invoices')
-    .select('*, customer:customers(*), items:invoice_items(*)')
-    .eq('id', invoice.id)
-    .single()
+  // invoice.created is for real invoices only: a quote is an offer, not a
+  // claim, and has no downstream consumer obligation (v1 route parity).
+  if (!isQuote) {
+    const { data: completeInvoice } = await supabase
+      .from('invoices')
+      .select('*, customer:customers(*), items:invoice_items(*)')
+      .eq('id', invoice.id)
+      .single()
 
-  if (completeInvoice) {
-    await eventBus.emit({
-      type: 'invoice.created',
-      payload: { invoice: completeInvoice as Invoice, userId, companyId },
-    })
+    if (completeInvoice) {
+      await eventBus.emit({
+        type: 'invoice.created',
+        payload: { invoice: completeInvoice as Invoice, userId, companyId },
+      })
+    }
   }
 
-  return { data: { invoice_id: invoice.id, invoice_number: invoice.invoice_number } }
+  return { data: { invoice_id: invoice.id, invoice_number: invoice.invoice_number ?? quoteNumber } }
 }
 
 /**
@@ -4812,91 +4848,24 @@ async function commitConvertInvoice(
   const id = params.invoice_id as string
   if (!id) return { error: 'invoice_id is required', status: 400 }
 
-  const { data: proforma, error: proformaError } = await supabase
-    .from('invoices').select('*, items:invoice_items(*)').eq('id', id).eq('company_id', companyId).single()
+  // Shared with POST /api/invoices/[id]/convert: proforma or quote to
+  // invoice, F-number allocated last, source cancelled (proforma) or
+  // accepted (quote).
+  const result = await convertToInvoice({ supabase, userId, companyId, sourceId: id })
 
-  if (proformaError || !proforma) return { error: 'Proformafakturan hittades inte', status: 404 }
-  if (proforma.document_type !== 'proforma') {
-    return { error: 'Endast proformafakturor kan konverteras', status: 400 }
-  }
-  if (proforma.status === 'cancelled') {
-    return { error: 'Denna proformafaktura har redan makuleras', status: 409 }
-  }
-
-  const { data: invoice, error: invoiceError } = await supabase
-    .from('invoices')
-    .insert({
-      user_id: userId,
-      company_id: companyId,
-      customer_id: proforma.customer_id,
-      invoice_number: null,
-      invoice_date: new Date().toISOString().split('T')[0],
-      due_date: proforma.due_date,
-      currency: proforma.currency,
-      exchange_rate: proforma.exchange_rate,
-      exchange_rate_date: proforma.exchange_rate_date,
-      subtotal: proforma.subtotal,
-      subtotal_sek: proforma.subtotal_sek,
-      vat_amount: proforma.vat_amount,
-      vat_amount_sek: proforma.vat_amount_sek,
-      total: proforma.total,
-      remaining_amount: proforma.total,
-      paid_amount: 0,
-      total_sek: proforma.total_sek,
-      vat_treatment: proforma.vat_treatment,
-      vat_rate: proforma.vat_rate,
-      moms_ruta: proforma.moms_ruta,
-      reverse_charge_text: proforma.reverse_charge_text,
-      your_reference: proforma.your_reference,
-      our_reference: proforma.our_reference,
-      notes: proforma.notes,
-      document_type: 'invoice',
-      converted_from_id: id,
-      // Dimensions PR7: the converted invoice books with the proforma's bag.
-      default_dimensions: proforma.default_dimensions ?? {},
-    })
-    .select()
-    .single()
-
-  if (invoiceError) return { error: invoiceError.message, status: 500 }
-
-  try {
-    await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
-  } catch (err) {
-    await supabase.from('invoices').delete().eq('id', invoice.id)
-    return { error: err instanceof Error ? err.message : 'Failed to assign invoice number', status: 500 }
-  }
-
-  const items = (proforma.items ?? []).map((item: Record<string, unknown>) => ({
-    invoice_id: invoice.id,
-    sort_order: item.sort_order,
-    line_type: item.line_type ?? 'product',
-    description: item.description,
-    quantity: item.quantity,
-    unit: item.unit,
-    unit_price: item.unit_price,
-    line_total: item.line_total,
-    // Preserve per-line VAT and any article/revenue-account override from the
-    // proforma so the converted invoice books exactly as the proforma showed
-    // (mixed rates + per-article accounts both rely on these per-line fields).
-    vat_rate: item.vat_rate ?? 0,
-    vat_amount: item.vat_amount ?? 0,
-    revenue_account: item.revenue_account ?? null,
-    article_id: item.article_id ?? null,
-    dimensions: item.dimensions ?? {},
-  }))
-
-  if (items.length > 0) {
-    const { error: itemsError } = await supabase.from('invoice_items').insert(items)
-    if (itemsError) {
-      await supabase.from('invoices').delete().eq('id', invoice.id)
-      return { error: itemsError.message, status: 500 }
+  if (!result.ok) {
+    if (result.code === 'INVOICE_CONVERT_FAILED') {
+      return { error: result.cause.message, errorCode: result.code, status: 500 }
+    }
+    const entry = getErrorEntry(result.code)
+    return {
+      error: entry?.message_sv ?? result.code,
+      errorCode: result.code,
+      status: entry?.httpStatus ?? 400,
     }
   }
 
-  await supabase.from('invoices').update({ status: 'cancelled' }).eq('id', id)
-
-  return { data: { invoice_id: invoice.id, invoice_number: invoice.invoice_number } }
+  return { data: { invoice_id: result.invoice.id, invoice_number: result.invoice.invoice_number } }
 }
 
 async function commitImportSie(

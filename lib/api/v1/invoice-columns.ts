@@ -12,7 +12,7 @@
  */
 
 export const INVOICE_FULL_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, ore_rounding, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, invoice_marking, notes, payment_link_url, stripe_payment_link_id, payment_link_auto, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, deduction_total, deduction_personnummer_last4, created_at, updated_at'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, ore_rounding, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, invoice_marking, notes, payment_link_url, stripe_payment_link_id, payment_link_auto, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, valid_until, quote_status, quote_decided_at, paid_at, paid_amount, remaining_amount, default_dimensions, deduction_total, deduction_personnummer_last4, created_at, updated_at'
 
 /**
  * Projection for the v1 PDF download route. Narrower than INVOICE_FULL_COLUMNS

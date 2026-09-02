@@ -159,6 +159,7 @@ import {
 import { computeInitialRunDate } from '@/lib/invoices/recurring-schedule-service'
 import { UpdateInvoiceParamsSchema } from '@/lib/pending-operations/schemas/update-invoice'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
+import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import {
   ensureCompanyDimensions,
   fetchDimensionRegistry,
@@ -523,6 +524,15 @@ const ANNOTATIONS_WRITE_OPEN_WORLD = {
   idempotentHint: false,
   openWorldHint: true,
 } as const satisfies McpToolAnnotations
+
+/**
+ * A domain failure carrying a structured-errors registry code, so the dispatch
+ * envelope (toToolError → getStructuredError) resolves the registry entry
+ * instead of UNKNOWN_ERROR. The Swedish registry message is the thrown text.
+ */
+function registryError(code: string): Error {
+  return Object.assign(new Error(getErrorEntry(code)?.message_sv ?? code), { code })
+}
 
 interface McpTool {
   name: string
@@ -6187,9 +6197,9 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_invoices',
-    keywords: ['faktura', 'kundfaktura', 'fakturor', 'obetalda', 'förfallna', 'påminnelse'],
+    keywords: ['faktura', 'kundfaktura', 'fakturor', 'obetalda', 'förfallna', 'påminnelse', 'offert', 'offerter'],
     title: 'List Customer Invoices',
-    description: 'List invoices for the active company, newest first. Optional status filter.',
+    description: 'List invoices and quotes (offerter) for the active company, newest first. Optional status, document_type and quote_status filters.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -6198,6 +6208,15 @@ export const tools: McpTool[] = [
           type: 'string',
           enum: ['draft', 'sent', 'paid', 'overdue', 'cancelled', 'credited'],
           description: 'Filter by invoice status',
+        },
+        document_type: {
+          type: 'string',
+          enum: ['invoice', 'proforma', 'delivery_note', 'quote'],
+        },
+        quote_status: {
+          type: 'string',
+          enum: ['open', 'accepted', 'declined', 'expired'],
+          description: 'Quotes only; expired = open past valid_until.',
         },
         limit: { type: 'number', description: 'Max results (default 50, max 100)' },
         offset: { type: 'integer', minimum: 0, description: 'Number of results to skip for pagination (default 0)' },
@@ -6209,14 +6228,29 @@ export const tools: McpTool[] = [
       const limit = Math.min(Math.max(1, Number(args.limit) || 50), 100)
       const offset = Math.max(0, Math.floor(Number(args.offset) || 0))
       const status = args.status as string | undefined
+      const documentType = args.document_type as string | undefined
+      const quoteStatus = args.quote_status as string | undefined
 
       let query = supabase
         .from('invoices')
-        .select('id, invoice_number, status, customer_id, total, currency, invoice_date, due_date, document_type, default_dimensions, customers(name)', { count: 'exact' })
+        .select('id, invoice_number, status, customer_id, total, currency, invoice_date, due_date, document_type, valid_until, quote_status, default_dimensions, customers(name)', { count: 'exact' })
         .eq('company_id', companyId)
 
       if (status) {
         query = query.eq('status', status)
+      }
+      if (documentType) {
+        query = query.eq('document_type', documentType)
+      }
+      if (quoteStatus) {
+        // "expired" is derived (lib/invoices/quote-status): an open quote whose
+        // valid_until has passed. Never stored, so it is a predicate here.
+        query = query.eq('document_type', 'quote')
+        if (quoteStatus === 'expired') {
+          query = query.eq('quote_status', 'open').lt('valid_until', new Date().toISOString().split('T')[0])
+        } else {
+          query = query.eq('quote_status', quoteStatus)
+        }
       }
 
       const { data, error, count } = await query
@@ -6237,6 +6271,9 @@ export const tools: McpTool[] = [
         invoice_date: inv.invoice_date,
         due_date: inv.due_date,
         document_type: inv.document_type,
+        valid_until: inv.valid_until ?? null,
+        // Effective status: open/accepted/declined/expired for quotes, null otherwise.
+        quote_status: effectiveQuoteStatus(inv as { quote_status?: string | null; valid_until?: string | null }),
         default_dimensions: inv.default_dimensions ?? {},
       }))
 
@@ -6275,7 +6312,9 @@ export const tools: McpTool[] = [
         invoice_id: { type: 'string' },
         invoice_number: { type: ['string', 'null'], description: 'null until sent' },
         status: { type: 'string' },
-        document_type: { type: 'string', description: 'invoice, proforma or delivery_note' },
+        document_type: { type: 'string', description: 'invoice, proforma, delivery_note or quote' },
+        valid_until: { type: ['string', 'null'], description: 'Quotes only: expiry date' },
+        quote_status: { type: ['string', 'null'], description: 'Quotes only: open, accepted, declined or expired (derived)' },
         customer_id: { type: 'string' },
         customer_name: { type: ['string', 'null'] },
         invoice_date: { type: 'string' },
@@ -6344,7 +6383,7 @@ export const tools: McpTool[] = [
       const { data: invoice, error } = await supabase
         .from('invoices')
         .select(
-          'id, invoice_number, status, document_type, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, invoice_marking, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
+          'id, invoice_number, status, document_type, valid_until, quote_status, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, invoice_marking, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
         )
         .eq('id', invoiceId)
         .eq('company_id', companyId)
@@ -6415,6 +6454,8 @@ export const tools: McpTool[] = [
         invoice_number: invoice.invoice_number ?? null,
         status: invoice.status,
         document_type: invoice.document_type ?? 'invoice',
+        valid_until: invoice.valid_until ?? null,
+        quote_status: effectiveQuoteStatus(invoice),
         customer_id: invoice.customer_id,
         customer_name: (invoice.customer as { name?: string } | null)?.name ?? null,
         invoice_date: invoice.invoice_date,
@@ -6442,13 +6483,19 @@ export const tools: McpTool[] = [
     name: 'gnubok_create_invoice',
     keywords: ['faktura', 'kundfaktura', 'fakturera', 'ny faktura'],
     title: 'Create Customer Invoice',
-    description: 'Stage a new invoice. Validates inputs, calculates VAT preview. Items accept dims bags. Approval creates a draft; the invoice number is assigned on send or mark-as-sent.',
+    description: 'Stage a new invoice or quote (offert). Validates inputs, calculates VAT preview. Items accept dims bags. Approval creates a draft (F-number assigned on send) or an open quote numbered OF-nnn at once; quotes require valid_until and never book.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         customer_id: { type: 'string', description: 'Customer UUID' },
+        document_type: {
+          type: 'string',
+          enum: ['invoice', 'quote'],
+          description: 'quote = offert: own OF-series, never books, needs valid_until. Default invoice.',
+        },
+        valid_until: { type: 'string', description: 'YYYY-MM-DD; quotes only (required): expiry date, due_date mirrors it.' },
         items: {
           type: 'array',
           items: {
@@ -6506,6 +6553,27 @@ export const tools: McpTool[] = [
       const today = new Date().toISOString().split('T')[0]
       const currency = ((args.currency as string) || 'SEK') as Currency
       const invoiceDate = (args.invoice_date as string) || today
+
+      // Offert: own OF-series allocated at approval, never books, and the
+      // expiry date is the one header field the type adds (CreateInvoiceSchema
+      // parity: valid_until is required exactly when document_type is quote).
+      const documentType = (args.document_type as string | undefined) ?? 'invoice'
+      if (documentType !== 'invoice' && documentType !== 'quote') {
+        throw codedError('VALIDATION_ERROR', 'document_type must be "invoice" or "quote".')
+      }
+      const isQuote = documentType === 'quote'
+      const validUntil = args.valid_until as string | undefined
+      if (isQuote) {
+        if (
+          typeof validUntil !== 'string' ||
+          !ISO_DATE_RE.test(validUntil) ||
+          Number.isNaN(new Date(`${validUntil}T00:00:00Z`).getTime())
+        ) {
+          throw codedError('VALIDATION_ERROR', 'valid_until (YYYY-MM-DD) is required for a quote (offert).')
+        }
+      } else if (validUntil !== undefined) {
+        throw codedError('VALIDATION_ERROR', 'valid_until applies to quotes only: set document_type "quote".')
+      }
 
       // Fetch customer (full row for VAT rules) BEFORE the article prefill:
       // an article's stored rate may only be adopted against this customer's
@@ -6621,9 +6689,12 @@ export const tools: McpTool[] = [
       }
       const total = subtotal + vatAmount
 
-      // Due date from payment terms if not provided
+      // Due date from payment terms if not provided. A quote has no payment
+      // due date: due_date mirrors valid_until (build-invoice-write parity).
       let dueDate = args.due_date as string | undefined
-      if (!dueDate) {
+      if (isQuote) {
+        dueDate = validUntil
+      } else if (!dueDate) {
         const d = new Date(invoiceDate)
         d.setDate(d.getDate() + (customer.default_payment_terms || 30))
         dueDate = d.toISOString().split('T')[0]
@@ -6631,9 +6702,11 @@ export const tools: McpTool[] = [
 
       // Stage for user approval instead of creating directly
       return stagePendingOperation(supabase, companyId, userId, 'create_invoice',
-        `Ny faktura: ${customer.name} ${Math.round(total * 100) / 100} ${currency}`,
+        `${isQuote ? 'Ny offert' : 'Ny faktura'}: ${customer.name} ${Math.round(total * 100) / 100} ${currency}`,
         {
           customer_id: customerId,
+          document_type: documentType,
+          ...(isQuote ? { valid_until: validUntil } : {}),
           items: stagedItems,
           ...(resolvedDefaultDimensions && Object.keys(resolvedDefaultDimensions).length > 0
             ? { default_dimensions: resolvedDefaultDimensions }
@@ -6662,15 +6735,30 @@ export const tools: McpTool[] = [
           vat_treatment: vatRules.treatment,
           invoice_date: invoiceDate,
           due_date: dueDate,
+          document_type: documentType,
+          ...(isQuote
+            ? {
+                valid_until: validUntil,
+                // The OF-number is allocated by generate_quote_number at
+                // approval; the preview must not show an F-series marker.
+                invoice_number: 'Offert OF-preview',
+                will: 'allocate OF-series number at approval; never books',
+              }
+            : {}),
           // Echoed for every non-exact dimension resolution (resolve-don't-
           // select) so the agent can verify what a name attached to.
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
         },
         actor,
-        {
-          description: 'Once approved, the invoice is created as a draft. Send it with gnubok_send_invoice or use gnubok_mark_invoice_as_sent if delivered outside the system.',
-          tool: 'gnubok_send_invoice',
-        }
+        isQuote
+          ? {
+              description: 'Once approved, the quote exists as an open offert with its OF-number. Record the customer decision with gnubok_set_quote_status; gnubok_convert_invoice creates the faktura from it.',
+              tool: 'gnubok_convert_invoice',
+            }
+          : {
+              description: 'Once approved, the invoice is created as a draft. Send it with gnubok_send_invoice or use gnubok_mark_invoice_as_sent if delivered outside the system.',
+              tool: 'gnubok_send_invoice',
+            }
       )
     },
   },
@@ -16614,13 +16702,13 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_convert_invoice',
-    keywords: ['proforma', 'kundfaktura', 'omvandla'],
-    title: 'Convert Proforma to Invoice',
-    description: 'Stage conversion of a proforma invoice to a real invoice. Allocates F-series number, copies items, marks proforma cancelled.',
+    keywords: ['proforma', 'offert', 'quote', 'kundfaktura', 'omvandla'],
+    title: 'Convert Proforma or Quote to Invoice',
+    description: 'Stage conversion of a proforma or a quote (offert) to a real invoice: allocates F-series number, copies items. Proforma is cancelled; the quote stays and becomes accepted. Declined or already-invoiced quotes are refused.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      properties: { invoice_id: { type: 'string' } },
+      properties: { invoice_id: { type: 'string', description: 'UUID of the proforma or quote' } },
       required: ['invoice_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -16631,21 +16719,44 @@ export const tools: McpTool[] = [
 
       const { data: inv } = await supabase
         .from('invoices')
-        .select('id, document_type, status, total, currency, customer:customers(name)')
+        .select('id, invoice_number, document_type, status, quote_status, total, currency, customer:customers(name)')
         .eq('id', id).eq('company_id', companyId).single()
-      if (!inv) throw new Error('Invoice not found')
-      if (inv.document_type !== 'proforma') throw new Error('Endast proformafakturor kan konverteras')
-      if (inv.status === 'cancelled') throw new Error('Denna proformafaktura har redan makulerats')
+      if (!inv) throw registryError('INVOICE_NOT_FOUND')
+      const isQuote = inv.document_type === 'quote'
+      // Same pre-checks as convertToInvoice (the commit path), so the agent
+      // gets the registry code at staging time instead of a failed approval.
+      if (inv.document_type !== 'proforma' && !isQuote) throw registryError('INVOICE_CONVERT_NOT_CONVERTIBLE')
+      if (inv.status === 'cancelled') throw registryError('INVOICE_CONVERT_SOURCE_CANCELLED')
+      if (isQuote) {
+        if (inv.quote_status === 'declined') throw registryError('INVOICE_CONVERT_QUOTE_DECLINED')
+        const { data: converted, error: convertedError } = await supabase
+          .from('invoices')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('converted_from_id', id)
+          .neq('status', 'cancelled')
+          .limit(1)
+          .maybeSingle()
+        if (convertedError) throw dbError(convertedError)
+        if (converted) throw registryError('INVOICE_QUOTE_ALREADY_INVOICED')
+      }
 
       const customerName = (inv.customer as { name?: string } | null)?.name ?? 'okänd kund'
+      const amount = `${Math.round(Number(inv.total) * 100) / 100} ${inv.currency}`
       return stagePendingOperation(supabase, companyId, userId, 'convert_invoice',
-        `Konvertera proforma → faktura: ${customerName} ${Math.round(Number(inv.total) * 100) / 100} ${inv.currency}`,
+        isQuote
+          ? `Konvertera offert → faktura: ${inv.invoice_number ?? ''} ${customerName} ${amount}`.replace(/\s+/g, ' ')
+          : `Konvertera proforma → faktura: ${customerName} ${amount}`,
         { invoice_id: id },
         {
           customer_name: (inv.customer as { name?: string } | null)?.name,
+          source_document_type: inv.document_type,
+          source_invoice_number: inv.invoice_number ?? null,
           total: inv.total,
           currency: inv.currency,
-          will: 'allocate F-series number, copy items, cancel proforma',
+          will: isQuote
+            ? 'allocate F-series number, copy items, mark the quote accepted (the quote stays)'
+            : 'allocate F-series number, copy items, cancel proforma',
         },
         actor,
         {
@@ -16653,6 +16764,96 @@ export const tools: McpTool[] = [
           tool: 'gnubok_send_invoice',
         }
       )
+    },
+  },
+
+  {
+    name: 'gnubok_set_quote_status',
+    keywords: ['offert', 'quote', 'accepterad', 'avböjd', 'godkänn offert'],
+    title: 'Set Quote Status',
+    description: 'Record the customer decision on a quote (offert): open, accepted or declined. Direct write, not staged. Locked once the quote is invoiced; expired is derived from valid_until, never set. Bill an accepted quote with gnubok_convert_invoice.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        invoice_id: { type: 'string', description: 'Quote UUID from gnubok_list_invoices' },
+        status: { type: 'string', enum: ['open', 'accepted', 'declined'] },
+      },
+      required: ['invoice_id', 'status'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        invoice_id: { type: 'string' },
+        invoice_number: { type: ['string', 'null'] },
+        document_type: { type: 'string' },
+        status: { type: 'string' },
+        quote_status: { type: 'string', enum: ['open', 'accepted', 'declined'], description: 'Stored decision' },
+        effective_quote_status: { type: 'string', enum: ['open', 'accepted', 'declined', 'expired'] },
+        quote_decided_at: { type: ['string', 'null'] },
+        valid_until: { type: ['string', 'null'] },
+      },
+      required: ['invoice_id', 'document_type', 'quote_status', 'effective_quote_status'],
+    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
+    async execute(args, companyId, userId, supabase) {
+      const id = args.invoice_id as string
+      if (!id) throw codedError('VALIDATION_ERROR', 'invoice_id is required')
+      const nextStatus = args.status as string
+      if (nextStatus !== 'open' && nextStatus !== 'accepted' && nextStatus !== 'declined') {
+        throw codedError('VALIDATION_ERROR', 'status must be open, accepted or declined')
+      }
+
+      // Mirrors POST /api/invoices/[id]/quote-status: any transition between
+      // the three decisions until the quote has been converted; cancelled
+      // quotes are not decidable; accepting past valid_until is allowed.
+      const { data: quote, error: fetchError } = await supabase
+        .from('invoices')
+        .select('id, document_type, status, quote_status, quote_decided_at')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (fetchError) throw dbError(fetchError)
+      if (!quote) throw registryError('INVOICE_NOT_FOUND')
+      if (quote.document_type !== 'quote') throw registryError('INVOICE_NOT_A_QUOTE')
+      if (quote.status === 'cancelled') throw registryError('INVOICE_QUOTE_NOT_DECIDABLE')
+
+      const { data: converted, error: convertedError } = await supabase
+        .from('invoices')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('converted_from_id', id)
+        .neq('status', 'cancelled')
+        .limit(1)
+        .maybeSingle()
+      if (convertedError) throw dbError(convertedError)
+      if (converted) throw registryError('INVOICE_QUOTE_ALREADY_INVOICED')
+
+      const { data: updated, error: updateError } = await supabase
+        .from('invoices')
+        .update({
+          quote_status: nextStatus,
+          quote_decided_at: nextStatus === 'open' ? null : new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .select('id, invoice_number, document_type, status, quote_status, quote_decided_at, valid_until')
+        .single()
+      if (updateError) throw dbError(updateError)
+      if (!updated) throw new Error('Quote status update failed')
+
+      return {
+        invoice_id: updated.id,
+        invoice_number: updated.invoice_number ?? null,
+        document_type: updated.document_type,
+        status: updated.status,
+        quote_status: updated.quote_status,
+        effective_quote_status: effectiveQuoteStatus(updated) ?? updated.quote_status,
+        quote_decided_at: updated.quote_decided_at ?? null,
+        valid_until: updated.valid_until ?? null,
+      }
     },
   },
 
