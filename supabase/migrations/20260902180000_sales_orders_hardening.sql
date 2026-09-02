@@ -34,13 +34,14 @@
 -- Idempotent on purpose: this file was renamed from 20260902160000 after a
 -- version collision with parties_substrate, and a preview branch that had
 -- already applied it under the old version replays it under the new one.
+-- The FK depends on the unique index, so it is dropped first.
+ALTER TABLE public.sales_order_items
+  DROP CONSTRAINT IF EXISTS sales_order_items_order_company_fkey;
 ALTER TABLE public.sales_orders
   DROP CONSTRAINT IF EXISTS sales_orders_id_company_id_key;
 ALTER TABLE public.sales_orders
   ADD CONSTRAINT sales_orders_id_company_id_key UNIQUE (id, company_id);
 
-ALTER TABLE public.sales_order_items
-  DROP CONSTRAINT IF EXISTS sales_order_items_order_company_fkey;
 ALTER TABLE public.sales_order_items
   ADD CONSTRAINT sales_order_items_order_company_fkey
   FOREIGN KEY (sales_order_id, company_id)
