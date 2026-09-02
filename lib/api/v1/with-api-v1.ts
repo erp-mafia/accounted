@@ -13,7 +13,9 @@
  *      the token when one is supplied.
  *   4. When the URL contains `companyId`, verifies the API key's user has
  *      access to that company via `company_members`. Multi-company keys are
- *      supported transparently: the URL is the source of truth.
+ *      supported transparently: the URL is the source of truth. A `viewer`
+ *      (read-only) membership is refused for every write: mutating method
+ *      or non-`:read` scope (FORBIDDEN, details.code ROLE_READ_ONLY).
  *   5. Resolves the dry-run flag (`?dry_run=true` query OR `X-Dry-Run` header).
  *   6. Resolves `Idempotency-Key` (header) and replays cached responses. The
  *      dry-run flag is part of the cache identity and dry-run responses are
@@ -46,6 +48,7 @@ import {
   extractBearerToken,
   hasScope,
   RATE_LIMIT_RETRY_AFTER_SECONDS,
+  scopeKind,
   validateApiKey,
 } from '@/lib/auth/api-keys'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
@@ -78,6 +81,13 @@ const DRY_RUN_HEADER = 'X-Dry-Run'
 // idempotency replay, requireIdempotencyKey enforcement), and omitting PUT
 // would let test keys write through PUT routes for real.
 const REQUIRES_IDEMPOTENCY = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+// RFC 9110 safe methods. The read-only role gate treats EVERYTHING else as a
+// write: a superset of REQUIRES_IDEMPOTENCY, so an exotic method can never
+// slip a viewer past the gate. Deliberately separate from REQUIRES_IDEMPOTENCY,
+// whose semantics (replay, dry-run forcing) must not widen as a side effect.
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+/** The read-only company role (see `CompanyRole` in `@/types`). */
+const READ_ONLY_ROLE = 'viewer'
 
 export interface ApiV1Context {
   /** Stable id for this HTTP request: appears in logs, error envelope, X-Request-Id. */
@@ -414,14 +424,54 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           })
         }
 
+        const membershipRole = (membership as { role?: string }).role
+
+        // Read-only role gate. Cookie routes enforce the viewer role through
+        // withRouteContext({ requireWrite }) and the DB enforces it through
+        // RLS + triggers for cookie sessions, but this surface runs as the
+        // service role: nothing below this line would stop a viewer's key from
+        // posting. A request is a write when EITHER its method is unsafe
+        // (catches action verbs whatever their scope) OR its scope is an
+        // elevated grant (catches reads-by-method that still manage tenant
+        // state, e.g. GET /webhooks on webhooks:manage). Dry-run and test
+        // keys are refused too: a viewer has no write to simulate.
+        //
+        // Placed AFTER the membership 404 so a non-member sees exactly what it
+        // saw before (no new company-existence signal), and BEFORE the seat
+        // gate so a refused write costs no extra read.
+        if (
+          membershipRole === READ_ONLY_ROLE &&
+          (!SAFE_METHODS.has(request.method) || scopeKind(requiredScope) === 'write')
+        ) {
+          userLog.warn('read-only membership refused write request', {
+            companyId,
+            method: request.method,
+            requiredScope,
+            ...forensic,
+          })
+          return await v1ErrorResponseFromCode('FORBIDDEN', userLog, {
+            requestId,
+            status: 403,
+            reason: 'role_read_only',
+            details: {
+              code: 'ROLE_READ_ONLY',
+              companyId,
+              role: READ_ONLY_ROLE,
+              required_scope: requiredScope,
+              message:
+                'This company membership is read-only (viewer): write requests are refused. Ask a company owner or admin to change the role.',
+            },
+          })
+        }
+
         // Multi-user seat gate: the API-key surface is a chokepoint like the
         // cookie routes and MCP. A non-owner membership in a frozen company
         // (multi_user lapsed past its 20-day grace) is refused here so an old
         // key cannot keep working the books after the freeze. Owners pass
         // without the extra read; the service client sees team-scoped grants.
-        if ((membership as { role?: string }).role !== 'owner') {
+        if (membershipRole !== 'owner') {
           const access = await getMultiUserState(supabase, companyId)
-          if (isMembershipDormant((membership as { role: string }).role, access.state)) {
+          if (isMembershipDormant(membershipRole as string, access.state)) {
             userLog.warn('multi-user seat gate refused frozen membership', { companyId, ...forensic })
             return await v1ErrorResponseFromCode('FORBIDDEN', userLog, {
               requestId,

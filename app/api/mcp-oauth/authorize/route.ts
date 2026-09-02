@@ -6,13 +6,19 @@ import { createAuthCode } from '@/lib/auth/oauth-codes'
 import { shouldEnforceMfa } from '@/lib/auth/mfa'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { getBranding } from '@/lib/branding/service'
-import { isAllowedRedirectUri } from '@/lib/auth/oauth-allowlist'
+import {
+  capScopesForRole,
+  lookupCompanyRole,
+  resolveRedirectUri,
+  type RedirectUriResolution,
+} from '@/lib/auth/oauth-allowlist'
 import { resolveDiscoveryBaseUrl } from '@/lib/api/v1/base-url'
 import {
   ALL_SCOPES,
   API_KEY_SCOPES,
   DEFAULT_OAUTH_SCOPES,
   SCOPE_GROUPS,
+  findStageApproveConflict,
   scopeKind,
   validateScopes,
   type ApiKeyScope,
@@ -173,9 +179,10 @@ function errorRedirect(request: Request, redirectUri: string, state: string | nu
 export async function GET(request: Request) {
   const url = new URL(request.url)
   const redirectUri = url.searchParams.get('redirect_uri')
-  // state and code_challenge are carried through to the POST handler via
-  // the form action's url.search, so we don't read them here: they're only
-  // validated on POST.
+  // state is read only to echo it on error redirects issued from GET;
+  // code_challenge is carried through to the POST handler via the form
+  // action's url.search and validated there.
+  const state = url.searchParams.get('state')
   const codeChallengeMethod = url.searchParams.get('code_challenge_method') || 'S256'
   const responseType = url.searchParams.get('response_type')
   const scopeParam = url.searchParams.get('scope')
@@ -222,9 +229,13 @@ export async function GET(request: Request) {
   const mfaRedirect = await requireAal2(supabase, user, request)
   if (mfaRedirect) return mfaRedirect
 
-  // Validate redirect_uri against allowlist (prevents open redirect). Passing
-  // the authenticated client makes the trust boundary explicit (SOC 2 CC6.1).
-  if (!(await isAllowedRedirectUri(redirectUri, supabase))) {
+  // Validate redirect_uri against the allowlist (prevents open redirect) and
+  // resolve who the client is. DB-registered URIs are bound to the consenting
+  // user: only their own or a colleague's registration counts, so a stranger
+  // cannot register a callback and phish consent from every account on the
+  // instance (SOC 2 CC6.1).
+  const resolution = await resolveRedirectUri(redirectUri, undefined, { consentingUserId: user.id })
+  if (!resolution.allowed) {
     return NextResponse.json(
       { error: 'invalid_request', error_description: 'redirect_uri is not allowed' },
       { status: 400 }
@@ -238,6 +249,7 @@ export async function GET(request: Request) {
   const companyId = await getActiveCompanyId(supabase, user.id)
 
   let companyName: string | null = null
+  let role: string | null = null
   if (companyId) {
     const { data: settings } = await supabase
       .from('company_settings')
@@ -245,15 +257,41 @@ export async function GET(request: Request) {
       .eq('company_id', companyId)
       .single()
     companyName = settings?.company_name || user.email || null
+
+    // The user's role in the company shown on this page caps what the page
+    // may offer (viewer = read-only). A failed lookup is a hard stop, not a
+    // silent downgrade or widening.
+    const lookup = await lookupCompanyRole(supabase, user.id, companyId)
+    if (lookup.error) {
+      return NextResponse.json(
+        { error: 'server_error', error_description: 'Could not resolve your role in the company' },
+        { status: 500 }
+      )
+    }
+    role = lookup.role
   }
 
   const appNameLower = escapeHtml(getBranding().appName.toLowerCase())
 
+  // Client identity and the host the browser will be sent to after consent.
+  // Both are shown unconditionally so a look-alike registration cannot pass
+  // for Claude and the user always sees where the code is going.
+  const client = describeClient(resolution)
+  const redirectHost = new URL(redirectUri).host
+  const clientRowsHtml = `<div class="fact">
+        <span class="fact-label">Klient</span>
+        <span class="fact-value">${escapeHtml(client.name)} <span class="fact-tag${client.verified ? ' verified' : ''}">${escapeHtml(client.tag)}</span></span>
+      </div>
+      <div class="fact">
+        <span class="fact-label">Skickar dig vidare till</span>
+        <span class="fact-value fact-host">${escapeHtml(redirectHost)}</span>
+      </div>`
+
   const accountRowHtml = companyName
-    ? `<span class="account-label">Företag</span>
-      <span class="account-name">${escapeHtml(companyName)}</span>`
-    : `<span class="account-label">Konto</span>
-      <span class="account-name">${escapeHtml(user.email ?? '')}</span>`
+    ? `<span class="fact-label">Företag</span>
+        <span class="fact-value">${escapeHtml(companyName)}</span>`
+    : `<span class="fact-label">Konto</span>
+        <span class="fact-value">${escapeHtml(user.email ?? '')}</span>`
   const noCompanyNoteHtml = companyId
     ? ''
     : `<p class="note">Du har inget företag i ${appNameLower} ännu. Du kan ansluta ändå: skapa företaget i appen så använder anslutningen det automatiskt, utan att du behöver ansluta på nytt.</p>`
@@ -271,24 +309,70 @@ export async function GET(request: Request) {
   const scopeBindingValue = scopeParam ?? ''
   const scopeBindingSignature = signScopeBinding(scopeBindingValue)
 
-  // Two-level model for the consent UI:
+  // Three inputs shape the consent UI:
   //
-  //   - Client requested specific scopes → ceiling = that set, pre-checked =
-  //     that set (RFC 6749 §3.3 strict least-privilege).
-  //   - Client passed no scope (or only the legacy `mcp` marker, Claude's
-  //     connector today) → ceiling = ALL_SCOPES and pre-checked = ALL_SCOPES:
-  //     one-click consent (founder decision 2026-08-26; the read-only default
-  //     killed the agent flow with an insufficient-scope dead-end mid-chat).
-  //     The mitigations that make full-by-default defensible: every write is
-  //     STAGED for explicit approval before anything touches the ledger, the
-  //     full scope list stays on the page (collapsed but expandable) with
-  //     every row untickable, the warn line states the staging rule above the
-  //     button, and the grant is revocable under Inställningar › API-nycklar.
-  //     RFC 6749 §3.3 lets the resource owner authorise the set presented;
-  //     the consent is the click on a page that shows exactly that set.
-  const grantCeiling = new Set<ApiKeyScope>(parsed.scopes ?? ALL_SCOPES)
-  const preChecked = new Set<ApiKeyScope>(parsed.scopes ?? ALL_SCOPES)
+  //   - Ceiling: the client's requested scopes (RFC 6749 §3.3 strict
+  //     least-privilege), or ALL_SCOPES when it passed none (or only the
+  //     legacy `mcp` marker, Claude's connector today), then capped to what
+  //     the user's role in the selected company permits (viewer = read-only).
+  //     Rows outside the ceiling are not rendered; the POST handler enforces
+  //     the same bound server-side.
+  //   - Pre-checked, built-in client (Claude, ChatGPT, localhost): the whole
+  //     ceiling. One-click consent (founder decision 2026-08-26; the read-only
+  //     default killed the agent flow with an insufficient-scope dead-end
+  //     mid-chat). The mitigations that make full-by-default defensible: every
+  //     write is STAGED for explicit approval before anything touches the
+  //     ledger, the full scope list stays on the page (collapsed but
+  //     expandable) with every row untickable, the warn line states the
+  //     staging rule above the button, and the grant is revocable under
+  //     Inställningar › API-nycklar. RFC 6749 §3.3 lets the resource owner
+  //     authorise the set presented; the consent is the click on a page that
+  //     shows exactly that set.
+  //   - Pre-checked, DB-registered client: only what it explicitly asked for,
+  //     or the :read scopes when it asked for nothing. Write and approve
+  //     scopes stay unticked until the user opts in: a registration is just a
+  //     URL some member typed into settings, not a vetted integration.
+  const clientCeiling: ApiKeyScope[] = parsed.scopes ?? [...ALL_SCOPES]
+  const roleCapped = companyId ? capScopesForRole(clientCeiling, role) : clientCeiling
+  if (roleCapped.length === 0) {
+    return errorRedirect(
+      request,
+      redirectUri,
+      state,
+      'invalid_scope',
+      'None of the requested scopes are available to your role in this company'
+    )
+  }
+  const roleLimited = roleCapped.length < clientCeiling.length
+  const grantCeiling = new Set<ApiKeyScope>(roleCapped)
+  const preChecked = new Set<ApiKeyScope>(
+    resolution.kind === 'built_in' || parsed.scopes
+      ? roleCapped
+      : roleCapped.filter((s) => scopeKind(s) === 'read')
+  )
+  const allPreChecked = preChecked.size === grantCeiling.size
+  const ceilingHasWrite = roleCapped.some((s) => scopeKind(s) === 'write')
   const scopeCheckboxesHtml = renderScopeCheckboxes(preChecked, grantCeiling)
+
+  const ledeHtml = !ceilingHasWrite
+    ? `${escapeHtml(client.name)} begär läsåtkomst till ditt ${appNameLower}-konto. Inga skrivbehörigheter ingår.`
+    : allPreChecked
+      ? `${escapeHtml(client.name)} begär åtkomst till ditt ${appNameLower}-konto. Alla behörigheter är förvalda; varje skrivning kräver ändå ditt godkännande innan den bokförs.`
+      : `${escapeHtml(client.name)} begär åtkomst till ditt ${appNameLower}-konto. Endast läsbehörigheter är förvalda: skrivbehörigheter måste du själv välja nedan, och varje skrivning kräver ändå ditt godkännande innan den bokförs.`
+  const roleNoteHtml = roleLimited
+    ? `<p class="note">Din roll i företaget är läsare, så bara läsbehörigheter kan ges här.</p>`
+    : ''
+  const summaryHintHtml = allPreChecked
+    ? 'Alla förvalda &middot; visa och justera'
+    : 'Endast läs förvalt &middot; visa och justera'
+  // Segregation of duties: a key that can both stage and approve lets the
+  // agent commit bookkeeping without a human review in the app. Mirrors
+  // app/api/settings/api-keys, where the same combination needs an explicit
+  // acknowledgement: here the statement sits above the button and the token
+  // route records the consent click as that acknowledgement.
+  const sodNoteHtml = findStageApproveConflict(roleCapped)
+    ? ` Ger du både skriv- och godkännandebehörighet kan klienten både förbereda och godkänna bokföring utan din granskning i ${appNameLower}; ditt godkännande här registreras som ett medgivande till det.`
+    : ''
 
   // Render consent page
   const html = `<!DOCTYPE html>
@@ -388,30 +472,58 @@ export async function GET(request: Request) {
       line-height: 1.55;
       margin-bottom: 1.5rem;
     }
-    .account {
+    .facts {
+      background: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0 0.875rem;
+      margin-bottom: 1.75rem;
+    }
+    .fact {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 0.75rem;
-      background: var(--muted);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 0.75rem 0.875rem;
-      margin-bottom: 1.75rem;
+      padding: 0.625rem 0;
     }
-    .account-label {
+    .fact + .fact { border-top: 1px solid var(--border); }
+    .fact-label {
       font-size: 0.6875rem;
       font-weight: 500;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--fg-faint);
+      flex-shrink: 0;
     }
-    .account-name {
+    .fact-value {
       font-size: 0.875rem;
       font-weight: 500;
       color: var(--fg);
       text-align: right;
       word-break: break-word;
+    }
+    .fact-host {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.8125rem;
+    }
+    .fact-tag {
+      display: inline-block;
+      margin-left: 0.375rem;
+      font-size: 0.625rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 0.0625rem 0.375rem;
+      border-radius: 4px;
+      background: var(--secondary);
+      color: var(--fg-muted);
+      border: 1px solid var(--border-strong);
+      vertical-align: middle;
+    }
+    .fact-tag.verified {
+      background: hsl(140 40% 94%);
+      color: hsl(150 45% 24%);
+      border-color: hsl(140 35% 78%);
     }
     .note {
       font-size: 0.8125rem;
@@ -636,12 +748,16 @@ export async function GET(request: Request) {
   <main class="card" role="main">
     <div class="eyebrow">${appNameLower} · mcp</div>
     <h1>Anslut MCP-klient</h1>
-    <p class="lede">En extern applikation begär åtkomst till ditt ${appNameLower}-konto. Alla behörigheter är förvalda; varje skrivning kräver ändå ditt godkännande innan den bokförs.</p>
+    <p class="lede">${ledeHtml}</p>
 
-    <div class="account">
-      ${accountRowHtml}
+    <div class="facts">
+      ${clientRowsHtml}
+      <div class="fact">
+        ${accountRowHtml}
+      </div>
     </div>
     ${noCompanyNoteHtml}
+    ${roleNoteHtml}
 
     <form method="POST" action="${escapeHtml(url.pathname + url.search)}" id="consent-form">
       <input type="hidden" name="scope_binding" value="${escapeHtml(scopeBindingValue)}">
@@ -650,7 +766,7 @@ export async function GET(request: Request) {
       <details class="scopes-details">
         <summary>
           <span class="scopes-title">Behörigheter</span>
-          <span class="scopes-summary-hint">Alla förvalda &middot; visa och justera</span>
+          <span class="scopes-summary-hint">${summaryHintHtml}</span>
           <svg class="scopes-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </summary>
         <div class="scopes-header">
@@ -670,7 +786,7 @@ export async function GET(request: Request) {
           <path d="M8 5v3.5" stroke-linecap="round"/>
           <circle cx="8" cy="11" r="0.5" fill="currentColor" stroke="none"/>
         </svg>
-        <span>Skrivbehörigheter låter agenten stagea verifikationer, fakturor och löner. Varje skrivoperation kräver ditt godkännande i ${appNameLower} innan den skrivs till databasen.</span>
+        <span>Skrivbehörigheter låter agenten stagea verifikationer, fakturor och löner. Varje skrivoperation kräver ditt godkännande i ${appNameLower} innan den skrivs till databasen.${sodNoteHtml}</span>
       </div>
 
       <div class="actions">
@@ -711,7 +827,7 @@ export async function GET(request: Request) {
   // returns a 303 to the OAuth client's callback (e.g. claude.ai), and CSP
   // form-action re-checks every hop in the redirect chain. With only 'self'
   // the browser would block the post-consent redirect. The origin is safe
-  // to whitelist here because isAllowedRedirectUri() already gated it above.
+  // to whitelist here because resolveRedirectUri() already gated it above.
   const redirectOrigin = new URL(redirectUri).origin
   const csp = [
     "default-src 'none'",
@@ -760,18 +876,15 @@ export async function POST(request: Request) {
   const mfaRedirect = await requireAal2(supabase, user, request)
   if (mfaRedirect) return mfaRedirect
 
-  // Pass the authenticated client so the lookup is bound to the same session
-  // that the consent display ran under (SOC 2 CC6.1).
-  if (!(await isAllowedRedirectUri(redirectUri, supabase))) {
+  // Same binding as GET: a DB-registered URI must be the consenting user's own
+  // or a colleague's registration (SOC 2 CC6.1).
+  const resolution = await resolveRedirectUri(redirectUri, undefined, { consentingUserId: user.id })
+  if (!resolution.allowed) {
     return NextResponse.json(
       { error: 'invalid_request', error_description: 'redirect_uri is not allowed' },
       { status: 400 }
     )
   }
-
-  // No company check here: the auth code carries only the user id, and the
-  // token endpoint resolves (or leaves unbound) the company when it mints the
-  // key. An account without a company may consent (issue #1814).
 
   // Parse form body
   const formData = await request.formData()
@@ -779,6 +892,27 @@ export async function POST(request: Request) {
 
   if (consent !== 'allow') {
     return errorRedirect(request, redirectUri, state, 'access_denied', 'User denied the request')
+  }
+
+  // The company the consent page showed and the user's role in it. Null for
+  // an account without a company (issue #1814): consent still goes through
+  // uncapped and the token endpoint mints the key unbound. The role caps the
+  // grant below and is re-checked at /token against the same company, which
+  // travels in the code payload.
+  const companyId = await getActiveCompanyId(supabase, user.id)
+  let role: string | null = null
+  if (companyId) {
+    const lookup = await lookupCompanyRole(supabase, user.id, companyId)
+    if (lookup.error) {
+      return errorRedirect(
+        request,
+        redirectUri,
+        state,
+        'server_error',
+        'Could not resolve your role in the company'
+      )
+    }
+    role = lookup.role
   }
 
   // Verify the scope binding signed at consent display matches what was
@@ -813,7 +947,7 @@ export async function POST(request: Request) {
     return errorRedirect(request, redirectUri, state, 'invalid_scope', parsed.description)
   }
 
-  // The user selects scopes via checkboxes on the consent page. Two upper
+  // The user selects scopes via checkboxes on the consent page. Three upper
   // bounds apply server-side, regardless of what the form posts:
   //
   //   1. validateScopes drops any value that isn't in API_KEY_SCOPES: guards
@@ -830,14 +964,27 @@ export async function POST(request: Request) {
   //          resource owner's instructions"). The silent fallback when the
   //          user selects nothing remains DEFAULT_OAUTH_SCOPES (read-only),
   //          preserving GDPR Art. 25(2) data-protection-by-default.
+  //   3. The ceiling is capped to the user's role in the selected company: a
+  //      viewer cannot hand an agent write scopes the viewer does not hold
+  //      themselves, however the form was built.
   const submittedScopes = formData.getAll('scopes').filter((s): s is string => typeof s === 'string')
   const validated = validateScopes(submittedScopes)
   const clientCeiling: ApiKeyScope[] = parsed.scopes ?? [...ALL_SCOPES]
-  const ceilingSet = new Set<ApiKeyScope>(clientCeiling)
+  const roleCapped = companyId ? capScopesForRole(clientCeiling, role) : clientCeiling
+  const ceilingSet = new Set<ApiKeyScope>(roleCapped)
   const boundedToClient = (validated ?? []).filter(s => ceilingSet.has(s))
   const grantedScopes: ApiKeyScope[] = boundedToClient.length > 0
     ? boundedToClient
     : [...DEFAULT_OAUTH_SCOPES].filter(s => ceilingSet.has(s))
+  if (grantedScopes.length === 0) {
+    return errorRedirect(
+      request,
+      redirectUri,
+      state,
+      'invalid_scope',
+      'None of the requested scopes are available to your role in this company'
+    )
+  }
 
   // Create auth code with userId (NO API key: that's created at /token after PKCE)
   const code = createAuthCode({
@@ -845,6 +992,7 @@ export async function POST(request: Request) {
     codeChallenge,
     redirectUri,
     scopes: grantedScopes,
+    companyId,
   })
 
   // Redirect to callback with the code
@@ -865,9 +1013,9 @@ export async function POST(request: Request) {
  * Render the scope checkbox UI grouped by domain. Only scopes in `ceiling`
  * are surfaced: scopes outside the ceiling are dropped from the consent UI
  * so the user can't tick boxes that the POST handler would refuse anyway.
- * The ceiling is either the client's `scope` querystring (when specified)
- * or DEFAULT_OAUTH_SCOPES (when the client passed no scope), matching the
- * server-side enforcement in the POST handler.
+ * The ceiling is the client's `scope` querystring (or ALL_SCOPES when it
+ * passed none) capped to the user's role, matching the server-side
+ * enforcement in the POST handler.
  */
 function renderScopeCheckboxes(
   preChecked: Set<ApiKeyScope>,
@@ -926,6 +1074,33 @@ function scopeRow(scope: ApiKeyScope, checked: boolean, kind: 'read' | 'write'):
       </label>
     </div>
   `
+}
+
+/**
+ * Human-readable identity of the client behind an allowed redirect URI, for
+ * the consent page. Built-in patterns are named after the connector that owns
+ * the callback host (and marked verified, since only that vendor can receive
+ * the code there); DB registrations show the name the registering member
+ * typed in settings, tagged with who registered it, never as verified.
+ */
+function describeClient(
+  resolution: Exclude<RedirectUriResolution, { allowed: false }>,
+): { name: string; tag: string; verified: boolean } {
+  if (resolution.kind === 'built_in') {
+    switch (resolution.provider) {
+      case 'claude':
+        return { name: 'Claude (Anthropic)', tag: 'Verifierad', verified: true }
+      case 'chatgpt':
+        return { name: 'ChatGPT (OpenAI)', tag: 'Verifierad', verified: true }
+      case 'local':
+        return { name: 'Lokal utveckling (localhost)', tag: 'Din egen dator', verified: false }
+    }
+  }
+  return {
+    name: resolution.clientName,
+    tag: resolution.registeredByConsentingUser ? 'Registrerad av dig' : 'Registrerad av en kollega',
+    verified: false,
+  }
 }
 
 /**

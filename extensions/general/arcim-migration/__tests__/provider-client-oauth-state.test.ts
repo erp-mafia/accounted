@@ -81,7 +81,7 @@ describe('consumeOAuthState', () => {
 
   it('consumes the state row with one conditional UPDATE, not a read then a write', async () => {
     const { calls } = useResults([
-      { data: { consent_id: 'consent-1' } },
+      { data: { consent_id: 'consent-1', user_id: 'user-1' } },
       { data: { provider: 'fortnox' } },
     ])
 
@@ -97,21 +97,22 @@ describe('consumeOAuthState', () => {
     expect(findOp(otcCall, 'is', 'used_at')?.[1]).toEqual(['used_at', null])
     // Expiry is enforced in the same statement, not in JavaScript afterwards.
     expect(findOp(otcCall, 'gt', 'expires_at')).toBeDefined()
-    expect(findOp(otcCall, 'select', 'consent_id')).toBeDefined()
+    expect(findOp(otcCall, 'select', 'consent_id, user_id')).toBeDefined()
   })
 
   it('returns the consent and the provider read from the server-side rows', async () => {
-    useResults([{ data: { consent_id: 'consent-1' } }, { data: { provider: 'visma' } }])
+    useResults([{ data: { consent_id: 'consent-1', user_id: 'user-1' } }, { data: { provider: 'visma' } }])
 
     await expect(consumeOAuthState('state-token')).resolves.toEqual({
       consentId: 'consent-1',
       provider: 'visma',
+      userId: 'user-1',
     })
   })
 
   it('reads the provider from provider_consents, never from the caller', async () => {
     const { calls } = useResults([
-      { data: { consent_id: 'consent-1' } },
+      { data: { consent_id: 'consent-1', user_id: 'user-1' } },
       { data: { provider: 'fortnox' } },
     ])
 
@@ -136,10 +137,11 @@ describe('consumeOAuthState', () => {
   })
 
   it('returns null on replay: the second consume of the same token loses', async () => {
-    useResults([{ data: { consent_id: 'consent-1' } }, { data: { provider: 'fortnox' } }])
+    useResults([{ data: { consent_id: 'consent-1', user_id: 'user-1' } }, { data: { provider: 'fortnox' } }])
     await expect(consumeOAuthState('one-time-token')).resolves.toEqual({
       consentId: 'consent-1',
       provider: 'fortnox',
+      userId: 'user-1',
     })
 
     // Replay: used_at is now set, so `is('used_at', null)` matches nothing.
@@ -147,8 +149,20 @@ describe('consumeOAuthState', () => {
     await expect(consumeOAuthState('one-time-token')).resolves.toBeNull()
   })
 
+  it('returns userId null for a row minted before the initiator column existed', async () => {
+    // The callback refuses these (nobody to bind the completion to); this
+    // function only has to report the absence honestly, never invent a user.
+    useResults([{ data: { consent_id: 'consent-1', user_id: null } }, { data: { provider: 'fortnox' } }])
+
+    await expect(consumeOAuthState('state-token')).resolves.toEqual({
+      consentId: 'consent-1',
+      provider: 'fortnox',
+      userId: null,
+    })
+  })
+
   it('returns null when the consent behind a valid token is gone', async () => {
-    useResults([{ data: { consent_id: 'consent-1' } }, { data: null }])
+    useResults([{ data: { consent_id: 'consent-1', user_id: 'user-1' } }, { data: null }])
 
     await expect(consumeOAuthState('state-token')).resolves.toBeNull()
   })
@@ -172,12 +186,15 @@ describe('generateOtc', () => {
     const { calls } = useResults([{ data: null }])
     const before = Date.now()
 
-    const { expiresAt } = await generateOtc('consent-1')
+    const { expiresAt } = await generateOtc('consent-1', 'user-1')
 
     const after = Date.now()
     expect(calls[0].table).toBe('provider_otc')
-    const inserted = findOp(calls[0], 'insert')?.[1][0] as { consent_id: string; expires_at: string }
+    const inserted = findOp(calls[0], 'insert')?.[1][0] as { consent_id: string; user_id: string; expires_at: string }
     expect(inserted.consent_id).toBe('consent-1')
+    // The initiator travels with the row: the callback binds the completing
+    // session to it, so it must be written here and nowhere else.
+    expect(inserted.user_id).toBe('user-1')
 
     const tenMinutes = 10 * 60 * 1000
     const expiry = new Date(expiresAt).getTime()

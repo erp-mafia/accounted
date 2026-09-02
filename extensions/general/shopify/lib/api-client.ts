@@ -1,8 +1,16 @@
+import { isUnsafeUrlError, safeFetch } from '@/lib/http/safe-fetch'
 import type { ShopifyOrder, ShopifyShopInfo } from '../types'
 import { sleep } from '@/lib/utils'
 
 /**
  * Minimal Shopify GraphQL Admin API client for the order feed.
+ *
+ * The shop domain is tenant input that the server connects to, and members
+ * can write `shopify_connections.shop_domain` directly through PostgREST
+ * (bypassing the connect route's normalisation), so every request here
+ * re-normalises the stored domain to `<handle>.myshopify.com` and goes
+ * through `safeFetch`: public addresses only, checked at request time, and no
+ * redirects followed.
  *
  * Auth is the client credentials grant: the merchant creates a custom app in
  * their own Shopify Dev Dashboard (the admin-created custom apps with
@@ -92,8 +100,52 @@ export function normalizeShopDomain(input: string): string | null {
   return /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(value) ? value : null
 }
 
+/** Error code on a ShopifyApiError when the stored shop domain fails re-normalisation. */
+export const INVALID_SHOP_DOMAIN_CODE = 'accounted_invalid_shop_domain'
+/** Error code on a ShopifyApiError when the SSRF guard refused to connect. */
+export const UNSAFE_SHOP_URL_CODE = 'accounted_unsafe_shop_url'
+
+/**
+ * Re-run the connect-time normalisation on the STORED shop domain at use
+ * time and return the https origin to call. The connect route normalises what
+ * the user typed, but a member can PATCH `shop_domain` straight into the row
+ * through PostgREST, so the database value is not trusted to still be a
+ * myshopify.com host. Anything else is refused with a clear, non-retryable
+ * error instead of fetched.
+ */
+function shopOriginOf(shopDomain: string): string {
+  const normalized = normalizeShopDomain(shopDomain)
+  if (!normalized) {
+    throw new ShopifyApiError(
+      `Shopify shop domain is not a myshopify.com domain (${shopDomain}); reconnect the store`,
+      0,
+      INVALID_SHOP_DOMAIN_CODE,
+    )
+  }
+  return `https://${normalized}`
+}
+
+/**
+ * Map a failure from postJson to the error the retry loop should see. Guard
+ * refusals (private address, redirect) are terminal: retrying the same URL
+ * cannot succeed and must not spend the backoff budget.
+ */
+function asTerminalGuardError(err: unknown): ShopifyApiError | null {
+  if (err instanceof ShopifyApiError) return err
+  if (isUnsafeUrlError(err)) {
+    return new ShopifyApiError(
+      `Shopify host refused by outbound URL guard: ${err.detail}`,
+      0,
+      UNSAFE_SHOP_URL_CODE,
+    )
+  }
+  return null
+}
+
 async function postJson(url: string, body: unknown, headers: Record<string, string>) {
-  return fetch(url, {
+  // safeFetch: public address only (checked now, not at connect time), no
+  // redirects. A 3xx from the host is a failure, never a hop.
+  return safeFetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...headers },
     body: JSON.stringify(body),
@@ -109,12 +161,14 @@ async function postJson(url: string, body: unknown, headers: Record<string, stri
  * the normal backoff schedule.
  */
 export async function exchangeAccessToken(creds: ShopifyCredentials): Promise<string> {
+  // Throws (non-retryable) when the stored domain is not a myshopify.com host.
+  const url = `${shopOriginOf(creds.shopDomain)}/admin/oauth/access_token`
   let lastError: unknown
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
     let response: Response
     try {
       response = await postJson(
-        `https://${creds.shopDomain}/admin/oauth/access_token`,
+        url,
         {
           client_id: creds.clientId,
           client_secret: creds.clientSecret,
@@ -123,6 +177,8 @@ export async function exchangeAccessToken(creds: ShopifyCredentials): Promise<st
         {},
       )
     } catch (err) {
+      const terminal = asTerminalGuardError(err)
+      if (terminal) throw terminal
       lastError = new ShopifyApiError(
         `Shopify token exchange failed: ${err instanceof Error ? err.message : String(err)}`,
         0,
@@ -200,7 +256,8 @@ export async function shopifyGraphQL<T>(
   query: string,
   variables: Record<string, unknown> = {},
 ): Promise<T> {
-  const url = `https://${session.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`
+  // Throws (non-retryable) when the stored domain is not a myshopify.com host.
+  const url = `${shopOriginOf(session.shopDomain)}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`
   let lastError: unknown
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
     let response: Response
@@ -209,6 +266,8 @@ export async function shopifyGraphQL<T>(
         'X-Shopify-Access-Token': session.accessToken,
       })
     } catch (err) {
+      const terminal = asTerminalGuardError(err)
+      if (terminal) throw terminal
       lastError = new ShopifyApiError(
         `Shopify request failed: ${err instanceof Error ? err.message : String(err)}`,
         0,

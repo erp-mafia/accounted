@@ -28,7 +28,12 @@ import {
 import { WintClient, WintApiError } from '@/lib/providers/wint/client'
 import { loginWint, WintLoginRejectedError } from '@/lib/providers/wint/oauth'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
+import { fetchCompanyInfoDirect } from '@/lib/providers/provider-data-fetcher'
+import type { CompanyInformationDto } from '@/lib/providers/dto'
+import { createLogger } from '@/lib/logger'
 import type { ConsentRecord, OtcResponse } from '../types'
+
+const log = createLogger('extensions/arcim-migration/provider-client')
 
 // Singleton (holds the rate limiter): used to validate BL User-Keys at submit
 const bjornLundenClient = new BjornLundenClient()
@@ -229,9 +234,15 @@ export async function deleteConsent(consentId: string): Promise<void> {
  * to the provider's login page and back. OAuth guidance puts state/OTC
  * lifetimes at 5-10 minutes; every extra minute widens the window in which a
  * leaked or phished state can still be consumed.
+ *
+ * `initiatedByUserId` is the user who clicked connect. The row remembers it so
+ * the callback can insist that the SAME user's browser session completes the
+ * flow: the state proves the callback belongs to a flow we started, not that
+ * the person finishing it is the person who started it.
  */
 export async function generateOtc(
   consentId: string,
+  initiatedByUserId: string,
   expiresInMinutes: number = 10,
 ): Promise<OtcResponse> {
   const supabase = createServiceClient()
@@ -244,6 +255,7 @@ export async function generateOtc(
     .insert({
       code,
       consent_id: consentId,
+      user_id: initiatedByUserId,
       expires_at: expiresAt,
     })
 
@@ -269,10 +281,14 @@ export async function generateOtc(
  * Returns null for every failure mode: unknown/forged state, expired state,
  * already-consumed state, deleted consent. Callers must not distinguish them,
  * that distinction is exactly the oracle this function exists to remove.
+ *
+ * `userId` is the initiator recorded at generateOtc time (null only for rows
+ * minted before provider_otc.user_id existed). The callback compares it to the
+ * completing browser's session before exchanging the code.
  */
 export async function consumeOAuthState(
   state: string,
-): Promise<{ consentId: string; provider: ProviderName } | null> {
+): Promise<{ consentId: string; provider: ProviderName; userId: string | null } | null> {
   const supabase = createServiceClient()
   const now = new Date().toISOString()
 
@@ -282,7 +298,7 @@ export async function consumeOAuthState(
     .eq('code', state)
     .is('used_at', null)
     .gt('expires_at', now)
-    .select('consent_id')
+    .select('consent_id, user_id')
     .maybeSingle()
 
   if (error || !consumed?.consent_id) {
@@ -302,6 +318,7 @@ export async function consumeOAuthState(
   return {
     consentId: consumed.consent_id as string,
     provider: consent.provider as ProviderName,
+    userId: typeof consumed.user_id === 'string' ? consumed.user_id : null,
   }
 }
 
@@ -363,6 +380,13 @@ export async function exchangeAuthToken(
 
   const expiresAt = new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
 
+  // The code is spent and the tokens are valid, but nothing so far ties the
+  // provider account they open to the Accounted company this consent belongs
+  // to: the user (or someone who lured them) may have signed in to a different
+  // Fortnox/Visma company. Same guard as Bokio/WINT in submitProviderToken:
+  // refuse BEFORE anything is stored, so a foreign ledger never gets imported.
+  await assertProviderCompanyMatchesConsent(supabase, consentId, provider, tokenResponse.access_token)
+
   // Store tokens
   await supabase
     .from('provider_consent_tokens')
@@ -381,6 +405,61 @@ export async function exchangeAuthToken(
     .eq('id', consentId)
 
   return { success: true, consentId }
+}
+
+/**
+ * Compare the org number of the company the freshly issued token opens with
+ * the org number of the Accounted company that owns the consent.
+ *
+ * Only a confident mismatch blocks (throws ProviderCompanyMismatchError). A
+ * missing org number on either side is not evidence of anything: Accounted
+ * allows companies without one, a provider response can omit it, and the
+ * company-information call itself can fail for reasons unrelated to identity
+ * (scope not granted on this app registration, provider hiccup). Those cases
+ * fall through and the connect completes exactly as before.
+ */
+async function assertProviderCompanyMatchesConsent(
+  supabase: ReturnType<typeof createServiceClient>,
+  consentId: string,
+  provider: ProviderName,
+  accessToken: string,
+): Promise<void> {
+  let info: CompanyInformationDto | null
+  try {
+    info = await fetchCompanyInfoDirect(provider, accessToken)
+  } catch (error) {
+    log.warn('provider company information unavailable after OAuth exchange; org-number check skipped', {
+      provider,
+      consentId,
+      reason: error instanceof Error ? error.message : 'unknown',
+    })
+    return
+  }
+
+  const providerOrgNumber = normalizeOrgNumber(info?.organizationNumber)
+  if (!providerOrgNumber) return
+
+  const { data: consent } = await supabase
+    .from('provider_consents')
+    .select('company_id')
+    .eq('id', consentId)
+    .maybeSingle()
+  if (!consent?.company_id) return
+
+  const { data: targetCompany } = await supabase
+    .from('companies')
+    .select('org_number')
+    .eq('id', consent.company_id as string)
+    .maybeSingle()
+  const targetOrgNumber = normalizeOrgNumber(targetCompany?.org_number)
+
+  if (targetOrgNumber && providerOrgNumber !== targetOrgNumber) {
+    throw new ProviderCompanyMismatchError(
+      targetOrgNumber,
+      providerOrgNumber,
+      info?.companyName?.trim() || null,
+    )
+  }
 }
 
 export async function submitProviderToken(

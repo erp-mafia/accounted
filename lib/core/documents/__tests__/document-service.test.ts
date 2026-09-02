@@ -72,6 +72,7 @@ import {
   createPendingDocumentUpload,
   completePendingDocumentUpload,
   computeSHA256,
+  resolveStoredMimeType,
   PENDING_DOCUMENT_UPLOAD_RETENTION_MS,
   SIGNED_DOCUMENT_UPLOAD_TTL_MS,
   isCompanyScopedDocumentPath,
@@ -1241,5 +1242,172 @@ describe('verifyIntegrity', () => {
     expect(result.valid).toBe(false)
     expect(result.storedHash).toBe('stored-hash-abc')
     expect(result.computedHash).not.toBe('stored-hash-abc')
+  })
+})
+
+describe('validated mime type persistence (stored type is what the bytes are)', () => {
+  const company = '11111111-1111-4111-8111-111111111111'
+  const user = '22222222-2222-4222-8222-222222222222'
+  const uploadId = '33333333-3333-4333-8333-333333333333'
+
+  // 16-byte ISO-BMFF ftyp box with the given major brand (see the HEIC tests).
+  const isoBmff = (brand: string): ArrayBuffer => {
+    const bytes = new Uint8Array(16)
+    bytes[3] = 16
+    bytes.set([0x66, 0x74, 0x79, 0x70], 4)
+    bytes.set(new TextEncoder().encode(brand), 8)
+    return bytes.buffer as ArrayBuffer
+  }
+  const pngBytes = (): ArrayBuffer =>
+    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).buffer as ArrayBuffer
+  const textBytes = (text: string): ArrayBuffer => {
+    const bytes = new TextEncoder().encode(text)
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+  }
+
+  function insertPayloadOf(client: ReturnType<typeof makeClient>, fromIndex: number) {
+    const builder = client.from.mock.results[fromIndex]?.value as { insert: ReturnType<typeof vi.fn> }
+    return builder.insert.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+  }
+
+  describe('resolveStoredMimeType', () => {
+    it('returns the sniffed type for binary formats, including the HEIC/HEIF family swap', () => {
+      expect(resolveStoredMimeType(pdfBuffer(), 'application/pdf')).toBe('application/pdf')
+      expect(resolveStoredMimeType(pngBytes(), 'image/png')).toBe('image/png')
+      expect(resolveStoredMimeType(isoBmff('heic'), 'image/heif')).toBe('image/heic')
+      expect(resolveStoredMimeType(isoBmff('mif1'), 'image/heic')).toBe('image/heif')
+    })
+
+    it('keeps the declared type for the shape-checked text formats (no magic number)', () => {
+      expect(resolveStoredMimeType(textBytes('<?xml version="1.0"?><Invoice/>'), 'application/xml')).toBe('application/xml')
+      expect(resolveStoredMimeType(textBytes('<?xml version="1.0"?><Invoice/>'), 'text/xml')).toBe('text/xml')
+      expect(resolveStoredMimeType(textBytes('<!doctype html><html></html>'), 'text/html')).toBe('text/html')
+      expect(resolveStoredMimeType(textBytes('<?xml version="1.0"?><html/>'), 'application/xhtml+xml')).toBe('application/xhtml+xml')
+      expect(resolveStoredMimeType(textBytes('{"a":1}'), 'application/json')).toBe('application/json')
+    })
+
+    it('sniffs an undeclared type and stores null rather than an unverified string', () => {
+      expect(resolveStoredMimeType(pdfBuffer(), undefined)).toBe('application/pdf')
+      expect(resolveStoredMimeType(pdfBuffer(), '')).toBe('application/pdf')
+      expect(resolveStoredMimeType(textBytes('just text'), undefined)).toBeNull()
+    })
+  })
+
+  it('uploadDocument stores and stamps the sniffed type, not the declared one', async () => {
+    results = [{ data: makeDocumentAttachment({ id: 'doc-1' }), error: null }]
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const client = makeClient({ upload })
+
+    await uploadDocument(client as never, 'user-1', 'company-1', {
+      name: 'IMG_0001.heif',
+      buffer: isoBmff('heic'),
+      type: 'image/heif',
+    })
+
+    expect(insertPayloadOf(client, 0)?.mime_type).toBe('image/heic')
+    expect((upload.mock.calls[0]?.[2] as { contentType: string }).contentType).toBe('image/heic')
+  })
+
+  it('uploadDocument sniffs an undeclared type instead of storing null for a real PDF', async () => {
+    results = [{ data: makeDocumentAttachment({ id: 'doc-1' }), error: null }]
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const client = makeClient({ upload })
+
+    await uploadDocument(client as never, 'user-1', 'company-1', {
+      name: 'kvitto.pdf',
+      buffer: pdfBuffer('undeclared'),
+    })
+
+    expect(insertPayloadOf(client, 0)?.mime_type).toBe('application/pdf')
+    expect((upload.mock.calls[0]?.[2] as { contentType: string }).contentType).toBe('application/pdf')
+  })
+
+  it('completePendingDocumentUpload persists the sniffed type', async () => {
+    const buffer = isoBmff('heic')
+    const document = makeDocumentAttachment({
+      id: uploadId,
+      mime_type: 'image/heic',
+      sha256_hash: await computeSHA256(buffer),
+    })
+    results = [
+      { data: null, error: null },
+      { data: document, error: null },
+    ]
+    serviceClientOverride = makeClient({
+      download: vi.fn().mockResolvedValue({ data: new Blob([buffer]), error: null }),
+    })
+    const client = makeClient()
+
+    await completePendingDocumentUpload(client as never, company, user, uploadId, 'IMG_0001.heif', 'image/heif')
+
+    expect(insertPayloadOf(client, 1)?.mime_type).toBe('image/heic')
+  })
+
+  it('completePendingDocumentUpload retry accepts the stored family member for the declared one', async () => {
+    const buffer = isoBmff('heic')
+    const document = makeDocumentAttachment({
+      id: uploadId,
+      user_id: user,
+      company_id: company,
+      file_name: 'IMG_0001.heif',
+      mime_type: 'image/heic',
+      storage_path: buildReservedDocumentStoragePath(company, user, uploadId, 'IMG_0001.heif'),
+      sha256_hash: await computeSHA256(buffer),
+    })
+    results = [{ data: document, error: null }]
+    const move = vi.fn().mockResolvedValue({ data: {}, error: null })
+    serviceClientOverride = makeClient({
+      download: vi.fn().mockResolvedValue({ data: new Blob([buffer]), error: null }),
+      move,
+    })
+
+    const completed = await completePendingDocumentUpload(
+      makeClient() as never,
+      company,
+      user,
+      uploadId,
+      'IMG_0001.heif',
+      'image/heif',
+    )
+
+    expect(completed.document).toEqual(document)
+    expect(move).not.toHaveBeenCalled()
+  })
+
+  it('completePendingDocumentUpload retry still rejects a genuinely different stored type', async () => {
+    const buffer = isoBmff('heic')
+    const document = makeDocumentAttachment({
+      id: uploadId,
+      file_name: 'IMG_0001.heif',
+      mime_type: 'image/jpeg',
+      sha256_hash: await computeSHA256(buffer),
+    })
+    results = [{ data: document, error: null }]
+    serviceClientOverride = makeClient({
+      download: vi.fn().mockResolvedValue({ data: new Blob([buffer]), error: null }),
+    })
+
+    await expect(
+      completePendingDocumentUpload(makeClient() as never, company, user, uploadId, 'IMG_0001.heif', 'image/heif'),
+    ).rejects.toThrow(/different file metadata/)
+  })
+
+  it('createNewVersion passes the sniffed type to the versioning RPC and the storage object', async () => {
+    results = [
+      { data: { company_id: 'company-1' }, error: null },
+      { data: 'doc-2', error: null },
+      { data: makeDocumentAttachment({ id: 'doc-2', version: 2 }), error: null },
+    ]
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const client = makeClient({ upload })
+
+    await createNewVersion(client as never, 'user-1', 'doc-1', {
+      name: 'IMG_0002.heif',
+      buffer: isoBmff('heic'),
+      type: 'image/heif',
+    })
+
+    expect((client.rpc.mock.calls[0]?.[1] as { p_mime_type: string }).p_mime_type).toBe('image/heic')
+    expect((upload.mock.calls[0]?.[2] as { contentType: string }).contentType).toBe('image/heic')
   })
 })

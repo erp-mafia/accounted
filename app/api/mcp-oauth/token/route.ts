@@ -7,9 +7,11 @@ import {
   hashRefreshToken,
   createServiceClientNoCookies,
   validateScopes,
+  findStageApproveConflict,
   DEFAULT_OAUTH_SCOPES,
   type ApiKeyScope,
 } from '@/lib/auth/api-keys'
+import { capScopesForRole, lookupCompanyRole } from '@/lib/auth/oauth-allowlist'
 import { getActiveCompanyId } from '@/lib/company/context'
 
 const ACCESS_TOKEN_TTL_SECONDS = 3600
@@ -126,10 +128,16 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
     .lt('created_at', new Date(Date.now() - 10 * 60 * 1000).toISOString())
     .then(() => {})
 
-  // null for an account that has no company yet (signed up from the OAuth
-  // popup, issue #1814). The key is minted unbound; validateApiKey binds it
-  // to the user's first company on the first call after one exists.
-  const companyId = await getActiveCompanyId(supabase, payload.userId)
+  // Bind the key to the company the consent page showed (carried in the code
+  // payload), so the role cap below is checked against the company the user
+  // actually consented for. Codes minted before the field existed, and
+  // companyless consents (signed up from the OAuth popup, issue #1814),
+  // resolve the active company here instead; null leaves the key unbound and
+  // validateApiKey binds it on the first call after a company exists.
+  const companyId =
+    typeof payload.companyId === 'string' && payload.companyId.length > 0
+      ? payload.companyId
+      : await getActiveCompanyId(supabase, payload.userId)
 
   const { key, hash, prefix } = generateApiKey()
   const refresh = generateRefreshToken()
@@ -155,6 +163,30 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
     grantedScopes = DEFAULT_OAUTH_SCOPES
   }
 
+  // Re-apply the role cap /authorize computed, against the live membership:
+  // a viewer's key is read-only even if the code payload says otherwise, and
+  // a role demoted between consent and exchange is honoured. A failed lookup
+  // is a hard stop rather than a silent downgrade or widening.
+  if (companyId) {
+    const lookup = await lookupCompanyRole(supabase, payload.userId, companyId)
+    if (lookup.error) {
+      console.error('[mcp-oauth/token] role lookup failed', { message: lookup.error })
+      return NextResponse.json(
+        { error: 'server_error', error_description: 'Failed to resolve company role' },
+        { status: 500 }
+      )
+    }
+    const capped = capScopesForRole(grantedScopes, lookup.role)
+    grantedScopes = capped.length > 0 ? capped : capScopesForRole(DEFAULT_OAUTH_SCOPES, lookup.role)
+  }
+
+  // Segregation of duties, mirrored from app/api/settings/api-keys: a key
+  // that can both stage and approve is recorded as an acknowledged risk
+  // acceptance. The consent page states the rule above the Allow button, so
+  // the consent click is the self-attestation (ASVS V16.1.1 / SOC 2 CC6.1).
+  const conflictingScope = findStageApproveConflict(grantedScopes)
+  const sodAcknowledgedAt = conflictingScope ? new Date().toISOString() : null
+
   const { error: insertError } = await supabase
     .from('api_keys')
     .insert({
@@ -165,6 +197,10 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
       name: OAUTH_MCP_KEY_NAME,
       scopes: grantedScopes,
       refresh_token_hash: refresh.hash,
+      // Literal keys (null when no conflict): the no-phantom-columns scanner
+      // resolves object literals only, never spreads.
+      sod_acknowledged_at: sodAcknowledgedAt,
+      sod_acknowledged_by: sodAcknowledgedAt ? payload.userId : null,
     })
 
   if (insertError) {
@@ -179,6 +215,17 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
       { error: 'server_error', error_description: 'Failed to create API key' },
       { status: 500 }
     )
+  }
+
+  if (conflictingScope) {
+    // High-risk security event, same shape the manual create route logs.
+    console.warn('[mcp-oauth/token] api_key.sod_acknowledged', {
+      keyPrefix: prefix,
+      conflictingScope,
+      scopes: grantedScopes,
+      acknowledgedBy: payload.userId,
+      companyId,
+    })
   }
 
   return NextResponse.json({
