@@ -14,25 +14,35 @@ import { scopeKind, type ApiKeyScope } from './scope-catalog'
 /**
  * Identity of a built-in client, derived from the redirect URI pattern that
  * matched. Rendered on the consent page so the user can tell a real Claude /
- * ChatGPT connector from a look-alike registration.
+ * ChatGPT / Grok connector from a look-alike registration.
  */
-export type BuiltInProvider = 'claude' | 'chatgpt' | 'local'
+export type BuiltInProvider = 'claude' | 'chatgpt' | 'grok' | 'local'
 
 /**
  * Built-in redirect URI patterns. These bypass the DB lookup entirely so
- * Claude's and ChatGPT's connectors keep working without seeded rows, and so
+ * the Claude, ChatGPT and Grok connectors keep working without seeded rows, and so
  * local development never depends on having a registration.
  *
  * ChatGPT uses a per-connector-instance callback path
  * (https://chatgpt.com/connector/oauth/{callback_id}) plus the legacy fixed
  * callback for already-published apps; both are documented at
  * developers.openai.com/apps-sdk/build/auth.
+ *
+ * Grok (grok.com custom connectors) registers itself through /register as a
+ * public client and sends a single fixed callback,
+ * https://grok.com/connectors-oauth-exchange-code/, published by X Corp as
+ * the "Grok (web)" redirect URL at docs.x.com/x-ads-api/mcp (xAI's own
+ * connector docs at docs.x.ai do not state it). grok.com serves the path
+ * itself: the slash form 308s to the no-slash form on the same origin, so
+ * both are accepted. Matched as an exact path, never a prefix, so a future
+ * grok.com path cannot ride on this entry.
  */
 const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }[] = [
   { pattern: /^https:\/\/claude\.ai\/api\//, provider: 'claude' },
   { pattern: /^https:\/\/claude\.com\/api\//, provider: 'claude' },
   { pattern: /^https:\/\/chatgpt\.com\/connector\/oauth\//, provider: 'chatgpt' },
   { pattern: /^https:\/\/chatgpt\.com\/connector_platform_oauth_redirect$/, provider: 'chatgpt' },
+  { pattern: /^https:\/\/grok\.com\/connectors-oauth-exchange-code\/?$/, provider: 'grok' },
   { pattern: /^http:\/\/localhost(:\d+)?(\/|$)/, provider: 'local' },
   { pattern: /^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/, provider: 'local' },
 ]

@@ -1,6 +1,6 @@
 ---
 title: "accounted MCP-server"
-description: "MCP-server för svensk dubbel bokföring. Över 150 verktyg över bokföring, fakturor, leverantörer, moms, lön och rapporter. OAuth 2.1 med PKCE och dynamisk klientregistrering. Installeras som connector i Claude.ai, Claude Desktop, Cursor och Continue."
+description: "MCP-server för svensk dubbel bokföring. Över 150 verktyg över bokföring, fakturor, leverantörer, moms, lön och rapporter. OAuth 2.1 med PKCE och dynamisk klientregistrering. Installeras som connector i Claude.ai, ChatGPT, Grok, Claude Desktop, Cursor och Continue."
 slug: "gnubok-mcp"
 kind: "mcp"
 author: "gnubok"
@@ -31,7 +31,7 @@ faq:
   - q: "Hur funkar OAuth-flödet?"
     a: "MCP-klienten upptäcker accounteds autentiseringsserver via `.well-known/oauth-protected-resource`. Klienten registrerar sig dynamiskt (RFC 7591) på `/api/mcp-oauth/register`, öppnar `/api/mcp-oauth/authorize` i webbläsaren, du loggar in på accounted och godkänner anslutningen, klienten utbyter authorization code mot en access token via `/api/mcp-oauth/token` med PKCE S256."
   - q: "Vilka klienter funkar?"
-    a: "Allt som följer MCP-spec 2026-02 och stödjer HTTP-transport med OAuth: Claude.ai (connectors), Claude Desktop (HTTP), Cursor, Continue, Codex. För stdio-bara klienter finns en lokal bro: `npx gnubok-mcp` med API-nyckel."
+    a: "Allt som följer MCP-spec 2026-02 och stödjer HTTP-transport med OAuth: Claude.ai (connectors), ChatGPT (Developer mode), Grok (custom connectors), Claude Desktop (HTTP), Cursor, Continue, Codex. För stdio-bara klienter finns en lokal bro: `npx gnubok-mcp` med API-nyckel."
   - q: "Vilka scopes ger jag bort?"
     a: "OAuth-flödet ger en enskild `mcp`-scope: 'denna agent får använda accounteds MCP'. Inom det är agentens åtkomst begränsad till samma rättigheter som ditt eget accounted-konto har. Du kan när som helst återkalla anslutningen i app.gnubok.se → Inställningar."
   - q: "Får agenten skriva direkt till huvudboken?"
@@ -68,6 +68,13 @@ verktyg den får exponera.
 2. Ange URL: `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp`.
 3. Claude öppnar accounted-OAuth i webbläsaren. Logga in. Godkänn anslutningen.
 4. Connectorn dyker upp i listan. Slå på för de chattar där du vill ha den aktiv.
+
+## Installera i Grok
+
+1. På grok.com: Connectors → New Connector → Custom.
+2. Ange URL: `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp`.
+3. Grok registrerar sig själv och öppnar accounted-OAuth. Logga in. Godkänn anslutningen.
+4. Starta en ny chatt med connectorn påslagen.
 
 ## Installera i Claude Desktop
 

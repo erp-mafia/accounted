@@ -40,6 +40,7 @@ import { GET, POST } from '../route'
 
 const CLAUDE: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'claude' }
 const CHATGPT: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'chatgpt' }
+const GROK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'grok' }
 const REGISTERED: RedirectUriResolution = {
   allowed: true,
   kind: 'registered',
@@ -362,6 +363,25 @@ describe('client identity on the consent page', () => {
 
     expect(html).toContain('ChatGPT (OpenAI)')
     expect(html).toContain('chatgpt.com')
+  })
+
+  it('names Grok as a verified client for the grok.com callback', async () => {
+    mocks.resolveRedirectUri.mockResolvedValue(GROK)
+    const html = await (
+      await GET(
+        new Request(
+          buildAuthorizeUrl({
+            ...params,
+            redirect_uri: 'https://grok.com/connectors-oauth-exchange-code/',
+          }),
+        ),
+      )
+    ).text()
+
+    expect(html).toContain('Grok (xAI)')
+    expect(html).toContain('Verifierad')
+    expect(html).toContain('grok.com')
+    expect(html).not.toContain('En extern applikation')
   })
 
   it('shows client_name and redirect host for a DB-registered client, never marked verified', async () => {

@@ -51,6 +51,25 @@ describe('POST /api/mcp-oauth/register', () => {
     expect(response.status).toBe(201)
   })
 
+  it('accepts registration with the grok.com connector callback', async () => {
+    const response = await POST(createRequest({
+      client_name: 'Grok',
+      redirect_uris: ['https://grok.com/connectors-oauth-exchange-code/'],
+      token_endpoint_auth_method: 'none',
+    }))
+    expect(response.status).toBe(201)
+    const body = await response.json()
+    expect(body.redirect_uris).toEqual(['https://grok.com/connectors-oauth-exchange-code/'])
+    expect(body.token_endpoint_auth_method).toBe('none')
+  })
+
+  it('rejects other grok.com paths', async () => {
+    const response = await POST(createRequest({
+      redirect_uris: ['https://grok.com/oauth/callback'],
+    }))
+    expect(response.status).toBe(400)
+  })
+
   it('rejects registration with disallowed redirect_uris', async () => {
     const response = await POST(createRequest({
       redirect_uris: ['https://evil.com/callback'],
