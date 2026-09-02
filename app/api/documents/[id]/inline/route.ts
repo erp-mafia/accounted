@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { OPAQUE_DOCUMENT_CSP, inlineSafeMimeType } from '@/lib/core/documents/storage-proxy'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
@@ -18,6 +19,14 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
  * Defense in depth: the user's cookie-bound client authorizes access
  * (RLS + explicit company_id filter) before the service-role client
  * fetches the file from the non-public `documents` bucket.
+ *
+ * Content types are served on an allow-list basis: only the natively
+ * inline-safe types (INLINE_SAFE_MIME_TYPES: PDF and raster images) render
+ * with the app origin's authority. Every other resolved type is served
+ * under OPAQUE_DOCUMENT_CSP, which keeps it opaque-origin and script-free
+ * while still letting the preview render (HTML mail bodies, Peppol XML,
+ * iXBRL). The mime_type column was client-declared for legacy rows, so the
+ * decision cannot trust it beyond membership in the allow-list.
  */
 
 const EXTENSION_MIME_MAP: Record<string, string> = {
@@ -92,20 +101,17 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         // content. Without nosniff a tampered file_name extension could
         // serve a stored document under an attacker-chosen MIME type.
         'X-Content-Type-Options': 'nosniff',
-        // text/html documents are attacker-controlled mail bodies from the
-        // invoice inbox. Served inline on the app origin they would execute
-        // scripts with our origin's authority: CSP sandbox (no tokens) makes
-        // the rendered document opaque-origin and script-free wherever it is
-        // opened, iframe or direct tab. The source policy blocks outbound
-        // requests on top of that: sandbox alone still loads remote images,
-        // so a tracking pixel would notify the sender when the preview is
-        // opened. Inline styles and embedded data:/blob: images keep working.
-        ...(contentType === 'text/html'
-          ? {
-              'Content-Security-Policy':
-                "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:",
-            }
-          : {}),
+        // Allow-list, not deny-list: anything that is not a natively
+        // inline-safe type (text/html mail bodies, XHTML, XML, SVG, JSON,
+        // unknown or legacy types) is uploader-controlled active content
+        // when rendered on this origin. The sandboxing policy neutralises
+        // scripts and outbound requests for all of them while the preview
+        // keeps rendering; see OPAQUE_DOCUMENT_CSP. PDF and raster images
+        // are exempt because the directive would also break Chrome's
+        // built-in PDF viewer (it renders through an internal <embed>).
+        ...(inlineSafeMimeType(contentType)
+          ? {}
+          : { 'Content-Security-Policy': OPAQUE_DOCUMENT_CSP }),
       },
     })
   },
