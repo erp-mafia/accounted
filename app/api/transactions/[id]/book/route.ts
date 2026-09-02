@@ -3,6 +3,7 @@ import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { resolveCashAccountVoucherSeries } from '@/lib/bookkeeping/cash-account-voucher-series'
 import { guardBookedCounterLines } from '@/lib/cash-accounts/service'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
@@ -167,6 +168,17 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       })
     }
 
+    // Series: the dialog's explicit pick wins; otherwise the transaction's
+    // bank account may carry its own verifikationsserie; otherwise the engine
+    // falls back to the per-source-type default.
+    const voucherSeries =
+      validation.data.voucher_series ??
+      (await resolveCashAccountVoucherSeries(
+        supabase,
+        companyId,
+        (transaction as Transaction).cash_account_id,
+      ))
+
     // Create journal entry via the engine
     let journalEntry
     try {
@@ -177,6 +189,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         source_type: 'bank_transaction',
         source_id: id,
         lines,
+        ...(voucherSeries ? { voucher_series: voucherSeries } : {}),
       })
     } catch (err) {
       const typed = bookkeepingErrorResponse(err)

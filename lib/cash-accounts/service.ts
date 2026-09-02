@@ -1529,6 +1529,28 @@ export async function setLedgerAccount(
 }
 
 /**
+ * Set or clear the verifikationsserie override for a cash account. null means
+ * "follow the per-source-type default"; the engine reads this via
+ * resolveCashAccountVoucherSeries() when it books from the account.
+ */
+export async function setVoucherSeries(
+  supabase: SupabaseClient,
+  companyId: string,
+  cashAccountId: string,
+  voucherSeries: string | null,
+): Promise<CashAccount | null> {
+  const { data, error } = await supabase
+    .from('cash_accounts')
+    .update({ voucher_series: voucherSeries })
+    .eq('company_id', companyId)
+    .eq('id', cashAccountId)
+    .select('*')
+    .maybeSingle()
+  if (error) throw new Error(`cash_accounts setVoucherSeries failed: ${error.message}`)
+  return (data as CashAccount | null) ?? null
+}
+
+/**
  * Mark a cash account as the primary for its company. Delegates to the
  * `set_cash_account_primary` RPC so the clear-old-primary and set-new-primary
  * updates happen inside a single transaction. The intermediate "no primary"

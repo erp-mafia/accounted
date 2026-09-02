@@ -4,6 +4,7 @@ import { errorResponse } from '@/lib/errors/get-structured-error'
 import { validateQuery } from '@/lib/api/validate'
 import { VoucherSequenceNextQuerySchema } from '@/lib/api/schemas'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
+import { resolveCashAccountVoucherSeries } from '@/lib/bookkeeping/cash-account-voucher-series'
 
 export const GET = withRouteContext(
   'voucher_sequence.next',
@@ -15,7 +16,12 @@ export const GET = withRouteContext(
       operation: 'voucher_sequence.next',
     })
     if (!query.success) return query.response
-    const { period_id: overridePeriodId, series: overrideSeries, source_type: sourceType } = query.data
+    const {
+      period_id: overridePeriodId,
+      series: overrideSeries,
+      source_type: sourceType,
+      cash_account_id: cashAccountId,
+    } = query.data
 
     const today = new Date().toISOString().split('T')[0]
     // Vouchers are numbered per fiscal period, so the preview must reflect the
@@ -57,14 +63,21 @@ export const GET = withRouteContext(
     }
 
     // When a source_type is supplied, resolve the series exactly as the booking
-    // engine does (per-source-type map → 'A'), so the preview can never disagree
-    // with the verifikat that actually gets created. Without a source_type, keep
-    // the legacy generic default for callers that just want "the next number".
+    // engine does (cash account override → per-source-type map → 'A'), so the
+    // preview can never disagree with the verifikat that actually gets created.
+    // Without a source_type, keep the legacy generic default for callers that
+    // just want "the next number".
+    const cashAccountSeries =
+      !overrideSeries && cashAccountId
+        ? await resolveCashAccountVoucherSeries(supabase, companyId, cashAccountId)
+        : undefined
     const series = overrideSeries
       ? overrideSeries
-      : sourceType
-        ? resolveDefaultSeriesForSource(settings, sourceType)
-        : settings?.default_voucher_series || 'A'
+      : cashAccountSeries
+        ? cashAccountSeries
+        : sourceType
+          ? resolveDefaultSeriesForSource(settings, sourceType)
+          : settings?.default_voucher_series || 'A'
 
     if (!period) {
       return NextResponse.json({ data: { next: null, series, fiscal_period_id: null } })

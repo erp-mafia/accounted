@@ -10,6 +10,7 @@ import { PeriodLockingSettings } from '@/components/settings/PeriodLockingSettin
 import { FiscalYearsManager } from '@/components/settings/FiscalYearsManager'
 import { VoucherSeriesManager } from '@/components/settings/VoucherSeriesManager'
 import { VoucherSeriesPerSourceTypeForm } from '@/components/settings/VoucherSeriesPerSourceTypeForm'
+import { VoucherSeriesPerCashAccountForm } from '@/components/settings/VoucherSeriesPerCashAccountForm'
 import { applyDefaultSeriesToMap } from '@/lib/bookkeeping/voucher-series-resolver'
 import { DimensionsToggle } from '@/components/settings/DimensionsToggle'
 import { MileageToggle } from '@/components/settings/MileageToggle'
@@ -168,6 +169,8 @@ export function BookkeepingSettingsContent() {
         settings={settings}
         onSettingsUpdated={updateSettings}
       />
+
+      <VoucherSeriesPerCashAccountForm />
 
       <VoucherSeriesManager defaultSeries={settings.default_voucher_series || 'A'} />
 

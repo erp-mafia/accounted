@@ -237,6 +237,84 @@ describe('POST /api/transactions/[id]/book', () => {
     )
   })
 
+  it("books into the bank account's own verifikationsserie when the cash account carries one", async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      journal_entry_id: null,
+      cash_account_id: 'ca-card',
+    })
+    const je = makeJournalEntry({ id: 'je-new', voucher_series: 'M' })
+
+    // Fetch transaction
+    enqueue({ data: tx, error: null })
+    // guardBookedCounterLines own-row lookup (1930 matches the own ledger: clean)
+    enqueue({ data: { ledger_account: '1930' }, error: null })
+    // Cash account series override
+    enqueue({ data: { voucher_series: 'M' }, error: null })
+    mockCreateJournalEntry.mockResolvedValue(je)
+    // Update transaction
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: validBody,
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockCreateJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ source_type: 'bank_transaction', voucher_series: 'M' }),
+    )
+  })
+
+  it('lets an explicit voucher_series from the dialog win over the cash account override', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      journal_entry_id: null,
+      cash_account_id: 'ca-card',
+    })
+    const je = makeJournalEntry({ id: 'je-new', voucher_series: 'V' })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { ledger_account: '1930' }, error: null })
+    mockCreateJournalEntry.mockResolvedValue(je)
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: { ...validBody, voucher_series: 'V' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockCreateJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ voucher_series: 'V' }),
+    )
+    // No cash_accounts series lookup: the explicit pick short-circuits it.
+    const seriesLookups = findCalls('cash_accounts', 'select').filter((args) => args[0] === 'voucher_series')
+    expect(seriesLookups).toHaveLength(0)
+  })
+
+  it('rejects a malformed voucher_series with 400', async () => {
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: { ...validBody, voucher_series: 'ab' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    expect(response.status).toBe(400)
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('returns 400 TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT when a line books the settlement row against its active twin (#1643)', async () => {
     // The issue's dialog shape: 1930 and 1931 both enabled on one active
     // connection; "Ändra rader" pre-filled 1930 debit / 1931 credit from a
@@ -288,6 +366,7 @@ describe('POST /api/transactions/[id]/book', () => {
       ],
     }) // cash_accounts topology
     enqueue({ data: [{ id: 'conn-live', status: 'active' }] }) // bank_connections statuses
+    enqueue({ data: { voucher_series: null } }) // cash account series override (none)
     mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
     enqueue({ data: [{ id: 'tx-1' }], error: null }) // link update
 
