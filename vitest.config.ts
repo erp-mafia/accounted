@@ -3,6 +3,8 @@ import path from 'path'
 
 const alias = {
   '@': path.resolve(__dirname, '.'),
+  // The connect contract is consumed from source in-repo (published separately).
+  '@accounted/connect-contract': path.resolve(__dirname, 'packages/connect-contract/src/index.ts'),
   // `server-only` is a build-time guard whose real entry point always throws;
   // Next.js swaps it out during bundling, Vitest cannot. Without this stub any
   // test that transitively imports a server-only module fails at import time.
