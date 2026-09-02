@@ -205,6 +205,7 @@ export async function registerCompanyForPeppolReceiving(args: {
       participant: prepared.participant,
       businessCard: prepared.businessCard,
       documentTypes: PEPPOL_RECEIVING_DOCUMENT_TYPES,
+      tenantReference: companyId,
     })
     const { data, error } = await service
       .from('peppol_registrations')

@@ -1,6 +1,7 @@
 import { getConnectorConfig } from './config'
 import {
   hasOwnEnableBankingCredentials,
+  hasOwnPeppolCredentials,
   hasOwnSkatteverketCredentials,
 } from '@/lib/entitlements/own-credentials'
 
@@ -24,7 +25,7 @@ export const CONNECTOR_COMPANY_HEADER = 'X-Connector-Company'
 export const CONNECTOR_UPSTREAM_AUTH_HEADER = 'X-Connector-Upstream-Authorization'
 export const CONNECTOR_UPSTREAM_CONTENT_TYPE_HEADER = 'X-Connector-Upstream-Content-Type'
 
-export { hasOwnEnableBankingCredentials, hasOwnSkatteverketCredentials }
+export { hasOwnEnableBankingCredentials, hasOwnPeppolCredentials, hasOwnSkatteverketCredentials }
 
 export interface ConnectorUpstream {
   /** Base URL to send upstream requests to (the hosted proxy). */
@@ -45,4 +46,16 @@ export function skatteverketConnectorMode(): ConnectorUpstream | null {
   const cfg = getConnectorConfig()
   if (!cfg) return null
   return { baseUrl: `${cfg.baseUrl}/api/connect/skv`, key: cfg.key }
+}
+
+/**
+ * Peppol through Arcim's contracted access point. Same rule as the other
+ * upstreams: an instance with its own Qvalia partner keys runs Peppol itself
+ * and is never routed here.
+ */
+export function peppolConnectorMode(): ConnectorUpstream | null {
+  if (hasOwnPeppolCredentials()) return null
+  const cfg = getConnectorConfig()
+  if (!cfg) return null
+  return { baseUrl: `${cfg.baseUrl}/api/connect/peppol`, key: cfg.key }
 }

@@ -118,6 +118,12 @@ export interface PeppolRecipientRegistrationInput {
   businessCard: PeppolBusinessCard
   documentTypes: PeppolDocumentTypeRegistration[]
   description?: string | null
+  /**
+   * The registering tenant (company id). Providers that hold one account per
+   * installation ignore it; the connector transport needs it because the
+   * hosted access point enforces a per-company registration quota.
+   */
+  tenantReference?: string | null
 }
 
 export interface PeppolRecipientRegistration {
@@ -196,6 +202,13 @@ export interface PeppolTransport {
   pollDeliveryStatus?(providerSubmissionId: string): Promise<PeppolVerifiedEvent[]>
 }
 
+/**
+ * Provider id of the instance-side transport that reaches Arcim's access
+ * point through the hosted connector (lib/invoices/transports/connector.ts).
+ * Declared here so availability resolution needs no import of that module.
+ */
+export const CONNECTOR_PEPPOL_PROVIDER = 'connector'
+
 const transports = new Map<string, PeppolTransport>()
 
 export function registerPeppolTransport(transport: PeppolTransport): () => void {
@@ -226,6 +239,12 @@ export type PeppolTransportAvailability =
 export function getPeppolTransportAvailability(): PeppolTransportAvailability {
   const configuredProvider = process.env.PEPPOL_TRANSPORT_PROVIDER?.trim().toLowerCase()
   if (!configuredProvider) {
+    // A self-hosted instance in connector mode has exactly one possible
+    // provider, so it needs no PEPPOL_TRANSPORT_PROVIDER. Hosted never
+    // registers the connector transport, so this branch is inert there.
+    if (transports.has(CONNECTOR_PEPPOL_PROVIDER)) {
+      return { available: true, provider: CONNECTOR_PEPPOL_PROVIDER }
+    }
     return { available: false, provider: null, reason: 'provider_selection_required' }
   }
 
