@@ -4,7 +4,13 @@ import { useTranslations } from 'next-intl'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { cn, formatCurrency } from '@/lib/utils'
 import type { KPIReport, KPIPreferences } from '@/types'
-import { allLabelsFit, compactKr, BAR_LABEL_FONT_PX } from './month-values'
+import {
+  allLabelsFit,
+  barLabel,
+  compactKr,
+  BAR_LABEL_FONT_PX,
+  LATEST_LABEL_FONT_PX,
+} from './month-values'
 
 /**
  * Nyckeltal as the founder-picked "Instrumentbrädan" layout: a grid of
@@ -88,14 +94,18 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
   const baseline = maxPos + maxNeg === 0 ? H - bottomPad : topPad + maxPos * pxPerKr
   const slot = W / months.length
   const barW = Math.min(30, slot * 0.62)
-  const labels = months.map((m) => (m.net === 0 ? '' : compactKr(m.net)))
-  const labelAll = allLabelsFit(labels, slot)
+  const labels = months.map((m) => barLabel(m.net))
+  const labelAll = allLabelsFit(labels, slot, lastActive)
   // Exact amounts as two columns of the year's months, read top to bottom.
   const half = Math.ceil(months.length / 2)
   const columns = [months.slice(0, half), months.slice(half)]
+  // A month with no result movement at all reads muted, whether it lies
+  // ahead of the last booking or before the first one (a mid-year start).
+  const inactive = (m: KPIReport['months'][number]) =>
+    m.income === 0 && m.expenses === 0 && m.net === 0
 
   return (
-    <Pane title={t('bars_title')} annotation={t('bars_unit')}>
+    <Pane title={t('bars_title')} annotation={t('bars_unit')} className="sm:row-span-2">
       <svg
         viewBox={`0 0 ${W} ${H + 8}`}
         className="mt-3 h-auto w-full"
@@ -130,7 +140,7 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
                   y={m.net >= 0 ? y - 5 : y + h + 11}
                   textAnchor="middle"
                   style={{
-                    font: `${isLast ? 10.5 : BAR_LABEL_FONT_PX}px var(--font-body, ui-sans-serif)`,
+                    font: `${isLast ? LATEST_LABEL_FONT_PX : BAR_LABEL_FONT_PX}px var(--font-body, ui-sans-serif)`,
                     fill: 'hsl(var(--muted-foreground))',
                   }}
                 >
@@ -150,15 +160,14 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
         {columns.map((column, c) => (
           <dl key={c} className="space-y-1">
             {column.map((m, j) => {
-              const upcoming = c * half + j > lastActive
               return (
-                <div key={m.label} className="flex items-baseline justify-between gap-3">
+                <div key={`${m.label}-${c * half + j}`} className="flex items-baseline justify-between gap-3">
                   <dt className="text-muted-foreground">{m.label}</dt>
                   <dd
                     className={cn(
                       'tabular-nums',
                       m.net < 0 && 'text-destructive',
-                      upcoming && 'text-muted-foreground/60',
+                      inactive(m) && 'text-muted-foreground/60',
                     )}
                   >
                     {formatCurrency(m.net)}
