@@ -401,7 +401,7 @@ function countNaiveRound() {
  * hosted adapter side.
  */
 const PROVIDER_HOST_RE =
-  /api\.enablebanking\.com|api\.tilisy\.com|api\.skatteverket\.se|peroauth2\.skatteverket\.se|sso\.skatteverket\.se|api\.qvalia\.com|api-test\.qvalia\.com|api\.fortnox\.se|apps\.fortnox\.se|vismaonline\.com|briox\.services|apigateway\.blinfo\.se|api\.bokio\.se|api\.bolagsverket\.se|api-accept2\.bolagsverket\.se|id\.tic\.io|graph\.facebook\.com|gmail\.googleapis\.com/
+  /api\.enablebanking\.com|api\.tilisy\.com|api\.skatteverket\.se|peroauth2\.skatteverket\.se|sso\.skatteverket\.se|api\.qvalia\.com|api-test\.qvalia\.com|api\.fortnox\.se|apps\.fortnox\.se|vismaonline\.com|briox\.services|apigateway\.blinfo\.se|api\.bokio\.se|api\.bolagsverket\.se|api-accept2\.bolagsverket\.se|id\.tic\.io|graph\.facebook\.com|gmail\.googleapis\.com/i
 
 function findProviderHostFiles() {
   const files = [
@@ -412,7 +412,7 @@ function findProviderHostFiles() {
   const found = []
   for (const f of files) {
     const r = rel(f)
-    if (r.includes('__tests__/') || r.endsWith('.test.ts')) continue
+    if (r.includes('__tests__/') || r.endsWith('.test.ts') || r.endsWith('.test.tsx')) continue
     if (PROVIDER_HOST_RE.test(fs.readFileSync(f, 'utf8'))) found.push(r)
   }
   return found.sort()
