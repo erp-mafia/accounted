@@ -1,3 +1,4 @@
+import { isUnsafeUrlError, safeFetch } from '@/lib/http/safe-fetch'
 import type { WooOrder, WooRefund, WooStoreInfo } from '../types'
 
 /**
@@ -8,6 +9,14 @@ import type { WooOrder, WooRefund, WooStoreInfo } from '../types'
  * Authorization header, so a 401 is retried once with the documented
  * query-string credential fallback; that fallback is why plain-http stores
  * are refused outright (keys in a cleartext URL are a credentials leak).
+ *
+ * The store URL is tenant input that the server connects to, and members can
+ * write `woocommerce_connections.store_url` directly through PostgREST
+ * (bypassing the connect route's normalisation), so every request here
+ * re-normalises the stored URL and goes through `safeFetch`: public
+ * addresses only, checked at request time, and no redirects followed. The
+ * nightly cron runs this under the service role, which is exactly the
+ * network position an SSRF would want.
  *
  * Typical WooCommerce hosts are slow shared PHP boxes: requests run
  * sequentially, pages are capped at 100 rows, and 429/5xx responses get a
@@ -53,9 +62,10 @@ export function isRevokedCredentialsError(error: unknown): boolean {
 /**
  * Hostnames the server must never fetch: the store URL is user input that we
  * probe server-side, so loopback/link-local/private ranges and internal
- * naming conventions are refused outright (SSRF guard). Hostname-level only:
- * a public DNS name resolving to a private address is not caught here, which
- * matches the app's other outbound-URL surfaces.
+ * naming conventions are refused outright (SSRF guard). Hostname-level only,
+ * and cheap enough to run synchronously at connect time; a public DNS name
+ * resolving to a private address is caught later by `safeFetch`, which
+ * resolves and classifies every A/AAAA record at request time.
  */
 function isDisallowedHost(hostname: string): boolean {
   const h = hostname.toLowerCase()
@@ -99,6 +109,30 @@ export function normalizeStoreUrl(input: string): string | null {
   return `https://${url.host.toLowerCase()}${path}`
 }
 
+/** Error code on a WooCommerceApiError when the stored store URL fails re-normalisation. */
+export const INVALID_STORE_URL_CODE = 'accounted_invalid_store_url'
+/** Error code on a WooCommerceApiError when the SSRF guard refused to connect. */
+export const UNSAFE_STORE_URL_CODE = 'accounted_unsafe_store_url'
+
+/**
+ * Re-run the connect-time normalisation on the STORED store URL at use time.
+ * The connect route normalises what the user typed, but a member can PATCH
+ * `store_url` straight into the row through PostgREST, so the value in the
+ * database is not trusted to still be an https public-host origin. A row that
+ * fails here is refused with a clear, non-retryable error instead of fetched.
+ */
+function storeOriginOf(creds: WooCredentials): string {
+  const normalized = normalizeStoreUrl(creds.storeUrl)
+  if (!normalized) {
+    throw new WooCommerceApiError(
+      `WooCommerce store URL is not a valid https store address (${creds.storeUrl}); reconnect the store`,
+      0,
+      INVALID_STORE_URL_CODE,
+    )
+  }
+  return normalized
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -109,7 +143,7 @@ function buildUrl(
   params: Record<string, string>,
   credentialsInQuery: boolean,
 ): string {
-  const url = new URL(`${creds.storeUrl}/wp-json/wc/v3${path}`)
+  const url = new URL(`${storeOriginOf(creds)}/wp-json/wc/v3${path}`)
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value)
   if (credentialsInQuery) {
     url.searchParams.set('consumer_key', creds.consumerKey)
@@ -129,10 +163,29 @@ async function requestOnce(
     const basic = Buffer.from(`${creds.consumerKey}:${creds.consumerSecret}`).toString('base64')
     headers.Authorization = `Basic ${basic}`
   }
-  return fetch(buildUrl(creds, path, params, credentialsInQuery), {
+  // safeFetch: public address only (checked now, not at connect time), no
+  // redirects. A 3xx from the store is a failure, never a hop.
+  return safeFetch(buildUrl(creds, path, params, credentialsInQuery), {
     headers,
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
+}
+
+/**
+ * Map a failure from requestOnce to the error the retry loop should see.
+ * Guard refusals (bad stored URL, private address, redirect) are terminal:
+ * retrying the same URL cannot succeed and must not spend the backoff budget.
+ */
+function asTerminalGuardError(err: unknown): WooCommerceApiError | null {
+  if (err instanceof WooCommerceApiError) return err
+  if (isUnsafeUrlError(err)) {
+    return new WooCommerceApiError(
+      `WooCommerce store refused by outbound URL guard: ${err.detail}`,
+      0,
+      UNSAFE_STORE_URL_CODE,
+    )
+  }
+  return null
 }
 
 async function parseError(response: Response): Promise<WooCommerceApiError> {
@@ -168,6 +221,8 @@ export async function wcGet<T>(
     try {
       response = await requestOnce(creds, path, params, credentialsInQuery)
     } catch (err) {
+      const terminal = asTerminalGuardError(err)
+      if (terminal) throw terminal
       // Network/timeout errors: retry on the same backoff schedule.
       lastError = new WooCommerceApiError(
         `WooCommerce request failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -303,7 +358,7 @@ export async function testConnectionAndFetchStoreInfo(
 
   try {
     // The WP REST index is public and carries the site title.
-    const response = await fetch(`${creds.storeUrl}/wp-json/`, {
+    const response = await safeFetch(`${storeOriginOf(creds)}/wp-json/`, {
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     })
