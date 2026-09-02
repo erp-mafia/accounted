@@ -33,6 +33,7 @@ import {
   anonymousRateLimitIdentifier,
   isPublicTool,
 } from './public-tools'
+import { isEagerAuthRequested } from './auth-mode'
 import { createLogger } from '@/lib/logger'
 import { roundOre, sumOre } from '@/lib/money'
 import { currentAppVersion } from '@/lib/reports/app-version'
@@ -20228,6 +20229,11 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   // be parsed keeps the pre-lazy-auth answer for a tokenless caller (401), so
   // probing the endpoint without credentials learns nothing new.
   const token = extractBearerToken(request)
+  // Eager authentication (auth-mode.ts): the URL opted out of lazy auth, so a
+  // tokenless caller is challenged before the body is even looked at. This is
+  // what makes claude.ai's Add-custom-connector probe detect OAuth instead of
+  // "None"; a caller with a token is unaffected.
+  if (!token && isEagerAuthRequested(request)) return unauthorized()
   let body: JsonRpcRequest
   try {
     body = await request.json()
