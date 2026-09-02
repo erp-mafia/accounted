@@ -223,6 +223,13 @@ describe('triggerConnectionSync', () => {
     expect(bogus).toMatchObject({ ok: false, code: 'NOT_FOUND' })
   })
 
+  it('answers NOT_FOUND when the caller is not a member of the company, before any lease or bank call', async () => {
+    state.membershipRole = null
+    expect(await run()).toMatchObject({ ok: false, code: 'NOT_FOUND' })
+    expect(state.leaseUntil).toBe(EPOCH)
+    expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
+  })
+
   it('refuses an expired or pending connection: only BankID can fix those', async () => {
     state.connection = connection({ status: 'expired' })
     expect(await run()).toMatchObject({ ok: false, code: 'BANK_SYNC_NOT_ACTIVE', status: 'expired' })

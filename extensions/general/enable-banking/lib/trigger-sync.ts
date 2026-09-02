@@ -94,6 +94,24 @@ export async function triggerConnectionSync(
     }
   }
 
+  // Membership is enforced by both callers before we run (withApiV1's
+  // company resolution, the MCP dispatcher's resolveMcpCompanyContext), but
+  // this runner writes transactions and bills a bank call, so it checks the
+  // caller's membership itself as well: a service-role client with the
+  // wrong userId must never get past this point. Viewers get raw inserts
+  // only, exactly like the web route.
+  const { data: membership, error: membershipError } = await supabase
+    .from('company_members')
+    .select('role')
+    .eq('company_id', companyId)
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (membershipError) throw membershipError
+  if (!membership) {
+    return { ok: false, code: 'NOT_FOUND', connection_id: connectionId }
+  }
+  const isViewer = (membership as { role?: string }).role === 'viewer'
+
   // A successful sync (ours, the web button's or the cron's) within the
   // window: the data is fresh, say so without touching the bank.
   const lastSynced = connection.last_synced_at
@@ -159,15 +177,6 @@ export async function triggerConnectionSync(
       .gte('fiscal_year_end', fromDate)
       .limit(1)
       .maybeSingle()
-
-    // Viewers get raw inserts only, exactly like the web route.
-    const { data: membership } = await supabase
-      .from('company_members')
-      .select('role')
-      .eq('company_id', companyId)
-      .eq('user_id', userId)
-      .maybeSingle()
-    const isViewer = (membership as { role?: string } | null)?.role === 'viewer'
 
     const syncOptions: SyncOptions = {
       ...(sieOverlap ? { skipAutoCategorization: true } : {}),
