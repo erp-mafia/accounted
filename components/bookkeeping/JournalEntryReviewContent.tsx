@@ -3,7 +3,7 @@
 import { Badge } from '@/components/ui/badge'
 import { AccountNumber } from '@/components/ui/account-number'
 import { CheckCircle2, Paperclip } from 'lucide-react'
-import { formatDate } from '@/lib/utils'
+import { formatAmount, formatDate } from '@/lib/utils'
 
 interface ReviewLine {
   account_number: string
@@ -24,10 +24,6 @@ interface JournalEntryReviewContentProps {
   attachmentCount?: number
   showBalanceBadge?: boolean
   hideDate?: boolean
-}
-
-function formatAmount(amount: number): string {
-  return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 export function JournalEntryReviewContent({

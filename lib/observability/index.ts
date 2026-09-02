@@ -28,17 +28,8 @@
 export {
   captureException,
   captureMessage,
-  flushObservability,
-  getEnvironment,
-  getObservabilitySink,
-  getRelease,
-  isObservabilityConfigured,
-  noopSink,
   registerObservabilitySink,
-  resetObservabilitySink,
   type ObservabilityContext,
   type ObservabilityLevel,
   type ObservabilitySink,
 } from './sink'
-
-export { REDACTED, REDACT_KEYS, redact, redactString } from './redact'

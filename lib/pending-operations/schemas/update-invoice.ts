@@ -46,4 +46,3 @@ export const UpdateInvoiceParamsSchema = z
   })
   .strict()
 
-export type UpdateInvoiceParams = z.infer<typeof UpdateInvoiceParamsSchema>

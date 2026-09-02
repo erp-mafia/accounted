@@ -73,10 +73,6 @@ export const KPI_DEFINITIONS: KPIDefinition[] = [
 
 export const ALL_KPI_IDS = KPI_DEFINITIONS.map((d) => d.id)
 
-export function getKPIDefinition(id: string): KPIDefinition | undefined {
-  return KPI_DEFINITIONS.find((d) => d.id === id)
-}
-
 export function getDefaultPreferences(): KPIPreferences {
   return {
     visibleKpis: KPI_DEFINITIONS.filter((d) => d.defaultVisible).map((d) => d.id),

@@ -853,38 +853,3 @@ export function getApplicableDeadlineConfigs(
 ): TaxDeadlineConfig[] {
   return TAX_DEADLINE_CONFIGS.filter((config) => config.condition(settings))
 }
-
-/**
- * Map from tax deadline type to report URL generator
- */
-export const REPORT_URLS: Record<string, (period: { year: number; quarter?: number; month?: number }) => string> = {
-  vat: (p) => {
-    if (p.quarter) {
-      return `/reports?tab=vat&year=${p.year}&period=${p.quarter}`
-    }
-    if (p.month) {
-      return `/reports?tab=vat&year=${p.year}&period=${p.month}`
-    }
-    return `/reports?tab=vat&year=${p.year}`
-  },
-  'ne-declaration': () => '/reports?tab=ne-declaration',
-}
-
-/**
- * Get the report URL for a deadline
- */
-export function getReportUrl(
-  linkedReportType: string | null,
-  linkedReportPeriod: Record<string, unknown> | null
-): string | null {
-  if (!linkedReportType || !linkedReportPeriod) {
-    return null
-  }
-
-  const urlGenerator = REPORT_URLS[linkedReportType]
-  if (!urlGenerator) {
-    return null
-  }
-
-  return urlGenerator(linkedReportPeriod as { year: number; quarter?: number; month?: number })
-}

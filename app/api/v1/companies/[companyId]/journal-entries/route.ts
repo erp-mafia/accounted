@@ -23,7 +23,8 @@ import {
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { readV1JsonBody } from '@/lib/api/v1/body'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { CreateJournalEntrySchema } from '@/lib/api/schemas'
@@ -135,12 +136,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       date_from: url.searchParams.get('date_from') ?? undefined,
       date_to: url.searchParams.get('date_to') ?? undefined,
     })
-    if (!fr.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { issues: fr.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })) },
-      })
-    }
+    if (!fr.success) return v1ValidationError(ctx, fr.error)
     const filters = fr.data
 
     // Sort by (created_at DESC, id ASC). created_at is the stable cursor
@@ -267,23 +263,12 @@ registerEndpoint({
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'journal-entries.create-draft',
   async (request, ctx) => {
-    let rawBody: unknown
-    try {
-      rawBody = await request.json()
-    } catch {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'body', message: 'Body is not valid JSON.' },
-      })
-    }
+    const rawBodyResult = await readV1JsonBody(request, ctx)
+    if (!rawBodyResult.ok) return rawBodyResult.response
+    const rawBody = rawBodyResult.body
 
     const parsed = CreateJournalEntrySchema.safeParse(rawBody)
-    if (!parsed.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { issues: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })) },
-      })
-    }
+    if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const input = parsed.data
 
     // Ownership pre-check: the caller-supplied fiscal_period_id must belong

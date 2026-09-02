@@ -4,7 +4,7 @@
  *
  * Root cause (bug): tax deadlines only ever regenerated when a tax-relevant
  * settings field CHANGED value (app/api/settings/route.ts, gated on
- * didTaxFieldsChange). Companies fill these fields once at onboarding, so a
+ * the since-removed didTaxFieldsChange). Companies fill these fields once at onboarding, so a
  * later save changed nothing and generated nothing. The annual cron
  * (generateNewYearDeadlines) is the only unconditional trigger and runs Jan 2,
  * so the installed base sat empty. Result before this backfill: only ~5 of ~776

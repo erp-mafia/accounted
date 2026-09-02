@@ -1,3 +1,4 @@
+import { sleep } from '@/lib/utils'
 import { isUnsafeUrlError, safeFetch } from '@/lib/http/safe-fetch'
 import type { WooOrder, WooRefund, WooStoreInfo } from '../types'
 
@@ -131,10 +132,6 @@ function storeOriginOf(creds: WooCredentials): string {
     )
   }
   return normalized
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function buildUrl(

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { privateNoStore } from '@/lib/api/private-no-store'
 import { validateBody } from '@/lib/api/validate'
 import { CompanyMigrationResetSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -28,11 +29,6 @@ function rpcFailure(
     requestId,
     details: result.details,
   })
-}
-
-function privateNoStore(response: NextResponse): NextResponse {
-  response.headers.set('Cache-Control', 'private, no-store')
-  return response
 }
 
 /**

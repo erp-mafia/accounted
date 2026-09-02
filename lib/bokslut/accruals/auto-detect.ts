@@ -1,13 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { EntityType } from '@/types'
 import { roundOre } from '@/lib/money'
 import { parseInvoiceDateRange } from './date-range-parser'
 
 export type PeriodiseringSource = 'invoice' | 'supplier_invoice'
 export type PeriodiseringConfidence = 'high' | 'medium' | 'low'
 
-/** The entity types the materiality wording distinguishes between. Mirrors
- *  `EntityType` in `@/types` without importing app types into lib/. */
-export type PeriodiseringEntityType = 'enskild_firma' | 'aktiebolag'
+/** The entity types the materiality wording distinguishes between. */
+export type PeriodiseringEntityType = EntityType
 
 /**
  * Materiality floor for auto-detected periodiseringar, in SEK.

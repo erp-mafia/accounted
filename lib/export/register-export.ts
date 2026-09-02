@@ -42,6 +42,4 @@ export function buildRegisterExport(
 }
 
 /** Today's date as `YYYY-MM-DD` for export filenames. */
-export function todayIso(): string {
-  return new Date().toISOString().slice(0, 10)
-}
+export { todayIsoUtc as todayIso } from '@/lib/dates/iso'

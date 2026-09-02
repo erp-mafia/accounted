@@ -313,8 +313,3 @@ export async function findContestedOrgNumbers(): Promise<Set<string>> {
 export async function isOrgNumberContested(orgNumber: string): Promise<boolean> {
   return (await findContestedOrgNumbers()).has(orgNumber)
 }
-
-/** Test hook: reset the memoized service client. */
-export function __resetConnectionStoreForTests(): void {
-  _serviceClient = null
-}

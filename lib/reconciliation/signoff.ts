@@ -3,6 +3,7 @@ import { ISO_DATE_RE } from '@/lib/invariants'
 import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { todayIsoUtc } from '@/lib/dates/iso'
 import { parseAccountKey, type ReconciliationSignoff, type ReconciliationStatus } from './schemas'
 import { getAccountStatus } from './service'
 import { getLatestSignoff, getSignoffById, insertSignoff, stampReopen } from './signoff-store'
@@ -81,10 +82,6 @@ export type SignoffResult =
   | { dry_run: true; would_sign: SignoffPreview }
   | { dry_run: false; signoff: ReconciliationSignoff }
 
-function isoToday(): string {
-  return new Date().toISOString().slice(0, 10)
-}
-
 /**
  * Sign one account off through a date. Returns null when the account key does
  * not resolve for this company (callers map that to 404); throws
@@ -100,7 +97,7 @@ export async function signOffAccount(
 ): Promise<SignoffResult | null> {
   const parsed = parseAccountKey(accountKey)
   if (!parsed) return null
-  const today = options.today ?? isoToday()
+  const today = options.today ?? todayIsoUtc()
   const throughDate = input.through_date
   if (!ISO_DATE_RE.test(throughDate) || Number.isNaN(Date.parse(throughDate))) {
     throw new ReconciliationSignoffError('Ogiltigt datum. Ange ÅÅÅÅ-MM-DD.', 'INVALID_DATE')

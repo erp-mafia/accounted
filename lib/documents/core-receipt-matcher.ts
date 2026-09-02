@@ -35,7 +35,6 @@ export const AMOUNT_TOLERANCE_PERCENT = 0.05
  * against real statements, the spread ran 1.2% to 3%.
  */
 export const CONVERTED_AMOUNT_TOLERANCE_PERCENT = 0.09
-export const MIN_MATCH_CONFIDENCE = 0.4
 
 /**
  * Flat discount on a confidence scored from a prominentAmounts fallback

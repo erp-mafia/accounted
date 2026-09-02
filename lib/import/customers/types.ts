@@ -61,12 +61,6 @@ export interface CustomerImportParseResult {
   warnings: string[]
 }
 
-/** Input for executing the customer import. */
-export interface CustomerImportExecuteInput {
-  rows: ParsedCustomerRow[]
-  update_duplicates: boolean
-}
-
 /** Result of executing the customer import. */
 export interface CustomerImportExecuteResult {
   success: boolean

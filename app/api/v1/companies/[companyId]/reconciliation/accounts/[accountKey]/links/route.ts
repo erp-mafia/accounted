@@ -11,29 +11,17 @@ import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
-import { AccountKeySchema } from '@/lib/reconciliation/schemas'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { readV1JsonBody } from '@/lib/api/v1/body'
+import {
+  AccountKeySchema,
+  ReconciliationPairSchema as PairSchema,
+  reconciliationLinksBodyFields,
+  reconciliationLinksBodyRefinement,
+} from '@/lib/reconciliation/schemas'
 import { matchPairs } from '@/lib/reconciliation/actions'
 
-const PairSchema = z.object({
-  external_ids: z.array(z.string().uuid()).min(1).max(50),
-  journal_entry_ids: z.array(z.string().uuid()).min(1).max(50),
-  allocations: z
-    .array(z.object({ journal_entry_id: z.string().uuid(), amount: z.number() }))
-    .min(2)
-    .max(50)
-    .optional(),
-})
-
-const LinksRequest = z
-  .object({
-    pairs: z.array(PairSchema).max(200).optional(),
-    use_proposals: z.boolean().optional(),
-    confidence_threshold: z.number().min(0).max(1).optional(),
-  })
-  .refine((b) => (b.pairs && b.pairs.length > 0) || b.use_proposals === true, {
-    message: 'Ange pairs eller use_proposals: true.',
-  })
+const LinksRequest = z.object(reconciliationLinksBodyFields).refine(...reconciliationLinksBodyRefinement)
 
 const LinksResponse = z.object({
   dry_run: z.boolean(),
@@ -111,24 +99,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; accountKey:
         details: { field: 'accountKey', message: 'Okänt konto.' },
       })
     }
-    let rawBody: unknown
-    try {
-      rawBody = await request.json()
-    } catch {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'body', message: 'Body is not valid JSON.' },
-      })
-    }
+    const rawBodyResult = await readV1JsonBody(request, ctx)
+    if (!rawBodyResult.ok) return rawBodyResult.response
+    const rawBody = rawBodyResult.body
     const parsed = LinksRequest.safeParse(rawBody)
-    if (!parsed.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
-        },
-      })
-    }
+    if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     try {
       const result = await matchPairs(
         ctx.supabase,

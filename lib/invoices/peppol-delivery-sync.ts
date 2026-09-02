@@ -9,7 +9,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
-import { persistPeppolEvidence, persistVerifiedPeppolEvent } from '@/lib/invoices/peppol-delivery'
+import { persistPeppolEvidence, persistVerifiedPeppolEvent, describeError } from '@/lib/invoices/peppol-delivery'
 import type { PeppolTransport } from '@/lib/invoices/peppol-transport'
 
 /** Deliveries the provider may still say something new about. */
@@ -40,10 +40,6 @@ export interface PeppolDeliveryPollResult {
   unchanged: number
   failed: number
   errors: Array<{ providerSubmissionId: string; reason: string }>
-}
-
-function describeError(err: unknown): string {
-  return (err instanceof Error ? err.message : String(err)).slice(0, 500)
 }
 
 /** Open deliveries for a provider, oldest status first; default horizon 45 days. */

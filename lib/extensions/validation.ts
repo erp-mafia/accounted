@@ -1,3 +1,5 @@
+import { luhnValidate } from '@/lib/bankgiro/luhn'
+
 /**
  * Validates a Swedish personal number (YYYYMMDD-XXXX) using Luhn checksum.
  * Returns an error message string, or null if valid.
@@ -21,17 +23,7 @@ export function validateSwedishPersonalNumber(pnr: string): string | null {
 
   // Luhn check on the last 10 digits (YYMMDDXXXX)
   const luhnDigits = cleaned.slice(2)
-  let sum = 0
-  for (let i = 0; i < 10; i++) {
-    let digit = parseInt(luhnDigits[i])
-    if (i % 2 === 0) {
-      digit *= 2
-      if (digit > 9) digit -= 9
-    }
-    sum += digit
-  }
-
-  if (sum % 10 !== 0) return 'Ogiltig kontrollsiffra'
+  if (!luhnValidate(luhnDigits)) return 'Ogiltig kontrollsiffra'
 
   return null
 }

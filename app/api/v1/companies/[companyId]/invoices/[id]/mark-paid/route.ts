@@ -31,7 +31,7 @@ import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { MarkInvoicePaidSchema } from '@/lib/api/schemas'
 import {
   createInvoiceCashEntry,
@@ -162,17 +162,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     let force = false
     if (rawBody) {
       const parsed = MarkInvoicePaidSchema.safeParse(rawBody)
-      if (!parsed.success) {
-        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-          requestId: ctx.requestId,
-          details: {
-            issues: parsed.error.issues.map((i) => ({
-              field: i.path.join('.'),
-              message: i.message,
-            })),
-          },
-        })
-      }
+      if (!parsed.success) return v1ValidationError(ctx, parsed.error)
       exchangeRateDifference = parsed.data.exchange_rate_difference
       bodyPaymentDate = parsed.data.payment_date
       customLines = parsed.data.lines

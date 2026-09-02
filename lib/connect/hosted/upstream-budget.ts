@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { ConnectorService } from './ledger'
 
 /**
  * Global upstream rate budget for the connector proxy.
@@ -15,7 +16,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  * per-minute quota.
  */
 
-export type UpstreamService = 'bank' | 'skatteverket'
+export type UpstreamService = ConnectorService
 
 interface Budget {
   minuteMax: number

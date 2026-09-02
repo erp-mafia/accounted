@@ -84,15 +84,6 @@ export interface ReportDescriptor {
   standalone?: boolean
 }
 
-/** Categories shown in the legacy desktop rail, in order. */
-export const NAV_CATEGORIES: ReportCategory[] = [
-  'interim',
-  'year_end',
-  'tax_vat',
-  'ledgers',
-  'reconciliation',
-]
-
 /** All categories shown on the library landing, in order. */
 export const LIBRARY_CATEGORIES: ReportCategory[] = [
   'interim',
@@ -383,23 +374,6 @@ export interface ReportSection {
   category: ReportCategory
   labelKey: string
   items: ReportDescriptor[]
-}
-
-/** Grouped reports for the legacy desktop rail (excludes library-only items). */
-export function getNavSections(
-  entityType?: EntityType,
-  dimensionsEnabled?: boolean,
-): ReportSection[] {
-  return NAV_CATEGORIES.map((category) => ({
-    category,
-    labelKey: CATEGORY_LABEL_KEY[category],
-    items: REPORT_CATALOG.filter(
-      (r) =>
-        r.category === category &&
-        !r.libraryOnly &&
-        isVisible(r, entityType, undefined, dimensionsEnabled),
-    ),
-  })).filter((s) => s.items.length > 0)
 }
 
 /** Grouped reports for the library landing (includes everything visible). */

@@ -49,7 +49,3 @@ export function getOAuthConfig(provider: string): OAuthConfig {
   }
   throw new Error(`Unknown provider: ${provider}`);
 }
-
-export function validateProvider(provider: string): boolean {
-  return provider === 'fortnox' || provider === 'visma' || provider === 'briox' || provider === 'bokio' || provider === 'bjornlunden' || provider === 'wint';
-}

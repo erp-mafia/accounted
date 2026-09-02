@@ -90,14 +90,6 @@ export interface KontrolleraSvar {
 
 // ---- inlamning (v2.1) ------------------------------------------------------
 
-export interface InlamningBegaran {
-  undertecknare: string
-  epostadresser: string[]
-  kvittensepostadresser?: string[]
-  notifieringEpostadresser?: string[]
-  handling: { fil: string; typ: HandlingTyp }
-}
-
 export interface InlamningSvar {
   orgnr: string
   avsandare: string

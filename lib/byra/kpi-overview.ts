@@ -14,6 +14,7 @@
  * RPC taking uuid[] (see DECISIONS.md).
  */
 
+import { chunk as chunked } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -47,12 +48,6 @@ const log = createLogger('byra:kpi-overview')
 
 /** Max ids per PostgREST .in() filter (mirrors lib/clients/fetch-client-overview.ts). */
 const IN_CLAUSE_CHUNK = 150
-
-function chunked<T>(items: T[], size: number): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
-  return out
-}
 
 export interface ByraKpiClientRow {
   companyId: string

@@ -239,8 +239,8 @@ interface TemplatePickerProps {
   direction: 'expense' | 'income'
   entityType?: EntityType
   suggestedTemplates?: SuggestedTemplate[]
-  recentTemplateIds?: string[]
   onSelect: (template: BookingTemplate) => void
+
   onSelectCounterparty?: (templateId: string) => void
   onPickLibraryTemplate?: (raw: BookingTemplateLibrary) => void
   // When provided, the search field also matches the company's active chart

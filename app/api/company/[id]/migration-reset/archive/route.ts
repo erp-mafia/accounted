@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { privateNoStore } from '@/lib/api/private-no-store'
+import { utcDateStamp } from '@/lib/utils'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import {
   estimateArchiveSize,
@@ -17,11 +19,6 @@ type Params = { params: Promise<{ id: string }> }
 interface ResetArchiveRow {
   source_company_id: string
   created_at: string
-}
-
-function privateNoStore(response: NextResponse): NextResponse {
-  response.headers.set('Cache-Control', 'private, no-store')
-  return response
 }
 
 /**
@@ -159,7 +156,7 @@ export const GET = withRouteContext<Params>(
       const zipBuffer = await generateBaseDataArchive(archiveClient, reset.source_company_id, {
         include_documents: includeDocuments,
       })
-      const filename = `migration_reset_archive_${formatDateStamp(new Date())}.zip`
+      const filename = `migration_reset_archive_${utcDateStamp(new Date())}.zip`
 
       log.info('migration reset source archive generated', {
         userId: user.id,
@@ -190,10 +187,3 @@ export const GET = withRouteContext<Params>(
     }
   },
 )
-
-function formatDateStamp(date: Date): string {
-  const year = date.getUTCFullYear()
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
-  const day = String(date.getUTCDate()).padStart(2, '0')
-  return `${year}${month}${day}`
-}

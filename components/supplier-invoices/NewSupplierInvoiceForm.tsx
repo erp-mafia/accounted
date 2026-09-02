@@ -31,7 +31,7 @@ import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { exceedsHostedUploadLimit } from '@/lib/documents/upload-size'
 import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatAmount, formatCurrency, formatDate } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -76,10 +76,6 @@ interface NewSupplierForm {
 
 function RequiredMark() {
   return <span className="text-destructive ml-0.5" aria-hidden="true">*</span>
-}
-
-function formatAmount(amount: number): string {
-  return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 // Accepts sv-SE formatted numbers ("12 345,67" with regular, no-break or

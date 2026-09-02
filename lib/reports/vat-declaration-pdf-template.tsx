@@ -1,3 +1,4 @@
+import { formatOrgNumber } from '@/lib/utils'
 import {
   Document,
   Page,
@@ -5,7 +6,7 @@ import {
   View,
   StyleSheet,
 } from '@react-pdf/renderer'
-import { pdfNumberText } from '@/lib/pdf/number-text'
+import { pdfNumberText, formatDateSv } from '@/lib/pdf/number-text'
 import type { CompanySettings } from '@/types'
 import type { ManualFilingRow } from '@/lib/reports/vat-manual-filing'
 
@@ -98,19 +99,6 @@ function formatKr(amount: number): string {
   // pdfNumberText: Intl's U+2212 has no glyph in the bundled Helvetica/Courier,
   // so moms att få tillbaka would print as moms att betala (issue #1982).
   return pdfNumberText(new Intl.NumberFormat('sv-SE', { maximumFractionDigits: 0 }).format(amount))
-}
-
-function formatOrgNumber(orgNumber: string): string {
-  const cleaned = orgNumber.replace(/\D/g, '')
-  if (cleaned.length === 10) {
-    return `${cleaned.slice(0, 6)}-${cleaned.slice(6)}`
-  }
-  return orgNumber
-}
-
-function formatDateSv(iso: string): string {
-  if (!iso) return ''
-  return new Date(iso).toLocaleDateString('sv-SE')
 }
 
 interface VatDeclarationPDFProps {

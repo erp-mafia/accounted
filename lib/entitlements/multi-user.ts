@@ -16,9 +16,7 @@ export {
   type MultiUserAccess,
   type MultiUserGrantRow,
 } from './multi-user-state'
-export type { MultiUserState } from './multi-user-state'
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+import { UUID_RE } from '@/lib/invariants/uuid'
 
 /**
  * Whether the owner-only dormancy rule is enforced at all in this

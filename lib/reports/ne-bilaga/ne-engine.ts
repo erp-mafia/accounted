@@ -318,20 +318,3 @@ export async function generateNEDeclaration(
     warnings,
   }
 }
-
-/**
- * Get totals for display
- */
-export function getNEDeclarationTotals(declaration: NEDeclaration): {
-  totalRevenue: number
-  totalExpenses: number
-  netResult: number
-} {
-  const { rutor } = declaration
-
-  return {
-    totalRevenue: rutor.R1 + rutor.R2 + rutor.R3 + rutor.R4,
-    totalExpenses: rutor.R5 + rutor.R6 + rutor.R7 + rutor.R8 + rutor.R9 + rutor.R10,
-    netResult: rutor.R11,
-  }
-}

@@ -73,11 +73,6 @@ export interface SupplierImportParseResult {
   warnings: string[]
 }
 
-/** Input for executing the supplier import. */
-export interface SupplierImportExecuteInput {
-  rows: ParsedSupplierRow[]
-  update_duplicates: boolean
-}
 
 /** Result of executing the supplier import. */
 export interface SupplierImportExecuteResult {

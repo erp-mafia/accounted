@@ -40,8 +40,3 @@ const INTENTS: AgentIntent<any, any>[] = [
 export function getIntent(id: string): AgentIntent<any, any> | undefined {
   return INTENTS.find((i) => i.id === id)
 }
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function listIntents(): AgentIntent<any, any>[] {
-  return INTENTS
-}

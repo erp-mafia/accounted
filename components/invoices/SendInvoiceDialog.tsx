@@ -30,7 +30,8 @@ import { creditNoteNeedsJournalEntry } from '@/lib/invoices/issue-credit-note'
 import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { Loader2, Mail, Plus, Send, Trash2 } from 'lucide-react'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
-import type { Invoice, InvoiceItem, Customer, EntityType } from '@/types'
+import type { EntityType } from '@/types'
+import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import {
@@ -40,11 +41,6 @@ import {
   parseInvoiceRecipientText,
   resolveInvoiceEmailRecipients,
 } from '@/lib/invoices/email-recipients'
-
-interface InvoiceWithRelations extends Invoice {
-  customer: Customer
-  items: InvoiceItem[]
-}
 
 interface SendInvoiceDialogProps {
   open: boolean

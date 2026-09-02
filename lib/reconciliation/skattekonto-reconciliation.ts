@@ -1,9 +1,11 @@
+import { chunk } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { addDaysIso, daysBetweenIso, toIsoDate } from '@/lib/dates/iso'
 import { LEDGER_BALANCE_STATUSES, sumAccountBalance } from './gl-balance'
 import {
   AWAITING_EXTERNAL_DAYS,
@@ -95,20 +97,6 @@ export interface SkattekontoReconciliationResult extends ReconciliationStatus {
   ledger_read_failed: boolean
 }
 
-function round2(n: number): number {
-  return roundOre(n)
-}
-
-function addDays(iso: string, days: number): string {
-  const d = new Date(iso + 'T00:00:00Z')
-  d.setUTCDate(d.getUTCDate() + days)
-  return d.toISOString().slice(0, 10)
-}
-
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10)
-}
-
 function parseFetchedAt(value: unknown): Date | null {
   if (typeof value === 'number' && Number.isFinite(value)) return new Date(value)
   if (typeof value === 'string') {
@@ -117,12 +105,6 @@ function parseFetchedAt(value: unknown): Date | null {
     return Number.isNaN(d.getTime()) ? null : d
   }
   return null
-}
-
-function chunk<T>(xs: T[], size: number): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < xs.length; i += size) out.push(xs.slice(i, i + size))
-  return out
 }
 
 async function readSnapshot(
@@ -141,7 +123,7 @@ async function readSnapshot(
   const fetchedAt = parseFetchedAt(value.fetchedAt)
   const saldo = Number(value.saldo?.saldoSkatteverket)
   if (!fetchedAt || !Number.isFinite(saldo)) return null
-  return { saldo: round2(saldo), fetchedAt }
+  return { saldo: roundOre(saldo), fetchedAt }
 }
 
 async function fetchRows(supabase: SupabaseClient, companyId: string): Promise<SkattekontoRow[]> {
@@ -209,8 +191,8 @@ async function fetchLedgerEntries(
     if (!head) continue
     const amount = Number(line.debit_amount || 0) - Number(line.credit_amount || 0)
     const existing = byEntry.get(head.id)
-    if (existing) existing.amount = round2(existing.amount + amount)
-    else byEntry.set(head.id, { head, amount: round2(amount) })
+    if (existing) existing.amount = roundOre(existing.amount + amount)
+    else byEntry.set(head.id, { head, amount: roundOre(amount) })
   }
   return byEntry
 }
@@ -226,14 +208,9 @@ function proposalFrom(head: EntryHead, row: SkattekontoRow): ReconciliationPropo
     confidence: head.status === 'posted' ? 0.95 : 0.8,
     reasons: [
       'exakt belopp på 1630',
-      `${Math.abs(daysBetween(head.entry_date, row.transaktionsdatum))} dagars avstånd`,
+      `${Math.abs(daysBetweenIso(row.transaktionsdatum, head.entry_date))} dagars avstånd`,
     ],
   }
-}
-
-function daysBetween(a: string, b: string): number {
-  const ms = new Date(a + 'T00:00:00Z').getTime() - new Date(b + 'T00:00:00Z').getTime()
-  return Math.round(ms / 86_400_000)
 }
 
 function inWindow(date: string, from: string | null | undefined, to: string | null | undefined): boolean {
@@ -275,16 +252,16 @@ export async function getSkattekontoReconciliationStatus(
   companyId: string,
   options: SkattekontoReconciliationOptions = {},
 ): Promise<SkattekontoReconciliationResult | null> {
-  const today = options.today ?? isoDate(new Date())
+  const today = options.today ?? toIsoDate(new Date())
   const [snapshot, rows] = await Promise.all([
     readSnapshot(supabase, companyId),
     fetchRows(supabase, companyId),
   ])
   if (!snapshot && rows.length === 0) return null
 
-  const cutoffDate = snapshot ? isoDate(snapshot.fetchedAt) : today
+  const cutoffDate = snapshot ? toIsoDate(snapshot.fetchedAt) : today
   const asOf = snapshot ? snapshot.fetchedAt.toISOString() : new Date(today + 'T00:00:00Z').toISOString()
-  const stale = !snapshot || daysBetween(today, cutoffDate) > STALE_AFTER_DAYS
+  const stale = !snapshot || daysBetweenIso(cutoffDate, today) > STALE_AFTER_DAYS
 
   const booked = rows.filter((r) => r.status === 'booked' && r.transaktionsdatum <= cutoffDate)
   const upcoming = rows.filter((r) => r.status === 'upcoming' && !r.is_ignored)
@@ -340,7 +317,7 @@ export async function getSkattekontoReconciliationStatus(
   const olderThanWindow = (date: string) => !!options.windowFrom && date < options.windowFrom
 
   for (const row of booked) {
-    const amount = round2(Number(row.belopp_skatteverket))
+    const amount = roundOre(Number(row.belopp_skatteverket))
     const base = {
       item_id: row.id,
       item_type: 'skattekonto_transaction' as const,
@@ -352,7 +329,7 @@ export async function getSkattekontoReconciliationStatus(
     }
 
     if (row.is_ignored) {
-      ignoredTotal = round2(ignoredTotal + amount)
+      ignoredTotal = roundOre(ignoredTotal + amount)
       counts.ignored++
       if (visible(row.transaktionsdatum)) {
         pushCapped('ignored', { ...base, bucket: 'ignored', actions: ['unignore'] })
@@ -389,7 +366,7 @@ export async function getSkattekontoReconciliationStatus(
     }
 
     // Unlinked (or dead link): counts toward the bridge either way.
-    unlinkedExternalTotal = round2(unlinkedExternalTotal + amount)
+    unlinkedExternalTotal = roundOre(unlinkedExternalTotal + amount)
     if (olderThanWindow(row.transaktionsdatum)) olderUnmatched++
 
     const suggestedHead = row.suggested_journal_entry_id
@@ -429,14 +406,14 @@ export async function getSkattekontoReconciliationStatus(
 
   // Ledger entries in the comparable history that no live link settles.
   let unlinkedLedgerTotal = 0
-  const awaitingFrom = addDays(cutoffDate, -AWAITING_EXTERNAL_DAYS)
+  const awaitingFrom = addDaysIso(cutoffDate, -AWAITING_EXTERNAL_DAYS)
   const sortedLedger = Array.from(ledgerEntries.values()).sort((a, b) =>
     a.head.entry_date < b.head.entry_date ? -1 : a.head.entry_date > b.head.entry_date ? 1 : 0,
   )
   for (const { head, amount } of sortedLedger) {
     if (liveLinkedEntryIds.has(head.id)) continue
     if (amount === 0) continue
-    unlinkedLedgerTotal = round2(unlinkedLedgerTotal + amount)
+    unlinkedLedgerTotal = roundOre(unlinkedLedgerTotal + amount)
     counts.unmatched_ledger++
     if (olderThanWindow(head.entry_date)) olderUnmatched++
     if (!visible(head.entry_date)) continue
@@ -459,8 +436,8 @@ export async function getSkattekontoReconciliationStatus(
 
   let upcomingTotal = 0
   for (const row of upcoming) {
-    const amount = round2(Number(row.belopp_skatteverket))
-    upcomingTotal = round2(upcomingTotal + amount)
+    const amount = roundOre(Number(row.belopp_skatteverket))
+    upcomingTotal = roundOre(upcomingTotal + amount)
     pushCapped('upcoming', {
       item_id: row.id,
       item_type: 'skattekonto_transaction',
@@ -475,16 +452,16 @@ export async function getSkattekontoReconciliationStatus(
   }
 
   // Totals and the identity.
-  const allBookedTotal = booked.reduce((s, r) => round2(s + Number(r.belopp_skatteverket)), 0)
+  const allBookedTotal = booked.reduce((s, r) => roundOre(s + Number(r.belopp_skatteverket)), 0)
   const saldo = snapshot?.saldo ?? null
-  const saldoAtStart = saldo === null ? null : round2(saldo - allBookedTotal)
+  const saldoAtStart = saldo === null ? null : roundOre(saldo - allBookedTotal)
   const openingDifference =
-    saldoAtStart === null || ledgerBefore === null ? null : round2(saldoAtStart - ledgerBefore)
-  const difference = saldo === null || ledgerBalance === null ? null : round2(saldo - ledgerBalance)
+    saldoAtStart === null || ledgerBefore === null ? null : roundOre(saldoAtStart - ledgerBefore)
+  const difference = saldo === null || ledgerBalance === null ? null : roundOre(saldo - ledgerBalance)
   const unexplained =
     difference === null || openingDifference === null
       ? null
-      : round2(
+      : roundOre(
           difference - openingDifference - unlinkedExternalTotal - ignoredTotal + unlinkedLedgerTotal,
         )
 
@@ -510,7 +487,7 @@ export async function getSkattekontoReconciliationStatus(
       key: 'unmatched_external',
       label_sv: 'Händelser som saknas i bokföringen',
       label_en: 'Events missing from the ledger',
-      amount: round2(-unlinkedExternalTotal),
+      amount: roundOre(-unlinkedExternalTotal),
       count: counts.unmatched_external + counts.proposed,
       items_bucket: 'unmatched_external',
     },
@@ -528,7 +505,7 @@ export async function getSkattekontoReconciliationStatus(
       key: 'ignored',
       label_sv: 'Ignorerade händelser',
       label_en: 'Ignored events',
-      amount: round2(-ignoredTotal),
+      amount: roundOre(-ignoredTotal),
       count: counts.ignored,
       items_bucket: 'ignored',
     })
@@ -538,7 +515,7 @@ export async function getSkattekontoReconciliationStatus(
       key: 'opening_difference',
       label_sv: `Ingående skillnad per ${historyStart ?? cutoffDate}`,
       label_en: `Opening difference at ${historyStart ?? cutoffDate}`,
-      amount: round2(-openingDifference),
+      amount: roundOre(-openingDifference),
       count: null,
       items_bucket: null,
     })

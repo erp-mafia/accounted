@@ -99,13 +99,7 @@ export class ProviderCompanyMismatchError extends Error {
 
 // Re-export data fetching functions from the provider layer
 export { resolveConsent } from '@/lib/providers/resolve-consent'
-export {
-  fetchCompanyInfoDirect,
-  fetchCustomersDirect,
-  fetchSuppliersDirect,
-  fetchSalesInvoicesDirect,
-  fetchSupplierInvoicesDirect,
-} from '@/lib/providers/provider-data-fetcher'
+export { fetchCompanyInfoDirect } from '@/lib/providers/provider-data-fetcher'
 
 // ── Consent lifecycle (direct Supabase) ─────────────────────────────
 

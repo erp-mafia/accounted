@@ -24,8 +24,7 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatDateLong } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
-type Kind = 'fact' | 'preference' | 'pattern' | 'correction'
-type Source = 'composer' | 'user_taught' | 'agent_learned' | 'derived'
+import type { FactKind as Kind, FactSource as Source } from '@/lib/agent-context/agent-competence'
 
 interface AgentMemoryRow {
   id: string

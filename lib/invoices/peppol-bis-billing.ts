@@ -1,3 +1,4 @@
+import { escapeXml } from '@/lib/xml/escape'
 import {
   generateOcrReference,
   validateBankgiroNumber,
@@ -109,15 +110,6 @@ function formatDecimal(value: number): string {
   const whole = Math.floor(absolute / precision)
   const fraction = String(absolute % precision).padStart(6, '0').replace(/0+$/, '')
   return fraction ? `${sign}${whole}.${fraction}` : `${sign}${whole}`
-}
-
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
 }
 
 function hasText(value: string | null | undefined): value is string {

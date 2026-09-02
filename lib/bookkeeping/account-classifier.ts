@@ -1,9 +1,6 @@
 import { getBASReference } from './bas-reference'
 import { classifyAccountHeuristic, type ClassifiedAccount } from './account-classifier-heuristic'
 
-export type { AccountType, ClassifiedAccount, NormalBalance } from './account-classifier-heuristic'
-
-
 /**
  * Map a 4-digit BAS account number to its account_type and normal_balance.
  *

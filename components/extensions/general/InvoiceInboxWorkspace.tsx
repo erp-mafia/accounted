@@ -63,7 +63,7 @@ import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { useBranding } from '@/lib/branding/brand-context'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
-import type { InboxChannelContext, InvoiceExtractionResult, InboxItemSource } from '@/types'
+import type { AccountingMethod, InboxChannelContext, InvoiceExtractionResult, InboxItemSource } from '@/types'
 import { renderChannelParticipant } from '@/lib/documents/channel-context-notes'
 import { selectInboxFields } from '@/lib/documents/inbox-field-visibility'
 import {
@@ -91,8 +91,6 @@ import {
 } from '@/lib/documents/upload-size'
 import { shrinkImageForUpload } from '@/lib/documents/shrink-image'
 import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
-
-type AccountingMethod = 'accrual' | 'cash'
 
 /**
  * A failure whose message is already the sentence to show the user, resolved
@@ -333,8 +331,6 @@ const EXTRACTED_FIELD_ACCESSORS: ((d: InvoiceExtractionResult) => unknown)[] = [
   (d) => d.totals?.vatAmount,
   (d) => d.totals?.total,
 ]
-
-export const EXTRACTED_FIELD_COUNT = EXTRACTED_FIELD_ACCESSORS.length
 
 /** How many of them the extraction actually filled in. */
 function countExtractedFields(data: InvoiceExtractionResult | null): number {

@@ -33,6 +33,8 @@ import { getSenderForBrand, getBaseUrlForBrand } from '@/lib/email/brand-sender'
 import { resolveBrandForCompany } from '@/lib/branding/resolve'
 import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
+import { escapeHtml } from '@/lib/email/user-text'
 
 const log = createLogger('bookkeeping-digest')
 
@@ -482,13 +484,6 @@ function toReferenceUuid(referenceKey: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
 }
 
-/** Split ids into .in()-safe chunks (see IN_CLAUSE_CHUNK). */
-function chunk<T>(items: T[], size: number): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
-  return out
-}
-
 /**
  * Company names are user-controlled and reach the Subject header: strip
  * CR/LF and other control characters so the value can never smuggle extra
@@ -499,11 +494,3 @@ function sanitizeHeaderText(input: string): string {
   return input.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
-function escapeHtml(input: string): string {
-  return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}

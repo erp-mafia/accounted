@@ -13,7 +13,6 @@ import {
 export const VISMA_BASE_URL = 'https://eaccountingapi.vismaonline.com/v2';
 export const VISMA_AUTH_URL = 'https://identity.vismaonline.com/connect/authorize';
 export const VISMA_TOKEN_URL = 'https://identity.vismaonline.com/connect/token';
-export const VISMA_REVOKE_URL = 'https://identity.vismaonline.com/connect/revocation';
 export const VISMA_RATE_LIMIT: RateLimitConfig = { maxRequests: 10, windowMs: 1000 };
 
 export const VISMA_RESOURCE_CONFIGS: Partial<Record<ResourceType, VismaResourceConfig>> = {

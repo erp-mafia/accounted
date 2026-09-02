@@ -1,5 +1,6 @@
 import { isUnsafeUrlError, safeFetch } from '@/lib/http/safe-fetch'
 import type { ShopifyOrder, ShopifyShopInfo } from '../types'
+import { sleep } from '@/lib/utils'
 
 /**
  * Minimal Shopify GraphQL Admin API client for the order feed.
@@ -139,10 +140,6 @@ function asTerminalGuardError(err: unknown): ShopifyApiError | null {
     )
   }
   return null
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 async function postJson(url: string, body: unknown, headers: Record<string, string>) {
