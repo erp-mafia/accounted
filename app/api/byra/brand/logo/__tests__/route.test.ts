@@ -67,8 +67,17 @@ function ownerMembership() {
   getByraMembershipMock.mockResolvedValue({ teamId: 'team-1', teamName: 'Siffra', role: 'owner' })
 }
 
-function uploadRequest(type = 'image/png', size = 128): Request {
-  const file = new File([new Uint8Array(size)], 'logo.png', { type })
+// The route decides the type by magic bytes (never by the declared type), so
+// the default fixture is a real PNG signature padded to `size`.
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+function fixtureBytes(magic: number[] | null, size: number): Uint8Array {
+  const bytes = new Uint8Array(Math.max(size, magic?.length ?? 0))
+  if (magic) bytes.set(magic, 0)
+  return bytes
+}
+
+function uploadRequest(type = 'image/png', size = 128, magic: number[] | null = PNG_MAGIC): Request {
+  const file = new File([fixtureBytes(magic, size)], 'logo.png', { type })
   const formData = new FormData()
   formData.append('file', file)
   return new Request('http://localhost/api/byra/brand/logo', { method: 'POST', body: formData })
@@ -122,7 +131,7 @@ describe('POST /api/byra/brand/logo', () => {
   it('returns 400 for a disallowed file type', async () => {
     authed()
     ownerMembership()
-    const res = await POST(uploadRequest('application/pdf'))
+    const res = await POST(uploadRequest('application/pdf', 128, null))
     expect(res.status).toBe(400)
   })
 
@@ -176,5 +185,13 @@ describe('DELETE /api/byra/brand/logo', () => {
     expect(storageRemoveMock).toHaveBeenCalledWith(['byra/team-1/logo-old.png'])
     expect(updateMock).toHaveBeenCalledWith({ logo_url: null })
     expect(clearBrandCacheMock).toHaveBeenCalled()
+  })
+
+  it('refuses an SVG even when declared as image/png (magic bytes decide)', async () => {
+    const svg = Array.from(new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"><script>1</script></svg>'))
+    const response = await POST(uploadRequest('image/png', svg.length, svg))
+    expect(response.status).toBe(400)
+    const body = await response.json()
+    expect(body.error).toBe('Otillåten filtyp. Tillåtna: PNG, JPG, WebP.')
   })
 })
