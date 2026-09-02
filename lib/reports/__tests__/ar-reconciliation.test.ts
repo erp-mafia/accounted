@@ -41,6 +41,14 @@ beforeEach(() => {
 })
 
 describe('generateARReconciliation', () => {
+  it('only reads fakturor: proformas, delivery notes and quotes are not receivables', async () => {
+    results = [{ data: [], error: null }, { data: [], error: null }]
+
+    await generateARReconciliation(supabase, 'company-1')
+
+    expect(calls).toContainEqual({ method: 'eq', args: ['document_type', 'invoice'] })
+  })
+
   it('returns reconciled when AR ledger matches account 1510', async () => {
     results = [
       // 0: invoices
