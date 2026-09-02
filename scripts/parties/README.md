@@ -96,6 +96,35 @@ the default for that reason. The model's remaining party misses are text
 with a person's name or a card descriptor, exactly where a hard key from a
 document would decide instead.
 
+## Selection-step evaluation against document-anchored truth, 2026-09-02
+
+`eval-selection.ts` scores the selection step (which similar keys in the same
+company are the same party) without human labels: every key in the set has an
+org number read by OCR from an invoice linked to its voucher, so two keys are
+the same party exactly when the org numbers agree. Keys mapping to several
+org numbers are excluded. 225 anchors, 1,038 candidate pairs (747 same, 291
+different), 44 anchors with no true match. Draw: `draw-selection-gold.sql`.
+
+| Selector | Pair precision | Pair recall | Non-match recall | Anchors fully right | "None" precision / recall |
+|---|---|---|---|---|---|
+| Rules (same core name) | 0.909 | 0.776 | 0.801 | 0.547 | 0.40 / 0.86 |
+| Sonnet 5 on Bedrock EU, zero-shot | 0.910 | 0.904 | 0.770 | 0.756 | 0.68 / 0.77 |
+
+What the false merges are: both selectors merge "Levfakt Fortnox (325)" with
+"Levfakt Fortnox (154)", "Vattenfall Kundservice" with "Vattenfall
+Eldistribution", "Jämtkraft" with "Jämtkraft" under another org number. Those
+are different legal entities sharing a trade name, or OCR variance in the org
+number. Text cannot separate them and should not try: the hard key from the
+document is the referee, which is exactly the resolver's precedence order.
+What the model catches that the rules miss: "lån themax" versus "lån från
+themax", and paraphrases with a changed word order.
+
+Read with one caveat: sales-side vouchers ("kundbet ...") contribute noisy
+truth because the org number on the linked document can be the customer's;
+the next draw restricts to expense-side vouchers.
+
+Cost: about 1,300 input tokens per anchor, 298k tokens for the run.
+
 ## Still to confirm in this phase
 
 - SCB access: the free Företagsregistret API carries F-skattstatus,
