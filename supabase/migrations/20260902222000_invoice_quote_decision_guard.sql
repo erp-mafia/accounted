@@ -90,4 +90,16 @@ $function$;
 COMMENT ON FUNCTION public.generate_quote_number(uuid) IS
   'Allocates the next offert (quote) number OF-nnn for p_company_id. Requires a non-viewer membership of the company; only a service_role or direct database connection with no auth.uid() is trusted without one. Raises 42501 otherwise. Not callable by anon.';
 
+-- 3. Date invariants the trigger maintains, pinned as CHECKs so no direct
+--    write can leave a quote without an expiry or with a diverged mirror,
+--    and no other document type can carry an expiry.
+ALTER TABLE public.invoices
+  DROP CONSTRAINT IF EXISTS invoices_quote_dates_check;
+ALTER TABLE public.invoices
+  ADD CONSTRAINT invoices_quote_dates_check
+    CHECK (
+      (document_type = 'quote' AND valid_until IS NOT NULL AND due_date = valid_until)
+      OR (document_type <> 'quote' AND valid_until IS NULL)
+    );
+
 NOTIFY pgrst, 'reload schema';

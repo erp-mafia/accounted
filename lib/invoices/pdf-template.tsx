@@ -51,6 +51,7 @@ const LABELS = {
     creditNoteRef: (n: string) => `Denna kreditfaktura avser och krediterar faktura nr ${n}`,
     // Sections
     invoiceInfoHeading: 'Fakturainformation',
+    quoteInfoHeading: 'Offertinformation',
     billedToHeading: 'Faktureras till',
     itemsHeading: 'Specifikation',
     // Invoice details
@@ -145,6 +146,7 @@ const LABELS = {
     paidBannerNoDate: (amount: string) => `Paid · ${amount}`,
     creditNoteRef: (n: string) => `This credit note credits invoice no. ${n}`,
     invoiceInfoHeading: 'Invoice information',
+    quoteInfoHeading: 'Quote information',
     billedToHeading: 'Billed to',
     itemsHeading: 'Items',
     invoiceDate: 'Invoice date:',
@@ -939,7 +941,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         <View style={styles.twoColumn}>
           {/* Invoice details */}
           <View style={styles.column}>
-            <Text style={styles.sectionTitle}>{L.invoiceInfoHeading}</Text>
+            <Text style={styles.sectionTitle}>{isQuote ? L.quoteInfoHeading : L.invoiceInfoHeading}</Text>
             <View style={styles.row}>
               <Text style={styles.label}>{isQuote ? L.quoteDate : L.invoiceDate}</Text>
               <Text style={styles.value}>{formatDate(invoice.invoice_date)}</Text>

@@ -191,7 +191,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     if (ctx.dryRun) {
       return dryRunPreview(
-        toResponse({ ...typed, quote_status: nextStatus, quote_decided_at: decidedAt }),
+        toResponse({
+          ...typed,
+          quote_status: nextStatus,
+          quote_decided_at: decidedAt,
+          valid_until: parsed.data.valid_until ?? typed.valid_until,
+        }),
         { requestId: ctx.requestId, log: ctx.log },
       )
     }

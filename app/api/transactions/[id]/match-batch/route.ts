@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { MatchBatchSchema } from '@/lib/api/schemas'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { eventBus } from '@/lib/events/bus'
 import { clearSettledBatchAllocationSuggestions } from '@/lib/invoices/clear-settled-batch-allocations'
 import { ensureInitialized } from '@/lib/init'
@@ -84,11 +84,15 @@ export const POST = withRouteContext(
       ),
     )
     if (customerInvoiceIds.length > 0) {
-      const { data: docRows } = await supabase
+      const { data: docRows, error: docError } = await supabase
         .from('invoices')
         .select('id, document_type')
         .in('id', customerInvoiceIds)
         .eq('company_id', companyId)
+      if (docError) {
+        txLog.error('match-batch: document lookup failed', docError)
+        return errorResponse(docError, txLog, { requestId })
+      }
       const offender = (docRows ?? []).find((r) => r.document_type && r.document_type !== 'invoice')
       if (offender) {
         return errorResponseFromCode('MATCH_INVOICE_NOT_INVOICE_TYPE', txLog, {
