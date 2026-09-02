@@ -23,8 +23,9 @@ const h = vi.hoisted(() => ({
     touchConnection: vi.fn(),
   },
   peppolLedger: {
-    countActiveConnectorPeppolRegistrations: vi.fn(),
+    countConnectorPeppolRegistrations: vi.fn(),
     findOwnedPeppolSubmission: vi.fn(),
+    getPeppolAllowedIdentifiers: vi.fn(),
     isHostedPeppolParticipantLive: vi.fn(),
     isPeppolParticipantHeld: vi.fn(),
     listActivePeppolParticipants: vi.fn(),
@@ -44,7 +45,7 @@ const h = vi.hoisted(() => ({
     fetchInboundDocumentXml: vi.fn(),
   },
   qvaliaConfigured: { value: true },
-  archive: { rows: [] as unknown[], single: null as unknown },
+  archive: { rows: [] as unknown[], single: null as unknown, ins: [] as Array<[string, unknown]> },
 }))
 
 vi.mock('@/lib/connect/hosted/with-connector-auth', () => ({
@@ -57,7 +58,8 @@ vi.mock('@/lib/connect/hosted/with-connector-auth', () => ({
           if (table !== 'peppol_inbound_documents') throw new Error(`unexpected table ${table}`)
           const chain: Record<string, unknown> = {}
           const self = () => chain
-          for (const m of ['select', 'eq', 'in', 'order']) chain[m] = self
+          for (const m of ['select', 'eq', 'order']) chain[m] = self
+          chain.in = (col: string, vals: unknown) => { h.archive.ins.push([col, vals]); return chain }
           chain.limit = () => Promise.resolve({ data: h.archive.rows, error: null })
           chain.maybeSingle = () => Promise.resolve({ data: h.archive.single, error: null })
           return chain
@@ -105,13 +107,15 @@ beforeEach(() => {
   h.qvaliaConfigured.value = true
   h.archive.rows = []
   h.archive.single = null
+  h.archive.ins = []
   h.ledger.findByAccountUid.mockResolvedValue(null)
   h.ledger.countHeldConnections.mockResolvedValue(0)
   h.ledger.createPendingConnection.mockResolvedValue('pending-1')
   h.ledger.activateByPendingState.mockResolvedValue({ id: 'row-1' })
   h.peppolLedger.isPeppolParticipantHeld.mockResolvedValue(false)
   h.peppolLedger.isHostedPeppolParticipantLive.mockResolvedValue(false)
-  h.peppolLedger.countActiveConnectorPeppolRegistrations.mockResolvedValue(0)
+  h.peppolLedger.countConnectorPeppolRegistrations.mockResolvedValue(0)
+  h.peppolLedger.getPeppolAllowedIdentifiers.mockResolvedValue(new Set(['5561234567']))
   h.peppolLedger.listActivePeppolParticipants.mockResolvedValue([participant])
   h.registration.getPeppolReceivingCap.mockReturnValue(null)
   h.registration.countLivePeppolRegistrations.mockResolvedValue(0)
@@ -162,7 +166,29 @@ describe('lookup and submit', () => {
     expect(h.transport.lookupRecipient).not.toHaveBeenCalled()
   })
 
+  const submissionBody = () => ({
+    idempotencyKey: 'idem-1',
+    tenantReference: 'company-OTHER',
+    sender: participant,
+    recipient: { scheme: '0007', identifier: '5569876543' },
+    documentTypeId: documentTypes[0].documentTypeId,
+    processId: documentTypes[0].processId,
+    filename: 'inv.xml',
+    contentType: 'application/xml',
+    document: '<Invoice/>',
+    documentSha256: 'a'.repeat(64),
+  })
+
+  it('refuses to send as a participant this key has not registered', async () => {
+    h.ledger.findByAccountUid.mockResolvedValue(null)
+    const res = await POST(req('POST', '/submit', submissionBody()))
+    expect(res.status).toBe(403)
+    expect((await res.json()).code).toBe('CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED')
+    expect(h.transport.submit).not.toHaveBeenCalled()
+  })
+
   it('submits under the header company and records ownership of the provider submission id', async () => {
+    h.ledger.findByAccountUid.mockResolvedValue({ id: 'row-sender' })
     h.transport.submit.mockResolvedValue({ provider: 'qvalia', providerSubmissionId: 'int-9', idempotencyKey: 'idem-1', tenantReference: 'company-1', acceptedAt: 'now' })
     const submission = {
       idempotencyKey: 'idem-1',
@@ -263,10 +289,49 @@ describe('receiving registration', () => {
   it('shares the provider-account cap between hosted companies and connector instances', async () => {
     h.registration.getPeppolReceivingCap.mockReturnValue(10)
     h.registration.countLivePeppolRegistrations.mockResolvedValue(7)
-    h.peppolLedger.countActiveConnectorPeppolRegistrations.mockResolvedValue(3)
+    h.peppolLedger.countConnectorPeppolRegistrations.mockResolvedValue(3)
     const res = await PUT(req('PUT', '/recipient', body))
     expect(res.status).toBe(403)
     expect((await res.json()).code).toBe('PEPPOL_REGISTRATION_CAP_REACHED')
+    expect(h.ledger.createPendingConnection).not.toHaveBeenCalled()
+  })
+
+  it('re-checks the cap after its own reservation and rolls back when a concurrent registration won', async () => {
+    h.registration.getPeppolReceivingCap.mockReturnValue(10)
+    h.registration.countLivePeppolRegistrations.mockResolvedValue(7)
+    h.peppolLedger.countConnectorPeppolRegistrations.mockResolvedValueOnce(2).mockResolvedValueOnce(4)
+    const res = await PUT(req('PUT', '/recipient', body))
+    expect(res.status).toBe(403)
+    expect((await res.json()).code).toBe('PEPPOL_REGISTRATION_CAP_REACHED')
+    expect(h.ledger.deletePendingConnectionById).toHaveBeenCalledWith(expect.anything(), 'pending-1')
+    expect(h.transport.registerRecipient).not.toHaveBeenCalled()
+  })
+
+  it('refuses a participant identifier the key is not authorized to publish', async () => {
+    h.peppolLedger.getPeppolAllowedIdentifiers.mockResolvedValue(new Set(['5560000001']))
+    const res = await PUT(req('PUT', '/recipient', body))
+    expect(res.status).toBe(403)
+    expect((await res.json()).code).toBe('CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED')
+    expect(h.peppolLedger.isPeppolParticipantHeld).not.toHaveBeenCalled()
+    expect(h.transport.registerRecipient).not.toHaveBeenCalled()
+  })
+
+  it('refuses to register through an access point that cannot deregister', async () => {
+    const original = h.transport.unregisterRecipient
+    ;(h.transport as { unregisterRecipient?: unknown }).unregisterRecipient = undefined
+    try {
+      const res = await PUT(req('PUT', '/recipient', body))
+      expect(res.status).toBe(422)
+      expect((await res.json()).code).toBe('PEPPOL_RECEIVING_UNSUPPORTED')
+      const del = await DELETE(req('DELETE', '/recipient?scheme=0007&identifier=5561234567'))
+      expect(del.status).toBe(404)
+      h.ledger.findByAccountUid.mockResolvedValue({ id: 'row-1' })
+      const del2 = await DELETE(req('DELETE', '/recipient?scheme=0007&identifier=5561234567'))
+      expect(del2.status).toBe(422)
+      expect(h.ledger.revokeByHandle).not.toHaveBeenCalled()
+    } finally {
+      h.transport.unregisterRecipient = original
+    }
   })
 
   it('rolls the reservation back when the access point rejects', async () => {
@@ -316,6 +381,9 @@ describe('inbound documents come from the hosted archive, scoped to owned partic
     expect(res.status).toBe(200)
     const items = await res.json()
     expect(items).toEqual([{ provider: 'qvalia', providerDocumentId: 'doc-1', documentType: 'Invoice', payload: { a: 1 }, receivedAt: 't1' }])
+    // Both halves of the participant id are filtered in the query itself, so
+    // foreign rows never consume the limit.
+    expect(h.archive.ins).toEqual([['recipient_scheme', ['0007']], ['recipient_identifier', ['5561234567']]])
     expect(h.transport.listInboundDocuments).not.toHaveBeenCalled()
   })
 

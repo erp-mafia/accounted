@@ -86,15 +86,53 @@ export async function isHostedPeppolParticipantLive(
   return !!data
 }
 
-/** Active connector-held registrations across every key (for the provider-account cap). */
-export async function countActiveConnectorPeppolRegistrations(supabase: SupabaseClient): Promise<number> {
-  const { count, error } = await supabase
-    .from('connector_connections')
-    .select('id', { count: 'exact', head: true })
-    .eq('service', 'peppol')
-    .eq('status', 'active')
-  if (error) throw new Error(`ledger count failed: ${error.message}`)
-  return count ?? 0
+/** Same reservation window as countHeldConnections in ./ledger.ts. */
+const PENDING_CAP_WINDOW_MS = 15 * 60 * 1000
+
+/**
+ * Connector-held registrations across every key, for the provider-account
+ * cap: active rows plus fresh pending reservations, so two concurrent
+ * registrations cannot both pass the cap check and both land.
+ */
+export async function countConnectorPeppolRegistrations(supabase: SupabaseClient, now: Date = new Date()): Promise<number> {
+  const freshPendingSince = new Date(now.getTime() - PENDING_CAP_WINDOW_MS).toISOString()
+  const [active, pending] = await Promise.all([
+    supabase
+      .from('connector_connections')
+      .select('id', { count: 'exact', head: true })
+      .eq('service', 'peppol')
+      .eq('status', 'active'),
+    supabase
+      .from('connector_connections')
+      .select('id', { count: 'exact', head: true })
+      .eq('service', 'peppol')
+      .eq('status', 'pending')
+      .gte('created_at', freshPendingSince),
+  ])
+  if (active.error) throw new Error(`ledger count failed: ${active.error.message}`)
+  if (pending.error) throw new Error(`ledger count failed: ${pending.error.message}`)
+  return (active.count ?? 0) + (pending.count ?? 0)
+}
+
+/**
+ * Participant identifiers a key may publish under Arcim's access point: the
+ * allowlist Arcim recorded at issuance plus the licensee's own org number.
+ * Whitespace is stripped the same way peppolHandle() does.
+ */
+export async function getPeppolAllowedIdentifiers(supabase: SupabaseClient, keyId: string): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from('connector_keys')
+    .select('org_number, peppol_participants')
+    .eq('id', keyId)
+    .maybeSingle()
+  if (error) throw new Error(`connector key read failed: ${error.message}`)
+  const row = data as { org_number: string | null; peppol_participants: string[] | null } | null
+  const allowed = new Set<string>()
+  for (const value of [row?.org_number ?? '', ...(row?.peppol_participants ?? [])]) {
+    const cleaned = value.replace(/\s/g, '')
+    if (cleaned) allowed.add(cleaned)
+  }
+  return allowed
 }
 
 export async function recordPeppolSubmission(

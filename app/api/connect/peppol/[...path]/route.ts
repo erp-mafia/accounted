@@ -12,9 +12,10 @@ import {
   touchConnection,
 } from '@/lib/connect/hosted/ledger'
 import {
-  countActiveConnectorPeppolRegistrations,
+  countConnectorPeppolRegistrations,
   describePeppolUpstreamFailure,
   findOwnedPeppolSubmission,
+  getPeppolAllowedIdentifiers,
   isHostedPeppolParticipantLive,
   isPeppolParticipantHeld,
   listActivePeppolParticipants,
@@ -37,8 +38,15 @@ import { QVALIA_PROVIDER, createQvaliaTransport, readQvaliaConfigFromEnv } from 
  * whole account, which the hosted inbound cron already does).
  *
  * Ownership model:
+ *   - a participant may only be registered when its identifier is on the
+ *     key's allowlist (connector_keys.peppol_participants, recorded by Arcim
+ *     at issuance) or is the licensee's own org number: the hosted side has
+ *     no other way to know which organisations an instance legitimately
+ *     hosts, and X-Connector-Company is caller-supplied;
  *   - a receiving registration is a ledger row (service 'peppol') whose
  *     account_uids holds the participant id; one participant, one key;
+ *   - a document may only be SENT as a participant the key has registered
+ *     (the registration is the identity claim, the allowlist authorizes it);
  *   - an outbound submission is a connector_peppol_submissions row; status
  *     polls and evidence reads require it;
  *   - inbound documents are served from the hosted archive
@@ -218,6 +226,15 @@ export const POST = withConnectorAuth('connect.peppol', async (request, ctx) => 
     if (!cref) return missingCompany()
     const body = await parseBody(request, submissionSchema)
     if (!body.ok) return body.response
+    // Sending as a participant is an identity claim: only participants this
+    // key registered (which the allowlist authorized) may appear as sender.
+    const senderOwned = await findByAccountUid(ctx.supabase, { keyId: ctx.key.id, accountUid: peppolHandle(body.value.sender) })
+    if (!senderOwned) {
+      return NextResponse.json(
+        { error: 'The sender participant is not registered through this connector key', code: 'CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED', retryable: false },
+        { status: 403 },
+      )
+    }
     const blocked = await budgetOr429(ctx)
     if (blocked) return blocked
     // The tenant reference the instance signs its delivery with must be the
@@ -269,16 +286,23 @@ export const POST = withConnectorAuth('connect.peppol', async (request, ctx) => 
     if (!body.ok) return body.response
     const participants = await listActivePeppolParticipants(ctx.supabase, ctx.key.id)
     if (participants.length === 0) return NextResponse.json([])
-    const identifiers = [...new Set(participants.map((p) => p.identifier))]
     const limit = Math.min(Math.max(body.value.limit ?? 25, 1), 100)
+    // Both halves of the participant id are filtered in the query, so a
+    // foreign row sharing only an identifier cannot consume the limit. The
+    // remaining cross-pair case (scheme of one owned participant with the
+    // identifier of another) is covered by over-fetching before the exact
+    // pair check below.
+    const schemes = [...new Set(participants.map((p) => p.scheme))]
+    const identifiers = [...new Set(participants.map((p) => p.identifier))]
     const { data, error } = await ctx.supabase
       .from('peppol_inbound_documents')
       .select('provider_document_id, document_type, ubl_json, received_at, recipient_scheme, recipient_identifier')
       .eq('provider', QVALIA_PROVIDER)
       .eq('document_type', body.value.documentType)
+      .in('recipient_scheme', schemes)
       .in('recipient_identifier', identifiers)
       .order('received_at', { ascending: false })
-      .limit(limit)
+      .limit(Math.min(limit * 2, 200))
     if (error) throw new Error(`inbound archive read failed: ${error.message}`)
     const owned = new Set(participants.map(peppolHandle))
     const messages: PeppolInboundMessage[] = []
@@ -299,6 +323,7 @@ export const POST = withConnectorAuth('connect.peppol', async (request, ctx) => 
         payload: row.ubl_json ?? {},
         receivedAt: row.received_at,
       })
+      if (messages.length >= limit) break
     }
     return NextResponse.json(messages)
   }
@@ -344,9 +369,12 @@ export const PUT = withConnectorAuth('connect.peppol', async (request, ctx) => {
   if (!body.ok) return body.response
   const transport = hostedTransport()
   if (!transport) return unconfigured()
-  if (!transport.registerRecipient) {
+  // Both directions are required: a registration this route cannot undo
+  // (rollback on a lost race, DELETE later) must never be created.
+  if (!transport.registerRecipient || !transport.unregisterRecipient) {
     return NextResponse.json({ error: 'Receiving is not supported by the hosted access point', code: 'PEPPOL_RECEIVING_UNSUPPORTED', retryable: false }, { status: 422 })
   }
+  const unregisterUpstream = transport.unregisterRecipient
 
   const participant = { scheme: body.value.participant.scheme, identifier: body.value.participant.identifier.replace(/\s/g, '') }
   const handle = peppolHandle(participant)
@@ -355,6 +383,13 @@ export const PUT = withConnectorAuth('connect.peppol', async (request, ctx) => {
   let pendingId: string | null = null
   let pendingState: string | null = null
   if (!owned) {
+    const allowed = await getPeppolAllowedIdentifiers(ctx.supabase, ctx.key.id)
+    if (!allowed.has(participant.identifier)) {
+      return NextResponse.json(
+        { error: 'This connector key is not authorized to publish that participant', code: 'CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED', retryable: false },
+        { status: 403 },
+      )
+    }
     if (await isPeppolParticipantHeld(ctx.supabase, handle)) return participantTaken()
     if (await isHostedPeppolParticipantLive(ctx.supabase, { provider: QVALIA_PROVIDER, participant })) return participantTaken()
 
@@ -368,19 +403,23 @@ export const PUT = withConnectorAuth('connect.peppol', async (request, ctx) => {
     if (held >= limit) return quotaExceeded()
 
     // The provider account is priced per registered tenant: hosted companies
-    // and connector instances share that cap.
+    // and connector instances share that cap. Fresh pending reservations
+    // count, and the cap is re-checked after this request's own reservation,
+    // so concurrent registrations cannot both squeeze past it.
     const cap = getPeppolReceivingCap()
+    const capReached = () =>
+      NextResponse.json(
+        { error: 'The access point has no free receiving slot right now', code: 'PEPPOL_REGISTRATION_CAP_REACHED', retryable: false },
+        { status: 403 },
+      )
+    let hostedLive = 0
     if (cap !== null) {
       const [hosted, connector] = await Promise.all([
         countLivePeppolRegistrations({ supabase: ctx.supabase, provider: QVALIA_PROVIDER }),
-        countActiveConnectorPeppolRegistrations(ctx.supabase),
+        countConnectorPeppolRegistrations(ctx.supabase),
       ])
-      if (hosted + connector >= cap) {
-        return NextResponse.json(
-          { error: 'The access point has no free receiving slot right now', code: 'PEPPOL_REGISTRATION_CAP_REACHED', retryable: false },
-          { status: 403 },
-        )
-      }
+      hostedLive = hosted
+      if (hosted + connector >= cap) return capReached()
     }
 
     pendingState = `${PENDING_STATE_PREFIX}${crypto.randomUUID()}`
@@ -395,6 +434,13 @@ export const PUT = withConnectorAuth('connect.peppol', async (request, ctx) => {
     if (heldAfter > limit) {
       await deletePendingConnectionById(ctx.supabase, pendingId)
       return quotaExceeded()
+    }
+    if (cap !== null) {
+      const connectorAfter = await countConnectorPeppolRegistrations(ctx.supabase)
+      if (hostedLive + connectorAfter > cap) {
+        await deletePendingConnectionById(ctx.supabase, pendingId)
+        return capReached()
+      }
     }
   }
 
@@ -437,9 +483,9 @@ export const PUT = withConnectorAuth('connect.peppol', async (request, ctx) => {
       // registration must not outlive its ledger row.
       if (pendingId) await deletePendingConnectionById(ctx.supabase, pendingId)
       try {
-        await transport.unregisterRecipient?.(participant)
+        await unregisterUpstream(participant)
       } catch (err) {
-        ctx.log.warn('could not roll back upstream peppol registration', { err: err instanceof Error ? err.message : String(err) })
+        ctx.log.error('could not roll back upstream peppol registration; participant is registered upstream without a ledger row', err as Error, { handle })
       }
       if (activationError && !isUniqueViolation(activationError)) {
         ctx.log.error('peppol ledger activation failed', activationError as Error)
@@ -476,13 +522,21 @@ export const DELETE = withConnectorAuth('connect.peppol', async (request, ctx) =
   if (!owned) return notOwned()
   const transport = hostedTransport()
   if (!transport) return unconfigured()
+  if (!transport.unregisterRecipient) {
+    return NextResponse.json(
+      { error: 'Deregistration is not supported by the hosted access point', code: 'PEPPOL_RECEIVING_UNSUPPORTED', retryable: false },
+      { status: 422 },
+    )
+  }
   const blocked = await budgetOr429(ctx)
   if (blocked) return blocked
   try {
-    await transport.unregisterRecipient?.(participant)
+    await transport.unregisterRecipient(participant)
   } catch (err) {
     return upstreamFailure(err, ctx, 'unregister')
   }
+  // Only after the upstream deregistration took: revoking first would leave a
+  // participant receiving at the access point that no key owns.
   await revokeByHandle(ctx.supabase, { keyId: ctx.key.id, service: 'peppol', handle })
   return new NextResponse(null, { status: 204 })
 })

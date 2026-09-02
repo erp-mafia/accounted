@@ -90,3 +90,16 @@ describe('connector Peppol transport', () => {
     )
   })
 })
+
+describe('transport security', () => {
+  it('refuses a plain-http hosted URL except for loopback', () => {
+    expect(() => createConnectorPeppolTransport({ baseUrl: 'http://connect.example.se/api/connect/peppol', key: 'k' })).toThrow(/https/)
+    expect(() => createConnectorPeppolTransport({ baseUrl: 'http://localhost:3000/api/connect/peppol', key: 'k' })).not.toThrow()
+  })
+
+  it('maps a stalled or failing body read to a retryable transport error', async () => {
+    const stalled = { ok: true, status: 200, text: () => Promise.reject(new Error('body stalled')) } as unknown as Response
+    const transport = build(vi.fn().mockResolvedValue(stalled) as unknown as typeof fetch)
+    await expect(transport.lookupRecipient(participant)).rejects.toSatisfy((e: unknown) => isPeppolTransportError(e) && e.retryable === true)
+  })
+})

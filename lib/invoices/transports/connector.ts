@@ -66,12 +66,33 @@ function failureFromResponse(status: number, body: unknown): PeppolTransportErro
   return new PeppolTransportError(`Connector: ${message}`, { retryable, detail: detail || null })
 }
 
+/**
+ * The connector key travels as a bearer token, so the hosted origin must be
+ * https. Plain http is tolerated for loopback only (local development against
+ * a hosted dev server), the same rule getConnectorConfig() applies when it
+ * reads GNUBOK_CONNECT_URL.
+ */
+function assertTransportSecurity(baseUrl: string): void {
+  let url: URL
+  try {
+    url = new URL(baseUrl)
+  } catch {
+    throw new PeppolTransportError('Connector: invalid hosted URL', { retryable: false })
+  }
+  const loopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]'
+  if (url.protocol === 'https:' || (url.protocol === 'http:' && loopback)) return
+  throw new PeppolTransportError('Connector: the hosted URL must be https (the connector key is a bearer token)', {
+    retryable: false,
+  })
+}
+
 export function createConnectorPeppolTransport(
   upstream: ConnectorUpstream,
   deps: ConnectorTransportDeps = {},
 ): PeppolTransport {
   const fetchImpl = deps.fetch ?? globalThis.fetch
   const baseUrl = upstream.baseUrl.replace(/\/+$/, '')
+  assertTransportSecurity(baseUrl)
 
   async function call<T>(
     method: 'POST' | 'PUT' | 'DELETE',
@@ -81,9 +102,11 @@ export function createConnectorPeppolTransport(
   ): Promise<T> {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
-    let response: Response
+    // The body is read INSIDE the timeout window: a response whose headers
+    // arrive and whose body then stalls must not hold the caller forever,
+    // and a body-read failure is a transport failure like any other.
     try {
-      response = await fetchImpl(`${baseUrl}${path}`, {
+      const response = await fetchImpl(`${baseUrl}${path}`, {
         method,
         signal: controller.signal,
         redirect: 'error',
@@ -96,14 +119,15 @@ export function createConnectorPeppolTransport(
         },
         body: body === undefined ? undefined : JSON.stringify(body),
       })
+      const json = await readJson(response)
+      if (!response.ok) throw failureFromResponse(response.status, json)
+      return json as T
     } catch (error) {
+      if (error instanceof PeppolTransportError) throw error
       throw new PeppolTransportError('Connector: could not reach the hosted service', { retryable: true, cause: error })
     } finally {
       clearTimeout(timeout)
     }
-    const json = await readJson(response)
-    if (!response.ok) throw failureFromResponse(response.status, json)
-    return json as T
   }
 
   function withProvider<T extends { provider: string }>(value: T): T {
