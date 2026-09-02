@@ -1,0 +1,41 @@
+{
+  "name": "@accounted/connect-contract",
+  "version": "0.1.0",
+  "description": "Wire contract between an Accounted ledger installation and the Accounted Connect service: constants, Zod schemas and types. Shape only, no behaviour.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "zod": "^4.0.0"
+  },
+  "keywords": [
+    "accounted",
+    "gnubok",
+    "connector",
+    "peppol",
+    "bookkeeping"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/erp-mafia/accounted.git",
+    "directory": "packages/connect-contract"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

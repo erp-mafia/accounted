@@ -1,12 +1,14 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import {
   bankConnectorMode,
+  peppolConnectorMode,
   skatteverketConnectorMode,
   hasOwnEnableBankingCredentials,
+  hasOwnPeppolCredentials,
   hasOwnSkatteverketCredentials,
 } from '../upstreams'
 
-const ENV = ['GNUBOK_CONNECTOR_KEY', 'GNUBOK_CONNECT_URL', 'ENABLE_BANKING_PRIVATE_KEY', 'ENABLE_BANKING_APP_ID', 'ENABLE_BANKING_PRIVATE_KEY_PRODUCTION', 'ENABLE_BANKING_APP_ID_PRODUCTION', 'SKATTEVERKET_OAUTH2_CLIENT_ID', 'SKATTEVERKET_APIGW_CLIENT_ID'] as const
+const ENV = ['GNUBOK_CONNECTOR_KEY', 'GNUBOK_CONNECT_URL', 'ENABLE_BANKING_PRIVATE_KEY', 'ENABLE_BANKING_APP_ID', 'ENABLE_BANKING_PRIVATE_KEY_PRODUCTION', 'ENABLE_BANKING_APP_ID_PRODUCTION', 'SKATTEVERKET_OAUTH2_CLIENT_ID', 'SKATTEVERKET_APIGW_CLIENT_ID', 'QVALIA_API_KEY', 'QVALIA_PARTNER_REG_NO'] as const
 
 afterEach(() => vi.unstubAllEnvs())
 function clear() {
@@ -54,5 +56,17 @@ describe('connector-mode detection', () => {
     vi.stubEnv('ENABLE_BANKING_PRIVATE_KEY_PRODUCTION', 'pk')
     expect(bankConnectorMode()).toBeNull()
     expect(skatteverketConnectorMode()).not.toBeNull()
+  })
+})
+
+describe('peppol connector mode', () => {
+  it('is off without a key and off with own Qvalia keys, on otherwise', () => {
+    clear()
+    expect(peppolConnectorMode()).toBeNull()
+    vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_x')
+    expect(peppolConnectorMode()).toEqual({ baseUrl: 'https://app.gnubok.se/api/connect/peppol', key: 'gnubok_ck_x' })
+    vi.stubEnv('QVALIA_PARTNER_REG_NO', '5560000000')
+    expect(hasOwnPeppolCredentials()).toBe(true)
+    expect(peppolConnectorMode()).toBeNull()
   })
 })

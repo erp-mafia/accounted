@@ -98,6 +98,14 @@ The boundary is strict and CI-enforced:
   extensions enabled, so a direct import breaks the build.
 - Extensions integrate through the event bus and documented extension APIs,
   and are wired via a generated static registry (`npm run setup:extensions`).
+- Provider integrations (banks, Skatteverket, Peppol, migration sources) are
+  moving behind the connector: a self-hosted instance with a connector key
+  and no credentials of its own for an upstream reaches that upstream through
+  the hosted `app/api/connect/*` side (an instance running on its own
+  registered credentials talks to the provider directly, see
+  `docs/SELF-HOSTING.md`), and the open ledger keeps the contract plus the
+  manual file paths. `npm run check:guards` ratchets the set of files that
+  name a provider API host directly; that set may only shrink.
 
 Licensing follows the same boundary: the project is AGPL-3.0, with an
 extension exception that allows third-party extensions using only the
