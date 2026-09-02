@@ -7910,6 +7910,8 @@
     "seller_country_se": "Sverige",
     "seller_country_eu": "Från EU-land",
     "seller_country_noneu": "Från icke EU-land",
+    "seller_country_abroad": "Utomlands",
+    "rc_region_label": "Inom eller utanför EU?",
     "seller_country_eu_hint": "Omvänd moms: kostnaden ligger kvar på kostnadskontot, ruta 21-underlaget bokförs som 4535/4598-par och beräknad moms som 2614/2645. Momsfältet från steg 1 används inte.",
     "seller_country_noneu_hint": "Omvänd moms: kostnaden ligger kvar på kostnadskontot, ruta 22-underlaget bokförs som 4531/4598-par och beräknad moms som 2614/2645. Momsfältet från steg 1 används inte.",
     "seller_country_gross_hint": "Utländsk moms är inte avdragsgill: hela beloppet inklusive lokal moms bokförs som kostnad. Gäller t.ex. hotell, restaurang och taxi som beskattas där de utförs.",

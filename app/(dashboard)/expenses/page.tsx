@@ -1521,14 +1521,19 @@ export default function ExpenseClaimsPage() {
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div className="space-y-2">
                         <Label>{t('form_seller_country')}</Label>
-                        <Select value={sellerCountry} onValueChange={(v) => applyCountry(v as SellerCountry)}>
+                        {/* Two-step (Bokio-style): Sverige/utomlands here; the
+                            EU vs non-EU split only matters for reverse charge
+                            (ruta 21 vs 22) and is asked when RC is opted in. */}
+                        <Select
+                          value={sellerCountry === 'se' ? 'se' : 'abroad'}
+                          onValueChange={(v) => applyCountry(v === 'se' ? 'se' : 'eu')}
+                        >
                           <SelectTrigger>
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="se">{t('seller_country_se')}</SelectItem>
-                            <SelectItem value="eu">{t('seller_country_eu')}</SelectItem>
-                            <SelectItem value="noneu">{t('seller_country_noneu')}</SelectItem>
+                            <SelectItem value="abroad">{t('seller_country_abroad')}</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -1560,6 +1565,26 @@ export default function ExpenseClaimsPage() {
                         />
                         {t('rc_toggle')}
                       </label>
+                      {reverseCharge && (
+                        <div className="max-w-xs space-y-2">
+                          <Label>{t('rc_region_label')}</Label>
+                          <Select
+                            value={sellerCountry}
+                            onValueChange={(v) => {
+                              setSellerCountry(v as SellerCountry)
+                              setBookingRows(null)
+                            }}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="eu">{t('seller_country_eu')}</SelectItem>
+                              <SelectItem value="noneu">{t('seller_country_noneu')}</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
                       <p className="text-xs text-muted-foreground">
                         {!reverseCharge
                           ? t('seller_country_gross_hint')
