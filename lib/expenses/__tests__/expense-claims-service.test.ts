@@ -408,6 +408,24 @@ describe('createPayoutBatch', () => {
     expect(findCall('expense_payout_batches', 'delete')).toBeTruthy()
   })
 
+  it('reports a failed compensation delete instead of claiming a clean rollback', async () => {
+    reverseEntryMock.mockResolvedValue({ id: 'je-storno' })
+    enqueue({ data: [registeredClaim()] })
+    enqueue({ data: { id: 'batch-1' } }) // batch insert
+    enqueue({ data: null }) // batch je update
+    enqueue({ data: null, error: { message: 'mark failed' } }) // claims mark paid
+    enqueue({ data: null, error: { message: 'batch delete failed' } }) // compensation
+
+    const result = await createPayoutBatch(sb, COMPANY, USER, {
+      claim_ids: ['c1'],
+      payout_date: '2026-09-05',
+      cash_account: '1935',
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'BATCH_INSERT_FAILED' })
+    expect((result as { detail: string }).detail).toContain('could not be removed')
+  })
+
   it('books one payout verifikat covering all claims and marks them paid', async () => {
     enqueue({ data: [registeredClaim(), registeredClaim({ id: 'c2', amount_sek: 1601.77 })] })
     enqueue({ data: { id: 'batch-1' } }) // batch insert

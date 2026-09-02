@@ -633,11 +633,6 @@ export async function createPayoutBatch(
     // is the case a human must reconcile.
     try {
       await reverseEntry(supabase, companyId, userId, journalEntryId)
-      await supabase
-        .from('expense_payout_batches')
-        .delete()
-        .eq('id', batch.id)
-        .eq('company_id', companyId)
     } catch (compensationError) {
       return {
         ok: false,
@@ -645,6 +640,21 @@ export async function createPayoutBatch(
         detail: `mark paid failed (${markError.message}); the payout entry ${journalEntryId} could not be reversed automatically: ${
           compensationError instanceof Error ? compensationError.message : String(compensationError)
         }`,
+      }
+    }
+    // PostgREST reports a failed delete in `error` rather than throwing, so
+    // it needs its own check: a surviving batch row after a reversed entry
+    // is exactly the inconsistency the compensation exists to prevent.
+    const { error: batchDeleteError } = await supabase
+      .from('expense_payout_batches')
+      .delete()
+      .eq('id', batch.id)
+      .eq('company_id', companyId)
+    if (batchDeleteError) {
+      return {
+        ok: false,
+        code: 'BATCH_INSERT_FAILED',
+        detail: `mark paid failed (${markError.message}); the payout entry was reversed but batch ${batch.id} could not be removed: ${batchDeleteError.message}`,
       }
     }
     return {
