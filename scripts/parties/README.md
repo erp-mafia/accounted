@@ -37,6 +37,23 @@ Label vocabulary for the pre-classifier, one per key:
 A key whose text names a vendor but is booked as a category still gets
 `party`: the resolver decides identity, the account comes from the ledger.
 
+Edge rules settled with the founder on 2026-09-02, after the first labelling
+round:
+
+- State fees and taxes where the counterpart is fixed (Bolagsverket
+  registration fees, Skatteverket, Transportstyrelsen vehicle tax) are
+  `authority`. A kommun or a state company that invoices for a service is a
+  `party` like any supplier.
+- A marketplace or payment processor that the company actually pays (Amazon
+  Marketplace purchases, Stripe or Amex fees) is a `party`. `intermediary` is
+  reserved for a rail that only carries someone else's money: Klarna, Swish
+  and Zettle payouts, "försäljning via" lines.
+- A card-platform line that carries an employee's name (Pleo, Google Ads with
+  the cardholder appended) is a `party`; the name is the cardholder, not the
+  counterpart.
+- Insurance and pension premiums are `party`: the insurer is the counterpart,
+  whatever the 74xx account says.
+
 ## Measured on prod, 2026-09-02
 
 - 113,032 imported expense vouchers across 385 real companies; 99.5% yield a
