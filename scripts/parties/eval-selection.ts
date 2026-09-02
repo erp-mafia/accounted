@@ -19,13 +19,20 @@
  * anchor-level "none" decision, because a resolver that merges where it
  * should not is the failure mode the July design warned about.
  *
- * SAFETY: read-only. Reads a gitignored JSONL, calls the AI service, writes a
- * report next to the input. Never opens a database connection.
+ * SAFETY: read-only. Reads a gitignored JSONL, writes a report next to the
+ * input. Never opens a database connection.
+ *
+ * DATA PROCESSING: the model selector is opt-in (--llm). It sends the voucher
+ * key text and account numbers in the gold file to getAiService(), which is
+ * the same configured provider the production categorizer already sends the
+ * same voucher text to (Claude on AWS Bedrock in the EU on hosted). Run it
+ * only with an env file whose AI configuration you have checked; without
+ * --llm the script scores the rules selector alone and makes no network call.
  *
  * Usage:
  *   npx tsx scripts/parties/eval-selection.ts \
  *     --gold dev_docs/parties/golden/selection-2026-09-02.jsonl --env .env.local \
- *     [--out <report.json>] [--no-llm] [--limit 300]
+ *     [--out <report.json>] [--llm] [--limit 300]
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -60,7 +67,7 @@ const goldPath = resolve(arg('gold') ?? 'dev_docs/parties/golden/selection-2026-
 const envPath = resolve(arg('env') ?? '.env.local')
 const outPath = resolve(arg('out') ?? goldPath.replace(/\.jsonl$/, '') + '.eval.json')
 const limit = Number(arg('limit') ?? 300)
-const runLlm = !flag('no-llm')
+const runLlm = flag('llm')
 dotenv({ path: envPath })
 
 const anchors: Anchor[] = readFileSync(goldPath, 'utf8')

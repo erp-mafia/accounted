@@ -104,6 +104,9 @@ org number read by OCR from an invoice linked to its voucher, so two keys are
 the same party exactly when the org numbers agree. Keys mapping to several
 org numbers are excluded. 225 anchors, 1,038 candidate pairs (747 same, 291
 different), 44 anchors with no true match. Draw: `draw-selection-gold.sql`.
+The model selector is opt-in (`--llm`): it sends the same voucher text the
+production categorizer already sends to the configured AI provider (Bedrock EU
+on hosted), so run it only with an env file whose AI settings you have checked.
 
 | Selector | Pair precision | Pair recall | Non-match recall | Anchors fully right | "None" precision / recall |
 |---|---|---|---|---|---|
