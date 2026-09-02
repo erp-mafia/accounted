@@ -65,6 +65,7 @@ import {
 } from '@/lib/api/idempotency'
 import { withApiV1 } from '../with-api-v1'
 import { dryRunPreview } from '../dry-run'
+import { v1ErrorResponseFromCode } from '../errors'
 import { created } from '../response'
 import { registerEndpoint } from '../registry'
 
@@ -338,6 +339,39 @@ describe('withApiV1: idempotent replay of real commits (must not regress)', () =
     expect(second.headers.get('Idempotent-Replayed')).toBe('true')
     expect((await second.json()).data.id).toBe('inv-1')
     expect(committed).toEqual(['inv-1'])
+  })
+
+  // A handler-level 429 (e.g. bank-connections.sync's cooldown) says "not
+  // now". Caching it would replay the throttle under the same key until the
+  // cache TTL, long after the cooldown itself has passed, and as a 400.
+  it('never caches a 429 so a same-key retry after Retry-After runs the handler', async () => {
+    let calls = 0
+    const route = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'invoices.create',
+      async (_request, ctx) => {
+        calls += 1
+        if (calls === 1) {
+          return v1ErrorResponseFromCode('RATE_LIMITED', ctx.log, {
+            requestId: ctx.requestId,
+            retryAfterSeconds: 1,
+          })
+        }
+        return created({ id: 'inv-after-cooldown' }, { requestId: ctx.requestId })
+      },
+      { requireScope: 'invoices:write' },
+    )
+
+    const first = await route(postInvoice({ key: 'key-7' }), companyParams(COMPANY_ID))
+    expect(first.status).toBe(429)
+    expect(mockStoreIdempotency).not.toHaveBeenCalled()
+
+    const second = await route(postInvoice({ key: 'key-7' }), companyParams(COMPANY_ID))
+    expect(second.status).toBe(201)
+    // The real commit is cached as before; only the throttle was not.
+    expect(mockStoreIdempotency).toHaveBeenCalledTimes(1)
+    expect(second.headers.get('Idempotent-Replayed')).toBeNull()
+    expect((await second.json()).data.id).toBe('inv-after-cooldown')
+    expect(calls).toBe(2)
   })
 
   it('still rejects the same key carrying a different body', async () => {
