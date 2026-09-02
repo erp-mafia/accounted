@@ -1,4 +1,5 @@
 import type { PayrollConfig } from './payroll-config'
+import type { MileageVehicleType } from '@/types'
 
 /**
  * Traktamente (per diem) and milersättning (mileage) calculations.
@@ -111,7 +112,7 @@ export function calculateTraktamente(params: {
 // Milersättning (Mileage Allowance)
 // ============================================================
 
-export type VehicleType = 'own_car' | 'company_car_fossil' | 'company_car_electric'
+export type VehicleType = MileageVehicleType
 
 /**
  * Calculate milersättning.

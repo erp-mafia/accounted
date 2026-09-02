@@ -21,10 +21,35 @@ export const ACCOUNT_KEY_REGEX =
   /^(bank:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|skattekonto|manual:\d{4})$/
 
 export const AccountKeySchema = z.string().regex(ACCOUNT_KEY_REGEX, 'Ogiltig account_key')
-export type AccountKey = z.infer<typeof AccountKeySchema>
 
 export const ReconciliationKindSchema = z.enum(['bank', 'skattekonto', 'manual'])
-export type ReconciliationKind = z.infer<typeof ReconciliationKindSchema>
+
+/** One link request: outside rows against verifikat (N:1), or a bank 1:N with allocations. */
+export const ReconciliationPairSchema = z.object({
+  external_ids: z.array(z.string().uuid()).min(1).max(50),
+  journal_entry_ids: z.array(z.string().uuid()).min(1).max(50),
+  // Bank 1:N only: the signed slice per verifikat (transaction sign
+  // convention). Omitted: each slice defaults to the voucher's bank line.
+  allocations: z
+    .array(z.object({ journal_entry_id: z.string().uuid(), amount: z.number() }))
+    .min(2)
+    .max(50)
+    .optional(),
+})
+
+/** Body fields shared by the dashboard and v1 POST .../links routes (spread into z.object). */
+export const reconciliationLinksBodyFields = {
+  pairs: z.array(ReconciliationPairSchema).max(200).optional(),
+  use_proposals: z.boolean().optional(),
+  confidence_threshold: z.number().min(0).max(1).optional(),
+}
+
+/** The links body must carry explicit pairs or opt into the persisted proposals. */
+export const reconciliationLinksBodyRefinement = [
+  (b: { pairs?: unknown[]; use_proposals?: boolean }) =>
+    (b.pairs && b.pairs.length > 0) || b.use_proposals === true,
+  { message: 'Ange pairs eller use_proposals: true.' },
+] as const
 
 export type ParsedAccountKey =
   | { kind: 'bank'; cashAccountId: string }

@@ -42,11 +42,6 @@ export type CategorizeHandler = (
   dimensions?: Record<string, string>
 ) => Promise<string | null>
 
-export type MatchInvoiceHandler = (
-  transactionId: string,
-  invoiceId: string
-) => Promise<boolean>
-
 // Category option type. `label` retains the Swedish text for back-compat and
 // non-React consumers; `labelKey` is the next-intl key under the `tx_categories`
 // namespace that React components should prefer.

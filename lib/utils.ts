@@ -178,19 +178,30 @@ export function formatOrgNumber(orgNumber: string): string {
   return orgNumber
 }
 
+/** UTC YYYYMMDD stamp (e.g. for archive download filenames). */
+export function utcDateStamp(date: Date): string {
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
+  return `${year}${month}${day}`
+}
+
+/** Resolve after `ms` milliseconds (setTimeout as a promise). */
+export function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Split `items` into consecutive slices of at most `size` elements. */
+export function chunk<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
+
 export function getCompanyDisplayName(settings: { company_name?: string | null }): string {
   return settings.company_name?.trim() || ''
 }
 
-export function getCompanyPrimaryName(settings: { company_name?: string | null }): string {
-  return settings.company_name?.trim() || ''
-}
-
-export function generateInvoiceNumber(): string {
-  const year = new Date().getFullYear()
-  const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
-  return `${year}-${random}`
-}
 
 // Shared FX-rate validator: keeps UI, RPC (>= 100000 / <= 0), and the
 // invoices/supplier_invoices CHECK constraints in sync. Single source

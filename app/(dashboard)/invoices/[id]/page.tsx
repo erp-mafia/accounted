@@ -80,7 +80,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import type { Invoice, InvoiceItem, Customer, InvoiceStatus, InvoiceReminder, InvoiceDocumentType } from '@/types'
+import type { Invoice, InvoiceItem, InvoiceStatus, InvoiceReminder, InvoiceDocumentType } from '@/types'
+import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { useBranding } from '@/lib/branding/brand-context'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
@@ -134,15 +135,6 @@ function daysOverdue(dueDateStr: string): number {
   const dueDate = new Date(dueDateStr)
   dueDate.setHours(0, 0, 0, 0)
   return Math.round((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
-}
-
-interface InvoiceWithRelations extends Invoice {
-  customer: Customer
-  items: InvoiceItem[]
-  // Optional reference to the issuance verifikation. Populated by the
-  // backend when the invoice flow auto-books an entry on send; absent on
-  // older invoices and on companies where issuance is not auto-booked.
-  journal_entry_id?: string | null
 }
 
 export default function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { PRIVATE_NO_STORE_HEADERS, privateNoStore } from '@/lib/api/private-no-store'
 import { InvoicePDF, type InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { getVatRules } from '@/lib/invoices/vat-rules'
@@ -17,13 +18,6 @@ import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
-
-const PRIVATE_NO_STORE_HEADERS = { 'Cache-Control': 'private, no-store' }
-
-function privateNoStore(response: NextResponse): NextResponse {
-  response.headers.set('Cache-Control', 'private, no-store')
-  return response
-}
 
 /** The per-line ROT/RUT fields the editor posts alongside the amounts. */
 interface PreviewItemInput {

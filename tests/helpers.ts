@@ -9,17 +9,13 @@ import type {
   JournalEntry,
   JournalEntryLine,
   DocumentAttachment,
-  TaxCode,
   Invoice,
-  InvoicePayment,
   Customer,
   Supplier,
   SupplierInvoice,
   CompanySettings,
   InvoiceInboxItem,
   CategorizationTemplate,
-  Company,
-  CompanyMember,
 } from '@/types'
 import type { SIEVoucher, SIETransactionLine } from '@/lib/import/types'
 
@@ -104,37 +100,6 @@ export function createMockSupabase() {
 
 let _counter = 0
 const nextId = () => `test-${++_counter}`
-
-export function makeCompany(overrides: Partial<Company> = {}): Company {
-  const { team_id = null, ...rest } = overrides
-  return {
-    id: 'company-1',
-    name: 'Test Company',
-    org_number: null,
-    entity_type: 'enskild_firma',
-    accounting_framework: 'k2',
-    created_by: 'user-1',
-    team_id,
-    archived_at: null,
-    created_at: '2024-01-01T00:00:00Z',
-    updated_at: '2024-01-01T00:00:00Z',
-    ...rest,
-  }
-}
-
-export function makeCompanyMember(overrides: Partial<CompanyMember> = {}): CompanyMember {
-  return {
-    id: 'member-1',
-    company_id: 'company-1',
-    user_id: 'user-1',
-    role: 'owner',
-    invited_by: null,
-    joined_at: '2024-01-01T00:00:00Z',
-    created_at: '2024-01-01T00:00:00Z',
-    updated_at: '2024-01-01T00:00:00Z',
-    ...overrides,
-  }
-}
 
 export function makeReceipt(overrides: Partial<Receipt> = {}): Receipt {
   return {
@@ -319,28 +284,6 @@ export function makeDocumentAttachment(
   }
 }
 
-export function makeTaxCode(overrides: Partial<TaxCode> = {}): TaxCode {
-  return {
-    id: nextId(),
-    user_id: null,
-    code: 'MP1',
-    description: 'Utgående moms 25%',
-    rate: 25,
-    moms_basis_boxes: ['05'],
-    moms_tax_boxes: ['10'],
-    moms_input_boxes: [],
-    is_output_vat: true,
-    is_reverse_charge: false,
-    is_eu: false,
-    is_export: false,
-    is_oss: false,
-    is_system: true,
-    created_at: '2024-01-01T00:00:00Z',
-    updated_at: '2024-01-01T00:00:00Z',
-    ...overrides,
-  }
-}
-
 export function makeInvoice(overrides: Partial<Invoice> = {}): Invoice {
   return {
     id: nextId(),
@@ -377,27 +320,6 @@ export function makeInvoice(overrides: Partial<Invoice> = {}): Invoice {
     remaining_amount: 12500,
     created_at: '2024-06-15T14:30:00Z',
     updated_at: '2024-06-15T14:30:00Z',
-    ...overrides,
-  }
-}
-
-export function makeInvoicePayment(
-  overrides: Partial<InvoicePayment> = {}
-): InvoicePayment {
-  return {
-    id: nextId(),
-    user_id: 'user-1',
-    company_id: 'company-1',
-    invoice_id: 'invoice-1',
-    payment_date: '2024-07-01',
-    amount: 12500,
-    currency: 'SEK',
-    exchange_rate: null,
-    exchange_rate_difference: 0,
-    journal_entry_id: null,
-    transaction_id: null,
-    notes: null,
-    created_at: '2024-07-01T00:00:00Z',
     ...overrides,
   }
 }

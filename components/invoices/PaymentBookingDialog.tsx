@@ -26,7 +26,8 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
 import { Plus, Trash2, Loader2 } from 'lucide-react'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
-import type { Invoice, InvoiceItem, Customer, EntityType } from '@/types'
+import type { EntityType } from '@/types'
+import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 
 type DuplicateMatchReason = 'ocr_exact' | 'name_amount_fuzzy' | 'amount_only'
@@ -40,14 +41,6 @@ interface DuplicateCandidate {
   reference: string | null
   match_reason: DuplicateMatchReason
   match_confidence: number
-}
-
-interface InvoiceWithRelations extends Invoice {
-  customer: Customer
-  items: InvoiceItem[]
-  // Present once an issuance verifikat has been booked (faktureringsmetoden);
-  // absent on kontantmetoden invoices that recognise revenue at payment.
-  journal_entry_id?: string | null
 }
 
 interface PaymentBookingDialogProps {

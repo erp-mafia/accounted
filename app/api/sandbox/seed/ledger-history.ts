@@ -40,6 +40,7 @@
  */
 
 import { roundOre } from '@/lib/money'
+import { lastDayOfMonth } from './date-utils'
 
 /**
  * Every BAS account this builder can emit. Exported so the seed's
@@ -194,11 +195,6 @@ function dateStr(year: number, month: number, day: number): string {
 
 function vatOf(net: number, vatRate: number): number {
   return roundOre((net * vatRate) / 100)
-}
-
-/** Day 0 of the next month is the last day of this one, leap years included. */
-function lastDayOfMonth(year: number, month: number): number {
-  return new Date(year, month, 0).getDate()
 }
 
 /**

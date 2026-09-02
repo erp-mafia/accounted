@@ -26,7 +26,8 @@ import {
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateEmployeeSchema } from '@/lib/api/schemas'
 import { maskPersonnummer } from '@/lib/api/v1/mask-personnummer'
 import { decryptPersonnummer, encryptPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
@@ -126,17 +127,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       search: url.searchParams.get('search') ?? undefined,
       include_inactive: url.searchParams.get('include_inactive') ?? undefined,
     })
-    if (!filtersResult.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: filtersResult.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
-    }
+    if (!filtersResult.success) return v1ValidationError(ctx, filtersResult.error)
     const filters = filtersResult.data
     const includeInactive = filters.include_inactive === 'true'
 
@@ -331,28 +322,12 @@ const EMPLOYEE_RESPONSE_COLUMNS =
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'employees.create',
   async (request, ctx) => {
-    let rawBody: unknown
-    try {
-      rawBody = await request.json()
-    } catch {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'body', message: 'Body is not valid JSON.' },
-      })
-    }
+    const rawBodyResult = await readV1JsonBody(request, ctx)
+    if (!rawBodyResult.ok) return rawBodyResult.response
+    const rawBody = rawBodyResult.body
 
     const parsed = CreateEmployeeSchema.safeParse(rawBody)
-    if (!parsed.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: parsed.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
-    }
+    if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const body = parsed.data
 
     // CreateEmployeeSchema only checks the shape (12 digits), so on its own it

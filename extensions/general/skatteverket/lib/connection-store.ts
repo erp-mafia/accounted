@@ -230,7 +230,3 @@ export async function listVerifiedCompanies(
   return (data ?? []) as Array<{ company_id: string; org_number: string; created_by: string | null }>
 }
 
-/** Test hook: reset the memoized service client. */
-export function __resetConnectionStoreForTests(): void {
-  _serviceClient = null
-}

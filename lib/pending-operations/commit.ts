@@ -82,10 +82,13 @@ import {
   createSupplierCreditNoteEntry,
   createSupplierInvoiceRegistrationEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
-import { linkInvoiceToVoucher } from '@/lib/invoices/voucher-matching'
+import { linkInvoiceToVoucher, type LinkInvoiceToVoucherResult } from '@/lib/invoices/voucher-matching'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
-import { linkSupplierInvoiceToVoucher } from '@/lib/invoices/supplier-voucher-matching'
+import {
+  linkSupplierInvoiceToVoucher,
+  type LinkSupplierInvoiceToVoucherResult,
+} from '@/lib/invoices/supplier-voucher-matching'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import {
@@ -176,7 +179,7 @@ import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import { applyRecurringScheduleUpdate } from '@/lib/invoices/apply-recurring-schedule-update'
-import { BulkBookInboxSchema } from '@/lib/api/schemas'
+import { BulkBookInboxSchema, OpeningBalancesBulkSchema } from '@/lib/api/schemas'
 import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { isValidRevenueAccount } from '@/lib/articles/validate-revenue-account'
 import { z } from 'zod'
@@ -200,6 +203,7 @@ import type {
   CreditNote,
   CreateJournalEntryLineInput,
   JournalEntrySourceType,
+  FiscalPeriod,
 } from '@/types'
 
 const log = createLogger('pending-operations/commit')
@@ -299,6 +303,34 @@ async function recordSkippedInvoiceJournalEntry(
 }
 
 // ── Executors ────────────────────────────────────────────────────
+
+/**
+ * The company's booking context for invoice-shaped executors: accounting
+ * method and entity type with the engine defaults when the settings row is
+ * missing or the read fails (errors are deliberately ignored, as before).
+ */
+async function loadBookingContext(
+  supabase: SupabaseClient,
+  companyId: string
+): Promise<{ accountingMethod: AccountingMethod; entityType: EntityType }> {
+  const { data: settings } = await supabase
+    .from('company_settings').select('accounting_method, entity_type').eq('company_id', companyId).single()
+
+  return {
+    accountingMethod: (settings?.accounting_method as AccountingMethod) || 'accrual',
+    entityType: (settings?.entity_type as EntityType) || 'enskild_firma',
+  }
+}
+
+/**
+ * Catch-body shared by the ledger-writing executors: a BookkeepingError is
+ * rethrown so the dispatcher maps it to a structured code; anything else
+ * becomes a plain failure with the executor's fallback text and status.
+ */
+function failUnlessBookkeepingError(err: unknown, fallback: string, status: number): ExecutorResult {
+  if (isBookkeepingError(err)) throw err
+  return { error: err instanceof Error ? err.message : fallback, status }
+}
 
 type ExecutorResult = {
   data?: Record<string, unknown>
@@ -2253,11 +2285,7 @@ async function commitMarkInvoicePaid(
     }
   }
 
-  const { data: settings } = await supabase
-    .from('company_settings').select('accounting_method, entity_type').eq('company_id', companyId).single()
-
-  const accountingMethod = settings?.accounting_method || 'accrual'
-  const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+  const { accountingMethod, entityType } = await loadBookingContext(supabase, companyId)
   const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
   let journalEntryId: string | null = null
 
@@ -2911,11 +2939,7 @@ async function commitMatchTransactionInvoice(
   // (BookkeepingDatabaseError on a failed cash_accounts lookup), and a throw
   // here must reject the op with NOTHING posted. Behavior-preserving on the
   // happy path: these are pure reads.
-  const { data: settings } = await supabase
-    .from('company_settings').select('accounting_method, entity_type').eq('company_id', companyId).single()
-
-  const accountingMethod = settings?.accounting_method || 'accrual'
-  const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+  const { accountingMethod, entityType } = await loadBookingContext(supabase, companyId)
 
   // Route on invoice state, not the company's current setting. Mirror of
   // the match-invoice route fix: see that handler for the full rationale.
@@ -3137,6 +3161,38 @@ async function commitMatchTransactionInvoice(
   return { data: { invoice_status: newStatus, paid_amount: newPaidAmount, journal_entry_id: journalEntryId } }
 }
 
+type VoucherLinkOutcome =
+  | { ok: true; result: LinkInvoiceToVoucherResult | LinkSupplierInvoiceToVoucherResult }
+  | { ok: false; code: string }
+
+/**
+ * Map a voucher-link outcome (customer or supplier invoice) to the executor
+ * result. 404/409 are auto-rejected by the dispatcher (the user can re-stage
+ * with adjusted inputs); 400 surfaces as a normal failure so the UI can
+ * explain what went wrong.
+ */
+function voucherLinkOutcomeToResult(outcome: VoucherLinkOutcome): ExecutorResult {
+  if (!outcome.ok) {
+    const entry = getErrorEntry(outcome.code)
+    return {
+      error: entry?.message_en ?? outcome.code,
+      status: entry?.httpStatus ?? 500,
+    }
+  }
+
+  return {
+    data: {
+      invoice_status: outcome.result.invoiceStatus,
+      paid_amount: outcome.result.paidAmount,
+      remaining_amount: outcome.result.remainingAmount,
+      payment_amount: outcome.result.paymentAmount,
+      payment_id: outcome.result.paymentId,
+      journal_entry_id: outcome.result.journalEntryId,
+      reconciled_transaction_id: outcome.result.reconciledTransactionId,
+    },
+  }
+}
+
 async function commitLinkInvoiceVoucher(
   supabase: SupabaseClient,
   userId: string,
@@ -3157,29 +3213,7 @@ async function commitLinkInvoiceVoucher(
     notes,
   })
 
-  if (!outcome.ok) {
-    const entry = getErrorEntry(outcome.code)
-    const httpStatus = entry?.httpStatus ?? 500
-    // 404/409 are auto-rejected by the dispatcher (the user can re-stage with
-    // adjusted inputs); 400 surfaces as a normal failure so the UI can
-    // explain what went wrong.
-    return {
-      error: entry?.message_en ?? outcome.code,
-      status: httpStatus,
-    }
-  }
-
-  return {
-    data: {
-      invoice_status: outcome.result.invoiceStatus,
-      paid_amount: outcome.result.paidAmount,
-      remaining_amount: outcome.result.remainingAmount,
-      payment_amount: outcome.result.paymentAmount,
-      payment_id: outcome.result.paymentId,
-      journal_entry_id: outcome.result.journalEntryId,
-      reconciled_transaction_id: outcome.result.reconciledTransactionId,
-    },
-  }
+  return voucherLinkOutcomeToResult(outcome)
 }
 
 async function commitLinkSupplierInvoiceVoucher(
@@ -3202,30 +3236,35 @@ async function commitLinkSupplierInvoiceVoucher(
     notes,
   })
 
-  if (!outcome.ok) {
-    const entry = getErrorEntry(outcome.code)
-    // 404/409 are auto-rejected by the dispatcher (the user can re-stage with
-    // adjusted inputs); 400 surfaces as a normal failure so the UI can explain.
-    return {
-      error: entry?.message_en ?? outcome.code,
-      status: entry?.httpStatus ?? 500,
-    }
-  }
-
-  return {
-    data: {
-      invoice_status: outcome.result.invoiceStatus,
-      paid_amount: outcome.result.paidAmount,
-      remaining_amount: outcome.result.remainingAmount,
-      payment_amount: outcome.result.paymentAmount,
-      payment_id: outcome.result.paymentId,
-      journal_entry_id: outcome.result.journalEntryId,
-      reconciled_transaction_id: outcome.result.reconciledTransactionId,
-    },
-  }
+  return voucherLinkOutcomeToResult(outcome)
 }
 
 // ── Stream 1 Phase 1 + follow-up executors ───────────────────────
+
+/**
+ * Close / lock / unlock share one shape: require fiscal_period_id, run the
+ * period-service transition, answer with the period id plus the timestamp
+ * the transition set (closed_at or locked_at), and turn any throw into a
+ * 400 with the service's message.
+ */
+async function runPeriodTransition(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>,
+  transition: (supabase: SupabaseClient, companyId: string, userId: string, id: string) => Promise<FiscalPeriod>,
+  timestampKey: 'closed_at' | 'locked_at',
+  fallback: string
+): Promise<ExecutorResult> {
+  const id = params.fiscal_period_id as string
+  if (!id) return { error: 'fiscal_period_id is required', status: 400 }
+  try {
+    const period = await transition(supabase, companyId, userId, id)
+    return { data: { period_id: period.id, [timestampKey]: period[timestampKey] } }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : fallback, status: 400 }
+  }
+}
 
 async function commitClosePeriod(
   supabase: SupabaseClient,
@@ -3233,14 +3272,7 @@ async function commitClosePeriod(
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
-  const id = params.fiscal_period_id as string
-  if (!id) return { error: 'fiscal_period_id is required', status: 400 }
-  try {
-    const period = await closePeriod(supabase, companyId, userId, id)
-    return { data: { period_id: period.id, closed_at: period.closed_at } }
-  } catch (err) {
-    return { error: err instanceof Error ? err.message : 'Close failed', status: 400 }
-  }
+  return runPeriodTransition(supabase, userId, companyId, params, closePeriod, 'closed_at', 'Close failed')
 }
 
 async function commitLockPeriod(
@@ -3249,14 +3281,7 @@ async function commitLockPeriod(
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
-  const id = params.fiscal_period_id as string
-  if (!id) return { error: 'fiscal_period_id is required', status: 400 }
-  try {
-    const period = await lockPeriod(supabase, companyId, userId, id)
-    return { data: { period_id: period.id, locked_at: period.locked_at } }
-  } catch (err) {
-    return { error: err instanceof Error ? err.message : 'Lock failed', status: 400 }
-  }
+  return runPeriodTransition(supabase, userId, companyId, params, lockPeriod, 'locked_at', 'Lock failed')
 }
 
 async function commitUnlockPeriod(
@@ -3265,14 +3290,7 @@ async function commitUnlockPeriod(
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
-  const id = params.fiscal_period_id as string
-  if (!id) return { error: 'fiscal_period_id is required', status: 400 }
-  try {
-    const period = await unlockPeriod(supabase, companyId, userId, id)
-    return { data: { period_id: period.id, locked_at: period.locked_at } }
-  } catch (err) {
-    return { error: err instanceof Error ? err.message : 'Unlock failed', status: 400 }
-  }
+  return runPeriodTransition(supabase, userId, companyId, params, unlockPeriod, 'locked_at', 'Unlock failed')
 }
 
 async function commitUncategorizeTransaction(
@@ -3288,8 +3306,7 @@ async function commitUncategorizeTransaction(
   try {
     await reverseEntry(supabase, companyId, userId, journalEntryId)
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'Reversal failed', status: 500 }
+    return failUnlessBookkeepingError(err, 'Reversal failed', 500)
   }
 
   const { error: updateError } = await supabase
@@ -3716,8 +3733,7 @@ async function commitRunYearEnd(
       },
     }
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'Year-end failed', status: 400 }
+    return failUnlessBookkeepingError(err, 'Year-end failed', 400)
   }
 }
 
@@ -3831,11 +3847,7 @@ async function commitPostKontantmetodCutoff(
     if (err instanceof KontantmetodCutoffPartialError) {
       throw new PartialCommitError(err.message, err.postedIds, err.cause)
     }
-    if (isBookkeepingError(err)) throw err
-    return {
-      error: err instanceof Error ? err.message : 'Kontantmetodens bokslutsavgränsning misslyckades',
-      status: 400,
-    }
+    return failUnlessBookkeepingError(err, 'Kontantmetodens bokslutsavgränsning misslyckades', 400)
   }
 }
 
@@ -3853,8 +3865,7 @@ async function commitSetOpeningBalances(
     const entry = await generateOpeningBalances(supabase, companyId, userId, closedId, nextId)
     return { data: { opening_balance_entry_id: entry.id } }
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'Opening balances failed', status: 400 }
+    return failUnlessBookkeepingError(err, 'Opening balances failed', 400)
   }
 }
 
@@ -3876,8 +3887,7 @@ async function commitRunCurrencyRevaluation(
         : { entry_id: null, items_revalued: 0, message: 'No foreign-currency items to revalue' },
     }
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'Revaluation failed', status: 400 }
+    return failUnlessBookkeepingError(err, 'Revaluation failed', 400)
   }
 }
 
@@ -3910,8 +3920,7 @@ async function commitPostAnnualDepreciation(
       },
     }
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'Depreciation posting failed', status: 400 }
+    return failUnlessBookkeepingError(err, 'Depreciation posting failed', 400)
   }
 }
 
@@ -4517,8 +4526,7 @@ async function commitCreditSupplierInvoice(
       }
     } catch (err) {
       await supabase.from('supplier_invoices').delete().eq('id', creditNote.id).eq('company_id', companyId)
-      if (isBookkeepingError(err)) throw err
-      return { error: err instanceof Error ? err.message : 'Failed to book credit note', status: 500 }
+      return failUnlessBookkeepingError(err, 'Failed to book credit note', 500)
     }
   }
 
@@ -4660,14 +4668,7 @@ async function commitCreditInvoice(
     .eq('id', creditNote.id)
     .single()
 
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('entity_type, accounting_method')
-    .eq('company_id', companyId)
-    .single()
-
-  const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
-  const accountingMethod = (settings?.accounting_method as AccountingMethod) || 'accrual'
+  const { accountingMethod, entityType } = await loadBookingContext(supabase, companyId)
 
   // Resolve the original verifikation reference so the credit-note JE can
   // point back to the corrected entry per BFL 5 kap. 5 §. We tolerate
@@ -4959,8 +4960,7 @@ async function commitImportSie(
       },
     }
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'SIE import failed', status: 500 }
+    return failUnlessBookkeepingError(err, 'SIE import failed', 500)
   }
 }
 
@@ -5216,8 +5216,7 @@ async function commitCreateVoucher(
       },
     }
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'Failed to create voucher', status: 500 }
+    return failUnlessBookkeepingError(err, 'Failed to create voucher', 500)
   }
 }
 
@@ -5309,8 +5308,7 @@ async function commitCorrectEntry(
       },
     }
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'Failed to correct entry', status: 500 }
+    return failUnlessBookkeepingError(err, 'Failed to correct entry', 500)
   }
 }
 
@@ -5394,8 +5392,7 @@ async function commitReverseEntry(
       },
     }
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'Failed to reverse entry', status: 500 }
+    return failUnlessBookkeepingError(err, 'Failed to reverse entry', 500)
   }
 }
 
@@ -5597,7 +5594,6 @@ async function commitUpdatePayslipLine(
 
   try {
     const { updatePayslipLine } = await import('@/lib/salary/payslip-lines')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await updatePayslipLine(supabase, {
       companyId,
       salaryRunId,
@@ -5642,7 +5638,6 @@ async function commitSetRunSalary(
 
   try {
     const { setRunEmployeeSalary } = await import('@/lib/salary/run-employees')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await setRunEmployeeSalary(supabase, {
       companyId,
       salaryRunId,
@@ -5686,7 +5681,6 @@ async function commitUpdateSalaryRun(
 
   try {
     const { updateDraftSalaryRun } = await import('@/lib/salary/update-run')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await updateDraftSalaryRun(supabase, {
       companyId,
       salaryRunId,
@@ -5724,7 +5718,6 @@ async function commitCreateEmployee(
 ): Promise<ExecutorResult> {
   try {
     const { createEmployee } = await import('@/lib/salary/employee-commands')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await createEmployee(supabase, {
       companyId,
       userId,
@@ -5761,7 +5754,6 @@ async function commitUpdateEmployee(
 
   try {
     const { updateEmployee } = await import('@/lib/salary/employee-commands')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await updateEmployee(supabase, { companyId, employeeId, patch })
     if (!result.ok) {
       const entry = getErrorEntry(result.code)
@@ -5796,7 +5788,6 @@ async function commitRegisterAbsence(
 
   try {
     const { upsertAbsenceRange } = await import('@/lib/salary/absence')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await upsertAbsenceRange(supabase, {
       companyId,
       employeeId,
@@ -5856,7 +5847,6 @@ async function commitBookSalaryRun(
 
   try {
     const { advanceAndBookSalaryRun } = await import('@/lib/salary/book-run')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await advanceAndBookSalaryRun(supabase, {
       companyId,
       userId,
@@ -5912,7 +5902,6 @@ async function commitDeleteAbsence(
 
   try {
     const { deleteAbsenceRange } = await import('@/lib/salary/absence')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await deleteAbsenceRange(supabase, {
       companyId,
       employeeId,
@@ -5966,13 +5955,11 @@ async function commitSetEmployeeOpeningBalances(
   }
 
   try {
-    const { OpeningBalancesBulkSchema } = await import('@/lib/api/schemas')
     const parsed = OpeningBalancesBulkSchema.safeParse({ items })
     if (!parsed.success) {
       return { error: 'Ogiltiga ingående saldon i den godkända operationen', status: 400 }
     }
     const { setOpeningBalancesBulk } = await import('@/lib/salary/opening-balances')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await setOpeningBalancesBulk(supabase, {
       companyId,
       userId,
@@ -6014,7 +6001,6 @@ async function commitVacationYearClose(
 
   try {
     const { commitVacationYearClose: runClose } = await import('@/lib/salary/semesterberedning')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await runClose(supabase, companyId, userId, yearStart, { bookAdjustment })
     if (!result.ok) {
       const entry = getErrorEntry(result.code)
@@ -6049,20 +6035,25 @@ async function commitVacationYearClose(
 // Error, which the dispatcher catch releases back to 'pending'; a non-recoverable
 // failure becomes a plain { error, status } that rejects the op.
 
-function getSkatteverketServices(): SkatteverketCommitServices {
-  const services = extensionRegistry.get('skatteverket')?.services as
-    | Partial<SkatteverketCommitServices>
-    | undefined
-  if (!services?.commitSubmitVatDeclaration || !services?.commitSubmitAgi) {
-    // Extension absent or not wired. Recoverable: leave the op pending so a
-    // re-enable + re-approve works without re-staging.
+/**
+ * Resolve the Skatteverket extension's services and require the given keys
+ * to be wired. Extension absent or not wired is recoverable: the op is left
+ * pending so a re-enable + re-approve works without re-staging.
+ */
+function requireSkatteverketServices<T extends object>(keys: ReadonlyArray<keyof T>): T {
+  const services = extensionRegistry.get('skatteverket')?.services as Partial<T> | undefined
+  if (!services || keys.some((key) => !services[key])) {
     throw new SkatteverketRecoverableError(
       'Skatteverket-integrationen är inte tillgänglig.',
       'EXTENSION_DISABLED',
       503,
     )
   }
-  return services as SkatteverketCommitServices
+  return services as T
+}
+
+function getSkatteverketServices(): SkatteverketCommitServices {
+  return requireSkatteverketServices<SkatteverketCommitServices>(['commitSubmitVatDeclaration', 'commitSubmitAgi'])
 }
 
 function handleSkvSubmitResult(result: SkvSubmitResult): ExecutorResult {
@@ -6115,19 +6106,7 @@ async function commitSubmitAgi(
 // work (or fail recoverable) independently of the SKV filing services.
 
 function getSkattekontoBookingService(): SkattekontoBookingCommitService {
-  const services = extensionRegistry.get('skatteverket')?.services as
-    | Partial<SkattekontoBookingCommitService>
-    | undefined
-  if (!services?.commitBookSkattekontoRows) {
-    // Extension absent or not wired. Recoverable: leave the op pending so a
-    // re-enable + re-approve works without re-staging.
-    throw new SkatteverketRecoverableError(
-      'Skatteverket-integrationen är inte tillgänglig.',
-      'EXTENSION_DISABLED',
-      503,
-    )
-  }
-  return services as SkattekontoBookingCommitService
+  return requireSkatteverketServices<SkattekontoBookingCommitService>(['commitBookSkattekontoRows'])
 }
 
 async function commitBookSkattekontoRows(

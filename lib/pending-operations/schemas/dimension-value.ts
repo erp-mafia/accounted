@@ -69,5 +69,3 @@ export const CreateDimensionValueParamsSchema = z
       })
     }
   })
-
-export type CreateDimensionValueParams = z.infer<typeof CreateDimensionValueParamsSchema>

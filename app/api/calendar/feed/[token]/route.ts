@@ -4,24 +4,13 @@ import { generateCalendarFeed } from '@/lib/calendar/ics-generator'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createLogger } from '@/lib/logger'
 import type { Deadline, Invoice } from '@/types'
+import { createTokenRateLimiter } from '@/lib/api/token-rate-limit'
+import { UUID_RE } from '@/lib/invariants/uuid'
 
 const log = createLogger('api/calendar/feed-token')
 
-// In-memory rate limiting: token -> { count, resetAt }
-const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
-const RATE_LIMIT_WINDOW_MS = 60_000 // 1 minute
-const RATE_LIMIT_MAX = 60 // 60 requests per minute per token
-
-// Periodic cleanup to prevent memory leaks (every 5 minutes)
-let lastCleanup = Date.now()
-function cleanupRateLimitMap() {
-  const now = Date.now()
-  if (now - lastCleanup < 5 * 60_000) return
-  lastCleanup = now
-  for (const [key, value] of rateLimitMap) {
-    if (now > value.resetAt) rateLimitMap.delete(key)
-  }
-}
+// 60 requests per minute per token, process-local.
+const rateLimiter = createTokenRateLimiter({ max: 60, windowMs: 60_000 })
 
 /**
  * GET /api/calendar/feed/[token]
@@ -35,22 +24,13 @@ export async function GET(
   const { token } = await params
 
   // Validate token format (UUID)
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-  if (!uuidRegex.test(token)) {
+  if (!UUID_RE.test(token)) {
     return new NextResponse('Invalid token', { status: 400 })
   }
 
   // Rate limiting per token
-  cleanupRateLimitMap()
-  const nowMs = Date.now()
-  const rateEntry = rateLimitMap.get(token)
-  if (rateEntry && nowMs < rateEntry.resetAt) {
-    if (rateEntry.count >= RATE_LIMIT_MAX) {
-      return new NextResponse('Too many requests', { status: 429 })
-    }
-    rateEntry.count++
-  } else {
-    rateLimitMap.set(token, { count: 1, resetAt: nowMs + RATE_LIMIT_WINDOW_MS })
+  if (!rateLimiter.allow(token)) {
+    return new NextResponse('Too many requests', { status: 429 })
   }
 
   // Create service client (no user auth required)

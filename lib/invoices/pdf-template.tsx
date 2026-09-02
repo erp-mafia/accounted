@@ -1,3 +1,4 @@
+import { formatOrgNumber } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import {
   Document,
@@ -673,15 +674,6 @@ export function buildPdfVatBreakdown(items: InvoiceItem[]): Map<number, { base: 
 // new Date() + local-getter timezone hazard.
 function formatDate(date: string): string {
   return date.slice(0, 10)
-}
-
-// Format org number
-function formatOrgNumber(orgNumber: string): string {
-  const cleaned = orgNumber.replace(/\D/g, '')
-  if (cleaned.length === 10) {
-    return `${cleaned.slice(0, 6)}-${cleaned.slice(6)}`
-  }
-  return orgNumber
 }
 
 /**

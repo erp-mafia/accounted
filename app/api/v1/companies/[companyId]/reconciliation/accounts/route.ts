@@ -11,7 +11,7 @@ import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ValidationError } from '@/lib/api/v1/errors'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { ReconciliationAccountSchema } from '@/lib/reconciliation/schemas'
 import { listReconciliationAccounts } from '@/lib/reconciliation/service'
@@ -100,14 +100,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       date_to: url.searchParams.get('date_to') ?? undefined,
       with_status: url.searchParams.get('with_status') ?? undefined,
     })
-    if (!parsed.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
-        },
-      })
-    }
+    if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     try {
       const accounts = await listReconciliationAccounts(ctx.supabase, ctx.companyId!, {
         windowFrom: parsed.data.date_from,

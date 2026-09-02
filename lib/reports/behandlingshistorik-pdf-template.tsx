@@ -1,3 +1,4 @@
+import { formatOrgNumber } from '@/lib/utils'
 import { Document, Page, StyleSheet, Text, View } from '@react-pdf/renderer'
 import {
   BEHANDLINGSHISTORIK_CATEGORIES,
@@ -123,11 +124,6 @@ const styles = StyleSheet.create({
  */
 export function pdfText(value: string): string {
   return value.replace(/→/g, '->').replace(/−/g, '-')
-}
-
-function formatOrgNumber(orgNumber: string): string {
-  const cleaned = orgNumber.replace(/\D/g, '')
-  return cleaned.length === 10 ? `${cleaned.slice(0, 6)}-${cleaned.slice(6)}` : orgNumber
 }
 
 function EventRow({ event }: { event: BehandlingshistorikEvent }) {

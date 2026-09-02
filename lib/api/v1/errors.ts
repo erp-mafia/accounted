@@ -28,7 +28,6 @@ import {
   errorResponse as legacyErrorResponse,
   errorResponseFromCode as legacyErrorResponseFromCode,
 } from '@/lib/errors/get-structured-error'
-import { getErrorEntry } from '@/lib/errors/structured-errors'
 import type { Logger } from '@/lib/logger'
 import { API_V1_VERSION, API_V1_VERSION_HEADER } from './version'
 
@@ -177,10 +176,42 @@ export async function v1ErrorResponseFromCode(
   return rewriteEnvelope(legacy, ctx)
 }
 
+/** Minimal slice of the v1 route context the validation helpers need. */
+export interface V1ValidationContext {
+  requestId: string
+  log: Logger
+}
+
+/** Structural view of a ZodError: enough to render the v1 issues list. */
+export interface V1ZodErrorLike {
+  issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }>
+}
+
 /**
- * Quick check: does this code map to a registered entry? Used by callers that
- * want to validate a code before throwing it (e.g. registry-driven dispatch).
+ * Map Zod issues into the `{ field, message }` list the v1 envelope carries
+ * under `details.issues`.
  */
-export function isRegisteredV1Code(code: string): boolean {
-  return getErrorEntry(code) !== undefined
+export function v1ZodIssues(err: V1ZodErrorLike): Array<{ field: string; message: string }> {
+  return err.issues.map((i) => ({
+    field: i.path.join('.'),
+    message: i.message,
+  }))
+}
+
+/**
+ * VALIDATION_ERROR envelope for a failed Zod parse:
+ *
+ *   const parsed = Schema.safeParse(rawBody)
+ *   if (!parsed.success) return v1ValidationError(ctx, parsed.error)
+ */
+export async function v1ValidationError(
+  ctx: V1ValidationContext,
+  err: V1ZodErrorLike,
+): Promise<NextResponse> {
+  return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+    requestId: ctx.requestId,
+    details: {
+      issues: v1ZodIssues(err),
+    },
+  })
 }

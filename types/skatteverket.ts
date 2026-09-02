@@ -41,28 +41,6 @@ export interface StoredSkattekontoTransaction {
   suggested_at?: string | null
 }
 
-/** Row shape for the `skattekonto_file_imports` tracking table (DB → app). */
-export interface SkattekontoFileImportRecord {
-  id: string
-  company_id: string
-  /** Importing user; null after that user's account is deleted. */
-  user_id: string | null
-  filename: string
-  file_hash: string
-  file_variant: 'csv' | 'skv'
-  row_count: number
-  imported_count: number
-  duplicate_count: number
-  promoted_count: number
-  date_from: string | null
-  date_to: string | null
-  closing_saldo: number | null
-  status: 'pending' | 'processing' | 'completed' | 'failed'
-  error_message: string | null
-  created_at: string
-  updated_at: string
-}
-
 /**
  * Single best candidate verifikat for an unmatched SKV row. Attached by
  * the `/skattekonto/transaktioner` endpoint when exactly one strong match

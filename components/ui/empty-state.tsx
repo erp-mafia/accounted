@@ -6,12 +6,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
-  ReceiptText,
   Users,
-  ArrowLeftRight,
-  Building2,
-  FileText,
-  Calendar,
   Plus,
   TrendingUp,
   type LucideIcon,
@@ -105,20 +100,6 @@ export function EmptyState({
 
 // Preset empty states for common pages
 
-export function EmptyInvoices({ onAction }: { onAction?: () => void } = {}) {
-  const t = useTranslations('empty')
-  return (
-    <EmptyState
-      icon={ReceiptText}
-      title={t('preset_invoices_title')}
-      description={t('preset_invoices_description')}
-      actionLabel={t('preset_invoices_action')}
-      actionHref={onAction ? undefined : '/invoices?new=1'}
-      onAction={onAction}
-    />
-  )
-}
-
 export function EmptyCustomers({ onAction }: { onAction?: () => void } = {}) {
   const t = useTranslations('empty')
   return (
@@ -129,60 +110,6 @@ export function EmptyCustomers({ onAction }: { onAction?: () => void } = {}) {
       actionLabel={t('preset_customers_action')}
       actionHref={onAction ? undefined : '/customers/new'}
       onAction={onAction}
-    />
-  )
-}
-
-export function EmptyTransactions() {
-  const t = useTranslations('empty')
-  return (
-    <EmptyState
-      icon={ArrowLeftRight}
-      title={t('preset_transactions_title')}
-      description={t('preset_transactions_description')}
-      actionLabel={t('preset_transactions_action')}
-      actionHref="/import"
-      supportHint
-    />
-  )
-}
-
-export function EmptyDeadlines() {
-  const t = useTranslations('empty')
-  return (
-    <EmptyState
-      icon={Calendar}
-      title={t('preset_deadlines_title')}
-      description={t('preset_deadlines_description')}
-    />
-  )
-}
-
-export function NoBankConnected() {
-  const t = useTranslations('empty')
-  return (
-    <EmptyState
-      icon={Building2}
-      title={t('preset_no_bank_title')}
-      description={t('preset_no_bank_description')}
-      actionLabel={t('preset_no_bank_action')}
-      actionHref="/import"
-      supportHint
-    />
-  )
-}
-
-export function EmptyReports() {
-  const t = useTranslations('empty')
-  return (
-    <EmptyState
-      icon={FileText}
-      title={t('preset_reports_title')}
-      description={t('preset_reports_description')}
-      actionLabel={t('preset_reports_action')}
-      actionHref="/invoices?new=1"
-      secondaryActionLabel={t('preset_reports_secondary')}
-      secondaryActionHref="/import"
     />
   )
 }

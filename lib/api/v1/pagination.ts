@@ -14,7 +14,7 @@
  * pagination hints, not security tokens.
  */
 
-import { z } from 'zod'
+import { UUID_RE as UUID } from '@/lib/invariants/uuid'
 
 export const DEFAULT_LIMIT = 50
 export const MAX_LIMIT = 100
@@ -47,14 +47,6 @@ export function parsePaginationParams(url: URL): PaginationParams {
   return { limit, cursor: cursor && cursor.length > 0 ? cursor : null }
 }
 
-/**
- * Schema for query-param validation when a route already uses Zod for inputs.
- */
-export const PaginationQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(MAX_LIMIT).optional(),
-  cursor: z.string().min(1).optional(),
-})
-
 // ─────────────────────────────────────────────────────────────────
 // Default (created_at, id) keyset cursor
 // ─────────────────────────────────────────────────────────────────
@@ -82,7 +74,6 @@ export function encodeDefaultCursor(row: { created_at: string; id: string } | nu
 // PostgREST would likely reject these, but validating here keeps the failure
 // mode predictable (stale cursor → "start over") rather than 400-ing.
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
  * Decode a cursor produced by encodeDefaultCursor. Returns null when the

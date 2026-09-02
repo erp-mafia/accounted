@@ -23,7 +23,7 @@ import {
   CheckCircle2,
   Loader2,
 } from 'lucide-react'
-import { formatDate } from '@/lib/utils'
+import { formatAmount, formatDate } from '@/lib/utils'
 import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
 import type { KassaflodesanalysReport } from '@/lib/reports/kassaflodesanalys'
@@ -31,13 +31,6 @@ import {
   getErrorMessage as getUserErrorMessage,
   type ErrorLocale,
 } from '@/lib/errors/get-error-message'
-
-function formatAmount(n: number): string {
-  return n.toLocaleString('sv-SE', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
-}
 
 interface CashRowProps {
   label: string

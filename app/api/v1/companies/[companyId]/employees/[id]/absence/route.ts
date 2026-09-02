@@ -18,7 +18,8 @@ import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { readV1JsonBody } from '@/lib/api/v1/body'
 import { AbsenceTypeSchema } from '@/lib/api/schemas'
 import {
   ABSENCE_RANGE_MAX_DAYS,
@@ -104,17 +105,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       to: url.searchParams.get('to') ?? undefined,
       type: url.searchParams.get('type') ?? undefined,
     })
-    if (!parsed.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: parsed.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
-    }
+    if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const { from, to, type } = parsed.data
 
     // Same cap as writes: the bounded range is the pagination contract.
@@ -213,28 +204,12 @@ export const PUT = withApiV1<{ params: Promise<{ companyId: string; id: string }
       })
     }
 
-    let rawBody: unknown
-    try {
-      rawBody = await request.json()
-    } catch {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'body', message: 'Body is not valid JSON.' },
-      })
-    }
+    const rawBodyResult = await readV1JsonBody(request, ctx)
+    if (!rawBodyResult.ok) return rawBodyResult.response
+    const rawBody = rawBodyResult.body
 
     const parsed = UpsertRangeBody.safeParse(rawBody)
-    if (!parsed.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: parsed.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
-    }
+    if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const body = parsed.data
 
     const result = await upsertAbsenceRange(ctx.supabase, {
@@ -325,17 +300,7 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
       to: url.searchParams.get('to') ?? undefined,
       type: url.searchParams.get('type') ?? undefined,
     })
-    if (!parsed.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: parsed.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
-    }
+    if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const { from, to, type } = parsed.data
 
     const result = await deleteAbsenceRange(ctx.supabase, {

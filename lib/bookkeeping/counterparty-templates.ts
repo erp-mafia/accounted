@@ -442,14 +442,15 @@ export async function findCounterpartyTemplatesBatch(
 // ── Build MappingResult ────────────────────────────────────────
 
 /** Which side of a template the money settles on. */
-type TemplateDirection = 'expense' | 'income' | 'unknown'
+export type TemplateDirection = 'expense' | 'income' | 'unknown'
 
 /**
  * Learned direction of a legacy (single debit/credit) template: expenses
  * settle on the credit side (credit bank, debit cost), income settles on the
  * debit side. 'unknown' when neither or both accounts look like settlement.
  */
-function legacyTemplateDirection(debitAccount: string, creditAccount: string): TemplateDirection {
+export function legacyTemplateDirection(debitAccount: string, creditAccount: string): TemplateDirection {
+
   const debitSettles = isSettlementAccount(debitAccount)
   const creditSettles = isSettlementAccount(creditAccount)
   if (creditSettles && !debitSettles) return 'expense'
@@ -458,7 +459,8 @@ function legacyTemplateDirection(debitAccount: string, creditAccount: string): T
 }
 
 /** Learned direction of a multi-line pattern: read off the business sides. */
-function patternDirection(pattern: LinePatternEntry[]): TemplateDirection {
+export function patternDirection(pattern: LinePatternEntry[]): TemplateDirection {
+
   const business = pattern.filter((e) => e.type === 'business')
   if (business.length === 0) return 'unknown'
   const debitCount = business.filter((b) => b.side === 'debit').length
@@ -999,7 +1001,8 @@ function toDateString(d: Date): string {
 }
 
 /** Settlement accounts: bank/cash (19xx), receivables (1510), payables (2440), credit card (2890) */
-function isSettlementAccount(account: string): boolean {
+export function isSettlementAccount(account: string): boolean {
+
   return account.startsWith('19') || account === '1510' || account === '2440' || account === '2890'
 }
 

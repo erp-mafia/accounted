@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
-import { Upload, FileText, AlertCircle, CheckCircle, Loader2, XCircle, RefreshCw } from 'lucide-react'
+import { Upload, AlertCircle, CheckCircle, Loader2, XCircle, RefreshCw } from 'lucide-react'
 
 const LOADING_PHASES = [
   { message: 'Läser fil...', progress: 10 },

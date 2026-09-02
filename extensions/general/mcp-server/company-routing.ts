@@ -31,13 +31,13 @@ export function isOptionalCompanyTool(toolName: string): boolean {
   return OPTIONAL_COMPANY_TOOLS.has(toolName)
 }
 
-export const COMPANY_ID_INPUT_PROPERTY = {
+const COMPANY_ID_INPUT_PROPERTY = {
   type: 'string',
   format: 'uuid',
   description: 'Target company ID. Omit for default.',
 } as const
 
-export interface McpCompanyContext {
+interface McpCompanyContext {
   companyId: string
   role: CompanyRole
   isDefault: boolean

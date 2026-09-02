@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { daysBetweenIso, toIsoDate } from '@/lib/dates/iso'
 import { getReconciliationStatus as getBankReconciliationStatus } from './bank-reconciliation'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
 import {
@@ -57,15 +58,6 @@ interface CashAccountRow {
   available_balance: number | null
   balance_updated_at: string | null
   updated_at: string | null
-}
-
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10)
-}
-
-function daysBetween(a: string, b: string): number {
-  const ms = new Date(a + 'T00:00:00Z').getTime() - new Date(b + 'T00:00:00Z').getTime()
-  return Math.round(ms / 86_400_000)
 }
 
 function defaultWindow(today: string): { from: string; to: string } {
@@ -158,7 +150,7 @@ async function bankStatus(
     Boolean(account.is_primary),
   )
   const syncedAt = await latestBankSyncAt(supabase, companyId, account.id)
-  const stale = !syncedAt || daysBetween(today, syncedAt.slice(0, 10)) > STALE_AFTER_DAYS
+  const stale = !syncedAt || daysBetweenIso(syncedAt.slice(0, 10), today) > STALE_AFTER_DAYS
   // The bank-reported (booked) balance, mirrored from the last PSD2 balance
   // refresh. Point-in-time and dated by balance_updated_at, NOT by any
   // through-date a caller asks for. It therefore lives ONLY in the bank block
@@ -240,7 +232,7 @@ export async function listReconciliationAccounts(
   companyId: string,
   options: ListAccountsOptions = {},
 ): Promise<ReconciliationAccount[]> {
-  const today = options.today ?? isoDate(new Date())
+  const today = options.today ?? toIsoDate(new Date())
   const withStatus = options.withStatus ?? true
   const window = {
     from: options.windowFrom ?? defaultWindow(today).from,
@@ -320,7 +312,7 @@ export async function listReconciliationAccounts(
       } catch {
         syncedAt = null
       }
-      const stale = !syncedAt || daysBetween(today, syncedAt.slice(0, 10)) > STALE_AFTER_DAYS
+      const stale = !syncedAt || daysBetweenIso(syncedAt.slice(0, 10), today) > STALE_AFTER_DAYS
       return {
         account_key: bankAccountKey(a.id),
         kind: 'bank',
@@ -406,7 +398,7 @@ export async function getAccountStatus(
 ): Promise<ReconciliationStatus | null> {
   const parsed = parseAccountKey(accountKey)
   if (!parsed) return null
-  const today = options.today ?? isoDate(new Date())
+  const today = options.today ?? toIsoDate(new Date())
 
   let status: ReconciliationStatus | null = null
   if (parsed.kind === 'skattekonto') {

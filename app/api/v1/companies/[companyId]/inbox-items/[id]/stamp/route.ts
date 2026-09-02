@@ -19,7 +19,8 @@ import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { readV1JsonBody } from '@/lib/api/v1/body'
 
 const Body = z
   .object({
@@ -80,22 +81,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     const itemId = idParse.data
 
-    let rawBody: unknown
-    try {
-      rawBody = await request.json()
-    } catch {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'body', message: 'Body is not valid JSON.' },
-      })
-    }
+    const rawBodyResult = await readV1JsonBody(request, ctx)
+    if (!rawBodyResult.ok) return rawBodyResult.response
+    const rawBody = rawBodyResult.body
     const parsed = Body.safeParse(rawBody)
-    if (!parsed.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { issues: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })) },
-      })
-    }
+    if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const body = parsed.data
 
     const [itemRes, jeRes] = await Promise.all([

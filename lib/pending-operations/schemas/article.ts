@@ -89,5 +89,3 @@ export const UpdateArticleParamsSchema = z.object({
   active: z.boolean().optional(),
 })
 
-export type CreateArticleParams = z.infer<typeof CreateArticleParamsSchema>
-export type UpdateArticleParams = z.infer<typeof UpdateArticleParamsSchema>

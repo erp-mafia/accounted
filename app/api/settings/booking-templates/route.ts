@@ -3,31 +3,24 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { UUID_RE } from '@/lib/invariants/uuid'
+import {
+  BookingTemplateCategorySchema,
+  BookingTemplateEntityTypeSchema,
+  BookingTemplateLineSchema,
+} from '@/lib/bookkeeping/booking-template-schemas'
 
 // The GET scope below builds a PostgREST .or() filter by string interpolation.
-// Guard every interpolated id against a strict UUID shape so a tainted value
-// can never inject filter syntax. Both ids are server-derived (companyId from
-// membership, teamId from a DB column), so this is defense-in-depth.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-const BookingTemplateLineSchema = z.object({
-  account: z.string().regex(/^\d{4}$/),
-  label: z.string().min(1),
-  side: z.enum(['debit', 'credit']),
-  type: z.enum(['business', 'vat', 'settlement']),
-  ratio: z.number().min(0).max(10).optional(),
-  vat_rate: z.number().min(0).max(1).optional(),
-})
+// Guard every interpolated id against a strict UUID shape (UUID_RE) so a
+// tainted value can never inject filter syntax. Both ids are server-derived
+// (companyId from membership, teamId from a DB column), so this is
+// defense-in-depth.
 
 const CreateBookingTemplateSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().max(2000).default(''),
-  category: z.enum([
-    'eu_trade', 'tax_account', 'private_transfer',
-    'salary', 'representation', 'year_end',
-    'vat', 'financial', 'other',
-  ]).default('other'),
-  entity_type: z.enum(['all', 'enskild_firma', 'aktiebolag']).default('all'),
+  category: BookingTemplateCategorySchema.default('other'),
+  entity_type: BookingTemplateEntityTypeSchema.default('all'),
   lines: z.array(BookingTemplateLineSchema).min(2),
   team_id: z.string().uuid().optional(),
 })

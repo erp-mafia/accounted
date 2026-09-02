@@ -25,24 +25,6 @@ export interface LedgerRow {
   status: 'pending' | 'active' | 'revoked'
 }
 
-/** Active connections for one company under one key and service. Enforces the per-company limit. */
-export async function countActiveConnections(
-  supabase: SupabaseClient,
-  keyId: string,
-  service: ConnectorService,
-  companyRef: string,
-): Promise<number> {
-  const { count, error } = await supabase
-    .from('connector_connections')
-    .select('id', { count: 'exact', head: true })
-    .eq('connector_key_id', keyId)
-    .eq('service', service)
-    .eq('company_ref', companyRef)
-    .eq('status', 'active')
-  if (error) throw new Error(`ledger count failed: ${error.message}`)
-  return count ?? 0
-}
-
 /**
  * Pending rows count toward quota only while their consent window is open:
  * the signed connector state expires after 15 minutes, so an abandoned

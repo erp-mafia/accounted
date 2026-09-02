@@ -380,8 +380,3 @@ export type EventPayload<T extends CoreEventType> = Extract<CoreEvent, { type: T
 /** Handler function for a specific event type */
 export type EventHandler<T extends CoreEventType> = (payload: EventPayload<T>) => Promise<void> | void
 
-/** Subscription: event type + handler */
-export interface EventSubscription<T extends CoreEventType = CoreEventType> {
-  eventType: T
-  handler: EventHandler<T>
-}

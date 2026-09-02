@@ -6,6 +6,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { formatDate } from '@/lib/utils'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import type { EventPayload } from '@/lib/events/types'
+import { escapeHtml } from '@/lib/email/user-text'
 
 const log = createLogger('skattekonto-drift-email')
 
@@ -173,11 +174,3 @@ async function resolveAuthorisedRecipient(
   return null
 }
 
-function escapeHtml(input: string): string {
-  return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}

@@ -19,13 +19,11 @@ type OpenSupplierInvoice = SupplierInvoice & { supplier?: Supplier }
 interface SupplierInvoicePickerProps {
   transaction: TransactionWithInvoice
   onSelect: (invoice: OpenSupplierInvoice) => void
-  isProcessing: boolean
 }
 
 export default function SupplierInvoicePicker({
   transaction,
   onSelect,
-  isProcessing,
 }: SupplierInvoicePickerProps) {
   const { company } = useCompany()
   const supabase = useMemo(() => createClient(), [])
@@ -155,13 +153,11 @@ export default function SupplierInvoicePicker({
               key={invoice.id}
               type="button"
               onClick={() => onSelect(invoice)}
-              disabled={isProcessing}
               className={cn(
                 'w-full text-left rounded-lg border px-3 py-2.5 transition-colors',
                 'hover:bg-muted/50 focus:outline-none focus:ring-2 focus:ring-ring',
                 exact && 'border-success/50 bg-success/5',
-                close && 'border-primary/30',
-                isProcessing && 'opacity-50 pointer-events-none'
+                close && 'border-primary/30'
               )}
             >
               <div className="flex items-start justify-between gap-3">

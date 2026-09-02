@@ -1,3 +1,4 @@
+import { UUID_RE } from '@/lib/invariants/uuid'
 import { NextResponse, after } from 'next/server'
 import {
   TASKS_EXTENSION_ID,
@@ -61,7 +62,7 @@ import { eventBus } from '@/lib/events/bus'
 import { getVatRules, getPermittedVatRates, getArticleVatRateAdoptionSet } from '@/lib/invoices/vat-rules'
 import { validateDeductionLines } from '@/lib/invoices/rot-rut-rules'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
-import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { getBranding } from '@/lib/branding/service'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import {
@@ -172,9 +173,8 @@ import {
   checkIdempotencyKey,
   storeIdempotencyResponse,
   hashRequest,
-  IdempotencyKeyReuseError,
 } from '@/lib/api/idempotency'
-import { toToolError, withNext, type NextActionHint } from './tool-result'
+import { toToolError, type NextActionHint } from './tool-result'
 import {
   addCompanyToNextHint,
   addCompanyToTopLevelNext,
@@ -215,7 +215,6 @@ import {
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
-import { createInvoicePaymentJournalEntry, createInvoiceCashEntry, createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
 import { sanitizeDeliveryRecipientStatuses } from '@/lib/invoices/delivery-recipient-statuses'
 import { listRotRutCandidates, createRotRutPayoutRequest } from '@/lib/invoices/rot-rut-service'
@@ -229,8 +228,8 @@ import {
   findMatchingVouchersForSupplierInvoice,
   validateVoucherForSupplierInvoiceLink,
 } from '@/lib/invoices/supplier-voucher-matching'
-import { findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
-import { closePeriod, countUnbookedInPeriod, findNextPeriod, lockPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import { findFiscalPeriod, getSwedishLocalDate, validateBalance } from '@/lib/bookkeeping/engine'
+import { countUnbookedInPeriod, findNextPeriod, lockPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { validateYearEndReadiness, previewYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
 import {
   assessKontantmetodCutoff,
@@ -242,22 +241,15 @@ import {
 } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 import { generateSIEExport } from '@/lib/reports/sie-export'
 import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
-import { bookkeepingErrorResponse, CorrectionChainTooDeepError } from '@/lib/bookkeeping/errors'
+import { CorrectionChainTooDeepError } from '@/lib/bookkeeping/errors'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { getSuggestedCategories, buildMerchantHistory, merchantHistoryFor } from '@/lib/transactions/category-suggestions'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { buildDuplicateBookingClaim } from '@/lib/transactions/categorize-core'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
-import { renderToBuffer } from '@react-pdf/renderer'
-import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { getEmailService } from '@/lib/email/service'
 import { hasCapability, capabilityBlockedError } from '@/lib/entitlements/has-capability'
 import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
-import {
-  generateInvoiceEmailHtml,
-  generateInvoiceEmailText,
-  generateInvoiceEmailSubject,
-} from '@/lib/email/invoice-templates'
 import {
   completePendingDocumentUpload,
   createPendingDocumentUpload,
@@ -480,6 +472,56 @@ interface McpToolAnnotations {
   idempotentHint?: boolean
   openWorldHint?: boolean
 }
+
+// Shared annotation sets. tools/list serialises `annotations` as-is, so a
+// shared frozen object emits exactly the JSON an inline literal did; nothing
+// mutates a tool's annotations after registration. Tools whose hints need
+// a per-tool explanation keep an inline block with comments.
+const ANNOTATIONS_READ_ONLY = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const satisfies McpToolAnnotations
+/** Stages a pending operation or writes once; retries are not idempotent. */
+const ANNOTATIONS_STAGED_WRITE = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+} as const satisfies McpToolAnnotations
+const ANNOTATIONS_IDEMPOTENT_WRITE = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const satisfies McpToolAnnotations
+const ANNOTATIONS_DESTRUCTIVE_WRITE = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: false,
+} as const satisfies McpToolAnnotations
+const ANNOTATIONS_DESTRUCTIVE_IDEMPOTENT_WRITE = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const satisfies McpToolAnnotations
+/** Read-only tools that call an external system (Skatteverket, Riksbanken). */
+const ANNOTATIONS_READ_ONLY_OPEN_WORLD = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const satisfies McpToolAnnotations
+/** Writes that also reach an external system. */
+const ANNOTATIONS_WRITE_OPEN_WORLD = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true,
+} as const satisfies McpToolAnnotations
 
 interface McpTool {
   name: string
@@ -1093,7 +1135,7 @@ async function resolveJournalEntryRef(
 
   // UUIDs pass through. If the UUID was hallucinated, the caller's own
   // lookup surfaces the "not found" diagnostic with the supplied value.
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
+  if (UUID_RE.test(trimmed)) {
     return trimmed
   }
 
@@ -1582,11 +1624,9 @@ async function resolveSieToolContent(
     if (!sha256) return
     const actual = createHash('sha256').update(buffer).digest('hex')
     if (actual !== sha256) {
-      throw Object.assign(
-        new Error(
-          `sha256 mismatch on ${source}: expected ${sha256}, got ${actual}. The content was truncated or altered; re-send it.`
-        ),
-        { code: 'VALIDATION_ERROR' }
+      throw codedError(
+        'VALIDATION_ERROR',
+        `sha256 mismatch on ${source}: expected ${sha256}, got ${actual}. The content was truncated or altered; re-send it.`
       )
     }
   }
@@ -1596,19 +1636,15 @@ async function resolveSieToolContent(
   if (typeof args.upload_id === 'string' && args.upload_id.length > 0) {
     const fileName = typeof args.filename === 'string' ? args.filename : ''
     if (!fileName) {
-      throw Object.assign(new Error('filename is required together with upload_id'), {
-        code: 'VALIDATION_ERROR',
-      })
+      throw codedError('VALIDATION_ERROR', 'filename is required together with upload_id')
     }
     const service = createServiceClientNoCookies()
     const pendingPath = buildPendingDocumentStoragePath(companyId, userId, args.upload_id, fileName)
     const { data, error } = await service.storage.from(DOCUMENTS_BUCKET).download(pendingPath)
     if (error || !data) {
-      throw Object.assign(
-        new Error(
-          'No uploaded file found for this upload_id. PUT the raw file bytes to the upload_url from gnubok_create_sie_upload first (same upload_id and filename).'
-        ),
-        { code: 'NOT_FOUND' }
+      throw codedError(
+        'NOT_FOUND',
+        'No uploaded file found for this upload_id. PUT the raw file bytes to the upload_url from gnubok_create_sie_upload first (same upload_id and filename).'
       )
     }
     const buffer = Buffer.from(await data.arrayBuffer())
@@ -1623,11 +1659,9 @@ async function resolveSieToolContent(
     // always does) has byte-exact content and the hash check below IS the
     // truncation guard, so the cap does not apply.
     if (!sha256 && args.file_content_base64.length > MAX_INLINE_SIE_CHARS) {
-      throw Object.assign(
-        new Error(
-          'File too large to pass inline safely without a sha256. Use gnubok_create_sie_upload (drag-and-drop card / PUT to its upload_url) and pass the upload_id here, or include sha256 of the raw bytes.'
-        ),
-        { code: 'VALIDATION_ERROR' }
+      throw codedError(
+        'VALIDATION_ERROR',
+        'File too large to pass inline safely without a sha256. Use gnubok_create_sie_upload (drag-and-drop card / PUT to its upload_url) and pass the upload_id here, or include sha256 of the raw bytes.'
       )
     }
     const buffer = Buffer.from(args.file_content_base64, 'base64')
@@ -1638,11 +1672,9 @@ async function resolveSieToolContent(
 
   if (typeof args.file_content === 'string' && args.file_content.length > 0) {
     if (args.file_content.length > MAX_INLINE_SIE_CHARS) {
-      throw Object.assign(
-        new Error(
-          'File too large to pass inline safely (silent mid-verifikat truncation risk). Use gnubok_create_sie_upload, PUT the raw bytes to its upload_url, and pass the upload_id here instead.'
-        ),
-        { code: 'VALIDATION_ERROR' }
+      throw codedError(
+        'VALIDATION_ERROR',
+        'File too large to pass inline safely (silent mid-verifikat truncation risk). Use gnubok_create_sie_upload, PUT the raw bytes to its upload_url, and pass the upload_id here instead.'
       )
     }
     return args.file_content
@@ -1657,9 +1689,9 @@ async function resolveSieToolContent(
  */
 function connectLinkBaseUrl(): string {
   if (!process.env.NEXT_PUBLIC_APP_URL) {
-    throw Object.assign(
-      new Error('NEXT_PUBLIC_APP_URL is not configured on this installation; cannot build a connect link'),
-      { code: 'INTERNAL_ERROR' }
+    throw codedError(
+      'INTERNAL_ERROR',
+      'NEXT_PUBLIC_APP_URL is not configured on this installation; cannot build a connect link'
     )
   }
   return getCanonicalBaseUrl()
@@ -1860,7 +1892,7 @@ const RUTA_05_COMPATIBILITY_ACCOUNTS = [
   '3071', '3072', '3073', '3074', '3075', '3076', '3077', '3078',
 ] as const
 
-export interface VatReportResult {
+interface VatReportResult {
   period: { type: string; year: number; period: number; start: string; end: string }
   period_label: string
   rutor: {
@@ -1877,7 +1909,7 @@ export interface VatReportResult {
   warnings: string[]
 }
 
-export interface VatReportWithRutor {
+interface VatReportWithRutor {
   report: VatReportResult
   dynamicVatAccounts: Awaited<ReturnType<typeof fetchDynamicVatAccounts>>
   /**
@@ -1919,7 +1951,7 @@ export async function computeVatReport(
   return report
 }
 
-export async function computeVatReportWithRutor(
+async function computeVatReportWithRutor(
   args: Record<string, unknown>,
   companyId: string,
   supabase: SupabaseClient
@@ -2388,13 +2420,6 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
  */
 const MISSING_UNDERLAG_MIN_GROSS_SEK = 4000
 
-/** ISO date one day after `isoDate`, in UTC so no local offset can shift it. */
-function dayAfter(isoDate: string): string {
-  const d = new Date(`${isoDate}T00:00:00Z`)
-  d.setUTCDate(d.getUTCDate() + 1)
-  return d.toISOString().slice(0, 10)
-}
-
 /** One `verifikat_without_documents` page-of-one, used only for its total. */
 async function totalMissingUnderlagSince(
   supabase: SupabaseClient,
@@ -2458,9 +2483,70 @@ async function countMissingUnderlagInPeriod(
 ): Promise<number> {
   const [fromStart, afterEnd] = await Promise.all([
     totalMissingUnderlagSince(supabase, companyId, start),
-    totalMissingUnderlagSince(supabase, companyId, dayAfter(end)),
+    totalMissingUnderlagSince(supabase, companyId, nextDay(end)),
   ])
   return Math.max(0, fromStart - afterEnd)
+}
+
+/**
+ * Resolve the fiscal period a report tool runs against: the caller's
+ * `period_id` when given, else the company's most recent period. The period
+ * is then re-read scoped to the company, so a foreign id never resolves.
+ */
+async function resolveReportPeriod(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodIdArg: unknown,
+  noPeriodsMessage: string,
+) {
+  let periodId = periodIdArg as string | undefined
+
+  if (!periodId) {
+    const { data: periods } = await supabase
+      .from('fiscal_periods')
+      .select('id')
+      .eq('company_id', companyId)
+      .order('period_start', { ascending: false })
+      .limit(1)
+      .single()
+
+    if (!periods) throw new Error(noPeriodsMessage)
+    periodId = periods.id
+  }
+
+  const { data: period } = await supabase
+    .from('fiscal_periods')
+    .select('id, name, period_start, period_end')
+    .eq('id', periodId)
+    .eq('company_id', companyId)
+    .single()
+
+  if (!period) throw new Error('Fiscal period not found.')
+  return period
+}
+
+/** Invoice row plus its customer, scoped to the company; throws when absent. */
+async function fetchInvoiceWithCustomer(supabase: SupabaseClient, companyId: string, invoiceId: string) {
+  const { data: invoice, error: invoiceError } = await supabase
+    .from('invoices')
+    .select('*, customer:customers(*)')
+    .eq('id', invoiceId)
+    .eq('company_id', companyId)
+    .single()
+
+  if (invoiceError || !invoice) throw new Error('Invoice not found')
+  return invoice
+}
+
+/** Offset-pagination tail shared by the list tools: count/total/has_more/next_offset. */
+function pageTail(rows: unknown[], total: number, offset: number) {
+  const hasMore = offset + rows.length < total
+  return {
+    count: rows.length,
+    total_count: total,
+    has_more: hasMore,
+    ...(hasMore ? { next_offset: offset + rows.length } : {}),
+  }
 }
 
 /**
@@ -3004,12 +3090,7 @@ export const tools: McpTool[] = [
       additionalProperties: true,
       description: 'The inner tool\'s own result, unchanged.',
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute() {
       // Unreachable: the dispatcher rewrites the call before resolution. If
       // this ever throws, the rewrite was removed and every call would have
@@ -3048,12 +3129,7 @@ export const tools: McpTool[] = [
       },
       required: ['tools', 'count', 'total_matched', 'detail'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, _companyId, _userId, _supabase, _actor) {
       const namespace: McpToolNamespace =
         args.__toolNamespace === 'accounted' ? 'accounted' : 'gnubok'
@@ -3205,12 +3281,7 @@ export const tools: McpTool[] = [
       },
       required: ['companies', 'count', 'default_company_id'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(_args, defaultCompanyId, userId, supabase) {
       type CompanyRow = {
         id: string
@@ -3303,19 +3374,14 @@ export const tools: McpTool[] = [
       },
       required: ['status', 'company', 'suggested_create_company_input', 'still_to_ask', 'warnings', 'instructions'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: true,
-    },
+    annotations: ANNOTATIONS_READ_ONLY_OPEN_WORLD,
     async execute(args) {
       const raw = String((args as { org_number: string }).org_number ?? '')
       const normalized = normalizeOrgNumber(raw)
       if (!normalized) {
-        throw Object.assign(
-          new Error('Invalid organisationsnummer: expected 10 digits (hyphens and spaces are OK).'),
-          { code: 'VALIDATION_ERROR' }
+        throw codedError(
+          'VALIDATION_ERROR',
+          'Invalid organisationsnummer: expected 10 digits (hyphens and spaces are OK).'
         )
       }
 
@@ -3506,12 +3572,7 @@ export const tools: McpTool[] = [
         message: { type: 'string' },
       },
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, _companyId, userId, supabase) {
       const { confirm, ...setup } = args
       const parsed = CompanySetupSchema.safeParse(setup)
@@ -3519,11 +3580,11 @@ export const tools: McpTool[] = [
         const detail = parsed.error.issues
           .map((issue) => `${issue.path.join('.') || 'input'}: ${issue.message}`)
           .join('; ')
-        throw Object.assign(new Error(`Invalid company setup: ${detail}`), { code: 'VALIDATION_ERROR' })
+        throw codedError('VALIDATION_ERROR', `Invalid company setup: ${detail}`)
       }
       const plan = planCompanySetup(parsed.data)
       if (!plan.ok) {
-        throw Object.assign(new Error(`Invalid fiscal period: ${plan.error}`), { code: 'VALIDATION_ERROR' })
+        throw codedError('VALIDATION_ERROR', `Invalid fiscal period: ${plan.error}`)
       }
 
       const teamId = parsed.data.team_id ?? (await defaultTeamForUser(supabase, userId))
@@ -3649,12 +3710,7 @@ export const tools: McpTool[] = [
       required: ['connected', 'connections', 'connect_url', 'instructions'],
     },
     _meta: { ui: { resourceUri: 'ui://connect-card/app.html' } },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const { data, error } = await supabase
         .from('bank_connections')
@@ -3725,12 +3781,7 @@ export const tools: McpTool[] = [
       required: ['available', 'connected', 'token_expires_at', 'connect_url', 'instructions'],
     },
     _meta: { ui: { resourceUri: 'ui://connect-card/app.html' } },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(_args, companyId, _userId, supabase) {
       const enabled = process.env.SKATTEVERKET_ENABLED === 'true'
       const { data, error } = await supabase
@@ -3789,12 +3840,7 @@ export const tools: McpTool[] = [
       required: ['provider', 'provider_name', 'api_connected', 'connect_url', 'instructions'],
     },
     _meta: { ui: { resourceUri: 'ui://connect-card/app.html' } },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args) {
       const PROVIDERS: Record<string, { name: string; api: boolean }> = {
         fortnox: { name: 'Fortnox', api: true },
@@ -3807,9 +3853,9 @@ export const tools: McpTool[] = [
       const provider = String(args.provider ?? '')
       const info = PROVIDERS[provider]
       if (!info) {
-        throw Object.assign(
-          new Error(`Unknown provider "${provider}". Supported: ${Object.keys(PROVIDERS).join(', ')}.`),
-          { code: 'VALIDATION_ERROR' }
+        throw codedError(
+          'VALIDATION_ERROR',
+          `Unknown provider "${provider}". Supported: ${Object.keys(PROVIDERS).join(', ')}.`
         )
       }
       const connectUrl = `${connectLinkBaseUrl()}/import?mode=migration&provider=${provider}`
@@ -3897,12 +3943,7 @@ export const tools: McpTool[] = [
         'invoice_email_texts',
       ],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     catalogVisibility: 'search',
     async execute(_args, companyId, _userId, supabase) {
       const { data, error } = await supabase
@@ -3988,12 +4029,7 @@ export const tools: McpTool[] = [
         idempotency_key: { type: 'string', description: 'Random per-operation UUID. Reusing it with the same payload returns the original staged response.' },
       },
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
       const rawChanges: Record<string, unknown> = {}
@@ -4131,12 +4167,7 @@ export const tools: McpTool[] = [
       },
       required: ['skills', 'count', 'hidden_count', 'company_context'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const tag = (args.tag as string | undefined)?.toLowerCase().trim()
       const tier = (args.tier as SkillTier | undefined)
@@ -4232,12 +4263,7 @@ export const tools: McpTool[] = [
       },
       required: ['slug', 'name', 'body', 'tier'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase, actor) {
       const slug = (args.slug as string | undefined)?.trim()
       if (!slug) throw new Error('slug is required')
@@ -4311,12 +4337,7 @@ export const tools: McpTool[] = [
       },
       required: ['id', 'fact_id', 'kind', 'content', 'created_at'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase) {
       const content = (args.content as string | undefined)?.trim()
       if (!content || content.length < 2) throw new Error('content is required (min 2 chars)')
@@ -4411,12 +4432,7 @@ export const tools: McpTool[] = [
       },
       required: ['id', 'fact_id', 'is_active'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, _userId, supabase) {
       const id = (args.id as string | undefined)?.trim()
       if (!id) throw new Error('id is required')
@@ -4639,12 +4655,7 @@ export const tools: McpTool[] = [
       },
       required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory', 'recommended_tools'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(_args, companyId, userId, supabase) {
       // Dimension registry is best-effort and cheap: one indexed read, skipped
       // output when empty (most companies never register dimensions: lazy
@@ -5018,12 +5029,7 @@ export const tools: McpTool[] = [
       },
       required: ['transactions'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const items = args.transactions as Array<Record<string, unknown>> | undefined
       if (!Array.isArray(items) || items.length === 0) {
@@ -5129,12 +5135,7 @@ export const tools: McpTool[] = [
         cash_account_ledger: { type: ['string', 'null'] },
       },
     }),
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 100)
       const offset = Math.max(0, Number(args.offset) || 0)
@@ -5145,7 +5146,7 @@ export const tools: McpTool[] = [
       // The ledger number now sits next to the id in every row, so an agent
       // may well pass "1930" here: fail with a clear message instead of a
       // raw Postgres uuid cast error.
-      if (cashAccountId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cashAccountId)) {
+      if (cashAccountId && !UUID_RE.test(cashAccountId)) {
         throw new Error('cash_account_id must be a cash account UUID (cash_accounts.id), not a ledger account number')
       }
 
@@ -5200,15 +5201,8 @@ export const tools: McpTool[] = [
         cash_account_ledger: t.cash_account_id ? ledgerByCashAccount.get(t.cash_account_id) ?? null : null,
       }))
       const total = totalCount ?? 0
-      const hasMore = total > offset + rows.length
 
-      return {
-        transactions: rows,
-        count: rows.length,
-        total_count: total,
-        has_more: hasMore,
-        ...(hasMore ? { next_offset: offset + rows.length } : {}),
-      }
+      return { transactions: rows, ...pageTail(rows, total, offset) }
     },
   },
 
@@ -5245,12 +5239,7 @@ export const tools: McpTool[] = [
         cash_account_ledger: { type: ['string', 'null'] },
       },
     }),
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 100)
       const offset = Math.max(0, Number(args.offset) || 0)
@@ -5282,14 +5271,7 @@ export const tools: McpTool[] = [
 
       const rows = result.transactions ?? []
       const total = result.total_count ?? 0
-      const hasMore = offset + rows.length < total
-      return {
-        transactions: rows,
-        count: rows.length,
-        total_count: total,
-        has_more: hasMore,
-        ...(hasMore ? { next_offset: offset + rows.length } : {}),
-      }
+      return { transactions: rows, ...pageTail(rows, total, offset) }
     },
   },
 
@@ -5321,12 +5303,7 @@ export const tools: McpTool[] = [
         gross_amount: { type: 'number' },
       },
     }),
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 100)
       const offset = Math.max(0, Number(args.offset) || 0)
@@ -5361,14 +5338,7 @@ export const tools: McpTool[] = [
 
       const rows = result.verifikat ?? []
       const total = result.total_count ?? 0
-      const hasMore = offset + rows.length < total
-      return {
-        verifikat: rows,
-        count: rows.length,
-        total_count: total,
-        has_more: hasMore,
-        ...(hasMore ? { next_offset: offset + rows.length } : {}),
-      }
+      return { verifikat: rows, ...pageTail(rows, total, offset) }
     },
   },
 
@@ -5406,12 +5376,7 @@ export const tools: McpTool[] = [
       ],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const vatAmount = typeof args.vat_amount === 'number' && Number.isFinite(args.vat_amount)
         ? args.vat_amount
@@ -5599,12 +5564,7 @@ export const tools: McpTool[] = [
       },
       required: ['transactions', 'categories', 'vat_treatments'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     _meta: { ui: { resourceUri: 'ui://receipt-matcher/app.html' } },
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 50)
@@ -5650,12 +5610,7 @@ export const tools: McpTool[] = [
       },
       required: ['customers', 'count'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       // Archived rows (v1 API soft-delete) are hidden by default: same
       // `archived_at IS NULL` convention and opt-in flag as the v1 list.
@@ -5902,12 +5857,7 @@ export const tools: McpTool[] = [
       },
       required: ['customer_id'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const changes: Record<string, unknown> = {}
       for (const key of [
@@ -6075,12 +6025,7 @@ export const tools: McpTool[] = [
       },
       required: ['articles', 'count'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       // Strip PostgREST filter metacharacters before interpolating into .or():
       // commas/parens would otherwise let a query inject extra or-conditions, and
@@ -6140,12 +6085,7 @@ export const tools: McpTool[] = [
       },
       required: ['name', 'price_excl_vat'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const name = (args.name as string)?.trim()
       if (!name) throw new Error('Article name is required.')
@@ -6215,12 +6155,7 @@ export const tools: McpTool[] = [
       },
       required: ['article_id'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const articleId = args.article_id as string
       if (!articleId) throw new Error('article_id is required.')
@@ -6268,12 +6203,7 @@ export const tools: McpTool[] = [
       },
     },
     outputSchema: paginatedSchema('invoices', { type: 'object' }),
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 50), 100)
       const offset = Math.max(0, Math.floor(Number(args.offset) || 0))
@@ -6399,12 +6329,7 @@ export const tools: McpTool[] = [
       },
       required: ['invoice_id', 'status', 'currency', 'editable_draft', 'items', 'item_count'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     // Round-trip read surface for gnubok_update_invoice (issue #1642). Kept
     // out of the default tools/list: payload-size.bench.test.ts sits at its
     // ceiling, and the update tool that needs it is search-only as well.
@@ -6569,12 +6494,7 @@ export const tools: McpTool[] = [
       },
       required: ['customer_id', 'items'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const customerId = args.customer_id as string
       const rawItems = args.items as StagedInvoiceLineInput[]
@@ -6785,40 +6705,9 @@ export const tools: McpTool[] = [
       },
       required: ['rows', 'total_debit', 'total_credit', 'is_balanced'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
-      let periodId = args.period_id as string | undefined
-
-      // If no period specified, find the most recent one
-      if (!periodId) {
-        const { data: periods } = await supabase
-          .from('fiscal_periods')
-          .select('id, name')
-          .eq('company_id', companyId)
-          .order('period_start', { ascending: false })
-          .limit(1)
-          .single()
-
-        if (!periods) {
-          throw new Error('No fiscal periods found. Categorize some transactions first to auto-create a period.')
-        }
-        periodId = periods.id
-      }
-
-      // Get period info
-      const { data: period } = await supabase
-        .from('fiscal_periods')
-        .select('id, name, period_start, period_end')
-        .eq('id', periodId)
-        .eq('company_id', companyId)
-        .single()
-
-      if (!period) throw new Error('Fiscal period not found.')
+      const period = await resolveReportPeriod(supabase, companyId, args.period_id, 'No fiscal periods found. Categorize some transactions first to auto-create a period.')
 
       // Optional dimensions filter: names resolve to registry codes first
       // (resolve-don't-select), then flow into the generator's jsonb
@@ -6833,7 +6722,7 @@ export const tools: McpTool[] = [
       const trialBalance = await generateTrialBalance(
         supabase,
         companyId,
-        periodId!,
+        period.id,
         // Saldobalans is the ledger as posted, resultatavslut included.
         dimFilter.filter
           ? { closingEntry: 'include' as const, dimensions: dimFilter.filter }
@@ -6896,12 +6785,7 @@ export const tools: McpTool[] = [
       },
       required: ['period_type', 'year', 'period'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     // Renders the VAT widget only when the caller passes render_ui=true (the
     // dispatcher emits result-level _meta in that case). This is the merged
     // report+widget surface; gnubok_vat_review_widget remains as an alias.
@@ -6927,12 +6811,7 @@ export const tools: McpTool[] = [
       required: ['period_type', 'year', 'period'],
     },
     outputSchema: VAT_REPORT_OUTPUT_SCHEMA,
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     _meta: { ui: { resourceUri: 'ui://vat-review/app.html' } },
     async execute(args, companyId, _userId, supabase) {
       return computeVatReport(args, companyId, supabase)
@@ -6983,12 +6862,7 @@ export const tools: McpTool[] = [
       },
       required: ['period', 'rutor', 'payment', 'blockers', 'declaration_checks', 'sanity', 'ready_to_close', 'summary'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       return computeVatCloseCheck(args, companyId, supabase)
     },
@@ -7013,47 +6887,17 @@ export const tools: McpTool[] = [
       examples: [{}, { period_id: '7c2b...' }],
     },
     outputSchema: { type: 'object' },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
-      let periodId = args.period_id as string | undefined
-
-      if (!periodId) {
-        const { data: periods } = await supabase
-          .from('fiscal_periods')
-          .select('id')
-          .eq('company_id', companyId)
-          .order('period_start', { ascending: false })
-          .limit(1)
-          .single()
-
-        if (!periods) {
-          throw new Error('No fiscal periods found. Categorize some transactions first.')
-        }
-        periodId = periods.id
-      }
-
-      // Verify period belongs to user
-      const { data: period } = await supabase
-        .from('fiscal_periods')
-        .select('id, name, period_start, period_end')
-        .eq('id', periodId)
-        .eq('company_id', companyId)
-        .single()
-
-      if (!period) throw new Error('Fiscal period not found.')
+      const period = await resolveReportPeriod(supabase, companyId, args.period_id, 'No fiscal periods found. Categorize some transactions first.')
 
       // Run queries in parallel (same as the KPI API route)
       const [incomeStatement, trialBalance, arLedger, monthlyBreakdown, paidInvoices] =
         await Promise.all([
-          generateIncomeStatement(supabase, companyId, periodId!),
-          generateTrialBalance(supabase, companyId, periodId!, { closingEntry: 'include' }),
+          generateIncomeStatement(supabase, companyId, period.id),
+          generateTrialBalance(supabase, companyId, period.id, { closingEntry: 'include' }),
           generateARLedger(supabase, companyId),
-          generateMonthlyBreakdown(supabase, companyId, periodId!),
+          generateMonthlyBreakdown(supabase, companyId, period.id),
           supabase
             .from('invoices')
             .select('invoice_date, paid_at')
@@ -7115,38 +6959,9 @@ export const tools: McpTool[] = [
       type: 'object',
       properties: { ...DIMENSION_FILTER_OUTPUT_PROPS },
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
-      let periodId = args.period_id as string | undefined
-
-      if (!periodId) {
-        const { data: periods } = await supabase
-          .from('fiscal_periods')
-          .select('id')
-          .eq('company_id', companyId)
-          .order('period_start', { ascending: false })
-          .limit(1)
-          .single()
-
-        if (!periods) {
-          throw new Error('No fiscal periods found. Categorize some transactions first.')
-        }
-        periodId = periods.id
-      }
-
-      const { data: period } = await supabase
-        .from('fiscal_periods')
-        .select('id, name, period_start, period_end')
-        .eq('id', periodId)
-        .eq('company_id', companyId)
-        .single()
-
-      if (!period) throw new Error('Fiscal period not found.')
+      const period = await resolveReportPeriod(supabase, companyId, args.period_id, 'No fiscal periods found. Categorize some transactions first.')
 
       rejectUnknownArgs(args, ['period_id', 'from_date', 'to_date', 'dimensions'])
       const range = parseReportRangeArgs(args, period, { from: 'from_date', to: 'to_date' })
@@ -7155,7 +6970,7 @@ export const tools: McpTool[] = [
       const result = await generateIncomeStatement(
         supabase,
         companyId,
-        periodId!,
+        period.id,
         {
           ...range,
           ...(dimFilter.filter ? { dimensions: dimFilter.filter } : {}),
@@ -7194,24 +7009,12 @@ export const tools: McpTool[] = [
       required: ['invoice_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const invoiceId = args.invoice_id as string
       if (!invoiceId) throw new Error('invoice_id is required')
 
-      const { data: invoice, error: invoiceError } = await supabase
-        .from('invoices')
-        .select('*, customer:customers(*)')
-        .eq('id', invoiceId)
-        .eq('company_id', companyId)
-        .single()
-
-      if (invoiceError || !invoice) throw new Error('Invoice not found')
+      const invoice = await fetchInvoiceWithCustomer(supabase, companyId, invoiceId)
       if (invoice.status !== 'sent' && invoice.status !== 'overdue') {
         throw new Error('Invoice can only be marked as paid when status is "sent" or "overdue"')
       }
@@ -7284,12 +7087,7 @@ export const tools: McpTool[] = [
       required: ['invoice_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
+    annotations: ANNOTATIONS_WRITE_OPEN_WORLD,
     async execute(args, companyId, userId, supabase, actor) {
       const invoiceId = args.invoice_id as string
       if (!invoiceId) throw new Error('invoice_id is required')
@@ -7299,14 +7097,7 @@ export const tools: McpTool[] = [
         throw new Error('Email service not configured. Ensure RESEND_API_KEY and RESEND_FROM_EMAIL are set (or SMTP_HOST and SMTP_FROM_EMAIL with EMAIL_PROVIDER=smtp).')
       }
 
-      const { data: invoice, error: invoiceError } = await supabase
-        .from('invoices')
-        .select('*, customer:customers(*)')
-        .eq('id', invoiceId)
-        .eq('company_id', companyId)
-        .single()
-
-      if (invoiceError || !invoice) throw new Error('Invoice not found')
+      const invoice = await fetchInvoiceWithCustomer(supabase, companyId, invoiceId)
 
       const customer = invoice.customer as Customer
       if (!customer.email) throw new Error('Customer has no email address. Update customer details first.')
@@ -7399,12 +7190,7 @@ export const tools: McpTool[] = [
       },
       required: ['deliveries', 'count'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     // Specialized per-invoice diagnostic: keep it out of the default tools/list
     // (context budget, payload-size.bench.test.ts) and let agents chasing an
     // unpaid invoice find it via gnubok_search_tools (delivery, bounce, email).
@@ -7491,24 +7277,12 @@ export const tools: McpTool[] = [
       required: ['invoice_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const invoiceId = args.invoice_id as string
       if (!invoiceId) throw new Error('invoice_id is required')
 
-      const { data: invoice, error: invoiceError } = await supabase
-        .from('invoices')
-        .select('*, customer:customers(*)')
-        .eq('id', invoiceId)
-        .eq('company_id', companyId)
-        .single()
-
-      if (invoiceError || !invoice) throw new Error('Invoice not found')
+      const invoice = await fetchInvoiceWithCustomer(supabase, companyId, invoiceId)
       if (invoice.status !== 'draft') throw new Error('Only draft invoices can be marked as sent')
 
       return stagePendingOperation(supabase, companyId, userId, 'mark_invoice_sent',
@@ -7551,12 +7325,7 @@ export const tools: McpTool[] = [
       },
       required: ['suppliers', 'count'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       // Archived rows (v1 API soft-delete) are hidden by default: same
       // `archived_at IS NULL` convention and opt-in flag as the v1 list.
@@ -7677,12 +7446,7 @@ export const tools: McpTool[] = [
       },
       required: ['name'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       // Server-side validation (defense in depth): MCP transport already
       // checks the JSON Schema, but we re-validate with Zod so financial
@@ -7751,12 +7515,7 @@ export const tools: McpTool[] = [
       },
       required: ['invoices', 'count'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 50), 100)
       const status = (args.status as string) || 'all'
@@ -7780,7 +7539,7 @@ export const tools: McpTool[] = [
       }
       // Clear message instead of a raw Postgres uuid cast error: an agent may
       // well pass a supplier's name here; point it at supplier_name instead.
-      if (supplierId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(supplierId)) {
+      if (supplierId && !UUID_RE.test(supplierId)) {
         throw new Error('supplier_id must be a supplier UUID (suppliers.id). To filter by name, use supplier_name.')
       }
       for (const [key, value] of [['date_from', dateFrom], ['date_to', dateTo]] as const) {
@@ -7908,12 +7667,7 @@ export const tools: McpTool[] = [
       },
       required: ['templates', 'count'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 100), 200)
 
@@ -7968,12 +7722,7 @@ export const tools: McpTool[] = [
       },
       required: ['suggestions', 'counterparty_matches', 'no_signal_transaction_ids'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const ids = args.transaction_ids as string[]
       if (!ids || ids.length === 0) throw new Error('transaction_ids is required (non-empty array)')
@@ -8085,12 +7834,7 @@ export const tools: McpTool[] = [
       },
       required: ['accounts', 'count'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const activeOnly = args.active_only !== false
       const accountClass = args.account_class as number | undefined
@@ -8175,12 +7919,7 @@ export const tools: McpTool[] = [
       },
       required: ['account_number'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const accountNumber = String(args.account_number ?? '').trim()
       if (!/^\d{4}$/.test(accountNumber)) {
@@ -8299,12 +8038,7 @@ export const tools: McpTool[] = [
       },
       required: ['account_number'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const accountNumber = String(args.account_number ?? '').trim()
       if (!/^\d{4}$/.test(accountNumber)) {
@@ -8499,12 +8233,7 @@ export const tools: McpTool[] = [
       },
       required: ['dimension', 'values', 'count'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const sieDimNo = Number(args.sie_dim_no)
       if (!Number.isInteger(sieDimNo) || sieDimNo < 1) {
@@ -8601,12 +8330,7 @@ export const tools: McpTool[] = [
       },
       required: ['sie_dim_no', 'code', 'name'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       // Strip MCP control fields, then re-validate with the same Zod schema
       // the commit executor uses (defense in depth, mirrors create_supplier).
@@ -8737,12 +8461,7 @@ export const tools: McpTool[] = [
       },
       required: ['dimensions', 'reason', 'filters'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const { dry_run, idempotency_key } = args
 
@@ -9086,12 +8805,7 @@ export const tools: McpTool[] = [
       },
       required: ['dimension', 'columns', 'groups', 'net_per_column', 'net_total'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const sieDimNo = String(args.sie_dim_no ?? '').trim()
       // Positive-integer guard: the value is interpolated into a PostgREST
@@ -9141,41 +8855,14 @@ export const tools: McpTool[] = [
       },
     },
     outputSchema: { type: 'object' },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
-      let periodId = args.period_id as string | undefined
-
-      if (!periodId) {
-        const { data: periods } = await supabase
-          .from('fiscal_periods')
-          .select('id')
-          .eq('company_id', companyId)
-          .order('period_start', { ascending: false })
-          .limit(1)
-          .single()
-
-        if (!periods) throw new Error('No fiscal periods found. Create one first.')
-        periodId = periods.id
-      }
-
-      const { data: period } = await supabase
-        .from('fiscal_periods')
-        .select('id, name, period_start, period_end')
-        .eq('id', periodId)
-        .eq('company_id', companyId)
-        .single()
-
-      if (!period) throw new Error('Fiscal period not found.')
+      const period = await resolveReportPeriod(supabase, companyId, args.period_id, 'No fiscal periods found. Create one first.')
 
       rejectUnknownArgs(args, ['period_id', 'as_of_date'])
       const range = parseReportRangeArgs(args, period, { to: 'as_of_date' })
 
-      const result = await generateBalanceSheet(supabase, companyId, periodId!, {
+      const result = await generateBalanceSheet(supabase, companyId, period.id, {
         toDate: range.toDate,
       })
 
@@ -9207,12 +8894,7 @@ export const tools: McpTool[] = [
       type: 'object',
       properties: { ...DIMENSION_FILTER_OUTPUT_PROPS },
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       let periodId = args.period_id as string | undefined
 
@@ -9340,12 +9022,7 @@ export const tools: McpTool[] = [
       },
       required: ['lines', 'total_lines', 'returned_lines', 'totals', 'totals_scope'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 100), 500)
       // Default 'all' (posted + reversed): the same inclusion rule every
@@ -9786,12 +9463,7 @@ export const tools: McpTool[] = [
       },
     },
     outputSchema: { type: 'object' },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const asOfDate = args.as_of_date as string | undefined
       return await generateARLedger(supabase, companyId, asOfDate)
@@ -9811,12 +9483,7 @@ export const tools: McpTool[] = [
       },
     },
     outputSchema: { type: 'object' },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const asOfDate = args.as_of_date as string | undefined
       return await generateSupplierLedger(supabase, companyId, asOfDate)
@@ -9840,12 +9507,7 @@ export const tools: McpTool[] = [
       required: ['transaction_id', 'invoice_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const transactionId = args.transaction_id as string
       const invoiceId = args.invoice_id as string
@@ -9933,12 +9595,7 @@ export const tools: McpTool[] = [
       required: ['transaction_id', 'allocations'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const transactionId = args.transaction_id as string
       const allocations = args.allocations as Array<{
@@ -10113,12 +9770,7 @@ export const tools: McpTool[] = [
       required: ['transaction_id', 'journal_entry_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const transactionId = args.transaction_id as string
       const journalEntryId = args.journal_entry_id as string
@@ -10305,12 +9957,7 @@ export const tools: McpTool[] = [
       required: ['tx_ids'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const txIds = args.tx_ids as string[]
       const existingJeId = (args.existing_journal_entry_id as string | undefined) ?? null
@@ -10579,12 +10226,7 @@ export const tools: McpTool[] = [
       required: ['item_ids', 'category'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const itemIds = args.item_ids as string[]
       if (!Array.isArray(itemIds) || itemIds.length === 0) throw new Error('item_ids is required (non-empty)')
@@ -10727,12 +10369,7 @@ export const tools: McpTool[] = [
       },
       required: ['invoice_id', 'candidates'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const invoiceId = args.invoice_id as string
       if (!invoiceId) throw new Error('invoice_id is required')
@@ -10786,12 +10423,7 @@ export const tools: McpTool[] = [
       required: ['invoice_id', 'journal_entry_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const invoiceId = args.invoice_id as string
       const journalEntryId = args.journal_entry_id as string
@@ -10882,12 +10514,7 @@ export const tools: McpTool[] = [
       },
       required: ['supplier_invoice_id', 'candidates'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const supplierInvoiceId = args.supplier_invoice_id as string
       if (!supplierInvoiceId) throw new Error('supplier_invoice_id is required')
@@ -10941,12 +10568,7 @@ export const tools: McpTool[] = [
       required: ['supplier_invoice_id', 'journal_entry_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const supplierInvoiceId = args.supplier_invoice_id as string
       const journalEntryId = args.journal_entry_id as string
@@ -11220,12 +10842,7 @@ export const tools: McpTool[] = [
       },
       required: ['periods', 'count'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(_args, companyId, userId, supabase) {
       const { data, error } = await supabase
         .from('fiscal_periods')
@@ -11272,12 +10889,7 @@ export const tools: McpTool[] = [
       },
     },
     outputSchema: { type: 'object' },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const dateFrom = args.date_from as string | undefined
       const dateTo = args.date_to as string | undefined
@@ -11346,12 +10958,7 @@ export const tools: McpTool[] = [
         actions: { type: 'array', items: { type: 'string' } },
       },
     }),
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const accountKey = args.account_key as string
       const result = await listAccountItems(supabase, companyId, accountKey, {
@@ -11412,12 +11019,7 @@ export const tools: McpTool[] = [
       required: ['account_key'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const accountKey = args.account_key as string
       const pairs =
@@ -11522,12 +11124,7 @@ export const tools: McpTool[] = [
       required: ['account_key', 'external_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const accountKey = args.account_key as string
       const externalId = args.external_id as string
@@ -11576,12 +11173,7 @@ export const tools: McpTool[] = [
       required: ['account_key', 'through_date'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const accountKey = args.account_key as string
       const throughDate = args.through_date as string
@@ -11655,12 +11247,7 @@ export const tools: McpTool[] = [
       required: ['account_key', 'external_ids', 'journal_entry_id', 'kind'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const accountKey = args.account_key as string
       const externalIds = args.external_ids as string[]
@@ -11726,12 +11313,7 @@ export const tools: McpTool[] = [
       required: ['skattekonto_transaction_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const transactionId = args.skattekonto_transaction_id
       if (typeof transactionId !== 'string' || transactionId.length === 0) {
@@ -11826,12 +11408,7 @@ export const tools: McpTool[] = [
       required: ['skattekonto_transaction_ids'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const rawIds = args.skattekonto_transaction_ids
       if (!Array.isArray(rawIds) || rawIds.length === 0) {
@@ -11980,12 +11557,7 @@ export const tools: McpTool[] = [
       },
       required: ['cash_accounts', 'count'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     // Search-only: a discovery helper for the transaction listings and the
     // reconciliation tool, not part of the default catalog (tools/list budget).
     catalogVisibility: 'search',
@@ -12048,12 +11620,7 @@ export const tools: McpTool[] = [
       },
       required: ['upload_id', 'upload_url', 'expires_at'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase) {
       const fileName = args.file_name as string
       // Validation only: reject unsupported types before handing out a signed
@@ -12119,12 +11686,7 @@ export const tools: McpTool[] = [
       },
       required: ['document_id', 'inbox_item_id', 'status'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase) {
       const uploadId = args.upload_id as string
       const fileName = args.file_name as string
@@ -12188,12 +11750,7 @@ export const tools: McpTool[] = [
       },
       required: ['document_id', 'inbox_item_id', 'status'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase) {
       const fileName = args.file_name as string
       const base64Content = args.file_content_base64 as string
@@ -12263,12 +11820,7 @@ export const tools: McpTool[] = [
       },
       required: ['items', 'count'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 50)
       const status = args.status as string | undefined
@@ -12406,12 +11958,7 @@ export const tools: McpTool[] = [
       required: ['inbox_item_id'],
     },
     outputSchema: { type: 'object' },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const id = args.inbox_item_id as string
 
@@ -12477,12 +12024,7 @@ export const tools: McpTool[] = [
       required: ['inbox_item_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const inboxItemId = args.inbox_item_id as string
       if (!inboxItemId) throw new Error('inbox_item_id is required')
@@ -12829,12 +12371,7 @@ export const tools: McpTool[] = [
       },
       required: ['items', 'count'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 50)
       const cursor = typeof args.cursor === 'string' ? args.cursor : null
@@ -12991,12 +12528,7 @@ export const tools: McpTool[] = [
       },
       required: ['document_id', 'file_name', 'signed_url', 'expires_at'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const documentId = args.document_id as string
       if (!documentId) throw new Error('document_id is required')
@@ -13050,12 +12582,7 @@ export const tools: McpTool[] = [
       required: ['transaction_id', 'document_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const transactionId = args.transaction_id as string
       const documentId = args.document_id as string
@@ -13182,12 +12709,7 @@ export const tools: McpTool[] = [
       examples: [{ document_id: 'd0c1...', journal_entry_id: 'a44e...' }],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const documentId = args.document_id as string
       const journalEntryId = args.journal_entry_id as string
@@ -13286,12 +12808,7 @@ export const tools: McpTool[] = [
       required: ['links'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     // Search-only: a one-off bulk migration tool does not belong in the default
     // catalog, which every session pays for in context. The everyday
     // gnubok_link_document_to_voucher stays default; this one is discovered via
@@ -13550,7 +13067,7 @@ export const tools: McpTool[] = [
       },
       required: ['trips', 'count', 'total_km', 'draft_km'],
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const { listTrips } = await import('@/lib/mileage/mileage-service')
       const status = args.status as 'draft' | 'booked' | undefined
@@ -13615,7 +13132,7 @@ export const tools: McpTool[] = [
       required: ['trip_date', 'distance_km', 'from_location', 'to_location', 'purpose'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const tripDate = args.trip_date as string
       const distanceKm = args.distance_km as number
@@ -13701,7 +13218,7 @@ export const tools: McpTool[] = [
       required: ['from', 'to', 'entry_date'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const from = args.from as string
       const to = args.to as string
@@ -13787,7 +13304,7 @@ export const tools: McpTool[] = [
       },
       required: ['employees', 'count'],
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const activeOnly = args.active_only !== false
       let query = supabase
@@ -13821,7 +13338,7 @@ export const tools: McpTool[] = [
       required: ['salary_run_id'],
     },
     outputSchema: { type: 'object' },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const id = args.salary_run_id as string
       const { data: run, error } = await supabase
@@ -13854,7 +13371,7 @@ export const tools: McpTool[] = [
       required: ['year'],
     },
     outputSchema: { type: 'object' },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const { generateSalaryJournal } = await import('@/lib/reports/salary-journal')
       return generateSalaryJournal(supabase, companyId, args.year as number)
@@ -13876,7 +13393,7 @@ export const tools: McpTool[] = [
       required: ['period_year', 'period_month', 'payment_date'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const { period_year, period_month, payment_date } = args as { period_year: number; period_month: number; payment_date: string }
       if (!Number.isInteger(period_year) || period_year < 1900 || period_year > 9999) {
@@ -13931,7 +13448,7 @@ export const tools: McpTool[] = [
       required: ['salary_run_id'],
     },
     outputSchema: { type: 'object' },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, _userId, supabase) {
       const id = args.salary_run_id as string
       if (!id) throw new Error('salary_run_id is required')
@@ -13978,7 +13495,7 @@ export const tools: McpTool[] = [
       required: ['salary_run_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const id = args.salary_run_id as string
       if (!id) throw new Error('salary_run_id is required')
@@ -14049,7 +13566,7 @@ export const tools: McpTool[] = [
       required: ['salary_run_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const id = args.salary_run_id as string
       if (!id) throw new Error('salary_run_id is required')
@@ -14106,7 +13623,7 @@ export const tools: McpTool[] = [
       required: ['period_type', 'year', 'period'],
     },
     outputSchema: SKV_VAT_VALIDATE_OUTPUT_SCHEMA,
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    annotations: ANNOTATIONS_READ_ONLY_OPEN_WORLD,
     async execute(args, companyId, userId, supabase) {
       assertSkatteverketEnabled()
       const periodType = args.period_type as VatPeriodType
@@ -14196,7 +13713,7 @@ export const tools: McpTool[] = [
       required: ['period_type', 'year', 'period'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    annotations: ANNOTATIONS_WRITE_OPEN_WORLD,
     async execute(args, companyId, userId, supabase, actor) {
       assertSkatteverketEnabled()
       const periodType = args.period_type as VatPeriodType
@@ -14265,7 +13782,7 @@ export const tools: McpTool[] = [
       required: ['period_type', 'year', 'period'],
     },
     outputSchema: SKV_VAT_STATUS_OUTPUT_SCHEMA,
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    annotations: ANNOTATIONS_READ_ONLY_OPEN_WORLD,
     async execute(args, companyId, userId, supabase) {
       assertSkatteverketEnabled()
       const periodType = args.period_type as VatPeriodType
@@ -14327,7 +13844,7 @@ export const tools: McpTool[] = [
       required: ['salary_run_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    annotations: ANNOTATIONS_WRITE_OPEN_WORLD,
     async execute(args, companyId, userId, supabase, actor) {
       assertSkatteverketEnabled()
       const salaryRunId = args.salary_run_id as string
@@ -14390,7 +13907,7 @@ export const tools: McpTool[] = [
       required: ['salary_run_id'],
     },
     outputSchema: SKV_AGI_STATUS_OUTPUT_SCHEMA,
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    annotations: ANNOTATIONS_READ_ONLY_OPEN_WORLD,
     async execute(args, companyId, userId, supabase) {
       assertSkatteverketEnabled()
       const salaryRunId = args.salary_run_id as string
@@ -14496,7 +14013,7 @@ export const tools: McpTool[] = [
       },
       required: ['employee_id', 'first_name', 'last_name', 'personnummer_masked', 'is_active'],
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const employeeId = args.employee_id as string
       if (!employeeId) throw new Error('employee_id is required')
@@ -14593,7 +14110,7 @@ export const tools: McpTool[] = [
       },
       required: ['salary_run_employee_id', 'salary_run_id', 'employee_id', 'employee_name', 'personnummer_masked', 'amounts', 'line_items'],
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const salaryRunId = args.salary_run_id as string
       const employeeId = args.employee_id as string
@@ -14685,7 +14202,7 @@ export const tools: McpTool[] = [
       },
       required: ['absence_days', 'count'],
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const { employee_id, from, to, absence_type } = args as {
         employee_id: string; from: string; to: string; absence_type?: string
@@ -14723,7 +14240,7 @@ export const tools: McpTool[] = [
       required: ['salary_run_id', 'salary_line_item_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const { salary_run_id, salary_line_item_id, amount, description, quantity, unit_price } = args as {
         salary_run_id: string; salary_line_item_id: string
@@ -14806,7 +14323,7 @@ export const tools: McpTool[] = [
       required: ['salary_run_id', 'employee_id', 'monthly_salary'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const { salary_run_id, employee_id, monthly_salary } = args as {
         salary_run_id: string; employee_id: string; monthly_salary: number
@@ -14891,7 +14408,7 @@ export const tools: McpTool[] = [
       required: ['salary_run_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const { salary_run_id, payment_date, voucher_series, notes } = args as {
         salary_run_id: string; payment_date?: string; voucher_series?: string; notes?: string | null
@@ -14990,7 +14507,7 @@ export const tools: McpTool[] = [
       required: ['employee_id', 'from', 'to', 'absence_type'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const { employee_id, from, to, absence_type, hours_per_day, notes, include_weekends } = args as {
         employee_id: string; from: string; to: string; absence_type: string
@@ -15073,7 +14590,7 @@ export const tools: McpTool[] = [
       required: ['employee_id', 'from', 'to'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const { employee_id, from, to, absence_type } = args as {
         employee_id: string; from: string; to: string; absence_type?: string
@@ -15179,7 +14696,7 @@ export const tools: McpTool[] = [
       required: ['first_name', 'last_name', 'personnummer', 'employment_start'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       // Resolve-don't-select BEFORE schema validation: the bag may carry
       // registry value NAMES, which the strict DimensionsBagSchema inside
@@ -15293,7 +14810,7 @@ export const tools: McpTool[] = [
       required: ['employee_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const { employee_id, ...rest } = args as { employee_id: string } & Record<string, unknown>
       if (!employee_id) throw new Error('employee_id is required')
@@ -15388,7 +14905,7 @@ export const tools: McpTool[] = [
       required: ['items'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       // Sparse merge, NOT full replace. OpeningBalancesBulkSchema carries a
       // .default() on all nine non-key fields (and .partial() would not strip
@@ -15560,7 +15077,7 @@ export const tools: McpTool[] = [
       },
       required: ['employee_vacation_balance_id', 'employee_id', 'vacation_year_start', 'entitled_days', 'taken_days', 'remaining_days'],
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const employeeId = args.employee_id as string
       if (!employeeId) throw new Error('employee_id is required')
@@ -15620,7 +15137,7 @@ export const tools: McpTool[] = [
       },
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_DESTRUCTIVE_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const { previewVacationYearClose } = await import('@/lib/salary/semesterberedning')
       const { getVacationYearBasis } = await import('@/lib/salary/vacation-ledger')
@@ -15686,12 +15203,7 @@ export const tools: McpTool[] = [
       required: ['fiscal_period_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -15743,12 +15255,7 @@ export const tools: McpTool[] = [
       required: ['fiscal_period_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -15844,12 +15351,7 @@ export const tools: McpTool[] = [
       required: ['transaction_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const transactionId = args.transaction_id as string
       if (!transactionId) throw new Error('transaction_id is required')
@@ -15917,7 +15419,7 @@ export const tools: McpTool[] = [
       required: ['transaction_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const transactionId = String(args.transaction_id ?? '').trim()
       if (!transactionId) throw new Error('transaction_id is required')
@@ -16009,12 +15511,7 @@ export const tools: McpTool[] = [
         generated_at: { type: 'string' },
       },
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -16435,12 +15932,7 @@ export const tools: McpTool[] = [
       },
       required: ['ready', 'blockers', 'warnings', 'summary'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const fiscalPeriodId = args.fiscal_period_id as string
       const includePreview = args.include_preview === true
@@ -16533,12 +16025,7 @@ export const tools: McpTool[] = [
       required: ['fiscal_period_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
     // Specialized cash-method year-end step. The year-end readiness blocker
     // and year-end skill name it exactly, while search-only visibility avoids
     // charging every MCP session for a schema most companies never need.
@@ -16721,7 +16208,7 @@ export const tools: McpTool[] = [
       required: ['fiscal_period_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -16768,7 +16255,7 @@ export const tools: McpTool[] = [
       required: ['closed_period_id', 'next_period_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const closedId = args.closed_period_id as string
       const nextId = args.next_period_id as string
@@ -16819,7 +16306,7 @@ export const tools: McpTool[] = [
       required: ['fiscal_period_id', 'closing_date'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       const closingDate = args.closing_date as string
@@ -16863,7 +16350,7 @@ export const tools: McpTool[] = [
       },
       required: ['gaps', 'total_gaps', 'unexplained_gaps'],
     },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const fiscalPeriodId = args.fiscal_period_id as string
       const voucherSeries = args.voucher_series as string | undefined
@@ -16933,12 +16420,7 @@ export const tools: McpTool[] = [
       },
       required: ['journal_entry_id', 'notes'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const journalEntryId = String(args.journal_entry_id ?? '').trim()
       if (!journalEntryId) throw new Error('journal_entry_id is required')
@@ -17008,7 +16490,7 @@ export const tools: McpTool[] = [
       required: ['fiscal_period_id', 'voucher_series', 'gap_start', 'gap_end', 'explanation'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const explanation = args.explanation as string
       if (!explanation?.trim()) throw new Error('explanation is required')
@@ -17050,7 +16532,7 @@ export const tools: McpTool[] = [
       required: ['supplier_invoice_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const id = args.supplier_invoice_id as string
       if (!id) throw new Error('supplier_invoice_id is required')
@@ -17098,7 +16580,7 @@ export const tools: McpTool[] = [
       required: ['supplier_invoice_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const id = args.supplier_invoice_id as string
       if (!id) throw new Error('supplier_invoice_id is required')
@@ -17141,7 +16623,7 @@ export const tools: McpTool[] = [
       required: ['invoice_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const id = args.invoice_id as string
       if (!id) throw new Error('invoice_id is required')
@@ -17187,7 +16669,7 @@ export const tools: McpTool[] = [
       required: ['fiscal_period_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -17238,7 +16720,7 @@ export const tools: McpTool[] = [
       required: ['invoice_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const id = args.invoice_id as string
       const reason = args.reason as string | undefined
@@ -17349,12 +16831,7 @@ export const tools: McpTool[] = [
       },
       required: ['invoice_id'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
       const invoiceId = args.invoice_id as string
@@ -17665,7 +17142,7 @@ export const tools: McpTool[] = [
       required: ['invoice_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
     catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
       const invoiceId = args.invoice_id as string
@@ -17771,9 +17248,7 @@ export const tools: McpTool[] = [
       const fileName = args.filename as string
       const lower = fileName.toLowerCase()
       if (!lower.endsWith('.se') && !lower.endsWith('.sie') && !lower.endsWith('.si')) {
-        throw Object.assign(new Error('filename must end in .se, .sie or .si'), {
-          code: 'VALIDATION_ERROR',
-        })
+        throw codedError('VALIDATION_ERROR', 'filename must end in .se, .sie or .si')
       }
       const uploadId = crypto.randomUUID()
       const reservation = await createPendingDocumentUpload(supabase, companyId, userId, uploadId, fileName)
@@ -17820,20 +17295,13 @@ export const tools: McpTool[] = [
       },
       required: ['verdict', 'file', 'validation', 'org_number_match', 'duplicate', 'mappings', 'mapping_stats', 'instructions'],
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const content = await resolveSieToolContent(args, companyId, userId)
       if (!content) {
-        throw Object.assign(
-          new Error(
-            'Provide the SIE file as upload_id (from gnubok_create_sie_upload), file_content_base64, or file_content.'
-          ),
-          { code: 'VALIDATION_ERROR' }
+        throw codedError(
+          'VALIDATION_ERROR',
+          'Provide the SIE file as upload_id (from gnubok_create_sie_upload), file_content_base64, or file_content.'
         )
       }
 
@@ -17847,9 +17315,9 @@ export const tools: McpTool[] = [
       try {
         parsed = parseSIEFile(content)
       } catch (e) {
-        throw Object.assign(
-          new Error(`SIE-filen kunde inte tolkas: ${e instanceof Error ? e.message : 'okänt fel'}`),
-          { code: 'VALIDATION_ERROR' }
+        throw codedError(
+          'VALIDATION_ERROR',
+          `SIE-filen kunde inte tolkas: ${e instanceof Error ? e.message : 'okänt fel'}`
         )
       }
 
@@ -17985,7 +17453,7 @@ export const tools: McpTool[] = [
       required: ['filename', 'mappings'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       // Decoded once here; the staged params carry the decoded text so
       // commitImportSie re-parses exactly what was previewed.
@@ -18114,7 +17582,7 @@ export const tools: McpTool[] = [
       required: ['import_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const importId = args.import_id as string
       const reason = typeof args.reason === 'string' ? args.reason : undefined
@@ -18264,7 +17732,7 @@ export const tools: McpTool[] = [
       ],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const entryDate = args.entry_date as string
       // Normalize like line_description (and gnubok_create_transactions): coerce
@@ -18583,7 +18051,7 @@ export const tools: McpTool[] = [
       required: ['entry_id', 'lines'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const entryRef = args.entry_id as string
       const rawLines = args.lines as Array<Record<string, unknown>> | undefined
@@ -18783,7 +18251,7 @@ export const tools: McpTool[] = [
       required: ['entry_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const entryRef = args.entry_id as string
       const reversalDate = typeof args.reversal_date === 'string' ? args.reversal_date : undefined
@@ -18953,7 +18421,7 @@ export const tools: McpTool[] = [
     // /bokslutsdispositioner: surface as a permissive object so the
     // strict-schema test passes without duplicating the type tree here.
     outputSchema: { type: 'object', additionalProperties: true },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -18977,7 +18445,7 @@ export const tools: McpTool[] = [
       required: ['fiscal_period_id'],
     },
     outputSchema: { type: 'object', additionalProperties: true },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -19005,7 +18473,7 @@ export const tools: McpTool[] = [
       },
     },
     outputSchema: { type: 'object', additionalProperties: true },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase, _actor) {
       const status = (args.status as string) || 'active'
       let query = supabase
@@ -19053,7 +18521,7 @@ export const tools: McpTool[] = [
       required: ['fiscal_period_id'],
     },
     outputSchema: { type: 'object', additionalProperties: true },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -19082,7 +18550,7 @@ export const tools: McpTool[] = [
       required: ['fiscal_period_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -19149,7 +18617,7 @@ export const tools: McpTool[] = [
       required: ['fiscal_period_id'],
     },
     outputSchema: { type: 'object', additionalProperties: true },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -19197,7 +18665,7 @@ export const tools: McpTool[] = [
       required: ['fiscal_period_id'],
     },
     outputSchema: { type: 'object', additionalProperties: true },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -19232,7 +18700,7 @@ export const tools: McpTool[] = [
       required: ['fiscal_period_id'],
     },
     outputSchema: { type: 'object', additionalProperties: true },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -19259,7 +18727,7 @@ export const tools: McpTool[] = [
       required: ['fiscal_period_id'],
     },
     outputSchema: { type: 'object', additionalProperties: true },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -19323,7 +18791,7 @@ export const tools: McpTool[] = [
       required: ['fiscal_period_id'],
     },
     outputSchema: { type: 'object', additionalProperties: true },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -19364,7 +18832,7 @@ export const tools: McpTool[] = [
       required: [],
     },
     outputSchema: paginatedSchema('operations'),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_READ_ONLY,
     // Renders the approval-queue widget only when the caller passes
     // render_ui=true (the dispatcher emits result-level _meta in that case),
     // keeping the tool data-only by default.
@@ -19398,14 +18866,7 @@ export const tools: McpTool[] = [
 
       const operations = data ?? []
       const totalCount = count ?? operations.length
-      const hasMore = offset + operations.length < totalCount
-      return {
-        operations,
-        count: operations.length,
-        total_count: totalCount,
-        has_more: hasMore,
-        ...(hasMore ? { next_offset: offset + operations.length } : {}),
-      }
+      return { operations, ...pageTail(operations, totalCount, offset) }
     },
   },
 
@@ -19443,7 +18904,7 @@ export const tools: McpTool[] = [
       },
       required: ['status', 'operation_id'],
     },
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const operationId = args.operation_id as string
       if (!operationId) throw new Error('operation_id is required')
@@ -19591,7 +19052,7 @@ export const tools: McpTool[] = [
       },
       required: ['status', 'operation_id'],
     },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const operationId = args.operation_id as string
       if (!operationId) throw new Error('operation_id is required')
@@ -19707,7 +19168,7 @@ export const tools: McpTool[] = [
       },
       required: ['inbox_item_id', 'extracted_data'],
     },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const inboxItemId = args.inbox_item_id as string
       if (!inboxItemId) throw new Error('inbox_item_id is required')
@@ -19851,12 +19312,7 @@ export const tools: McpTool[] = [
         },
       },
     }),
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_READ_ONLY,
     catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 50), 100)
@@ -20010,12 +19466,7 @@ export const tools: McpTool[] = [
       },
       required: ['customer_id', 'name', 'day_of_month', 'items'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
       // Resolve-don't-select: parse the schedule-level default bag + each
@@ -20204,12 +19655,7 @@ export const tools: McpTool[] = [
       },
       required: ['schedule_id'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
       // Resolve-don't-select for both the replacement default bag and any

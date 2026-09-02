@@ -1,5 +1,6 @@
 'use client'
 
+import { UUID_RE } from '@/lib/invariants/uuid'
 import { Eye } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
@@ -11,7 +12,6 @@ interface DocumentViewButtonProps {
   className?: string
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
  * Opens a document in the browser through the same-origin inline proxy

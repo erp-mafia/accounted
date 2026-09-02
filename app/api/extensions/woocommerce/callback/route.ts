@@ -1,3 +1,4 @@
+import { UUID_RE } from '@/lib/invariants/uuid'
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { ensureInitialized } from '@/lib/init'
@@ -71,7 +72,7 @@ export async function POST(request: Request) {
   // the DB (the column is typed uuid and would error opaquely).
   const isUuid =
     state !== null &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(state)
+    UUID_RE.test(state)
   if (!isUuid || !consumerKey || !consumerSecret) {
     return NextResponse.json({ error: 'Missing parameters' }, { status: 400 })
   }

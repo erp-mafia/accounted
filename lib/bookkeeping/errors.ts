@@ -2,28 +2,15 @@ import { NextResponse } from 'next/server'
 import { DimensionValidationError, MandatoryDimensionMissingError } from './dimension-errors'
 
 // ============================================================================
-// Dimension validation error: class lives in ./dimension-errors.ts (pure
-// module, no next/server) because dimension-resolver.ts is reachable from
-// client bundles via lib/api/schemas.ts. Re-exported here so this file stays
-// the single import surface for all typed bookkeeping errors.
+// Dimension validation errors: the classes live in ./dimension-errors.ts
+// (pure module, no next/server) because dimension-resolver.ts is reachable
+// from client bundles via lib/api/schemas.ts. The two error classes are
+// re-exported here so this file stays the import surface for typed
+// bookkeeping errors; codes, formatters and issue types are imported from
+// ./dimension-errors directly.
 // ============================================================================
 
-export {
-  DIMENSION_VALIDATION_FAILED,
-  DimensionValidationError,
-  formatDimensionValidationIssue,
-  formatDimensionValidationIssues,
-  isDimensionValidationError,
-  MANDATORY_DIMENSION_MISSING,
-  MandatoryDimensionMissingError,
-  formatMandatoryDimensionViolation,
-  isMandatoryDimensionMissingError,
-} from './dimension-errors'
-export type {
-  DimensionValidationIssue,
-  DimensionValidationReason,
-  MandatoryDimensionViolation,
-} from './dimension-errors'
+export { DimensionValidationError, MandatoryDimensionMissingError } from './dimension-errors'
 
 // ============================================================================
 // Error codes

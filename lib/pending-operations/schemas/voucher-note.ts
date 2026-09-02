@@ -17,5 +17,3 @@ export const SetVoucherNoteParamsSchema = z.object({
     z.string().max(2000).nullable(),
   ),
 })
-
-export type SetVoucherNoteParams = z.infer<typeof SetVoucherNoteParamsSchema>

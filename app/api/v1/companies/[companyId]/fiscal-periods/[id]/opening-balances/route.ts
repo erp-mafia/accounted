@@ -14,7 +14,7 @@ import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { generateOpeningBalances } from '@/lib/core/bookkeeping/year-end-service'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -81,12 +81,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     const parsed = Body.safeParse(rawBody)
-    if (!parsed.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { issues: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })) },
-      })
-    }
+    if (!parsed.success) return v1ValidationError(ctx, parsed.error)
 
     // Ownership pre-check on BOTH ids: the closed period (URL) and the next
     // period (body). The wrapper has already verified the user's membership

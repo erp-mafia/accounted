@@ -1031,10 +1031,12 @@ export async function replaceOpeningBalanceEntry(
 /**
  * Get the current date in Swedish timezone (Europe/Stockholm).
  * Avoids UTC date shift when server runs in a different timezone.
+ * Pass `now` to format a specific instant instead of the current time.
  */
-export function getSwedishLocalDate(): string {
-  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(new Date())
+export function getSwedishLocalDate(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(now)
 }
+
 
 /**
  * Create a reversal entry for an existing journal entry

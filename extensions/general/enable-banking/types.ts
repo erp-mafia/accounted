@@ -42,18 +42,6 @@ export interface StoredAccount {
   deselected_elsewhere?: boolean
 }
 
-// Re-export API types from the client
-export type {
-  ASPSP,
-  AuthMethod,
-  AuthResponse,
-  SessionResponse,
-  AccountInfo,
-  Balance,
-  BalanceResponse,
-  Transaction as EnableBankingTransaction,
-  TransactionsResponse,
-  TransactionsFetchStrategy,
-  Bank,
-  BankTransaction,
-} from './lib/api-client'
+// Re-exported from the client for lib/sync.ts; every other api-client type
+// is imported from './lib/api-client' directly.
+export type { TransactionsFetchStrategy } from './lib/api-client'

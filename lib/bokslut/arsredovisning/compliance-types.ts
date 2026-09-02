@@ -1,10 +1,10 @@
 import type { ArsredovisningData } from './types'
 import type { IxbrlArsredovisningInput } from '@/lib/bokslut/ixbrl/types'
+import type { AccountingFramework } from '@/types'
 
 export const ANNUAL_REPORT_SCHEMA_VERSION = '1.0' as const
 
-export type AnnualReportFramework = 'k2' | 'k3'
-export type AnnualReportFilingMode = 'paper' | 'digital'
+export type AnnualReportFramework = AccountingFramework
 export type AnnualReportValidationStage = 'draft' | 'signing' | 'filing'
 
 export type ParentGroupSize = 'none' | 'small' | 'large'
@@ -164,13 +164,4 @@ export function emptyAnnualReportProfile(
     signer_roster_confirmed_at: null,
     updated_at: null,
   }
-}
-
-export const EMPTY_DISCLOSURE_STATE: AnnualReportDisclosureState = {
-  long_term_debt_over_five_years_confirmed: false,
-  securities_pledged_confirmed: false,
-  contingent_liabilities_confirmed: false,
-  parent_company_confirmed: false,
-  agm_disposition_outcome: null,
-  agm_disposition_decision: null,
 }

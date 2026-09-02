@@ -15,7 +15,7 @@ import { SettingsGroup, SettingsRowNote } from '@/components/settings/SettingsRo
 import { cn } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
-type Tier = 'horizontal' | 'vertical' | 'modifier'
+import type { AtomTier as Tier } from '@/lib/agent-context/agent-competence'
 
 interface AtomMeta {
   id: string

@@ -1,3 +1,4 @@
+import { chunk as chunkIds } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CashAccount, CashAccountSource, MappingResult } from '@/types'
 import { createLogger } from '@/lib/logger'
@@ -993,12 +994,6 @@ export async function resolvePsd2LedgerAccount(
 
 /** Max transaction ids per `.in()` filter when rebinding: keeps the request URL short. */
 const REBIND_ID_CHUNK_SIZE = 100
-
-function chunkIds(ids: readonly string[], size: number): string[][] {
-  const out: string[][] = []
-  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size))
-  return out
-}
 
 /**
  * Rebind the MOVABLE transactions of one cash_accounts row onto another.

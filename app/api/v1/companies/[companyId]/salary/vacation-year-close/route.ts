@@ -14,7 +14,7 @@ import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import {
   commitVacationYearClose,
   previewVacationYearClose,
@@ -91,17 +91,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
 
     const parsed = CloseBody.safeParse(rawBody)
-    if (!parsed.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: parsed.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
-    }
+    if (!parsed.success) return v1ValidationError(ctx, parsed.error)
 
     let yearStart = parsed.data.vacation_year_start
     if (!yearStart) {

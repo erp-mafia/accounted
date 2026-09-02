@@ -1,5 +1,6 @@
 'use client'
 
+import { UUID_RE } from '@/lib/invariants/uuid'
 import { useState, useEffect, useMemo } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -44,7 +45,6 @@ interface NextVoucher {
   series: string
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export default function BookkeepingPage() {
   const { toast } = useToast()

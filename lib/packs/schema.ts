@@ -136,5 +136,3 @@ export const PackSchema = z
   .strict()
 
 export type Pack = z.infer<typeof PackSchema>
-export type PackLine = z.infer<typeof PackLineSchema>
-export type PackMeta = z.infer<typeof PackMetaSchema>

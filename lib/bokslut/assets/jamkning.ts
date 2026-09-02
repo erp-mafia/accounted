@@ -7,9 +7,9 @@
  * deducted at acquisition.
  */
 
-import type { AssetCategory, VatTreatment } from '@/types'
+import type { AssetCategory, AssetJamkningDirection, VatTreatment } from '@/types'
 
-export type JamkningDirection = 'increase' | 'decrease' | 'none' | 'transferred'
+export type JamkningDirection = AssetJamkningDirection
 
 export interface JamkningAssessmentInput {
   acquisitionDate: string

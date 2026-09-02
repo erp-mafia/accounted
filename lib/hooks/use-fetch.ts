@@ -24,7 +24,8 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
  *    don't blank out on refresh. Read `loading` to show a pending indicator.
  *  - When `url`/`enabled` start inactive and later become active, `loading`
  *    flips true on the effect tick, not synchronously on the activating render.
- *    Pair with `DataState` (which branches on `loading` first) to avoid a flash.
+ *    Branch on `loading` first to avoid a flash.
+
  *
  * Response convention: the JSON body is returned as-is, typed as `T`. Most
  * Accounted routes wrap payloads as `{ data: ... }`, so the common usage is

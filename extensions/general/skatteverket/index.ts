@@ -1,3 +1,4 @@
+import { sleep } from '@/lib/utils'
 import crypto from 'crypto'
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -2757,8 +2758,6 @@ function handleSkvError(err: unknown): NextResponse {
 function skatteverketEnabled(): boolean {
   return process.env.SKATTEVERKET_ENABLED === 'true'
 }
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 const EXTENSION_DISABLED_RESULT: Extract<SkvSubmitResult, { ok: false }> = {
   ok: false,

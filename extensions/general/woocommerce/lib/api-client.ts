@@ -1,3 +1,4 @@
+import { sleep } from '@/lib/utils'
 import type { WooOrder, WooRefund, WooStoreInfo } from '../types'
 
 /**
@@ -97,10 +98,6 @@ export function normalizeStoreUrl(input: string): string | null {
   if (isDisallowedHost(url.hostname)) return null
   const path = url.pathname.replace(/\/+$/, '')
   return `https://${url.host.toLowerCase()}${path}`
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function buildUrl(

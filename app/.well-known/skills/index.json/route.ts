@@ -8,7 +8,7 @@
  */
 
 import { NextResponse } from 'next/server'
-import { skills } from '@/extensions/general/mcp-server/skills'
+import { workflowSkills as skills } from '@/extensions/general/mcp-server/skills'
 import { API_V1_VERSION } from '@/lib/api/v1/version'
 import { withPublicSecurityHeaders } from '@/lib/api/v1/security-headers'
 import { getCanonicalBaseUrl } from '@/lib/api/v1/base-url'

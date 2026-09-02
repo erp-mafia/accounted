@@ -29,7 +29,7 @@ import { created } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { createCreditNoteJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { eventBus } from '@/lib/events'
 import type { AccountingMethod, CreditNote, EntityType, Invoice } from '@/types'
@@ -138,17 +138,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     let reason: string | undefined
     if (rawBody) {
       const parsed = CreditNoteRequest.safeParse(rawBody)
-      if (!parsed.success) {
-        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-          requestId: ctx.requestId,
-          details: {
-            issues: parsed.error.issues.map((i) => ({
-              field: i.path.join('.'),
-              message: i.message,
-            })),
-          },
-        })
-      }
+      if (!parsed.success) return v1ValidationError(ctx, parsed.error)
       reason = parsed.data.reason
     }
 

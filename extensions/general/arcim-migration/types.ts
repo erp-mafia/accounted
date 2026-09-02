@@ -7,30 +7,17 @@
 
 import type { HydrationReport } from '@/lib/providers/provider-data-fetcher'
 
-// Re-export canonical DTOs used by entity-mapper and migration-orchestrator
+// Re-export the canonical DTOs used by arcim-client (entity-mapper imports
+// its DTOs straight from '@/lib/providers/dto')
 export type {
-  AmountType,
-  PostalAddress,
-  Contact,
-  PartyIdentification,
-  PartyLegalEntity,
-  PartyDto,
   PaginatedResponse,
-  TaxSubtotalDto,
-  TaxTotalDto,
-  LegalMonetaryTotalDto,
-  PaymentStatusDto,
   CompanyInformationDto,
   CustomerDto,
   SupplierDto,
-  InvoiceStatusCode,
-  SalesInvoiceLineDto,
   SalesInvoiceDto,
-  SupplierInvoiceLineDto,
   SupplierInvoiceDto,
 } from '@/lib/providers/dto'
 
-export type { CustomerType as ArcimCustomerType } from '@/lib/providers/dto'
 
 // ── Supported providers ─────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 import type { Invoice, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
-import { formatDate, getCompanyDisplayName, getCompanyPrimaryName } from '@/lib/utils'
+import { formatDate, getCompanyDisplayName } from '@/lib/utils'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { companyWithInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
 import { applyPlaceholders, escapeHtml, sanitizeSubjectLine, userTextToHtml } from './user-text'
@@ -165,7 +165,7 @@ function buildPlaceholderValues(data: InvoiceEmailData, lang: EmailLang): Record
     fakturanummer: invoice.invoice_number ?? '',
     kundnamn: fullName,
     förnamn: fullName ? fullName.split(' ')[0] : '',
-    företag: getCompanyPrimaryName(company),
+    företag: getCompanyDisplayName(company),
     förfallodatum: formatDate(invoice.due_date),
     belopp: formatCurrencyForCustomer(getAmountToPay(invoice, company).toPay, invoice.currency, lang),
   }
@@ -245,7 +245,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
     <!-- Header -->
     <div style="margin-bottom: 30px; border-bottom: 2px solid ${primaryColor}; padding-bottom: 16px;">
       <h1 style="margin: 0 0 10px 0; font-size: 24px; font-weight: 600; color: ${primaryColor};">
-        ${L.documentFrom(documentType, getCompanyPrimaryName(company))}
+        ${L.documentFrom(documentType, getCompanyDisplayName(company))}
       </h1>
       <p style="margin: 0; color: #666; font-size: 14px;">
         ${L.documentNumber(documentType)} ${invoice.invoice_number}
@@ -348,7 +348,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
       </p>
       <p style="margin: 0; color: #666; font-size: 14px;">
         ${custom.signoff !== undefined ? userTextToHtml(custom.signoff) : L.sincerely}<br>
-        <strong style="color: ${primaryColor};">${getCompanyPrimaryName(company)}</strong>
+        <strong style="color: ${primaryColor};">${getCompanyDisplayName(company)}</strong>
       </p>
       ${company.org_number ? `
       <p style="margin: 10px 0 0 0; color: #999; font-size: 12px;">
@@ -382,7 +382,7 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
   const firstName = customer.name ? customer.name.split(' ')[0] : ''
   const custom = resolveCustomTexts(data, lang)
 
-  let text = `${L.documentFrom(documentType, getCompanyPrimaryName(company))}\n`
+  let text = `${L.documentFrom(documentType, getCompanyDisplayName(company))}\n`
   text += `${L.documentNumber(documentType)} ${invoice.invoice_number}\n\n`
 
   text += `${custom.greeting ?? L.greeting(firstName)}\n\n`
@@ -437,7 +437,7 @@ export function generateInvoiceEmailSubject(data: InvoiceEmailData): string {
   if (custom.subject !== undefined) return sanitizeSubjectLine(custom.subject)
 
   const documentType = getDocumentLabel(invoice, lang)
-  return L.subjectFrom(documentType, invoice.invoice_number ?? '', getCompanyPrimaryName(company))
+  return L.subjectFrom(documentType, invoice.invoice_number ?? '', getCompanyDisplayName(company))
 }
 
 // ---------------------------------------------------------------------------
@@ -462,7 +462,7 @@ export function generatePaymentConfirmationEmailSubject(data: InvoiceEmailData):
   const { invoice, customer, company } = data
   const L = LABELS[resolveLang(customer)]
   return sanitizeSubjectLine(
-    L.confirmationSubject(invoice.invoice_number ?? '', getCompanyPrimaryName(company)),
+    L.confirmationSubject(invoice.invoice_number ?? '', getCompanyDisplayName(company)),
   )
 }
 
@@ -482,13 +482,13 @@ export function generatePaymentConfirmationEmailHtml(data: InvoiceEmailData): st
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${escapeHtml(L.confirmationSubject(invoice.invoice_number ?? '', getCompanyPrimaryName(company)))}</title>
+  <title>${escapeHtml(L.confirmationSubject(invoice.invoice_number ?? '', getCompanyDisplayName(company)))}</title>
 </head>
 <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
   <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
     <div style="margin-bottom: 30px; border-bottom: 2px solid ${primaryColor}; padding-bottom: 16px;">
       <h1 style="margin: 0 0 10px 0; font-size: 24px; font-weight: 600; color: ${primaryColor};">
-        ${escapeHtml(L.confirmationHeading(getCompanyPrimaryName(company)))}
+        ${escapeHtml(L.confirmationHeading(getCompanyDisplayName(company)))}
       </h1>
       <p style="margin: 0; color: #666; font-size: 14px;">
         ${L.documentNumber(L.docInvoice)} ${invoiceNumber}
@@ -532,7 +532,7 @@ export function generatePaymentConfirmationEmailHtml(data: InvoiceEmailData): st
       <p style="margin: 0 0 10px 0; color: #666; font-size: 14px;">${L.confirmationQuestions}</p>
       <p style="margin: 0; color: #666; font-size: 14px;">
         ${L.sincerely}<br>
-        <strong style="color: ${primaryColor};">${escapeHtml(getCompanyPrimaryName(company))}</strong>
+        <strong style="color: ${primaryColor};">${escapeHtml(getCompanyDisplayName(company))}</strong>
       </p>
       ${company.org_number ? `
       <p style="margin: 10px 0 0 0; color: #999; font-size: 12px;">
@@ -556,7 +556,7 @@ export function generatePaymentConfirmationEmailText(data: InvoiceEmailData): st
   const paidDate = paidDateForCustomer(invoice)
   const number = invoice.invoice_number ?? ''
 
-  let text = `${L.confirmationHeading(getCompanyPrimaryName(company))}\n`
+  let text = `${L.confirmationHeading(getCompanyDisplayName(company))}\n`
   text += `${L.documentNumber(L.docInvoice)} ${number}\n\n`
   text += `${L.greeting(firstName)}\n\n`
   text += `${L.confirmationBody(number)}\n\n`

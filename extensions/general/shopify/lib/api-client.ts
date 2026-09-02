@@ -1,4 +1,5 @@
 import type { ShopifyOrder, ShopifyShopInfo } from '../types'
+import { sleep } from '@/lib/utils'
 
 /**
  * Minimal Shopify GraphQL Admin API client for the order feed.
@@ -89,10 +90,6 @@ export function normalizeShopDomain(input: string): string | null {
   if (!value) return null
   if (!value.includes('.')) value = `${value}.myshopify.com`
   return /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(value) ? value : null
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 async function postJson(url: string, body: unknown, headers: Record<string, string>) {

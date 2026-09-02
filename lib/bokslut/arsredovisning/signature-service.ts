@@ -128,17 +128,3 @@ export async function markSignatureSigned(
   }
   return data as SignatureRequest
 }
-
-/**
- * True when every signature request for the period is signed. The UI uses
- * this to enable the "Ladda ner fastställd PDF" button and to gate filing.
- */
-export async function isFullySignedOff(
-  supabase: SupabaseClient,
-  companyId: string,
-  fiscalPeriodId: string,
-): Promise<boolean> {
-  const requests = await listSignatureRequests(supabase, companyId, fiscalPeriodId)
-  if (requests.length === 0) return false
-  return requests.every((r) => r.status === 'signed')
-}
