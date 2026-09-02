@@ -519,9 +519,11 @@ export function getErrorMessage(
         // Known codes without a dynamic branch above (e.g. CANNOT_REVERSE_STORNO)
         // carry raw English engine messages: prefer the registry's Swedish
         // message so no typed code surfaces English in a Swedish UI.
+        // A code flagged thrown_message_sv composes its Swedish text at the
+        // throw site (a date, an amount): that text wins over the static entry.
         if (locale === 'sv' && typeof structured.code === 'string' && !isSwedishUserMessage(structured.message)) {
           const entry = getErrorEntry(structured.code)
-          if (entry?.message_sv) return entry.message_sv
+          if (entry?.message_sv && !entry.thrown_message_sv) return entry.message_sv
         }
         return structured.message
       }

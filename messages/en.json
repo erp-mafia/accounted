@@ -7770,6 +7770,7 @@
     "signoff_date": "Reconciled through",
     "signoff_note": "Note",
     "signoff_note_placeholder": "Optional. Required when something is unexplained.",
+    "signoff_preview_pending": "Checking against the ledger…",
     "signoff_unexplained_warning": "{amount} is not explained. You can sign anyway with a note, but it shows in the history.",
     "signoff_force": "Sign despite the unexplained difference",
     "signoff_confirm": "Sign",
