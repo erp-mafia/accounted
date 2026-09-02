@@ -83,20 +83,20 @@ describe('GET /auth/callback flow=email_change (stock GoTrue links)', () => {
     expect(res.headers.get('location')).toBe(`${STATUS_PAGE}done`)
   })
 
-  it('reports done when the code exchange fails but the change has completed', async () => {
-    // Clicked in a browser without the PKCE verifier: the verify already
-    // flipped the address before the code was minted.
+  it('reports done when the code exchange fails in a browser without a session', async () => {
+    // Completing link opened in a phone mail app: no PKCE verifier cookie,
+    // no session cookie. GoTrue already flipped the address before minting
+    // the code, so this is a completed change, not a failed one.
     exchangeCodeForSession.mockResolvedValue({
       data: {},
-      error: { message: 'invalid flow state' },
+      error: { message: 'PKCE code verifier not found' },
     })
-    getUser.mockResolvedValue({
-      data: { user: { id: 'u1', email: 'new@testbrand.example' } },
-      error: null,
-    })
+    getUser.mockResolvedValue({ data: { user: null }, error: null })
 
     const res = await GET(makeRequest({ flow: 'email_change', code: 'pkce-code' }))
 
+    expect(exchangeCodeForSession).toHaveBeenCalledWith('pkce-code')
+    expect(getUser).not.toHaveBeenCalled()
     expect(res.headers.get('location')).toBe(`${STATUS_PAGE}done`)
   })
 

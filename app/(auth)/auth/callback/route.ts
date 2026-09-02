@@ -153,11 +153,13 @@ async function resolveStockEmailChangeStatus(
   if (searchParams.get('error') || searchParams.get('error_code')) return 'failed'
   if (searchParams.get('message')) return 'partial'
   if (code) {
-    const { error } = await supabase.auth.exchangeCodeForSession(code)
-    if (!error) return 'done'
-    // The verify already completed the change before the code was minted;
-    // a failed exchange (clicked in another browser, no PKCE verifier) must
-    // not be reported as a failed change. Fall through to the state check.
+    // GoTrue mints the code only after the completing verify has flipped the
+    // address, so the change is done whatever happens to the exchange. It
+    // fails when the link is opened in a browser without the PKCE verifier
+    // cookie (a phone mail app); the status page then just has no session
+    // to land, which must not be reported as a failed change.
+    await supabase.auth.exchangeCodeForSession(code)
+    return 'done'
   }
   const {
     data: { user },
