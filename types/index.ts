@@ -231,7 +231,12 @@ export type CustomerType =
 export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'partially_paid' | 'overdue' | 'cancelled' | 'credited'
 
 // Invoice document type
-export type InvoiceDocumentType = 'invoice' | 'proforma' | 'delivery_note'
+export type InvoiceDocumentType = 'invoice' | 'proforma' | 'delivery_note' | 'quote'
+
+// Offert decision. Lives in invoices.quote_status for document_type 'quote'
+// only; the lifecycle column `status` keeps meaning draft / sent / cancelled.
+// "expired" is never stored: derive it with isQuoteExpired() (lib/invoices/quote-status.ts).
+export type QuoteStatus = 'open' | 'accepted' | 'declined'
 
 // Supplier types
 export type SupplierType = 'swedish_business' | 'eu_business' | 'non_eu_business'
@@ -453,6 +458,8 @@ export interface CompanySettings {
   // GREATEST(MAX(arrival_number)+1, next_arrival_number). Defaults to 1.
   next_arrival_number: number
   next_delivery_note_number: number
+  // Offert series (OF-nnn), allocated at insert by generate_quote_number.
+  next_quote_number: number
   invoice_default_days: number
   invoice_default_notes: string | null
   // Default "Vår referens": pre-fills the per-invoice our_reference field.
@@ -1327,8 +1334,16 @@ export interface Invoice {
   // Document type (invoice, proforma, delivery_note, quote)
   document_type: InvoiceDocumentType
 
-  // Conversion tracking (proforma -> invoice)
+  // Conversion tracking (proforma / quote -> invoice)
   converted_from_id: string | null
+
+  // Quotes (offert) only. valid_until is the authoritative expiry date
+  // (due_date mirrors it because the column is NOT NULL); quote_status is
+  // NULL on every other document type. Optional in TS for pre-migration
+  // fixtures.
+  valid_until?: string | null
+  quote_status?: QuoteStatus | null
+  quote_decided_at?: string | null
 
   // Kundorder this invoice was created from (sales_orders.id). Header-level
   // provenance only; the per-line link is invoice_items.sales_order_item_id.

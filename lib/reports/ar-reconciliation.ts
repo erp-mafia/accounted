@@ -55,6 +55,8 @@ export async function generateARReconciliation(
       .from('invoices')
       .select('id, total, paid_amount, currency, exchange_rate')
       .eq('company_id', companyId)
+      // Proformas, delivery notes and quotes are never receivables.
+      .eq('document_type', 'invoice')
       .in('status', ['sent', 'overdue'])
       .order('id', { ascending: true })
       .range(from, to)

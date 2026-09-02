@@ -391,6 +391,16 @@ describe('tools/list payload size guard', () => {
     // Only READ tools may be demoted: gnubok_call_tool refuses writes, so a
     // search-only WRITE is uncallable on Claude.ai. That is why the three
     // bumps above happened instead of demotions.
+    //
+    //   * 2026-09-02, offert (#2163): gnubok_set_quote_status (a WRITE, so it
+    //     must stay in the default catalog) plus document_type / valid_until /
+    //     quote_status on create, list and get. Measured 60 306 after merging
+    //     the sales-order tools from #2166, then 60 093 after shortening every
+    //     quote description and dropping set_quote_status's outputSchema to a
+    //     bare object. The remaining ~100 tokens came from demoting
+    //     gnubok_get_arsredovisning_filing_status to search-only: iXBRL
+    //     filing is off until the Bolagsverket avtal exists, so no client
+    //     polls it. Ceiling unchanged.
     expect(approxTokens).toBeLessThan(60_000)
   })
 

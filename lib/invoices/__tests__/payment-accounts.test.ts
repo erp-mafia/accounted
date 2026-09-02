@@ -195,6 +195,7 @@ describe('invoice payment accounts', () => {
     expect(invoiceRequiresPaymentAccount(makeInvoice({ credited_invoice_id: 'invoice-original' }))).toBe(false)
     expect(invoiceRequiresPaymentAccount(makeInvoice({ document_type: 'delivery_note' }))).toBe(false)
     expect(invoiceRequiresPaymentAccount(makeInvoice({ document_type: 'proforma' }))).toBe(false)
+    expect(invoiceRequiresPaymentAccount(makeInvoice({ document_type: 'quote' }))).toBe(false)
   })
 
   it('accepts non-payable documents without an account', () => {
@@ -210,6 +211,10 @@ describe('invoice payment accounts', () => {
     expect(hasRequiredInvoicePaymentAccount(
       emptySettings,
       makeInvoice({ document_type: 'proforma' }),
+    )).toBe(true)
+    expect(hasRequiredInvoicePaymentAccount(
+      emptySettings,
+      makeInvoice({ document_type: 'quote' }),
     )).toBe(true)
     expect(hasRequiredInvoicePaymentAccount(emptySettings, makeInvoice())).toBe(false)
   })

@@ -1039,6 +1039,9 @@ async function countOpenFxItemsAtBalansdagen(
         .from('invoices')
         .select(columns)
         .eq('company_id', companyId)
+        // Proformas, delivery notes and quotes are never receivables (kept in
+        // lockstep with getOpenForeignCurrencyReceivables).
+        .eq('document_type', 'invoice')
         .neq('currency', 'SEK')
       // 'partially_paid' is a live status for customer invoices (payment-sync
       // sets it on partial settlements); the unpaid remainder was open on

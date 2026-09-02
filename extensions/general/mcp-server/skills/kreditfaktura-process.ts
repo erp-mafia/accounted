@@ -46,6 +46,7 @@ The invoice must be in one of: \`sent\`, \`paid\`, or \`overdue\`. You cannot cr
 - A draft (just edit/delete the draft before sending)
 - An already-credited invoice (it has status \`credited\`)
 - A proforma (use \`gnubok_convert_invoice\` first if needed, but proformas don't post to VAT/AR: usually you just cancel them)
+- A quote (offert): it never posts either. Decline it with \`gnubok_set_quote_status\`, or convert it with \`gnubok_convert_invoice\` and credit the resulting faktura
 
 ### Step 2: Stage the kreditfaktura
 

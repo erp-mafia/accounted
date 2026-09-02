@@ -8,6 +8,31 @@ function sort(invoices: Invoice[], sortBy: InvoiceListSort, oreRounding = true) 
 }
 
 describe('sortInvoiceList', () => {
+  it('sorts quotes by valid_until in the date column even though they stay drafts', () => {
+    const invoices = [
+      makeInvoice({ id: 'draft', status: 'draft', due_date: '2024-05-01' }),
+      makeInvoice({
+        id: 'quote-late',
+        document_type: 'quote',
+        status: 'draft',
+        due_date: '2024-08-01',
+        valid_until: '2024-08-01',
+      }),
+      makeInvoice({
+        id: 'quote-early',
+        document_type: 'quote',
+        status: 'draft',
+        due_date: '2024-06-01',
+        valid_until: '2024-06-01',
+      }),
+    ]
+
+    const sorted = sortInvoiceList(invoices, { column: 'due', direction: 'asc' }, true)
+
+    // Quotes carry a date; the plain draft has none and sorts last.
+    expect(sorted.map((i) => i.id)).toEqual(['quote-early', 'quote-late', 'draft'])
+  })
+
   it('sorts displayed invoice numbers naturally and keeps missing numbers last', () => {
     const invoices = [
       makeInvoice({ id: '10', invoice_number: 'F-10' }),

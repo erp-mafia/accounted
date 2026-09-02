@@ -128,6 +128,8 @@ export function invoiceRequiresPaymentAccount(
   return !invoice.credited_invoice_id
     && invoice.document_type !== 'delivery_note'
     && invoice.document_type !== 'proforma'
+    // A quote (offert) is never a payment request: nothing to pay to.
+    && invoice.document_type !== 'quote'
 }
 
 export function hasRequiredInvoicePaymentAccount(

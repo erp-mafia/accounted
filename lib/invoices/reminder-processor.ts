@@ -198,6 +198,10 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
       credit_notes:invoices!credited_invoice_id(id, status, creation_complete)
     `)
     .in('status', ['sent', 'overdue'])
+    // Only fakturor are payment requests. A sent proforma or quote past its
+    // date is not overdue and must never receive a betalningspåminnelse or
+    // be flipped to 'overdue' below.
+    .eq('document_type', 'invoice')
     .is('credited_invoice_id', null)
     .lte('due_date', cutoffDate.toISOString().split('T')[0])
     .order('due_date', { ascending: true })
