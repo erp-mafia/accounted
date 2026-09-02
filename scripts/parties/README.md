@@ -49,10 +49,40 @@ A key whose text names a vendor but is booked as a category still gets
   warrant a "verify" sentence, never a block, and a value must be seen on two
   documents before it counts as known.
 
+## Pre-classifier shadow evaluation, 2026-09-02
+
+`eval-preclassifier.ts` scores three routers on the same 180 held-out keys
+(20 rows, chosen by md5 of the key, serve as few-shot examples and are never
+scored). Rows the founder marked `unsure` always receive a label, so the
+honest number is the one that excludes them.
+
+| Router | Strict agreement | Excluding founder-unsure | Party TPR | Party TNR |
+|---|---|---|---|---|
+| Rules v0, lexicon from BAS account names | 0.917 | 0.965 | 0.992 | 0.930 |
+| Rules v0, lexicon incl. BAS descriptions | 0.911 | 0.959 | 0.984 | 0.930 |
+| Sonnet 5 on Bedrock EU, zero-shot | 0.861 | 0.906 | 0.906 | 0.977 |
+| Sonnet 5 on Bedrock EU, 20 founder examples | 0.878 | 0.924 | 0.930 | 0.977 |
+
+Read with two caveats. The rules were written after the labels were seen,
+so their score is optimistic; the model scores are honest. And most of the
+remaining disagreements are definitions, not errors: whether a Bolagsverket
+fee is `authority` or `intermediary`, whether a marketplace or payment
+processor (Amazon Marketplace, Stripe, Amex fees) is `party` or
+`intermediary`, whether a card-platform line with a person's name (Pleo,
+Google Ads) is `party` or `payroll`, and whether a pension insurance premium
+is `party` or `payroll`. Settle those in the vocabulary above, relabel the
+handful of rows, and re-run.
+
+BAS description tokens in the lexicon make Google and Facebook look generic
+because the descriptions name them as examples; the account-name lexicon is
+the default for that reason. The model's remaining party misses are text
+with a person's name or a card descriptor, exactly where a hard key from a
+document would decide instead.
+
 ## Still to confirm in this phase
 
-- Which registration flags the free SCB Företagsregistret API exposes
-  (moms, arbetsgivare, F-skatt). This decides how much of rung three can skip
-  TIC.
+- SCB access: the free Företagsregistret API carries F-skattstatus,
+  Momsstatus and Arbetsgivarstatus (verified on scb.se 2026-09-02); access
+  requested by email, credentials pending.
 - The pre-classifier and selection agreement bars (0.85 on the labelled set)
   are enforced by the shadow harness in phase 1, not here.
