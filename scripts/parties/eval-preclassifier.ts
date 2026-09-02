@@ -21,7 +21,7 @@
  * Usage:
  *   npx tsx scripts/parties/eval-preclassifier.ts \
  *     --golden dev_docs/parties/golden/golden-2026-09-02.jsonl \
- *     --env .env.local [--out <report.json>] [--no-llm] [--batch 25] [--vocab names|full]
+ *     --env .env.local [--out <report.json>] [--no-llm] [--batch 25]
  */
 import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -74,76 +74,15 @@ const examples = ordered.slice(0, 20)
 const exampleIds = new Set(examples.map((r) => r.id))
 const evalRows = rows.filter((r) => !exampleIds.has(r.id))
 
-// ── Deterministic router v0 ─────────────────────────────────────────────────
-
-// Lexicon: BAS account names and descriptions for the expense classes plus
-// the generic words that voucher text uses for a category without a
-// counterpart. Geographic tokens are deliberately NOT in the lexicon: "taxi
-// stockholm" reads as a party to the founder, "taxiresor och parkering" does
-// not.
+// ── Deterministic router ────────────────────────────────────────────────────
+// The rules live in lib/parties/classify.ts so the product and this
+// evaluation share one implementation. --vocab is kept for the report's
+// history: 'names' is what the library does; 'full' is no longer supported.
+import { classifyKey } from '@/lib/parties/classify'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
 
-const STOP = new Set([
-  'av', 'och', 'för', 'via', 'kort', 'ej', 'moms', 'inkl', 'exkl', 'per', 'utanför', 'inom', 'eu', 'se', 'ab',
-  'till', 'mot', 'med', 'från', 'på', 'i', 'en', 'ett', 'den', 'det', 'som', 'om', 'utan', 'the', 'usd', 'eur', 'sek',
-])
-const GENERIC = [
-  'inköp', 'inkp', 'kvitto', 'kvitton', 'fika', 'diesel', 'bensin', 'bränsle', 'försäkring', 'telefon', 'mobil', 'hyra',
-  'lokalhyra', 'frakt', 'hosting', 'julklapp', 'frimärken', 'utlägg', 'hotell', 'resa', 'resor', 'resekostnader',
-  'biljett', 'biljetter', 'biljettkostnad', 'taxi', 'taxiresor', 'parkering', 'parkeringsavgifter', 'representation',
-  'måltidsrepresentation', 'kollektivtrafik', 'kollektivtra', 'kontorsmaterial', 'förbrukning', 'förbrukningsmateriel',
-  'frbrukningsmateriel', 'programvara', 'mjukvara', 'licens', 'avgift', 'avgifter', 'traktamente', 'traktamenten',
-  'bilersättning', 'material', 'varor', 'tjänster', 'tjnster', 'faktura', 'kostnad', 'kostnader', 'betalning', 'utgift',
-  'företagskvitto', 'fretagskvitto', 'fretagskvitton', 'övriga', 'personbilskostnader', 'glykol', 'lastbil', 'verktyg',
-  'abonnemang', 'subscription', 'ittjänster', 'itprodukter', 'inrikes', 'utrikes', 'utlandsk', 'utländsk', 'europeisk',
-  'annonsering', 'konsultarvoden', 'momspliktig', 'momsfri', 'skattefritt', 'utomlands', 'internet', 'överföring',
-  'kortköputtag', 'kortkp', 'uttag', 'avdragsgill', 'avdragbar', 'schablon', 'person', 'deltagare', 'syfte', 'möte',
-  'samarbete', 'rapporterad', 'kundfaktura', 'påminnelseavgifter', 'avräkningsnota', 'avrkningsnota', 'fakturaservice',
-  'påminnelse', 'ränta', 'dröjsmålsränta', 'porto', 'kontor', 'lokal', 'el', 'vatten', 'värme', 'städning', 'reparation',
-  'underhåll', 'service', 'utbildning', 'kurs', 'litteratur', 'tidningar', 'bok', 'böcker', 'gåva', 'gåvor', 'mat',
-  'lunch', 'middag', 'kaffe', 'personal', 'friskvård', 'sjukvård', 'arbetskläder', 'skyddskläder',
-]
-// --vocab names  : BAS account names + GENERIC (default; descriptions name
-//                  example vendors such as Google and Facebook, which makes
-//                  real parties look generic, the trap the July design found)
-// --vocab full   : also BAS description tokens
-const vocabMode = arg('vocab') ?? 'names'
-const VOCAB = new Set<string>(GENERIC)
-for (const a of BAS_REFERENCE) {
-  if (a.account_class < 4) continue
-  const text = vocabMode === 'full' ? `${a.account_name} ${a.description}` : a.account_name
-  for (const t of text.toLowerCase().split(/[^a-zåäöé]+/)) {
-    if (t.length >= 3) VOCAB.add(t)
-  }
-}
-
-const AP_PREFIX = /^(levfakt|levfkt|lev\.?fakt\.?|leverantörsfaktura|leverantorsfaktura|levbet\.?|lev\.?bet\.?)\b/
-const PAYROLL = /\b(lön|löner|löne\w*|lneutbetalning|lönebesked|salary|semesterskuld|arbetsgivaravgift\w*|pensionsförsäkring)\b/
-const ADJUSTMENT =
-  /(periodisering|omföring|omforing|lagerförändring|lagerforandring|nedskrivning|rättelse|rattelse|kostnadsföring|avskrivning|bokslut|kursdiff|valutakurs|eur till sek|omvänd betalningsskyldighet)/
-const BANK = /(bankkostnad|bankavgift|banktjänst|baspaket bank|bank årsavg|årsavg|avi överdrag|företagspaket)/
-const AUTHORITY = /\b(skatteverket|bolagsverket|transportstyrelsen|försäkringskassan|kronofogden|tullverket|skattekonto|kommun)\b/
-const INTERMEDIARY = /\b(klarna|paypal|zettle|izettle|swish|payex|bankgirot|adyen|nets)\b/
-
-function acctNum(a: string | null): number {
-  const n = Number(a)
-  return Number.isFinite(n) ? n : 0
-}
-
 export function ruleLabel(row: { k: string; acct: string | null }): Label {
-  const k = row.k
-  const acct = acctNum(row.acct)
-  if (AP_PREFIX.test(k)) return 'party'
-  if (PAYROLL.test(k) || (acct >= 7010 && acct <= 7299)) return 'payroll'
-  if (ADJUSTMENT.test(k)) return 'adjustment'
-  if (BANK.test(k)) return 'bank'
-  if (AUTHORITY.test(k)) return 'authority'
-  if (INTERMEDIARY.test(k)) return 'intermediary'
-  const content = k
-    .split(/\s+/)
-    .filter((t) => t.length >= 3 && !/^\d+$/.test(t) && !/^k\d+$/.test(t) && !STOP.has(t))
-  if (content.length === 0) return 'unsure'
-  return content.every((t) => VOCAB.has(t)) ? 'category' : 'party'
+  return classifyKey({ key: row.k, acct: row.acct })
 }
 
 // ── Model router ────────────────────────────────────────────────────────────
