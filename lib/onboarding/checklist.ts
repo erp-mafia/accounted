@@ -80,12 +80,14 @@ export function claudeStepDone(input: { oauthKeyCount: number | null | undefined
  * The claude.ai Add-custom-connector deep link the checklist's Claude step
  * opens. Same shape as the Settings → API & MCP button: `tool_namespace` is
  * load-bearing (without it the server hands out legacy `gnubok_` tool
- * names), `client` is a telemetry-only distribution marker, and the origin
- * comes from the page so self-hosted and white-label domains link to
- * themselves. The link only prefills the dialog; the user reviews there.
+ * names), `client` is a telemetry-only distribution marker, `auth=required`
+ * makes claude.ai's dialog detect OAuth instead of "None" (see
+ * extensions/general/mcp-server/auth-mode.ts), and the origin comes from the
+ * page so self-hosted and white-label domains link to themselves. The link
+ * only prefills the dialog; the user reviews there.
  */
 export function claudeConnectorLink(input: { origin: string; appName: string }): string {
-  const serverUrl = `${input.origin}/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-connector`
+  const serverUrl = `${input.origin}/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-connector&auth=required`
   return (
     'https://claude.ai/customize/connectors?modal=add-custom-connector' +
     `&connectorName=${encodeURIComponent(input.appName)}` +

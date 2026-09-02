@@ -14,11 +14,11 @@ There are three ways to connect, depending on your client. All three reach the s
 
 ## Path A: claude.ai or Claude Desktop (one click)
 
-**[→ Connect Accounted to Claude](https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=Accounted&connectorUrl=https%3A%2F%2Fapp.accounted.se%2Fapi%2Fextensions%2Fext%2Fmcp-server%2Fmcp%3Ftool_namespace%3Daccounted%26client%3Dclaude-connector)**
+**[→ Connect Accounted to Claude](https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=Accounted&connectorUrl=https%3A%2F%2Fapp.accounted.se%2Fapi%2Fextensions%2Fext%2Fmcp-server%2Fmcp%3Ftool_namespace%3Daccounted%26client%3Dclaude-connector%26auth%3Drequired)**
 
 The link opens claude.ai with the connector name and URL already filled in. You review the values and confirm; the link only prefills the dialog, it grants nothing on its own. No API key to manage.
 
-**You do not need an Accounted account yet.** The connector works as soon as it is added: the server answers the handshake and the documentation tools without credentials, and the first company-scoped call opens the Accounted sign-in, where a new user creates the account (BankID or e-mail + 2FA).
+**You do not need an Accounted account yet.** Adding the connector opens the Accounted sign-in straight away, and a new user creates the account right there (BankID or e-mail + 2FA).
 
 **All permissions pre-selected, every write still staged.** The consent page grants the full scope set with one click. Expand **Behörigheter** and choose **Endast läs** to connect read-only (list invoices, read reports, compute VAT): a reviewer can do that while you keep a write-enabled connection for daily work. Whatever the scopes, write tools (create invoice, categorise, book vouchers, run year-end) only stage a pending operation that you confirm before anything is booked, and the grant can be revoked under Settings → API & MCP.
 
@@ -26,22 +26,21 @@ The link opens claude.ai with the connector name and URL already filled in. You 
 
 The rest of the setup happens on Claude's side, in this order:
 
-1. **The connector dialog.** claude.ai opens **Add custom connector** with the name and URL filled in. Check the URL and click **Add**. If the dialog asks about authentication, choose **"Required when the server asks"**, not the auto-detected "None": the server does not demand a login at connect time, so "None" looks right but blocks the sign-in in step 3. Claude Desktop shows the same dialog under Settings → Connectors.
-2. **The tools appear straight away.** The connector shows as connected and Claude lists the Accounted tools before you have signed in. That is by design: the handshake and the documentation tools need no account.
-3. **The first real question opens the sign-in.** Ask something about your books, for example *"Which company am I connected to?"*. The server answers that a login is required, and claude.ai opens the Accounted sign-in (BankID or e-mail + 2FA), followed by the consent page. It shows the company that is currently active in the app (switch company in the app first if you have several) with every permission pre-selected; expand **Behörigheter** and choose **Endast läs** for a read-only connection. Approve, then **ask the question again**: the question that was waiting when the sign-in opened is not retried on its own. A "connected" status with an unanswered first question means "sign in, then ask again", not a broken connection.
-4. **Done.** From here every question runs against that company; writes stage at **/pending** until you confirm.
+1. **The connector dialog.** claude.ai opens **Add custom connector** with the name and URL filled in. Check the URL and continue: the dialog detects that the server requires a sign-in (**Always required**) and that Claude can register itself automatically. Keep those and click **Add**. Claude Desktop shows the same dialog under Settings → Connectors.
+2. **The sign-in opens.** claude.ai asks you to connect and opens the Accounted sign-in (BankID or e-mail + 2FA), followed by the consent page. It shows the company that is currently active in the app (switch company in the app first if you have several) with every permission pre-selected; expand **Behörigheter** and choose **Endast läs** for a read-only connection. Approve, and the connector shows as connected with the Accounted tools listed.
+3. **Ask your first question.** For example *"Which company am I connected to?"*. From here every question runs against that company; writes stage at **/pending** until you confirm.
 
-Signed in, but Claude still says it cannot reach the server? Ask again in the same chat first. If that does not help, open Settings → Connectors, remove the connector, and add it again with authentication set to "Required when the server asks".
+Signed in, but Claude still says it cannot reach the server? Ask again in the same chat first. If that does not help, open Settings → Connectors, remove the connector, and add it again from the link above, with authentication left on **Always required**.
 
 #### Adding it by hand instead
 
 In **claude.ai** (Settings → Connectors) or **Claude Desktop** (Settings → Connectors → Add custom connector), choose **Add custom connector** and paste:
 
 \`\`\`
-https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-connector
+https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-connector&auth=required
 \`\`\`
 
-Keep \`tool_namespace=accounted\`: it selects the tool names this guide uses. \`client=claude-connector\` is telemetry-only. If the dialog asks about authentication, choose **"Required when the server asks"**, not the auto-detected "None".
+Keep all three parameters. \`tool_namespace=accounted\` selects the tool names this guide uses. \`auth=required\` makes the dialog detect the sign-in (**Always required**): without it the server accepts an anonymous handshake, the dialog suggests **None**, and a connector added with that default never opens the sign-in. If you do add the bare URL, choose **Required when the server asks** by hand. \`client=claude-connector\` is telemetry-only.
 
 ## Path B: Claude Code (plugin)
 
