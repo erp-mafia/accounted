@@ -73,6 +73,26 @@ describe('buildAuthEmail', () => {
     expect(mail.text).toContain('Kod: 123456')
   })
 
+  it('renders the BankID signup confirmation with the ignore-and-stay-inactive note', () => {
+    // Sent to whatever address the BankID holder typed, so the copy must say
+    // the account was opened with BankID and that ignoring the mail leaves it
+    // inactive: a stranger must not be nudged into activating it.
+    const mail = buildAuthEmail({
+      actionType: 'bankid_signup',
+      appName: 'Siffra',
+      actionUrl: 'https://app.siffra.se/auth/callback?token_hash=abc&type=magiclink',
+    })
+    expect(mail.subject).toBe('Bekräfta din e-postadress')
+    expect(mail.text).toContain('BankID')
+    expect(mail.text).toContain('Siffra')
+    expect(mail.text).toContain('förblir inaktivt')
+    expect(mail.text).toContain(
+      'Bekräfta e-postadress: https://app.siffra.se/auth/callback?token_hash=abc&type=magiclink',
+    )
+    expect(mail.html).toContain('type=magiclink')
+    expect(mail.html).not.toMatch(/accounted/i)
+  })
+
   it('falls back to a generic mail for unknown action types', () => {
     const mail = buildAuthEmail({
       actionType: 'some_future_type',

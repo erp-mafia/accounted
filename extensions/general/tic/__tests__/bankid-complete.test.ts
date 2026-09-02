@@ -15,6 +15,21 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
 }))
 
+// The confirmation mail (generateLink + platform email service + brand
+// lookup) is covered in bankid-confirmation-mail.test.ts; here it is a seam
+// so the route tests can assert WHEN it is sent and to WHOM.
+vi.mock('../lib/bankid-confirmation-mail', () => ({
+  sendBankIdSignupConfirmation: vi.fn(),
+}))
+
+// The invite-only brand gate reads the brands table for any non-empty host;
+// it has its own tests. Open here so a forwarded host can be asserted on the
+// mail without a database.
+vi.mock('@/lib/auth/brand-signup-gate', () => ({
+  evaluateBrandSignupGate: vi.fn().mockResolvedValue({ allowed: true }),
+  readInviteTokenFromCookieHeader: vi.fn().mockReturnValue(null),
+}))
+
 import {
   cancelBankIdSession,
   collectBankIdResult,
@@ -23,6 +38,7 @@ import {
   fetchEnrichmentData,
   startBankIdAuth,
 } from '../lib/bankid-client'
+import { sendBankIdSignupConfirmation } from '../lib/bankid-confirmation-mail'
 import { createServiceClient } from '@/lib/supabase/server'
 import { ticExtension } from '../index'
 import {
@@ -141,9 +157,13 @@ function mockServiceClient(
   return { admin, client }
 }
 
+/** A verified identity row, as every pre-2026-09 row is after the backfill. */
+const VERIFIED_AT = '2026-01-01T00:00:00Z'
+
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('BANKID_ENCRYPTION_KEY', TEST_KEY)
+  vi.mocked(sendBankIdSignupConfirmation).mockResolvedValue({ ok: true })
 })
 
 afterEach(() => {
@@ -213,37 +233,71 @@ describe('POST /bankid/complete', () => {
     })
   })
 
-  describe('signup mode: happy path', () => {
-    it('creates a new user, marks bankid_linked, and returns the magic link tokenHash', async () => {
+  describe('signup mode: happy path (account pre-hijacking fix, audit 2026-09)', () => {
+    it('creates an UNCONFIRMED user with a PENDING identity, mails the typed address, and returns no session', async () => {
+      // The address came from the request body and nothing proved it belongs
+      // to the BankID holder. The old flow confirmed it, granted the MFA
+      // exemption and handed the browser a magic link; the real owner of the
+      // address could later adopt the account while the BankID kept a login.
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
-      const { admin } = mockServiceClient([
+      const { admin, client } = mockServiceClient([
         { data: null }, // pnr lookup → not linked
-        { error: null }, // bankid_identities insert OK
       ])
+      const insertSpy = vi.fn().mockResolvedValue({ error: null })
+      const origFrom = client.from as unknown as ReturnType<typeof vi.fn>
+      const queuedFrom = origFrom.getMockImplementation() as (table: string) => unknown
+      let identityCalls = 0
+      origFrom.mockImplementation((table: string) => {
+        if (table === 'bankid_identities' && ++identityCalls === 2) {
+          return { insert: insertSpy }
+        }
+        return queuedFrom(table)
+      })
 
       const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
         method: 'POST',
-        headers: await flowCookie('signup'),
-        body: { email: 'fresh@example.com' },
+        headers: { ...(await flowCookie('signup')), 'x-forwarded-host': 'app.gnubok.se', 'x-forwarded-proto': 'https' },
+        body: { email: 'Fresh@Example.com ' },
       })
+      const response = await findCompleteHandler()(req)
+      const raw = await response.clone().text()
       const { status, body } = await parseJsonResponse<{
-        data?: { tokenHash?: string; type?: string; isNewUser?: boolean }
-      }>(await findCompleteHandler()(req))
+        data?: { status?: string; email?: string; tokenHash?: string }
+      }>(response)
 
       expect(status).toBe(200)
-      expect(body.data?.tokenHash).toBe('magic-token-hash')
-      expect(body.data?.type).toBe('magiclink')
-      expect(body.data?.isNewUser).toBe(true)
+      // Same shape as POST /api/auth/signup: the register page shows its
+      // "check your inbox" screen. Nothing here signs anyone in.
+      expect(body.data).toEqual({ status: 'confirmation_sent', email: 'fresh@example.com' })
+      expect(raw).not.toContain('magic-token-hash')
+      expect(raw).not.toContain('tokenHash')
+      // The route itself mints no link; only the mail helper does, server-side.
+      expect(admin.generateLink).not.toHaveBeenCalled()
 
       expect(admin.createUser).toHaveBeenCalledWith(
-        expect.objectContaining({ email: 'fresh@example.com', email_confirm: true })
+        expect.objectContaining({ email: 'fresh@example.com', email_confirm: false })
       )
+      // Pending, not linked: bankid_linked (the MFA exemption) is granted by
+      // /auth/callback once the mail is clicked.
       expect(admin.updateUserById).toHaveBeenCalledWith(
         'new-user-uuid',
         expect.objectContaining({
-          app_metadata: { bankid_linked: true, has_password: false },
+          app_metadata: { bankid_pending: true, has_password: false },
         })
       )
+      expect(insertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ user_id: 'new-user-uuid', email_verified_at: null })
+      )
+      expect(insertSpy.mock.calls[0][0]).not.toHaveProperty('bankid_linked')
+
+      expect(sendBankIdSignupConfirmation).toHaveBeenCalledTimes(1)
+      expect(sendBankIdSignupConfirmation).toHaveBeenCalledWith({
+        supabase: client,
+        email: 'fresh@example.com',
+        host: 'app.gnubok.se',
+        proto: 'https',
+      })
+      expect(admin.deleteUser).not.toHaveBeenCalled()
     })
   })
 
@@ -251,7 +305,7 @@ describe('POST /bankid/complete', () => {
     it('returns 409 already_linked before email lookup', async () => {
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
       const { admin, client } = mockServiceClient([
-        { data: { user_id: 'some-other-user' } }, // pnr lookup → LINKED
+        { data: { user_id: 'some-other-user', email_verified_at: VERIFIED_AT } }, // pnr lookup → LINKED
       ])
 
       const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
@@ -300,28 +354,32 @@ describe('POST /bankid/complete', () => {
       expect(admin.generateLink).not.toHaveBeenCalled()
     })
 
-    it('deletes the created user when generateLink fails', async () => {
+    it('deletes the created user when the confirmation mail cannot be sent', async () => {
+      // An account whose address will never receive its confirmation link is
+      // unusable AND blocks the address; roll it back so a retry starts clean.
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
       const { admin } = mockServiceClient([
         { data: null }, // pnr lookup → not linked
         { error: null }, // identity insert OK
       ])
-      admin.generateLink.mockResolvedValueOnce({
-        data: null,
-        error: { message: 'link boom' },
-      } as never)
+      vi.mocked(sendBankIdSignupConfirmation).mockResolvedValueOnce({
+        ok: false,
+        step: 'send',
+        message: 'Email service not configured',
+      })
 
       const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
         method: 'POST',
         headers: await flowCookie('signup'),
         body: { email: 'fresh@example.com' },
       })
-      const { status, body } = await parseJsonResponse<{ error?: string }>(
+      const { status, body } = await parseJsonResponse<{ error?: string; message?: string }>(
         await findCompleteHandler()(req)
       )
 
       expect(status).toBe(500)
       expect(body.error).toBe('internal_error')
+      expect(body.message).toBe('Kunde inte skicka bekräftelsemailet. Försök igen.')
       expect(admin.deleteUser).toHaveBeenCalledWith('new-user-uuid')
     })
 
@@ -387,6 +445,323 @@ describe('POST /bankid/complete', () => {
       expect(status).toBe(404)
       expect(body.error).toBe('no_account')
       expect(admin.generateLink).not.toHaveBeenCalled()
+    })
+
+    it('answers 503 (not no_account) when the identity lookup itself fails', async () => {
+      // A schema behind the code or a lost connection must not send every
+      // returning BankID user to signup, nor create anything.
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin } = mockServiceClient([
+        { data: null, error: { code: '42703', message: 'column "email_verified_at" does not exist' } },
+      ])
+
+      const { status, body } = await parseJsonResponse<{ error?: string }>(
+        await findCompleteHandler()(
+          createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+            method: 'POST',
+            headers: await flowCookie('login'),
+          })
+        )
+      )
+
+      expect(status).toBe(503)
+      expect(body.error).toBe('service_unavailable')
+      expect(admin.generateLink).not.toHaveBeenCalled()
+      expect(admin.createUser).not.toHaveBeenCalled()
+    })
+
+    it('treats PGRST116 (no row) as not linked', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      mockServiceClient([
+        { data: null, error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' } },
+      ])
+
+      const { status, body } = await parseJsonResponse<{ error?: string }>(
+        await findCompleteHandler()(
+          createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+            method: 'POST',
+            headers: await flowCookie('login'),
+          })
+        )
+      )
+
+      expect(status).toBe(404)
+      expect(body.error).toBe('no_account')
+    })
+
+    it('signs a VERIFIED identity in with a magic link, as before', async () => {
+      // Every identity that existed before the pending column was added is
+      // backfilled as verified; their login must be byte-identical.
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin } = mockServiceClient([
+        { data: { user_id: 'existing-user', email_verified_at: VERIFIED_AT } },
+      ])
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        headers: await flowCookie('login'),
+      })
+      const { status, body } = await parseJsonResponse<{
+        data?: { tokenHash?: string; type?: string; isNewUser?: boolean }
+      }>(await findCompleteHandler()(req))
+
+      expect(status).toBe(200)
+      expect(body.data).toEqual({ tokenHash: 'magic-token-hash', type: 'magiclink', isNewUser: false })
+      expect(admin.generateLink).toHaveBeenCalledWith({
+        type: 'magiclink',
+        email: 'existing@example.com',
+      })
+      expect(sendBankIdSignupConfirmation).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('pending identities (address never proven, audit 2026-09)', () => {
+    /** The auth user a BankID signup leaves behind until the mail is clicked. */
+    const pendingShell = {
+      id: 'pending-user',
+      email: 'typed@example.com',
+      email_confirmed_at: undefined,
+      identities: [{ provider: 'email' }],
+      app_metadata: { bankid_pending: true, has_password: false },
+    }
+
+    function clearedFlow(response: Response): boolean {
+      return response.headers
+        .getSetCookie()
+        .some((c) => c.startsWith(`${BANKID_FLOW_COOKIE}=`) && /Max-Age=0/i.test(c))
+    }
+
+    it('login: refuses a pending identity, re-sends the confirmation mail, and mints nothing', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin, client } = mockServiceClient([
+        { data: { user_id: 'pending-user', email_verified_at: null } },
+      ])
+      admin.getUserById.mockResolvedValue({ data: { user: pendingShell }, error: null } as never)
+
+      const response = await findCompleteHandler()(
+        createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+          method: 'POST',
+          headers: { ...(await flowCookie('login')), 'x-forwarded-host': 'app.gnubok.se' },
+        })
+      )
+      const raw = await response.clone().text()
+      const { status, body } = await parseJsonResponse<{ error?: string; message?: string }>(response)
+
+      expect(status).toBe(403)
+      expect(body.error).toBe('email_unconfirmed')
+      expect(body.message).toMatch(/^Bekräfta din e-postadress först/)
+      expect(raw).not.toContain('tokenHash')
+      expect(admin.generateLink).not.toHaveBeenCalled()
+      expect(sendBankIdSignupConfirmation).toHaveBeenCalledWith(
+        expect.objectContaining({ email: 'typed@example.com', host: 'app.gnubok.se' })
+      )
+      // The flag was already set, so nothing to heal; the row stays for the click.
+      expect(admin.updateUserById).not.toHaveBeenCalled()
+      expect(vi.mocked(client.from).mock.calls.map((c) => c[0])).toEqual(['bankid_identities'])
+      // Terminal for this identification: the flow is spent.
+      expect(clearedFlow(response)).toBe(true)
+    })
+
+    it('login: heals a missing bankid_pending flag before re-sending (rows from the old flow)', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin } = mockServiceClient([
+        { data: { user_id: 'legacy-user', email_verified_at: null } },
+      ])
+      admin.getUserById.mockResolvedValue({
+        data: {
+          user: {
+            ...pendingShell,
+            id: 'legacy-user',
+            email_confirmed_at: '2026-09-02T08:00:00Z',
+            app_metadata: { bankid_linked: true, has_password: false },
+          },
+        },
+        error: null,
+      } as never)
+
+      const { status } = await parseJsonResponse(
+        await findCompleteHandler()(
+          createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+            method: 'POST',
+            headers: await flowCookie('login'),
+          })
+        )
+      )
+
+      expect(status).toBe(403)
+      // /auth/callback only promotes when the flag is present.
+      expect(admin.updateUserById).toHaveBeenCalledWith('legacy-user', {
+        app_metadata: { bankid_linked: true, has_password: false, bankid_pending: true },
+      })
+      expect(sendBankIdSignupConfirmation).toHaveBeenCalledTimes(1)
+    })
+
+    it('login: revokes the pending link and answers no_account once the address owner adopted the account', async () => {
+      // The victim signed in with Google (or set a password): the account is
+      // theirs. The BankID holder who typed their address gets no login into
+      // it, now or after any later confirmation click.
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin, client } = mockServiceClient([
+        { data: { user_id: 'victim-user', email_verified_at: null } }, // pnr lookup → pending
+        { error: null }, // bankid_identities delete OK
+      ])
+      admin.getUserById.mockResolvedValue({
+        data: {
+          user: {
+            ...pendingShell,
+            id: 'victim-user',
+            email: 'victim@example.com',
+            identities: [{ provider: 'email' }, { provider: 'google' }],
+          },
+        },
+        error: null,
+      } as never)
+
+      const { status, body } = await parseJsonResponse<{ error?: string; givenName?: string }>(
+        await findCompleteHandler()(
+          createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+            method: 'POST',
+            headers: await flowCookie('login'),
+          })
+        )
+      )
+
+      expect(status).toBe(404)
+      expect(body.error).toBe('no_account')
+      expect(body.givenName).toBe('Anna')
+      expect(admin.generateLink).not.toHaveBeenCalled()
+      expect(sendBankIdSignupConfirmation).not.toHaveBeenCalled()
+      // Row deleted, flag dropped, no MFA exemption granted.
+      expect(vi.mocked(client.from).mock.calls.map((c) => c[0])).toEqual([
+        'bankid_identities',
+        'bankid_identities',
+      ])
+      expect(admin.updateUserById).toHaveBeenCalledWith('victim-user', {
+        app_metadata: { bankid_pending: null, has_password: false },
+      })
+      expect(admin.deleteUser).not.toHaveBeenCalled()
+    })
+
+    it('login: a pending identity whose user set a password is treated as adopted', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin } = mockServiceClient([
+        { data: { user_id: 'victim-user', email_verified_at: null } },
+        { error: null },
+      ])
+      admin.getUserById.mockResolvedValue({
+        data: {
+          user: { ...pendingShell, id: 'victim-user', app_metadata: { bankid_pending: true, has_password: true } },
+        },
+        error: null,
+      } as never)
+
+      const { status, body } = await parseJsonResponse<{ error?: string }>(
+        await findCompleteHandler()(
+          createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+            method: 'POST',
+            headers: await flowCookie('login'),
+          })
+        )
+      )
+
+      expect(status).toBe(404)
+      expect(body.error).toBe('no_account')
+      expect(sendBankIdSignupConfirmation).not.toHaveBeenCalled()
+    })
+
+    it('signup: replaces a stale unadopted pending account from the same BankID (typo, lost mail)', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin } = mockServiceClient([
+        { data: { user_id: 'stale-user', email_verified_at: null } }, // pnr lookup → pending
+        { error: null }, // new bankid_identities insert OK
+      ])
+      admin.getUserById.mockResolvedValue({
+        data: { user: { ...pendingShell, id: 'stale-user', email: 'typo@exmaple.com' } },
+        error: null,
+      } as never)
+
+      const { status, body } = await parseJsonResponse<{ data?: { status?: string } }>(
+        await findCompleteHandler()(
+          createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+            method: 'POST',
+            headers: await flowCookie('signup'),
+            body: { email: 'correct@example.com' },
+          })
+        )
+      )
+
+      expect(status).toBe(200)
+      expect(body.data?.status).toBe('confirmation_sent')
+      // The unconfirmed shell (cascades its identity row) goes; a fresh one is made.
+      expect(admin.deleteUser).toHaveBeenCalledTimes(1)
+      expect(admin.deleteUser).toHaveBeenCalledWith('stale-user')
+      expect(admin.createUser).toHaveBeenCalledWith(
+        expect.objectContaining({ email: 'correct@example.com', email_confirm: false })
+      )
+      expect(sendBankIdSignupConfirmation).toHaveBeenCalledWith(
+        expect.objectContaining({ email: 'correct@example.com' })
+      )
+    })
+
+    it('signup: never deletes an adopted account; only the pending link is removed before the new signup', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin, client } = mockServiceClient([
+        { data: { user_id: 'victim-user', email_verified_at: null } }, // pnr lookup → pending
+        { error: null }, // pending row delete OK
+        { error: null }, // new bankid_identities insert OK
+      ])
+      admin.getUserById.mockResolvedValue({
+        data: {
+          user: {
+            ...pendingShell,
+            id: 'victim-user',
+            email_confirmed_at: '2026-09-01T00:00:00Z',
+            identities: [{ provider: 'email' }, { provider: 'google' }],
+          },
+        },
+        error: null,
+      } as never)
+
+      const { status } = await parseJsonResponse(
+        await findCompleteHandler()(
+          createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+            method: 'POST',
+            headers: await flowCookie('signup'),
+            body: { email: 'mine@example.com' },
+          })
+        )
+      )
+
+      expect(status).toBe(200)
+      expect(admin.deleteUser).not.toHaveBeenCalled()
+      expect(vi.mocked(client.from).mock.calls.filter((c) => c[0] === 'bankid_identities')).toHaveLength(3)
+      expect(admin.updateUserById).toHaveBeenCalledWith('victim-user', {
+        app_metadata: { bankid_pending: null, has_password: false },
+      })
+      expect(admin.createUser).toHaveBeenCalledWith(
+        expect.objectContaining({ email: 'mine@example.com' })
+      )
+    })
+
+    it('signup: fails closed (500, flow kept) when the stale pending link cannot be cleared', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin } = mockServiceClient([
+        { data: { user_id: 'stale-user', email_verified_at: null } },
+      ])
+      admin.getUserById.mockResolvedValue({ data: { user: { ...pendingShell, id: 'stale-user' } }, error: null } as never)
+      admin.deleteUser.mockResolvedValueOnce({ data: null, error: { message: 'boom' } } as never)
+
+      const response = await findCompleteHandler()(
+        createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+          method: 'POST',
+          headers: await flowCookie('signup'),
+          body: { email: 'correct@example.com' },
+        })
+      )
+
+      expect(response.status).toBe(500)
+      expect(admin.createUser).not.toHaveBeenCalled()
+      expect(clearedFlow(response)).toBe(false)
     })
   })
 
@@ -457,11 +832,11 @@ describe('POST /bankid/complete', () => {
         body: { email: 'fresh@example.com' },
       })
       const { status, body } = await parseJsonResponse<{
-        data?: { tokenHash?: string; isNewUser?: boolean }
+        data?: { status?: string }
       }>(await findCompleteHandler()(req))
 
       expect(status).toBe(200)
-      expect(body.data?.isNewUser).toBe(true)
+      expect(body.data?.status).toBe('confirmation_sent')
       expect(vi.mocked(requestEnrichment)).toHaveBeenCalledWith(
         'test-session',
         ['SPAR', 'CompanyRoles']
@@ -586,9 +961,9 @@ describe('POST /bankid/complete', () => {
       expect(collectBankIdResult).not.toHaveBeenCalled()
     })
 
-    it('spends the flow on success, so a second tab cannot mint a rival magic link', async () => {
+    it('spends the flow on success, so a second tab cannot send a rival confirmation mail', async () => {
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
-      const { admin } = mockServiceClient([
+      mockServiceClient([
         { data: null }, // pnr lookup → not linked
         { error: null }, // bankid_identities insert OK
       ])
@@ -602,9 +977,9 @@ describe('POST /bankid/complete', () => {
       )
 
       expect(response.status).toBe(200)
-      expect(admin.generateLink).toHaveBeenCalled()
+      expect(sendBankIdSignupConfirmation).toHaveBeenCalledTimes(1)
       // Without this, two tabs that both saw 'complete' would each mint a
-      // magic link and the second would invalidate the first.
+      // link and the second would invalidate the first.
       expect(clearedFlow(response)).toBe(true)
     })
 
@@ -615,7 +990,7 @@ describe('POST /bankid/complete', () => {
       // magic link that would invalidate the first tab's.
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
       const { admin } = mockServiceClient(
-        [{ data: { user_id: 'existing-user' } }], // pnr is linked
+        [{ data: { user_id: 'existing-user', email_verified_at: VERIFIED_AT } }], // pnr is linked
         { error: { code: '23505', message: 'duplicate key' } },
       )
 
@@ -662,7 +1037,7 @@ describe('POST /bankid/complete', () => {
       // authenticate again, so an unreachable table must not be waved through.
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
       const { admin } = mockServiceClient(
-        [{ data: { user_id: 'existing-user' } }],
+        [{ data: { user_id: 'existing-user', email_verified_at: VERIFIED_AT } }],
         { error: { code: '42P01', message: 'relation does not exist' } },
       )
 

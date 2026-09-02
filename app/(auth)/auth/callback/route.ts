@@ -20,6 +20,121 @@ function oauthResumePath(next: string): string | null {
   return safe.startsWith('/api/mcp-oauth/authorize?') ? safe : null
 }
 
+/**
+ * Mirror of hasForeignCredential in extensions/general/tic/lib/bankid-pending.ts
+ * (core cannot import from extensions). A non-email identity (Google) or a
+ * password the user set themselves (`has_password: true`, written only by
+ * POST /api/account/password) means somebody proved ownership of the address
+ * by other means than the BankID signup's confirmation mail.
+ */
+function hasForeignCredential(user: {
+  identities?: Array<{ provider: string }>
+  app_metadata?: Record<string, unknown>
+}): boolean {
+  if ((user.identities ?? []).some((identity) => identity.provider !== 'email')) return true
+  return user.app_metadata?.has_password === true
+}
+
+/**
+ * Pending BankID identities (security audit 2026-09, account pre-hijacking).
+ *
+ * A BankID signup (extensions/general/tic, POST /bankid/complete) creates the
+ * auth user with the typed address UNCONFIRMED, a bankid_identities row with
+ * email_verified_at NULL, and app_metadata.bankid_pending instead of
+ * bankid_linked. The confirmation mail it sends lands here, and this is the
+ * one place that promotes the identity: email_verified_at = now(),
+ * bankid_linked = true (the MFA exemption in lib/auth/mfa.ts), bankid_pending
+ * removed. Until then BankID login refuses the identity.
+ *
+ * Promotion is refused, and the pending link revoked instead, when the account
+ * was adopted through another credential in the meantime: this link is a
+ * password reset (type=recovery, "forgot password" on the address), or the
+ * user already carries a non-email identity (Google) or a password they set
+ * themselves. In each case the real owner of the address proved it by other
+ * means, and the BankID holder who typed that address must not end up with a
+ * login into their account.
+ *
+ * Gated on the bankid_pending flag so the ordinary confirmation and recovery
+ * paths cost nothing extra. Failures are logged and never block the redirect:
+ * a pending identity simply stays pending, which is the safe state.
+ */
+async function reconcilePendingBankIdIdentity(
+  user: { id: string; app_metadata?: Record<string, unknown> },
+  type: string,
+): Promise<void> {
+  if (user.app_metadata?.bankid_pending !== true) return
+
+  try {
+    const service = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { cookies: { getAll: () => [], setAll: () => {} } }
+    )
+
+    const { data: pending, error: lookupError } = await service
+      .from('bankid_identities')
+      .select('id')
+      .eq('user_id', user.id)
+      .is('email_verified_at', null)
+      .maybeSingle()
+    if (lookupError) {
+      console.error('[auth/callback] pending BankID lookup failed:', lookupError.message)
+      return
+    }
+
+    // Fresh, authoritative copy: identities and app_metadata as of now.
+    const { data: userData, error: userError } = await service.auth.admin.getUserById(user.id)
+    const current = userData?.user
+    if (userError || !current) {
+      console.error('[auth/callback] pending BankID user lookup failed:', userError?.message)
+      return
+    }
+    const prior = current.app_metadata ?? {}
+
+    if (!pending || type === 'recovery' || hasForeignCredential(current)) {
+      // Adopted, or nothing left to promote: drop the unverified link and the
+      // flag. bankid_linked is untouched (a pending signup never set it).
+      // null removes the key under GoTrue's merge semantics and is falsy if
+      // app_metadata is ever replaced wholesale instead.
+      if (pending) {
+        const { error: deleteError } = await service
+          .from('bankid_identities')
+          .delete()
+          .eq('user_id', user.id)
+          .is('email_verified_at', null)
+        if (deleteError) {
+          console.error('[auth/callback] pending BankID revoke failed:', deleteError.message)
+          return
+        }
+        console.warn(
+          '[auth/callback] pending BankID identity revoked: account adopted through another credential',
+          { userId: user.id, type },
+        )
+      }
+      await service.auth.admin.updateUserById(user.id, {
+        app_metadata: { ...prior, bankid_pending: null },
+      })
+      return
+    }
+
+    // The click proves the address for the BankID holder who typed it.
+    const { error: promoteError } = await service
+      .from('bankid_identities')
+      .update({ email_verified_at: new Date().toISOString() })
+      .eq('user_id', user.id)
+      .is('email_verified_at', null)
+    if (promoteError) {
+      console.error('[auth/callback] pending BankID promotion failed:', promoteError.message)
+      return
+    }
+    await service.auth.admin.updateUserById(user.id, {
+      app_metadata: { ...prior, bankid_linked: true, bankid_pending: null },
+    })
+  } catch (err) {
+    console.error('[auth/callback] pending BankID reconciliation failed:', err)
+  }
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url)
   const code = searchParams.get('code')
@@ -86,6 +201,13 @@ export async function GET(request: NextRequest) {
         response.cookies.set({ name, value, ...options })
       }
       return response
+    }
+
+    // A BankID signup proves its address through this very link; a password
+    // reset on that address proves the opposite. Runs before the recovery
+    // early-return below so both outcomes are handled here.
+    if (!error && data?.user) {
+      await reconcilePendingBankIdIdentity(data.user, type)
     }
 
     authenticated = !error
