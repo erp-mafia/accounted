@@ -967,6 +967,12 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Counterparties and articles
   { name: 'customers', file: 'customers.json', orderBy: 'created_at' },
   { name: 'suppliers', file: 'suppliers.json', orderBy: 'created_at' },
+  // The party layer above customers and suppliers: identities, facts with
+  // provenance, payment identities and the human decisions that shaped them.
+  { name: 'parties', file: 'parties.json', orderBy: 'created_at' },
+  { name: 'party_facts', file: 'party_facts.json', orderBy: 'recorded_at' },
+  { name: 'party_identities', file: 'party_identities.json', orderBy: 'created_at' },
+  { name: 'party_decisions', file: 'party_decisions.json', orderBy: 'created_at' },
   { name: 'articles', file: 'articles.json', orderBy: 'created_at' },
   // Customer invoicing
   { name: 'invoices', file: 'invoices.json', orderBy: 'invoice_date' },
