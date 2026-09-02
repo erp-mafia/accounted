@@ -47,6 +47,12 @@ interface NewUserChecklistProps {
   sieSweep?: { auto_linked: number; suggested: number; unmatched: number; errors: number } | null
 }
 
+/** Clients that get a collapsed "Using X?" side door under the Claude step.
+ *  Each value keys the i18n strings step_claude_<door>_link / _steps and the
+ *  telemetry step name. Order is display order. */
+const SIDE_DOORS = ['chatgpt', 'grok'] as const
+type SideDoor = (typeof SIDE_DOORS)[number]
+
 /**
  * Activation funnel events, mirroring the one existing product-event site
  * (lib/support/submit-feedback.ts): guarded, try/caught, no PII in
@@ -108,9 +114,9 @@ export default function NewUserChecklist({
   // effect and re-raised the error toast forever. The next visit tries once
   // more from server truth.
   const completeRejectedRef = useRef(false)
-  // The ChatGPT side door on the Claude step: collapsed by default so the
-  // one-click Claude path stays the visual primary.
-  const [chatGptOpen, setChatGptOpen] = useState(false)
+  // The ChatGPT and Grok side doors on the Claude step: collapsed by default
+  // so the one-click Claude path stays the visual primary; at most one open.
+  const [sideDoor, setSideDoor] = useState<SideDoor | null>(null)
   const [serverUrlCopied, setServerUrlCopied] = useState(false)
 
   const hasMigration = ENABLED_EXTENSION_IDS.has('arcim-migration')
@@ -258,12 +264,13 @@ export default function NewUserChecklist({
       'noopener',
     )
   }
-  // ChatGPT has no add-connector deep link (the user pastes the server URL
-  // into Developer mode manually), so the side door copies the URL instead.
-  const toggleChatGpt = () => {
-    setChatGptOpen((open) => {
-      if (!open) captureSetup('onboarding_setup_step_started', { step: 'chatgpt' })
-      return !open
+  // Neither ChatGPT nor Grok has an add-connector deep link (the user pastes
+  // the server URL into the client manually), so the side doors copy the URL
+  // instead.
+  const toggleSideDoor = (door: SideDoor) => {
+    setSideDoor((open) => {
+      if (open !== door) captureSetup('onboarding_setup_step_started', { step: door })
+      return open === door ? null : door
     })
   }
   const copyServerUrl = async () => {
@@ -467,18 +474,23 @@ export default function NewUserChecklist({
                   {t('step_claude_guide_link')}
                 </a>
               </p>
-              <button
-                type="button"
-                onClick={toggleChatGpt}
-                aria-expanded={chatGptOpen}
-                className="text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
-              >
-                {t('step_claude_chatgpt_link')}
-              </button>
-              {chatGptOpen && (
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                {SIDE_DOORS.map((door) => (
+                  <button
+                    key={door}
+                    type="button"
+                    onClick={() => toggleSideDoor(door)}
+                    aria-expanded={sideDoor === door}
+                    className="text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                  >
+                    {t(`step_claude_${door}_link`)}
+                  </button>
+                ))}
+              </div>
+              {sideDoor && (
                 <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
                   <p className="max-w-prose text-xs leading-5 text-muted-foreground">
-                    {t('step_claude_chatgpt_steps', { appName })}
+                    {t(`step_claude_${sideDoor}_steps`, { appName })}
                   </p>
                   <Button size="sm" variant="outline" onClick={() => void copyServerUrl()}>
                     {serverUrlCopied
@@ -533,7 +545,7 @@ function Step({
   doneNote?: React.ReactNode
   /** Block content below the pitch while the step is open. Unlike `children`
    *  (which lives inside a <p>), this may hold nested block elements, e.g.
-   *  the Claude step's ChatGPT side door. */
+   *  the Claude step's ChatGPT and Grok side doors. */
   footnote?: React.ReactNode
   last?: boolean
   children: React.ReactNode
