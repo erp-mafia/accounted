@@ -1066,6 +1066,15 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Webshop order rows are booking underlag (and carry customer personal
   // data), so they belong in the archive like transactions do.
   { name: 'webshop_orders', file: 'webshop_orders.json', orderBy: 'order_date' },
+  // Kundorder: non-ledger sales documents. Not räkenskapsinformation on
+  // their own, but the provenance of invoices created from them
+  // (invoices.sales_order_id / invoice_items.sales_order_item_id) points
+  // here, so a revisor reading the archive can follow the link.
+  { name: 'sales_orders', file: 'sales_orders.json', orderBy: 'order_date' },
+  // Direct dump (the coverage contract requires it for a table with its own
+  // company_id); the line's currency is the parent order's, one file over,
+  // joined by sales_order_id.
+  { name: 'sales_order_items', file: 'sales_order_items.json', orderBy: 'created_at' },
   { name: 'webshop_store_settings', file: 'webshop_store_settings.json' },
   { name: 'transaction_voucher_links', file: 'transaction_voucher_links.json' },
   { name: 'bank_file_imports', file: 'bank_file_imports.json', orderBy: 'created_at' },

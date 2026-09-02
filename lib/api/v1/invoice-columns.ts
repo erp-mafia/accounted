@@ -35,4 +35,4 @@ export const INVOICE_PDF_COLUMNS =
   'paid_amount, remaining_amount, deduction_total, deduction_personnummer_last4'
 
 export const INVOICE_ITEM_FULL_COLUMNS =
-  'id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, deduction_amount, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, dimensions, created_at'
+  'id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, deduction_amount, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, dimensions, sales_order_item_id, created_at'

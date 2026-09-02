@@ -220,7 +220,18 @@ import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
 import { sanitizeDeliveryRecipientStatuses } from '@/lib/invoices/delivery-recipient-statuses'
 import { listRotRutCandidates, createRotRutPayoutRequest } from '@/lib/invoices/rot-rut-service'
 import { importRotRutBeslutFile } from '@/lib/invoices/rot-rut-beslut-import'
-import { RotRutBeslutFileSchema } from '@/lib/api/schemas'
+import {
+  CreateInvoiceFromSalesOrderSchema,
+  CreateSalesOrderSchema,
+  RegisterSalesOrderDeliverySchema,
+  RotRutBeslutFileSchema,
+  SalesOrderTransitionSchema,
+} from '@/lib/api/schemas'
+import { decorate as decorateSalesOrder, fetchInvoicedQuantities, loadSalesOrder } from '@/lib/sales-orders/load'
+import { normalizeSalesOrderLines } from '@/lib/sales-orders/lines'
+import { hasOpenInvoices } from '@/lib/sales-orders/write'
+import { pickLines } from '@/lib/sales-orders/create-invoice-from-order'
+import type { ServiceFailure } from '@/lib/sales-orders/result'
 import {
   findMatchingVouchersForInvoice,
   validateVoucherForInvoiceLink,
@@ -289,7 +300,7 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
 // ensureInitialized() is called by the extension router (ext/[...path]/route.ts)
 // which dispatches to this handler: no duplicate call needed here.
-import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, VatPeriodType, VatDeclarationRutor, YearEndBlockerCode } from '@/types'
+import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, VatPeriodType, VatDeclarationRutor, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
 
 // ── Actor context ────────────────────────────────────────────
 
@@ -3046,6 +3057,165 @@ function getCanonicalToolNames(): ReadonlySet<string> {
 function projectMcpPayload<T>(value: T, namespace: McpToolNamespace): T {
   return projectToolReferences(value, namespace, getCanonicalToolNames())
 }
+
+// ── Kundorder (sales orders) helpers ─────────────────────────
+
+const SALES_ORDER_STATUSES = ['draft', 'confirmed', 'completed', 'cancelled'] as const
+const SALES_ORDER_PROGRESS = ['none', 'partial', 'full'] as const
+
+/**
+ * Staging-time mirror of the header state machine in
+ * lib/sales-orders/transitions.ts. The service is authoritative at commit
+ * (it re-reads the order and compare-and-sets on the status it saw); this
+ * copy exists only so an impossible transition is refused before it costs
+ * an approval round-trip.
+ */
+const SALES_ORDER_TRANSITIONS: Record<
+  'confirm' | 'cancel' | 'reopen',
+  { from: readonly SalesOrderStatus[]; to: SalesOrderStatus }
+> = {
+  confirm: { from: ['draft'], to: 'confirmed' },
+  cancel: { from: ['draft', 'confirmed'], to: 'cancelled' },
+  reopen: { from: ['cancelled'], to: 'draft' },
+}
+
+/** Surface a lib/sales-orders ServiceFailure through the tool error envelope. */
+function throwSalesOrderFailure(failure: ServiceFailure, context: string): never {
+  if ('dbError' in failure) throw dbError(failure.dbError)
+  const entry = getErrorEntry(failure.code)
+  const details = failure.details ? ` ${JSON.stringify(failure.details)}` : ''
+  throw new Error(`${context}: ${failure.code}. ${entry?.message_en ?? ''}${details}`.trim())
+}
+
+async function loadSalesOrderOrThrow(
+  supabase: SupabaseClient,
+  companyId: string,
+  rawId: unknown,
+): Promise<SalesOrder> {
+  const orderId = String(rawId ?? '').trim()
+  if (!orderId) throw new Error('sales_order_id is required. Use gnubok_list_sales_orders to find IDs.')
+  const res = await loadSalesOrder(supabase, companyId, orderId)
+  if (!res.ok) {
+    if ('code' in res && res.code === 'SALES_ORDER_NOT_FOUND') {
+      throw new Error('Sales order not found. Use gnubok_list_sales_orders to find valid IDs.')
+    }
+    throwSalesOrderFailure(res, 'Could not load sales order')
+  }
+  return res.order
+}
+
+/** First Zod issue of a staged sales-order payload as a tool error. */
+function throwFirstZodIssue(result: { success: false; error: z.ZodError }, field?: string): never {
+  const issue = result.error.issues[0]
+  const path = [field, ...(issue?.path ?? [])].filter((p) => p !== undefined && p !== '').join('.')
+  throw new Error(`Invalid ${path || 'arguments'}: ${issue?.message ?? 'validation failed'}`)
+}
+
+function salesOrderSummary(order: SalesOrder) {
+  return {
+    sales_order_id: order.id,
+    order_number: order.order_number ?? null,
+    status: order.status,
+    customer_id: order.customer_id ?? null,
+    customer_name: (order.customer as { name?: string } | null | undefined)?.name ?? null,
+    order_date: order.order_date,
+    requested_delivery_date: order.requested_delivery_date ?? null,
+    last_delivery_date: order.last_delivery_date ?? null,
+    currency: order.currency,
+    subtotal: order.subtotal,
+    vat_amount: order.vat_amount,
+    total: order.total,
+    delivery_progress: order.delivery_progress ?? 'none',
+    invoicing_progress: order.invoicing_progress ?? 'none',
+    line_count: (order.items ?? []).length,
+  }
+}
+
+function salesOrderLineOut(item: SalesOrderItem) {
+  return {
+    sales_order_item_id: item.id,
+    line_type: item.line_type,
+    description: item.description,
+    quantity: item.quantity,
+    delivered_qty: item.delivered_qty,
+    invoiced_qty: item.invoiced_qty ?? 0,
+    remaining_qty: item.remaining_qty ?? Math.max(0, item.quantity - (item.invoiced_qty ?? 0)),
+    unit: item.unit,
+    unit_price: item.unit_price,
+    discount_percent: item.discount_percent,
+    line_total: item.line_total,
+    vat_rate: item.vat_rate,
+    article_id: item.article_id ?? null,
+    revenue_account: item.revenue_account ?? null,
+    dimensions: item.dimensions ?? {},
+  }
+}
+
+const SALES_ORDER_SUMMARY_PROPS = {
+  sales_order_id: { type: 'string' },
+  order_number: { type: ['string', 'null'], description: 'OR-<n>; null only if numbering failed at creation' },
+  status: { type: 'string', enum: SALES_ORDER_STATUSES },
+  customer_id: { type: ['string', 'null'] },
+  customer_name: { type: ['string', 'null'] },
+  order_date: { type: 'string' },
+  requested_delivery_date: { type: ['string', 'null'] },
+  last_delivery_date: { type: ['string', 'null'], description: 'Latest registered delivery; becomes delivery_date on invoices created from the order' },
+  currency: { type: 'string' },
+  subtotal: { type: 'number' },
+  vat_amount: { type: 'number' },
+  total: { type: 'number' },
+  delivery_progress: { type: 'string', enum: SALES_ORDER_PROGRESS },
+  invoicing_progress: { type: 'string', enum: SALES_ORDER_PROGRESS },
+  line_count: { type: 'number' },
+} as const
+
+const SALES_ORDER_SUMMARY_REQUIRED = [
+  'sales_order_id', 'status', 'order_date', 'currency', 'subtotal', 'vat_amount', 'total',
+  'delivery_progress', 'invoicing_progress', 'line_count',
+] as const
+
+const SALES_ORDER_LINE_OUTPUT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    sales_order_item_id: { type: 'string' },
+    line_type: { type: 'string', description: 'product or text' },
+    description: { type: 'string' },
+    quantity: { type: 'number' },
+    delivered_qty: { type: 'number', description: 'Cumulative delivered quantity registered so far' },
+    invoiced_qty: { type: 'number', description: 'Derived from linked lines on non-cancelled, non-credited invoices' },
+    remaining_qty: { type: 'number', description: 'quantity - invoiced_qty, never negative' },
+    unit: { type: 'string' },
+    unit_price: { type: 'number' },
+    discount_percent: { type: 'number', description: 'Line discount 0-100; line_total is net of it' },
+    line_total: { type: 'number', description: 'Net of discount, order currency' },
+    vat_rate: { type: 'number' },
+    article_id: { type: ['string', 'null'] },
+    revenue_account: { type: ['string', 'null'] },
+    dimensions: { type: 'object', additionalProperties: { type: 'string' } },
+  },
+  required: [
+    'sales_order_item_id', 'line_type', 'description', 'quantity', 'delivered_qty', 'invoiced_qty',
+    'remaining_qty', 'unit', 'unit_price', 'line_total', 'vat_rate',
+  ],
+} as const
+
+const SALES_ORDER_LINE_INPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    description: { type: 'string' },
+    quantity: { type: 'number' },
+    unit: { type: 'string', description: 'st, tim, dag, mån' },
+    unit_price: { type: 'number', description: 'Per unit excl. VAT' },
+    discount_percent: { type: 'number', description: 'Line discount 0-100' },
+    vat_rate: { type: 'number', description: 'VAT rate 0-100; default from customer VAT rules' },
+    article_id: { type: 'string', description: 'Article UUID; prefills like gnubok_create_invoice, line values win' },
+    line_type: { type: 'string', enum: ['product', 'text'], description: 'text = free-text row, no amounts' },
+    revenue_account: { type: ['string', 'null'], description: 'BAS class 1-3 account override' },
+    dimensions: { type: 'object', additionalProperties: { type: 'string' }, description: 'Dims bag {sie_dim_no: kod eller namn}' },
+  },
+  required: ['quantity'],
+} as const
 
 // ── Tools ────────────────────────────────────────────────────
 
@@ -6424,7 +6594,7 @@ export const tools: McpTool[] = [
       const { data: invoice, error } = await supabase
         .from('invoices')
         .select(
-          'id, invoice_number, status, document_type, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, invoice_marking, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
+          'id, invoice_number, status, document_type, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, invoice_marking, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, sales_order_item_id, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
         )
         .eq('id', invoiceId)
         .eq('company_id', companyId)
@@ -6751,6 +6921,672 @@ export const tools: McpTool[] = [
           description: 'Once approved, the invoice is created as a draft. Send it with gnubok_send_invoice or use gnubok_mark_invoice_as_sent if delivered outside the system.',
           tool: 'gnubok_send_invoice',
         }
+      )
+    },
+  },
+
+  // ── Kundorder (sales orders) ─────────────────────────────────
+  //
+  // The non-ledger document between agreement and invoice. Orders never
+  // book: delivery is a fact the user records, invoicing creates a DRAFT
+  // kundfaktura through the same builder gnubok_create_invoice uses. Every
+  // write stages for approval and commits through lib/sales-orders.
+
+  {
+    name: 'gnubok_list_sales_orders',
+    keywords: ['kundorder', 'order', 'ordrar', 'orderbekräftelse', 'leverans', 'delfaktura'],
+    title: 'List Sales Orders',
+    description: 'List kundorder (sales orders) for the active company, newest first, with delivery and invoicing progress per order. Optional status and customer filters. Use gnubok_get_sales_order for the lines.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        status: { type: 'string', enum: SALES_ORDER_STATUSES, description: 'Filter by order status' },
+        customer_id: { type: 'string', description: 'Filter by customer UUID' },
+        limit: { type: 'number', description: 'Max results (default 50, max 100)' },
+        offset: { type: 'integer', minimum: 0, description: 'Number of results to skip for pagination (default 0)' },
+      },
+    },
+    // Item keys listed in prose instead of declared: the typed summary schema
+    // costs ~350 tokens of the tools/list budget (payload-size.bench.test.ts)
+    // and gnubok_get_sales_order (search-only) declares the same fields fully.
+    outputSchema: paginatedSchema('sales_orders', {
+      type: 'object',
+      description: 'sales_order_id, order_number, status, customer_id, customer_name, order_date, requested_delivery_date, last_delivery_date, currency, subtotal, vat_amount, total, delivery_progress, invoicing_progress (none|partial|full), line_count',
+    }),
+    annotations: ANNOTATIONS_READ_ONLY,
+    async execute(args, companyId, userId, supabase) {
+      const limit = Math.min(Math.max(1, Number(args.limit) || 50), 100)
+      const offset = Math.max(0, Math.floor(Number(args.offset) || 0))
+      const status = typeof args.status === 'string' ? args.status : undefined
+      const customerId = typeof args.customer_id === 'string' ? args.customer_id.trim() : ''
+      if (status && !(SALES_ORDER_STATUSES as readonly string[]).includes(status)) {
+        throw new Error(`Invalid status "${status}". Allowed: ${SALES_ORDER_STATUSES.join(', ')}`)
+      }
+
+      let query = supabase
+        .from('sales_orders')
+        .select(
+          'id, order_number, status, customer_id, order_date, requested_delivery_date, last_delivery_date, currency, subtotal, vat_amount, total, customer:customers(name), items:sales_order_items(id, line_type, quantity, delivered_qty, sort_order)',
+          { count: 'exact' },
+        )
+        .eq('company_id', companyId)
+      if (status) query = query.eq('status', status)
+      if (customerId) query = query.eq('customer_id', customerId)
+
+      const { data, error, count } = await query
+        .order('order_date', { ascending: false })
+        .order('id', { ascending: false })
+        .range(offset, offset + limit)
+      if (error) throw dbError(error)
+
+      const rows = ((data ?? []) as unknown as SalesOrder[]).slice(0, limit)
+      // Progress needs the invoiced quantity per line, which lives on the
+      // linked invoice_items (one RPC for the whole page, RLS applies).
+      const invoiced = await fetchInvoicedQuantities(supabase, rows.map((r) => r.id))
+      if (!invoiced.ok) throw dbError(invoiced.dbError)
+      const salesOrders = rows.map((row) => salesOrderSummary(decorateSalesOrder(row, invoiced.byItem)))
+
+      const fetched = (data ?? []).length
+      const hasMore = count == null ? fetched > limit : offset + salesOrders.length < count
+      const total = count ?? offset + salesOrders.length + (hasMore ? 1 : 0)
+      return {
+        sales_orders: salesOrders,
+        count: salesOrders.length,
+        total_count: total,
+        has_more: hasMore,
+        ...(hasMore ? { next_offset: offset + salesOrders.length } : {}),
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_get_sales_order',
+    keywords: ['kundorder', 'order', 'orderrader', 'leverans', 'delfaktura'],
+    title: 'Get Sales Order',
+    description: 'One kundorder (sales order): header plus every line with delivered_qty, invoiced_qty and remaining_qty, and the invoices created from it. Read it before registering delivery or invoicing so line ids and remaining quantities are exact.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        sales_order_id: { type: 'string', description: 'UUID from gnubok_list_sales_orders' },
+      },
+      required: ['sales_order_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        ...SALES_ORDER_SUMMARY_PROPS,
+        source_invoice_id: { type: ['string', 'null'], description: 'Proforma the order was converted from, if any' },
+        your_reference: { type: ['string', 'null'] },
+        our_reference: { type: ['string', 'null'] },
+        notes: { type: ['string', 'null'] },
+        default_dimensions: { type: 'object', additionalProperties: { type: 'string' } },
+        confirmed_at: { type: ['string', 'null'] },
+        completed_at: { type: ['string', 'null'] },
+        cancelled_at: { type: ['string', 'null'] },
+        items: { type: 'array', description: 'Lines in display order', items: SALES_ORDER_LINE_OUTPUT_SCHEMA },
+        item_count: { type: 'number' },
+        invoices: {
+          type: 'array',
+          description: 'Invoices created from this order (all statuses)',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              invoice_id: { type: 'string' },
+              invoice_number: { type: ['string', 'null'], description: 'null until sent' },
+              status: { type: 'string' },
+              invoice_date: { type: 'string' },
+              total: { type: 'number' },
+              currency: { type: 'string' },
+            },
+            required: ['invoice_id', 'status', 'total', 'currency'],
+          },
+        },
+      },
+      required: [...SALES_ORDER_SUMMARY_REQUIRED, 'items', 'item_count', 'invoices'],
+    },
+    annotations: ANNOTATIONS_READ_ONLY,
+    // Search-only like gnubok_get_invoice: the line-level detail read behind
+    // the delivery and invoicing writes. Reads stay callable on Claude.ai via
+    // gnubok_call_tool; the tools/list budget (payload-size.bench.test.ts)
+    // has no room for its typed line schema in the default catalog.
+    catalogVisibility: 'search',
+    async execute(args, companyId, userId, supabase) {
+      const order = await loadSalesOrderOrThrow(supabase, companyId, args.sales_order_id)
+
+      const { data: invoiceRows, error: invoiceError } = await supabase
+        .from('invoices')
+        .select('id, invoice_number, status, invoice_date, total, currency')
+        .eq('company_id', companyId)
+        .eq('sales_order_id', order.id)
+        .order('invoice_date', { ascending: true })
+        .order('id', { ascending: true })
+      if (invoiceError) throw dbError(invoiceError)
+
+      const items = (order.items ?? []).map(salesOrderLineOut)
+      return {
+        ...salesOrderSummary(order),
+        source_invoice_id: order.source_invoice_id ?? null,
+        your_reference: order.your_reference ?? null,
+        our_reference: order.our_reference ?? null,
+        notes: order.notes ?? null,
+        default_dimensions: order.default_dimensions ?? {},
+        confirmed_at: order.confirmed_at ?? null,
+        completed_at: order.completed_at ?? null,
+        cancelled_at: order.cancelled_at ?? null,
+        items,
+        item_count: items.length,
+        invoices: (invoiceRows ?? []).map((inv) => ({
+          invoice_id: inv.id,
+          invoice_number: inv.invoice_number ?? null,
+          status: inv.status,
+          invoice_date: inv.invoice_date,
+          total: inv.total,
+          currency: inv.currency,
+        })),
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_create_sales_order',
+    keywords: ['kundorder', 'order', 'ny order', 'orderbekräftelse'],
+    title: 'Create Sales Order',
+    description: 'Stage a new kundorder (sales order) as a draft with its lines. Stages for approval: nothing is booked; totals are informational. Confirm it afterwards with gnubok_transition_sales_order, then deliver and invoice from it.',
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        customer_id: { type: 'string', description: 'Customer UUID' },
+        items: { type: 'array', items: SALES_ORDER_LINE_INPUT_SCHEMA, description: 'Order lines' },
+        default_dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Dims bag {sie_dim_no: kod eller namn} applied to every item not setting the key',
+        },
+        order_date: { type: 'string', description: 'YYYY-MM-DD (default today)' },
+        requested_delivery_date: { type: 'string', description: 'YYYY-MM-DD' },
+        currency: { type: 'string', enum: ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'] },
+        our_reference: { type: 'string' },
+        your_reference: { type: 'string' },
+        notes: { type: 'string' },
+        dry_run: { type: 'boolean', description: 'Preview without staging' },
+        idempotency_key: { type: 'string', description: 'UUID for safe retries (24h)' },
+      },
+      required: ['customer_id', 'items'],
+    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
+    // Search-only (same footing as the mileage and skattekonto families): the
+    // tools/list budget (payload-size.bench.test.ts) has ~900 tokens of
+    // headroom and the four staged kundorder writes need ~2000 even trimmed.
+    // gnubok_list_sales_orders stays in the default catalog as the entry
+    // point; promoting the writes means demoting other reads first.
+    catalogVisibility: 'search',
+    async execute(args, companyId, userId, supabase, actor) {
+      const customerId = typeof args.customer_id === 'string' ? args.customer_id.trim() : ''
+      const rawItems = Array.isArray(args.items) ? (args.items as StagedInvoiceLineInput[]) : []
+      if (!customerId) throw new Error('customer_id is required. Use gnubok_list_customers to find IDs.')
+      if (rawItems.length === 0) throw new Error('At least one item is required.')
+
+      const { data: customer, error: custError } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('id', customerId)
+        .eq('company_id', companyId)
+        .maybeSingle<Customer>()
+      if (custError) throw dbError(custError)
+      if (!customer) throw new Error('Customer not found. Use gnubok_list_customers to find valid IDs.')
+
+      const currency = ((args.currency as string) || 'SEK') as Currency
+      const today = new Date().toISOString().split('T')[0]
+
+      // Article prefill with the same rules as gnubok_create_invoice: the
+      // line's own values win, the article fills the rest, and its VAT rate
+      // is adopted only inside the customer's default rate set.
+      const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated)
+      const articleIds = Array.from(new Set(rawItems.map((i) => i.article_id).filter((a): a is string => !!a)))
+      const articlesById = new Map<string, InvoiceLineArticle>()
+      if (articleIds.length > 0) {
+        const { data: articleRows, error: articleError } = await supabase
+          .from('articles')
+          .select('id, name, unit, price_excl_vat, vat_rate, revenue_account, currency, active')
+          .eq('company_id', companyId)
+          .in('id', articleIds)
+        if (articleError) throw dbError(articleError)
+        for (const row of articleRows ?? []) articlesById.set(row.id, row)
+      }
+      const resolvedLines = rawItems.map((item, i) =>
+        resolveInvoiceLineFromArticle(
+          item,
+          item.article_id ? articlesById.get(item.article_id) : undefined,
+          currency,
+          adoptableVatRates,
+          i,
+        ),
+      )
+
+      // Resolve-don't-select for dimensions (names to registry codes), same
+      // as gnubok_create_invoice; the resolved bags are what gets staged.
+      const defaultDimensions = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
+      const { bags: resolvedDimBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
+        supabase,
+        companyId,
+        [defaultDimensions, ...resolvedLines.map((item, i) => parseDimensionsArg(item.dimensions, `items[${i}].dimensions`))],
+      )
+      const resolvedDefaultDimensions = resolvedDimBags[0]
+
+      const items = resolvedLines.map((line, i) => {
+        const bag = resolvedDimBags[i + 1]
+        return {
+          line_type: line.line_type ?? 'product',
+          description: line.description,
+          quantity: line.quantity,
+          unit: line.unit,
+          unit_price: line.unit_price,
+          ...(line.discount_percent != null ? { discount_percent: line.discount_percent } : {}),
+          ...(line.vat_rate != null ? { vat_rate: line.vat_rate } : {}),
+          ...(line.article_id ? { article_id: line.article_id } : {}),
+          ...(line.revenue_account != null ? { revenue_account: line.revenue_account } : {}),
+          ...(bag && Object.keys(bag).length > 0 ? { dimensions: bag } : {}),
+        }
+      })
+
+      // Same schema the cookie route validates with, so a payload refused
+      // here is refused identically at the commit boundary.
+      const parsed = CreateSalesOrderSchema.safeParse({
+        customer_id: customerId,
+        order_date: (args.order_date as string) || today,
+        ...(args.requested_delivery_date ? { requested_delivery_date: args.requested_delivery_date } : {}),
+        currency,
+        ...(args.your_reference ? { your_reference: args.your_reference } : {}),
+        ...(args.our_reference ? { our_reference: args.our_reference } : {}),
+        ...(args.notes ? { notes: args.notes } : {}),
+        ...(resolvedDefaultDimensions && Object.keys(resolvedDefaultDimensions).length > 0
+          ? { default_dimensions: resolvedDefaultDimensions }
+          : {}),
+        items,
+      })
+      if (!parsed.success) throwFirstZodIssue(parsed)
+      const params = parsed.data
+
+      // Preview totals from the exact line math the service stores (net of
+      // discount, öre-exact) including the per-customer VAT gate.
+      const lines = normalizeSalesOrderLines(params.items, customer)
+      if (!lines.ok) throwSalesOrderFailure(lines, 'Cannot create sales order')
+
+      return stagePendingOperation(supabase, companyId, userId, 'create_sales_order',
+        `Ny kundorder: ${customer.name} ${lines.totals.total} ${currency}`,
+        params as unknown as Record<string, unknown>,
+        {
+          customer_name: customer.name,
+          customer_type: customer.customer_type,
+          items: lines.rows.map((row) => ({
+            line_type: row.line_type,
+            description: row.description,
+            quantity: row.quantity,
+            unit: row.unit,
+            unit_price: row.unit_price,
+            discount_percent: row.discount_percent,
+            vat_rate: row.vat_rate,
+            line_total: row.line_total,
+            article_id: row.article_id,
+            revenue_account: row.revenue_account,
+            dimensions: row.dimensions,
+          })),
+          subtotal: lines.totals.subtotal,
+          vat_amount: lines.totals.vat_amount,
+          total: lines.totals.total,
+          currency,
+          order_date: params.order_date,
+          requested_delivery_date: params.requested_delivery_date ?? null,
+          // Informational: an order is not a verifikat, so no period check.
+          writes_verifikat: false,
+          ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
+        },
+        actor,
+        {
+          description: 'Once approved, the order is a draft. Confirm it with gnubok_transition_sales_order (action: confirm) before delivering or invoicing.',
+          tool: 'gnubok_transition_sales_order',
+          args: { action: 'confirm' },
+        },
+        {
+          dryRun: Boolean(args.dry_run),
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+        },
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_transition_sales_order',
+    keywords: ['kundorder', 'order', 'bekräfta order', 'makulera order', 'återöppna order'],
+    title: 'Transition Sales Order',
+    description: 'Stage a status change on a kundorder: confirm (draft to confirmed), cancel (draft or confirmed), or reopen (cancelled to draft). Stages for approval. Cancel and reopen are refused while invoices created from the order exist.',
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        sales_order_id: { type: 'string', description: 'UUID from gnubok_list_sales_orders' },
+        action: { type: 'string', enum: ['confirm', 'cancel', 'reopen'] },
+        dry_run: { type: 'boolean', description: 'Preview without staging' },
+        idempotency_key: { type: 'string', description: 'UUID for safe retries (24h)' },
+      },
+      required: ['sales_order_id', 'action'],
+    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
+    // Search-only: see gnubok_create_sales_order.
+    catalogVisibility: 'search',
+    async execute(args, companyId, userId, supabase, actor) {
+      const parsedAction = SalesOrderTransitionSchema.safeParse({ action: args.action })
+      if (!parsedAction.success) throwFirstZodIssue(parsedAction)
+      const { action } = parsedAction.data
+      const order = await loadSalesOrderOrThrow(supabase, companyId, args.sales_order_id)
+
+      const rule = SALES_ORDER_TRANSITIONS[action]
+      if (!rule.from.includes(order.status)) {
+        throw new Error(
+          `Cannot ${action} sales order ${order.order_number ?? order.id}: SALES_ORDER_INVALID_STATE. ` +
+          `Status is "${order.status}"; ${action} requires ${rule.from.map((s) => `"${s}"`).join(' or ')}.`,
+        )
+      }
+      if (action === 'confirm' && !order.customer_id) {
+        throw new Error('Cannot confirm sales order: SALES_ORDER_CUSTOMER_MISSING. Set a customer first.')
+      }
+      if (action === 'cancel' || action === 'reopen') {
+        const open = await hasOpenInvoices(supabase, companyId, order.id)
+        if (!open.ok) throw dbError(open.dbError)
+        if (open.open) {
+          throw new Error(
+            `Cannot ${action} sales order ${order.order_number ?? order.id}: SALES_ORDER_HAS_INVOICES. ` +
+            'Cancel or credit the invoices created from it first (see gnubok_get_sales_order.invoices).',
+          )
+        }
+      }
+
+      const label = order.order_number ?? order.id
+      const titleVerb = action === 'confirm' ? 'Bekräfta' : action === 'cancel' ? 'Makulera' : 'Återöppna'
+      const customerName = (order.customer as { name?: string } | null | undefined)?.name ?? null
+      return stagePendingOperation(supabase, companyId, userId, 'transition_sales_order',
+        `${titleVerb} kundorder ${label}`,
+        { sales_order_id: order.id, action },
+        {
+          sales_order_id: order.id,
+          order_number: order.order_number ?? null,
+          customer_name: customerName,
+          action,
+          current_status: order.status,
+          new_status: rule.to,
+          total: order.total,
+          currency: order.currency,
+          writes_verifikat: false,
+        },
+        actor,
+        action === 'confirm'
+          ? {
+              description: 'Once confirmed, register deliveries with gnubok_register_sales_order_delivery or invoice it with gnubok_create_invoice_from_sales_order.',
+              tool: 'gnubok_create_invoice_from_sales_order',
+              args: { sales_order_id: order.id },
+            }
+          : {
+              description: 'Check the order afterwards with gnubok_get_sales_order.',
+              tool: 'gnubok_get_sales_order',
+              args: { sales_order_id: order.id },
+            },
+        {
+          dryRun: Boolean(args.dry_run),
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+        },
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_register_sales_order_delivery',
+    keywords: ['kundorder', 'leverans', 'leverera', 'delleverans', 'levererat antal'],
+    title: 'Register Sales Order Delivery',
+    description: 'Stage delivered quantities on a confirmed kundorder. delivered_qty is CUMULATIVE per line (the new total, not a delta), so retries are safe. Stages for approval; nothing is booked. Sets the delivery date used by invoices created afterwards.',
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        sales_order_id: { type: 'string', description: 'UUID from gnubok_list_sales_orders' },
+        delivery_date: { type: 'string', description: 'YYYY-MM-DD (default today)' },
+        lines: {
+          type: 'array',
+          description: 'Delivered lines; omitted lines are untouched',
+          items: {
+            type: 'object',
+            properties: {
+              sales_order_item_id: { type: 'string', description: 'Line UUID from gnubok_get_sales_order' },
+              delivered_qty: { type: 'number', description: 'Cumulative delivered total, 0..quantity' },
+            },
+            required: ['sales_order_item_id', 'delivered_qty'],
+          },
+        },
+        dry_run: { type: 'boolean', description: 'Preview without staging' },
+        idempotency_key: { type: 'string', description: 'UUID for safe retries (24h)' },
+      },
+      required: ['sales_order_id', 'lines'],
+    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
+    // Search-only: see gnubok_create_sales_order.
+    catalogVisibility: 'search',
+    async execute(args, companyId, userId, supabase, actor) {
+      const parsed = RegisterSalesOrderDeliverySchema.safeParse({
+        ...(args.delivery_date ? { delivery_date: args.delivery_date } : {}),
+        lines: args.lines,
+      })
+      if (!parsed.success) throwFirstZodIssue(parsed)
+      const input = parsed.data
+      const order = await loadSalesOrderOrThrow(supabase, companyId, args.sales_order_id)
+
+      if (order.status !== 'confirmed' && order.status !== 'completed') {
+        throw new Error(
+          `Cannot register delivery on sales order ${order.order_number ?? order.id}: SALES_ORDER_INVALID_STATE. ` +
+          `Status is "${order.status}"; confirm it first with gnubok_transition_sales_order.`,
+        )
+      }
+
+      // Same per-line guards the service applies at commit (line exists,
+      // text rows carry no quantity, never above the ordered quantity), so
+      // the agent learns about a bad line now instead of after approval.
+      const byId = new Map((order.items ?? []).map((i) => [i.id, i]))
+      const previewLines: Record<string, unknown>[] = []
+      for (const line of input.lines) {
+        const item = byId.get(line.sales_order_item_id)
+        if (!item) {
+          throw new Error(
+            `SALES_ORDER_LINE_NOT_FOUND: line ${line.sales_order_item_id} is not on this order. Read gnubok_get_sales_order for the line ids.`,
+          )
+        }
+        if (item.line_type === 'text') continue
+        if (line.delivered_qty > item.quantity) {
+          throw new Error(
+            `SALES_ORDER_OVER_DELIVERED: line "${item.description}" has quantity ${item.quantity}, cannot mark ${line.delivered_qty} delivered.`,
+          )
+        }
+        previewLines.push({
+          sales_order_item_id: item.id,
+          description: item.description,
+          quantity: item.quantity,
+          unit: item.unit,
+          delivered_before: item.delivered_qty,
+          delivered_after: line.delivered_qty,
+          delta: roundOre(line.delivered_qty - item.delivered_qty),
+        })
+      }
+      if (previewLines.length === 0) throw new Error('No product lines to deliver: every referenced line is a text row.')
+
+      const deliveryDate = input.delivery_date ?? new Date().toISOString().split('T')[0]
+      const label = order.order_number ?? order.id
+      const customerName = (order.customer as { name?: string } | null | undefined)?.name ?? null
+      return stagePendingOperation(supabase, companyId, userId, 'register_sales_order_delivery',
+        `Leverans kundorder ${label}`,
+        { sales_order_id: order.id, delivery_date: deliveryDate, lines: input.lines },
+        {
+          sales_order_id: order.id,
+          order_number: order.order_number ?? null,
+          customer_name: customerName,
+          delivery_date: deliveryDate,
+          lines: previewLines,
+          // Quantities only: no inventory, no verifikat.
+          writes_verifikat: false,
+        },
+        actor,
+        {
+          description: 'Once approved, invoice the delivered quantities with gnubok_create_invoice_from_sales_order (mode: delivered).',
+          tool: 'gnubok_create_invoice_from_sales_order',
+          args: { sales_order_id: order.id, mode: 'delivered' },
+        },
+        {
+          dryRun: Boolean(args.dry_run),
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+        },
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_create_invoice_from_sales_order',
+    keywords: ['kundorder', 'fakturera order', 'delfaktura', 'delfakturera', 'slutfaktura', 'fakturera leverans'],
+    title: 'Create Invoice From Sales Order',
+    description: 'Stage a DRAFT kundfaktura from a confirmed kundorder: mode remaining (default) bills everything left, delivered bills what is delivered but not yet invoiced, or pick lines explicitly (delfaktura). Stages for approval; the number is assigned on send.',
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        sales_order_id: { type: 'string', description: 'UUID from gnubok_list_sales_orders' },
+        mode: { type: 'string', enum: ['remaining', 'delivered'], description: 'Line selection when lines is omitted (default remaining)' },
+        lines: {
+          type: 'array',
+          description: 'Explicit picks (win over mode)',
+          items: {
+            type: 'object',
+            properties: {
+              sales_order_item_id: { type: 'string', description: 'Line UUID from gnubok_get_sales_order' },
+              quantity: { type: 'number', description: 'Positive, at most remaining_qty' },
+            },
+            required: ['sales_order_item_id', 'quantity'],
+          },
+        },
+        invoice_date: { type: 'string', description: 'YYYY-MM-DD (default today)' },
+        due_date: { type: 'string', description: 'YYYY-MM-DD (default from payment terms)' },
+        dry_run: { type: 'boolean', description: 'Preview without staging' },
+        idempotency_key: { type: 'string', description: 'UUID for safe retries (24h)' },
+      },
+      required: ['sales_order_id'],
+    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
+    // Search-only: see gnubok_create_sales_order.
+    catalogVisibility: 'search',
+    async execute(args, companyId, userId, supabase, actor) {
+      const parsed = CreateInvoiceFromSalesOrderSchema.safeParse({
+        ...(args.mode ? { mode: args.mode } : {}),
+        ...(args.lines !== undefined ? { lines: args.lines } : {}),
+        ...(args.invoice_date ? { invoice_date: args.invoice_date } : {}),
+        ...(args.due_date ? { due_date: args.due_date } : {}),
+      })
+      if (!parsed.success) throwFirstZodIssue(parsed)
+      const input = parsed.data
+      const order = await loadSalesOrderOrThrow(supabase, companyId, args.sales_order_id)
+      const label = order.order_number ?? order.id
+
+      if (order.status !== 'confirmed') {
+        const hint =
+          order.status === 'draft'
+            ? 'Confirm it first with gnubok_transition_sales_order (action: confirm).'
+            : order.status === 'completed'
+              ? 'It is fully invoiced already; see gnubok_get_sales_order.invoices.'
+              : 'A cancelled order cannot be invoiced; reopen and confirm it first.'
+        throw new Error(`Cannot invoice sales order ${label}: SALES_ORDER_INVALID_STATE. Status is "${order.status}". ${hint}`)
+      }
+      if (!order.customer_id) {
+        throw new Error(`Cannot invoice sales order ${label}: SALES_ORDER_CUSTOMER_MISSING. Set a customer first.`)
+      }
+
+      // The same picker the service runs at commit, against the CURRENT
+      // invoiced quantities: nothing left to bill, or a pick above
+      // remaining_qty, is refused here rather than after approval.
+      const pickedRes = pickLines(order, input)
+      if (!pickedRes.ok) throwSalesOrderFailure(pickedRes, `Cannot invoice sales order ${label}`)
+      const { picked } = pickedRes
+
+      // Preview line math: computeLineNet + roundOre, the same primitives the
+      // invoice builder uses; the builder is authoritative at commit.
+      let subtotal = 0
+      let vatAmount = 0
+      const previewLines = picked.map(({ item, quantity }) => {
+        const remaining = item.remaining_qty ?? Math.max(0, item.quantity - (item.invoiced_qty ?? 0))
+        const lineTotal = computeLineNet(quantity, item.unit_price, item.discount_percent)
+        const lineVat = roundOre((lineTotal * item.vat_rate) / 100)
+        subtotal = roundOre(subtotal + lineTotal)
+        vatAmount = roundOre(vatAmount + lineVat)
+        return {
+          sales_order_item_id: item.id,
+          description: item.description,
+          quantity,
+          unit: item.unit,
+          unit_price: item.unit_price,
+          discount_percent: item.discount_percent,
+          vat_rate: item.vat_rate,
+          line_total: lineTotal,
+          vat_amount: lineVat,
+          remaining_after: roundOre(remaining - quantity),
+        }
+      })
+      const total = roundOre(subtotal + vatAmount)
+
+      const customer = order.customer as (Customer | null | undefined)
+      const invoiceDate = input.invoice_date ?? new Date().toISOString().split('T')[0]
+      let dueDate = input.due_date
+      if (!dueDate) {
+        const due = new Date(invoiceDate)
+        due.setDate(due.getDate() + (customer?.default_payment_terms ?? 30))
+        dueDate = due.toISOString().split('T')[0]
+      }
+      const anyDelivered = picked.some((p) => p.item.delivered_qty > 0)
+
+      return stagePendingOperation(supabase, companyId, userId, 'create_invoice_from_sales_order',
+        `Faktura från kundorder ${label}: ${customer?.name ?? ''} ${total} ${order.currency}`.replace(/\s+/g, ' '),
+        {
+          sales_order_id: order.id,
+          ...(input.mode ? { mode: input.mode } : {}),
+          ...(input.lines ? { lines: input.lines } : {}),
+          invoice_date: invoiceDate,
+          due_date: dueDate,
+        },
+        {
+          sales_order_id: order.id,
+          order_number: order.order_number ?? null,
+          customer_name: customer?.name ?? null,
+          mode: input.lines && input.lines.length > 0 ? 'explicit' : (input.mode ?? 'remaining'),
+          items: previewLines,
+          subtotal,
+          vat_amount: vatAmount,
+          total,
+          currency: order.currency,
+          invoice_date: invoiceDate,
+          due_date: dueDate,
+          // Taxable-event date only when the invoice covers delivered goods.
+          delivery_date: anyDelivered ? (order.last_delivery_date ?? null) : null,
+          creates_draft: true,
+        },
+        actor,
+        {
+          description: 'Once approved, the invoice exists as a draft linked to the order. Send it with gnubok_send_invoice or use gnubok_mark_invoice_as_sent if delivered outside the system.',
+          tool: 'gnubok_send_invoice',
+        },
+        {
+          dryRun: Boolean(args.dry_run),
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+        },
       )
     },
   },

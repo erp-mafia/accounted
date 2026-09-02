@@ -156,6 +156,17 @@ import { defaultRateForVatTreatment } from '@/lib/vat/account-vat-treatment'
 import { SetVoucherNoteParamsSchema } from '@/lib/pending-operations/schemas/voucher-note'
 import { IgnoreTransactionParamsSchema } from '@/lib/pending-operations/schemas/ignore-transaction'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
+import {
+  CreateInvoiceFromSalesOrderParamsSchema,
+  CreateSalesOrderParamsSchema,
+  RegisterSalesOrderDeliveryParamsSchema,
+  TransitionSalesOrderParamsSchema,
+} from '@/lib/pending-operations/schemas/sales-order'
+import { createSalesOrder } from '@/lib/sales-orders/write'
+import { transitionSalesOrder } from '@/lib/sales-orders/transitions'
+import { registerSalesOrderDelivery } from '@/lib/sales-orders/register-delivery'
+import { createInvoiceFromSalesOrder } from '@/lib/sales-orders/create-invoice-from-order'
+import type { ServiceFailure } from '@/lib/sales-orders/result'
 import { UpdateCompanySettingsParamsSchema } from '@/lib/pending-operations/schemas/company-settings'
 import { UpdateCustomerParamsSchema } from '@/lib/pending-operations/schemas/customer'
 import {
@@ -1282,6 +1293,192 @@ async function commitIgnoreTransaction(
   }
 }
 
+// ── Kundorder (sales orders) ────────────────────────────────────────
+//
+// The four executors below never touch totals, VAT or the order state
+// machine themselves: they re-validate the staged params (ASVS V4.5) and
+// hand them to the lib/sales-orders service the cookie routes use, so the
+// MCP door and the web door produce identical rows and identical refusals.
+
+/** Zod failure on a staged row -> 400 with the first issue named. */
+function invalidStagedParams(err: unknown): ExecutorResult {
+  if (err instanceof z.ZodError) {
+    const issue = err.issues[0]
+    return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
+  }
+  throw err
+}
+
+/**
+ * Map a lib/sales-orders ServiceFailure onto the ExecutorResult contract.
+ * A coded failure carries the structured-error httpStatus (404/409 auto-
+ * reject the op, 400 fails it) and its Swedish message, with the service's
+ * details persisted so the approver sees WHICH line was refused; a raw DB
+ * failure is a 500 with the driver message.
+ */
+function salesOrderFailure(failure: ServiceFailure): ExecutorResult {
+  if ('code' in failure) {
+    const entry = getErrorEntry(failure.code)
+    return {
+      error: entry?.message_sv ?? failure.code,
+      errorCode: failure.code,
+      status: entry?.httpStatus ?? 400,
+      ...(failure.details ? { data: failure.details } : {}),
+    }
+  }
+  const dbMessage =
+    typeof failure.dbError === 'object' && failure.dbError !== null && 'message' in failure.dbError
+      ? String((failure.dbError as { message: unknown }).message)
+      : null
+  return { error: dbMessage || getErrorEntry('SALES_ORDER_CREATE_FAILED')?.message_sv || 'Kundordern kunde inte sparas.', status: 500 }
+}
+
+async function commitCreateSalesOrder(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  let validated
+  try {
+    validated = CreateSalesOrderParamsSchema.parse(params)
+  } catch (err) {
+    return invalidStagedParams(err)
+  }
+
+  const result = await createSalesOrder(supabase, { companyId, userId, input: validated })
+  if (!result.ok) return salesOrderFailure(result)
+
+  const { order } = result
+  return {
+    data: {
+      sales_order_id: order.id,
+      order_number: order.order_number,
+      status: order.status,
+      total: order.total,
+      currency: order.currency,
+    },
+  }
+}
+
+async function commitTransitionSalesOrder(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  let validated
+  try {
+    validated = TransitionSalesOrderParamsSchema.parse(params)
+  } catch (err) {
+    return invalidStagedParams(err)
+  }
+
+  // The service re-reads the order and refuses a transition the current
+  // status does not allow (compare-and-set), so an order that moved between
+  // staging and approval lands as SALES_ORDER_INVALID_STATE, never as a
+  // silent overwrite.
+  const result = await transitionSalesOrder(supabase, {
+    companyId,
+    orderId: validated.sales_order_id,
+    action: validated.action,
+  })
+  if (!result.ok) return salesOrderFailure(result)
+
+  const { order } = result
+  return {
+    data: {
+      sales_order_id: order.id,
+      order_number: order.order_number,
+      status: order.status,
+      action: validated.action,
+    },
+  }
+}
+
+async function commitRegisterSalesOrderDelivery(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  let validated
+  try {
+    validated = RegisterSalesOrderDeliveryParamsSchema.parse(params)
+  } catch (err) {
+    return invalidStagedParams(err)
+  }
+
+  const { sales_order_id: orderId, ...input } = validated
+  const result = await registerSalesOrderDelivery(supabase, { companyId, orderId, input })
+  if (!result.ok) return salesOrderFailure(result)
+
+  const { order } = result
+  return {
+    data: {
+      sales_order_id: order.id,
+      order_number: order.order_number,
+      status: order.status,
+      last_delivery_date: order.last_delivery_date,
+      delivery_progress: order.delivery_progress ?? null,
+    },
+  }
+}
+
+async function commitCreateInvoiceFromSalesOrder(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  let validated
+  try {
+    validated = CreateInvoiceFromSalesOrderParamsSchema.parse(params)
+  } catch (err) {
+    return invalidStagedParams(err)
+  }
+
+  // The service re-reads the order, re-picks the lines against the CURRENT
+  // invoiced quantities and builds the draft through buildInvoiceWriteData,
+  // so a line invoiced elsewhere between staging and approval is refused
+  // (SALES_ORDER_OVER_INVOICED / NOTHING_TO_INVOICE) instead of double-billed.
+  const { sales_order_id: orderId, ...input } = validated
+  const result = await createInvoiceFromSalesOrder(supabase, { companyId, userId, orderId, input })
+  if (!result.ok) return salesOrderFailure(result)
+
+  const { invoice, order } = result
+
+  // Same event the direct create_invoice executor emits, so extension
+  // handlers (webhooks, digests) see order-born drafts too.
+  const { data: completeInvoice } = await supabase
+    .from('invoices')
+    .select('*, customer:customers(*), items:invoice_items(*)')
+    .eq('id', invoice.id)
+    .single()
+  // Post-commit notification only: the draft already exists, so an event
+  // failure must not reject an operation whose write succeeded.
+  try {
+    await eventBus.emit({
+      type: 'invoice.created',
+      payload: { invoice: (completeInvoice ?? invoice) as Invoice, userId, companyId },
+    })
+  } catch {
+    // Non-critical
+  }
+
+  return {
+    data: {
+      invoice_id: invoice.id,
+      // Unnumbered draft: the F-series number is assigned on send.
+      invoice_number: invoice.invoice_number ?? null,
+      sales_order_id: order.id,
+      order_number: order.order_number,
+      order_status: order.status,
+      invoicing_progress: order.invoicing_progress ?? null,
+      total: invoice.total,
+      currency: invoice.currency,
+    },
+  }
+}
+
 async function commitCreateSupplier(
   supabase: SupabaseClient,
   userId: string,
@@ -2061,7 +2258,7 @@ async function commitUpdateInvoice(
     const { data: itemRows, error: itemsFetchError } = await supabase
       .from('invoice_items')
       .select(
-        'line_type, description, quantity, unit, unit_price, discount_percent, vat_rate, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions',
+        'line_type, description, quantity, unit, unit_price, discount_percent, vat_rate, article_id, revenue_account, sales_order_item_id, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions',
       )
       .eq('invoice_id', invoiceId)
       .order('sort_order', { ascending: true })
@@ -2150,6 +2347,9 @@ async function commitUpdateInvoice(
 
   const replaced = await replaceInvoiceItems(supabase, invoiceId, build.items)
   if (!replaced.ok) {
+    if (replaced.stage === 'guard') {
+      return { error: replaced.messageSv, errorCode: replaced.code, status: 409 }
+    }
     return {
       error: `Fakturaraderna kunde inte skrivas om (${replaced.stage}): ${replaced.error.message}`,
       status: 500,
@@ -6758,6 +6958,18 @@ async function commitPendingOperationInner(
         break
       case 'ignore_transaction':
         result = await commitIgnoreTransaction(supabase, companyId, pendingOp.params)
+        break
+      case 'create_sales_order':
+        result = await commitCreateSalesOrder(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'transition_sales_order':
+        result = await commitTransitionSalesOrder(supabase, companyId, pendingOp.params)
+        break
+      case 'register_sales_order_delivery':
+        result = await commitRegisterSalesOrderDelivery(supabase, companyId, pendingOp.params)
+        break
+      case 'create_invoice_from_sales_order':
+        result = await commitCreateInvoiceFromSalesOrder(supabase, userId, companyId, pendingOp.params)
         break
       case 'create_dimension_value':
         result = await commitCreateDimensionValue(supabase, userId, companyId, pendingOp.params)
