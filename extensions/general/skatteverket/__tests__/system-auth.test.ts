@@ -85,7 +85,7 @@ describe('system-auth config', () => {
   })
 
   it('parses scopes from env with a sensible default', () => {
-    expect(getSystemScopes()).toEqual(['skattekonto', 'agd:lasa', 'momsdeklaration'])
+    expect(getSystemScopes()).toEqual(['skattekonto', 'agd:lasa', 'momsdeklaration', 'obr'])
     process.env.SKATTEVERKET_SYSTEM_SCOPES = 'a  b'
     expect(getSystemScopes()).toEqual(['a', 'b'])
   })
