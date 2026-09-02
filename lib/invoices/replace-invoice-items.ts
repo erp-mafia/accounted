@@ -18,6 +18,8 @@ import type { InvoiceWriteItemRow } from '@/lib/invoices/build-invoice-write'
  * snapshot/restore idiom as commitUpdateRecurringSchedule in
  * lib/pending-operations/commit.ts. `restored` on the insert-failure shape
  * says whether the previous rows are back; the success path is unchanged.
+ * An unreadable snapshot refuses the replace outright: it is both the
+ * restore source and the input to the kundorder link guard below.
  *
  * Shared by the cookie PATCH route (app/api/invoices/[id]), the v1 REST PATCH
  * route, and the update_invoice commit executor so the replace logic cannot
@@ -67,7 +69,19 @@ export async function replaceInvoiceItems(
   // that read the lines through a projection without it, or a header-only
   // edit path that re-reads a narrow column list) must not silently sever
   // the kundorder link. Compare the link multiset before deleting anything.
-  if (!snapshotError && snapshotRows) {
+  if (snapshotError || !snapshotRows) {
+    // Without the snapshot the guard cannot run and the restore path has
+    // nothing to put back: refuse rather than fail open on a draft that may
+    // carry order links.
+    return {
+      ok: false,
+      stage: 'delete',
+      error:
+        snapshotError ??
+        ({ message: 'invoice_items snapshot unavailable', code: 'SNAPSHOT_UNAVAILABLE' } as PostgrestError),
+    }
+  }
+  {
     const existingLinks = (snapshotRows as Array<{ sales_order_item_id?: string | null }>)
       .map((row) => row.sales_order_item_id)
       .filter((id): id is string => typeof id === 'string')
@@ -107,10 +121,10 @@ export async function replaceInvoiceItems(
   if (insertError) {
     // Best-effort restore of the snapshot so the draft keeps its lines. A
     // failed (or impossible) restore is reported, never swallowed.
+    // The snapshot is guaranteed here: an unreadable one refuses the replace
+    // before the delete (order-link guard above).
     let restored = false
-    if (snapshotError || snapshotRows == null) {
-      restored = false
-    } else if (snapshotRows.length === 0) {
+    if (snapshotRows.length === 0) {
       // Nothing existed before, so the draft is already in its prior state.
       restored = true
     } else {

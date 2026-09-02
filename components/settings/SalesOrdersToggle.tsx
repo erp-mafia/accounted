@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { ExternalLink } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
@@ -28,6 +29,7 @@ export function SalesOrdersToggle() {
   const { settings, updateSettings } = useSettings()
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
+  const router = useRouter()
   const [isSaving, setIsSaving] = useState(false)
 
   const enabled = settings?.sales_orders_enabled ?? false
@@ -50,6 +52,9 @@ export function SalesOrdersToggle() {
         return
       }
       updateSettings({ sales_orders_enabled: next })
+      // The nav row is gated by the server-rendered dashboard layout, so the
+      // SWR patch alone leaves the Kundorder row hidden until a reload.
+      router.refresh()
     } catch (err) {
       // A rejected fetch (offline, DNS failure, aborted request) never reaches
       // the !res.ok arm above, and the switch is controlled by the settings

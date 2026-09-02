@@ -188,10 +188,10 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     // the user add / remove / reorder rows freely. invoice_items cascade
     // nothing else.
     const replaced = await replaceInvoiceItems(supabase, id, build.items)
-    if (!replaced.ok && replaced.stage === 'guard') {
-      return errorResponseFromCode(replaced.code, ctxLog, { requestId })
-    }
     if (!replaced.ok) {
+      if (replaced.stage === 'guard') {
+        return errorResponseFromCode(replaced.code, ctxLog, { requestId })
+      }
       ctxLog.error(`invoice items ${replaced.stage} failed on update`, replaced.error, { invoiceId: id })
       return errorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', ctxLog, {
         requestId,

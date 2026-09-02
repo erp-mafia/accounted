@@ -693,7 +693,15 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           ? t('order_created_toast_description', { number: data.data.order_number })
           : undefined,
       })
-      router.push(`/sales-orders/${data.sales_order_id}`)
+      const salesOrderId: string | undefined = data?.sales_order_id ?? data?.data?.id
+      if (salesOrderId) {
+        router.push(`/sales-orders/${salesOrderId}`)
+      } else {
+        // 2xx without a parsable body: the order exists, so refresh instead
+        // of turning the success into a failure toast.
+        router.refresh()
+        setIsCreatingOrder(false)
+      }
     } catch (error) {
       // Network failure (offline, aborted): the structured envelope never
       // arrived, so map the raw error the same way the convert action does.

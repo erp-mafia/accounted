@@ -258,7 +258,7 @@ describe('DELETE /api/sales-orders/[id]', () => {
     enqueue({ data: [] })
     enqueue({ data: [] })
     enqueue({ data: null, count: 0 })
-    enqueue({ data: null }) // delete
+    enqueue({ data: [{ id: IDS.order }] }) // delete (status-guarded, one row matched)
 
     const { status, body } = await parseJsonResponse<{ data: { id: string; deleted: boolean } }>(await del())
 
@@ -268,5 +268,39 @@ describe('DELETE /api/sales-orders/[id]', () => {
     const eqs = findCalls('sales_orders', 'eq')
     expect(eqs).toContainEqual(['id', IDS.order])
     expect(eqs).toContainEqual(['company_id', IDS.company])
+    // Status in the delete predicate: a concurrent confirm must not be deleted.
+    expect(findCall('sales_orders', 'in')).toEqual(['status', ['draft', 'cancelled']])
+    // The first sales_orders select is loadSalesOrder's projection; the delete chain's is ['id'].
+    expect(findCalls('sales_orders', 'select')).toContainEqual(['id'])
+  })
+
+  it('returns 409 SALES_ORDER_INVALID_STATE when the delete matches zero rows (confirmed concurrently)', async () => {
+    enqueue({ data: makeSalesOrder({ status: 'draft' }) })
+    enqueue({ data: [] })
+    enqueue({ data: [] }) // hasOpenInvoices rpc
+    enqueue({ data: null, count: 0 }) // no linked invoice
+    enqueue({ data: [] }) // delete: the status predicate no longer matches
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, unknown> } }>(
+      await del(),
+    )
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SALES_ORDER_INVALID_STATE')
+    expect(body.error.details).toMatchObject({ action: 'delete', reason: 'status changed concurrently' })
+    expect(findCall('sales_orders', 'delete')).toBeDefined()
+  })
+
+  it('treats a null delete result as the same conflict', async () => {
+    enqueue({ data: makeSalesOrder({ status: 'cancelled' }) })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    enqueue({ data: null, count: 0 })
+    enqueue({ data: null }) // delete
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await del())
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SALES_ORDER_INVALID_STATE')
   })
 })

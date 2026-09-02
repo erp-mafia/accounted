@@ -61,7 +61,21 @@ export const DELETE = withRouteContext<Ctx>(
     if (!open.ok) return errorResponse(open.dbError, log, { requestId })
     if (open.open) return errorResponseFromCode('SALES_ORDER_HAS_INVOICES', log, { requestId })
 
-    const { error } = await supabase.from('sales_orders').delete().eq('id', id).eq('company_id', companyId)
+    // Status in the predicate: a concurrent confirm between the read above
+    // and this delete must not remove a confirmed order.
+    const { data: deleted, error } = await supabase
+      .from('sales_orders')
+      .delete()
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .in('status', ['draft', 'cancelled'])
+      .select('id')
+    if (!error && (!deleted || deleted.length === 0)) {
+      return errorResponseFromCode('SALES_ORDER_INVALID_STATE', log, {
+        requestId,
+        details: { action: 'delete', reason: 'status changed concurrently' },
+      })
+    }
     if (error) {
       // A makulerad (cancelled) invoice still references the order: the
       // RESTRICT FK is the authority, surfaced as the structured code.

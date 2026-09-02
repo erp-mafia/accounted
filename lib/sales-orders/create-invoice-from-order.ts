@@ -3,6 +3,7 @@ import type { z } from 'zod'
 import type { Currency, Customer, Invoice, SalesOrder, SalesOrderItem } from '@/types'
 import type { CreateInvoiceFromSalesOrderSchema } from '@/lib/api/schemas'
 import { buildInvoiceWriteData, type InvoiceWriteInput } from '@/lib/invoices/build-invoice-write'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { loadSalesOrder } from './load'
 import { qtyGreater, roundQty } from './progress'
 import { codeFromPgError, fail, failDb, type ServiceResult } from './result'
@@ -150,7 +151,7 @@ export async function createInvoiceFromSalesOrder(
     })
   }
 
-  const invoiceDate = input.invoice_date ?? new Date().toISOString().slice(0, 10)
+  const invoiceDate = input.invoice_date ?? todayIsoStockholm()
   let dueDate = input.due_date
   if (!dueDate) {
     const due = new Date(invoiceDate)

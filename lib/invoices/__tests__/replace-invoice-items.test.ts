@@ -63,6 +63,7 @@ function storedRow(overrides: Record<string, unknown> = {}): Record<string, unkn
 }
 
 function createHarness(opts: {
+  /** Snapshot rows; omit for an empty draft, pass null for "no rows came back". */
   snapshot?: unknown[] | null
   snapshotError?: unknown
   deleteError?: unknown
@@ -72,12 +73,11 @@ function createHarness(opts: {
   const inserts: Record<string, unknown>[][] = []
   const deletes: string[] = []
   let insertCall = 0
+  const snapshot = opts.snapshot === undefined ? [] : opts.snapshot
   const supabase = {
     from: vi.fn(() => ({
       select: vi.fn(() => ({
-        eq: vi.fn(() =>
-          Promise.resolve({ data: opts.snapshot ?? [], error: opts.snapshotError ?? null }),
-        ),
+        eq: vi.fn(() => Promise.resolve({ data: snapshot, error: opts.snapshotError ?? null })),
       })),
       delete: vi.fn(() => ({
         eq: vi.fn((_column: string, value: string) => {
@@ -185,17 +185,20 @@ describe('replaceInvoiceItems order-link guard', () => {
     expect(inserts).toHaveLength(0)
   })
 
-  it('does not guard when the snapshot could not be read (nothing to compare against)', async () => {
+  it('fails closed before deleting when the snapshot could not be read (guard cannot run)', async () => {
+    // Without the snapshot the link multiset is unknown: a draft that may
+    // carry order links must not be emptied on a guess.
+    const selectBoom = { message: 'select boom' }
     const { supabase, inserts, deletes } = createHarness({
       snapshot: null,
-      snapshotError: { message: 'select boom' },
+      snapshotError: selectBoom,
     })
 
     const result = await replaceInvoiceItems(supabase, 'inv-1', [makeItem()])
 
-    expect(result).toEqual({ ok: true })
-    expect(deletes).toEqual(['inv-1'])
-    expect(inserts).toHaveLength(1)
+    expect(result).toEqual({ ok: false, stage: 'delete', error: selectBoom })
+    expect(deletes).toEqual([])
+    expect(inserts).toHaveLength(0)
   })
 })
 
@@ -251,19 +254,24 @@ describe('replaceInvoiceItems', () => {
     expect(inserts).toHaveLength(2)
   })
 
-  it('reports restored: false when the snapshot itself could not be read', async () => {
-    // With no snapshot there is nothing to reinsert, and claiming the draft is
-    // intact would be a guess: the delete may well have removed real rows.
-    const { supabase, inserts } = createHarness({
+  it('refuses at the delete stage when the snapshot read returns no rows at all (null, no error)', async () => {
+    // A null snapshot without a driver error still leaves nothing to restore
+    // and nothing to guard against: the function stops before the delete
+    // instead of proceeding and later reporting restored: false.
+    const { supabase, inserts, deletes } = createHarness({
       snapshot: null,
-      snapshotError: { message: 'select boom' },
       insertErrors: [insertBoom],
     })
 
     const result = await replaceInvoiceItems(supabase, 'inv-1', [makeItem()])
 
-    expect(result).toMatchObject({ ok: false, stage: 'insert', restored: false })
-    expect(inserts).toHaveLength(1)
+    expect(result).toMatchObject({
+      ok: false,
+      stage: 'delete',
+      error: { code: 'SNAPSHOT_UNAVAILABLE', message: 'invoice_items snapshot unavailable' },
+    })
+    expect(deletes).toEqual([])
+    expect(inserts).toHaveLength(0)
   })
 
   it('reports restored: true when the draft had no items to begin with', async () => {

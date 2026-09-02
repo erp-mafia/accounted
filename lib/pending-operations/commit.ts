@@ -1453,10 +1453,16 @@ async function commitCreateInvoiceFromSalesOrder(
     .select('*, customer:customers(*), items:invoice_items(*)')
     .eq('id', invoice.id)
     .single()
-  await eventBus.emit({
-    type: 'invoice.created',
-    payload: { invoice: (completeInvoice ?? invoice) as Invoice, userId, companyId },
-  })
+  // Post-commit notification only: the draft already exists, so an event
+  // failure must not reject an operation whose write succeeded.
+  try {
+    await eventBus.emit({
+      type: 'invoice.created',
+      payload: { invoice: (completeInvoice ?? invoice) as Invoice, userId, companyId },
+    })
+  } catch {
+    // Non-critical
+  }
 
   return {
     data: {

@@ -3,6 +3,7 @@ import type { z } from 'zod'
 import type { Customer, SalesOrder, SalesOrderItem } from '@/types'
 import type { CreateSalesOrderSchema, UpdateSalesOrderSchema } from '@/lib/api/schemas'
 import { normalizeSalesOrderLines, type SalesOrderLineRow } from './lines'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { ensureSalesOrderNumber } from './ensure-order-number'
 import { fetchInvoicedQuantities, loadSalesOrder } from './load'
 import { qtyGreater } from './progress'
@@ -57,7 +58,7 @@ export async function createSalesOrder(
       customer_vat_validated_snapshot: customer.vat_number_validated ?? false,
       status: 'draft',
       source_invoice_id: params.sourceInvoiceId ?? null,
-      order_date: input.order_date ?? new Date().toISOString().slice(0, 10),
+      order_date: input.order_date ?? todayIsoStockholm(),
       requested_delivery_date: input.requested_delivery_date ?? null,
       currency: input.currency ?? 'SEK',
       your_reference: input.your_reference ?? null,

@@ -326,6 +326,37 @@ describe('commitPendingOperation: create_invoice_from_sales_order', () => {
     })
   })
 
+  it('still commits when the invoice.created emit rejects (the draft already exists)', async () => {
+    // eventBus.emit settles handler failures itself, so the only way the emit
+    // can reject is the bus throwing; the executor must treat that as a
+    // post-commit notification failure, not as a failed operation.
+    vi.mocked(createInvoiceFromSalesOrder).mockResolvedValue({
+      ok: true,
+      invoice: invoice as never,
+      order: makeOrder({ status: 'completed', invoicing_progress: 'full' }),
+    })
+    const emitSpy = vi.spyOn(eventBus, 'emit').mockRejectedValueOnce(new Error('bus down'))
+    try {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' } }) // CAS claim
+      enqueue({ data: { ...invoice, items: [], customer: null } }) // complete-invoice select for the event
+      enqueue({ data: null }) // finalize
+
+      const result = await commitPendingOperation(
+        supabase as never, 'user-1', 'company-1',
+        makePendingOp({ operation_type: 'create_invoice_from_sales_order', params }),
+      )
+
+      expect(result.status).toBe('committed')
+      expect(result.data).toMatchObject({ invoice_id: INVOICE_ID, sales_order_id: ORDER_ID })
+      expect(emitSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'invoice.created' }),
+      )
+    } finally {
+      emitSpy.mockRestore()
+    }
+  })
+
   it('maps SALES_ORDER_NOTHING_TO_INVOICE onto a 409 auto-reject and emits nothing', async () => {
     vi.mocked(createInvoiceFromSalesOrder).mockResolvedValue({ ok: false, code: 'SALES_ORDER_NOTHING_TO_INVOICE' })
     const handler = vi.fn()

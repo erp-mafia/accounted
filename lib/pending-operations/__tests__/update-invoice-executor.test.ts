@@ -89,6 +89,7 @@ describe('commitPendingOperation: update_invoice', () => {
     enqueue({ data: makeCustomer({ id: CUSTOMER_ID }) }) // customers
     enqueue({ data: { vat_registered: true } }) // company_settings (builder VAT gate)
     enqueue({ data: [{ id: INVOICE_ID }] }) // invoices update (draft-guarded)
+    enqueue({ data: [] }) // invoice_items snapshot (replaceInvoiceItems, no prior rows)
     enqueue({ data: null }) // invoice_items delete
     enqueue({ data: null }) // invoice_items insert
     enqueue({ data: null }) // pending_operations final status update
@@ -111,8 +112,10 @@ describe('commitPendingOperation: update_invoice', () => {
       items_replaced: true,
     })
     expect(supabase.from).toHaveBeenNthCalledWith(2, 'invoices')
+    // snapshot, delete, insert
     expect(supabase.from).toHaveBeenNthCalledWith(6, 'invoice_items')
     expect(supabase.from).toHaveBeenNthCalledWith(7, 'invoice_items')
+    expect(supabase.from).toHaveBeenNthCalledWith(8, 'invoice_items')
   })
 
   it('keeps the existing lines on a header-only edit (no full replace staged)', async () => {
@@ -147,6 +150,7 @@ describe('commitPendingOperation: update_invoice', () => {
     })
     enqueue({ data: { vat_registered: true } }) // company_settings
     enqueue({ data: [{ id: INVOICE_ID }] }) // invoices update
+    enqueue({ data: [] }) // invoice_items snapshot (replaceInvoiceItems, no order links)
     enqueue({ data: null }) // invoice_items delete
     enqueue({ data: null }) // invoice_items insert
     enqueue({ data: null }) // final status update

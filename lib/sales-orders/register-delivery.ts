@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { z } from 'zod'
 import type { SalesOrder } from '@/types'
 import type { RegisterSalesOrderDeliverySchema } from '@/lib/api/schemas'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { loadSalesOrder } from './load'
 import { qtyGreater } from './progress'
 import { codeFromPgError, fail, failDb, type ServiceResult } from './result'
@@ -35,7 +36,7 @@ export async function registerSalesOrderDelivery(
   }
 
   const items = new Map((order.items ?? []).map((i) => [i.id, i]))
-  const deliveryDate = input.delivery_date ?? new Date().toISOString().slice(0, 10)
+  const deliveryDate = input.delivery_date ?? todayIsoStockholm()
   const increased = new Set<string>()
   for (const line of input.lines) {
     const item = items.get(line.sales_order_item_id)
@@ -54,7 +55,10 @@ export async function registerSalesOrderDelivery(
   for (const line of input.lines) {
     const item = items.get(line.sales_order_item_id)
     if (!item || item.line_type === 'text') continue
-    const { error } = await supabase
+    // Optimistic predicate on the quantity read above: two concurrent
+    // cumulative registrations (6 and 8 from 0) must not let the later
+    // write regress the earlier one.
+    const { data: updated, error } = await supabase
       .from('sales_order_items')
       .update({
         delivered_qty: line.delivered_qty,
@@ -62,9 +66,18 @@ export async function registerSalesOrderDelivery(
       })
       .eq('id', item.id)
       .eq('company_id', companyId)
+      .eq('delivered_qty', item.delivered_qty)
+      .select('id')
     if (error) {
       const code = codeFromPgError(error)
       return code ? fail(code) : failDb(error)
+    }
+    if (!updated || updated.length === 0) {
+      return fail('SALES_ORDER_INVALID_STATE', {
+        action: 'deliver',
+        sales_order_item_id: item.id,
+        reason: 'delivered quantity changed concurrently',
+      })
     }
   }
 

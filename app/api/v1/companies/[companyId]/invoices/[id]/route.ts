@@ -463,10 +463,10 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       // Full replace via the shared helper (same delete + reinsert as the
       // cookie route and the update_invoice commit executor).
       const replaced = await replaceInvoiceItems(ctx.supabase, invoiceId, build.items)
-      if (!replaced.ok && replaced.stage === 'guard') {
-        return v1ErrorResponseFromCode(replaced.code, ctx.log, { requestId: ctx.requestId })
-      }
       if (!replaced.ok) {
+        if (replaced.stage === 'guard') {
+          return v1ErrorResponseFromCode(replaced.code, ctx.log, { requestId: ctx.requestId })
+        }
         ctx.log.error(`invoice items ${replaced.stage} failed on v1 update`, replaced.error, {
           invoiceId,
           companyId: ctx.companyId,

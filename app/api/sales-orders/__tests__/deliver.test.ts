@@ -118,10 +118,25 @@ describe('POST /api/sales-orders/[id]/deliver', () => {
     expect(findCall('sales_order_items', 'update')).toBeUndefined()
   })
 
+  it('returns 409 SALES_ORDER_INVALID_STATE when the line moved concurrently (update matched zero rows)', async () => {
+    enqueue({ data: confirmed(0) })
+    enqueue({ data: [] })
+    enqueue({ data: [] }) // line update: optimistic predicate on delivered_qty did not match
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, unknown> } }>(
+      await post({ delivery_date: '2026-09-02', lines: [{ sales_order_item_id: IDS.item1, delivered_qty: 6 }] }),
+    )
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SALES_ORDER_INVALID_STATE')
+    expect(body.error.details).toMatchObject({ action: 'deliver', sales_order_item_id: IDS.item1 })
+    expect(findCall('sales_orders', 'update')).toBeUndefined()
+  })
+
   it('registers the delivery and answers with the reloaded order', async () => {
     enqueue({ data: confirmed(0) })
     enqueue({ data: [] })
-    enqueue({ data: null }) // line update
+    enqueue({ data: [{ id: IDS.item1 }] }) // line update (optimistic write matched the row)
     enqueue({ data: null }) // last_delivery_date update
     enqueue({ data: { ...confirmed(6), last_delivery_date: '2026-09-02' } })
     enqueue({ data: [] })

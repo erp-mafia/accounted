@@ -16,7 +16,8 @@ ensureInitialized()
 /**
  * GET /api/sales-orders: the company's kundorder with customer, lines and
  * the derived delivery/invoicing progress. Filters: status, customer_id, q
- * (order number or customer name).
+ * (order number; the list page matches customer names client-side over the
+ * embedded customer).
  */
 export const GET = withRouteContext('sales_order.list', async (request, { supabase, companyId, log, requestId }) => {
   const query = validateQuery(request, SalesOrderListQuerySchema)

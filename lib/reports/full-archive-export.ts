@@ -1065,7 +1065,12 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // (invoices.sales_order_id / invoice_items.sales_order_item_id) points
   // here, so a revisor reading the archive can follow the link.
   { name: 'sales_orders', file: 'sales_orders.json', orderBy: 'order_date' },
-  { name: 'sales_order_items', file: 'sales_order_items.json', orderBy: 'created_at' },
+  {
+    name: 'sales_order_items',
+    file: 'sales_order_items.json',
+    via: { parent: 'sales_orders', fk: 'sales_order_id' },
+    denormalize: { prefix: 'sales_order_', columns: ['currency'] },
+  },
   { name: 'webshop_store_settings', file: 'webshop_store_settings.json' },
   { name: 'transaction_voucher_links', file: 'transaction_voucher_links.json' },
   { name: 'bank_file_imports', file: 'bank_file_imports.json', orderBy: 'created_at' },
