@@ -1,6 +1,7 @@
 -- Kundorder hardening (skeptic + security review of PR #2166).
 --
--- Additive follow-up to 20260902130000_sales_orders.sql:
+-- Additive follow-up to 20260902130000_sales_orders.sql (version 20260902180000;
+-- originally 20260902160000, renamed after colliding with parties_substrate on main):
 --
 --   1. Tenant consistency between an order line and its parent order is now
 --      a database invariant: a composite FK (sales_order_id, company_id)
@@ -30,9 +31,16 @@
 --      lines against the current rules).
 
 -- 1. Composite tenant FK -----------------------------------------------------
+-- Idempotent on purpose: this file was renamed from 20260902160000 after a
+-- version collision with parties_substrate, and a preview branch that had
+-- already applied it under the old version replays it under the new one.
+ALTER TABLE public.sales_orders
+  DROP CONSTRAINT IF EXISTS sales_orders_id_company_id_key;
 ALTER TABLE public.sales_orders
   ADD CONSTRAINT sales_orders_id_company_id_key UNIQUE (id, company_id);
 
+ALTER TABLE public.sales_order_items
+  DROP CONSTRAINT IF EXISTS sales_order_items_order_company_fkey;
 ALTER TABLE public.sales_order_items
   ADD CONSTRAINT sales_order_items_order_company_fkey
   FOREIGN KEY (sales_order_id, company_id)

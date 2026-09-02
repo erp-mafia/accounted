@@ -401,7 +401,7 @@ describe('sales_order_invoiced_quantities RPC', () => {
   })
 })
 
-describe('hardening (20260902160000)', () => {
+describe('hardening (20260902180000)', () => {
   it('refuses an order line whose company differs from its parent order (composite FK)', async () => {
     const victim = await seedOrderWithLine(1)
     const attacker = await seedCompany()

@@ -252,7 +252,10 @@ describe('PATCH /api/v1/companies/:companyId/invoices/:id', () => {
             error: null,
           },
           company_settings: { data: { vat_registered: true }, error: null },
-          invoice_items: { data: null, error: null },
+          // replaceInvoiceItems snapshots the current rows before deleting and
+          // refuses (fails closed) when the snapshot is unreadable, so the
+          // mock must answer with a real (empty) row set.
+          invoice_items: { data: [], error: null },
         },
         captures,
       ),

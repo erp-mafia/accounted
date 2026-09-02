@@ -151,8 +151,9 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // create-invoice route and POST /api/invoices already use (their columns are
 // pinned by build-invoice-write.ts and its tests); write.ts inserts order
 // lines as a row array built from one literal mapper (toInsertRow). Every
-// header/line update in the module is an object literal.
-const UNRESOLVED_CEILING = 395
+// header/line update in the module is an object literal. Merged with main
+// (parties phase 1, #2162/#2168/#2169) at 395: 397.
+const UNRESOLVED_CEILING = 397
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change
