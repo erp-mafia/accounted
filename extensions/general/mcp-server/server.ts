@@ -3765,7 +3765,7 @@ export const tools: McpTool[] = [
     keywords: ['synka bank', 'banksynk', 'hämta banktransaktioner', 'uppdatera bank', 'synka nu'],
     title: 'Sync Bank Now',
     description:
-      'Sync one PSD2 bank connection now instead of waiting for the nightly run. Use when gnubok_connect_bank shows a stale last_synced_at on an active connection. Server picks the window; synced=false with next_allowed_at means it ran within 15 min and the data is already fresh.',
+      'Sync one PSD2 bank connection now instead of waiting for the nightly run. Use when gnubok_connect_bank shows a stale last_synced_at on an active connection. Server picks the window; synced=false with next_allowed_at means a sync ran or was attempted within 15 min.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -3814,7 +3814,7 @@ export const tools: McpTool[] = [
             last_synced_at: null,
             next_allowed_at: result.next_allowed_at ?? null,
             instructions:
-              'This connection synced within the last 15 minutes, so transactions and balances are already current. Do NOT call again before next_allowed_at; continue with gnubok_list_uncategorized_transactions.',
+              'A sync ran or was attempted on this connection within the last 15 minutes. Check last_synced_at via gnubok_connect_bank: if it is fresh, transactions and balances are already current, continue with gnubok_list_uncategorized_transactions. If it is still stale, the previous attempt failed; retry once after next_allowed_at, never before.',
           }
         }
         throw Object.assign(

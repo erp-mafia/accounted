@@ -122,6 +122,9 @@ describe('gnubok_sync_bank', () => {
       next_allowed_at: '2026-09-02T09:29:03.000Z',
     })
     expect(result.instructions).toContain('next_allowed_at')
+    // A cooldown can follow a FAILED attempt too (durable lease): the agent
+    // must be told to check freshness rather than assume it.
+    expect(result.instructions).toContain('last_synced_at')
   })
 
   it.each([

@@ -6,10 +6,12 @@
  * Deliberately narrower than the cookie-session "Synka nu" route in
  * index.ts: the window is never caller-controlled (the gap-aware incremental
  * lookback from cron-lookback.ts, 7 to 90 days), and a connection that
- * synced within SYNC_COOLDOWN_MS answers with a cooldown instead of another
- * paid Enable Banking round-trip. An unattended agent loop therefore costs
- * at most one sync per connection per cooldown window, regardless of how
- * often it asks.
+ * synced OR was attempted within SYNC_COOLDOWN_MS answers with a cooldown
+ * instead of another paid Enable Banking round-trip. The attempt guard is a
+ * durable lease on bank_connections.sync_lease_until, claimed with one
+ * conditional UPDATE, so it holds across serverless instances and cold
+ * starts. An unattended agent loop therefore costs at most one sync per
+ * connection per cooldown window, regardless of how often it asks.
  *
  * Failures are reported as codes, never thrown, so each surface maps them
  * to its own envelope (structured-errors.ts BANK_SYNC_*). A dead PSD2
@@ -41,19 +43,11 @@ import type { Transaction } from '@/types'
 export { SYNC_COOLDOWN_MS }
 export type { TriggerSyncInput, TriggerSyncResult }
 
-/**
- * Process-local memory of the last attempt per connection, so a connection
- * whose sync keeps FAILING (last_synced_at never advances) is still throttled
- * within one serverless instance. The durable guard is last_synced_at.
- */
-const lastAttemptAt = new Map<string, number>()
-
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }
 
-function cooldownResult(connectionId: string, since: number, now: number): TriggerSyncResult {
-  const nextAllowed = since + SYNC_COOLDOWN_MS
+function cooldownResult(connectionId: string, nextAllowed: number, now: number): TriggerSyncResult {
   return {
     ok: false,
     code: 'BANK_SYNC_COOLDOWN',
@@ -76,7 +70,9 @@ export async function triggerConnectionSync(
 
   const { data: connection, error: connectionError } = await supabase
     .from('bank_connections')
-    .select('id, company_id, bank_name, status, accounts_data, last_synced_at, error_message')
+    .select(
+      'id, company_id, bank_name, status, accounts_data, last_synced_at, error_message, sync_lease_until',
+    )
     .eq('id', connectionId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -98,15 +94,21 @@ export async function triggerConnectionSync(
     }
   }
 
+  // A successful sync (ours, the web button's or the cron's) within the
+  // window: the data is fresh, say so without touching the bank.
   const lastSynced = connection.last_synced_at
     ? new Date(connection.last_synced_at as string).getTime()
     : null
   if (lastSynced !== null && now - lastSynced < SYNC_COOLDOWN_MS) {
-    return cooldownResult(connectionId, lastSynced, now)
+    return cooldownResult(connectionId, lastSynced + SYNC_COOLDOWN_MS, now)
   }
-  const lastAttempt = lastAttemptAt.get(connectionId)
-  if (lastAttempt !== undefined && now - lastAttempt < SYNC_COOLDOWN_MS) {
-    return cooldownResult(connectionId, lastAttempt, now)
+  // A lease still held from a recent ATTEMPT (success or failure): cheap
+  // read-side answer before the write below.
+  const heldLease = connection.sync_lease_until
+    ? new Date(connection.sync_lease_until as string).getTime()
+    : null
+  if (heldLease !== null && heldLease > now) {
+    return cooldownResult(connectionId, heldLease, now)
   }
 
   const allAccounts = ((connection.accounts_data as StoredAccount[] | null) ?? []).map((a) => ({
@@ -117,7 +119,28 @@ export async function triggerConnectionSync(
     return { ok: false, code: 'BANK_SYNC_NO_ACCOUNTS', connection_id: connectionId }
   }
 
-  lastAttemptAt.set(connectionId, now)
+  // Durable, atomic cooldown claim. One conditional UPDATE: the lease is
+  // taken only if none is held, and Postgres row locking serialises
+  // concurrent claimers, so two agent calls landing on different serverless
+  // instances (or retries of a failing connection after a cold start) can
+  // never both reach the bank. The lease stays for the full window whether
+  // the sync succeeds or fails: that IS the throttle.
+  const nowIso = new Date(now).toISOString()
+  const leaseUntil = now + SYNC_COOLDOWN_MS
+  const { data: claimed, error: claimError } = await supabase
+    .from('bank_connections')
+    .update({ sync_lease_until: new Date(leaseUntil).toISOString() })
+    .eq('id', connectionId)
+    .eq('company_id', companyId)
+    .or(`sync_lease_until.is.null,sync_lease_until.lte.${nowIso}`)
+    .select('id')
+  if (claimError) throw claimError
+  if (!claimed || claimed.length === 0) {
+    // Lost the race: another caller claimed between our read and this write.
+    // Its lease started at most a moment ago, so ours is the honest estimate.
+    log.info('agent-triggered bank sync: lease held by a concurrent caller', { connectionId })
+    return cooldownResult(connectionId, leaseUntil, now)
+  }
 
   const lookbackDays = incrementalLookbackDays(connection.last_synced_at as string | null, now)
   const toDate = new Date(now).toISOString().split('T')[0]
@@ -261,9 +284,4 @@ export async function triggerConnectionSync(
       status: connection.status as string,
     }
   }
-}
-
-/** Test hook: forget process-local attempt memory. */
-export function resetSyncAttemptMemory(): void {
-  lastAttemptAt.clear()
 }

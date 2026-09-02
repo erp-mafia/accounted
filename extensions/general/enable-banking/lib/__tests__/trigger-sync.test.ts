@@ -17,11 +17,7 @@ vi.mock('@/lib/events/bus', () => ({
 }))
 
 import { SessionExpiredError, REAUTH_REQUIRED_MESSAGE } from '../api-client'
-import {
-  SYNC_COOLDOWN_MS,
-  resetSyncAttemptMemory,
-  triggerConnectionSync,
-} from '../trigger-sync'
+import { SYNC_COOLDOWN_MS, triggerConnectionSync } from '../trigger-sync'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const CONNECTION_ID = '11111111-1111-4111-8111-111111111111'
@@ -33,20 +29,40 @@ interface State {
   membershipRole: string | null
   sieOverlap: boolean
   updates: Record<string, unknown>[]
+  /**
+   * The durable lease as the database holds it. The conditional UPDATE the
+   * runner issues (`sync_lease_until is null or <= now`) is reproduced here:
+   * a held lease makes the claim return no row.
+   */
+  leaseUntil: string | null
 }
 
 function makeClient(state: State) {
   return {
     from: (table: string) => {
       let updatePayload: Record<string, unknown> | null = null
+      let orFilter: string | null = null
       const chain: Record<string, unknown> = {}
       const passthrough = ['select', 'eq', 'gte', 'order', 'limit', 'in']
       for (const m of passthrough) chain[m] = vi.fn(() => chain)
+      chain.or = vi.fn((filter: string) => {
+        orFilter = filter
+        return chain
+      })
       chain.update = vi.fn((payload: Record<string, unknown>) => {
         updatePayload = payload
         return chain
       })
       const resolve = () => {
+        if (updatePayload && 'sync_lease_until' in updatePayload) {
+          // Atomic claim: `.or('sync_lease_until.is.null,sync_lease_until.lte.<now>')`.
+          const nowIso = orFilter?.match(/sync_lease_until\.lte\.([^,]+)$/)?.[1]
+          if (!nowIso) throw new Error('lease claim must carry the conditional filter')
+          if (state.leaseUntil && state.leaseUntil > nowIso) return { data: [], error: null }
+          state.leaseUntil = updatePayload.sync_lease_until as string
+          state.updates.push(updatePayload)
+          return { data: [{ id: CONNECTION_ID }], error: null }
+        }
         if (updatePayload) {
           state.updates.push(updatePayload)
           return { data: null, error: null }
@@ -77,6 +93,7 @@ function connection(overrides: Record<string, unknown> = {}) {
     ],
     last_synced_at: new Date(NOW - 2 * DAY_MS).toISOString(),
     error_message: null,
+    sync_lease_until: null,
     ...overrides,
   }
 }
@@ -97,8 +114,13 @@ function run(now = NOW) {
 describe('triggerConnectionSync', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    resetSyncAttemptMemory()
-    state = { connection: connection(), membershipRole: 'owner', sieOverlap: false, updates: [] }
+    state = {
+      connection: connection(),
+      membershipRole: 'owner',
+      sieOverlap: false,
+      updates: [],
+      leaseUntil: null,
+    }
     mocks.syncAccountTransactions.mockResolvedValue({ imported: 2, duplicates: 5, errors: 0 })
     mocks.updateBalancesFromSync.mockResolvedValue(undefined)
     mocks.emit.mockResolvedValue(undefined)
@@ -143,13 +165,46 @@ describe('triggerConnectionSync', () => {
     expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
   })
 
-  it('throttles a failing connection by attempt time, not only by last_synced_at', async () => {
+  it('claims the durable lease before calling the bank', async () => {
+    await run()
+    expect(state.leaseUntil).toBe(new Date(NOW + SYNC_COOLDOWN_MS).toISOString())
+    // The claim is issued before syncAccountTransactions: the lease row
+    // update is the first write recorded.
+    expect(state.updates[0]).toEqual({ sync_lease_until: state.leaseUntil })
+  })
+
+  it('throttles a failing connection by the lease, not only by last_synced_at', async () => {
     mocks.syncAccountTransactions.mockRejectedValue(new Error('ASPSP 500'))
     const first = await run()
     expect(first).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED' })
+    // A second instance re-reads the row: the lease is now held.
+    state.connection = connection({ sync_lease_until: state.leaseUntil })
     const second = await run(NOW + 60 * 1000)
-    expect(second).toMatchObject({ ok: false, code: 'BANK_SYNC_COOLDOWN' })
+    expect(second).toMatchObject({
+      ok: false,
+      code: 'BANK_SYNC_COOLDOWN',
+      next_allowed_at: state.leaseUntil,
+      retry_after_seconds: 14 * 60,
+    })
     expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(1)
+  })
+
+  it('loses the race to a concurrent claimer and never calls the bank', async () => {
+    // Our read saw no lease; between the read and the claim another
+    // serverless instance took it. The conditional UPDATE returns no row.
+    state.leaseUntil = new Date(NOW + SYNC_COOLDOWN_MS - 1000).toISOString()
+    const result = await run()
+    expect(result).toMatchObject({ ok: false, code: 'BANK_SYNC_COOLDOWN' })
+    expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
+    expect(mocks.updateBalancesFromSync).not.toHaveBeenCalled()
+  })
+
+  it('accepts a sync once a previous lease has expired', async () => {
+    state.leaseUntil = new Date(NOW - 1000).toISOString()
+    state.connection = connection({ sync_lease_until: state.leaseUntil })
+    const result = await run()
+    expect(result.ok).toBe(true)
+    expect(state.leaseUntil).toBe(new Date(NOW + SYNC_COOLDOWN_MS).toISOString())
   })
 
   it('answers NOT_FOUND for a connection outside the company or a non-uuid id', async () => {

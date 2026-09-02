@@ -4,9 +4,11 @@
  * Trigger a PSD2 sync of one bank connection now, instead of waiting for
  * the nightly cron. The window is not caller-controlled: the same gap-aware
  * incremental lookback the cron uses (7 days, widened to cover any gap since
- * last_synced_at, capped at 90). A connection synced within the last 15
- * minutes answers 429 BANK_SYNC_COOLDOWN with next_allowed_at, so an
- * unattended agent can never run up the Enable Banking bill by polling.
+ * last_synced_at, capped at 90). A connection synced or attempted within the
+ * last 15 minutes answers 429 BANK_SYNC_COOLDOWN with next_allowed_at (the
+ * attempt guard is a durable lease on the row, claimed atomically), so an
+ * unattended agent can never run up the Enable Banking bill by polling, even
+ * across serverless instances.
  *
  * What this cannot do: revive a dead consent. status=expired (or a session
  * the bank reports dead mid-sync) needs BankID in a browser; the response
@@ -56,7 +58,7 @@ registerEndpoint({
     'Polling. Connections sync every night on their own; call this once when freshness matters, then read /transactions. Fixing a dead connection: status=expired needs BankID in a browser, not a sync.',
   pitfalls: [
     'Idempotency-Key is optional here. If you send one, use a fresh key per attempt: a cooldown answer is never cached, but a completed sync is, and replaying it fetches nothing new.',
-    '429 BANK_SYNC_COOLDOWN is not an error to retry immediately: wait until next_allowed_at (Retry-After is set), or just use the data you have.',
+    '429 BANK_SYNC_COOLDOWN follows a recent successful sync OR a recent attempt that failed (the 15-minute lease is taken before the bank is called, on every instance). Compare last_synced_at from GET /bank-connections: if it is fresh, use the data you have; if it is still stale, the previous attempt failed, so retry once after next_allowed_at (Retry-After is set).',
     '409 BANK_SESSION_EXPIRED means the bank reported the consent dead during the sync; the connection is now status=expired. Hand the user the connect link; no API call revives it.',
     'imported: 0 is normal on a quiet account. Banks report with up to 48 hours of delay, so today\'s transactions often arrive tomorrow.',
     'Costs one Enable Banking call per enabled account: 403 CAPABILITY_BLOCKED when the company has no bank_sync entitlement.',
