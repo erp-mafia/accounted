@@ -19,6 +19,7 @@ function makeCashAccount(overrides: Partial<CashAccount> = {}): CashAccount {
     enabled: true,
     is_primary: true,
     source: 'manual',
+    voucher_series: null,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
     ...overrides,

@@ -291,6 +291,9 @@ export const VoucherSequenceNextQuerySchema = z.object({
   period_id: uuid.optional(),
   series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z').optional(),
   source_type: JournalEntrySourceTypeSchema.optional(),
+  // Bank account the entry is booked from: its voucher_series override (when
+  // set) takes precedence over the per-source-type default.
+  cash_account_id: uuid.optional(),
   date: isoDate.optional(),
 })
 
@@ -1594,6 +1597,9 @@ export const BookTransactionSchema = z
     entry_date: isoDate,
     description: z.string().min(1, 'Description is required'),
     lines: z.array(CreateJournalEntryLineSchema).min(1, 'At least one line is required'),
+    // Explicit series from the booking dialog's picker. Omitted: the route
+    // resolves it from the transaction's cash account, then the per-type map.
+    voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z').optional(),
     // Booking-time duplicate guard: see CategorizeTransactionSchema.
     force: z.boolean().optional(),
     expected_duplicate_transaction_id: uuid.optional(),
@@ -1723,6 +1729,18 @@ export const MoveTransactionCashAccountSchema = z.object({
   account_number: z
     .string()
     .regex(/^19\d{2}$/, 'Expected a BAS 19xx bank account number'),
+})
+
+/**
+ * Set or clear the verifikationsserie override on one of the company's cash
+ * accounts. null clears the override: entries booked from the account then
+ * follow the per-source-type default again.
+ */
+export const UpdateCashAccountVoucherSeriesSchema = z.object({
+  voucher_series: z
+    .string()
+    .regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z')
+    .nullable(),
 })
 
 export const BookInboxItemDirectlySchema = z.object({

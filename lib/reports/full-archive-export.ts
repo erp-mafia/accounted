@@ -1552,6 +1552,23 @@ async function buildSystemDoc(
         fiscal_period_id: vs.fiscal_period_id ?? null,
       })
     ),
+    // BFNAR 2013:2 p. 9.2-9.15: how verifikationer are assigned to a series
+    // is a behandlingsregel the systemdokumentation has to spell out, incl.
+    // the exceptions. The concrete mappings live in the data tables named
+    // here (company_settings.default_voucher_series_per_source_type and
+    // cash_accounts.voucher_series); changes to both are in behandlingshistorik.
+    verifikationsserier_regler: {
+      ordning: [
+        'Serie vald av användaren i bokföringsdialogen',
+        'Bankkontots egen verifikationsserie (data/cash_accounts.json, fältet voucher_series), gäller verifikat som skapas från banktransaktioner',
+        'Standardserie per verifikattyp (data/company_settings.json, fältet default_voucher_series_per_source_type)',
+        'Serie A',
+      ],
+      undantag: [
+        'Betalningar av kund- och leverantörsfakturor som matchas mot en banktransaktion använder fakturatypens serie, inte bankkontots',
+        'Samlingsverifikat (bokföring av flera banktransaktioner i ett verifikat) använder standardserien för banktransaktioner',
+      ],
+    },
     behorighetskontroll: {
       description: 'Rollbaserad atkomstkontroll med owner/admin/member/viewer',
       mfa_stod: true,

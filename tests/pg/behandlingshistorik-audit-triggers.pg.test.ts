@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { insertAuthUser, insertCompany, insertCompanyMember } from './fixtures'
+import { insertAuthUser, insertCashAccount, insertCompany, insertCompanyMember } from './fixtures'
 import { getPool, withUserContext } from './setup'
 
 /**
@@ -126,6 +126,40 @@ describe('behandlingshistorik audit triggers (BFNAR 2013:2 p. 9.16)', () => {
     // booking_template_library has no user_id column, so write_audit_log()
     // falls back to auth.uid(): the actor is the authenticated writer.
     expect(rows).toEqual([{ action: 'INSERT', company_id: companyId, user_id: userId }])
+  })
+
+  it('logs a cash_accounts voucher_series change but not bank-sync churn (20260902124513)', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    const cashAccountId = await insertCashAccount({ companyId, ledgerAccount: '1931' })
+
+    // Bank sync touches balance and name all day: no behandlingsregel, no row.
+    await getPool().query(
+      `UPDATE public.cash_accounts SET balance = 250, name = 'Företagskort' WHERE id = $1`,
+      [cashAccountId],
+    )
+    expect(await auditActions('cash_accounts', cashAccountId)).toEqual([])
+
+    // Assigning the account its own verifikationsserie is a behandlingsregel.
+    await getPool().query(`UPDATE public.cash_accounts SET voucher_series = 'M' WHERE id = $1`, [cashAccountId])
+    // Clearing it back to "follow the per-type default" is one too.
+    await getPool().query(`UPDATE public.cash_accounts SET voucher_series = NULL WHERE id = $1`, [cashAccountId])
+
+    const rows = await getPool().query<{ action: string; company_id: string | null; old_series: string | null; new_series: string | null }>(
+      `SELECT action, company_id, old_state->>'voucher_series' AS old_series, new_state->>'voucher_series' AS new_series
+         FROM public.audit_log WHERE table_name = 'cash_accounts' AND record_id = $1
+        ORDER BY created_at, id`,
+      [cashAccountId],
+    )
+    expect(rows.rows).toEqual([
+      { action: 'UPDATE', company_id: companyId, old_series: null, new_series: 'M' },
+      { action: 'UPDATE', company_id: companyId, old_series: 'M', new_series: null },
+    ])
+
+    // The CHECK from 20260902121420 still guards the column.
+    await expect(
+      getPool().query(`UPDATE public.cash_accounts SET voucher_series = 'ab' WHERE id = $1`, [cashAccountId]),
+    ).rejects.toThrow(/check constraint/i)
   })
 
   it('logs the global payroll constants without a company (read via service role by the report)', async () => {

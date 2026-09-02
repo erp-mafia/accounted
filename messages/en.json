@@ -2336,7 +2336,16 @@
     "series_prefix": "Series",
     "default_badge": "default",
     "latest_number": "Latest no.",
-    "footnote": "New series are created automatically the first time they are used in bookkeeping."
+    "footnote": "New series are created automatically the first time they are used in bookkeeping.",
+    "per_account_heading": "Voucher series per bank account",
+    "per_account_help": "Let a bank account book into its own series, for example the main bank on A and the company card on M. Default follows the bank-transaction series above. Applies to booking bank transactions; invoice matches keep their payment series.",
+    "per_account_follow_default": "Default",
+    "per_account_loading": "Loading bank accounts",
+    "per_account_empty": "No active bank accounts yet. Accounts are created when you connect a bank or import transactions.",
+    "per_account_saved_title": "Voucher series saved",
+    "per_account_saved_set": "New vouchers from {account} land in series {series}.",
+    "per_account_saved_cleared": "{account} now follows the default bank-transaction series.",
+    "per_account_save_failed": "Could not save"
   },
   "settings_team_panel": {
     "role_owner": "Owner",

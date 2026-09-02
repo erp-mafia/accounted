@@ -430,6 +430,10 @@ export default function TransactionBookingDialog({
                 submitUrl={`/api/transactions/${transaction.id}/book`}
                 sourceType="bank_transaction"
                 sourceId={transaction.id}
+                // Series picker seeded from the bank account's own series
+                // (Inställningar → Bokföring → Verifikationsserie per bankkonto).
+                seriesPicker
+                cashAccountId={transaction.cash_account_id ?? null}
                 onEntryCreated={(entryId) => handleBooked(transaction.id, entryId)}
                 duplicateMatchTransaction={{
                   id: transaction.id,
