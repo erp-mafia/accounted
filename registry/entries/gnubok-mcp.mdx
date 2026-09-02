@@ -72,7 +72,7 @@ verktyg den får exponera.
 ## Installera i Grok
 
 1. På grok.com: Connectors → New Connector → Custom.
-2. Ange URL: `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp`.
+2. Ange URL: `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp?auth=required` (utan `auth=required` ser Grok servern som öppen och startar aldrig inloggningen).
 3. Grok registrerar sig själv och öppnar accounted-OAuth. Logga in. Godkänn anslutningen.
 4. Starta en ny chatt med connectorn påslagen.
 
