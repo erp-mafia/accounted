@@ -139,6 +139,24 @@ describe('parties substrate (pg)', () => {
     expect(visibleToStranger).toBe(0)
   })
 
+  it('ensure_party refuses a p_user_id that is not the authenticated caller', async () => {
+    const mine = await seedCompany()
+    const other = await seedCompany()
+    await expect(
+      withUserContext(mine.userId, (client) =>
+        client.query(`SELECT public.ensure_party($1, $2, 'Spoofed AB', NULL, 'company', 'manual')`, [mine.companyId, other.userId]),
+      ),
+    ).rejects.toMatchObject({ code: '42501' })
+    const own = await withUserContext(mine.userId, async (client) => {
+      const { rows } = await client.query<{ id: string }>(
+        `SELECT public.ensure_party($1, $2, 'Own AB', NULL, 'company', 'manual') AS id`,
+        [mine.companyId, mine.userId],
+      )
+      return rows[0]!.id
+    })
+    expect(own).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
   it('refuses to attach facts, identities, decisions, roles or merges to another company\'s party', async () => {
     const mine = await seedCompany()
     const theirs = await seedCompany()
