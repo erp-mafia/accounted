@@ -35,6 +35,7 @@ import {
   fetchInboundAttachment,
   extractLocalPartForDomain,
   kindHintFromTag,
+  type InboxKindHint,
   parseRecipients,
   isEmailReceivedEvent,
   ResendSignatureError,
@@ -1788,9 +1789,11 @@ export const invoiceInboxExtension: Extension = {
         const sharedRecipient = extractLocalPartForDomain(to, domain)
         const localPart = sharedRecipient?.localPart ?? null
         // Sender-declared kind from the +lev / +ver tag on the shared
-        // address. Only the shared domain carries tags; custom domains are
-        // catch-all and stay unhinted.
-        const kindHint = kindHintFromTag(sharedRecipient?.tag)
+        // address. Set only when that address is the one that resolved the
+        // company: a tag on an unknown or retired shared address must not
+        // ride along onto a custom-domain match further down. Custom domains
+        // are catch-all and stay unhinted.
+        let kindHint: InboxKindHint | null = null
         if (localPart) {
           const { data: inbox } = await serviceSupabase
             .from('company_inboxes')
@@ -1799,7 +1802,10 @@ export const invoiceInboxExtension: Extension = {
             .maybeSingle()
           if (inbox) {
             sharedInboxStatus = inbox.status
-            if (inbox.status === 'active') companyId = inbox.company_id
+            if (inbox.status === 'active') {
+              companyId = inbox.company_id
+              kindHint = kindHintFromTag(sharedRecipient?.tag)
+            }
           }
         }
 

@@ -178,6 +178,47 @@ describe('POST /inbound', () => {
     expect(vi.mocked(uploadAndExtract).mock.calls[0][2]).toBe('company-9')
   })
 
+  it('does not carry a shared-address tag onto a custom-domain match (#2129)', async () => {
+    // The tagged shared address is retired, so the custom domain resolves the
+    // company. The +lev tag belonged to the retired address and must not stamp
+    // the custom-domain company's row.
+    const to = ['old-inbox-abcd+lev@arcim.io', 'fakturor@hansbolag.example']
+    vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ to, attachments: [] }) as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-old', company_id: 'company-old', status: 'deprecated' } }) // shared lookup
+    enqueue({ data: [{ company_id: 'company-9', domain: 'hansbolag.example' }] }) // verified domain
+    enqueue({ data: { created_by: 'user-owner-9' } }) // company owner
+    enqueue({ data: null }) // body-document dedupe check finds nothing
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-9' } as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({
+      object: 'email',
+      id: 'em_123',
+      to,
+      from: 'billing@supplier.com',
+      created_at: '2026-04-20T10:00:00Z',
+      subject: 'Invoice #5678',
+      bcc: null,
+      cc: null,
+      reply_to: null,
+      html: null,
+      text: 'Body',
+      headers: {},
+      message_id: '<msg@x>',
+      raw: null,
+      attachments: [],
+    } as never)
+
+    const request = createMockRequest('/inbound', { method: 'POST', body: {} })
+    const res = await webhookRoute.handler(request)
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.reason).toBe('email_body')
+    const [, , companyId, , , emailMeta] = vi.mocked(uploadAndExtract).mock.calls[0]
+    expect(companyId).toBe('company-9')
+    expect(emailMeta?.kindHint).toBeNull()
+  })
+
   it('does not route mail for an unverified custom domain', async () => {
     vi.mocked(verifyInboundWebhook).mockReturnValue(
       mockReceivedEvent({ to: ['faktura@pending-bolag.example'] }) as never
