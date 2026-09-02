@@ -1364,6 +1364,77 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Detta dokument är inte en offert.',
     message_en: 'This document is not a quote.',
   },
+  // Kundorder (sales orders): lib/sales-orders/*, app/api/sales-orders/*
+  SALES_ORDER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Kundordern hittades inte.',
+    message_en: 'The sales order was not found.',
+  },
+  SALES_ORDER_INVALID_STATE: {
+    httpStatus: 409,
+    message_sv: 'Kundordern har inte en status som tillåter den här åtgärden.',
+    message_en: 'The sales order is not in a state that allows this action.',
+  },
+  SALES_ORDER_NOT_EDITABLE: {
+    httpStatus: 409,
+    message_sv: 'Kundordern kan bara ändras medan den är utkast eller bekräftad.',
+    message_en: 'A sales order can only be edited while it is a draft or confirmed.',
+  },
+  SALES_ORDER_HAS_INVOICES: {
+    httpStatus: 409,
+    message_sv: 'Kundordern kan inte makuleras: det finns fakturor som skapats från den. Makulera eller kreditera fakturorna först.',
+    message_en: 'The sales order cannot be cancelled: invoices have been created from it. Cancel or credit those invoices first.',
+  },
+  SALES_ORDER_LINE_NOT_FOUND: {
+    httpStatus: 400,
+    message_sv: 'En angiven orderrad finns inte på kundordern.',
+    message_en: 'A referenced line does not exist on the sales order.',
+  },
+  SALES_ORDER_OVER_INVOICED: {
+    httpStatus: 409,
+    message_sv: 'Angivet antal överstiger vad som återstår att fakturera på orderraden.',
+    message_en: 'The requested quantity exceeds what remains to be invoiced on the order line.',
+  },
+  SALES_ORDER_OVER_DELIVERED: {
+    httpStatus: 400,
+    message_sv: 'Levererat antal kan inte överstiga beställt antal.',
+    message_en: 'Delivered quantity cannot exceed the ordered quantity.',
+  },
+  SALES_ORDER_QUANTITY_BELOW_INVOICED: {
+    httpStatus: 409,
+    message_sv: 'Antalet på en orderrad kan inte sänkas under det som redan fakturerats.',
+    message_en: 'An order line quantity cannot be lowered below what has already been invoiced.',
+  },
+  SALES_ORDER_NOTHING_TO_INVOICE: {
+    httpStatus: 409,
+    message_sv: 'Det finns inget kvar att fakturera på kundordern.',
+    message_en: 'There is nothing left to invoice on the sales order.',
+  },
+  SALES_ORDER_CUSTOMER_MISSING: {
+    httpStatus: 409,
+    message_sv: 'Kundordern saknar kund. Ange en kund innan du fakturerar.',
+    message_en: 'The sales order has no customer. Set a customer before invoicing.',
+  },
+  SALES_ORDER_CREATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kundordern kunde inte sparas.',
+    message_en: 'The sales order could not be saved.',
+  },
+  SALES_ORDER_LINE_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'En orderrad med fakturerat eller levererat antal kan inte tas bort.',
+    message_en: 'An order line with invoiced or delivered quantity cannot be removed.',
+  },
+  SALES_ORDER_SOURCE_NOT_PROFORMA: {
+    httpStatus: 400,
+    message_sv: 'Bara en proformafaktura kan omvandlas till kundorder.',
+    message_en: 'Only a proforma invoice can be converted into a sales order.',
+  },
+  SALES_ORDER_SOURCE_ALREADY_CONVERTED: {
+    httpStatus: 409,
+    message_sv: 'Proformafakturan har redan omvandlats till en kundorder.',
+    message_en: 'The proforma has already been converted into a sales order.',
+  },
   // POST /api/invoices/{id}/peppol/send. The Access Point is an environment
   // decision (PEPPOL_TRANSPORT_PROVIDER + adapter credentials); the product
   // never pretends to send when no adapter is switched on.

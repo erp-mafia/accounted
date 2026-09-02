@@ -13,6 +13,7 @@ import { VoucherSeriesPerSourceTypeForm } from '@/components/settings/VoucherSer
 import { applyDefaultSeriesToMap } from '@/lib/bookkeeping/voucher-series-resolver'
 import { DimensionsToggle } from '@/components/settings/DimensionsToggle'
 import { MileageToggle } from '@/components/settings/MileageToggle'
+import { SalesOrdersToggle } from '@/components/settings/SalesOrdersToggle'
 import { AccountingFrameworkForm } from '@/components/settings/AccountingFrameworkForm'
 import {
   SettingsGroup,
@@ -186,6 +187,7 @@ export function BookkeepingSettingsContent() {
         </SettingsRow>
         <DimensionsToggle />
         <MileageToggle />
+        <SalesOrdersToggle />
       </SettingsGroup>
 
       <SettingsGroup>

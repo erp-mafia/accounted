@@ -50,6 +50,7 @@ import {
   FolderArchive,
   ShoppingCart,
   Car,
+  ClipboardList,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { BrandHomeLink } from '@/components/branding/BrandHomeLink'
@@ -88,6 +89,10 @@ interface DashboardNavProps {
   // switched on. Drives visibility of the Kostnadsställen & projekt row:
   // same mechanism as paysSalaries: fetched by the dashboard layout.
   dimensionsEnabled?: boolean
+  // Whether kundorder (company_settings.sales_orders_enabled) is switched on.
+  // Drives visibility of the Kundorder row: same mechanism as
+  // dimensionsEnabled, fetched by the dashboard layout.
+  salesOrdersEnabled?: boolean
   // Whether the company has a webshop hooked up (active WooCommerce/Shopify
   // connection, or existing webshop_orders rows). Drives visibility of the
   // Order row: same mechanism as paysSalaries, fetched by the layout.
@@ -117,6 +122,7 @@ type NavLabelKey =
   | 'invoice_inbox'
   | 'invoices'
   | 'sales_orders'
+  | 'webshop_orders'
   | 'customers'
   | 'articles'
   | 'supplier_invoices'
@@ -183,6 +189,10 @@ interface NavItem {
   // company_settings.dimensions_enabled (UI-visibility gate only; the pages
   // and APIs work regardless, dimensions plan §2).
   requiresDimensions?: boolean
+  // Kundorder surfaces: visible only when the company has opted in via
+  // company_settings.sales_orders_enabled (UI-visibility gate only; the
+  // pages and APIs work regardless).
+  requiresSalesOrders?: boolean
   // Webshop surfaces: visible only when the company has an active
   // WooCommerce/Shopify connection or already-imported order rows.
   // UI-visibility gate only; the page and APIs work regardless.
@@ -225,12 +235,14 @@ const navItems: NavItem[] = [
   { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'arbeta' },
   { href: '/reconciliation', labelKey: 'reconciliation', icon: Scale, group: 'arbeta' },
   { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'arbeta' },
+  // Kundorder: opt-in via the bookkeeping settings toggle (UI gate only).
+  { href: '/sales-orders', labelKey: 'sales_orders', icon: ClipboardList, group: 'arbeta', requiresSalesOrders: true },
   { href: '/invoices', labelKey: 'invoices', icon: ReceiptText, group: 'arbeta' },
   // Webshop orders: visible only for companies that actually have a webshop
   // hooked up (active WooCommerce/Shopify connection or existing order rows).
   // Deliberately NOT capability-gated: a company whose entitlement lapsed
   // must still reach its already-imported orders (accounting underlag).
-  { href: '/orders', labelKey: 'sales_orders', icon: ShoppingCart, group: 'arbeta', requiresWebshop: true, betaBadge: true },
+  { href: '/orders', labelKey: 'webshop_orders', icon: ShoppingCart, group: 'arbeta', requiresWebshop: true, betaBadge: true },
   { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'arbeta' },
   { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'arbeta', employerOnly: true },
   // Körjournal: hidden by default (most companies have no car); shows when
@@ -329,7 +341,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, hasWebshop = false, hasMileage = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, initialUiState }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, hasWebshop = false, hasMileage = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, initialUiState }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
@@ -572,6 +584,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     // Dimension surfaces are hidden until the company opts in via the
     // bookkeeping settings toggle (company_settings.dimensions_enabled).
     if (item.requiresDimensions && !dimensionsEnabled) return false
+    if (item.requiresSalesOrders && !salesOrdersEnabled) return false
     // Webshop surfaces are hidden until a store is connected (or order rows
     // already exist from a since-disconnected store).
     if (item.requiresWebshop && !hasWebshop) return false

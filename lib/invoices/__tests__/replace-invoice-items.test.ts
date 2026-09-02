@@ -25,6 +25,7 @@ function makeItem(overrides: Partial<InvoiceWriteItemRow> = {}): InvoiceWriteIte
     vat_amount: 250,
     article_id: null,
     revenue_account: null,
+    sales_order_item_id: null,
     deduction_type: null,
     deduction_amount: 0,
     labor_hours: null,

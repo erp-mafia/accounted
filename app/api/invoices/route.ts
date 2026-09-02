@@ -35,6 +35,11 @@ export const GET = withRouteContext(
     if (status) {
       query = query.eq('status', status)
     }
+    // Kundorder detail: the invoices created from one order.
+    const salesOrderId = searchParams.get('sales_order_id')
+    if (salesOrderId && /^[0-9a-f-]{36}$/i.test(salesOrderId)) {
+      query = query.eq('sales_order_id', salesOrderId)
+    }
 
     const { data, error, count } = await query
 

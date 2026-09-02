@@ -57,6 +57,7 @@ import {
   Pencil,
   Copy,
   MoreHorizontal,
+  ClipboardList,
 } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -82,7 +83,7 @@ import {
 } from '@/components/ui/dialog'
 import type { Invoice, InvoiceItem, InvoiceStatus, InvoiceReminder, InvoiceDocumentType } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useBranding } from '@/lib/branding/brand-context'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
@@ -211,6 +212,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [showSendDialog, setShowSendDialog] = useState(false)
   const [sendDialogMode, setSendDialogMode] = useState<'email' | 'manual'>('email')
   const [isConverting, setIsConverting] = useState(false)
+  const [isCreatingOrder, setIsCreatingOrder] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isUpdating, setIsUpdating] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
@@ -661,6 +663,47 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
 
     setIsConverting(false)
+  }
+
+  // Proforma -> draft kundorder (sibling of convertToInvoice). The proforma is
+  // cancelled by the service; the user lands on the new order.
+  async function convertToOrder() {
+    if (!invoice) return
+    setIsCreatingOrder(true)
+    try {
+      const response = await fetch(`/api/invoices/${invoice.id}/convert-to-order`, {
+        method: 'POST',
+      })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) {
+        toast({
+          title: t('create_order_failed_title'),
+          description: getUserErrorMessage(data, {
+            locale: locale as ErrorLocale,
+            statusCode: response.status,
+          }),
+          variant: 'destructive',
+        })
+        setIsCreatingOrder(false)
+        return
+      }
+      toast({
+        title: t('order_created_toast_title'),
+        description: data?.data?.order_number
+          ? t('order_created_toast_description', { number: data.data.order_number })
+          : undefined,
+      })
+      router.push(`/sales-orders/${data.sales_order_id}`)
+    } catch (error) {
+      // Network failure (offline, aborted): the structured envelope never
+      // arrived, so map the raw error the same way the convert action does.
+      toast({
+        title: t('create_order_failed_title'),
+        description: getUserErrorMessage(error, { locale: locale as ErrorLocale }),
+        variant: 'destructive',
+      })
+      setIsCreatingOrder(false)
+    }
   }
 
   /**
@@ -1472,6 +1515,23 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('convert_to_invoice')}
             </Button>
           )}
+          {isProforma && invoice.status !== 'cancelled' && (
+            <Button
+              variant="outline"
+              onClick={convertToOrder}
+              disabled={isCreatingOrder || !canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {isCreatingOrder ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : !canWrite ? (
+                <Lock className="mr-2 h-4 w-4" />
+              ) : (
+                <ClipboardList className="mr-2 h-4 w-4" />
+              )}
+              {t('create_order')}
+            </Button>
+          )}
           {isUnnumberedDraft && (
             <Button
               onClick={openFinalizeDialog}
@@ -1881,6 +1941,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <DefRow label={t('def_converted_from')}>
               <Link href={`/invoices/${convertedFromInvoice.id}`} className="hover:underline">
                 {t('title_proforma', { number: convertedFromInvoice.invoice_number ?? '' })}
+              </Link>
+            </DefRow>
+          )}
+          {invoice.sales_order_id && (
+            <DefRow label={t('def_sales_order')}>
+              <Link href={`/sales-orders/${invoice.sales_order_id}`} className="hover:underline">
+                {t('open_sales_order')}
               </Link>
             </DefRow>
           )}

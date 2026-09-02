@@ -551,6 +551,7 @@ export function makeCompanySettings(
     reminder_interest_rate_override: null,
     dimensions_enabled: false,
     mileage_enabled: false,
+    sales_orders_enabled: false,
     data_analysis_opt_in: false,
     preferred_payment_format: 'pain001',
     salary_pay_day: 25,
