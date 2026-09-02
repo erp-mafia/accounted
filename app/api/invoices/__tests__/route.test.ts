@@ -772,4 +772,90 @@ describe('POST /api/invoices (create credit note)', () => {
     expect(status).toBe(500)
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_CREATE_ITEMS_FAILED')
   })
+
+  it('numbers a quote from the OF-series at insert and never touches the F-series or the event bus', async () => {
+    const customer = makeCustomer({ id: VALID_UUID })
+    const createdQuote = makeInvoice({
+      id: 'q-1',
+      invoice_number: 'OF-001',
+      document_type: 'quote',
+      valid_until: '2024-07-15',
+      quote_status: 'open',
+    })
+
+    mockGetVatRules.mockReturnValue({
+      treatment: 'standard_25',
+      rate: 25,
+      momsRuta: '10',
+      reverseChargeText: null,
+    })
+    mockCalculateVat.mockReturnValue(2500)
+    mockGetAvailableVatRates.mockReturnValue([
+      { rate: 25, label: '25%', treatment: 'standard_25' },
+      { rate: 12, label: '12%', treatment: 'reduced_12' },
+      { rate: 6, label: '6%', treatment: 'reduced_6' },
+      { rate: 0, label: '0% (momsfri)', treatment: 'exempt' },
+    ])
+
+    // Fetch customer
+    enqueue({ data: customer, error: null })
+    // company_settings.vat_registered gate
+    enqueue({ data: { vat_registered: true }, error: null })
+    // generate_quote_number RPC (numbered BEFORE insert, like delivery notes)
+    enqueue({ data: 'OF-001', error: null })
+    // Insert quote
+    enqueue({ data: createdQuote, error: null })
+    // Insert items
+    enqueue({ data: null, error: null })
+    // Fetch complete quote (no generate_invoice_number call in between)
+    enqueue({ data: { ...createdQuote, customer, items: [] }, error: null })
+
+    const emitSpy = vi.spyOn(eventBus, 'emit')
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: {
+        customer_id: VALID_UUID,
+        invoice_date: '2024-06-15',
+        due_date: '2024-07-15',
+        valid_until: '2024-07-15',
+        document_type: 'quote',
+        currency: 'SEK',
+        items: [{ description: 'Consulting', quantity: 10, unit: 'tim', unit_price: 1000 }],
+      },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ data: { invoice_number: string | null } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.invoice_number).toBe('OF-001')
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('generate_quote_number', { p_company_id: 'company-1' })
+    expect(mockSupabase.rpc).not.toHaveBeenCalledWith('generate_invoice_number', expect.anything())
+    const inserted = findCall('invoices', 'insert')?.[0] as Record<string, unknown>
+    expect(inserted.invoice_number).toBe('OF-001')
+    expect(inserted.document_type).toBe('quote')
+    expect(inserted.valid_until).toBe('2024-07-15')
+    expect(inserted.quote_status).toBe('open')
+    expect(inserted.remaining_amount).toBe(0)
+    expect(emitSpy).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'invoice.created' }))
+  })
+
+  it('rejects a quote without valid_until', async () => {
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: {
+        customer_id: VALID_UUID,
+        invoice_date: '2024-06-15',
+        due_date: '2024-07-15',
+        document_type: 'quote',
+        currency: 'SEK',
+        items: [{ description: 'Consulting', quantity: 1, unit: 'st', unit_price: 100 }],
+      },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ errors: Array<{ field: string }> }>(response)
+
+    expect(status).toBe(400)
+    expect(body.errors.map((e) => e.field)).toContain('valid_until')
+  })
 })

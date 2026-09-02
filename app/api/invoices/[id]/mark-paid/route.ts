@@ -65,6 +65,12 @@ export const POST = withRouteContext(
     // remaining (öresavrundning) or an ordinary open partial is completed
     // here. settleInvoicePayment's plan math and CAS guard already handle
     // the state; only this route-level gate excluded it.
+    // A quote is an offer, not a claim: nothing is owed until it has been
+    // converted to a faktura.
+    if (invoice.document_type === 'quote') {
+      return errorResponseFromCode('INVOICE_QUOTE_NOT_PAYABLE', opLog, { requestId })
+    }
+
     if (
       invoice.status !== 'sent' &&
       invoice.status !== 'overdue' &&

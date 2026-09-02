@@ -526,4 +526,50 @@ describe('buildInvoiceWriteData kundkort fallback customer-type gate', () => {
     if (result.ok) return
     expect('code' in result && result.code).toBe('INVOICE_CREATE_ROT_RUT_VALIDATION')
   })
+
+  it('writes valid_until + quote_status open for a quote, mirrors it into due_date and keeps nothing owed', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({ customer_type: 'swedish_business' })
+    const result = await call(
+      enqueue,
+      supabase as unknown as SupabaseClient,
+      customer,
+      {
+        ...baseHeader,
+        valid_until: '2026-08-01',
+        items: [{ description: 'Offererat arbete', quantity: 2, unit: 'tim', unit_price: 1000, vat_rate: 25 }],
+      },
+      'quote',
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.document_type).toBe('quote')
+    expect(result.invoiceFields.valid_until).toBe('2026-08-01')
+    expect(result.invoiceFields.due_date).toBe('2026-08-01')
+    expect(result.invoiceFields.quote_status).toBe('open')
+    expect(result.invoiceFields.total).toBe(2500)
+    expect(result.invoiceFields.remaining_amount).toBe(0)
+    expect(result.invoiceFields.deduction_total).toBe(0)
+  })
+
+  it('leaves the quote columns NULL on every other document type', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({ customer_type: 'swedish_business' })
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      valid_until: '2026-08-01',
+      items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25 }],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.valid_until).toBeNull()
+    expect(result.invoiceFields.quote_status).toBeNull()
+    expect(result.invoiceFields.due_date).toBe(baseHeader.due_date)
+  })
 })

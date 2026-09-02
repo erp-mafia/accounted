@@ -71,6 +71,8 @@ export interface InvoiceWriteInput {
   invoice_date: string
   due_date: string
   delivery_date?: string | null
+  /** Quotes only: expiry date. Mirrored into due_date (NOT NULL) for quotes. */
+  valid_until?: string | null
   currency: Currency
   your_reference?: string
   our_reference?: string
@@ -101,6 +103,8 @@ export type InvoiceWriteFields = {
   invoice_date: string
   due_date: string
   delivery_date: string | null
+  valid_until: string | null
+  quote_status: 'open' | null
   currency: Currency
   exchange_rate: number | null
   exchange_rate_date: string | null
@@ -501,11 +505,21 @@ export async function buildInvoiceWriteData(params: {
     totalSek = Math.round(total * 100) / 100
   }
 
+  // A quote has no due date, only an expiry. due_date is NOT NULL on the
+  // table and every date-ordered reader sorts on it, so it mirrors
+  // valid_until; valid_until stays the authoritative column.
+  const validUntil = documentType === 'quote' ? (input.valid_until ?? input.due_date) : null
+
   const invoiceFields: InvoiceWriteFields = {
     customer_id: input.customer_id,
     invoice_date: input.invoice_date,
-    due_date: input.due_date,
+    due_date: validUntil ?? input.due_date,
     delivery_date: input.delivery_date ?? null,
+    valid_until: validUntil,
+    // Every quote starts open; decisions are made via /quote-status and the
+    // draft editor refuses accepted/declined quotes, so a PATCH never
+    // overwrites a decision here.
+    quote_status: documentType === 'quote' ? 'open' : null,
     currency: input.currency,
     exchange_rate: exchangeRate,
     exchange_rate_date: exchangeRateDate,
@@ -518,7 +532,7 @@ export async function buildInvoiceWriteData(params: {
     // remaining_amount = total - deduction for real invoices so open-invoice
     // queries treat them as fully unpaid for the CUSTOMER's share: the
     // Skatteverket portion is on 1513 and clears when the agency pays out.
-    // Proformas / delivery notes have no payment obligation → keep 0.
+    // Proformas / delivery notes / quotes have no payment obligation → keep 0.
     remaining_amount: documentType === 'invoice' ? total - deductionTotal : 0,
     vat_treatment: notVatRegistered ? 'exempt' : headerRules.treatment,
     vat_rate: documentType === 'delivery_note' ? 0 : (isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate)),
