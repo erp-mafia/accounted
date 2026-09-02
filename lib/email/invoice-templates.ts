@@ -15,15 +15,19 @@ const LABELS = {
     docInvoice: 'Faktura',
     docCreditNote: 'Kreditfaktura',
     docProforma: 'Proformafaktura',
+    docQuote: 'Offert',
     docDeliveryNote: 'Följesedel',
     htmlLang: 'sv',
     documentFrom: (doc: string, sender: string) => `${doc} från ${sender}`,
     documentNumber: (doc: string) => `${doc}nummer:`,
     documentDate: (doc: string) => `${doc}datum:`,
     dueDate: 'Förfallodatum:',
+    validUntil: 'Giltig till:',
     greeting: (firstName: string) => `Hej${firstName ? ` ${firstName}` : ''},`,
     bodyCreditNote: 'Bifogat hittar du en kreditfaktura som korrigerar en tidigare faktura.',
     bodyInvoice: 'Tack för ditt förtroende! Bifogat hittar du din faktura.',
+    bodyQuote: (validUntil: string) => `Tack för ditt intresse! Bifogat hittar du vår offert. Offerten är giltig till ${validUntil}.`,
+    questionsQuote: 'Har du frågor om offerten? Svara direkt på detta mejl så hjälper vi dig.',
     toPay: 'Att betala:',
     payOnline: 'Betala online',
     paymentHeading: 'Betalningsinformation',
@@ -51,15 +55,19 @@ const LABELS = {
     docInvoice: 'Invoice',
     docCreditNote: 'Credit note',
     docProforma: 'Proforma invoice',
+    docQuote: 'Quote',
     docDeliveryNote: 'Delivery note',
     htmlLang: 'en',
     documentFrom: (doc: string, sender: string) => `${doc} from ${sender}`,
     documentNumber: (doc: string) => `${doc} number:`,
     documentDate: (doc: string) => `${doc} date:`,
     dueDate: 'Due date:',
+    validUntil: 'Valid until:',
     greeting: (firstName: string) => `Hi${firstName ? ` ${firstName}` : ''},`,
     bodyCreditNote: 'Attached you will find a credit note that corrects an earlier invoice.',
     bodyInvoice: 'Thank you for your business. Attached you will find your invoice.',
+    bodyQuote: (validUntil: string) => `Thank you for your interest. Attached you will find our quote. The quote is valid until ${validUntil}.`,
+    questionsQuote: 'Questions about the quote? Reply directly to this email and we will help you.',
     toPay: 'Total due:',
     payOnline: 'Pay online',
     paymentHeading: 'Payment information',
@@ -122,7 +130,7 @@ function resolveLang(customer: Customer): EmailLang {
   return customer.language === 'en' ? 'en' : 'sv'
 }
 
-// Custom texts apply ONLY to standard invoices. Credit notes, proforma and
+// Custom texts apply ONLY to standard invoices. Credit notes, proforma, quotes and
 // delivery notes always use the stock texts: a custom "Tack för ditt
 // förtroende..." body or "Faktura..." subject would be wrong on those.
 function isStandardInvoice(invoice: Invoice): boolean {
@@ -135,8 +143,16 @@ function getDocumentLabel(invoice: Invoice, lang: EmailLang): string {
   if (invoice.credited_invoice_id) return L.docCreditNote
   const docType = (invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice'
   if (docType === 'proforma') return L.docProforma
+  if (docType === 'quote') return L.docQuote
   if (docType === 'delivery_note') return L.docDeliveryNote
   return L.docInvoice
+}
+
+// A quote's expiry: valid_until is authoritative, due_date only mirrors it
+// (the column is NOT NULL), so fall back to it for rows written before
+// valid_until existed.
+function quoteValidUntil(invoice: Invoice): string {
+  return formatDate(invoice.valid_until || invoice.due_date)
 }
 
 // Currency for the customer-facing total: explicit ISO code so a non-Swedish
@@ -221,9 +237,17 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
   const docType = (invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice'
   const isDeliveryNote = docType === 'delivery_note'
   const isProforma = docType === 'proforma'
-  const hidePayment = isCreditNote || isDeliveryNote || isProforma
+  // A quote (offert) is never a payment request: no payment details, no
+  // pay-online button; its expiry replaces the due date.
+  const isQuote = docType === 'quote'
+  const hidePayment = isCreditNote || isDeliveryNote || isProforma || isQuote
   const firstName = customer.name ? customer.name.split(' ')[0] : ''
   const custom = resolveCustomTexts(data, lang)
+  const stockBody = isCreditNote
+    ? L.bodyCreditNote
+    : isQuote
+      ? L.bodyQuote(quoteValidUntil(invoice))
+      : L.bodyInvoice
 
   // Primary color drives the heading accent and the highlighted total. The
   // accent is sanitized to a strict hex pattern: anything else falls back
@@ -258,7 +282,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
         ${custom.greeting !== undefined ? userTextToHtml(custom.greeting) : L.greeting(firstName)}
       </p>
       <p style="margin: 0;">
-        ${custom.body !== undefined ? userTextToHtml(custom.body) : (isCreditNote ? L.bodyCreditNote : L.bodyInvoice)}
+        ${custom.body !== undefined ? userTextToHtml(custom.body) : stockBody}
       </p>
     </div>
 
@@ -274,9 +298,9 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
           <td style="padding: 8px 0; text-align: right;">${formatDate(invoice.invoice_date)}</td>
         </tr>
         <tr>
-          <td style="padding: 8px 0; color: #666; font-size: 14px;">${L.dueDate}</td>
-          <td style="padding: 8px 0; text-align: right; font-weight: 500; color: ${isCreditNote ? '#333' : '#e11d48'};">
-            ${formatDate(invoice.due_date)}
+          <td style="padding: 8px 0; color: #666; font-size: 14px;">${isQuote ? L.validUntil : L.dueDate}</td>
+          <td style="padding: 8px 0; text-align: right; font-weight: 500; color: ${isCreditNote || isQuote ? '#333' : '#e11d48'};">
+            ${isQuote ? quoteValidUntil(invoice) : formatDate(invoice.due_date)}
           </td>
         </tr>
         <tr>
@@ -344,7 +368,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
     <!-- Footer -->
     <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
       <p style="margin: 0 0 10px 0; color: #666; font-size: 14px;">
-        ${L.questions}
+        ${isQuote ? L.questionsQuote : L.questions}
       </p>
       <p style="margin: 0; color: #666; font-size: 14px;">
         ${custom.signoff !== undefined ? userTextToHtml(custom.signoff) : L.sincerely}<br>
@@ -378,22 +402,30 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
   const docType = (invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice'
   const isDeliveryNote = docType === 'delivery_note'
   const isProforma = docType === 'proforma'
-  const hidePayment = isCreditNote || isDeliveryNote || isProforma
+  const isQuote = docType === 'quote'
+  const hidePayment = isCreditNote || isDeliveryNote || isProforma || isQuote
   const firstName = customer.name ? customer.name.split(' ')[0] : ''
   const custom = resolveCustomTexts(data, lang)
+  const stockBody = isCreditNote
+    ? L.bodyCreditNote
+    : isQuote
+      ? L.bodyQuote(quoteValidUntil(invoice))
+      : L.bodyInvoice
 
   let text = `${L.documentFrom(documentType, getCompanyDisplayName(company))}\n`
   text += `${L.documentNumber(documentType)} ${invoice.invoice_number}\n\n`
 
   text += `${custom.greeting ?? L.greeting(firstName)}\n\n`
 
-  text += `${custom.body ?? (isCreditNote ? L.bodyCreditNote : L.bodyInvoice)}\n\n`
+  text += `${custom.body ?? stockBody}\n\n`
 
   text += `${L.documentSummary(documentType)}\n`
   text += `---\n`
   text += `${L.documentNumber(documentType)} ${invoice.invoice_number}\n`
   text += `${L.documentDate(documentType)} ${formatDate(invoice.invoice_date)}\n`
-  text += `${L.dueDate} ${formatDate(invoice.due_date)}\n`
+  text += isQuote
+    ? `${L.validUntil} ${quoteValidUntil(invoice)}\n`
+    : `${L.dueDate} ${formatDate(invoice.due_date)}\n`
   text += `${L.toPay} ${formatCurrencyForCustomer(getAmountToPay(invoice, company).toPay, invoice.currency, lang)}\n`
   text += `---\n\n`
 
@@ -409,7 +441,7 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
     text += `${L.message} ${invoice.invoice_number}\n\n`
   }
 
-  text += `${L.questions}\n\n`
+  text += `${isQuote ? L.questionsQuote : L.questions}\n\n`
   text += `${custom.signoff ?? L.sincerely}\n`
   text += `${getCompanyDisplayName(company)}\n`
 

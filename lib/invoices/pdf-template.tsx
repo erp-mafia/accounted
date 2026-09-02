@@ -32,6 +32,7 @@ const LABELS = {
     titleInvoice: 'FAKTURA',
     titleCreditNote: 'KREDITFAKTURA',
     titleProforma: 'PROFORMAFAKTURA',
+    titleQuote: 'OFFERT',
     titleDeliveryNote: 'FÖLJESEDEL',
     titlePreview: 'FÖRHANDSGRANSKNING',
     // Status banners
@@ -53,6 +54,10 @@ const LABELS = {
     // Invoice details
     invoiceDate: 'Fakturadatum:',
     dueDate: 'Förfallodatum:',
+    // Quote (offert) date labels: a quote has an issue date and an expiry,
+    // never a due date.
+    quoteDate: 'Offertdatum:',
+    validUntil: 'Giltig till:',
     deliveryDate: 'Leveransdatum:',
     yourReference: 'Er referens:',
     ourReference: 'Vår referens:',
@@ -87,8 +92,9 @@ const LABELS = {
     paidRow: 'Betalt:',
     vatInSek: (rate: number | string) => `Moms i SEK (kurs ${rate}):`,
     totalInSek: 'Totalt i SEK:',
-    // Proforma / exempt
+    // Proforma / quote / exempt
     proformaNotice: 'Detta är en proformafaktura och utgör ingen betalningsanmodan.',
+    quoteNotice: 'Detta är en offert och utgör ingen faktura eller betalningsanmodan.',
     exemptNotice: 'Undantag från skatteplikt, ML 3 kap.',
     notVatRegisteredNotice: 'Företaget är inte momsregistrerat. Mervärdesskatt redovisas ej.',
     // Payment
@@ -119,6 +125,7 @@ const LABELS = {
     titleInvoice: 'INVOICE',
     titleCreditNote: 'CREDIT NOTE',
     titleProforma: 'PROFORMA INVOICE',
+    titleQuote: 'QUOTE',
     titleDeliveryNote: 'DELIVERY NOTE',
     titlePreview: 'PREVIEW',
     cancelledTitle: 'VOID: not a valid invoice',
@@ -136,6 +143,8 @@ const LABELS = {
     itemsHeading: 'Items',
     invoiceDate: 'Invoice date:',
     dueDate: 'Due date:',
+    quoteDate: 'Quote date:',
+    validUntil: 'Valid until:',
     deliveryDate: 'Delivery date:',
     yourReference: 'Your reference:',
     ourReference: 'Our reference:',
@@ -168,6 +177,7 @@ const LABELS = {
     vatInSek: (rate: number | string) => `VAT in SEK (rate ${rate}):`,
     totalInSek: 'Total in SEK:',
     proformaNotice: 'This is a proforma invoice and is not a request for payment.',
+    quoteNotice: 'This is a quote and is not an invoice or a request for payment.',
     exemptNotice: 'Exempt from VAT (ML 3 kap., Swedish VAT Act).',
     notVatRegisteredNotice: 'The seller is not VAT-registered. No VAT is charged on this invoice.',
     paymentHeading: 'Payment information',
@@ -719,6 +729,7 @@ function getDocumentTitle(invoice: Invoice, lang: PdfLang): string {
   if (invoice.credited_invoice_id) return L.titleCreditNote
   const docType = (invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice'
   if (docType === 'proforma') return L.titleProforma
+  if (docType === 'quote') return L.titleQuote
   if (docType === 'delivery_note') return L.titleDeliveryNote
   return L.titleInvoice
 }
@@ -797,6 +808,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   const docType = (invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice'
   const isDeliveryNote = docType === 'delivery_note'
   const isProforma = docType === 'proforma'
+  // A quote (offert) is never a payment request: no payment box, no OCR,
+  // no Swish/QR, no payment link (pdf-render-helpers gates the QR builders
+  // on docType === 'invoice'). Its expiry replaces the due date.
+  const isQuote = docType === 'quote'
 
   // Shared with the invoice email (lib/email/invoice-templates.ts) so the
   // mail and the PDF always state the same "Att betala". Computed once here
@@ -917,12 +932,14 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
           <View style={styles.column}>
             <Text style={styles.sectionTitle}>{L.invoiceInfoHeading}</Text>
             <View style={styles.row}>
-              <Text style={styles.label}>{L.invoiceDate}</Text>
+              <Text style={styles.label}>{isQuote ? L.quoteDate : L.invoiceDate}</Text>
               <Text style={styles.value}>{formatDate(invoice.invoice_date)}</Text>
             </View>
             <View style={styles.row}>
-              <Text style={styles.label}>{L.dueDate}</Text>
-              <Text style={styles.value}>{formatDate(invoice.due_date)}</Text>
+              <Text style={styles.label}>{isQuote ? L.validUntil : L.dueDate}</Text>
+              <Text style={styles.value}>
+                {formatDate(isQuote ? (invoice.valid_until || invoice.due_date) : invoice.due_date)}
+              </Text>
             </View>
             {invoice.delivery_date && invoice.delivery_date !== invoice.invoice_date && (
               <View style={styles.row}>
@@ -1232,8 +1249,17 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
           </View>
         )}
 
-        {/* Payment information - not shown for credit notes, proformas, or delivery notes */}
-        {!isCreditNote && !isProforma && !isDeliveryNote && (
+        {/* Quote notice */}
+        {isQuote && (
+          <View style={[styles.reverseChargeBox, { backgroundColor: '#e8f4fd', borderColor: '#90cdf4' }]}>
+            <Text style={[styles.reverseChargeText, { color: '#2b6cb0' }]}>
+              {L.quoteNotice}
+            </Text>
+          </View>
+        )}
+
+        {/* Payment information - not shown for credit notes, proformas, quotes, or delivery notes */}
+        {!isCreditNote && !isProforma && !isQuote && !isDeliveryNote && (
           <View style={styles.paymentSection}>
             <Text style={styles.paymentTitle}>{L.paymentHeading}</Text>
             {invoice.payment_link_url && (

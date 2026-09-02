@@ -359,6 +359,101 @@ describe('invoice email templates', () => {
       expect(generateInvoiceEmailSubject({ invoice: deliveryNote, customer: svCustomer, company: fullOverrides }))
         .toBe('F\u00f6ljesedel 1045 fr\u00e5n Acme AB')
     })
+
+    it('ignores overrides on quotes', () => {
+      const quote = makeInvoice({
+        invoice_number: 'OF-001',
+        document_type: 'quote',
+        valid_until: '2026-10-02',
+        quote_status: 'open',
+      })
+      const html = generateInvoiceEmailHtml({ invoice: quote, customer: svCustomer, company: fullOverrides })
+      expect(html).toContain('Bifogat hittar du v\u00e5r offert')
+      expect(html).not.toContain('H\u00e4r kommer m\u00e5nadens faktura.')
+      expect(generateInvoiceEmailSubject({ invoice: quote, customer: svCustomer, company: fullOverrides }))
+        .toBe('Offert OF-001 fr\u00e5n Acme AB')
+    })
+  })
+
+  // A quote (offert) is not a payment request: the mail states the expiry
+  // instead of a due date and carries no payment details or pay-online CTA.
+  describe('quote (offert)', () => {
+    const quote = makeInvoice({
+      invoice_number: 'OF-001',
+      invoice_date: '2026-09-02',
+      due_date: '2026-10-02',
+      valid_until: '2026-10-02',
+      quote_status: 'open',
+      document_type: 'quote',
+      currency: 'SEK',
+      total: 12500,
+      payment_link_url: 'https://buy.stripe.com/test_quote',
+    })
+    const svCustomer = makeCustomer({ name: 'Erik Andersson', email: 'erik@example.se', language: 'sv' })
+    const enCustomer = makeCustomer({ name: 'Jane Doe', email: 'jane@example.com', language: 'en' })
+
+    it('uses the Swedish quote subject', () => {
+      expect(generateInvoiceEmailSubject({ invoice: quote, customer: svCustomer, company }))
+        .toBe('Offert OF-001 fr\u00e5n Acme AB')
+    })
+
+    it('uses the English quote subject', () => {
+      expect(generateInvoiceEmailSubject({ invoice: quote, customer: enCustomer, company }))
+        .toBe('Quote OF-001 from Acme AB')
+    })
+
+    it('sv HTML: attached quote, Giltig till, no payment section and no pay-online button', () => {
+      const html = generateInvoiceEmailHtml({ invoice: quote, customer: svCustomer, company })
+      expect(html).toContain('Offert fr\u00e5n Acme AB')
+      expect(html).toContain('Offertnummer:')
+      expect(html).toContain('Offertdatum:')
+      expect(html).toContain('Bifogat hittar du v\u00e5r offert. Offerten \u00e4r giltig till 2026-10-02.')
+      expect(html).toContain('Giltig till:')
+      expect(html).toContain('2026-10-02')
+      expect(html).not.toContain('F\u00f6rfallodatum:')
+      expect(html).not.toContain('Betalningsinformation')
+      expect(html).not.toContain('Betala online')
+      expect(html).not.toContain('buy.stripe.com')
+      expect(html).toContain('Har du fr\u00e5gor om offerten?')
+      expect(html).not.toContain('Har du fr\u00e5gor om fakturan?')
+    })
+
+    it('en HTML: attached quote, Valid until, no payment section and no pay-online button', () => {
+      const html = generateInvoiceEmailHtml({ invoice: quote, customer: enCustomer, company })
+      expect(html).toContain('Quote from Acme AB')
+      expect(html).toContain('Quote number:')
+      expect(html).toContain('Attached you will find our quote. The quote is valid until 2026-10-02.')
+      expect(html).toContain('Valid until:')
+      expect(html).not.toContain('Due date:')
+      expect(html).not.toContain('Payment information')
+      expect(html).not.toContain('Pay online')
+      expect(html).toContain('Questions about the quote?')
+    })
+
+    it('plain text mirrors the HTML in both languages', () => {
+      const sv = generateInvoiceEmailText({ invoice: quote, customer: svCustomer, company })
+      expect(sv).toContain('Offert fr\u00e5n Acme AB')
+      expect(sv).toContain('Offerten \u00e4r giltig till 2026-10-02.')
+      expect(sv).toContain('Giltig till: 2026-10-02')
+      expect(sv).not.toContain('F\u00f6rfallodatum:')
+      expect(sv).not.toContain('Betalningsinformation')
+      expect(sv).not.toContain('Betala online')
+      expect(sv).not.toContain('buy.stripe.com')
+
+      const en = generateInvoiceEmailText({ invoice: quote, customer: enCustomer, company })
+      expect(en).toContain('Quote from Acme AB')
+      expect(en).toContain('The quote is valid until 2026-10-02.')
+      expect(en).toContain('Valid until: 2026-10-02')
+      expect(en).not.toContain('Due date:')
+      expect(en).not.toContain('Payment information')
+      expect(en).not.toContain('Pay online')
+    })
+
+    it('falls back to due_date when valid_until is missing on an older row', () => {
+      const legacy = makeInvoice({ ...quote, valid_until: null })
+      const text = generateInvoiceEmailText({ invoice: legacy, customer: svCustomer, company })
+      expect(text).toContain('Giltig till: 2026-10-02')
+    })
   })
 
   describe('payment link (payment_link_url)', () => {
