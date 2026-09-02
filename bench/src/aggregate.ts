@@ -458,7 +458,7 @@ function main() {
   const latest = latestPerKey(loadAllRecords())
   const suites: SuiteId[] = ['booking', 'reasoning', 'extraction', 'ledger-agent']
   const leaderboard: Record<string, unknown> = {
-    benchVersion: 'v2.0',
+    benchVersion: 'v2.1',
     generatedAt: new Date().toISOString(),
     suites: {},
     taskMatrix: {},

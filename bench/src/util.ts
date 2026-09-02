@@ -105,7 +105,12 @@ export function assertDataClassAllowed(task: Task, spec: ModelSpec): void {
 }
 
 export function resultsDir(): string {
-  const dir = path.join(BENCH_ROOT, 'results', 'runs')
+  // BENCH_RESULTS_DIR redirects run output (e.g. a k=3 reliability study) to a
+  // separate folder so it does not disturb the published single-run board,
+  // which the aggregator reads only from results/runs/.
+  const dir = process.env.BENCH_RESULTS_DIR
+    ? path.resolve(process.env.BENCH_RESULTS_DIR)
+    : path.join(BENCH_ROOT, 'results', 'runs')
   fs.mkdirSync(dir, { recursive: true })
   return dir
 }

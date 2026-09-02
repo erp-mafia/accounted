@@ -1,0 +1,56 @@
+{
+  "_comment": "Measured k=3 reliability on the booking suite. perRun = pass count in each run; pass3 = share of tasks passed in ALL runs; swingPp = spread between the best and worst run. Produced by bench/scripts/summarize-k3.ts from a run under BENCH_RESULTS_DIR.",
+  "generatedAt": "2026-09-02",
+  "suite": "booking",
+  "runs": 3,
+  "models": {
+    "claude-fable-5": {
+      "runs": 3,
+      "n": 52,
+      "perRun": [
+        50,
+        48,
+        48
+      ],
+      "pass3": 0.904,
+      "swingPp": 3.8,
+      "meanPass": 0.936
+    },
+    "claude-opus-5": {
+      "runs": 3,
+      "n": 52,
+      "perRun": [
+        49,
+        50,
+        49
+      ],
+      "pass3": 0.923,
+      "swingPp": 1.9,
+      "meanPass": 0.949
+    },
+    "claude-sonnet-4-6": {
+      "runs": 3,
+      "n": 52,
+      "perRun": [
+        45,
+        44,
+        46
+      ],
+      "pass3": 0.827,
+      "swingPp": 3.8,
+      "meanPass": 0.865
+    },
+    "claude-sonnet-5": {
+      "runs": 3,
+      "n": 52,
+      "perRun": [
+        46,
+        47,
+        43
+      ],
+      "pass3": 0.808,
+      "swingPp": 7.7,
+      "meanPass": 0.872
+    }
+  }
+}

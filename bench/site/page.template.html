@@ -469,11 +469,11 @@
       <h2>Would the numbers hold on a rerun?</h2>
       <p class="sectiondesc">Every pass rate on the board is a single run. Language models are not deterministic, so the honest question is how much a number would move if the same tasks ran again.</p>
       <div class="k3">
-        <span class="tag">Projected · full k=3 not yet run</span>
+        <span class="tag">Measured · Claude tiers · projected for the rest</span>
         <p id="k3measured"></p>
-        <p><b>What a full k=3 would add, projected.</b> Running all 15 models over all 52 booking tasks three times (about $150, not yet spent) would put a variance band on every number and let us report <b>pass<sup>3</sup></b>: the share of tasks a model solves on <em>every</em> attempt, which is the figure a firm relying on unattended booking should actually trust. The bands below are each model's sampling interval, the <em>floor</em> on how much a rerun could move, not a measured three-run spread. They understate the real thing on purpose: in the one subsample we did run three times, Claude Sonnet 5 moved 25 points while its sampling band is a fifth of that, so run-to-run noise is several times wider than sampling alone. Read the bands as "at least this uncertain."</p>
+        <p id="k3passcubed"></p>
         <div class="bands" id="k3bands"></div>
-        <p style="margin-top:12px"><b>What survives either way:</b> the statistical tie groups. Run-to-run noise moves models within a group, not across the rules that separate groups, which is the standing reason to read the tiers rather than the exact ordering. The agent suite already runs three times per task; its reliability column is measured, not projected.</p>
+        <p style="margin-top:12px"><b>What survives either way:</b> the statistical tie groups. Run-to-run noise moves models within a group, not across the rules that separate groups, which is the standing reason to read the tiers rather than the exact ordering. The agent suite is also run three times per task; its reliability column is measured too.</p>
       </div>
     </section>
 
@@ -569,7 +569,7 @@
 
     <section id="roadmap">
       <h2>What this measures next</h2>
-      <p class="sectiondesc">v2.0 measures models. The axes that follow measure everything else in the sentence "this model, with these instructions, in this system".</p>
+      <p class="sectiondesc">v2.1 measures models. The axes that follow measure everything else in the sentence "this model, with these instructions, in this system".</p>
       <div class="roadmap">
         <div class="rcard">
           <h5>What the suite does not test yet</h5>
@@ -1395,41 +1395,52 @@
   // on the page and in the code: a full k=3 has not been run, so no measured
   // three-run number is presented as if it had.
   function renderReliability() {
-    const V = VALIDITY.variance || {};
+    const K = (VALIDITY.k3 || {}).models || {};
+    const pc = (x) => (x * 100).toFixed(0) + '%';
     const rowFor = (id) => modelRow('booking', id);
-    // Real study: [minPass, n, swingPct] per model.
-    const studied = Object.entries(V)
-      .map(([id, a]) => ({ id, r: rowFor(id), swing: Array.isArray(a) ? a[2] : 0, n: Array.isArray(a) ? a[1] : 0 }))
+
+    // Measured: three full runs of all 52 tasks for the models we ran (Bedrock
+    // Claude tiers). Real numbers, not a projection.
+    const measured = Object.entries(K)
+      .map(([id, v]) => ({ id, r: rowFor(id), ...v }))
       .filter((x) => x.r)
-      .sort((a, b) => b.swing - a.swing);
-    if (studied.length) {
-      const worst = studied[0], held = studied.filter((x) => x.swing < 1);
-      const nm = (x) => `${x.r.label}`;
+      .sort((a, b) => b.pass3 - a.pass3);
+    if (measured.length) {
+      const nm = (x) => x.r.label;
+      const swings = measured.map((m) => m.swingPp);
       document.getElementById('k3measured').innerHTML =
-        `<b>What we have measured.</b> A ${studied[0].n}-task booking subsample was run three times for ${studied.length} models. ` +
-        `${nm(worst)} moved <b>${Math.round(worst.swing)} points</b> between identical runs` +
-        (held.length ? `, while ${listNames(held.map(nm))} held within a point` : '') +
-        `. That is real single-run noise on top of sampling noise, and it is why a lone number is worth less than the tier it sits in.`;
-    } else {
-      document.getElementById('k3measured').innerHTML =
-        `<b>What we have measured.</b> A small booking subsample was run three times; single-run pass rates moved by up to a quarter for the least stable model.`;
+        `<b>What we ran.</b> All 52 booking tasks, three times each, for the ${measured.length} Claude tiers on Bedrock (${measured[0].n ? measured[0].runs + ' runs × ' + measured[0].n + ' tasks' : ''}). ` +
+        `Run-to-run swing was ${Math.min(...swings).toFixed(1)} to ${Math.max(...swings).toFixed(1)} points: ${nm(measured.find((m) => m.swingPp === Math.max(...swings)))} moved most, ${nm(measured.find((m) => m.swingPp === Math.min(...swings)))} least. The other 11 models were not rerun (that needs OpenRouter credit) and keep the projected floor below.`;
+      const best = measured[0];
+      document.getElementById('k3passcubed').innerHTML =
+        `<b>pass<sup>3</sup> is the number to trust, and it is lower than the headline.</b> Requiring a task to be solved on <em>every</em> one of the three runs, not just once, ` +
+        measured.map((m) => `${m.r.label} lands at ${pc(m.pass3)}`).slice(0, 4).join(', ') +
+        `. Against each model's single-run pass rate that is a real drop: ${best.r.label} books ${pc(best.r.passRate)} once but ${pc(best.pass3)} every time. A firm running the model unattended lives with pass<sup>3</sup>, not the headline.`;
     }
 
-    // Projected bands: pass rate with the Wilson half-width as the projected
-    // spread. Wider band = less likely to hold on a rerun.
-    const rows = (DATA.suites.booking || []).slice()
-      .sort((a, b) => (b.wilsonHi - b.wilsonLo) - (a.wilsonHi - a.wilsonLo));
-    const maxHalf = Math.max(...rows.map((r) => (r.wilsonHi - r.wilsonLo) / 2)) || 1;
-    document.getElementById('k3bands').innerHTML = rows.map((r) => {
+    // Bands: measured swing where we ran three times, projected sampling floor
+    // where we did not. Two visibly different things, labelled.
+    const rows = (DATA.suites.booking || []).slice().map((r) => {
+      const k = K[r.model];
       const half = (r.wilsonHi - r.wilsonLo) / 2;
-      const w = Math.max(6, (half / maxHalf) * 100);
-      const measured = (VALIDITY.variance || {})[r.model];
-      const tag = measured ? '<span class="measured" title="in the measured subsample"> ·measured</span>' : '';
-      return `<div class="bandrow"><span class="nm">${markFor(r.vendor)}${short(r.label)}</span>` +
-        `<span class="track"><span class="fill" style="left:${50 - w / 2}%;width:${w}%"></span></span>` +
-        `<span class="val">±${(half * 100).toFixed(1)} pp${tag}</span></div>`;
+      return {
+        r,
+        measured: !!k,
+        // Measured band = half the run-to-run swing; projected = Wilson half-width.
+        band: k ? (k.swingPp / 100) / 2 : half,
+        label: k ? `±${(k.swingPp / 2).toFixed(1)} pp measured` : `±${(half * 100).toFixed(1)} pp floor`,
+      };
+    }).sort((a, b) => b.band - a.band);
+    const maxBand = Math.max(...rows.map((x) => x.band)) || 1;
+    document.getElementById('k3bands').innerHTML = rows.map((x) => {
+      const w = Math.max(6, (x.band / maxBand) * 100);
+      const fill = x.measured ? 'var(--ochre)' : 'var(--faint)';
+      return `<div class="bandrow"><span class="nm">${markFor(x.r.vendor)}${short(x.r.label)}</span>` +
+        `<span class="track"><span class="fill" style="left:${50 - w / 2}%;width:${w}%;background:${fill}"></span></span>` +
+        `<span class="val${x.measured ? ' measured' : ''}">${x.label}</span></div>`;
     }).join('');
   }
+
 
   function listNames(xs) {
     return xs.length <= 1 ? (xs[0] || '') : xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1];

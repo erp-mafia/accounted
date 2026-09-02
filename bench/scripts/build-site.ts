@@ -29,6 +29,7 @@ const validity = {
   resolutions: readJson(path.join(siteDir, 'audit-resolutions.json')),
   freeze: readJson(path.join(BENCH_ROOT, 'freeze.json')),
   variance: readJson(path.join(BENCH_ROOT, 'results', 'variance', 'summary.json')),
+  k3: readJson(path.join(BENCH_ROOT, 'results', 'variance', 'booking-k3.json')),
 }
 
 for (const token of ['__LEADERBOARD_JSON__', '__LOGOS_JSON__', '__VALIDITY_JSON__']) {

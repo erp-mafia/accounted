@@ -328,6 +328,18 @@ visible, reviewable event, not a silent retune toward a nicer-looking board.
 
 ## Changelog
 
+**v2.1 (2026-09-02).** Reliability release. Ran a real **k=3** on the booking
+suite for the four Claude tiers on Bedrock (52 tasks × 3 runs each, 156 calls
+per model, ~$85). Measured pass^3 (solved on every run) is below the single-run
+rate: Opus 5 96.2%→92.3%, Fable 5 94.2%→90.4%, Sonnet 4.6 86.5%→82.7%,
+Sonnet 5 88.5%→80.8%; run-to-run swing 1.9-7.7 points. The reliability section
+now shows these as measured bands and pass^3, with the 11 OpenRouter models
+keeping a projected sampling floor until credit is topped up for their k=3.
+`bench/scripts/summarize-k3.ts` produces the summary from a run under
+`BENCH_RESULTS_DIR` (which redirects output so a k=3 study never disturbs the
+single-run board). The 12-task subsample's 25-point Sonnet 5 swing was a
+small-n artifact: on the full 52 tasks it is 7.7.
+
 **v2.0 (2026-09-01).** Trustworthiness release. (1) The automation-coverage
 metric is now **cross-fitted**: the confidence threshold is fitted on one fold
 of tasks and scored on the other, so no transaction is judged by a threshold
@@ -485,7 +497,7 @@ rest). Results land as append-only JSONL under `bench/results/runs/`.
 
 ## Roadmap: what this measures next
 
-v2.0 measures models. Three further axes are planned and explicitly not yet
+v2.1 measures models. Three further axes are planned and explicitly not yet
 run, recorded here so the direction predates the numbers:
 
 1. **Skills and instructions.** Hold the model fixed, vary the instruction
