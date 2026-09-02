@@ -313,6 +313,13 @@ export function ApiKeysPanel() {
   // distribution marker (server reads it; never used for auth).
   const mcpUrl = (client: string) =>
     `${mcpBase}?tool_namespace=accounted&client=${client}`
+  // claude.ai's Add-custom-connector dialog probes the URL without credentials
+  // and pre-fills Authentication "None" when the lazy handshake answers 200,
+  // which blocks the sign-in later. `auth=required` makes every tokenless
+  // request answer the 401 challenge so the dialog detects OAuth instead
+  // (extensions/general/mcp-server/auth-mode.ts). Claude Code, Cursor and the
+  // stdio bridge keep the lazy URL.
+  const claudeConnectorUrl = `${mcpUrl('claude-connector')}&auth=required`
 
   // claude.ai install link: opens Add-custom-connector with name and URL
   // prefilled. It only prefills the dialog, so the user still reviews and
@@ -322,7 +329,7 @@ export function ApiKeysPanel() {
   const claudeInstallUrl =
     'https://claude.ai/customize/connectors?modal=add-custom-connector' +
     `&connectorName=${encodeURIComponent(branding.appName)}` +
-    `&connectorUrl=${encodeURIComponent(mcpUrl('claude-connector'))}`
+    `&connectorUrl=${encodeURIComponent(claudeConnectorUrl)}`
 
   return (
     <>
@@ -419,7 +426,7 @@ export function ApiKeysPanel() {
                   path: (chunks) => <strong>{chunks}</strong>,
                 })}
               </p>
-              <CopyBlock text={mcpUrl('claude-connector')} copyAriaLabel={t('copy_aria')} />
+              <CopyBlock text={claudeConnectorUrl} copyAriaLabel={t('copy_aria')} />
             </div>
 
             <div>
