@@ -301,11 +301,13 @@ BEGIN
     )
     SELECT count(*) INTO v_count FROM logged;
   ELSE
+    -- Dismiss is the queue's "not a party" answer: it only touches suggested
+    -- rows. A confirmed party is archived through its own action later.
     WITH changed AS (
       UPDATE public.parties p
       SET archived_at = now()
       WHERE p.company_id = p_company_id AND p.id = ANY(p_party_ids) AND p.merged_into IS NULL
-        AND p.archived_at IS NULL
+        AND p.status = 'suggested' AND p.archived_at IS NULL
       RETURNING p.id, p.status
     ), logged AS (
       INSERT INTO public.party_decisions (party_id, company_id, user_id, kind, before, after, note)
@@ -324,6 +326,6 @@ $$;
 REVOKE ALL ON FUNCTION public.decide_parties(uuid, uuid, uuid[], text, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.decide_parties(uuid, uuid, uuid[], text, text) TO authenticated, service_role;
 COMMENT ON FUNCTION public.decide_parties(uuid, uuid, uuid[], text, text) IS
-  'Bulk confirm (suggested -> confirmed) or dismiss (archive) parties, one party_decisions row each. Merge and undo live in their own RPCs.';
+  'Bulk confirm (suggested -> confirmed) or dismiss (archive a suggested party), one party_decisions row each. Confirmed parties are never dismissed here. Merge and undo live in their own RPCs.';
 
 NOTIFY pgrst, 'reload schema';

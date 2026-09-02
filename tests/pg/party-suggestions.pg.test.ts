@@ -221,6 +221,11 @@ describe('decide_parties (pg)', () => {
     // Second confirm of the same ids is a no-op: no duplicate decisions.
     const again = await decide(c.companyId, c.userId, [byName['Loopia AB']!], 'confirm')
     expect(again).toBe(0)
+    // Dismiss never touches a confirmed party.
+    const notDismissed = await decide(c.companyId, c.userId, [byName['Loopia AB']!], 'dismiss')
+    expect(notDismissed).toBe(0)
+    const loopia = await getPool().query<{ archived: boolean }>(`SELECT archived_at IS NOT NULL AS archived FROM public.parties WHERE id = $1`, [byName['Loopia AB']])
+    expect(loopia.rows[0]!.archived).toBe(false)
   })
 
   it('rejects unknown kinds and other companies', async () => {
