@@ -185,8 +185,8 @@ describe('POST /api/invoices/[id]/convert', () => {
     })
     // 3. insert items
     enqueue({ data: null, error: null })
-    // 4. cancel proforma, succeeds
-    enqueue({ data: null, error: null })
+    // 4. cancel proforma, succeeds (compare-and-set returns the row)
+    enqueue({ data: [{ id: 'pf-1' }], error: null })
     // 5. ensureInvoiceNumber → rpc THROWS
     enqueue({ data: null, error: { message: 'number allocation failed' } })
     // 6. un-cancel proforma (restore previous status)
@@ -213,8 +213,8 @@ describe('POST /api/invoices/[id]/convert', () => {
     })
     // 3. insert items
     enqueue({ data: null, error: null })
-    // 4. cancel proforma
-    enqueue({ data: null, error: null })
+    // 4. cancel proforma (compare-and-set returns the row)
+    enqueue({ data: [{ id: 'pf-1' }], error: null })
     // 5. ensureInvoiceNumber → rpc returns the assigned F-number
     enqueue({ data: 'F-2026005', error: null })
     // 6. fetch complete invoice
@@ -293,8 +293,8 @@ describe('POST /api/invoices/[id]/convert', () => {
       enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null })
       // 4. insert items
       enqueue({ data: null, error: null })
-      // 5. quote -> accepted
-      enqueue({ data: null, error: null })
+      // 5. quote -> accepted (compare-and-set returns the row)
+      enqueue({ data: [{ id: 'q-1' }], error: null })
       // 6. generate_invoice_number RPC
       enqueue({ data: 'F-042', error: null })
       // 7. refetch complete invoice
@@ -353,7 +353,7 @@ describe('POST /api/invoices/[id]/convert', () => {
       enqueue({ data: null, error: null }) // no existing conversion
       enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null })
       enqueue({ data: null, error: null }) // items
-      enqueue({ data: null, error: null }) // quote -> accepted
+      enqueue({ data: [{ id: 'q-eur' }], error: null }) // quote -> accepted
       enqueue({ data: 'F-050', error: null }) // number
       enqueue({ data: { id: 'inv-1', invoice_number: 'F-050', document_type: 'invoice', items: [] }, error: null })
 
@@ -404,5 +404,29 @@ describe('POST /api/invoices/[id]/convert', () => {
     expect(status).toBe(409)
     expect(body.error.code).toBe('INVOICE_QUOTE_ALREADY_INVOICED')
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('removes the orphan invoice and refuses when the proforma was cancelled concurrently (0-row compare-and-set)', async () => {
+    // 1. fetch proforma
+    enqueue({ data: baseProforma, error: null })
+    // 2. insert real invoice
+    enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null })
+    // 3. insert items
+    enqueue({ data: null, error: null })
+    // 4. cancel proforma: a concurrent order conversion already cancelled it, 0 rows
+    enqueue({ data: [], error: null })
+    // 5. delete orphan invoice
+    enqueue({ data: null, error: null })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/pf-1/convert', { method: 'POST' }),
+      createMockRouteParams({ id: 'pf-1' })
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INVOICE_CONVERT_SOURCE_CHANGED')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    expect(findCalls('invoices', 'delete').length).toBe(1)
   })
 })

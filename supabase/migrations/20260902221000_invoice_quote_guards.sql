@@ -1,7 +1,7 @@
 -- Quote guards that belong in the database, not in every writer.
 --
 -- 1. quote_status defaults to 'open' for a new quote. invoices_quote_columns_check
---    (20260902140000) pairs quote_status with document_type = 'quote', so every
+--    (20260902220000) pairs quote_status with document_type = 'quote', so every
 --    creator (dashboard, v1, bulk-create, MCP) had to remember the column, and
 --    every UPDATE that spread the shared write-builder's fields re-wrote 'open'
 --    over a recorded accept/decline. The decision now lives only where it is

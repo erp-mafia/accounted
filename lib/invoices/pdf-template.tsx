@@ -40,6 +40,8 @@ const LABELS = {
     cancelledWithNumber: (n: string) => `Faktura ${n} har makulerats. Numret behålls i serien för att hålla nummerföljden obruten enligt ML 17 kap 24§, men dokumentet är inte ett giltigt fakturaunderlag.`,
     cancelledNoNumber: 'Detta utkast har makulerats och är inte ett giltigt fakturaunderlag.',
     draftTitle: 'UTKAST: inte en giltig faktura',
+    draftTitleQuote: 'UTKAST',
+    draftTextQuote: 'Detta är ett utkast av offerten.',
     draftWithNumber: 'Detta är ett utkast. Markera fakturan som skickad eller skicka via systemet för att göra den giltig som fakturaunderlag.',
     draftNoNumber: 'Denna faktura saknar löpnummer och kan inte användas som fakturaunderlag enligt ML 17 kap 24§. Skicka fakturan via systemet för att tilldela ett nummer.',
     paidTitle: 'BETALD',
@@ -134,6 +136,8 @@ const LABELS = {
     cancelledWithNumber: (n: string) => `Invoice ${n} has been voided. The number is retained in the sequence to keep the numbering unbroken (ML 17 kap 24§, Swedish VAT Act), but this document is not a valid invoice.`,
     cancelledNoNumber: 'This draft has been voided and is not a valid invoice.',
     draftTitle: 'DRAFT: not a valid invoice',
+    draftTitleQuote: 'DRAFT',
+    draftTextQuote: 'This is a draft of the quote.',
     draftWithNumber: 'This is a draft. Mark the invoice as sent, or send it via the system, to make it a valid invoice.',
     draftNoNumber: 'This invoice has no serial number and cannot be used as a valid invoice under ML 17 kap 24§ (Swedish VAT Act). Send the invoice via the system to assign a number.',
     paidTitle: 'PAID',
@@ -861,11 +865,13 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
           </View>
         ) : isPreview ? null : (invoice.status === 'draft' || !invoice.invoice_number) ? (
           <View style={styles.draftBanner}>
-            <Text style={styles.draftBannerTitle}>{L.draftTitle}</Text>
+            <Text style={styles.draftBannerTitle}>{isQuote ? L.draftTitleQuote : L.draftTitle}</Text>
             <Text style={styles.draftBannerText}>
-              {invoice.invoice_number
-                ? L.draftWithNumber
-                : L.draftNoNumber}
+              {isQuote
+                ? L.draftTextQuote
+                : invoice.invoice_number
+                  ? L.draftWithNumber
+                  : L.draftNoNumber}
             </Text>
           </View>
         ) : paidState?.kind === 'paid' && (

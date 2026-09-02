@@ -1242,6 +1242,16 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Dokumentet är makulerat och kan inte omvandlas.',
     message_en: 'This document is cancelled and cannot be converted.',
   },
+  INVOICE_CONVERT_SOURCE_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Dokumentet ändrades samtidigt (makulerat, omvandlat eller beslutat på annat sätt). Ladda om och försök igen.',
+    message_en: 'The document changed concurrently (cancelled, converted or decided elsewhere). Reload and try again.',
+  },
+  INVOICE_QUOTE_CHANGED_CONCURRENTLY: {
+    httpStatus: 409,
+    message_sv: 'Offerten ändrades samtidigt (fakturerad, makulerad eller beslutad på annat sätt). Ladda om och försök igen.',
+    message_en: 'The quote changed concurrently (invoiced, cancelled or decided elsewhere). Reload and try again.',
+  },
   INVOICE_CONVERT_QUOTE_DECLINED: {
     httpStatus: 409,
     message_sv: 'Offerten är avböjd. Markera den som accepterad innan du skapar en faktura.',

@@ -522,7 +522,7 @@ export async function buildInvoiceWriteData(params: {
     // quote_status is deliberately NOT a builder output: this object is
     // spread into both inserts and draft updates, and a recorded accept or
     // decline must never be overwritten by an edit. New quotes start open via
-    // the invoices_quote_defaults trigger (20260902141000); decisions are
+    // the invoices_quote_defaults trigger (20260902221000); decisions are
     // written only by the quote-status routes and the converter.
     currency: input.currency,
     exchange_rate: exchangeRate,
@@ -629,7 +629,10 @@ export async function buildInvoiceWriteData(params: {
       // VAT-treatment-derived account in generatePerRateLines().
       article_id: item.article_id ?? null,
       revenue_account: item.revenue_account ?? null,
-      sales_order_item_id: item.sales_order_item_id ?? null,
+      // Only a faktura consumes kundorder quantity: a quote or proforma line
+      // linked to an order item would mark the order invoiced without any
+      // invoice existing (sales_order_invoiced_quantities counts by status).
+      sales_order_item_id: documentType === 'invoice' ? (item.sales_order_item_id ?? null) : null,
       deduction_type: deductionType,
       deduction_amount: deductionAmount,
       labor_hours: documentType === 'invoice' ? (item.labor_hours ?? null) : null,

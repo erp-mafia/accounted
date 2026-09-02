@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { getPool } from '@/tests/pg/setup'
 import { seedCompany } from '@/tests/pg/fixtures'
 
-// Migration 20260902140000_invoice_quotes: the OF-series RPC, the widened
+// Migration 20260902220000_invoice_quotes: the OF-series RPC, the widened
 // document_type CHECK and the quote column pairing constraint.
 
 async function ensureCompanySettings(params: {
@@ -186,7 +186,7 @@ describe('invoices quote columns', () => {
     ).rejects.toThrow(/invoices_document_type_check/)
   })
 
-describe('invoices_quote_defaults trigger and one-live-conversion index (20260902141000)', () => {
+describe('invoices_quote_defaults trigger and one-live-conversion index (20260902221000)', () => {
   it('opens a new quote and mirrors due_date into valid_until when a writer omits them', async () => {
     const { userId, companyId } = await seedCompany()
     const customerId = await insertCustomer(userId, companyId)

@@ -574,4 +574,26 @@ describe('buildInvoiceWriteData kundkort fallback customer-type gate', () => {
     expect(result.invoiceFields).not.toHaveProperty('quote_status')
     expect(result.invoiceFields.due_date).toBe(baseHeader.due_date)
   })
+
+  it('drops sales_order_item_id on quote lines so an offer never consumes kundorder quantity', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({ customer_type: 'swedish_business' })
+    const result = await call(
+      enqueue,
+      supabase as unknown as SupabaseClient,
+      customer,
+      {
+        ...baseHeader,
+        valid_until: '2026-08-01',
+        items: [{ description: 'Orderrad', quantity: 1, unit: 'st', unit_price: 1000, vat_rate: 25, sales_order_item_id: '33333333-3333-4333-8333-333333333333' }],
+      },
+      'quote',
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.items[0]).toMatchObject({ sales_order_item_id: null })
+  })
 })

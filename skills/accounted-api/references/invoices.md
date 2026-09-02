@@ -677,7 +677,7 @@ Response `200` (`application/pdf`).
 **Record the customer decision on a quote (offert).**
 `scope:invoices:write · risk:low · idempotent · dry-run · reversible`
 
-Sets quote_status on a quote (document_type=quote) to open, accepted or declined. Any transition between the three is allowed until the quote has been converted to an invoice; after that the decision is locked (409 INVOICE_QUOTE_ALREADY_INVOICED). "expired" is never written: it is derived from valid_until and reported as effective_quote_status. Accepting a quote past valid_until is allowed (extend valid_until with PATCH if you want it to read as open again). No journal entry, number allocation or event is involved. Idempotent and dry-runnable.
+Sets quote_status on a quote (document_type=quote) to open, accepted or declined. Any transition between the three is allowed until the quote has been converted to an invoice; after that the decision is locked (409 INVOICE_QUOTE_ALREADY_INVOICED). "expired" is never written: it is derived from valid_until and reported as effective_quote_status. Accepting a quote past valid_until is allowed (pass valid_until here to extend an expired quote so it reads as open again). No journal entry, number allocation or event is involved. Idempotent and dry-runnable.
 
 **Use when:** The customer answered a quote and you want Accounted to reflect it (accepted / declined), or you want to reopen a decision that was recorded by mistake.
 **Do not use for:** Creating the invoice from an accepted quote (convert it in the dashboard; the conversion marks the quote accepted itself). Regular invoices, proformas or delivery notes: they return 400 INVOICE_NOT_A_QUOTE.
@@ -696,7 +696,7 @@ Sets quote_status on a quote (document_type=quote) to open, accepted or declined
 
 Request body:
 ```ts
-{ status: "open" | "accepted" | "declined" }
+{ status: "open" | "accepted" | "declined", valid_until?: string | "" }
 ```
 
 Example request:

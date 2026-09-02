@@ -129,6 +129,9 @@ export async function GET(
                 .select('*, customer:customers(*)')
                 .eq('company_id', feed.company_id)
                 .in('status', ['sent', 'paid', 'partially_paid', 'overdue'])
+                // A quote's due_date only mirrors its expiry; it is not a
+                // payment date. Proformas and delivery notes are not owed.
+                .eq('document_type', 'invoice')
                 .gte('due_date', startStr)
                 .lte('due_date', endStr)
                 .order('due_date')

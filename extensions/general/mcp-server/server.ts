@@ -8025,9 +8025,10 @@ export const tools: McpTool[] = [
       if (!invoiceId) throw new Error('invoice_id is required')
 
       const invoice = await fetchInvoiceWithCustomer(supabase, companyId, invoiceId)
-      // Only a faktura is a claim: a proforma, delivery note or quote has
-      // nothing to settle (parity with the dashboard and v1 mark-paid routes).
-      if (invoice.document_type && invoice.document_type !== 'invoice') {
+      // A quote is an offer, not a claim (parity with the dashboard mark-paid
+      // route, which likewise refuses only quotes: marking a sent proforma paid
+      // is a supported prepayment record with no verifikat).
+      if (invoice.document_type === 'quote') {
         throw registryError('INVOICE_QUOTE_NOT_PAYABLE')
       }
       if (invoice.status !== 'sent' && invoice.status !== 'overdue') {
@@ -10697,7 +10698,7 @@ export const tools: McpTool[] = [
         const uniqueIds = Array.from(new Set(invoiceIds))
         const { data: found } = await supabase
           .from('invoices')
-          .select('id')
+          .select('id, document_type')
           .in('id', uniqueIds)
           .eq('company_id', companyId)
         const foundRows = found ?? []
@@ -10705,6 +10706,12 @@ export const tools: McpTool[] = [
         const missing = uniqueIds.filter((id) => !foundSet.has(id))
         if (missing.length > 0 || foundRows.length !== uniqueIds.length) {
           throw new Error(`Invoices not found for this company: ${missing.join(', ') || '(count mismatch)'}`)
+        }
+        // Only fakturor carry a receivable: the RPC gates on status alone, so
+        // a sent proforma or quote must be refused here (parity with the
+        // single-invoice match tool).
+        if (foundRows.some((r) => r.document_type && r.document_type !== 'invoice')) {
+          throw registryError('MATCH_INVOICE_NOT_INVOICE_TYPE')
         }
       }
       if (supplierInvoiceIds.length > 0) {
@@ -17714,6 +17721,7 @@ export const tools: McpTool[] = [
       properties: {
         invoice_id: { type: 'string', description: 'Quote UUID' },
         status: { type: 'string', enum: ['open', 'accepted', 'declined'] },
+        valid_until: { type: 'string', description: 'YYYY-MM-DD; new expiry (reopens an expired quote)' },
       },
       required: ['invoice_id', 'status'],
     },
@@ -17755,19 +17763,29 @@ export const tools: McpTool[] = [
       if (convertedError) throw dbError(convertedError)
       if (converted) throw registryError('INVOICE_QUOTE_ALREADY_INVOICED')
 
+      const nextValidUntil = typeof args.valid_until === 'string' ? args.valid_until : undefined
+      if (nextValidUntil !== undefined && !ISO_DATE_RE.test(nextValidUntil)) {
+        throw codedError('VALIDATION_ERROR', 'valid_until must be YYYY-MM-DD')
+      }
+      // Compare-and-set on the state read above (same as the HTTP routes): a
+      // conversion or cancel that lands in between makes this a 0-row update
+      // instead of overwriting newer state.
       const { data: updated, error: updateError } = await supabase
         .from('invoices')
         .update({
           quote_status: nextStatus,
           quote_decided_at: nextStatus === 'open' ? null : new Date().toISOString(),
+          valid_until: nextValidUntil,
           updated_at: new Date().toISOString(),
         })
         .eq('id', id)
         .eq('company_id', companyId)
+        .eq('quote_status', quote.quote_status)
+        .neq('status', 'cancelled')
         .select('id, invoice_number, document_type, status, quote_status, quote_decided_at, valid_until')
-        .single()
+        .maybeSingle()
       if (updateError) throw dbError(updateError)
-      if (!updated) throw new Error('Quote status update failed')
+      if (!updated) throw registryError('INVOICE_QUOTE_CHANGED_CONCURRENTLY')
 
       return {
         invoice_id: updated.id,

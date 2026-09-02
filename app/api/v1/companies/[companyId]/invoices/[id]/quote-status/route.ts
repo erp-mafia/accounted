@@ -46,7 +46,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/quote-status',
   summary: 'Record the customer decision on a quote (offert).',
   description:
-    'Sets quote_status on a quote (document_type=quote) to open, accepted or declined. Any transition between the three is allowed until the quote has been converted to an invoice; after that the decision is locked (409 INVOICE_QUOTE_ALREADY_INVOICED). "expired" is never written: it is derived from valid_until and reported as effective_quote_status. Accepting a quote past valid_until is allowed (extend valid_until with PATCH if you want it to read as open again). No journal entry, number allocation or event is involved. Idempotent and dry-runnable.',
+    'Sets quote_status on a quote (document_type=quote) to open, accepted or declined. Any transition between the three is allowed until the quote has been converted to an invoice; after that the decision is locked (409 INVOICE_QUOTE_ALREADY_INVOICED). "expired" is never written: it is derived from valid_until and reported as effective_quote_status. Accepting a quote past valid_until is allowed (pass valid_until here to extend an expired quote so it reads as open again). No journal entry, number allocation or event is involved. Idempotent and dry-runnable.',
   useWhen:
     'The customer answered a quote and you want Accounted to reflect it (accepted / declined), or you want to reopen a decision that was recorded by mistake.',
   doNotUseFor:
@@ -195,6 +195,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .update({
         quote_status: nextStatus,
         quote_decided_at: decidedAt,
+        // undefined is dropped by supabase-js: only a supplied date moves.
+        valid_until: parsed.data.valid_until,
         updated_at: new Date().toISOString(),
       })
       .eq('company_id', ctx.companyId!)
@@ -214,13 +216,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponse(updateError, ctx.log, { requestId: ctx.requestId })
     }
     if (!updated) {
-      ctx.log.warn('invoices.quote-status: row vanished between read and update', {
+      ctx.log.warn('invoices.quote-status: quote changed between read and update', {
         quoteId,
         companyId: ctx.companyId,
       })
-      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
+      return v1ErrorResponseFromCode('INVOICE_QUOTE_CHANGED_CONCURRENTLY', ctx.log, {
         requestId: ctx.requestId,
-        details: { resource: 'invoice' },
       })
     }
 

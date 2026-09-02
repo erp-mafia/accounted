@@ -225,13 +225,6 @@ export const InvoiceDocumentTypeSchema = z.enum([
   'invoice', 'proforma', 'delivery_note', 'quote',
 ])
 
-export const QuoteStatusSchema = z.enum(['open', 'accepted', 'declined'])
-
-// POST /api/invoices/[id]/quote-status. Any transition between the three
-// decisions is allowed until the quote has been converted to an invoice.
-export const SetQuoteStatusSchema = z.object({
-  status: QuoteStatusSchema,
-})
 
 export const VatTreatmentSchema = z.enum([
   'standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt',
@@ -495,6 +488,18 @@ export const CreateInvoiceItemSchema = z
   })
 
 const optionalIsoDate = isoDate.or(z.literal('')).transform(v => v || undefined).optional()
+
+export const QuoteStatusSchema = z.enum(['open', 'accepted', 'declined'])
+
+// POST /api/invoices/[id]/quote-status. Any transition between the three
+// decisions is allowed until the quote has been converted to an invoice.
+export const SetQuoteStatusSchema = z.object({
+  status: QuoteStatusSchema,
+  // Optional new expiry. This is how an expired (open, past valid_until)
+  // quote is reopened: sent quotes are not draft-editable, so the date
+  // travels with the decision. The DB trigger mirrors it into due_date.
+  valid_until: optionalIsoDate,
+})
 
 /**
  * ROT/RUT claim completeness (HUSFL: art av arbete + antal arbetstimmar) at

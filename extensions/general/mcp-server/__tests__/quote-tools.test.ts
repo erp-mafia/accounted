@@ -331,4 +331,35 @@ describe('quotes are never claims on the MCP payment tools', () => {
     expect(findCall('pending_operations', 'insert')).toBeUndefined()
   })
 })
+
+describe('gnubok_set_quote_status: concurrency and expiry', () => {
+  it('reports INVOICE_QUOTE_CHANGED_CONCURRENTLY when the compare-and-set update hits 0 rows', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'q-1', document_type: 'quote', status: 'sent', quote_status: 'open', quote_decided_at: null, valid_until: '2026-12-31' }, error: null })
+    enqueue({ data: null, error: null }) // no converted invoice yet
+    enqueue({ data: null, error: null }) // update matched 0 rows: converted in between
+
+    await expect(
+      setQuoteStatus.execute({ invoice_id: 'q-1', status: 'declined' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'INVOICE_QUOTE_CHANGED_CONCURRENTLY' })
+  })
+
+  it('writes a new valid_until with the decision and rejects a malformed one', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'q-1', document_type: 'quote', status: 'sent', quote_status: 'open', quote_decided_at: null, valid_until: '2026-01-31' }, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'q-1', invoice_number: 'OF-001', document_type: 'quote', status: 'sent', quote_status: 'open', quote_decided_at: null, valid_until: '2026-12-31' }, error: null })
+
+    await setQuoteStatus.execute({ invoice_id: 'q-1', status: 'open', valid_until: '2026-12-31' }, 'company-1', 'user-1', supabase as never)
+    const update = findCall('invoices', 'update')?.[0] as Record<string, unknown>
+    expect(update.valid_until).toBe('2026-12-31')
+
+    const second = createQueuedMockSupabase()
+    second.enqueue({ data: { id: 'q-1', document_type: 'quote', status: 'sent', quote_status: 'open', quote_decided_at: null, valid_until: '2026-01-31' }, error: null })
+    second.enqueue({ data: null, error: null })
+    await expect(
+      setQuoteStatus.execute({ invoice_id: 'q-1', status: 'open', valid_until: 'next week' }, 'company-1', 'user-1', second.supabase as never),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+  })
+})
 })

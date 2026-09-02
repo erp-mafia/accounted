@@ -2431,10 +2431,9 @@ async function commitMarkInvoicePaid(
   if (invoice.credited_invoice_id) {
     return { error: 'Kreditfakturor kan inte markeras som betalda.', status: 409 }
   }
-  // Parity with the dashboard and v1 mark-paid routes: only a faktura is a
-  // claim. A proforma, delivery note or quote has nothing to settle and must
-  // never reach a payment voucher.
-  if (invoice.document_type && invoice.document_type !== 'invoice') {
+  // Parity with the dashboard mark-paid route: a quote is an offer, not a
+  // claim. Proformas keep working (a prepayment record with no verifikat).
+  if (invoice.document_type === 'quote') {
     const entry = getErrorEntry('INVOICE_QUOTE_NOT_PAYABLE')
     // 409 like the credit-note guard above: the dispatcher records it as
     // rejected (a state refusal), not failed (an execution error).

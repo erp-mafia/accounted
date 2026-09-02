@@ -2975,7 +2975,14 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         name="document_type"
                         control={control}
                         render={({ field }) => (
-                          <Select value={field.value} onValueChange={field.onChange}>
+                          <Select
+                            value={field.value}
+                            onValueChange={field.onChange}
+                            // Quotes and delivery notes are numbered from their
+                            // own series at insert, so an existing one cannot
+                            // change type (the API refuses it too).
+                            disabled={isEditMode && (field.value === 'quote' || field.value === 'delivery_note')}
+                          >
                             <SelectTrigger className="h-8 w-44 text-[13px]">
                               <SelectValue />
                             </SelectTrigger>

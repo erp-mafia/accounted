@@ -73,6 +73,31 @@ export const POST = withRouteContext(
 
     // PR #607 round 3: p_user_id removed: RPC resolves caller from
     // auth.uid() directly. Keeps the attack surface off the API boundary.
+    // Only fakturor carry a receivable. The RPC gates on status alone, so a
+    // sent proforma or quote in the allocation list is refused here, as the
+    // single-invoice match route does.
+    const customerInvoiceIds = Array.from(
+      new Set(
+        validation.data.allocations.flatMap((a) =>
+          a.kind === 'customer_invoice' && a.invoice_id ? [a.invoice_id] : [],
+        ),
+      ),
+    )
+    if (customerInvoiceIds.length > 0) {
+      const { data: docRows } = await supabase
+        .from('invoices')
+        .select('id, document_type')
+        .in('id', customerInvoiceIds)
+        .eq('company_id', companyId)
+      const offender = (docRows ?? []).find((r) => r.document_type && r.document_type !== 'invoice')
+      if (offender) {
+        return errorResponseFromCode('MATCH_INVOICE_NOT_INVOICE_TYPE', txLog, {
+          requestId,
+          details: { invoiceId: offender.id, documentType: offender.document_type },
+        })
+      }
+    }
+
     const { data, error } = await supabase.rpc('match_batch_allocate', {
       p_tx_id: transactionId,
       p_allocations: validation.data.allocations,

@@ -26,6 +26,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
     if (!validation.success) return validation.response
     const nextStatus = validation.data.status
+    const nextValidUntil = validation.data.valid_until
 
     const { data: quote, error: fetchError } = await supabase
       .from('invoices')
@@ -75,6 +76,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .update({
         quote_status: nextStatus,
         quote_decided_at: nextStatus === 'open' ? null : new Date().toISOString(),
+        // undefined is dropped by supabase-js: only a supplied date moves.
+        valid_until: nextValidUntil,
         updated_at: new Date().toISOString(),
       })
       .eq('id', id)
@@ -89,10 +92,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       return errorResponse(updateError, log, { requestId })
     }
     if (!updated) {
-      return errorResponseFromCode('INVOICE_QUOTE_ALREADY_INVOICED', log, {
-        requestId,
-        reason: 'quote changed concurrently (converted or cancelled) before the decision was written',
-      })
+      return errorResponseFromCode('INVOICE_QUOTE_CHANGED_CONCURRENTLY', log, { requestId })
     }
 
     return NextResponse.json({ data: updated })

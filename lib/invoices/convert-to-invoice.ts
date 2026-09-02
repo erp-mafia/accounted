@@ -32,6 +32,7 @@ export type ConvertToInvoiceFailureCode =
   | 'INVOICE_NOT_FOUND'
   | 'INVOICE_CONVERT_NOT_CONVERTIBLE'
   | 'INVOICE_CONVERT_SOURCE_CANCELLED'
+  | 'INVOICE_CONVERT_SOURCE_CHANGED'
   | 'INVOICE_CONVERT_QUOTE_DECLINED'
   | 'INVOICE_QUOTE_ALREADY_INVOICED'
 
@@ -53,6 +54,7 @@ interface SourceItem {
   vat_amount?: number | null
   revenue_account?: string | null
   article_id?: string | null
+  sales_order_item_id?: string | null
   dimensions?: Record<string, string> | null
 }
 
@@ -214,7 +216,7 @@ export async function convertToInvoice(params: {
   if (invoiceError) {
     // idx_invoices_one_live_conversion: a concurrent conversion won the race.
     if ((invoiceError as { code?: string }).code === '23505') {
-      return { ok: false, code: 'INVOICE_QUOTE_ALREADY_INVOICED' }
+      return { ok: false, code: isQuote ? 'INVOICE_QUOTE_ALREADY_INVOICED' : 'INVOICE_CONVERT_SOURCE_CHANGED' }
     }
     return { ok: false, code: 'INVOICE_CONVERT_FAILED', cause: invoiceError }
   }
@@ -239,6 +241,9 @@ export async function convertToInvoice(params: {
     vat_amount: item.vat_amount ?? 0,
     revenue_account: item.revenue_account ?? null,
     article_id: item.article_id ?? null,
+    // A kundorder link on a proforma line moves to the invoice, so the order
+    // keeps counting the quantity as invoiced once the proforma is cancelled.
+    sales_order_item_id: item.sales_order_item_id ?? null,
     dimensions: item.dimensions ?? {},
   }))
 
@@ -260,7 +265,12 @@ export async function convertToInvoice(params: {
   }
   // Literal payloads on purpose: the phantom-column schema guard
   // (tests/schema/no-phantom-columns.test.ts) can only check object literals.
-  const { error: sourceUpdateError } = isQuote
+  // Compare-and-set on the state read above: a concurrent cancel, a
+  // concurrent proforma-to-order conversion (which cancels the proforma) or
+  // a concurrent decision on the quote turns this into a 0-row update, and
+  // the orphan invoice is removed instead of a second document for the
+  // same sale surviving.
+  const { data: sourceRows, error: sourceUpdateError } = isQuote
     ? await supabase
         .from('invoices')
         .update({
@@ -268,14 +278,23 @@ export async function convertToInvoice(params: {
           quote_decided_at: source.quote_decided_at ?? new Date().toISOString(),
         })
         .eq('id', sourceId)
+        .eq('quote_status', source.quote_status)
+        .neq('status', 'cancelled')
+        .select('id')
     : await supabase
         .from('invoices')
         .update({ status: 'cancelled' })
         .eq('id', sourceId)
+        .neq('status', 'cancelled')
+        .select('id')
 
   if (sourceUpdateError) {
     await supabase.from('invoices').delete().eq('id', invoice.id)
     return { ok: false, code: 'INVOICE_CONVERT_FAILED', cause: sourceUpdateError }
+  }
+  if (!sourceRows || sourceRows.length === 0) {
+    await supabase.from('invoices').delete().eq('id', invoice.id)
+    return { ok: false, code: 'INVOICE_CONVERT_SOURCE_CHANGED' }
   }
 
   // Allocate the F-series number last. If allocation fails, restore the
