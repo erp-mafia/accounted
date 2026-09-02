@@ -135,7 +135,13 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
  * employee_benefits code already carries: the step-8d3 derived-rows insert
  * (rows built in a .map with literal keys, opaque to the scanner) and the
  * PATCH route's merged-updates payload (explicit literal keys, but assembled
- * conditionally into a variable).
+ * conditionally into a variable). Both carry scoped assertions instead:
+ * employee-recurring-lines.pg.test.ts inserts the derived-row shape against
+ * the real table, and the PATCH route test pins the exact writable column
+ * set ("writes exactly the patchable columns and nothing else"). Making
+ * either literal would cost a real property: the PATCH would have to write
+ * every column on every request, turning a partial update into
+ * last-write-wins.
  */
 // 2026-08-20: +1 for lib/connect/instance/sync.ts, whose capability_grants
 // upsert is a per-company x per-scope row array built at runtime (one chunked

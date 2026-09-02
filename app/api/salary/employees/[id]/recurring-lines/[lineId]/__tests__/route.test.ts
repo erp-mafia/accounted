@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
-const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -82,6 +82,38 @@ describe('PATCH /api/salary/employees/[id]/recurring-lines/[lineId]', () => {
 
     expect(status).toBe(200)
     expect(body.data.amount).toBe(-700)
+  })
+
+  it('writes exactly the patchable columns and nothing else', async () => {
+    // Scoped assertion for the merged-updates payload: it is assembled
+    // conditionally, so the phantom-column scanner cannot resolve it. This
+    // pins the column set the route can ever write.
+    enqueue({ data: storedLine }) // fetch existing
+    enqueue({ data: { id: 'line-1' } }) // update
+
+    await PATCH(
+      patch({
+        description: 'Förmånscykel',
+        amount: -700,
+        account_number: '7399',
+        valid_from: '2026-02-01',
+        valid_to: '2026-12-31',
+        metadata: { source: 'test' },
+        is_active: false,
+      }),
+      params,
+    )
+
+    const update = findCall('employee_recurring_lines', 'update')
+    expect(Object.keys(update?.[0] as Record<string, unknown>).sort()).toEqual([
+      'account_number',
+      'amount',
+      'description',
+      'is_active',
+      'metadata',
+      'valid_from',
+      'valid_to',
+    ])
   })
 
   it('returns 404 when the line does not exist', async () => {
