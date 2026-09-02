@@ -1,18 +1,20 @@
+import { PEPPOL_OPERATIONS, connectorErrorSchema } from '@accounted/connect-contract'
+import type { z } from 'zod'
 import { CONNECTOR_COMPANY_HEADER, type ConnectorUpstream } from '@/lib/connect/instance/upstreams'
 import {
   CONNECTOR_PEPPOL_PROVIDER,
   PeppolTransportError,
   type PeppolDeliveryEvidence,
-  type PeppolInboundListOptions,
   type PeppolInboundMessage,
-  type PeppolParticipant,
   type PeppolRecipientLookup,
   type PeppolRecipientRegistration,
+  type PeppolSubmissionReceipt,
+  type PeppolVerifiedEvent,
+  type PeppolInboundListOptions,
+  type PeppolParticipant,
   type PeppolRecipientRegistrationInput,
   type PeppolSubmission,
-  type PeppolSubmissionReceipt,
   type PeppolTransport,
-  type PeppolVerifiedEvent,
   type PeppolWebhookRequest,
 } from '@/lib/invoices/peppol-transport'
 
@@ -49,13 +51,6 @@ export interface ConnectorTransportDeps {
   companyForParticipant?: (participant: PeppolParticipant) => Promise<string | null>
 }
 
-interface ConnectorErrorBody {
-  error?: string
-  code?: string
-  retryable?: boolean
-  detail?: string | null
-}
-
 async function readJson(response: Response): Promise<unknown> {
   const text = await response.text()
   if (!text) return null
@@ -67,12 +62,23 @@ async function readJson(response: Response): Promise<unknown> {
 }
 
 function failureFromResponse(status: number, body: unknown): PeppolTransportError {
-  const parsed = (body && typeof body === 'object' ? body : {}) as ConnectorErrorBody
-  const code = typeof parsed.code === 'string' ? parsed.code : `HTTP_${status}`
-  const message = typeof parsed.error === 'string' && parsed.error ? parsed.error : `Connector answered ${status}`
-  const retryable = typeof parsed.retryable === 'boolean' ? parsed.retryable : status === 429 || status >= 500
-  const detail = [code, typeof parsed.detail === 'string' ? parsed.detail : null].filter(Boolean).join(': ')
+  const parsed = connectorErrorSchema.safeParse(body)
+  const envelope = parsed.success ? parsed.data : null
+  const code = envelope?.code ?? `HTTP_${status}`
+  const message = envelope?.error || `Connector answered ${status}`
+  const retryable = typeof envelope?.retryable === 'boolean' ? envelope.retryable : status === 429 || status >= 500
+  const detail = [code, envelope?.detail ?? null].filter(Boolean).join(': ')
   return new PeppolTransportError(`Connector: ${message}`, { retryable, detail: detail || null })
+}
+
+/** Validate a hosted answer against the contract; a shape mismatch is a protocol error, never retried. */
+function parseResponse<T>(schema: z.ZodType<T>, json: unknown, operation: string): T {
+  const parsed = schema.safeParse(json)
+  if (parsed.success) return parsed.data
+  throw new PeppolTransportError(`Connector: unexpected response shape from ${operation}`, {
+    retryable: false,
+    detail: parsed.error.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+  })
 }
 
 /**
@@ -104,6 +110,8 @@ export function createConnectorPeppolTransport(
   assertTransportSecurity(baseUrl)
 
   async function call<T>(
+    operation: string,
+    schema: z.ZodType<T>,
     method: 'POST' | 'PUT' | 'DELETE',
     path: string,
     body: unknown,
@@ -130,7 +138,7 @@ export function createConnectorPeppolTransport(
       })
       const json = await readJson(response)
       if (!response.ok) throw failureFromResponse(response.status, json)
-      return json as T
+      return parseResponse(schema, json, operation)
     } catch (error) {
       if (error instanceof PeppolTransportError) throw error
       throw new PeppolTransportError('Connector: could not reach the hosted service', { retryable: true, cause: error })
@@ -144,11 +152,11 @@ export function createConnectorPeppolTransport(
   }
 
   async function lookupRecipient(participant: PeppolParticipant): Promise<PeppolRecipientLookup> {
-    return call<PeppolRecipientLookup>('POST', '/lookup', { participant })
+    return call('lookup', PEPPOL_OPERATIONS.lookup.response, 'POST', PEPPOL_OPERATIONS.lookup.path, { participant })
   }
 
   async function submit(submission: PeppolSubmission): Promise<PeppolSubmissionReceipt> {
-    const receipt = await call<PeppolSubmissionReceipt>('POST', '/submit', submission, {
+    const receipt = await call('submit', PEPPOL_OPERATIONS.submit.response, 'POST', PEPPOL_OPERATIONS.submit.path, submission, {
       companyRef: submission.tenantReference,
     })
     return withProvider(receipt)
@@ -168,14 +176,14 @@ export function createConnectorPeppolTransport(
   }
 
   async function retrieveEvidence(providerSubmissionId: string): Promise<PeppolDeliveryEvidence[]> {
-    const items = await call<PeppolDeliveryEvidence[]>('POST', '/evidence', { providerSubmissionId }, {
+    const items = await call('evidence', PEPPOL_OPERATIONS.evidence.response, 'POST', PEPPOL_OPERATIONS.evidence.path, { providerSubmissionId }, {
       companyRef: await companyFor(providerSubmissionId),
     })
     return (items ?? []).map(withProvider)
   }
 
   async function pollDeliveryStatus(providerSubmissionId: string): Promise<PeppolVerifiedEvent[]> {
-    const events = await call<PeppolVerifiedEvent[]>('POST', '/status', { providerSubmissionId }, {
+    const events = await call('status', PEPPOL_OPERATIONS.status.response, 'POST', PEPPOL_OPERATIONS.status.path, { providerSubmissionId }, {
       companyRef: await companyFor(providerSubmissionId),
     })
     return (events ?? []).map(withProvider)
@@ -187,7 +195,7 @@ export function createConnectorPeppolTransport(
         retryable: false,
       })
     }
-    const result = await call<PeppolRecipientRegistration>('PUT', '/recipient', input, {
+    const result = await call('register', PEPPOL_OPERATIONS.register.response, 'PUT', PEPPOL_OPERATIONS.register.path, input, {
       companyRef: input.tenantReference,
     })
     return { ...result, participant: input.participant }
@@ -195,13 +203,13 @@ export function createConnectorPeppolTransport(
 
   async function unregisterRecipient(participant: PeppolParticipant): Promise<void> {
     const query = new URLSearchParams({ scheme: participant.scheme, identifier: participant.identifier })
-    await call<unknown>('DELETE', `/recipient?${query.toString()}`, undefined, {
+    await call('unregister', PEPPOL_OPERATIONS.unregister.response, 'DELETE', `${PEPPOL_OPERATIONS.unregister.path}?${query.toString()}`, undefined, {
       companyRef: deps.companyForParticipant ? await deps.companyForParticipant(participant) : null,
     })
   }
 
   async function listInboundDocuments(options: PeppolInboundListOptions): Promise<PeppolInboundMessage[]> {
-    const items = await call<PeppolInboundMessage[]>('POST', '/inbound/list', options)
+    const items = await call('inboundList', PEPPOL_OPERATIONS.inboundList.response, 'POST', PEPPOL_OPERATIONS.inboundList.path, options)
     return (items ?? []).map(withProvider)
   }
 
@@ -209,7 +217,7 @@ export function createConnectorPeppolTransport(
     providerDocumentId: string,
     documentType: PeppolInboundListOptions['documentType'],
   ): Promise<string | null> {
-    const result = await call<{ xml: string | null }>('POST', '/inbound/xml', { providerDocumentId, documentType })
+    const result = await call('inboundXml', PEPPOL_OPERATIONS.inboundXml.response, 'POST', PEPPOL_OPERATIONS.inboundXml.path, { providerDocumentId, documentType })
     return typeof result?.xml === 'string' && result.xml.trim().startsWith('<') ? result.xml : null
   }
 

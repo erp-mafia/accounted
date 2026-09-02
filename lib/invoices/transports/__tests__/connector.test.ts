@@ -62,15 +62,24 @@ describe('connector Peppol transport', () => {
   })
 
   it('polls status and evidence with the connector provider stamped on and the owning company resolved', async () => {
+    const event = {
+      provider: 'qvalia', providerTenantId: '5560000000', providerSubmissionId: 'int-1', providerEventId: 'e1', idempotencyKey: null,
+      eventCode: 'status_poll', normalizedStatus: 'transport_succeeded', isTerminal: false, detail: null, occurredAt: 't',
+      rawPayload: {}, eventSha256: 'a'.repeat(64), verificationMethod: 'provider_poll',
+    }
+    const evidence = {
+      provider: 'qvalia', evidenceType: 'qvalia_message_record', payload: {}, exactDocument: null, exactDocumentSha256: null,
+      evidenceSha256: 'b'.repeat(64), retrievedAt: 't',
+    }
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(jsonResponse([{ provider: 'qvalia', eventCode: 'status_poll' }]))
-      .mockResolvedValueOnce(jsonResponse([{ provider: 'qvalia', evidenceType: 'qvalia_message_record' }]))
+      .mockResolvedValueOnce(jsonResponse([event]))
+      .mockResolvedValueOnce(jsonResponse([evidence]))
     const transport = createConnectorPeppolTransport(upstream, {
       fetch: fetchMock as unknown as typeof fetch,
       companyFor: async (id) => (id === 'int-1' ? 'company-7' : null),
     })
-    expect(await transport.pollDeliveryStatus!('int-1')).toEqual([{ provider: 'connector', eventCode: 'status_poll' }])
-    expect(await transport.retrieveEvidence('int-1')).toEqual([{ provider: 'connector', evidenceType: 'qvalia_message_record' }])
+    expect(await transport.pollDeliveryStatus!('int-1')).toEqual([{ ...event, provider: 'connector' }])
+    expect(await transport.retrieveEvidence('int-1')).toEqual([{ ...evidence, provider: 'connector' }])
     for (const call of fetchMock.mock.calls as Array<[string, RequestInit]>) {
       expect((call[1].headers as Record<string, string>)['X-Connector-Company']).toBe('company-7')
     }
@@ -107,5 +116,15 @@ describe('transport security', () => {
     const stalled = { ok: true, status: 200, text: () => Promise.reject(new Error('body stalled')) } as unknown as Response
     const transport = build(vi.fn().mockResolvedValue(stalled) as unknown as typeof fetch)
     await expect(transport.lookupRecipient(participant)).rejects.toSatisfy((e: unknown) => isPeppolTransportError(e) && e.retryable === true)
+  })
+})
+
+describe('contract validation', () => {
+  it('rejects a hosted answer that does not match the contract as a non-retryable protocol error', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ reachable: 'maybe' }))
+    const transport = build(fetchMock as unknown as typeof fetch)
+    await expect(transport.lookupRecipient(participant)).rejects.toSatisfy(
+      (e: unknown) => isPeppolTransportError(e) && e.retryable === false && /unexpected response shape/.test(e.message),
+    )
   })
 })
