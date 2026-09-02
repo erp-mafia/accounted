@@ -4,6 +4,8 @@
  * Pure module (no React, no fetch) so the precedence between the states is
  * unit-testable. Precedence, highest first:
  *
+ *   paused     the company has no bank_sync entitlement: the cron skips it,
+ *              so nothing below applies until the subscription is back
  *   attention  a connection is expired or errored: only BankID fixes it
  *   expiring   a live consent ends within CONSENT_WARNING_DAYS: renew in time
  *   stale      nothing synced for STALE_THRESHOLD_MS: check the connection
@@ -27,6 +29,7 @@ const DAY_MS = 24 * 60 * 60 * 1000
 
 export type ChipState =
   | { kind: 'none' }
+  | { kind: 'paused' }
   | { kind: 'attention'; count: number }
   | { kind: 'expiring'; daysLeft: number; count: number }
   | { kind: 'stale'; mostRecent: string }
@@ -43,8 +46,23 @@ export function daysUntilConsentExpiry(
   return Math.max(0, Math.ceil((expiresAt - now) / DAY_MS))
 }
 
-export function getChipState(rows: ConnectionRow[], now: number = Date.now()): ChipState {
+export interface ChipStateOptions {
+  /** Clock override for tests; defaults to Date.now() at call time. */
+  now?: number
+  /**
+   * Whether the company holds the bank_sync capability. Without it the daily
+   * cron skips every connection, so rows keep status=active with a frozen
+   * last_synced_at and would otherwise read as a mysterious "stale".
+   */
+  hasBankSync?: boolean
+}
+
+export function getChipState(
+  rows: ConnectionRow[],
+  { now = Date.now(), hasBankSync = true }: ChipStateOptions = {},
+): ChipState {
   if (rows.length === 0) return { kind: 'none' }
+  if (!hasBankSync) return { kind: 'paused' }
 
   const needsAttention = rows.filter(
     (r) => r.status === 'expired' || r.status === 'error',

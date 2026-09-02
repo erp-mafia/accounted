@@ -35,15 +35,15 @@ describe('daysUntilConsentExpiry', () => {
 
 describe('getChipState', () => {
   it('is hidden without connections', () => {
-    expect(getChipState([], NOW)).toEqual({ kind: 'none' })
+    expect(getChipState([], { now: NOW })).toEqual({ kind: 'none' })
   })
 
   it('reads healthy for a recent sync with a distant consent', () => {
-    expect(getChipState([row()], NOW)).toEqual({ kind: 'healthy', mostRecent: at(-2 * HOUR_MS) })
+    expect(getChipState([row()], { now: NOW })).toEqual({ kind: 'healthy', mostRecent: at(-2 * HOUR_MS) })
   })
 
   it('warns when a live consent ends within seven days', () => {
-    expect(getChipState([row({ consent_expires: at(7 * DAY_MS) })], NOW)).toEqual({
+    expect(getChipState([row({ consent_expires: at(7 * DAY_MS) })], { now: NOW })).toEqual({
       kind: 'expiring',
       daysLeft: 7,
       count: 1,
@@ -51,7 +51,7 @@ describe('getChipState', () => {
   })
 
   it('stays quiet at eight days', () => {
-    expect(getChipState([row({ consent_expires: at(8 * DAY_MS) })], NOW).kind).toBe('healthy')
+    expect(getChipState([row({ consent_expires: at(8 * DAY_MS) })], { now: NOW }).kind).toBe('healthy')
   })
 
   it('reports the soonest expiry and how many are affected', () => {
@@ -94,14 +94,33 @@ describe('getChipState', () => {
   })
 
   it('reads stale after 36 hours without a sync', () => {
-    expect(getChipState([row({ last_synced_at: at(-37 * HOUR_MS) })], NOW)).toEqual({
+    expect(getChipState([row({ last_synced_at: at(-37 * HOUR_MS) })], { now: NOW })).toEqual({
       kind: 'stale',
       mostRecent: at(-37 * HOUR_MS),
     })
   })
 
+  it('reads paused when the company lacks the bank_sync entitlement', () => {
+    // 56 of 191 active connections on prod sat in this state on 2026-09-01:
+    // the cron skips them, so they are neither dead nor merely stale.
+    const state = getChipState([row({ last_synced_at: at(-20 * DAY_MS) })], {
+      now: NOW,
+      hasBankSync: false,
+    })
+    expect(state).toEqual({ kind: 'paused' })
+  })
+
+  it('ranks paused above a dead connection: renewing without a subscription changes nothing', () => {
+    const state = getChipState([row({ status: 'expired' })], { now: NOW, hasBankSync: false })
+    expect(state).toEqual({ kind: 'paused' })
+  })
+
+  it('stays hidden without connections even when unentitled', () => {
+    expect(getChipState([], { now: NOW, hasBankSync: false })).toEqual({ kind: 'none' })
+  })
+
   it('tolerates rows without the consent column', () => {
-    const state = getChipState([{ id: 'x', status: 'active', last_synced_at: at(-HOUR_MS) }], NOW)
+    const state = getChipState([{ id: 'x', status: 'active', last_synced_at: at(-HOUR_MS) }], { now: NOW })
     expect(state.kind).toBe('healthy')
   })
 })

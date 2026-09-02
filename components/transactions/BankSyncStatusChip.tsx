@@ -6,7 +6,9 @@ import { useTranslations } from 'next-intl'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { onBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
-import { useCompany } from '@/contexts/CompanyContext'
+import { useCompany, useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
+import { isSelfHosted } from '@/lib/env/public-flags'
 import {
   Tooltip,
   TooltipContent,
@@ -35,6 +37,7 @@ export default function BankSyncStatusChip() {
   const t = useTranslations('transactions')
   const formatAge = useAgeFormatter()
   const { company } = useCompany()
+  const hasBankSync = useCapability(CAPABILITY.bank_sync)
   const [rows, setRows] = useState<ConnectionRow[] | null>(null)
 
   useEffect(() => {
@@ -69,9 +72,28 @@ export default function BankSyncStatusChip() {
 
   if (!rows) return null
 
-  const state = getChipState(rows)
+  const state = getChipState(rows, { hasBankSync })
 
   if (state.kind === 'none') return null
+
+  if (state.kind === 'paused') {
+    // Same remedy split as BankSyncNowButton: hosted points at billing,
+    // self-host at the connector key (never the Stripe page).
+    const selfHosted = isSelfHosted()
+    return (
+      <Link
+        href={selfHosted ? '/settings/banking' : '/settings/billing'}
+        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-muted/50"
+      >
+        <AlertTriangle className="h-3.5 w-3.5" />
+        <span>
+          {selfHosted
+            ? t('bank_sync_paused_connector_key')
+            : t('bank_sync_paused_subscription')}
+        </span>
+      </Link>
+    )
+  }
 
   if (state.kind === 'attention') {
     return (

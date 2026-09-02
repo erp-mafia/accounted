@@ -5853,6 +5853,8 @@
     "bank_sync_stale_warning": "Last sync was over 36 hours ago: check the connection",
     "bank_sync_expiring_one": "Bank consent expires {days, plural, =0 {today} =1 {tomorrow} other {in # days}}: renew with BankID",
     "bank_sync_expiring_many": "{count} bank consents expire, the first {days, plural, =0 {today} =1 {tomorrow} other {in # days}}: renew with BankID",
+    "bank_sync_paused_subscription": "Bank sync is paused: no subscription, upgrade to continue",
+    "bank_sync_paused_connector_key": "Bank sync is paused: connector key missing",
     "bank_sync_latency_hint": "Banks report transactions with up to 48 hours of delay. Today's transactions often only appear the next morning.",
     "bank_sync_button_now": "Sync now",
     "bank_sync_button_syncing": "Syncing…",
