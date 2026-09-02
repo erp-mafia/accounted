@@ -1197,8 +1197,6 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
     'WORM verification log (SHA-256 recompute outcomes); failures reach the archive via audit_log in revision/behandlingshistorik.json',
   event_log: '30-day TTL event bus log',
   extension_data: 'extension runtime state (includes this backup\'s own state)',
-  graph_counterparties: 'derived AI context graph, regenerable',
-  graph_transaction_counterparties: 'derived AI context graph, regenerable',
   idempotency_keys: 'infrastructure',
   inbox_rate_counters: 'infrastructure',
   mail_connections:

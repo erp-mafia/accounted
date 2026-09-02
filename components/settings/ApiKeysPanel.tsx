@@ -423,6 +423,16 @@ export function ApiKeysPanel() {
             </div>
 
             <div>
+              <p className="mb-1 text-sm">Grok</p>
+              <p className="mb-2 text-xs text-muted-foreground">
+                {t.rich('grok_instructions', {
+                  path: (chunks) => <strong>{chunks}</strong>,
+                })}
+              </p>
+              <CopyBlock text={mcpUrl('grok')} copyAriaLabel={t('copy_aria')} />
+            </div>
+
+            <div>
               <p className="mb-1 text-sm">{t('claude_plugin_label')}</p>
               <p className="mb-2 text-xs text-muted-foreground">{t('claude_plugin_instructions')}</p>
               <CopyBlock
