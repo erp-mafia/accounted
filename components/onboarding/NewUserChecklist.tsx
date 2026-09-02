@@ -264,9 +264,12 @@ export default function NewUserChecklist({
       'noopener',
     )
   }
-  // Neither ChatGPT nor Grok has an add-connector deep link (the user pastes
-  // the server URL into the client manually), so the side doors copy the URL
-  // instead.
+  /**
+   * Open one side door (closing any other) or close it when it is already
+   * open. Neither ChatGPT nor Grok has an add-connector deep link (the user
+   * pastes the server URL into the client manually), so the side doors copy
+   * the URL instead. Telemetry fires once per open, never on close.
+   */
   const toggleSideDoor = (door: SideDoor) => {
     setSideDoor((open) => {
       if (open !== door) captureSetup('onboarding_setup_step_started', { step: door })

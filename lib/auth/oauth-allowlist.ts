@@ -30,11 +30,12 @@ export type BuiltInProvider = 'claude' | 'chatgpt' | 'grok' | 'local'
  *
  * Grok (grok.com custom connectors) registers itself through /register as a
  * public client and sends a single fixed callback,
- * https://grok.com/connectors-oauth-exchange-code/. xAI publishes no
- * developer page for it; the value is what Grok's DCR request carried when
- * observed live (2026-08-09, confirmed by two independent connector
- * write-ups). Matched as an exact path (trailing slash optional), never a
- * prefix, so a future grok.com path cannot ride on this entry.
+ * https://grok.com/connectors-oauth-exchange-code/, published by X Corp as
+ * the "Grok (web)" redirect URL at docs.x.com/x-ads-api/mcp (xAI's own
+ * connector docs at docs.x.ai do not state it). grok.com serves the path
+ * itself: the slash form 308s to the no-slash form on the same origin, so
+ * both are accepted. Matched as an exact path, never a prefix, so a future
+ * grok.com path cannot ride on this entry.
  */
 const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }[] = [
   { pattern: /^https:\/\/claude\.ai\/api\//, provider: 'claude' },
