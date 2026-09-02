@@ -47,8 +47,12 @@ import { QVALIA_PROVIDER, createQvaliaTransport, readQvaliaConfigFromEnv } from 
  *     account_uids holds the participant id; one participant, one key;
  *   - a document may only be SENT as a participant the key has registered
  *     (the registration is the identity claim, the allowlist authorizes it);
- *   - an outbound submission is a connector_peppol_submissions row; status
- *     polls and evidence reads require it;
+ *   - registrations, submissions, status polls, evidence reads and
+ *     deregistration are bound to the (key, company_ref) pair, so one company
+ *     on a multi-company instance cannot act on another company's
+ *     registration through the shared key; inbound listing is key-wide
+ *     because the instance's inbound sync routes documents to its own
+ *     companies by its own registrations;
  *   - inbound documents are served from the hosted archive
  *     (peppol_inbound_documents, filled by /api/peppol/inbound/cron) filtered
  *     by the participants this key holds, never by calling Qvalia's read
@@ -229,7 +233,7 @@ export const POST = withConnectorAuth('connect.peppol', async (request, ctx) => 
     // Sending as a participant is an identity claim: only participants this
     // key registered (which the allowlist authorized) may appear as sender.
     const senderOwned = await findByAccountUid(ctx.supabase, { keyId: ctx.key.id, accountUid: peppolHandle(body.value.sender) })
-    if (!senderOwned) {
+    if (!senderOwned || senderOwned.company_ref !== cref) {
       return NextResponse.json(
         { error: 'The sender participant is not registered through this connector key', code: 'CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED', retryable: false },
         { status: 403 },
@@ -258,10 +262,13 @@ export const POST = withConnectorAuth('connect.peppol', async (request, ctx) => 
   }
 
   if (path === '/status' || path === '/evidence') {
+    const cref = companyRef(request)
+    if (!cref) return missingCompany()
     const body = await parseBody(request, submissionRefSchema)
     if (!body.ok) return body.response
     const owned = await findOwnedPeppolSubmission(ctx.supabase, {
       keyId: ctx.key.id,
+      companyRef: cref,
       provider: QVALIA_PROVIDER,
       providerSubmissionId: body.value.providerSubmissionId,
     })
@@ -287,33 +294,41 @@ export const POST = withConnectorAuth('connect.peppol', async (request, ctx) => 
     const participants = await listActivePeppolParticipants(ctx.supabase, ctx.key.id)
     if (participants.length === 0) return NextResponse.json([])
     const limit = Math.min(Math.max(body.value.limit ?? 25, 1), 100)
-    // Both halves of the participant id are filtered in the query, so a
-    // foreign row sharing only an identifier cannot consume the limit. The
-    // remaining cross-pair case (scheme of one owned participant with the
-    // identifier of another) is covered by over-fetching before the exact
-    // pair check below.
-    const schemes = [...new Set(participants.map((p) => p.scheme))]
-    const identifiers = [...new Set(participants.map((p) => p.identifier))]
-    const { data, error } = await ctx.supabase
-      .from('peppol_inbound_documents')
-      .select('provider_document_id, document_type, ubl_json, received_at, recipient_scheme, recipient_identifier')
-      .eq('provider', QVALIA_PROVIDER)
-      .eq('document_type', body.value.documentType)
-      .in('recipient_scheme', schemes)
-      .in('recipient_identifier', identifiers)
-      .order('received_at', { ascending: false })
-      .limit(Math.min(limit * 2, 200))
-    if (error) throw new Error(`inbound archive read failed: ${error.message}`)
-    const owned = new Set(participants.map(peppolHandle))
-    const messages: PeppolInboundMessage[] = []
-    for (const row of (data ?? []) as Array<{
+    // Exact (scheme, identifier) pairs, one query per scheme: within a scheme
+    // the identifier list IS the pair set, so no foreign or cross-pair row can
+    // consume the limit. Schemes are one or two in practice (0007, 0088).
+    const identifiersByScheme = new Map<string, Set<string>>()
+    for (const p of participants) {
+      const set = identifiersByScheme.get(p.scheme) ?? new Set<string>()
+      set.add(p.identifier)
+      identifiersByScheme.set(p.scheme, set)
+    }
+    type ArchiveRow = {
       provider_document_id: string
       document_type: 'Invoice' | 'CreditNote'
       ubl_json: Record<string, unknown>
       received_at: string | null
       recipient_scheme: string | null
       recipient_identifier: string | null
-    }>) {
+    }
+    const rows: ArchiveRow[] = []
+    for (const [scheme, identifiers] of identifiersByScheme) {
+      const { data, error } = await ctx.supabase
+        .from('peppol_inbound_documents')
+        .select('provider_document_id, document_type, ubl_json, received_at, recipient_scheme, recipient_identifier')
+        .eq('provider', QVALIA_PROVIDER)
+        .eq('document_type', body.value.documentType)
+        .eq('recipient_scheme', scheme)
+        .in('recipient_identifier', [...identifiers])
+        .order('received_at', { ascending: false })
+        .limit(limit)
+      if (error) throw new Error(`inbound archive read failed: ${error.message}`)
+      rows.push(...((data ?? []) as ArchiveRow[]))
+    }
+    rows.sort((a, b) => (b.received_at ?? '').localeCompare(a.received_at ?? ''))
+    const owned = new Set(participants.map(peppolHandle))
+    const messages: PeppolInboundMessage[] = []
+    for (const row of rows) {
       if (!row.recipient_scheme || !row.recipient_identifier) continue
       if (!owned.has(peppolHandle({ scheme: row.recipient_scheme, identifier: row.recipient_identifier }))) continue
       messages.push({
@@ -379,6 +394,9 @@ export const PUT = withConnectorAuth('connect.peppol', async (request, ctx) => {
   const participant = { scheme: body.value.participant.scheme, identifier: body.value.participant.identifier.replace(/\s/g, '') }
   const handle = peppolHandle(participant)
   const owned = await findByAccountUid(ctx.supabase, { keyId: ctx.key.id, accountUid: handle })
+  // Held by this key for ANOTHER company on the instance: not re-registrable
+  // from here, and not claimable either (it is not free).
+  if (owned && owned.company_ref !== cref) return participantTaken()
 
   let pendingId: string | null = null
   let pendingState: string | null = null
@@ -516,10 +534,12 @@ export const DELETE = withConnectorAuth('connect.peppol', async (request, ctx) =
   if (!parsed.success) {
     return NextResponse.json({ error: 'scheme and identifier query parameters are required', code: 'BAD_REQUEST' }, { status: 400 })
   }
+  const cref = companyRef(request)
+  if (!cref) return missingCompany()
   const participant = { scheme: parsed.data.scheme, identifier: parsed.data.identifier.replace(/\s/g, '') }
   const handle = peppolHandle(participant)
   const owned = await findByAccountUid(ctx.supabase, { keyId: ctx.key.id, accountUid: handle })
-  if (!owned) return notOwned()
+  if (!owned || owned.company_ref !== cref) return notOwned()
   const transport = hostedTransport()
   if (!transport) return unconfigured()
   if (!transport.unregisterRecipient) {

@@ -61,13 +61,19 @@ describe('connector Peppol transport', () => {
     expect(await transport.fetchInboundDocumentXml!('doc-1', 'Invoice')).toBeNull()
   })
 
-  it('polls status and evidence with the connector provider stamped on', async () => {
+  it('polls status and evidence with the connector provider stamped on and the owning company resolved', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse([{ provider: 'qvalia', eventCode: 'status_poll' }]))
       .mockResolvedValueOnce(jsonResponse([{ provider: 'qvalia', evidenceType: 'qvalia_message_record' }]))
-    const transport = build(fetchMock as unknown as typeof fetch)
+    const transport = createConnectorPeppolTransport(upstream, {
+      fetch: fetchMock as unknown as typeof fetch,
+      companyFor: async (id) => (id === 'int-1' ? 'company-7' : null),
+    })
     expect(await transport.pollDeliveryStatus!('int-1')).toEqual([{ provider: 'connector', eventCode: 'status_poll' }])
     expect(await transport.retrieveEvidence('int-1')).toEqual([{ provider: 'connector', evidenceType: 'qvalia_message_record' }])
+    for (const call of fetchMock.mock.calls as Array<[string, RequestInit]>) {
+      expect((call[1].headers as Record<string, string>)['X-Connector-Company']).toBe('company-7')
+    }
   })
 
   it('turns hosted refusals into PeppolTransportErrors carrying the retryable flag and code', async () => {

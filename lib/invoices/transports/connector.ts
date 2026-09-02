@@ -38,6 +38,15 @@ const FETCH_TIMEOUT_MS = 60_000
 
 export interface ConnectorTransportDeps {
   fetch?: typeof fetch
+  /**
+   * Resolve the instance company that made a submission (from
+   * peppol_deliveries) so status and evidence reads carry the company the
+   * hosted side bound the submission to. Optional for tests; the production
+   * factory in transports/index.ts wires it to the instance database.
+   */
+  companyFor?: (providerSubmissionId: string) => Promise<string | null>
+  /** Same for a receiving registration (from peppol_registrations). */
+  companyForParticipant?: (participant: PeppolParticipant) => Promise<string | null>
 }
 
 interface ConnectorErrorBody {
@@ -151,13 +160,24 @@ export function createConnectorPeppolTransport(
     })
   }
 
+  // The PeppolTransport read methods carry no tenant, but the hosted side
+  // binds submissions to (key, company). The instance resolves the company
+  // from its own peppol_deliveries row before polling, via deps.companyFor.
+  async function companyFor(providerSubmissionId: string): Promise<string | null> {
+    return deps.companyFor ? deps.companyFor(providerSubmissionId) : null
+  }
+
   async function retrieveEvidence(providerSubmissionId: string): Promise<PeppolDeliveryEvidence[]> {
-    const items = await call<PeppolDeliveryEvidence[]>('POST', '/evidence', { providerSubmissionId })
+    const items = await call<PeppolDeliveryEvidence[]>('POST', '/evidence', { providerSubmissionId }, {
+      companyRef: await companyFor(providerSubmissionId),
+    })
     return (items ?? []).map(withProvider)
   }
 
   async function pollDeliveryStatus(providerSubmissionId: string): Promise<PeppolVerifiedEvent[]> {
-    const events = await call<PeppolVerifiedEvent[]>('POST', '/status', { providerSubmissionId })
+    const events = await call<PeppolVerifiedEvent[]>('POST', '/status', { providerSubmissionId }, {
+      companyRef: await companyFor(providerSubmissionId),
+    })
     return (events ?? []).map(withProvider)
   }
 
@@ -175,7 +195,9 @@ export function createConnectorPeppolTransport(
 
   async function unregisterRecipient(participant: PeppolParticipant): Promise<void> {
     const query = new URLSearchParams({ scheme: participant.scheme, identifier: participant.identifier })
-    await call<unknown>('DELETE', `/recipient?${query.toString()}`, undefined)
+    await call<unknown>('DELETE', `/recipient?${query.toString()}`, undefined, {
+      companyRef: deps.companyForParticipant ? await deps.companyForParticipant(participant) : null,
+    })
   }
 
   async function listInboundDocuments(options: PeppolInboundListOptions): Promise<PeppolInboundMessage[]> {

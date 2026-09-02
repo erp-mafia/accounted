@@ -32,17 +32,25 @@ export function parsePeppolHandle(handle: string): PeppolParticipant | null {
   return { scheme, identifier }
 }
 
-/** Every participant this key currently holds an active registration for. */
+/**
+ * Every participant this key currently holds an active registration for,
+ * optionally narrowed to one company on the instance. Inbound routing is
+ * key-wide (the instance's inbound sync lists for all its companies and
+ * routes by its own registrations); everything else is company-bound.
+ */
 export async function listActivePeppolParticipants(
   supabase: SupabaseClient,
   keyId: string,
+  companyRef?: string,
 ): Promise<PeppolParticipant[]> {
-  const { data, error } = await supabase
+  let query = supabase
     .from('connector_connections')
     .select('account_uids')
     .eq('connector_key_id', keyId)
     .eq('service', 'peppol')
     .eq('status', 'active')
+  if (companyRef) query = query.eq('company_ref', companyRef)
+  const { data, error } = await query
   if (error) throw new Error(`ledger read failed: ${error.message}`)
   const participants: PeppolParticipant[] = []
   for (const row of (data ?? []) as Array<{ account_uids: string[] | null }>) {
@@ -154,14 +162,16 @@ export async function recordPeppolSubmission(
   if (error) throw new Error(`submission record failed: ${error.message}`)
 }
 
+/** The submission row for (key, company, provider submission id): both the key and the company must match. */
 export async function findOwnedPeppolSubmission(
   supabase: SupabaseClient,
-  params: { keyId: string; provider: string; providerSubmissionId: string },
+  params: { keyId: string; companyRef: string; provider: string; providerSubmissionId: string },
 ): Promise<{ id: string; company_ref: string } | null> {
   const { data, error } = await supabase
     .from('connector_peppol_submissions')
     .select('id, company_ref')
     .eq('connector_key_id', params.keyId)
+    .eq('company_ref', params.companyRef)
     .eq('provider', params.provider)
     .eq('provider_submission_id', params.providerSubmissionId)
     .maybeSingle()

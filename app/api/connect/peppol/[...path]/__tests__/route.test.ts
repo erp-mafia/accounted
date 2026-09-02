@@ -179,16 +179,19 @@ describe('lookup and submit', () => {
     documentSha256: 'a'.repeat(64),
   })
 
-  it('refuses to send as a participant this key has not registered', async () => {
+  it('refuses to send as a participant this key has not registered, or registered for another company', async () => {
     h.ledger.findByAccountUid.mockResolvedValue(null)
-    const res = await POST(req('POST', '/submit', submissionBody()))
+    let res = await POST(req('POST', '/submit', submissionBody()))
     expect(res.status).toBe(403)
     expect((await res.json()).code).toBe('CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED')
+    h.ledger.findByAccountUid.mockResolvedValue({ id: 'row-other', company_ref: 'company-2' })
+    res = await POST(req('POST', '/submit', submissionBody()))
+    expect(res.status).toBe(403)
     expect(h.transport.submit).not.toHaveBeenCalled()
   })
 
   it('submits under the header company and records ownership of the provider submission id', async () => {
-    h.ledger.findByAccountUid.mockResolvedValue({ id: 'row-sender' })
+    h.ledger.findByAccountUid.mockResolvedValue({ id: 'row-sender', company_ref: 'company-1' })
     h.transport.submit.mockResolvedValue({ provider: 'qvalia', providerSubmissionId: 'int-9', idempotencyKey: 'idem-1', tenantReference: 'company-1', acceptedAt: 'now' })
     const submission = {
       idempotencyKey: 'idem-1',
@@ -229,12 +232,15 @@ describe('lookup and submit', () => {
 })
 
 describe('status and evidence are ownership-gated', () => {
-  it('404s for a submission this key did not make', async () => {
+  it('404s for a submission this key did not make, and looks it up under the header company', async () => {
     h.peppolLedger.findOwnedPeppolSubmission.mockResolvedValue(null)
     const res = await POST(req('POST', '/status', { providerSubmissionId: 'int-foreign' }))
     expect(res.status).toBe(404)
     expect((await res.json()).code).toBe('CONNECTOR_NOT_OWNED')
+    expect(h.peppolLedger.findOwnedPeppolSubmission).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ keyId: 'key-1', companyRef: 'company-1', providerSubmissionId: 'int-foreign' }))
     expect(h.transport.pollDeliveryStatus).not.toHaveBeenCalled()
+    const noCompany = await POST(new Request('https://app.gnubok.se/api/connect/peppol/status', { method: 'POST', body: JSON.stringify({ providerSubmissionId: 'int-9' }) }))
+    expect(noCompany.status).toBe(400)
   })
 
   it('polls and retrieves evidence for an owned submission', async () => {
@@ -325,7 +331,7 @@ describe('receiving registration', () => {
       expect((await res.json()).code).toBe('PEPPOL_RECEIVING_UNSUPPORTED')
       const del = await DELETE(req('DELETE', '/recipient?scheme=0007&identifier=5561234567'))
       expect(del.status).toBe(404)
-      h.ledger.findByAccountUid.mockResolvedValue({ id: 'row-1' })
+      h.ledger.findByAccountUid.mockResolvedValue({ id: 'row-1', company_ref: 'company-1' })
       const del2 = await DELETE(req('DELETE', '/recipient?scheme=0007&identifier=5561234567'))
       expect(del2.status).toBe(422)
       expect(h.ledger.revokeByHandle).not.toHaveBeenCalled()
@@ -350,8 +356,15 @@ describe('receiving registration', () => {
     expect(h.ledger.deletePendingConnectionById).toHaveBeenCalledWith(expect.anything(), 'pending-1')
   })
 
+  it('refuses to touch a participant this key holds for another company', async () => {
+    h.ledger.findByAccountUid.mockResolvedValue({ id: 'row-2', company_ref: 'company-2' })
+    const res = await PUT(req('PUT', '/recipient', body))
+    expect(res.status).toBe(409)
+    expect(h.transport.registerRecipient).not.toHaveBeenCalled()
+  })
+
   it('re-registers an owned participant without consuming quota', async () => {
-    h.ledger.findByAccountUid.mockResolvedValue({ id: 'row-1' })
+    h.ledger.findByAccountUid.mockResolvedValue({ id: 'row-1', company_ref: 'company-1' })
     h.transport.registerRecipient.mockResolvedValue({ status: 'updated', participant, providerAccountReference: 'x', raw: {} })
     const res = await PUT(req('PUT', '/recipient', body))
     expect(res.status).toBe(200)
@@ -360,10 +373,14 @@ describe('receiving registration', () => {
     expect(h.ledger.touchConnection).toHaveBeenCalledWith(expect.anything(), 'row-1')
   })
 
-  it('DELETE unregisters only an owned participant and revokes the ledger row', async () => {
+  it('DELETE unregisters only an owned participant of the header company and revokes the ledger row', async () => {
     let res = await DELETE(req('DELETE', '/recipient?scheme=0007&identifier=5561234567'))
     expect(res.status).toBe(404)
-    h.ledger.findByAccountUid.mockResolvedValue({ id: 'row-1' })
+    h.ledger.findByAccountUid.mockResolvedValue({ id: 'row-2', company_ref: 'company-2' })
+    res = await DELETE(req('DELETE', '/recipient?scheme=0007&identifier=5561234567'))
+    expect(res.status).toBe(404)
+    expect(h.transport.unregisterRecipient).not.toHaveBeenCalled()
+    h.ledger.findByAccountUid.mockResolvedValue({ id: 'row-1', company_ref: 'company-1' })
     res = await DELETE(req('DELETE', '/recipient?scheme=0007&identifier=5561234567'))
     expect(res.status).toBe(204)
     expect(h.transport.unregisterRecipient).toHaveBeenCalledWith(participant)
@@ -381,9 +398,9 @@ describe('inbound documents come from the hosted archive, scoped to owned partic
     expect(res.status).toBe(200)
     const items = await res.json()
     expect(items).toEqual([{ provider: 'qvalia', providerDocumentId: 'doc-1', documentType: 'Invoice', payload: { a: 1 }, receivedAt: 't1' }])
-    // Both halves of the participant id are filtered in the query itself, so
-    // foreign rows never consume the limit.
-    expect(h.archive.ins).toEqual([['recipient_scheme', ['0007']], ['recipient_identifier', ['5561234567']]])
+    // One query per scheme with that scheme's identifiers: exact pairs, so
+    // neither foreign nor cross-pair rows can consume the limit.
+    expect(h.archive.ins).toEqual([['recipient_identifier', ['5561234567']]])
     expect(h.transport.listInboundDocuments).not.toHaveBeenCalled()
   })
 
