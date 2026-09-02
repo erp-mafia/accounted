@@ -39,7 +39,6 @@ export const UNGATED_EXTENSION_ROUTES = new Set([
   'app/api/extensions/enable-banking/callback/route.ts',
   'app/api/extensions/enable-banking/sync/cron/route.ts',
   'app/api/extensions/skatteverket/agi/kvittenser/cron/route.ts',
-  'app/api/extensions/skatteverket/skattekonto/drift/route.ts',
   'app/api/extensions/skatteverket/skattekonto/sync/cron/route.ts',
   'app/api/extensions/skatteverket/vat/kvittenser/cron/route.ts',
   'app/api/extensions/stripe/callback/route.ts',
