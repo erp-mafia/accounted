@@ -707,6 +707,30 @@ describe('auditRowToEvent: behandlingsregler', () => {
     expect(upd.details).toEqual(['Debetkonto: 6540 → 6212'])
   })
 
+  it('cash_accounts: a verifikationsserie change names the account and diffs the series', () => {
+    const upd = auditRowToEvent(
+      auditRow({
+        table_name: 'cash_accounts',
+        action: 'UPDATE',
+        old_state: { name: 'Företagskort', ledger_account: '1931', voucher_series: null, balance: 100, updated_at: 'x' },
+        new_state: { name: 'Företagskort', ledger_account: '1931', voucher_series: 'M', balance: 250, updated_at: 'y' },
+      }),
+    )!
+    expect(upd).toMatchObject({ category: 'installningar', code: 'cash_account.updated', object: 'Företagskort 1931' })
+    expect(upd.details).toEqual(['Verifikationsserie: (tomt) → M'])
+
+    // Bank-sync churn (balance, name) is not a behandlingsregel: no event.
+    const churn = auditRowToEvent(
+      auditRow({
+        table_name: 'cash_accounts',
+        action: 'UPDATE',
+        old_state: { name: 'Företagskort', ledger_account: '1931', voucher_series: 'M', balance: 100 },
+        new_state: { name: 'Företagskort', ledger_account: '1931', voucher_series: 'M', balance: 250 },
+      }),
+    )
+    expect(churn).toBeNull()
+  })
+
   it('categorization_templates: the learning columns never reach the report', () => {
     // The DB trigger filters these already (20260901103000 + 20260901200000);
     // the read model must not resurrect them if a row slips through, or every
