@@ -122,9 +122,9 @@ export function isConnectorCapability(key: CapabilityKey): boolean {
  * The document upload tools invoke AI (Bedrock document OCR via
  * extractInvoiceFields), so they are gated on CAPABILITY.ai: the same paywall
  * the HTTP inbox upload/attach/retry paths enforce. Without these entries a
- * free-tier API key could trigger paid AI extraction. bank_sync gates only
- * gnubok_connect_bank (the onboarding connect link); the sync itself is
- * cron/HTTP only.
+ * free-tier API key could trigger paid AI extraction. bank_sync gates
+ * gnubok_connect_bank (the onboarding connect link) and gnubok_sync_bank
+ * (the agent-triggered PSD2 sync, a paid Enable Banking call per account).
  */
 export const MCP_TOOL_CAPABILITY_MAP: Readonly<Partial<Record<string, CapabilityKey>>> = {
   gnubok_send_invoice: CAPABILITY.email_send,
@@ -132,6 +132,8 @@ export const MCP_TOOL_CAPABILITY_MAP: Readonly<Partial<Record<string, Capability
   gnubok_agi_submit: CAPABILITY.skatteverket,
   // Onboarding connect-link tools (issue #1814): gated like the links' targets.
   gnubok_connect_bank: CAPABILITY.bank_sync,
+  // Agent-triggered PSD2 sync: a paid Enable Banking call per account.
+  gnubok_sync_bank: CAPABILITY.bank_sync,
   gnubok_connect_skatteverket: CAPABILITY.skatteverket,
   // AI document OCR (Bedrock): the inbox's paid extraction, reachable via MCP.
   gnubok_create_document_upload: CAPABILITY.ai,

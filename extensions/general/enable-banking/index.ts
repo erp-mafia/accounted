@@ -12,6 +12,7 @@ import {
   type ASPSP,
 } from './lib/api-client'
 import { syncAccountTransactions } from './lib/sync'
+import { triggerConnectionSync } from './lib/trigger-sync'
 import { findReusableSessions, countLiveSiblings } from './lib/session-sharing'
 import {
   runUnattendedReconciliationSweep,
@@ -60,6 +61,13 @@ export const enableBankingExtension: Extension = {
   settingsPanel: {
     label: 'Bankintegration (PSD2)',
     path: '/settings/banking',
+  },
+
+  // Registry-resolved services for core callers (core cannot import
+  // @/extensions). Contract: lib/bank-sync/trigger-sync-contract.ts.
+  services: {
+    // Agent-triggered sync behind POST /api/v1/.../bank-connections/{id}/sync.
+    triggerConnectionSync,
   },
 
   apiRoutes: [
