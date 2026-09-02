@@ -457,3 +457,55 @@ describe('GET /api/extensions/enable-banking/sync/cron: failure log level', () =
     consoleError.mockRestore()
   })
 })
+
+describe('GET /api/extensions/enable-banking/sync/cron: incremental lookback', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000
+  const isoDate = (msAgo: number) => new Date(Date.now() - msAgo).toISOString().split('T')[0]
+  const syncedDaysAgo = (days: number) => new Date(Date.now() - days * DAY_MS).toISOString()
+
+  it('uses the 7-day window when the connection synced yesterday', async () => {
+    state.active = [connection({ last_synced_at: syncedDaysAgo(1) })]
+    mocks.probeSessionHealth.mockResolvedValue('alive')
+
+    await GET(cronRequest())
+
+    expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(1)
+    const [, , , , , fromDate, , , options] = mocks.syncAccountTransactions.mock.calls[0]
+    expect(fromDate).toBe(isoDate(7 * DAY_MS))
+    expect(options).not.toHaveProperty('strategy')
+  })
+
+  it('widens the window to cover a gap since the last sync', async () => {
+    // A subscription that lapsed for 20 days and was paid again: a fixed
+    // 7-day window would silently drop the 13 days in between.
+    state.active = [connection({ last_synced_at: syncedDaysAgo(20) })]
+    mocks.probeSessionHealth.mockResolvedValue('alive')
+
+    await GET(cronRequest())
+
+    expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(1)
+    const [, , , , , fromDate] = mocks.syncAccountTransactions.mock.calls[0]
+    expect(fromDate).toBe(isoDate(21 * DAY_MS))
+  })
+
+  it('asks for the deepest history the bank serves on a gap of a month or more', async () => {
+    state.active = [connection({ last_synced_at: syncedDaysAgo(40) })]
+    mocks.probeSessionHealth.mockResolvedValue('alive')
+
+    await GET(cronRequest())
+
+    const [, , , , , fromDate, , , options] = mocks.syncAccountTransactions.mock.calls[0]
+    expect(fromDate).toBe(isoDate(41 * DAY_MS))
+    expect(options).toMatchObject({ strategy: 'longest' })
+  })
+
+  it('caps the widened window at 90 days', async () => {
+    state.active = [connection({ last_synced_at: syncedDaysAgo(200) })]
+    mocks.probeSessionHealth.mockResolvedValue('alive')
+
+    await GET(cronRequest())
+
+    const [, , , , , fromDate] = mocks.syncAccountTransactions.mock.calls[0]
+    expect(fromDate).toBe(isoDate(90 * DAY_MS))
+  })
+})
