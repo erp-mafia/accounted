@@ -116,6 +116,40 @@ describe('expense_claims constraints', () => {
     ).rejects.toThrow(/check/i)
   })
 
+  it('refuses a payout batch from another company', async () => {
+    const a = await seedCompany()
+    const b = await seedCompany()
+    const claimId = await insertClaim(a.companyId, a.userId)
+
+    // A batch that exists, but in the other company.
+    const foreign = await getPool().query<{ id: string }>(
+      `INSERT INTO public.expense_payout_batches
+         (company_id, user_id, claimant_name, payout_date, cash_account, liability_account, total_sek)
+       VALUES ($1, $2, 'Ägare', '2026-08-31', '1930', '2893', 500) RETURNING id`,
+      [b.companyId, b.userId],
+    )
+
+    await expect(
+      getPool().query(
+        `UPDATE public.expense_claims SET status = 'paid', payout_batch_id = $1 WHERE id = $2`,
+        [foreign.rows[0].id, claimId],
+      ),
+    ).rejects.toThrow(/foreign key/)
+
+    // The same shape inside the claim's own company is accepted.
+    const own = await getPool().query<{ id: string }>(
+      `INSERT INTO public.expense_payout_batches
+         (company_id, user_id, claimant_name, payout_date, cash_account, liability_account, total_sek)
+       VALUES ($1, $2, 'Ägare', '2026-08-31', '1930', '2893', 500) RETURNING id`,
+      [a.companyId, a.userId],
+    )
+    const ok = await getPool().query(
+      `UPDATE public.expense_claims SET status = 'paid', payout_batch_id = $1 WHERE id = $2`,
+      [own.rows[0].id, claimId],
+    )
+    expect(ok.rowCount).toBe(1)
+  })
+
   it('rejects a non-19xx cash account and an off-list liability account on batches', async () => {
     const { userId, companyId } = await seedCompany()
     const insertBatch = (cashAccount: string, liabilityAccount: string) =>

@@ -462,8 +462,24 @@ export async function deleteExpenseClaim(
     // back-link write failed. Hard-deleting would orphan the posted entry.
     return { ok: false, code: 'UNLINKED', detail: `claim ${claimId} has no journal_entry_id` }
   }
-  const reversal = await reverseEntry(supabase, companyId, userId, claim.journal_entry_id)
-  const reversalEntryId: string | null = reversal.id
+  // Retry safety: if a previous attempt posted the storno but failed to
+  // delete the register row, the entry is already 'reversed' and
+  // reverseEntry would refuse it (CannotReverseNonPostedError). Reuse the
+  // existing reversal and finish the delete instead of dead-ending the row.
+  const { data: entry } = await supabase
+    .from('journal_entries')
+    .select('status, reversed_by_id')
+    .eq('id', claim.journal_entry_id)
+    .eq('company_id', companyId)
+    .maybeSingle()
+
+  let reversalEntryId: string | null
+  if (entry?.status === 'reversed') {
+    reversalEntryId = entry.reversed_by_id ?? null
+  } else {
+    const reversal = await reverseEntry(supabase, companyId, userId, claim.journal_entry_id)
+    reversalEntryId = reversal.id
+  }
 
   const { error: deleteError } = await supabase
     .from('expense_claims')
@@ -609,8 +625,33 @@ export async function createPayoutBatch(
     .eq('company_id', companyId)
     .in('id', input.claim_ids)
   if (markError) {
-    // The payout verifikat exists; surface the sync failure rather than hide it.
-    return { ok: false, code: 'BATCH_INSERT_FAILED', detail: markError.message }
+    // Compensate: without this the transfer stays posted while the claims
+    // remain 'registered', so the next attempt would post a second payout
+    // verifikat for the same claims. Storno the entry (BFL 5 kap. 5 §: the
+    // posted one is never deleted) and drop the batch row, so a retry starts
+    // from a clean state. A failing compensation is reported verbatim: that
+    // is the case a human must reconcile.
+    try {
+      await reverseEntry(supabase, companyId, userId, journalEntryId)
+      await supabase
+        .from('expense_payout_batches')
+        .delete()
+        .eq('id', batch.id)
+        .eq('company_id', companyId)
+    } catch (compensationError) {
+      return {
+        ok: false,
+        code: 'BATCH_INSERT_FAILED',
+        detail: `mark paid failed (${markError.message}); the payout entry ${journalEntryId} could not be reversed automatically: ${
+          compensationError instanceof Error ? compensationError.message : String(compensationError)
+        }`,
+      }
+    }
+    return {
+      ok: false,
+      code: 'BATCH_INSERT_FAILED',
+      detail: `mark paid failed (${markError.message}); the payout entry was reversed, no claims were changed`,
+    }
   }
 
   return {

@@ -387,6 +387,27 @@ describe('createPayoutBatch', () => {
     createJournalEntryMock.mockResolvedValue({ id: 'je-2' })
   })
 
+  it('reverses the posted transfer when marking the claims paid fails', async () => {
+    // Without the compensation the entry would stay posted while the claims
+    // stayed 'registered', so a retry would post a second payout for them.
+    reverseEntryMock.mockResolvedValue({ id: 'je-storno' })
+    enqueue({ data: [registeredClaim()] })
+    enqueue({ data: { id: 'batch-1' } }) // batch insert
+    enqueue({ data: null }) // batch je update
+    enqueue({ data: null, error: { message: 'mark failed' } }) // claims mark paid
+    enqueue({ data: null }) // batch delete (compensation)
+
+    const result = await createPayoutBatch(sb, COMPANY, USER, {
+      claim_ids: ['c1'],
+      payout_date: '2026-09-05',
+      cash_account: '1935',
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'BATCH_INSERT_FAILED' })
+    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-2')
+    expect(findCall('expense_payout_batches', 'delete')).toBeTruthy()
+  })
+
   it('books one payout verifikat covering all claims and marks them paid', async () => {
     enqueue({ data: [registeredClaim(), registeredClaim({ id: 'c2', amount_sek: 1601.77 })] })
     enqueue({ data: { id: 'batch-1' } }) // batch insert
@@ -462,6 +483,7 @@ describe('deleteExpenseClaim', () => {
 
   it('reverses the verifikat and removes the row', async () => {
     enqueue({ data: { id: 'c1', status: 'registered', journal_entry_id: 'je-1' } })
+    enqueue({ data: { status: 'posted', reversed_by_id: null } }) // entry status
     enqueue({ data: null }) // delete
 
     const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
@@ -474,6 +496,18 @@ describe('deleteExpenseClaim', () => {
     enqueue({ data: { id: 'c1', status: 'paid', journal_entry_id: 'je-1' } })
     const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
     expect(result).toEqual({ ok: false, code: 'ALREADY_PAID' })
+    expect(reverseEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('reuses an existing storno when a previous delete already reversed the entry', async () => {
+    // Retry after a delete that failed with the storno already posted: the
+    // entry is 'reversed', so reverseEntry would refuse it.
+    enqueue({ data: { id: 'c1', status: 'registered', journal_entry_id: 'je-1' } })
+    enqueue({ data: { status: 'reversed', reversed_by_id: 'je-storno-1' } })
+    enqueue({ data: null }) // delete
+
+    const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
+    expect(result).toEqual({ ok: true, reversal_entry_id: 'je-storno-1' })
     expect(reverseEntryMock).not.toHaveBeenCalled()
   })
 

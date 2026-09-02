@@ -32,6 +32,10 @@ CREATE TABLE public.expense_payout_batches (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Target for the tenant-scoped FK from expense_claims.payout_batch_id.
+ALTER TABLE public.expense_payout_batches
+  ADD CONSTRAINT expense_payout_batches_id_company_id_key UNIQUE (id, company_id);
+
 COMMENT ON TABLE public.expense_payout_batches IS
   'One reimbursement transfer covering N registered expense claims; books liability -> cash.';
 
@@ -62,14 +66,20 @@ CREATE TABLE public.expense_claims (
   document_id      uuid REFERENCES public.document_attachments(id) ON DELETE SET NULL,
   status           text NOT NULL DEFAULT 'registered' CHECK (status IN ('registered', 'paid')),
   journal_entry_id uuid REFERENCES public.journal_entries(id) ON DELETE SET NULL,
-  payout_batch_id  uuid REFERENCES public.expense_payout_batches(id) ON DELETE SET NULL,
+  -- Same-company by construction: the composite FK below binds the batch to
+  -- this row's company, so a member of two companies cannot mark a claim in
+  -- one as paid by a batch belonging to the other.
+  payout_batch_id  uuid,
 
   metadata   jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
 
   -- A paid claim must reference the batch that paid it.
-  CHECK (status <> 'paid' OR payout_batch_id IS NOT NULL)
+  CHECK (status <> 'paid' OR payout_batch_id IS NOT NULL),
+
+  FOREIGN KEY (payout_batch_id, company_id)
+    REFERENCES public.expense_payout_batches(id, company_id) ON DELETE SET NULL
 );
 
 COMMENT ON TABLE public.expense_claims IS
