@@ -230,8 +230,8 @@ describe('POST /api/mcp-oauth/token', () => {
 
       const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
       expect(inserted.scopes).toEqual(['transactions:read', 'reports:read'])
-      expect(inserted.sod_acknowledged_at).toBeUndefined()
-      expect(inserted.sod_acknowledged_by).toBeUndefined()
+      expect(inserted.sod_acknowledged_at).toBeNull()
+      expect(inserted.sod_acknowledged_by).toBeNull()
     })
 
     it('viewer whose code carries only write scopes falls back to the read-only defaults', async () => {
@@ -319,7 +319,7 @@ describe('POST /api/mcp-oauth/token', () => {
       const res = await POST(formRequest(codeExchange))
       expect(res.status).toBe(200)
       const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
-      expect(inserted.sod_acknowledged_at).toBeUndefined()
+      expect(inserted.sod_acknowledged_at).toBeNull()
     })
 
     it('returns 500 and mints no key when the role lookup fails', async () => {

@@ -197,9 +197,10 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
       name: OAUTH_MCP_KEY_NAME,
       scopes: grantedScopes,
       refresh_token_hash: refresh.hash,
-      ...(sodAcknowledgedAt
-        ? { sod_acknowledged_at: sodAcknowledgedAt, sod_acknowledged_by: payload.userId }
-        : {}),
+      // Literal keys (null when no conflict): the no-phantom-columns scanner
+      // resolves object literals only, never spreads.
+      sod_acknowledged_at: sodAcknowledgedAt,
+      sod_acknowledged_by: sodAcknowledgedAt ? payload.userId : null,
     })
 
   if (insertError) {
