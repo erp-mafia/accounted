@@ -654,6 +654,10 @@ export interface CashAccount {
   enabled: boolean
   is_primary: boolean
   source: CashAccountSource
+  // Optional verifikationsserie (single letter) for entries booked from this
+  // account. null = follow company_settings.default_voucher_series_per_source_type.
+  // See 20260902121420_cash_accounts_voucher_series.sql.
+  voucher_series: string | null
   created_at: string
   updated_at: string
 }
