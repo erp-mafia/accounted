@@ -1496,6 +1496,35 @@ async function categorizeTransactionCore(
   }
 }
 
+/**
+ * A voucher line that names neither debit_amount nor credit_amount is a shape
+ * error, not a zero line. `Number(undefined) || 0` silently turned
+ * {debit: 500}, {amount, side} and {debitAmount: 500} into 0/0, and the
+ * balance check then reported "debits 0 SEK, credits 0 SEK" for four
+ * perfectly balanced formats (feedback seq 318571). No host validates
+ * inputSchema at runtime, so the guard lives here, and it names the keys it
+ * got so the agent can fix the shape in one turn instead of guessing at the
+ * amounts.
+ */
+function assertVoucherLineShape(line: Record<string, unknown>, label: string): void {
+  const hasDebit = line.debit_amount !== undefined && line.debit_amount !== null
+  const hasCredit = line.credit_amount !== undefined && line.credit_amount !== null
+  if (!hasDebit && !hasCredit) {
+    const got = Object.keys(line).filter((k) => k !== 'account_number')
+    throw new Error(
+      `${label}: expected debit_amount and/or credit_amount (numbers in SEK)` +
+        (got.length ? `; got ${got.join(', ')}` : '; got neither') +
+        '. Example: {"account_number":"6110","debit_amount":400}, {"account_number":"1930","credit_amount":400}.',
+    )
+  }
+  for (const key of ['debit_amount', 'credit_amount'] as const) {
+    const v = line[key]
+    if (v !== undefined && v !== null && !Number.isFinite(Number(v))) {
+      throw new Error(`${label}.${key} must be a number in SEK; got ${JSON.stringify(v)}`)
+    }
+  }
+}
+
 // ── Output schema helpers ────────────────────────────────────
 
 const PAGINATION_PROPS = {
@@ -5499,10 +5528,18 @@ export const tools: McpTool[] = [
         false // preview mode: execution happens at approval time via gnubok_approve_pending_operation
       )
 
-      // If already has a journal entry, pass through as-is
+      // Already booked: categorizeTransactionCore returns a success-shaped
+      // object here, which fails STAGED_OPERATION_SCHEMA on strict clients and
+      // reached the agent as "Structured content does not match the tool's
+      // output schema" with the real reason swallowed (feedback seq 288574).
+      // Throw instead: the dispatcher's isError path carries no
+      // structuredContent, so the message survives.
       if (result.success && result.journal_entry_created === false) {
-        const { transaction: _tx, ...publicResult } = result
-        return publicResult
+        throw new Error(
+          `Transaction is already booked (journal_entry_id ${result.journal_entry_id ?? 'unknown'}); ` +
+            'nothing to categorize. Use gnubok_list_uncategorized_transactions to find unbooked ones, ' +
+            'or gnubok_correct_entry / gnubok_reverse_journal_entry to change the existing verifikat.',
+        )
       }
 
       // Fetch transaction description (and date for period_status) for the title
@@ -9689,6 +9726,21 @@ export const tools: McpTool[] = [
       if (!Array.isArray(allocations) || allocations.length === 0) {
         throw new Error('allocations is required (non-empty array)')
       }
+      // kind is the key every guard below branches on (direction, required
+      // id, tenant pre-check). With kind absent, none of them fired: an
+      // incoming +50 359 SEK payment against three kundfakturor staged as
+      // allocations_kind "supplier_invoice" with zero invoice checks
+      // (feedback seq 319919). No host validates inputSchema at runtime, so
+      // reject here, and say which id field goes with which kind.
+      for (const [i, a] of allocations.entries()) {
+        if (a.kind !== 'customer_invoice' && a.kind !== 'supplier_invoice') {
+          throw new Error(
+            `allocations[${i}].kind is required: "customer_invoice" (incoming payment, pass invoice_id) ` +
+              `or "supplier_invoice" (outgoing payment, pass supplier_invoice_id)` +
+              (a.kind === undefined ? '' : `; got ${JSON.stringify(a.kind)}`),
+          )
+        }
+      }
 
       const { data: transaction, error: txError } = await supabase
         .from('transactions')
@@ -11129,15 +11181,22 @@ export const tools: McpTool[] = [
         { dryRun: true },
       )
       if (!preview) throw new Error(`Unknown account_key "${accountKey}" for this company`)
-      // Rebuild the staged pairs from the preview: 1:1 links stay one pair
-      // each; the links of a bank 1:N split (they carry allocated_amount, all
-      // on the same row) fold back into ONE pair with explicit allocations, so
-      // the executor re-validates the exact slices the reviewer approved.
+      // Rebuild the staged pairs from the preview. The dry run flattens every
+      // pair into one link per outside row, so the grouping must be put back:
+      // the links of an N:1 pair (several rows, one verifikat, no
+      // allocated_amount) fold into ONE pair on their verifikat, and the links
+      // of a bank 1:N split (one row, allocated_amount per verifikat) fold into
+      // ONE pair with explicit allocations. Staging them as N separate 1:1
+      // pairs made the executor ask each Skatteverket row alone to settle the
+      // whole 1630 verifikat: PAIR_NOT_CLOSED on every "Avdragen skatt" +
+      // "Arbetsgivaravgift" pair whose sum matched exactly (feedback seq
+      // 292682, 36 rows / 18 verifikat).
       const resolvedPairs: Array<{
         external_ids: string[]
         journal_entry_ids: string[]
         allocations?: Array<{ journal_entry_id: string; amount: number }>
       }> = []
+      const rowsByEntry = new Map<string, string[]>()
       const splitByRow = new Map<string, Array<{ journal_entry_id: string; amount: number }>>()
       for (const a of preview.applied) {
         if (typeof a.allocated_amount === 'number') {
@@ -11146,7 +11205,12 @@ export const tools: McpTool[] = [
           splitByRow.set(a.external_id, slices)
           continue
         }
-        resolvedPairs.push({ external_ids: [a.external_id], journal_entry_ids: [a.journal_entry_id] })
+        const rows = rowsByEntry.get(a.journal_entry_id) ?? []
+        if (!rows.includes(a.external_id)) rows.push(a.external_id)
+        rowsByEntry.set(a.journal_entry_id, rows)
+      }
+      for (const [journalEntryId, externalIds] of rowsByEntry) {
+        resolvedPairs.push({ external_ids: externalIds, journal_entry_ids: [journalEntryId] })
       }
       for (const [externalId, slices] of splitByRow) {
         resolvedPairs.push({
@@ -11156,7 +11220,15 @@ export const tools: McpTool[] = [
         })
       }
       if (resolvedPairs.length === 0) {
-        throw new Error('No linkable pairs: nothing to stage')
+        // The dry run's skipped list holds the actual reason; without it the
+        // agent saw only "No linkable pairs" (feedback seq 292682).
+        const reasons = preview.skipped
+          .slice(0, 5)
+          .map((sk) => `${sk.code}: ${sk.message}`)
+        throw new Error(
+          'No linkable pairs: nothing to stage' +
+            (reasons.length ? `. Skipped: ${reasons.join(' | ')}` : ''),
+        )
       }
 
       return stagePendingOperation(
@@ -17827,6 +17899,9 @@ export const tools: McpTool[] = [
       }
 
       // Normalize so validateBalance + preview see consistent numeric types.
+      // Shape first: a line with neither amount key is a schema mismatch and
+      // must say so, never coerce to 0/0 and fail the balance check instead.
+      for (const [i, l] of rawLines.entries()) assertVoucherLineShape(l, `lines[${i}]`)
       const lines = rawLines.map((l, i) => ({
         account_number: String(l.account_number ?? ''),
         debit_amount: Number(l.debit_amount) || 0,
@@ -18142,6 +18217,7 @@ export const tools: McpTool[] = [
         throw new Error('entry_id and at least two lines are required')
       }
 
+      for (const [i, l] of rawLines.entries()) assertVoucherLineShape(l, `lines[${i}]`)
       const lines = rawLines.map((l, i) => ({
         account_number: String(l.account_number ?? ''),
         debit_amount: Number(l.debit_amount) || 0,

@@ -204,7 +204,49 @@ describe('reconciliation MCP tools', () => {
     ])
   })
 
-  it('reconcile_match refuses an empty request and a request with nothing linkable', async () => {
+  it('reconcile_match keeps an N:1 group as ONE staged pair (feedback seq 292682: Skatteverket rows against one 1630 verifikat)', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const row2 = '77777777-7777-4777-8777-777777777777'
+    const otherRow = '66666666-6666-4666-8666-666666666666'
+    const entry2 = '44444444-4444-4444-8444-444444444444'
+    // The dry run flattens a pair into one link per outside row and carries
+    // no allocated_amount for a non-split pair.
+    matchMock.mockResolvedValue({
+      dry_run: true,
+      considered: 2,
+      applied: [
+        { external_id: ROW, journal_entry_id: ENTRY },
+        { external_id: row2, journal_entry_id: ENTRY },
+        { external_id: otherRow, journal_entry_id: entry2 },
+      ],
+      skipped: [],
+    })
+    const out = (await tool('gnubok_reconcile_match').execute(
+      {
+        account_key: 'skattekonto',
+        pairs: [
+          { external_ids: [ROW, row2], journal_entry_ids: [ENTRY] },
+          { external_ids: [otherRow], journal_entry_ids: [entry2] },
+        ],
+        dry_run: true,
+      },
+      COMPANY,
+      USER,
+      supabase as never,
+      { type: 'api_key', id: 'key-1' } as never,
+    )) as Record<string, unknown>
+    const preview = out.preview as Record<string, unknown>
+    // Staging the group as two 1:1 pairs made the executor ask each row alone
+    // to settle the whole verifikat (PAIR_NOT_CLOSED on both). The group must
+    // reach the executor as the all-or-nothing pair the reviewer approved.
+    expect(preview.pair_count).toBe(2)
+    expect(preview.pairs).toEqual([
+      { external_ids: [ROW, row2], journal_entry_ids: [ENTRY] },
+      { external_ids: [otherRow], journal_entry_ids: [entry2] },
+    ])
+  })
+
+  it('reconcile_match refuses an empty request and a request with nothing linkable, naming the skip reason', async () => {
     const { supabase } = createQueuedMockSupabase()
     await expect(
       tool('gnubok_reconcile_match').execute({ account_key: 'skattekonto' }, COMPANY, USER, supabase as never),
@@ -218,6 +260,28 @@ describe('reconciliation MCP tools', () => {
         supabase as never,
       ),
     ).rejects.toThrow(/nothing to stage/i)
+    // A bank 1:N whose dry run legitimately failed used to surface as a bare
+    // "No linkable pairs"; the skipped list holds the actual reason.
+    matchMock.mockResolvedValue({
+      dry_run: true,
+      considered: 1,
+      applied: [],
+      skipped: [
+        {
+          pair: { external_ids: [ROW], journal_entry_ids: [ENTRY] },
+          code: 'PAIR_NOT_CLOSED',
+          message: 'Verifikationen saknar rad på 1940',
+        },
+      ],
+    })
+    await expect(
+      tool('gnubok_reconcile_match').execute(
+        { account_key: 'skattekonto', pairs: [{ external_ids: [ROW], journal_entry_ids: [ENTRY] }] },
+        COMPANY,
+        USER,
+        supabase as never,
+      ),
+    ).rejects.toThrow(/nothing to stage\. Skipped: PAIR_NOT_CLOSED: Verifikationen saknar rad på 1940/)
   })
 
   it('reconcile_unmatch dry-run returns the low-risk staging preview', async () => {
