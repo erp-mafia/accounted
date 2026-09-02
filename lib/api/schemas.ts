@@ -30,7 +30,7 @@ import {
   orgNumberHoldsPersonalNumber,
   personalNumberDigits,
 } from '@/lib/customers/personal-number-shape'
-import type { AuditAction, Currency } from '@/types'
+import type { AuditAction, Currency, InvoiceDocumentType } from '@/types'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 
 // ============================================================
@@ -222,8 +222,9 @@ export const SupplierTypeSchema = z.enum([
 ])
 
 export const InvoiceDocumentTypeSchema = z.enum([
-  'invoice', 'proforma', 'delivery_note',
+  'invoice', 'proforma', 'delivery_note', 'quote',
 ])
+
 
 export const VatTreatmentSchema = z.enum([
   'standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt',
@@ -488,6 +489,18 @@ export const CreateInvoiceItemSchema = z
 
 const optionalIsoDate = isoDate.or(z.literal('')).transform(v => v || undefined).optional()
 
+export const QuoteStatusSchema = z.enum(['open', 'accepted', 'declined'])
+
+// POST /api/invoices/[id]/quote-status. Any transition between the three
+// decisions is allowed until the quote has been converted to an invoice.
+export const SetQuoteStatusSchema = z.object({
+  status: QuoteStatusSchema,
+  // Optional new expiry. This is how an expired (open, past valid_until)
+  // quote is reopened: sent quotes are not draft-editable, so the date
+  // travels with the decision. The DB trigger mirrors it into due_date.
+  valid_until: optionalIsoDate,
+})
+
 /**
  * ROT/RUT claim completeness (HUSFL: art av arbete + antal arbetstimmar) at
  * the invoice level, where document_type is known: only real invoices book a
@@ -523,6 +536,9 @@ const CreateInvoiceBaseSchema = z.object({
   delivery_date: optionalIsoDate,
   currency: CurrencySchema,
   document_type: InvoiceDocumentTypeSchema.optional(),
+  // Quotes only: the date the offer expires ("Giltig till"). Required when
+  // document_type is 'quote' (refineQuoteFields); ignored otherwise.
+  valid_until: optionalIsoDate,
   your_reference: z.string().optional(),
   our_reference: z.string().optional(),
   // Fakturamärkning: buyer-required marking (kostnadsställe/projekt/PO),
@@ -614,7 +630,25 @@ const CreateInvoiceBaseSchema = z.object({
   items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required'),
 })
 
-export const CreateInvoiceSchema = CreateInvoiceBaseSchema.superRefine(refineRotRutLineCompleteness)
+// A quote must say how long it is valid: valid_until is the one header
+// field the document type adds, and the PDF, the list and the derived
+// "expired" state all key off it.
+function refineQuoteFields(
+  data: { document_type?: InvoiceDocumentType; valid_until?: string },
+  ctx: z.RefinementCtx,
+) {
+  if (data.document_type === 'quote' && !data.valid_until) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['valid_until'],
+      message: 'Giltig till (valid_until) krävs för en offert.',
+    })
+  }
+}
+
+export const CreateInvoiceSchema = CreateInvoiceBaseSchema
+  .superRefine(refineRotRutLineCompleteness)
+  .superRefine(refineQuoteFields)
 
 // Update (edit) an existing DRAFT invoice in place. Same shape as create minus
 // `save_as_draft`: editing never (re)creates a draft or allocates a number, it
@@ -623,6 +657,7 @@ export const CreateInvoiceSchema = CreateInvoiceBaseSchema.superRefine(refineRot
 export const UpdateInvoiceSchema = CreateInvoiceBaseSchema
   .omit({ save_as_draft: true })
   .superRefine(refineRotRutLineCompleteness)
+  .superRefine(refineQuoteFields)
 
 export const CreateCreditNoteSchema = z.object({
   credited_invoice_id: uuid,

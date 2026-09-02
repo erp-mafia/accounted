@@ -1112,4 +1112,17 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     expect(body.paid_amount).toBe(1000)
     expect(body.remaining_amount).toBe(0)
   })
+
+  it('refuses to mark a quote paid: an offert is not a claim', async () => {
+    const quote = makeInvoice({ status: 'sent', document_type: 'quote', quote_status: 'accepted' })
+    enqueue({ data: quote, error: null })
+
+    const request = createMockRequest('/api/invoices/q-1/mark-paid', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'q-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_QUOTE_NOT_PAYABLE')
+    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+  })
 })

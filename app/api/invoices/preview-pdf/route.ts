@@ -81,7 +81,7 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
 }) => {
   const body = await request.json()
   const {
-    customer_id, invoice_date, due_date, delivery_date, currency, items, your_reference, our_reference,
+    customer_id, invoice_date, due_date, delivery_date, valid_until, currency, items, your_reference, our_reference,
     invoice_marking, notes,
     document_type, invoice_number, payment_link_url,
     deduction_personnummer, deduction_housing_designation, deduction_apartment_number, deduction_brf_org_number,
@@ -304,6 +304,11 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
     invoice_date: invoice_date || new Date().toISOString().split('T')[0],
     due_date: due_date || new Date().toISOString().split('T')[0],
     delivery_date: delivery_date || null,
+    // Quotes (offert): the expiry the PDF prints as "Giltig till". The write
+    // path mirrors it into due_date, so fall back to that for the preview.
+    valid_until: docType === 'quote'
+      ? ((typeof valid_until === 'string' && valid_until.trim()) || due_date || null)
+      : null,
     status: 'draft',
     currency: requestedCurrency,
     exchange_rate: null,

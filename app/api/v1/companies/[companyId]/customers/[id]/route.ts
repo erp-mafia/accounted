@@ -183,6 +183,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
         .select(OPEN_INVOICE_COLUMNS)
         .eq('company_id', ctx.companyId!)
         .eq('customer_id', customerId)
+        // Proformas, delivery notes and quotes are never open receivables.
+        .eq('document_type', 'invoice')
         .in('status', OPEN_INVOICE_STATUSES)
         .order('invoice_date', { ascending: false })
 

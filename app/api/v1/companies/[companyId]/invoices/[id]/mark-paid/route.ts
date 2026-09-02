@@ -196,6 +196,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const typed = invoice as unknown as Invoice & { customer?: { name?: string } }
 
     // Document-shape guards before status check (consistent with mark-sent).
+    // A quote is an offer, not a claim: convert it to a faktura first.
+    if (typed.document_type === 'quote') {
+      return v1ErrorResponseFromCode('INVOICE_QUOTE_NOT_PAYABLE', ctx.log, {
+        requestId: ctx.requestId,
+      })
+    }
     if (typed.document_type === 'delivery_note') {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
