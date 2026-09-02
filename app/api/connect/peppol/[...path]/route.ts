@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { z } from 'zod'
+import type { z } from 'zod'
+import { CONNECTOR_HEADERS, PEPPOL_OPERATIONS, peppolParticipantSchema } from '@accounted/connect-contract'
 import { withConnectorAuth, type ConnectorContext } from '@/lib/connect/hosted/with-connector-auth'
 import { reserveUpstream } from '@/lib/connect/hosted/upstream-budget'
 import {
@@ -63,53 +64,19 @@ import { QVALIA_PROVIDER, createQvaliaTransport, readQvaliaConfigFromEnv } from 
  * operation answers 403.
  */
 
-const MAX_DOCUMENT_CHARS = 5_000_000
-const COMPANY_HEADER = 'x-connector-company'
+const COMPANY_HEADER = CONNECTOR_HEADERS.company.toLowerCase()
 const PENDING_STATE_PREFIX = 'peppol:'
 
-const participantSchema = z.object({
-  // Peppol participant scheme (ISO 6523 ICD), four digits; not a BAS account.
-  scheme: z.string().length(4).regex(/^\d+$/),
-  identifier: z.string().trim().min(1).max(64),
-})
-const documentTypeSchema = z.enum(['Invoice', 'CreditNote'])
-
-const lookupSchema = z.object({ participant: participantSchema })
-const submissionSchema = z.object({
-  idempotencyKey: z.string().trim().min(1).max(128),
-  tenantReference: z.string().trim().min(1).max(128),
-  sender: participantSchema,
-  recipient: participantSchema,
-  documentTypeId: z.string().trim().min(1).max(512),
-  processId: z.string().trim().min(1).max(512),
-  filename: z.string().trim().min(1).max(255),
-  contentType: z.literal('application/xml'),
-  document: z.string().min(1).max(MAX_DOCUMENT_CHARS),
-  documentSha256: z.string().regex(/^[0-9a-f]{64}$/),
-})
-const submissionRefSchema = z.object({ providerSubmissionId: z.string().trim().min(1).max(128) })
-const registrationSchema = z.object({
-  participant: participantSchema,
-  businessCard: z.object({
-    companyName: z.string().trim().min(1).max(200),
-    countryCode: z.string().trim().length(2),
-    geographicalInformation: z.string().max(500).nullish(),
-    vatNumber: z.string().max(64).nullish(),
-    orgNumber: z.string().max(64).nullish(),
-  }),
-  documentTypes: z.array(z.object({ processId: z.string().min(1).max(512), documentTypeId: z.string().min(1).max(512) })).min(1).max(20),
-  description: z.string().max(200).nullish(),
-  tenantReference: z.string().max(128).nullish(),
-})
-const inboundListSchema = z.object({
-  documentType: documentTypeSchema,
-  limit: z.number().int().min(1).max(100).optional(),
-  includeRead: z.boolean().optional(),
-})
-const inboundXmlSchema = z.object({
-  providerDocumentId: z.string().trim().min(1).max(128),
-  documentType: documentTypeSchema,
-})
+// Request shapes come from the published contract so this route and the
+// instance transport (and any third-party implementation of either side)
+// validate with the same schemas.
+const participantSchema = peppolParticipantSchema
+const lookupSchema = PEPPOL_OPERATIONS.lookup.request
+const submissionSchema = PEPPOL_OPERATIONS.submit.request
+const submissionRefSchema = PEPPOL_OPERATIONS.status.request
+const registrationSchema = PEPPOL_OPERATIONS.register.request
+const inboundListSchema = PEPPOL_OPERATIONS.inboundList.request
+const inboundXmlSchema = PEPPOL_OPERATIONS.inboundXml.request
 
 function hostedTransport(): PeppolTransport | null {
   const config = readQvaliaConfigFromEnv()
