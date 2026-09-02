@@ -277,6 +277,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       vat_rate: z.number().min(0).max(25),
       // Article linkage (artikelregister). Optional: free-text lines omit them.
       article_id: z.string().nullable().optional(),
+      // Kundorder line link: an invoice created from a sales order carries it
+      // per item; the draft editor replaces items wholesale on save, so the
+      // field must round-trip or the order line becomes re-invoiceable.
+      sales_order_item_id: z.string().nullable().optional(),
       revenue_account: z
         .string()
         .regex(INVOICE_POSTING_ACCOUNT_REGEX, t('posting_account_invalid'))
@@ -580,6 +584,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             discount_percent: hasLineDiscount(item.discount_percent) ? item.discount_percent : null,
             vat_rate: item.vat_rate ?? 25,
             article_id: item.article_id ?? null,
+            sales_order_item_id: item.sales_order_item_id ?? null,
             revenue_account: item.revenue_account ?? null,
             deduction_type: item.deduction_type ?? null,
             labor_hours: item.labor_hours ?? null,
@@ -861,6 +866,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       discount_percent: null,
       vat_rate: vatRegistered ? vatRatePlan.defaultRate : 0,
       article_id: null,
+      sales_order_item_id: null,
       revenue_account: null,
       deduction_type: null,
       labor_hours: null,
@@ -916,6 +922,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       discount_percent: null,
       vat_rate: 0,
       article_id: null,
+      sales_order_item_id: null,
       revenue_account: null,
       deduction_type: null,
       labor_hours: null,

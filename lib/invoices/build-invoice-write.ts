@@ -53,6 +53,9 @@ export interface InvoiceWriteItemInput {
   vat_rate?: number
   article_id?: string | null
   revenue_account?: string | null
+  /** Kundorder line this invoice line was created from; round-tripped on
+   *  edit so the order's derived invoiced quantity never loses a link. */
+  sales_order_item_id?: string | null
   deduction_type?: 'rot' | 'rut' | null
   labor_hours?: number | null
   work_type?: string | null
@@ -145,6 +148,7 @@ export type InvoiceWriteItemRow = {
   vat_amount: number
   article_id: string | null
   revenue_account: string | null
+  sales_order_item_id: string | null
   deduction_type: 'rot' | 'rut' | null
   deduction_amount: number
   labor_hours: number | null
@@ -578,6 +582,7 @@ export async function buildInvoiceWriteData(params: {
         vat_amount: 0,
         article_id: null,
         revenue_account: null,
+        sales_order_item_id: null,
         deduction_type: null,
         deduction_amount: 0,
         labor_hours: null,
@@ -624,6 +629,7 @@ export async function buildInvoiceWriteData(params: {
       // VAT-treatment-derived account in generatePerRateLines().
       article_id: item.article_id ?? null,
       revenue_account: item.revenue_account ?? null,
+      sales_order_item_id: item.sales_order_item_id ?? null,
       deduction_type: deductionType,
       deduction_amount: deductionAmount,
       labor_hours: documentType === 'invoice' ? (item.labor_hours ?? null) : null,

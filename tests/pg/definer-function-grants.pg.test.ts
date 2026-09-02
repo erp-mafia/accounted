@@ -64,6 +64,11 @@ const AUTHENTICATED_GUARDED_WRITERS = [
   'generate_delivery_note_number(uuid)',
   'generate_article_number(uuid,uuid)',
   'check_and_increment_inbox_quota(uuid,integer,integer)',
+  // Kundorder (20260902130000): numbering + completion refresh, both called
+  // on the user's session client; non-member refusal is exercised in
+  // tests/pg/sales-orders.pg.test.ts.
+  'generate_sales_order_number(uuid,uuid)',
+  'refresh_sales_order_completion(uuid)',
 ]
 
 interface GrantRow {

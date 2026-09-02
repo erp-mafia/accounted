@@ -419,6 +419,10 @@ export const CreateInvoiceItemSchema = z
     // accounts are only accepted on zero-VAT lines (build-invoice-write.ts).
     article_id: uuid.nullable().optional(),
     revenue_account: invoicePostingAccount.nullable().optional(),
+    // Kundorder provenance: the order line this invoice line was created
+    // from. Round-tripped on draft edits; the DB trigger refuses a quantity
+    // that would over-invoice the order line.
+    sales_order_item_id: uuid.nullable().optional(),
     // ROT/RUT-avdrag fields. `deduction_amount` is intentionally omitted from
     // the client schema: the API computes it from rot-rut-rules.ts so a
     // tampered client can't expand the 1513 receivable beyond the line total.
@@ -2314,6 +2318,9 @@ export const UpdateSettingsSchema = z.object({
   // Körjournal (mileage log): UI-visibility toggle only, never load-bearing
   // for correctness (trips created via API/MCP work regardless).
   mileage_enabled: z.boolean().optional(),
+  // Kundorder (sales orders): UI-visibility toggle only, never load-bearing
+  // for correctness (the pages and APIs work regardless).
+  sales_orders_enabled: z.boolean().optional(),
   // Data analysis consent (#1346): gates cross-company analysis of this
   // company's bookkeeping outcomes. Flipped by a human in the settings UI
   // only; deliberately absent from the v1 REST / MCP settings pick lists.
@@ -3809,4 +3816,94 @@ export const BrandAllowlistAddSchema = z.object({
 
 export const BrandAllowlistRemoveSchema = z.object({
   id: z.string().uuid(),
+})
+
+// ============================================================
+// Kundorder (sales orders) schemas
+// ============================================================
+
+// Order lines mirror the invoice line shape (same editor, same line math)
+// minus the invoice-only fields (ROT/RUT, periodisering). Text rows carry a
+// description only.
+export const SalesOrderItemSchema = z
+  .object({
+    id: uuid.optional(),
+    line_type: z.enum(['product', 'text']).optional(),
+    description: z.string().max(2000),
+    quantity: z.number().nonnegative(),
+    unit: z.string().max(32),
+    unit_price: z.number(),
+    discount_percent: z.number().min(0).max(100).nullable().optional(),
+    vat_rate: z.number().min(0).max(100).optional(),
+    article_id: uuid.nullable().optional(),
+    revenue_account: invoicePostingAccount.nullable().optional(),
+    dimensions: DimensionsBagSchema.optional(),
+  })
+  .superRefine((item, ctx) => {
+    if (item.line_type === 'text') return
+    if (!item.description.trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['description'], message: 'Beskrivning krävs' })
+    }
+  })
+
+export const CreateSalesOrderSchema = z.object({
+  customer_id: uuid,
+  order_date: isoDate.optional(),
+  requested_delivery_date: isoDate.nullable().optional(),
+  currency: CurrencySchema.optional(),
+  your_reference: z.string().max(200).nullable().optional(),
+  our_reference: z.string().max(200).nullable().optional(),
+  notes: z.string().max(4000).nullable().optional(),
+  default_dimensions: DimensionsBagSchema.optional(),
+  items: z.array(SalesOrderItemSchema).min(1, 'Minst en orderrad krävs').max(500),
+})
+
+// Full replace of header + lines. Lines that carry an `id` keep their
+// delivered/invoiced history (the DB refuses lowering quantity below the
+// invoiced quantity); lines without an id are new; omitted ids are deleted.
+export const UpdateSalesOrderSchema = CreateSalesOrderSchema.partial().extend({
+  items: z.array(SalesOrderItemSchema).min(1).max(500).optional(),
+})
+
+export const SalesOrderTransitionSchema = z.object({
+  action: z.enum(['confirm', 'cancel', 'reopen']),
+})
+
+export const RegisterSalesOrderDeliverySchema = z.object({
+  delivery_date: isoDate.optional(),
+  lines: z
+    .array(
+      z.object({
+        sales_order_item_id: uuid,
+        // Cumulative delivered quantity after this registration (not a delta):
+        // idempotent on retry, and what the user sees in the dialog.
+        delivered_qty: z.number().nonnegative(),
+      }),
+    )
+    .min(1)
+    .max(500),
+})
+
+export const CreateInvoiceFromSalesOrderSchema = z.object({
+  // Explicit picks win. Without them, `mode` selects the lines:
+  //   remaining  = every line with quantity left to invoice (default)
+  //   delivered  = only what has been delivered but not yet invoiced
+  mode: z.enum(['remaining', 'delivered']).optional(),
+  lines: z
+    .array(
+      z.object({
+        sales_order_item_id: uuid,
+        quantity: z.number().positive(),
+      }),
+    )
+    .max(500)
+    .optional(),
+  invoice_date: isoDate.optional(),
+  due_date: isoDate.optional(),
+})
+
+export const SalesOrderListQuerySchema = z.object({
+  status: z.enum(['draft', 'confirmed', 'completed', 'cancelled']).optional(),
+  customer_id: uuid.optional(),
+  q: z.string().max(200).optional(),
 })

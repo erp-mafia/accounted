@@ -30,3 +30,19 @@ export function toIsoDate(d: Date): string {
 export function todayIsoUtc(): string {
   return new Date().toISOString().slice(0, 10)
 }
+
+/**
+ * Today's calendar date in Europe/Stockholm as YYYY-MM-DD. Business dates
+ * (order date, delivery date, invoice date) belong to the Swedish calendar
+ * day, not UTC: near midnight the UTC date is still yesterday, and a
+ * delivery date is also the Riksbanken rate anchor for foreign-currency
+ * invoices.
+ */
+export function todayIsoStockholm(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Europe/Stockholm',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now)
+}

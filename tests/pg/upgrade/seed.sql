@@ -105,4 +105,74 @@ VALUES
   ('44444444-4444-4444-4444-444444444403', '6570', 123.45, 0),
   ('44444444-4444-4444-4444-444444444403', '1930', 0, 123.45);
 
+-- Edge rows that broke real backfills on production (2026-09-02, the party
+-- substrate migration failed twice on prod after passing here): a supplier
+-- and a customer with an empty name, and a company archived by a migration
+-- reset whose rows block_migration_reset_source_mutation makes immutable.
+-- Any migration that UPDATEs every supplier or customer must survive both.
+INSERT INTO public.suppliers (id, company_id, user_id, name)
+VALUES (
+  '77777777-7777-7777-7777-777777777701',
+  '22222222-2222-2222-2222-222222222222',
+  '11111111-1111-1111-1111-111111111111',
+  ''
+);
+
+INSERT INTO public.customers (id, company_id, user_id, name)
+VALUES (
+  '77777777-7777-7777-7777-777777777702',
+  '22222222-2222-2222-2222-222222222222',
+  '11111111-1111-1111-1111-111111111111',
+  ''
+);
+
+-- Guarded: company_migration_resets arrived 2026-08-18 and a merge-base older
+-- than that lacks the table. Then the archived company simply is not seeded.
+DO $$
+BEGIN
+  IF to_regclass('public.company_migration_resets') IS NULL THEN
+    RETURN;
+  END IF;
+
+  INSERT INTO public.companies (id, name, entity_type, created_by)
+  VALUES (
+    '88888888-8888-8888-8888-888888888801',
+    'Arkiverade Bolaget AB',
+    'aktiebolag',
+    '11111111-1111-1111-1111-111111111111'
+  );
+  INSERT INTO public.companies (id, name, entity_type, created_by)
+  VALUES (
+    '88888888-8888-8888-8888-888888888802',
+    'Ersattningsbolaget AB',
+    'aktiebolag',
+    '11111111-1111-1111-1111-111111111111'
+  );
+  INSERT INTO public.suppliers (id, company_id, user_id, name)
+  VALUES (
+    '88888888-8888-8888-8888-888888888811',
+    '88888888-8888-8888-8888-888888888801',
+    '11111111-1111-1111-1111-111111111111',
+    'Frusen Leverantor AB'
+  );
+  INSERT INTO public.customers (id, company_id, user_id, name)
+  VALUES (
+    '88888888-8888-8888-8888-888888888812',
+    '88888888-8888-8888-8888-888888888801',
+    '11111111-1111-1111-1111-111111111111',
+    'Frusen Kund AB'
+  );
+  -- Last, so the rows above are written before the archive freezes them.
+  INSERT INTO public.company_migration_resets
+    (source_company_id, replacement_company_id, actor_id, reason, confirmation_snapshot, source_counts)
+  VALUES (
+    '88888888-8888-8888-8888-888888888801',
+    '88888888-8888-8888-8888-888888888802',
+    '11111111-1111-1111-1111-111111111111',
+    'pg-upgrade fixture: archived source company for migration edge cases',
+    '{}'::jsonb,
+    '{}'::jsonb
+  );
+END $$;
+
 COMMIT;

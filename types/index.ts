@@ -555,6 +555,12 @@ export interface CompanySettings {
   // for correctness. The nav row also shows when mileage_trips rows exist.
   mileage_enabled: boolean
 
+  // Kundorder (sales orders): UI-visibility toggle only, never load-bearing
+  // for correctness (the /sales-orders pages and APIs work regardless).
+  sales_orders_enabled: boolean
+  // Per-company counter behind generate_sales_order_number (OR-<n>).
+  next_sales_order_number?: number
+
   // Data analysis consent (migration 20260828120000): when true, the
   // company's bookkeeping outcomes may be read across companies to evaluate
   // and improve automatic booking. Default false, enforced server-side
@@ -949,6 +955,96 @@ export interface SupplierPaymentBatchItem {
   created_at: string
 }
 
+// Kundorder (sales order): the non-ledger document between agreement and
+// invoice. Never books. Four-state header machine; delivery and invoicing
+// progress are derived per line (see SalesOrderItem.invoiced_qty).
+export type SalesOrderStatus = 'draft' | 'confirmed' | 'completed' | 'cancelled'
+
+/** Derived per-axis progress: none / partial / full. */
+export type SalesOrderProgress = 'none' | 'partial' | 'full'
+
+export interface SalesOrder {
+  id: string
+  company_id: string
+  user_id: string
+  customer_id: string | null
+  /** OR-<n>, allocated at creation by generate_sales_order_number. */
+  order_number: string | null
+  status: SalesOrderStatus
+  /** Proforma the order was converted from, if any. */
+  source_invoice_id: string | null
+  order_date: string
+  requested_delivery_date: string | null
+  /** Latest registered delivery date across all lines (display only; invoices use per-line dates). */
+  last_delivery_date: string | null
+  /** Customer facts the lines were VAT-validated under; invoicing refuses when they changed. */
+  customer_type_snapshot?: CustomerType | null
+  customer_vat_validated_snapshot?: boolean | null
+  currency: string
+  subtotal: number
+  vat_amount: number
+  total: number
+  your_reference: string | null
+  our_reference: string | null
+  notes: string | null
+  default_dimensions: Record<string, string>
+  confirmed_at: string | null
+  completed_at: string | null
+  cancelled_at: string | null
+  created_at: string
+  updated_at: string
+
+  // Embeds / derived (list + detail responses)
+  customer?: Customer | null
+  items?: SalesOrderItem[]
+  delivery_progress?: SalesOrderProgress
+  invoicing_progress?: SalesOrderProgress
+}
+
+export interface SalesOrderItem {
+  id: string
+  company_id: string
+  sales_order_id: string
+  sort_order: number
+  line_type: 'product' | 'text'
+  description: string
+  quantity: number
+  /** Stored: registered by the user via the deliver action. */
+  delivered_qty: number
+  /** Latest delivery date registered for this line (null until delivered). */
+  last_delivery_date?: string | null
+  unit: string
+  unit_price: number
+  discount_percent: number
+  vat_rate: number
+  /** NET of discount, order currency. */
+  line_total: number
+  article_id: string | null
+  revenue_account: string | null
+  dimensions: Record<string, string>
+  created_at: string
+  updated_at: string
+
+  /** Derived from linked invoice_items on non-cancelled, non-credited invoices. */
+  invoiced_qty?: number
+  /** quantity - invoiced_qty (never negative). */
+  remaining_qty?: number
+}
+
+export interface SalesOrderItemInput {
+  id?: string
+  line_type?: 'product' | 'text'
+  description: string
+  quantity: number
+  unit: string
+  unit_price: number
+  discount_percent?: number | null
+  vat_rate?: number
+  article_id?: string | null
+  revenue_account?: string | null
+  dimensions?: Record<string, string>
+}
+
 // Article (artikelregister): reusable invoice-line preset. NON-INVENTORY:
 // no stock fields and no inventory postings, by deliberate design.
 export type ArticleType = 'vara' | 'tjanst'
@@ -1249,6 +1345,10 @@ export interface Invoice {
   quote_status?: QuoteStatus | null
   quote_decided_at?: string | null
 
+  // Kundorder this invoice was created from (sales_orders.id). Header-level
+  // provenance only; the per-line link is invoice_items.sales_order_item_id.
+  sales_order_id?: string | null
+
   // Self-billing received (mottagen självfaktura, ML 17 kap 15§). When
   // `is_self_billed` is true the customer issued the invoice on our behalf;
   // for us it is a sale. The counterparty's number lives in
@@ -1402,6 +1502,12 @@ export interface InvoiceItem {
   // booking in generatePerRateLines().
   article_id?: string | null
   revenue_account?: string | null
+
+  // Kundorder line this invoice line was created from. The order line's
+  // invoiced quantity is DERIVED from these links (never stored), so an
+  // edit that drops the link would free the quantity for double invoicing:
+  // every write path round-trips it.
+  sales_order_item_id?: string | null
 
   // Periodisering (förutbetald intäkt): when set, the revenue entry credits
   // accrual_balance_account (29xx) instead of the line's revenue account, and
@@ -2220,6 +2326,12 @@ export type PendingOperationType =
   | 'update_company_settings'
   | 'create_article'
   | 'update_article'
+  // Kundorder (gnubok_create_sales_order / _transition_sales_order /
+  // _register_sales_order_delivery / _create_invoice_from_sales_order)
+  | 'create_sales_order'
+  | 'transition_sales_order'
+  | 'register_sales_order_delivery'
+  | 'create_invoice_from_sales_order'
   // Kontoplan reference data (gnubok_create_account / gnubok_update_account)
   | 'create_account'
   | 'update_account'

@@ -205,6 +205,9 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     // nothing else.
     const replaced = await replaceInvoiceItems(supabase, id, build.items)
     if (!replaced.ok) {
+      if (replaced.stage === 'guard') {
+        return errorResponseFromCode(replaced.code, ctxLog, { requestId })
+      }
       ctxLog.error(`invoice items ${replaced.stage} failed on update`, replaced.error, { invoiceId: id })
       return errorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', ctxLog, {
         requestId,

@@ -175,6 +175,29 @@ describe('PATCH /api/invoices/[id]', () => {
     expect(emitSpy).not.toHaveBeenCalled()
   })
 
+  it('returns 409 INVOICE_UPDATE_DROPS_ORDER_LINK when the new lines drop a kundorder link', async () => {
+    enqueue({
+      data: { id: 'inv-1', status: 'draft', invoice_number: null, journal_entry_id: null, is_self_billed: false },
+      error: null,
+    }) // existing
+    enqueue({ data: makeCustomer({ id: 'customer-1', customer_type: 'swedish_business' }), error: null }) // customer
+    enqueue({ data: { vat_registered: true }, error: null }) // settings
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // header update matched
+    enqueue({
+      // snapshot: the stored line is linked to an order line; VALID_BODY carries no sales_order_item_id
+      data: [{ id: 'item-old-1', invoice_id: 'inv-1', sales_order_item_id: 'd1000000-0000-4000-8000-000000000001' }],
+      error: null,
+    })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await patch('inv-1'))
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INVOICE_UPDATE_DROPS_ORDER_LINK')
+    // The guard fires before the delete: from() was called for existing,
+    // customer, settings, update and snapshot only, never for delete/insert.
+    expect(mockSupabase.from).toHaveBeenCalledTimes(5)
+  })
+
   it('returns 409 when the draft is sent/finalized concurrently (0-row update)', async () => {
     enqueue({
       data: { id: 'inv-1', status: 'draft', invoice_number: null, journal_entry_id: null, is_self_billed: false },

@@ -25,8 +25,7 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { SetQuoteStatusSchema } from '@/lib/api/schemas'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 
-const QUOTE_STATUS_RESPONSE_COLUMNS =
-  'id, invoice_number, document_type, status, quote_status, quote_decided_at, valid_until'
+
 
 const QuoteStatusResponse = z.object({
   id: z.string().uuid(),
@@ -132,7 +131,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const { data: quote, error: fetchError } = await ctx.supabase
       .from('invoices')
-      .select(QUOTE_STATUS_RESPONSE_COLUMNS)
+      .select('id, invoice_number, document_type, status, quote_status, quote_decided_at, valid_until')
       .eq('company_id', ctx.companyId!)
       .eq('id', quoteId)
       .maybeSingle()
@@ -204,7 +203,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       // above makes this a 0-row update instead of overwriting newer state.
       .eq('quote_status', typed.quote_status)
       .neq('status', 'cancelled')
-      .select(QUOTE_STATUS_RESPONSE_COLUMNS)
+      .select('id, invoice_number, document_type, status, quote_status, quote_decided_at, valid_until')
       .maybeSingle()
 
     if (updateError) {
