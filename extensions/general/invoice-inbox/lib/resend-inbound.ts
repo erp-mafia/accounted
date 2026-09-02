@@ -81,16 +81,47 @@ export async function fetchInboundAttachment(
   }
 }
 
-// Parses the first recipient whose domain matches our configured inbound domain,
-// returning just the local_part. Returns null if no match.
-export function extractLocalPartForDomain(recipients: string[], domain: string): string | null {
+export interface SharedInboxRecipient {
+  /** The company_inboxes.local_part candidate, lowercased, without any +tag. */
+  localPart: string
+  /** Plus-address tag (the part after the first `+`), lowercased; null when absent or empty. */
+  tag: string | null
+}
+
+// Parses the first recipient whose domain matches our configured inbound
+// domain, returning its local_part split at the first `+` (RFC 5233
+// sub-addressing): `acme-x7f2+lev@inbox` matches the inbox row for
+// `acme-x7f2` and carries tag `lev`. Before this split a +tagged mail 404ed,
+// because the whole `acme-x7f2+lev` was looked up as the local_part.
+// Returns null if no recipient is on the domain.
+export function extractLocalPartForDomain(
+  recipients: string[],
+  domain: string,
+): SharedInboxRecipient | null {
   const normalized = domain.toLowerCase()
   for (const addr of recipients) {
     const match = addr.match(/^\s*([^@\s]+)@([^@\s]+?)\s*$/)
     if (!match) continue
-    const [, localPart, addrDomain] = match
-    if (addrDomain.toLowerCase() === normalized) return localPart.toLowerCase()
+    const [, rawLocal, addrDomain] = match
+    if (addrDomain.toLowerCase() !== normalized) continue
+    const lower = rawLocal.toLowerCase()
+    const plus = lower.indexOf('+')
+    if (plus === -1) return { localPart: lower, tag: null }
+    const tag = lower.slice(plus + 1)
+    return { localPart: lower.slice(0, plus), tag: tag.length > 0 ? tag : null }
   }
+  return null
+}
+
+/** Sender-declared document kind, stored on invoice_inbox_items.kind_hint. */
+export type InboxKindHint = 'supplier_invoice' | 'receipt'
+
+// Maps the plus-address tag to a kind hint. `+lev` (leverantörsfaktura) and
+// `+ver` (verifikation/underlag) are the two documented tags; anything else
+// routes to the inbox with no hint, so a typo never loses a document.
+export function kindHintFromTag(tag: string | null | undefined): InboxKindHint | null {
+  if (tag === 'lev') return 'supplier_invoice'
+  if (tag === 'ver') return 'receipt'
   return null
 }
 
