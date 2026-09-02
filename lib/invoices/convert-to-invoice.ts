@@ -226,16 +226,20 @@ export async function convertToInvoice(params: {
     quote_status: source.quote_status ?? null,
     quote_decided_at: source.quote_decided_at ?? null,
   }
-  const sourceUpdate = isQuote
-    ? {
-        quote_status: 'accepted',
-        quote_decided_at: source.quote_decided_at ?? new Date().toISOString(),
-      }
-    : { status: 'cancelled' }
-  const { error: sourceUpdateError } = await supabase
-    .from('invoices')
-    .update(sourceUpdate)
-    .eq('id', sourceId)
+  // Literal payloads on purpose: the phantom-column schema guard
+  // (tests/schema/no-phantom-columns.test.ts) can only check object literals.
+  const { error: sourceUpdateError } = isQuote
+    ? await supabase
+        .from('invoices')
+        .update({
+          quote_status: 'accepted',
+          quote_decided_at: source.quote_decided_at ?? new Date().toISOString(),
+        })
+        .eq('id', sourceId)
+    : await supabase
+        .from('invoices')
+        .update({ status: 'cancelled' })
+        .eq('id', sourceId)
 
   if (sourceUpdateError) {
     await supabase.from('invoices').delete().eq('id', invoice.id)
@@ -248,14 +252,20 @@ export async function convertToInvoice(params: {
   try {
     await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
   } catch (err) {
-    await supabase
-      .from('invoices')
-      .update(
-        isQuote
-          ? { quote_status: previousSource.quote_status, quote_decided_at: previousSource.quote_decided_at }
-          : { status: previousSource.status },
-      )
-      .eq('id', sourceId)
+    if (isQuote) {
+      await supabase
+        .from('invoices')
+        .update({
+          quote_status: previousSource.quote_status,
+          quote_decided_at: previousSource.quote_decided_at,
+        })
+        .eq('id', sourceId)
+    } else {
+      await supabase
+        .from('invoices')
+        .update({ status: previousSource.status })
+        .eq('id', sourceId)
+    }
     await supabase.from('invoices').delete().eq('id', invoice.id)
     return {
       ok: false,
