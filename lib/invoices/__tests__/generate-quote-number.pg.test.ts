@@ -140,21 +140,13 @@ describe('invoices quote columns', () => {
     expect(rows[0]).toEqual({ document_type: 'quote', quote_status: 'open', valid_until: '2026-07-01' })
   })
 
-  it('rejects a quote without quote_status and a non-quote with one', async () => {
+  it('rejects a non-quote that carries a quote_status', async () => {
     const { userId, companyId } = await seedCompany()
     const customerId = await insertCustomer(userId, companyId)
 
-    await expect(
-      insertInvoiceRow({
-        userId,
-        companyId,
-        customerId,
-        documentType: 'quote',
-        invoiceNumber: 'OF-002',
-        quoteStatus: null,
-      }),
-    ).rejects.toThrow(/invoices_quote_columns_check/)
-
+    // A quote inserted WITHOUT quote_status is opened by the
+    // invoices_quote_defaults trigger (tested below), so only the reverse
+    // pairing can still violate invoices_quote_columns_check.
     await expect(
       insertInvoiceRow({
         userId,
@@ -193,4 +185,105 @@ describe('invoices quote columns', () => {
       }),
     ).rejects.toThrow(/invoices_document_type_check/)
   })
+
+describe('invoices_quote_defaults trigger and one-live-conversion index (20260902141000)', () => {
+  it('opens a new quote and mirrors due_date into valid_until when a writer omits them', async () => {
+    const { userId, companyId } = await seedCompany()
+    const customerId = await insertCustomer(userId, companyId)
+
+    const id = await insertInvoiceRow({
+      userId,
+      companyId,
+      customerId,
+      documentType: 'quote',
+      invoiceNumber: 'OF-010',
+      quoteStatus: null,
+      validUntil: null,
+    })
+
+    const { rows } = await getPool().query<{ quote_status: string; valid_until: string; due_date: string }>(
+      'SELECT quote_status, valid_until::text, due_date::text FROM public.invoices WHERE id = $1',
+      [id],
+    )
+    expect(rows[0]).toEqual({ quote_status: 'open', valid_until: '2026-07-01', due_date: '2026-07-01' })
+  })
+
+  it('keeps the two dates equal on update, valid_until winning, and never rewrites a decision', async () => {
+    const { userId, companyId } = await seedCompany()
+    const customerId = await insertCustomer(userId, companyId)
+    const id = await insertInvoiceRow({
+      userId,
+      companyId,
+      customerId,
+      documentType: 'quote',
+      invoiceNumber: 'OF-011',
+      quoteStatus: 'accepted',
+      validUntil: '2026-07-01',
+    })
+
+    await getPool().query('UPDATE public.invoices SET due_date = $2 WHERE id = $1', [id, '2026-08-15'])
+    let res = await getPool().query<{ quote_status: string; valid_until: string; due_date: string }>(
+      'SELECT quote_status, valid_until::text, due_date::text FROM public.invoices WHERE id = $1',
+      [id],
+    )
+    expect(res.rows[0]).toEqual({ quote_status: 'accepted', valid_until: '2026-08-15', due_date: '2026-08-15' })
+
+    await getPool().query('UPDATE public.invoices SET valid_until = $2 WHERE id = $1', [id, '2026-09-30'])
+    res = await getPool().query<{ quote_status: string; valid_until: string; due_date: string }>(
+      'SELECT quote_status, valid_until::text, due_date::text FROM public.invoices WHERE id = $1',
+      [id],
+    )
+    expect(res.rows[0]).toEqual({ quote_status: 'accepted', valid_until: '2026-09-30', due_date: '2026-09-30' })
+  })
+
+  it('leaves non-quote rows untouched', async () => {
+    const { userId, companyId } = await seedCompany()
+    const customerId = await insertCustomer(userId, companyId)
+    const id = await insertInvoiceRow({
+      userId,
+      companyId,
+      customerId,
+      documentType: 'invoice',
+      invoiceNumber: null,
+      quoteStatus: null,
+    })
+
+    const { rows } = await getPool().query<{ quote_status: string | null; valid_until: string | null }>(
+      'SELECT quote_status, valid_until::text FROM public.invoices WHERE id = $1',
+      [id],
+    )
+    expect(rows[0]).toEqual({ quote_status: null, valid_until: null })
+  })
+
+  it('allows one live invoice per converted source, and another once the first is cancelled', async () => {
+    const { userId, companyId } = await seedCompany()
+    const customerId = await insertCustomer(userId, companyId)
+    const quoteId = await insertInvoiceRow({
+      userId,
+      companyId,
+      customerId,
+      documentType: 'quote',
+      invoiceNumber: 'OF-012',
+      quoteStatus: 'accepted',
+      validUntil: '2026-07-01',
+    })
+
+    const insertConverted = (id: string, number: string) =>
+      getPool().query(
+        `INSERT INTO public.invoices
+           (id, user_id, company_id, customer_id, invoice_number, document_type, converted_from_id,
+            invoice_date, due_date, currency, subtotal, vat_amount, total, vat_treatment, vat_rate, moms_ruta, status)
+         VALUES ($1, $2, $3, $4, $5, 'invoice', $6,
+                 '2026-06-01', '2026-07-01', 'SEK', 1000, 250, 1250, 'standard_25', 25, '10', 'draft')`,
+        [id, userId, companyId, customerId, number, quoteId],
+      )
+
+    const first = randomUUID()
+    await insertConverted(first, 'F-901')
+    await expect(insertConverted(randomUUID(), 'F-902')).rejects.toThrow(/idx_invoices_one_live_conversion/)
+
+    await getPool().query(`UPDATE public.invoices SET status = 'cancelled' WHERE id = $1`, [first])
+    await expect(insertConverted(randomUUID(), 'F-903')).resolves.toBeDefined()
+  })
+})
 })

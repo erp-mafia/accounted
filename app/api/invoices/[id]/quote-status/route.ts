@@ -66,6 +66,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       })
     }
 
+    // Compare-and-set on what was just read: a conversion (which writes
+    // 'accepted') or a cancel that lands between the checks above and this
+    // write turns it into a 0-row update instead of overwriting the newer
+    // state. maybeSingle: 0 rows is the race, not a DB error.
     const { data: updated, error: updateError } = await supabase
       .from('invoices')
       .update({
@@ -75,12 +79,20 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       })
       .eq('id', id)
       .eq('company_id', companyId)
+      .eq('quote_status', quote.quote_status)
+      .neq('status', 'cancelled')
       .select('id, invoice_number, document_type, status, quote_status, quote_decided_at, valid_until')
-      .single()
+      .maybeSingle()
 
-    if (updateError || !updated) {
-      log.error('quote status update failed', updateError ?? new Error('no row'), { quoteId: id })
-      return errorResponse(updateError ?? new Error('Quote status update failed'), log, { requestId })
+    if (updateError) {
+      log.error('quote status update failed', updateError, { quoteId: id })
+      return errorResponse(updateError, log, { requestId })
+    }
+    if (!updated) {
+      return errorResponseFromCode('INVOICE_QUOTE_ALREADY_INVOICED', log, {
+        requestId,
+        reason: 'quote changed concurrently (converted or cancelled) before the decision was written',
+      })
     }
 
     return NextResponse.json({ data: updated })

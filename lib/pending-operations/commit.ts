@@ -1899,10 +1899,12 @@ async function commitCreateInvoice(
       vat_amount_sek: vatAmountSek,
       total,
       total_sek: totalSek,
-      // Fresh unpaid receivable: remaining_amount is what every payment
+      // A quote is an offer, not a claim: nothing is owed on it (parity with
+      // build-invoice-write). Otherwise a fresh unpaid receivable:
+      // remaining_amount is what every payment
       // surface reads as the open balance; leaving the NOT NULL DEFAULT 0
       // made every agent-created invoice look settled.
-      remaining_amount: total,
+      remaining_amount: isQuote ? 0 : total,
       paid_amount: 0,
       vat_treatment: notVatRegistered ? 'exempt' : vatRules.treatment,
       vat_rate: isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate),
@@ -2036,7 +2038,7 @@ async function commitUpdateInvoice(
   const { data: existing, error: fetchError } = await supabase
     .from('invoices')
     .select(
-      'id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, customer_id, document_type, invoice_date, due_date, delivery_date, currency, your_reference, our_reference, invoice_marking, notes, payment_link_url, payment_link_auto, ore_rounding, default_dimensions, deduction_personnummer_encrypted, deduction_personnummer_last4',
+      'id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, quote_status, customer_id, document_type, invoice_date, due_date, delivery_date, currency, your_reference, our_reference, invoice_marking, notes, payment_link_url, payment_link_auto, ore_rounding, default_dimensions, deduction_personnummer_encrypted, deduction_personnummer_last4',
     )
     .eq('id', invoiceId)
     .eq('company_id', companyId)
@@ -2224,6 +2226,15 @@ async function commitMarkInvoicePaid(
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
   if (invoice.credited_invoice_id) {
     return { error: 'Kreditfakturor kan inte markeras som betalda.', status: 409 }
+  }
+  // Parity with the dashboard and v1 mark-paid routes: only a faktura is a
+  // claim. A proforma, delivery note or quote has nothing to settle and must
+  // never reach a payment voucher.
+  if (invoice.document_type && invoice.document_type !== 'invoice') {
+    const entry = getErrorEntry('INVOICE_QUOTE_NOT_PAYABLE')
+    // 409 like the credit-note guard above: the dispatcher records it as
+    // rejected (a state refusal), not failed (an execution error).
+    return { error: entry?.message_sv ?? 'Only invoices can be paid.', errorCode: 'INVOICE_QUOTE_NOT_PAYABLE', status: 409 }
   }
   if (invoice.status !== 'sent' && invoice.status !== 'overdue') {
     return { error: 'Invoice can only be marked as paid when status is "sent" or "overdue"', status: 409 }
@@ -2885,6 +2896,18 @@ async function commitMatchTransactionInvoice(
   if (invoice.credited_invoice_id) {
     return { error: 'Kreditfakturor kan inte registreras som betalda.', status: 409 }
   }
+  // Parity with the dashboard match route (MATCH_INVOICE_NOT_INVOICE_TYPE):
+  // proformas, delivery notes and quotes carry no receivable to settle.
+  if (invoice.document_type && invoice.document_type !== 'invoice') {
+    const entry = getErrorEntry('MATCH_INVOICE_NOT_INVOICE_TYPE')
+    return {
+      error: entry?.message_sv ?? 'Only invoices can be matched to a transaction.',
+      errorCode: 'MATCH_INVOICE_NOT_INVOICE_TYPE',
+      // 409 like the credit-note guard above: the dispatcher records it as
+      // rejected (a state refusal), not failed (an execution error).
+      status: 409,
+    }
+  }
   if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
     return { error: 'Invoice is not in a matchable state', status: 409 }
   }
@@ -3241,6 +3264,24 @@ async function commitLinkInvoiceVoucher(
 
   if (!invoiceId || !journalEntryId) {
     return { error: 'invoice_id and journal_entry_id are required', status: 400 }
+  }
+
+  // Only a faktura carries a receivable to settle (parity with the dashboard
+  // link route and the match executors); the RPC validates status only.
+  const { data: docRow } = await supabase
+    .from('invoices')
+    .select('document_type')
+    .eq('id', invoiceId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  const docType = (docRow as { document_type?: string | null } | null)?.document_type
+  if (docType && docType !== 'invoice') {
+    const entry = getErrorEntry('MATCH_INVOICE_NOT_INVOICE_TYPE')
+    return {
+      error: entry?.message_sv ?? 'Only invoices can be linked to a payment voucher.',
+      errorCode: 'MATCH_INVOICE_NOT_INVOICE_TYPE',
+      status: 409,
+    }
   }
 
   const outcome = await linkInvoiceToVoucher(supabase, userId, companyId, {

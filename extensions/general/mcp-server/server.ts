@@ -6243,6 +6243,11 @@ export const tools: McpTool[] = [
         query = query.eq('document_type', documentType)
       }
       if (quoteStatus) {
+        // quote_status only exists on quotes: combining it with another
+        // document_type can never match, so say so instead of returning [].
+        if (documentType && documentType !== 'quote') {
+          throw registryError('VALIDATION_ERROR')
+        }
         // "expired" is derived (lib/invoices/quote-status): an open quote whose
         // valid_until has passed. Never stored, so it is a predicate here.
         query = query.eq('document_type', 'quote')
@@ -7104,6 +7109,11 @@ export const tools: McpTool[] = [
       if (!invoiceId) throw new Error('invoice_id is required')
 
       const invoice = await fetchInvoiceWithCustomer(supabase, companyId, invoiceId)
+      // Only a faktura is a claim: a proforma, delivery note or quote has
+      // nothing to settle (parity with the dashboard and v1 mark-paid routes).
+      if (invoice.document_type && invoice.document_type !== 'invoice') {
+        throw registryError('INVOICE_QUOTE_NOT_PAYABLE')
+      }
       if (invoice.status !== 'sent' && invoice.status !== 'overdue') {
         throw new Error('Invoice can only be marked as paid when status is "sent" or "overdue"')
       }
@@ -9622,6 +9632,11 @@ export const tools: McpTool[] = [
         .single()
 
       if (invError || !invoice) throw new Error('Invoice not found')
+      // Parity with the dashboard match route: proformas, delivery notes and
+      // quotes carry no receivable to settle.
+      if (invoice.document_type && invoice.document_type !== 'invoice') {
+        throw registryError('MATCH_INVOICE_NOT_INVOICE_TYPE')
+      }
       if (invoice.status !== 'sent' && invoice.status !== 'overdue' && invoice.status !== 'partially_paid') {
         throw new Error('Invoice is not in a matchable state (must be sent, overdue, or partially_paid)')
       }
@@ -10467,7 +10482,7 @@ export const tools: McpTool[] = [
       const { data: invoice, error } = await supabase
         .from('invoices')
         .select(
-          'id, invoice_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, customer_id, customer:customers(id, name)'
+          'id, invoice_number, status, document_type, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, customer_id, customer:customers(id, name)'
         )
         .eq('id', invoiceId)
         .eq('company_id', companyId)
@@ -10524,12 +10539,17 @@ export const tools: McpTool[] = [
       const { data: invoice, error: invErr } = await supabase
         .from('invoices')
         .select(
-          'id, invoice_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, customer_id, customer:customers(id, name)'
+          'id, invoice_number, status, document_type, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, customer_id, customer:customers(id, name)'
         )
         .eq('id', invoiceId)
         .eq('company_id', companyId)
         .single()
       if (invErr || !invoice) throw new Error('Invoice not found')
+      // Parity with the dashboard match route: proformas, delivery notes and
+      // quotes carry no receivable to link a payment voucher to.
+      if (invoice.document_type && invoice.document_type !== 'invoice') {
+        throw registryError('MATCH_INVOICE_NOT_INVOICE_TYPE')
+      }
       if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
         throw new Error('Invoice is not in a matchable state (must be sent, overdue, or partially_paid)')
       }
@@ -17076,7 +17096,7 @@ export const tools: McpTool[] = [
       // previewed, or returned.
       const { data: invoice, error } = await supabase
         .from('invoices')
-        .select('id, invoice_number, status, document_type, journal_entry_id, is_self_billed, credited_invoice_id, total, currency, customer_id, deduction_personnummer_encrypted, customer:customers(name)')
+        .select('id, invoice_number, status, document_type, quote_status, journal_entry_id, is_self_billed, credited_invoice_id, total, currency, customer_id, deduction_personnummer_encrypted, customer:customers(name)')
         .eq('id', invoiceId)
         .eq('company_id', companyId)
         .maybeSingle()

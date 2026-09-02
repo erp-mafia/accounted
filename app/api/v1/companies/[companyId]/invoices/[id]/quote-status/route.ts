@@ -200,6 +200,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
       .eq('company_id', ctx.companyId!)
       .eq('id', quoteId)
+      // Compare-and-set: a conversion or cancel that lands after the checks
+      // above makes this a 0-row update instead of overwriting newer state.
+      .eq('quote_status', typed.quote_status)
+      .neq('status', 'cancelled')
       .select(QUOTE_STATUS_RESPONSE_COLUMNS)
       .maybeSingle()
 

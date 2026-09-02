@@ -34,6 +34,7 @@ import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/in
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { CreateInvoiceItemSchema } from '@/lib/api/schemas'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
@@ -317,10 +318,17 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         details: { resource: 'invoice' },
       })
     }
-    if ((current as { status: string }).status !== 'draft') {
+    // Shared predicate with the dashboard PATCH: draft, no verifikat, not a
+    // received self-billing document, not a credit-note draft, and for a
+    // quote not accepted or declined (a recorded decision must be reopened
+    // before the offer itself is edited).
+    if (!isEditableInvoiceDraft(current as Parameters<typeof isEditableInvoiceDraft>[0])) {
       return v1ErrorResponseFromCode('INVOICE_UPDATE_NOT_DRAFT', ctx.log, {
         requestId: ctx.requestId,
-        details: { current_status: (current as { status: string }).status },
+        details: {
+          current_status: (current as { status: string }).status,
+          quote_status: (current as { quote_status?: string | null }).quote_status ?? null,
+        },
       })
     }
 

@@ -29,6 +29,8 @@ const LABELS = {
     bodyQuote: (validUntil: string) => `Tack för ditt intresse! Bifogat hittar du vår offert. Offerten är giltig till ${validUntil}.`,
     questionsQuote: 'Har du frågor om offerten? Svara direkt på detta mejl så hjälper vi dig.',
     toPay: 'Att betala:',
+    // A quote is not a payment request, so its grand total is a neutral sum.
+    totalQuote: 'Summa:',
     payOnline: 'Betala online',
     paymentHeading: 'Betalningsinformation',
     bank: 'Bank:',
@@ -69,6 +71,7 @@ const LABELS = {
     bodyQuote: (validUntil: string) => `Thank you for your interest. Attached you will find our quote. The quote is valid until ${validUntil}.`,
     questionsQuote: 'Questions about the quote? Reply directly to this email and we will help you.',
     toPay: 'Total due:',
+    totalQuote: 'Total:',
     payOnline: 'Pay online',
     paymentHeading: 'Payment information',
     bank: 'Bank:',
@@ -307,7 +310,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
           <td colspan="2" style="padding: 15px 0 8px 0; border-top: 1px solid #e5e7eb;"></td>
         </tr>
         <tr>
-          <td style="padding: 8px 0; font-size: 18px; font-weight: 600;">${L.toPay}</td>
+          <td style="padding: 8px 0; font-size: 18px; font-weight: 600;">${isQuote ? L.totalQuote : L.toPay}</td>
           <td style="padding: 8px 0; text-align: right; font-size: 18px; font-weight: 600; color: ${isCreditNote ? '#059669' : primaryColor};">
             ${formatCurrencyForCustomer(getAmountToPay(invoice, company).toPay, invoice.currency, lang)}
           </td>
@@ -426,7 +429,7 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
   text += isQuote
     ? `${L.validUntil} ${quoteValidUntil(invoice)}\n`
     : `${L.dueDate} ${formatDate(invoice.due_date)}\n`
-  text += `${L.toPay} ${formatCurrencyForCustomer(getAmountToPay(invoice, company).toPay, invoice.currency, lang)}\n`
+  text += `${isQuote ? L.totalQuote : L.toPay} ${formatCurrencyForCustomer(getAmountToPay(invoice, company).toPay, invoice.currency, lang)}\n`
   text += `---\n\n`
 
   if (!hidePayment) {

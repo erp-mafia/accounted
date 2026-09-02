@@ -296,4 +296,39 @@ describe('gnubok_list_invoices: quote filters', () => {
     expect(result.invoices[0].quote_status).toBeNull()
     expect(result.invoices[0].valid_until).toBeNull()
   })
+
+describe('quotes are never claims on the MCP payment tools', () => {
+  const markPaid = tools.find((t) => t.name === 'gnubok_mark_invoice_as_paid')!
+  const matchTx = tools.find((t) => t.name === 'gnubok_match_transaction_to_invoice')!
+
+  it('gnubok_mark_invoice_as_paid refuses a sent quote with INVOICE_QUOTE_NOT_PAYABLE', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: { id: 'q-1', invoice_number: 'OF-001', document_type: 'quote', status: 'sent', quote_status: 'accepted', total: 2500, currency: 'SEK', customer: { name: 'Testbrand AB' } },
+      error: null,
+    })
+
+    await expect(
+      markPaid.execute({ invoice_id: 'q-1' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'INVOICE_QUOTE_NOT_PAYABLE' })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it('gnubok_match_transaction_to_invoice refuses a sent quote with MATCH_INVOICE_NOT_INVOICE_TYPE', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: { id: 'tx-1', description: 'Inbetalning', merchant_name: null, amount: 2500, currency: 'SEK', date: '2026-06-10', invoice_id: null },
+      error: null,
+    })
+    enqueue({
+      data: { id: 'q-1', invoice_number: 'OF-001', document_type: 'quote', status: 'sent', quote_status: 'accepted', total: 2500, remaining_amount: 0, currency: 'SEK', customer: { name: 'Testbrand AB' } },
+      error: null,
+    })
+
+    await expect(
+      matchTx.execute({ transaction_id: 'tx-1', invoice_id: 'q-1' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'MATCH_INVOICE_NOT_INVOICE_TYPE' })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+})
 })

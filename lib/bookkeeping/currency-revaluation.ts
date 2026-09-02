@@ -179,6 +179,9 @@ export async function getOpenForeignCurrencyReceivables(
         .from('invoices')
         .select('*')
         .eq('company_id', companyId)
+        // Proformas, delivery notes and quotes are never receivables: they
+        // sit on no 1510 balance, so there is nothing to revalue.
+        .eq('document_type', 'invoice')
         .neq('currency', 'SEK')
         .in(
           'status',

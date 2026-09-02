@@ -276,11 +276,13 @@ export async function detectPeriodisering(
 
   // Customer invoices: only "real" ones (sent/paid). Drafts and overdue
   // get skipped: drafts haven't moved through the engine, overdue is just a
-  // status label that overlaps with sent here.
+  // status label that overlaps with sent here. Proformas, delivery notes and
+  // quotes are never booked, so there is no revenue to periodise.
   const { data: invoiceRows } = await supabase
     .from('invoices')
     .select('id, invoice_number, invoice_date, subtotal, currency, subtotal_sek, notes, customers(name), invoice_items(description)')
     .eq('company_id', companyId)
+    .eq('document_type', 'invoice')
     .gte('invoice_date', periodStart)
     .lte('invoice_date', periodEnd)
     .in('status', ['sent', 'partially_paid', 'paid', 'overdue'])

@@ -113,6 +113,14 @@ describe('quote PDF (sv)', () => {
     expect(text).toContain('12\u00a0500,00 SEK')
   })
 
+  it('labels the grand total Summa, never Att betala', () => {
+    const text = renderText(quote())
+
+    expect(text).toContain('Summa:')
+    expect(text).not.toContain('Att betala')
+    expect(text).not.toContain('Att kreditera')
+  })
+
   it('never carries a paid state even if the row says paid', () => {
     const text = renderText(quote({ status: 'paid', paid_amount: 12500, paid_at: '2026-09-10T00:00:00Z' }))
 
@@ -141,5 +149,13 @@ describe('quote PDF (en)', () => {
     expect(text).toContain('This is a quote and is not an invoice or a request for payment.')
     expect(text).not.toContain('Payment information')
     expect(text).not.toContain('Pay online')
+  })
+
+  it('labels the grand total Total, never Total due', () => {
+    const text = renderText(quote(), 'en')
+
+    expect(text).toContain('Total:')
+    expect(text).not.toContain('Total due')
+    expect(text).not.toContain('To credit')
   })
 })

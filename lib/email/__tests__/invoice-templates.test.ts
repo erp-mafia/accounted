@@ -454,6 +454,24 @@ describe('invoice email templates', () => {
       const text = generateInvoiceEmailText({ invoice: legacy, customer: svCustomer, company })
       expect(text).toContain('Giltig till: 2026-10-02')
     })
+
+    // The grand total sits right above the "not a payment request" notice,
+    // so it must not be labelled as an amount due.
+    it('labels the total Summa / Total, never Att betala / Total due', () => {
+      const svHtml = generateInvoiceEmailHtml({ invoice: quote, customer: svCustomer, company })
+      const svText = generateInvoiceEmailText({ invoice: quote, customer: svCustomer, company })
+      expect(svHtml).toContain('Summa:')
+      expect(svHtml).not.toContain('Att betala')
+      expect(svText).toContain('Summa: 12 500,00 SEK')
+      expect(svText).not.toContain('Att betala')
+
+      const enHtml = generateInvoiceEmailHtml({ invoice: quote, customer: enCustomer, company })
+      const enText = generateInvoiceEmailText({ invoice: quote, customer: enCustomer, company })
+      expect(enHtml).toContain('Total:')
+      expect(enHtml).not.toContain('Total due')
+      expect(enText).toContain('Total: 12,500.00 SEK')
+      expect(enText).not.toContain('Total due')
+    })
   })
 
   describe('payment link (payment_link_url)', () => {

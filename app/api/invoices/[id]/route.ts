@@ -87,7 +87,6 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
     if (!validation.success) return validation.response
     const input = validation.data
-    const documentType: InvoiceDocumentType = input.document_type || 'invoice'
 
     // Fetch the target. Only drafts (not sent, no committed verifikat, not a
     // received self-billing document) may be edited.
@@ -110,10 +109,15 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       return errorResponseFromCode('INVOICE_UPDATE_NOT_DRAFT', ctxLog, { requestId })
     }
 
+    // An omitted document_type means "unchanged", never "invoice": a client
+    // that only edits lines on a delivery-note or quote draft must not trip
+    // the series lock below.
+    const existingType: InvoiceDocumentType = existing.document_type ?? 'invoice'
+    const documentType: InvoiceDocumentType = input.document_type ?? existingType
+
     // Quotes and delivery notes are numbered at insert from their own series,
     // so their type is fixed: turning OF-007 into a faktura would carry a
     // quote number into the F-series (and vice versa).
-    const existingType: InvoiceDocumentType = existing.document_type ?? 'invoice'
     const seriesLocked = (t: InvoiceDocumentType) => t === 'quote' || t === 'delivery_note'
     if (existingType !== documentType && (seriesLocked(existingType) || seriesLocked(documentType))) {
       return errorResponseFromCode('INVOICE_UPDATE_DOCUMENT_TYPE_LOCKED', ctxLog, {

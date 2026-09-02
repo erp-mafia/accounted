@@ -835,7 +835,8 @@ describe('POST /api/invoices (create credit note)', () => {
     expect(inserted.invoice_number).toBe('OF-001')
     expect(inserted.document_type).toBe('quote')
     expect(inserted.valid_until).toBe('2024-07-15')
-    expect(inserted.quote_status).toBe('open')
+    // The decision column is set by the DB trigger, never by a writer.
+    expect(inserted).not.toHaveProperty('quote_status')
     expect(inserted.remaining_amount).toBe(0)
     expect(emitSpy).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'invoice.created' }))
   })

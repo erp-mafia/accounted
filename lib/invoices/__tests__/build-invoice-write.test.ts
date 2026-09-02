@@ -549,7 +549,9 @@ describe('buildInvoiceWriteData kundkort fallback customer-type gate', () => {
     expect(result.invoiceFields.document_type).toBe('quote')
     expect(result.invoiceFields.valid_until).toBe('2026-08-01')
     expect(result.invoiceFields.due_date).toBe('2026-08-01')
-    expect(result.invoiceFields.quote_status).toBe('open')
+    // The decision column is never a builder output (a draft edit must not
+    // overwrite an accept/decline); the DB trigger opens a new quote.
+    expect(result.invoiceFields).not.toHaveProperty('quote_status')
     expect(result.invoiceFields.total).toBe(2500)
     expect(result.invoiceFields.remaining_amount).toBe(0)
     expect(result.invoiceFields.deduction_total).toBe(0)
@@ -569,7 +571,7 @@ describe('buildInvoiceWriteData kundkort fallback customer-type gate', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.invoiceFields.valid_until).toBeNull()
-    expect(result.invoiceFields.quote_status).toBeNull()
+    expect(result.invoiceFields).not.toHaveProperty('quote_status')
     expect(result.invoiceFields.due_date).toBe(baseHeader.due_date)
   })
 })

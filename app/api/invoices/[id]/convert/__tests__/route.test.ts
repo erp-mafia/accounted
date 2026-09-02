@@ -8,6 +8,15 @@ import {
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
+const mockFetchExchangeRate = vi.fn()
+vi.mock('@/lib/currency/riksbanken', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/currency/riksbanken')>('@/lib/currency/riksbanken')
+  return {
+    ...actual,
+    fetchExchangeRate: (...args: unknown[]) => mockFetchExchangeRate(...args),
+  }
+})
+
 const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -317,5 +326,83 @@ describe('POST /api/invoices/[id]/convert', () => {
       expect(updates.some((u) => u.quote_status === 'accepted')).toBe(true)
       expect(updates.some((u) => u.status === 'cancelled')).toBe(false)
     })
+  })
+
+  describe('foreign-currency sources', () => {
+    const eurQuote = {
+      ...baseProforma,
+      id: 'q-eur',
+      document_type: 'quote',
+      status: 'sent',
+      invoice_number: 'OF-004',
+      valid_until: '2026-08-31',
+      quote_status: 'open',
+      quote_decided_at: null,
+      currency: 'EUR',
+      exchange_rate: 11.1,
+      exchange_rate_date: '2026-06-01',
+      subtotal_sek: 111000,
+      vat_amount_sek: 27750,
+      total_sek: 138750,
+      customer: { default_payment_terms: 30 },
+    }
+
+    it('books the converted invoice at the rate of the conversion day, not the quote day', async () => {
+      mockFetchExchangeRate.mockResolvedValue({ rate: 11.45, date: '2026-07-28' })
+      enqueue({ data: eurQuote, error: null }) // fetch quote
+      enqueue({ data: null, error: null }) // no existing conversion
+      enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null })
+      enqueue({ data: null, error: null }) // items
+      enqueue({ data: null, error: null }) // quote -> accepted
+      enqueue({ data: 'F-050', error: null }) // number
+      enqueue({ data: { id: 'inv-1', invoice_number: 'F-050', document_type: 'invoice', items: [] }, error: null })
+
+      const response = await POST(
+        createMockRequest('/api/invoices/q-eur/convert', { method: 'POST' }),
+        createMockRouteParams({ id: 'q-eur' })
+      )
+      const { status } = await parseJsonResponse(response)
+
+      expect(status).toBe(200)
+      expect(mockFetchExchangeRate).toHaveBeenCalledWith('EUR', expect.any(Date), expect.anything())
+      const inserted = findCall('invoices', 'insert')?.[0] as Record<string, unknown>
+      expect(inserted.exchange_rate).toBe(11.45)
+      expect(inserted.exchange_rate_date).toBe('2026-07-28')
+      expect(inserted.subtotal_sek).toBe(Math.round(10000 * 11.45 * 100) / 100)
+      expect(inserted.vat_amount_sek).toBe(Math.round(2500 * 11.45 * 100) / 100)
+      expect(inserted.total_sek).toBe(Math.round(12500 * 11.45 * 100) / 100)
+    })
+
+    it('fails closed before inserting anything when no rate can be fetched', async () => {
+      mockFetchExchangeRate.mockResolvedValue(null)
+      enqueue({ data: eurQuote, error: null })
+      enqueue({ data: null, error: null })
+
+      const response = await POST(
+        createMockRequest('/api/invoices/q-eur/convert', { method: 'POST' }),
+        createMockRouteParams({ id: 'q-eur' })
+      )
+      const { status } = await parseJsonResponse(response)
+
+      expect(status).toBe(500)
+      expect(findCall('invoices', 'insert')).toBeUndefined()
+      expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    })
+  })
+
+  it('maps the one-live-conversion unique index violation to INVOICE_QUOTE_ALREADY_INVOICED', async () => {
+    enqueue({ data: { ...baseProforma, id: 'q-1', document_type: 'quote', status: 'sent', quote_status: 'open', customer: { default_payment_terms: 30 } }, error: null })
+    enqueue({ data: null, error: null }) // existence check passed (race)
+    enqueue({ data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "idx_invoices_one_live_conversion"' } })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/q-1/convert', { method: 'POST' }),
+      createMockRouteParams({ id: 'q-1' })
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INVOICE_QUOTE_ALREADY_INVOICED')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
   })
 })

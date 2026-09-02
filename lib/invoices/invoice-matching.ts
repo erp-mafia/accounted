@@ -275,7 +275,9 @@ export async function findInvoiceMatchCandidates(
     return emptyResult()
   }
 
-  // Query unpaid invoices (sent or overdue) with customer info
+  // Query unpaid invoices (sent or overdue) with customer info. Proformas,
+  // delivery notes and quotes are never receivables, so a sent quote is never
+  // proposed as a payment candidate.
   let invoices: Array<Invoice & { customer?: { name?: string | null } | null }>
   try {
     invoices = await fetchAllRows(({ from, to }) =>
@@ -283,6 +285,7 @@ export async function findInvoiceMatchCandidates(
         .from('invoices')
         .select('*, customer:customers(*), credit_notes:invoices!credited_invoice_id(id, status, creation_complete)')
         .eq('company_id', companyId)
+        .eq('document_type', 'invoice')
         .is('credited_invoice_id', null)
         .in('status', ['sent', 'overdue', 'partially_paid'])
         .order('id', { ascending: true })

@@ -32,6 +32,23 @@ export const POST = withRouteContext(
     if (!validation.success) return validation.response
     const { journal_entry_id, notes } = validation.data
 
+    // Only a faktura carries a receivable to settle: proformas, delivery notes
+    // and quotes are refused before the RPC (which validates status, not
+    // document type). A missing row falls through to the RPC's own 404.
+    const { data: docRow } = await supabase
+      .from('invoices')
+      .select('document_type')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    const docType = (docRow as { document_type?: string | null } | null)?.document_type
+    if (docType && docType !== 'invoice') {
+      return errorResponseFromCode('MATCH_INVOICE_NOT_INVOICE_TYPE', opLog, {
+        requestId,
+        details: { documentType: docType },
+      })
+    }
+
     const outcome = await linkInvoiceToVoucher(supabase, user.id, companyId, {
       invoiceId: id,
       journalEntryId: journal_entry_id,

@@ -104,7 +104,6 @@ export type InvoiceWriteFields = {
   due_date: string
   delivery_date: string | null
   valid_until: string | null
-  quote_status: 'open' | null
   currency: Currency
   exchange_rate: number | null
   exchange_rate_date: string | null
@@ -516,10 +515,11 @@ export async function buildInvoiceWriteData(params: {
     due_date: validUntil ?? input.due_date,
     delivery_date: input.delivery_date ?? null,
     valid_until: validUntil,
-    // Every quote starts open; decisions are made via /quote-status and the
-    // draft editor refuses accepted/declined quotes, so a PATCH never
-    // overwrites a decision here.
-    quote_status: documentType === 'quote' ? 'open' : null,
+    // quote_status is deliberately NOT a builder output: this object is
+    // spread into both inserts and draft updates, and a recorded accept or
+    // decline must never be overwritten by an edit. New quotes start open via
+    // the invoices_quote_defaults trigger (20260902141000); decisions are
+    // written only by the quote-status routes and the converter.
     currency: input.currency,
     exchange_rate: exchangeRate,
     exchange_rate_date: exchangeRateDate,

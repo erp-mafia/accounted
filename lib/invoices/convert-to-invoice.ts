@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { convertToSEK, fetchExchangeRate } from '@/lib/currency/riksbanken'
 import type { Invoice } from '@/types'
 
 /**
@@ -103,6 +104,31 @@ export async function convertToInvoice(params: {
   const today = isoDate(new Date())
   let dueDate: string = source.due_date
 
+  // The invoice is a new taxable event dated today (ML 8 kap 21-23 §): a
+  // quote can sit for weeks, so the SEK twins must use today's rate, not
+  // the one stamped when the offer was written. Fail closed if no rate can
+  // be had (the create paths refuse a NULL rate for the same reason).
+  let exchangeRate = source.exchange_rate
+  let exchangeRateDate = source.exchange_rate_date
+  let subtotalSek = source.subtotal_sek
+  let vatAmountSek = source.vat_amount_sek
+  let totalSek = source.total_sek
+  if (source.currency !== 'SEK') {
+    const rate = await fetchExchangeRate(source.currency, new Date(`${today}T00:00:00Z`), supabase)
+    if (!rate) {
+      return {
+        ok: false,
+        code: 'INVOICE_CONVERT_FAILED',
+        cause: { message: `Exchange rate for ${source.currency} unavailable; try again later` },
+      }
+    }
+    exchangeRate = rate.rate
+    exchangeRateDate = rate.date
+    subtotalSek = convertToSEK(source.subtotal, rate.rate)
+    vatAmountSek = convertToSEK(source.vat_amount, rate.rate)
+    totalSek = convertToSEK(source.total, rate.rate)
+  }
+
   if (isQuote) {
     if (source.quote_status === 'declined') {
       return { ok: false, code: 'INVOICE_CONVERT_QUOTE_DECLINED' }
@@ -125,8 +151,10 @@ export async function convertToInvoice(params: {
       return { ok: false, code: 'INVOICE_QUOTE_ALREADY_INVOICED' }
     }
 
-    let termsDays = source.customer?.default_payment_terms ?? null
-    if (!termsDays) {
+    // 0 days is a real term (due on receipt); only a missing value falls
+    // through to the company default and then to 30.
+    let termsDays: number | null = source.customer?.default_payment_terms ?? null
+    if (termsDays == null) {
       const { data: settings } = await supabase
         .from('company_settings')
         .select('invoice_default_days')
@@ -134,7 +162,7 @@ export async function convertToInvoice(params: {
         .maybeSingle()
       termsDays = (settings as { invoice_default_days?: number | null } | null)?.invoice_default_days ?? null
     }
-    dueDate = addDays(today, termsDays || DEFAULT_PAYMENT_TERMS_DAYS)
+    dueDate = addDays(today, termsDays ?? DEFAULT_PAYMENT_TERMS_DAYS)
   }
 
   const { data: invoice, error: invoiceError } = await supabase
@@ -147,14 +175,14 @@ export async function convertToInvoice(params: {
       invoice_date: today,
       due_date: dueDate,
       currency: source.currency,
-      exchange_rate: source.exchange_rate,
-      exchange_rate_date: source.exchange_rate_date,
+      exchange_rate: exchangeRate,
+      exchange_rate_date: exchangeRateDate,
       subtotal: source.subtotal,
-      subtotal_sek: source.subtotal_sek,
+      subtotal_sek: subtotalSek,
       vat_amount: source.vat_amount,
-      vat_amount_sek: source.vat_amount_sek,
+      vat_amount_sek: vatAmountSek,
       total: source.total,
-      total_sek: source.total_sek,
+      total_sek: totalSek,
       // The converted invoice is a fresh unpaid receivable: proformas and
       // quotes carry no ROT/RUT deduction, so the customer owes the full
       // total. Omitting this left the NOT NULL DEFAULT 0, which every payment
@@ -184,6 +212,10 @@ export async function convertToInvoice(params: {
     .single()
 
   if (invoiceError) {
+    // idx_invoices_one_live_conversion: a concurrent conversion won the race.
+    if ((invoiceError as { code?: string }).code === '23505') {
+      return { ok: false, code: 'INVOICE_QUOTE_ALREADY_INVOICED' }
+    }
     return { ok: false, code: 'INVOICE_CONVERT_FAILED', cause: invoiceError }
   }
 

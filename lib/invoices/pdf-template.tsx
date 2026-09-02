@@ -89,6 +89,8 @@ const LABELS = {
     deductionNotice: 'Köparen ansöker om utbetalning hos Skatteverket via fakturamodellen. Säljaren begär utbetalning för den del köparen inte betalat.',
     toCredit: 'Att kreditera:',
     toPay: 'Att betala:',
+    // A quote is not a payment request, so its grand total is a neutral sum.
+    totalQuote: 'Summa:',
     paidRow: 'Betalt:',
     vatInSek: (rate: number | string) => `Moms i SEK (kurs ${rate}):`,
     totalInSek: 'Totalt i SEK:',
@@ -173,6 +175,7 @@ const LABELS = {
     deductionNotice: 'The customer claims the deduction via fakturamodellen at Skatteverket. The seller requests payment from the agency for the portion not paid by the customer.',
     toCredit: 'To credit:',
     toPay: 'Total due:',
+    totalQuote: 'Total:',
     paidRow: 'Paid:',
     vatInSek: (rate: number | string) => `VAT in SEK (rate ${rate}):`,
     totalInSek: 'Total in SEK:',
@@ -1158,7 +1161,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                     </>
                   ) : (
                     <View style={styles.grandTotal}>
-                      <Text style={styles.grandTotalLabel}>{isCreditNote ? L.toCredit : L.toPay}</Text>
+                      <Text style={styles.grandTotalLabel}>{isCreditNote ? L.toCredit : isQuote ? L.totalQuote : L.toPay}</Text>
                       <Text style={styles.grandTotalValue}>{formatPdfCurrency(grandTotal, invoice.currency, lang)}</Text>
                     </View>
                   )}
