@@ -79,7 +79,7 @@ Fetches new transactions and balances for one PSD2 bank connection right away. T
 **Do not use for:** Polling. Connections sync every night on their own; call this once when freshness matters, then read /transactions. Fixing a dead connection: status=expired needs BankID in a browser, not a sync.
 
 **Pitfalls:**
-- Idempotency-Key is mandatory.
+- Idempotency-Key is optional here. If you send one, use a fresh key per attempt: a cooldown answer is never cached, but a completed sync is, and replaying it fetches nothing new.
 - 429 BANK_SYNC_COOLDOWN is not an error to retry immediately: wait until next_allowed_at (Retry-After is set), or just use the data you have.
 - 409 BANK_SESSION_EXPIRED means the bank reported the consent dead during the sync; the connection is now status=expired. Hand the user the connect link; no API call revives it.
 - imported: 0 is normal on a quiet account. Banks report with up to 48 hours of delay, so today's transactions often arrive tomorrow.

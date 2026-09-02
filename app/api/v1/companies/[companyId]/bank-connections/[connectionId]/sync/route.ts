@@ -11,6 +11,11 @@
  * What this cannot do: revive a dead consent. status=expired (or a session
  * the bank reports dead mid-sync) needs BankID in a browser; the response
  * says so and points at the connect link.
+ *
+ * The runner lives in the enable-banking extension. Core cannot import it
+ * (CI guard), so it is reached through the registry-resolved `services`
+ * channel declared in lib/bank-sync/trigger-sync-contract.ts, and a
+ * deployment without the extension answers EXTENSION_DISABLED.
  */
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
@@ -20,10 +25,11 @@ import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { ensureInitialized } from '@/lib/init'
+import { extensionRegistry } from '@/lib/extensions/registry'
 import {
-  triggerConnectionSync,
   SYNC_COOLDOWN_MS,
-} from '@/extensions/general/enable-banking/lib/trigger-sync'
+  type EnableBankingServices,
+} from '@/lib/bank-sync/trigger-sync-contract'
 
 ensureInitialized()
 
@@ -49,7 +55,7 @@ registerEndpoint({
   doNotUseFor:
     'Polling. Connections sync every night on their own; call this once when freshness matters, then read /transactions. Fixing a dead connection: status=expired needs BankID in a browser, not a sync.',
   pitfalls: [
-    'Idempotency-Key is mandatory.',
+    'Idempotency-Key is optional here. If you send one, use a fresh key per attempt: a cooldown answer is never cached, but a completed sync is, and replaying it fetches nothing new.',
     '429 BANK_SYNC_COOLDOWN is not an error to retry immediately: wait until next_allowed_at (Retry-After is set), or just use the data you have.',
     '409 BANK_SESSION_EXPIRED means the bank reported the consent dead during the sync; the connection is now status=expired. Hand the user the connect link; no API call revives it.',
     'imported: 0 is normal on a quiet account. Banks report with up to 48 hours of delay, so today\'s transactions often arrive tomorrow.',
@@ -83,6 +89,7 @@ registerEndpoint({
       'BANK_SESSION_EXPIRED',
       'BANK_SYNC_FAILED',
       'CAPABILITY_BLOCKED',
+      'EXTENSION_DISABLED',
       'NOT_FOUND',
     ],
   },
@@ -110,8 +117,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; connectionI
       })
     }
 
+    // The enable-banking extension is opt-in (extensions.config.json) and the
+    // registry is the runtime source of truth: absent registration means the
+    // deployment does not offer PSD2 sync at all.
+    const services = extensionRegistry.get('enable-banking')?.services as
+      | Partial<EnableBankingServices>
+      | undefined
+    if (!services?.triggerConnectionSync) {
+      return v1ErrorResponseFromCode('EXTENSION_DISABLED', ctx.log, {
+        requestId: ctx.requestId,
+      })
+    }
+
     try {
-      const result = await triggerConnectionSync(ctx.supabase, {
+      const result = await services.triggerConnectionSync(ctx.supabase, {
         companyId: ctx.companyId!,
         userId: ctx.userId,
         connectionId,

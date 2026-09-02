@@ -22,16 +22,18 @@ vi.mock('@supabase/supabase-js', async () => {
 })
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
-const { requireCapabilityMock, triggerSyncMock } = vi.hoisted(() => ({
+const { requireCapabilityMock, triggerSyncMock, registryGetMock } = vi.hoisted(() => ({
   requireCapabilityMock: vi.fn(),
   triggerSyncMock: vi.fn(),
+  registryGetMock: vi.fn(),
 }))
 vi.mock('@/lib/entitlements/has-capability', () => ({
   requireCapability: requireCapabilityMock,
 }))
-vi.mock('@/extensions/general/enable-banking/lib/trigger-sync', () => ({
-  SYNC_COOLDOWN_MS: 15 * 60 * 1000,
-  triggerConnectionSync: triggerSyncMock,
+// Core cannot import the extension: the route resolves the runner through
+// the registry's `services` channel, so that is what gets stubbed.
+vi.mock('@/lib/extensions/registry', () => ({
+  extensionRegistry: { get: registryGetMock },
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
@@ -105,6 +107,9 @@ describe('v1 bank-connections sync', () => {
     vi.clearAllMocks()
     requireCapabilityMock.mockResolvedValue(null)
     triggerSyncMock.mockResolvedValue(OK_RESULT)
+    registryGetMock.mockImplementation((id: string) =>
+      id === 'enable-banking' ? { services: { triggerConnectionSync: triggerSyncMock } } : undefined,
+    )
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { role: 'owner' } },
@@ -161,6 +166,15 @@ describe('v1 bank-connections sync', () => {
     const body = (await res.json()) as { error: { code: string; details: { field: string } } }
     expect(body.error.code).toBe('VALIDATION_ERROR')
     expect(body.error.details.field).toBe('dry_run')
+    expect(triggerSyncMock).not.toHaveBeenCalled()
+  })
+
+  it('answers EXTENSION_DISABLED when the enable-banking extension is not registered', async () => {
+    authOk(['transactions:write'])
+    registryGetMock.mockReturnValue(undefined)
+    const res = await POST(req(), params)
+    const body = (await res.json()) as { error: { code: string } }
+    expect(body.error.code).toBe('EXTENSION_DISABLED')
     expect(triggerSyncMock).not.toHaveBeenCalled()
   })
 

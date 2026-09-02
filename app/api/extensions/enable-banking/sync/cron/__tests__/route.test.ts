@@ -460,8 +460,20 @@ describe('GET /api/extensions/enable-banking/sync/cron: failure log level', () =
 
 describe('GET /api/extensions/enable-banking/sync/cron: incremental lookback', () => {
   const DAY_MS = 24 * 60 * 60 * 1000
-  const isoDate = (msAgo: number) => new Date(Date.now() - msAgo).toISOString().split('T')[0]
-  const syncedDaysAgo = (days: number) => new Date(Date.now() - days * DAY_MS).toISOString()
+  // Pin the clock: the route reads Date.now() after the fixture does, and a
+  // single elapsed millisecond makes Math.ceil in incrementalLookbackDays
+  // count one more day than the fixture intended.
+  const NOW = Date.parse('2026-09-02T05:00:00.000Z')
+  const isoDate = (msAgo: number) => new Date(NOW - msAgo).toISOString().split('T')[0]
+  const syncedDaysAgo = (days: number) => new Date(NOW - days * DAY_MS).toISOString()
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(NOW)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
 
   it('uses the 7-day window when the connection synced yesterday', async () => {
     state.active = [connection({ last_synced_at: syncedDaysAgo(1) })]
