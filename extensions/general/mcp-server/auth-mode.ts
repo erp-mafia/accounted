@@ -7,8 +7,8 @@
  * turns into its Connect prompt.
  *
  * `auth=required` on the endpoint URL makes that URL eager instead: EVERY
- * tokenless request answers the 401 challenge, `initialize` included. It has
- * one consumer. claude.ai's two-step "Add custom connector" dialog probes the
+ * tokenless request answers the 401 challenge, `initialize` included. Two
+ * consumers. claude.ai's two-step "Add custom connector" dialog probes the
  * URL without credentials and pre-fills the Authentication choice from the
  * answer (Anthropic: "Claude checks the URL and pre-fills the authentication
  * settings it detects"). A 200 on that probe is read as "None", an authless
@@ -16,7 +16,10 @@
  * when the challenge arrives later. A 401 is the only answer the dialog reads
  * as OAuth (Anthropic: "Claude does not honor a WWW-Authenticate header on a
  * 200 response"), so the links we control (Settings -> API & MCP, the
- * onboarding checklist, both docs pages, the website) carry the flag.
+ * onboarding checklist, both docs pages, the website) carry the flag. Grok's
+ * custom-connector dialog behaves the same way: on the lazy URL it lists
+ * every tool and never starts OAuth (observed 2026-09-02), so the Grok links
+ * carry the flag too.
  *
  * The bare URL keeps lazy authentication for Claude Code, the plugin, Cursor,
  * ChatGPT developer mode and hand-typed adds, and connector records created
