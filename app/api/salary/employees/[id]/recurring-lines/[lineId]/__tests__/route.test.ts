@@ -147,8 +147,7 @@ describe('DELETE /api/salary/employees/[id]/recurring-lines/[lineId]', () => {
   })
 
   it('hard-deletes a line that has never been derived into a run', async () => {
-    enqueue({ data: null }) // derived-row reference check → none
-    enqueue({ data: null }) // delete resolves without error
+    enqueue({ data: { id: 'line-1' } }) // delete returns the removed row
 
     const request = createMockRequest('/api/salary/employees/emp-1/recurring-lines/line-1', {
       method: 'DELETE',
@@ -158,6 +157,20 @@ describe('DELETE /api/salary/employees/[id]/recurring-lines/[lineId]', () => {
 
     expect(status).toBe(200)
     expect(body.data.deleted).toBe(true)
+  })
+
+  it('returns 404 when the delete matches no row', async () => {
+    // Unknown id, or a line belonging to another company: the filtered
+    // delete reports no error and no row.
+    enqueue({ data: null })
+
+    const request = createMockRequest('/api/salary/employees/emp-1/recurring-lines/nope', {
+      method: 'DELETE',
+    })
+    const response = await DELETE(request, {
+      params: Promise.resolve({ id: 'emp-1', lineId: 'nope' }),
+    } as never)
+    expect(response.status).toBe(404)
   })
 
   it('deactivates instead of deleting when derived rows reference the line', async () => {

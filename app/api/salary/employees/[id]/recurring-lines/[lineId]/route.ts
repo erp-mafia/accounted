@@ -123,12 +123,17 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string; lineId: s
     // racing this request. A referenced line is deactivated instead: the
     // provenance link stays intact, the next recalculation drops draft
     // derived rows and never re-derives.
-    const { error } = await supabase
+    // Selecting the deleted row separates "deleted" from "matched nothing":
+    // a filtered DELETE reports no error when the id is unknown or belongs to
+    // another company, which would otherwise answer 200 deleted: true.
+    const { data: deleted, error } = await supabase
       .from('employee_recurring_lines')
       .delete()
       .eq('id', lineId)
       .eq('employee_id', id)
       .eq('company_id', companyId)
+      .select('id')
+      .maybeSingle()
 
     if (error && error.code !== '23503') {
       return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
@@ -147,6 +152,10 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string; lineId: s
       }
 
       return NextResponse.json({ data: { id: lineId, deleted: false, deactivated: true } })
+    }
+
+    if (!deleted) {
+      return NextResponse.json({ error: 'Raden hittades inte' }, { status: 404 })
     }
 
     return NextResponse.json({ data: { id: lineId, deleted: true } })

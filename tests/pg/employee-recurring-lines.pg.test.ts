@@ -3,8 +3,8 @@ import { describe, it, expect } from 'vitest'
 import { getPool, withUserContext } from './setup'
 import { seedCompany, insertAuthUser, insertCompanyMember } from './fixtures'
 
-// pg-real coverage for 20260831210000_employee_recurring_lines: RLS (member
-// read, stranger blind, viewer read-only), the composite employee/company FK
+// pg-real coverage for 20260902140000_employee_recurring_lines: RLS (member
+// read, stranger blind, viewers denied every write), the composite FK
 // (cross-company insert refused), the CHECKs (deduction-only item types,
 // negative amount, period order, account format) and the NO ACTION back-link
 // FK from salary_line_items (delete of a derived-into line fails with 23503).
@@ -63,10 +63,10 @@ describe('employee_recurring_lines RLS', () => {
     expect(strangerView.rows).toHaveLength(0)
   })
 
-  it('members read their company, non-members cannot write', async () => {
-    // Policies are company-scoped like employee_benefits (the mirrored
-    // precedent): viewer write-blocking is enforced app-side by requireWrite,
-    // not in RLS, so the DB assertion here is membership, not role.
+  it('viewers read but are denied insert, update and delete', async () => {
+    // The write policies AND in current_user_can_write(), so a read-only
+    // viewer cannot write straight through PostgREST even though the route's
+    // requireWrite would also refuse.
     const { userId, companyId, employeeId } = await seedEmployee()
     const lineId = await insertLine(companyId, employeeId, userId)
     const viewer = await insertAuthUser()
@@ -77,7 +77,41 @@ describe('employee_recurring_lines RLS', () => {
     )
     expect(viewerRead.rows).toHaveLength(1)
 
+    await expect(
+      withUserContext(viewer, (client) =>
+        client.query(
+          `INSERT INTO public.employee_recurring_lines
+             (employee_id, company_id, user_id, item_type, description, amount, valid_from)
+           VALUES ($1, $2, $3, 'net_deduction_union', 'Fackavgift', -100, '2026-01-01')`,
+          [employeeId, companyId, viewer],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: '42501' })
+
+    await expect(
+      withUserContext(viewer, (client) =>
+        client.query(`UPDATE public.employee_recurring_lines SET amount = -1 WHERE id = $1`, [lineId]),
+      ),
+    ).rejects.toMatchObject({ code: '42501' })
+    await expect(
+      withUserContext(viewer, (client) =>
+        client.query(`DELETE FROM public.employee_recurring_lines WHERE id = $1`, [lineId]),
+      ),
+    ).rejects.toMatchObject({ code: '42501' })
+
+    const survived = await getPool().query(
+      `SELECT amount FROM public.employee_recurring_lines WHERE id = $1`,
+      [lineId],
+    )
+    expect(survived.rows).toHaveLength(1)
+    expect(Number(survived.rows[0].amount)).toBeCloseTo(-670.17, 2)
+  })
+
+  it('non-members cannot write at all', async () => {
+    const { userId, companyId, employeeId } = await seedEmployee()
+    const lineId = await insertLine(companyId, employeeId, userId)
     const stranger = await insertAuthUser()
+
     await expect(
       withUserContext(stranger, (client) =>
         client.query(
@@ -87,12 +121,8 @@ describe('employee_recurring_lines RLS', () => {
           [employeeId, companyId, stranger],
         ),
       ),
-    ).rejects.toThrow(/row-level security/)
+    ).rejects.toThrow(/row-level security|permission|privilege/i)
 
-    const upd = await withUserContext(stranger, (client) =>
-      client.query(`UPDATE public.employee_recurring_lines SET amount = -1 WHERE id = $1`, [lineId]),
-    )
-    expect(upd.rowCount).toBe(0)
     const del = await withUserContext(stranger, (client) =>
       client.query(`DELETE FROM public.employee_recurring_lines WHERE id = $1`, [lineId]),
     )

@@ -63,6 +63,10 @@ ALTER TABLE public.employee_recurring_lines ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "view own-company employee_recurring_lines"
   ON public.employee_recurring_lines FOR SELECT
   USING (company_id IN (SELECT user_company_ids()));
+-- Membership predicates like every sibling table; the read-only viewer is
+-- kept out by the aa_enforce_company_writer_role trigger below, which is the
+-- gate 20260902093000 put on every company-scoped table (it also fires
+-- inside SECURITY DEFINER bodies, where RLS does not apply).
 CREATE POLICY "insert own-company employee_recurring_lines"
   ON public.employee_recurring_lines FOR INSERT
   WITH CHECK (company_id IN (SELECT user_company_ids()));
@@ -80,6 +84,14 @@ CREATE INDEX idx_employee_recurring_lines_employee
 CREATE INDEX idx_employee_recurring_lines_active
   ON public.employee_recurring_lines (employee_id, valid_from, valid_to)
   WHERE is_active = true;
+
+-- The table-level writer guard 20260902093000 attaches to every
+-- company-scoped table: it also fires inside SECURITY DEFINER bodies, where
+-- RLS does not apply. This migration is versioned after that one so the
+-- function exists when a fresh database replays the folder in order.
+CREATE TRIGGER aa_enforce_company_writer_role
+  BEFORE INSERT OR UPDATE OR DELETE ON public.employee_recurring_lines
+  FOR EACH ROW EXECUTE FUNCTION public.enforce_company_writer_role();
 
 CREATE TRIGGER set_updated_at_employee_recurring_lines
   BEFORE UPDATE ON public.employee_recurring_lines

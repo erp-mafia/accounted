@@ -3192,7 +3192,7 @@ export const RecurringLineItemTypeSchema = z.enum([
 ])
 
 /** Same inclusive-bound semantics as BENEFIT_PERIOD_ORDER_MESSAGE, for
- * employee_recurring_lines (migration 20260831210000). */
+ * employee_recurring_lines (migration 20260902140000). */
 export const RECURRING_LINE_PERIOD_ORDER_MESSAGE =
   '"Gäller till" måste vara samma dag som eller efter "Gäller från". Lämna fältet tomt för en löpande rad.'
 
