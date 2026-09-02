@@ -4,6 +4,7 @@ import { Fragment, useMemo, useState, useEffect, useRef } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
+import { groupRows } from '@/lib/lists/group-rows'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -148,6 +149,14 @@ function SortableHeader({
 
 // Row grouping (same pattern as the customer invoice list): 'status' is the
 // default and reproduces the payment-queue sections.
+/** Mirrors PAYABLE_STATUSES in lib/invoices/bulk-reconcile-supplier-vouchers.ts:
+ *  a partially paid invoice still belongs in the payment queue. */
+const AWAITING_PAYMENT_STATUSES = ['registered', 'approved', 'overdue', 'partially_paid']
+const isAwaitingPayment = (status: string | null | undefined) =>
+  !!status && AWAITING_PAYMENT_STATUSES.includes(status)
+const STATUS_SECTION_ORDER = ['awaiting', 'settled'] as const
+/** Sentinel bucket for rows with no supplier or no date. */
+const UNKNOWN_GROUP_KEY = 'unknown'
 const GROUP_MODES = ['status', 'supplier', 'month', 'none'] as const
 type GroupMode = (typeof GROUP_MODES)[number]
 const GROUP_LABEL_KEYS: Record<GroupMode, string> = {
@@ -173,7 +182,7 @@ export default function SupplierInvoicesPage() {
   const [sort, setSort] = useState<SupplierInvoiceListSort | null>(null)
   const [groupMode, setGroupMode] = useState<GroupMode>(() => {
     const param = searchParams.get('group')
-    return param && GROUP_MODES.includes(param as never) ? (param as GroupMode) : 'status'
+    return param && GROUP_MODES.includes(param as never) ? (param as GroupMode) : 'none'
   })
   // Fiscal-year scope (convention 8): null = all years.
   const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
@@ -299,66 +308,53 @@ export default function SupplierInvoicesPage() {
 
   const sortedInvoices = sort ? sortSupplierInvoiceList(filteredInvoices, sort) : filteredInvoices
 
-  // Grouping: bucket the sorted rows, keep the sort order inside each
-  // bucket, and flatten back so paging and the detail pager walk the exact
-  // rendered order. With no column sort active the status groups run newest
-  // first so recent activity is never buried; an active sort governs order
-  // inside every group.
+  // Grouping: bucket the sorted rows through the shared helper and flatten
+  // back so paging, range selection and the detail pager walk the exact
+  // rendered order. Order is never touched here: for a payment queue the
+  // API's forfallodatum-ascending default is the order that matters (what
+  // falls due first goes first), and an active column sort governs the rest.
   const { orderedInvoices, rowGroupKeys, groupMeta } = useMemo(() => {
-    const isAwaitingPayment = (inv: (typeof sortedInvoices)[number]) =>
-      inv.status === 'registered' || inv.status === 'approved' || inv.status === 'overdue'
-    const byNewestFirst = (
-      a: (typeof sortedInvoices)[number],
-      b: (typeof sortedInvoices)[number],
-    ) =>
-      (b.invoice_date ?? '').localeCompare(a.invoice_date ?? '') ||
-      (b.arrival_number ?? 0) - (a.arrival_number ?? 0)
     const keys = new Map<string, string | null>()
-    const meta = new Map<string, { label: string; count: number }>()
     if (groupMode === 'none') {
       for (const inv of sortedInvoices) keys.set(inv.id, null)
-      return { orderedInvoices: sortedInvoices, rowGroupKeys: keys, groupMeta: meta }
-    }
-    const base =
-      groupMode === 'status' && !sort ? [...sortedInvoices].sort(byNewestFirst) : sortedInvoices
-    const buckets = new Map<string, { label: string; rows: typeof sortedInvoices }>()
-    for (const inv of base) {
-      let key: string
-      let label: string
-      if (groupMode === 'status') {
-        key = isAwaitingPayment(inv) ? 'awaiting' : 'settled'
-        label = key
-      } else if (groupMode === 'supplier') {
-        label = inv.supplier?.name ?? '—'
-        // Bucket by id, not display name: two suppliers can share a name.
-        key = inv.supplier_id ?? label
-      } else {
-        key = (inv.invoice_date ?? '').slice(0, 7) || '—'
-        label = key
+      return {
+        orderedInvoices: sortedInvoices,
+        rowGroupKeys: keys,
+        groupMeta: new Map<string, { label: string; count: number }>(),
       }
-      const bucket = buckets.get(key) ?? { label, rows: [] as typeof sortedInvoices }
-      bucket.rows.push(inv)
-      buckets.set(key, bucket)
     }
-    let ordered = [...buckets.keys()]
-    if (groupMode === 'status') {
-      ordered = ['awaiting', 'settled'].filter((key) => buckets.has(key))
-    } else if (groupMode === 'supplier') {
-      ordered.sort((a, b) => (buckets.get(a)?.label ?? a).localeCompare(buckets.get(b)?.label ?? b, 'sv'))
-    } else {
-      ordered.sort((a, b) => b.localeCompare(a))
-    }
+    const grouped =
+      groupMode === 'status'
+        ? groupRows(sortedInvoices, {
+            keyOf: (inv) => {
+              const key = isAwaitingPayment(inv.status) ? 'awaiting' : 'settled'
+              return { key, label: key }
+            },
+            order: STATUS_SECTION_ORDER,
+          })
+        : groupMode === 'supplier'
+          ? groupRows(sortedInvoices, {
+              keyOf: (inv) => {
+                const label = inv.supplier?.name ?? UNKNOWN_GROUP_KEY
+                // Bucket by id, not display name: two suppliers can share one.
+                return { key: inv.supplier_id ?? label, label }
+              },
+              order: (a, b) => a.label.localeCompare(b.label, 'sv'),
+            })
+          : groupRows(sortedInvoices, {
+              keyOf: (inv) => {
+                const key = (inv.invoice_date ?? '').slice(0, 7) || UNKNOWN_GROUP_KEY
+                return { key, label: key }
+              },
+              order: (a, b) => b.key.localeCompare(a.key),
+            })
     const flat: typeof sortedInvoices = []
-    for (const key of ordered) {
-      const bucket = buckets.get(key)!
-      meta.set(key, { label: bucket.label, count: bucket.rows.length })
-      for (const inv of bucket.rows) {
-        keys.set(inv.id, key)
-        flat.push(inv)
-      }
+    for (const entry of grouped.rows) {
+      keys.set(entry.row.id, entry.groupKey)
+      flat.push(entry.row)
     }
-    return { orderedInvoices: flat, rowGroupKeys: keys, groupMeta: meta }
-  }, [groupMode, sort, sortedInvoices])
+    return { orderedInvoices: flat, rowGroupKeys: keys, groupMeta: grouped.meta }
+  }, [groupMode, sortedInvoices])
   // Status sections only earn headers when there is more than one of them;
   // supplier/month grouping is an explicit ask, so headers always show.
   const showGroupHeaders = groupMode !== 'none' && (groupMode !== 'status' || groupMeta.size > 1)
@@ -373,10 +369,11 @@ export default function SupplierInvoicesPage() {
     if (groupMode === 'status') {
       return key === 'awaiting' ? t('section_awaiting', { count }) : t('section_settled', { count })
     }
-    if (groupMode === 'month' && key !== '—') {
+    if (groupMode === 'month' && key !== UNKNOWN_GROUP_KEY) {
       const label = monthFormatter.format(new Date(`${key}-01T00:00:00`))
       return `${label.charAt(0).toLocaleUpperCase('sv-SE')}${label.slice(1)} (${count})`
     }
+    if (key === UNKNOWN_GROUP_KEY) return `${t('group_unknown')} (${count})`
     return `${meta?.label ?? key} (${count})`
   }
 
@@ -692,26 +689,27 @@ export default function SupplierInvoicesPage() {
                 const canApprove =
                   canApproveSupplierInvoice(inv) && !inv.is_credit_note && canWrite
                 const selectable = canWrite && isBatchSelectable(inv)
+                // Same shape as the customer list: the section header is a
+                // sibling row decided from the previous row's key.
+                const groupKey = rowGroupKeys.get(inv.id) ?? null
+                const prevKey =
+                  rowIndex > 0 ? rowGroupKeys.get(orderedInvoices[rowIndex - 1].id) ?? null : undefined
+                const showHeader = showGroupHeaders && groupKey !== null && groupKey !== prevKey
                 return (
                   <Fragment key={inv.id}>
-                    {(() => {
-                      const groupKey = rowGroupKeys.get(inv.id) ?? null
-                      const prevKey =
-                        rowIndex > 0 ? rowGroupKeys.get(orderedInvoices[rowIndex - 1].id) ?? null : undefined
-                      return showGroupHeaders && groupKey !== null && groupKey !== prevKey ? (
-                        <tr>
-                          <td
-                            colSpan={9}
-                            className={cn(
-                              'border-b border-border px-1 pb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground',
-                              rowIndex === 0 ? 'pt-4' : 'pt-6',
-                            )}
-                          >
-                            {groupHeaderLabel(groupKey)}
-                          </td>
-                        </tr>
-                      ) : null
-                    })()}
+                    {showHeader && (
+                      <tr data-no-stagger>
+                        <td
+                          colSpan={canWrite ? 9 : 8}
+                          className={cn(
+                            'border-b border-border px-1 pb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground',
+                            rowIndex === 0 ? 'pt-4' : 'pt-6',
+                          )}
+                        >
+                          {groupHeaderLabel(groupKey)}
+                        </td>
+                      </tr>
+                    )}
                   <tr
                     className={cn(
                       'group cursor-pointer transition-colors duration-150 hover:bg-secondary/35',
@@ -737,10 +735,10 @@ export default function SupplierInvoicesPage() {
                             onCheckedChange={() => toggleSelect(inv.id, shiftHeld.current)}
                             aria-label={t('bulk_select_row')}
                             className={cn(
-                              'transition-opacity duration-150',
+                              'border-foreground duration-150',
                               selectedIds.has(inv.id) || selectedIds.size > 0
                                 ? 'opacity-100'
-                                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100',
+                                : CHECKBOX_REVEAL_CLASS,
                             )}
                           />
                         )}

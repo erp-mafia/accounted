@@ -841,7 +841,8 @@
     "group_status": "Status",
     "group_supplier": "Supplier",
     "group_month": "Month",
-    "group_none": "No grouping"
+    "group_none": "No grouping",
+    "group_unknown": "Missing"
   },
   "supplier_payment_files": {
     "dialog_title": "Create payment file",

@@ -841,7 +841,8 @@
     "group_status": "Status",
     "group_supplier": "Leverantör",
     "group_month": "Månad",
-    "group_none": "Ingen gruppering"
+    "group_none": "Ingen gruppering",
+    "group_unknown": "Saknas"
   },
   "supplier_payment_files": {
     "dialog_title": "Skapa betalfil",
