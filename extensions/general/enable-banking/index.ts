@@ -47,7 +47,10 @@ const MAX_ENABLED_UIDS = 50
  * Required environment variables:
  * - ENABLE_BANKING_APP_ID
  * - ENABLE_BANKING_PRIVATE_KEY (base64-encoded PEM)
- * - ENABLE_BANKING_SANDBOX (optional, for sandbox mode)
+ *
+ * Optional:
+ * - ENABLE_BANKING_API_URL (default https://api.enablebanking.com; api.tilisy.com = sandbox)
+ * - ENABLE_BANKING_PSU_TYPE (default business)
  */
 export const enableBankingExtension: Extension = {
   id: 'enable-banking',

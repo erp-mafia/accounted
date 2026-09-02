@@ -166,7 +166,7 @@ If you already have nginx / a managed load balancer / Cloudflare in front, skip 
 
 ## Optional Extensions
 
-The self-hosted image ships with a curated set of general extensions, including email, invoice inbox, document extraction, push notifications, calendar, and the MCP server. Enable Banking is excluded because it requires private PSD2 credentials. Each extension activates when you provide its env vars: without them, the app works normally and the feature is simply unavailable.
+The self-hosted image ships with a curated set of general extensions, including email, invoice inbox, document extraction, push notifications, calendar, and the MCP server. Enable Banking and Skatteverket are in the preset too: they run on a connector key or on your own credentials (see [SELF-HOSTING.md](SELF-HOSTING.md), "Connector subscription"). Each extension activates when you provide its env vars: without them, the app works normally and the feature is simply unavailable.
 
 ### AI Features (document-extraction, invoice-inbox, AI assistant)
 

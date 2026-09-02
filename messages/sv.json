@@ -1555,7 +1555,9 @@
     "step_claude_chatgpt_link": "Använder du ChatGPT?",
     "step_claude_chatgpt_steps": "I ChatGPT (Plus, Pro eller Business): Inställningar → Appar → Avancerade inställningar → slå på Utvecklarläge. Välj Lägg till anpassad connector, namnge den {appName} och klistra in serveradressen. Starta sedan en ny chatt och be om en genomgång av bokföringen.",
     "step_claude_chatgpt_copy": "Kopiera serveradress",
-    "step_claude_chatgpt_copied": "Kopierad"
+    "step_claude_chatgpt_copied": "Kopierad",
+    "step_claude_expectation": "Claude listar verktygen direkt. Första riktiga frågan öppnar en inloggning: godkänn den och ställ frågan igen.",
+    "step_claude_guide_link": "Guide: anslut Claude steg för steg"
   },
   "tax_assessment_notices": {
     "title": "Slutskattebesked och kvarskatt",
@@ -2839,7 +2841,7 @@
     "copy_failed": "Kunde inte kopiera. Markera texten ovan och kopiera manuellt.",
     "connect_mcp_title": "Anslut MCP-klient",
     "connect_to_claude": "Anslut till Claude",
-    "connect_to_claude_help": "Öppnar claude.ai med adressen ifylld. Du granskar och godkänner där; ingen API-nyckel behövs. Kräver att din instans går att nå från internet.",
+    "connect_to_claude_help": "Öppnar claude.ai med adressen ifylld. Du granskar och godkänner där; ingen API-nyckel behövs. Kräver att din instans går att nå från internet. Claude listar verktygen direkt; första riktiga frågan öppnar en inloggning, godkänn den och ställ frågan igen.",
     "other_clients": "Andra klienter: Claude Code, Cursor, plugin",
     "claude_ai_manual": "claude.ai (manuellt)",
     "works_with_ai": "Fungerar med Claude, ChatGPT och andra AI-assistenter.",
@@ -2961,6 +2963,10 @@
     "system_cert_expires_soon": "{appName}s certifikat mot Skatteverket går ut om {days} dagar.",
     "system_verify_failed": "Verifieringen misslyckades",
     "system_verify_rate_limited": "Vänta en minut mellan verifieringar.",
+    "system_deeplink": "Utse {appName} som ombud",
+    "system_deeplink_loading": "Skapar länk...",
+    "system_deeplink_failed": "Länken kunde inte skapas",
+    "system_deeplink_hint": "Länken öppnar Skatteverkets e-tjänst med {appName} och rollerna förvalda. Signera där med BankID. Länken gäller i tre veckor.",
     "needs_reconsent_message": "Anslutningen till Skatteverket behöver förnyas. Den automatiska synkroniseringen är pausad tills du ansluter igen med BankID.",
     "missing_scope_message": "Anslutningen saknar behörighet för en eller flera tjänster, till exempel skattekontot. Anslut igen och godkänn alla behörigheter på Skatteverkets samtyckessida.",
     "connect_waiting": "Väntar på BankID…",
@@ -2987,7 +2993,8 @@
     "expires_in_minutes": "(om {minutes} min)",
     "refresh_label": "Förnyelse",
     "refresh_auto": "Förnyas automatiskt",
-    "refresh_exhausted": "Förnyelse uttömd: anslut igen",
+    "refresh_exhausted": "Kan inte förnyas längre: anslut igen med BankID",
+    "session_lifetime_note": "BankID-sessionen mot Skatteverket gäller cirka en timme. Efter det behövs en ny inloggning innan något kan hämtas eller lämnas in.",
     "permissions_label": "Behörigheter",
     "missing_skattekonto": "Behörigheten för Skattekonto saknas: koppla från och anslut igen för att aktivera saldo- och transaktionsvyn.",
     "missing_agd": "Behörigheten för Arbetsgivardeklaration (AGI) saknas: koppla från och anslut igen för att kunna skicka AGI direkt från accounted. Tokens utfärdade innan AGI-stödet aktiverades saknar denna scope.",
@@ -3218,6 +3225,15 @@
     "success_toast": "Underlag kopplat",
     "error_toast": "Kunde inte koppla underlaget",
     "cancel": "Avbryt"
+  },
+  "tx_detach": {
+    "menu_item": "Ta bort underlag",
+    "confirm_title": "Ta bort underlaget?",
+    "confirm_body": "Underlaget kopplas loss från {description}, {amount}. Filen raderas inte och kan kopplas igen.",
+    "confirm_label": "Ta bort underlag",
+    "cancel_label": "Avbryt",
+    "toast_done": "Underlaget borttaget",
+    "toast_failed": "Kunde inte ta bort underlaget"
   },
   "tx_underlag": {
     "attached_label": "Underlag",
