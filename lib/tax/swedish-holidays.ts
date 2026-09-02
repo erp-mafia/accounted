@@ -2,6 +2,7 @@
  * Swedish holidays including Easter calculation
  * Used for adjusting tax deadlines that fall on weekends or holidays
  */
+import { formatDateISO } from '@/lib/calendar/utils'
 
 /**
  * Calculate Easter Sunday using the Anonymous Gregorian algorithm
@@ -122,16 +123,6 @@ function getAllaHelgonsDag(year: number): Date {
 }
 
 /**
- * Format date to YYYY-MM-DD
- */
-function formatDateISO(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-/**
  * Check if a date is a Swedish holiday
  */
 export function isSwedishHoliday(date: Date): boolean {
@@ -182,66 +173,9 @@ export function getNextBankingDay(date: Date): Date {
 }
 
 /**
- * Get the previous banking day from a given date
- * If the date is already a banking day, return it
- * Otherwise, find the previous banking day
- */
-export function getPreviousBankingDay(date: Date): Date {
-  const result = new Date(date)
-
-  while (!isBankingDay(result)) {
-    result.setDate(result.getDate() - 1)
-  }
-
-  return result
-}
-
-/**
  * Adjust a deadline date to the next banking day if it falls on a weekend or holiday
  * Skatteverket deadlines that fall on non-banking days are moved to the next banking day
  */
 export function adjustDeadlineToNextBankingDay(date: Date): Date {
   return getNextBankingDay(date)
-}
-
-/**
- * Get the month name in Swedish
- */
-export function getSwedishMonthName(month: number): string {
-  const months = [
-    'januari',
-    'februari',
-    'mars',
-    'april',
-    'maj',
-    'juni',
-    'juli',
-    'augusti',
-    'september',
-    'oktober',
-    'november',
-    'december',
-  ]
-  return months[month]
-}
-
-/**
- * Get quarter number (1-4) from month (0-11)
- */
-export function getQuarterFromMonth(month: number): number {
-  return Math.floor(month / 3) + 1
-}
-
-/**
- * Get the first month of a quarter (0-indexed)
- */
-export function getFirstMonthOfQuarter(quarter: number): number {
-  return (quarter - 1) * 3
-}
-
-/**
- * Get the last month of a quarter (0-indexed)
- */
-export function getLastMonthOfQuarter(quarter: number): number {
-  return quarter * 3 - 1
 }

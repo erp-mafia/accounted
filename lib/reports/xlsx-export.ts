@@ -219,6 +219,17 @@ export function dateColumn(header: string): ColumnSpec {
   return { header, format: 'date' }
 }
 
+/**
+ * Parse an ISO date string into a Date for a `date` column cell. Returns null
+ * for an empty or unparseable string so the cell is left blank.
+ */
+export function parseCellDate(s: string): Date | null {
+  if (!s) return null
+  const d = new Date(s)
+  return isNaN(d.getTime()) ? null : d
+}
+
+
 export function integerColumn(header: string): ColumnSpec {
   return { header, format: 'integer' }
 }

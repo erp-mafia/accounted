@@ -541,7 +541,7 @@ export async function ensureFiscalPeriod(
   // lib/bookkeeping/validate-period-duration.ts, the same arithmetic and the
   // same threshold validatePeriodDuration() applies on every other
   // period-creation path (fiscal-periods POST/PATCH, period-service's
-  // createNextPeriod/createPreviousPeriod, onboarding's computeFiscalPeriod),
+  // createNextPeriod, onboarding's computeFiscalPeriod),
   // so an 18-month förlängt räkenskapsår imports exactly as it does there and
   // a 19-month one does not. 18 is the ceiling for an extended or re-laid
   // year; ongoing years are 12. BFL sets no minimum, so there is no floor here.

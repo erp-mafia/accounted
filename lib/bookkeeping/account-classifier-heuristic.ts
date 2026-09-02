@@ -5,15 +5,9 @@
  * (account-classifier-client.ts) uses the lazily loaded chart the same way.
  */
 
-export type AccountType =
-  | 'asset'
-  | 'liability'
-  | 'equity'
-  | 'revenue'
-  | 'expense'
-  | 'untaxed_reserves'
+import type { AccountType, NormalBalance } from '@/types'
 
-export type NormalBalance = 'debit' | 'credit'
+export type { AccountType, NormalBalance }
 
 export interface ClassifiedAccount {
   account_type: AccountType

@@ -52,16 +52,6 @@ export interface OpeningBalanceParseResult {
   detected_bank_format: string | null
 }
 
-/** Input for executing the opening balance import */
-export interface OpeningBalanceExecuteInput {
-  fiscal_period_id: string
-  lines: {
-    account_number: string
-    debit_amount: number
-    credit_amount: number
-  }[]
-}
-
 /** Result of executing the opening balance import */
 export interface OpeningBalanceExecuteResult {
   success: boolean

@@ -26,11 +26,6 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>()
 
-/** Test hook: drop every cached team brand. */
-export function clearTeamBrandCache(): void {
-  cache.clear()
-}
-
 /**
  * Resolve brands for a set of team ids. Returns a map containing ONLY teams
  * that have a brand; brandless teams are absent (and negatively cached).

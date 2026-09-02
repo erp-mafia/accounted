@@ -1,3 +1,4 @@
+import { sleep } from '@/lib/utils'
 import crypto from 'crypto'
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -14,6 +15,10 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { buildAuthorizeUrl, exchangeCodeForTokens, generatePkcePair } from './lib/oauth'
 import { skatteverketConnectorMode, startConnectorAuthorization } from './lib/connector-mode'
 import { isConnectorState, verifyConnectorState } from '@/lib/connect/hosted/state'
+import {
+  requireFlowInitiator,
+  FLOW_INITIATOR_MISMATCH_MESSAGE,
+} from '@/lib/auth/oauth-flow-binding'
 import { storeTokens, getTokens, deleteTokens, getTokenHealth } from './lib/token-store'
 import { skvRequest, skvRequestWithAuth, SkatteverketAuthError, getSkatteverketEnvironment } from './lib/api-client'
 import { writeSkatteverketAudit } from './lib/audit'
@@ -66,7 +71,6 @@ import {
   bokforSkattekontoTransactionsBatch,
   SkattekontoBookingError,
 } from './lib/skattekonto-booking'
-import { handleSkattekontoDriftDetected } from './lib/skattekonto-drift-email'
 import {
   findMatchCandidates,
   findMatchSuggestionsBulk,
@@ -559,8 +563,43 @@ export const skatteverketExtension: Extension = {
         // Flows that started before oauth_user_id shipped ran on the same
         // domain as the app and still carry session cookies; fall back to
         // those so in-flight connects survive the deploy boundary.
-        let userId = await readSetting('oauth_user_id')
-        if (!userId) {
+        const storedUserId = await readSetting('oauth_user_id')
+        let userId = storedUserId
+        if (storedUserId) {
+          // The state row names the user who started the flow; the tokens
+          // below are stored for that user with the service client. Bind the
+          // completion to that user's own session so a victim lured into
+          // approving a Skatteverket consent someone else started cannot have
+          // their BankID-authorised access stored under that someone.
+          //
+          // Hosted, this callback is served on the pinned OAuth host
+          // (getSkvOauthBaseUrl, app.gnubok.se) where the app's session
+          // cookies never arrive: a missing session proves nothing there and
+          // the single-use state + membership check stay the guard. Where the
+          // OAuth host IS the app host (self-hosted, or the pin removed) the
+          // initiator's cookies do arrive, so no session means the initiator
+          // is not the one finishing the flow. A session for a DIFFERENT user
+          // is refused on every host.
+          const initiator = await requireFlowInitiator(request, storedUserId, {
+            flow: 'skatteverket.callback',
+          })
+          if (!initiator.ok) {
+            const sessionExpected =
+              new URL(getSkvOauthBaseUrl()).origin === new URL(appUrl).origin
+            if (initiator.reason === 'mismatch') {
+              return respondWithError(
+                FLOW_INITIATOR_MISMATCH_MESSAGE,
+                `/reports?tab=vat-declaration&skv_error=${encodeURIComponent(FLOW_INITIATOR_MISMATCH_MESSAGE)}`,
+              )
+            }
+            if (sessionExpected) {
+              // The state row is untouched until the exchange, so signing in
+              // and re-running this callback (the helper's /login?next=...)
+              // completes the flow for its initiator.
+              return initiator.response
+            }
+          }
+        } else {
           const cookieClient = await createClient()
           const { data: { user } } = await cookieClient.auth.getUser()
           userId = user?.id ?? null
@@ -2687,16 +2726,14 @@ export const skatteverketExtension: Extension = {
     },
   ],
 
-  // skattekonto.connection.expired is still emitted (needs_reconsent flagging,
-  // UI banner, agent briefing) but has no email consumer: with SKV's 65-minute
-  // personal sessions a per-episode expiry mail is one mail per connect, which
-  // trains users to ignore it. See DECISIONS.md 2026-08-25.
-  eventHandlers: [
-    {
-      eventType: 'skattekonto.drift_detected',
-      handler: handleSkattekontoDriftDetected,
-    },
-  ],
+  // No email consumers. skattekonto.connection.expired is still emitted
+  // (needs_reconsent flagging, UI banner, agent briefing) but a per-episode
+  // expiry mail is one mail per connect with SKV's 65-minute sessions, which
+  // trains users to ignore it (DECISIONS.md 2026-08-25). The skattekonto
+  // drift mail was removed 2026-09-02: the reconciliation page and the Hem
+  // notice (lib/notices/categories.ts detectSkvUnexplained) are the surface,
+  // and the mail alerted on raw saldo-vs-1630 gaps that unbooked rows explain.
+  eventHandlers: [],
 
   // Registry-resolved commit services for the MCP submit tools. The core
   // pending-operations dispatcher (lib/pending-operations/commit.ts) cannot
@@ -2890,8 +2927,6 @@ function handleSkvError(err: unknown): NextResponse {
 function skatteverketEnabled(): boolean {
   return process.env.SKATTEVERKET_ENABLED === 'true'
 }
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 const EXTENSION_DISABLED_RESULT: Extract<SkvSubmitResult, { ok: false }> = {
   ok: false,

@@ -1,3 +1,4 @@
+import { escapeXml } from '@/lib/xml/escape'
 import { decryptPersonnummer } from '../personnummer'
 import { getBranding } from '@/lib/branding/service'
 import { stripOrgNumberFormatting } from '@/lib/invariants/org-number'
@@ -163,11 +164,3 @@ export function generateKU10Xml(
   return lines.join('\n')
 }
 
-function escapeXml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
-}

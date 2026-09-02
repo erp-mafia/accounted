@@ -18,6 +18,7 @@
  * entities completes in a handful of Supabase requests per step.
  */
 
+import { chunk } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { MigrationProgress, MigrationResults, MigrationStepError, SkipReasons } from '../types'
 import type { ProviderName } from '@/lib/providers/types'
@@ -88,12 +89,6 @@ const ENRICHMENT_CONCURRENCY = 10
 
 function emitProgress(options: MigrationOptions, progress: MigrationProgress) {
   options.onProgress?.(progress)
-}
-
-function chunk<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
-  return out
 }
 
 /**

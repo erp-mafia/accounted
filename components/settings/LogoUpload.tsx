@@ -26,7 +26,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
   const [isDragging, setIsDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/svg+xml', 'image/webp']
+  const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 
   function validateAndUpload(file: File) {
     if (!ALLOWED_TYPES.includes(file.type)) {
@@ -171,7 +171,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
       <input
         ref={inputRef}
         type="file"
-        accept="image/png,image/jpeg,image/svg+xml,image/webp"
+        accept="image/png,image/jpeg,image/webp"
         className="hidden"
         onChange={handleFileChange}
       />

@@ -18,7 +18,7 @@ import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
@@ -106,12 +106,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     if (rawBody) {
       const parsed = ReverseRequest.safeParse(rawBody)
-      if (!parsed.success) {
-        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-          requestId: ctx.requestId,
-          details: { issues: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })) },
-        })
-      }
+      if (!parsed.success) return v1ValidationError(ctx, parsed.error)
       bodyReversalDate = parsed.data.reversal_date
       bodyAllowDeepChain = parsed.data.allow_deep_chain === true
     }

@@ -64,17 +64,3 @@ export interface SRUSubmission {
   generatedAt: string
 }
 
-// Labels for NE rutor
-export const NE_RUTA_LABELS: Record<keyof NEDeclarationRutor, string> = {
-  R1: 'Försäljning med moms (25%)',
-  R2: 'Momsfria intäkter',
-  R3: 'Bil/bostadsförmån',
-  R4: 'Ränteintäkter',
-  R5: 'Varuinköp',
-  R6: 'Övriga kostnader',
-  R7: 'Lönekostnader',
-  R8: 'Räntekostnader',
-  R9: 'Avskrivningar fastighet',
-  R10: 'Avskrivningar övriga tillgångar',
-  R11: 'Årets resultat'
-}

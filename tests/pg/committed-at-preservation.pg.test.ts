@@ -86,8 +86,13 @@ describe('set_committed_at trusted-writer preservation', () => {
     const { entryId, userId } = await seedBackdatedDraft()
     const before = Date.now()
     const committedAt = await withUserContext(userId, async (client) => {
+      // Direct draft -> posted flips from a user session must carry a
+      // sequence-issued voucher number (20260902093000); take one inline.
       const updated = await client.query(
-        `UPDATE public.journal_entries SET status = 'posted' WHERE id = $1 RETURNING id`,
+        `UPDATE public.journal_entries
+            SET status = 'posted',
+                voucher_number = public.next_voucher_number(company_id, fiscal_period_id, voucher_series)
+          WHERE id = $1 RETURNING id`,
         [entryId],
       )
       // RLS must actually let the member's UPDATE through; 0 rows would make
@@ -231,8 +236,13 @@ describe('committed_at override audit trail', () => {
   it('writes no override row when an authenticated member posts (stamp path)', async () => {
     const { entryId, userId } = await seedBackdatedDraft()
     await withUserContext(userId, async (client) => {
+      // Direct draft -> posted flips from a user session must carry a
+      // sequence-issued voucher number (20260902093000); take one inline.
       const updated = await client.query(
-        `UPDATE public.journal_entries SET status = 'posted' WHERE id = $1 RETURNING id`,
+        `UPDATE public.journal_entries
+            SET status = 'posted',
+                voucher_number = public.next_voucher_number(company_id, fiscal_period_id, voucher_series)
+          WHERE id = $1 RETURNING id`,
         [entryId],
       )
       expect(updated.rowCount).toBe(1)

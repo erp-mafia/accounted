@@ -47,12 +47,6 @@ export interface WintListResponse<T> {
   TotalItemsWithOutFilter?: number;
 }
 
-export interface WintFinancialYear {
-  Id: number;
-  Start: string;
-  End: string;
-}
-
 const DEFAULT_PAGE_SIZE = 200;
 
 export class WintClient {

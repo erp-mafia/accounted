@@ -1,3 +1,4 @@
+import { chunk as chunked } from '@/lib/utils'
 import type Stripe from 'stripe'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getStripe } from '@/lib/stripe/client'
@@ -476,12 +477,6 @@ async function linkBookedPayouts(
     )
   }
   return linked
-}
-
-function chunked<T>(items: T[], size: number): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
-  return out
 }
 
 export async function syncStripeBalanceTransactions(

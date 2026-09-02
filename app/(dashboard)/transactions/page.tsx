@@ -1,5 +1,6 @@
 'use client'
 
+import { UUID_RE } from '@/lib/invariants/uuid'
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import dynamic from 'next/dynamic'
@@ -145,7 +146,6 @@ const PERIOD_FILTER_STORAGE_PREFIX = 'Accounted:transactions-fy-scope:v1:'
 // string in the underlag-badge effect below. They come from journal_entries.id
 // (DB-sourced), but this guard keeps the interpolated list UUID-only, matching
 // /api/documents/counts.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // A skattekonto row qualifies for bulk booking when the outcome is fully
 // deterministic: a rule matched (booking_suggestion), it is not a likely
@@ -381,8 +381,6 @@ export default function TransactionsPage() {
   // voucher (salary, Fortnox import, manual entry) with no new bokföring.
   const [matchVoucherTx, setMatchVoucherTx] = useState<TransactionWithInvoice | null>(null)
   const [bulkBookOpen, setBulkBookOpen] = useState(false)
-  const [isMatchingSupplierFromPicker, setIsMatchingSupplierFromPicker] = useState(false)
-  const [isMatchingFromPicker, setIsMatchingFromPicker] = useState(false)
 
   // Quick review dialog (suggestion review before booking)
   const [quickReviewOpen, setQuickReviewOpen] = useState(false)
@@ -2394,46 +2392,6 @@ export default function TransactionsPage() {
     }
   }, [refreshTransactions, t, toast])
 
-  async function handleMatchInvoice(transactionId: string, invoiceId: string): Promise<boolean> {
-    try {
-      const response = await fetch(`/api/transactions/${transactionId}/match-invoice`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoice_id: invoiceId }),
-      })
-      const result = await response.json()
-      if (!response.ok) {
-        toast({ title: 'Fakturamatchning misslyckades', description: getErrorMessage(result, { context: 'transaction' }), variant: 'destructive' })
-        return false
-      }
-
-      const transaction = transactions.find((t) => t.id === transactionId)
-      const invoiceNumber = transaction?.potential_invoice?.invoice_number || ''
-
-      setTransactions((prev) =>
-        prev.map((t) =>
-          t.id === transactionId
-            ? {
-                ...t,
-                invoice_id: invoiceId,
-                potential_invoice_id: null,
-                potential_invoice: undefined,
-                is_business: true,
-                category: 'income_services' as TransactionCategory,
-                journal_entry_id: result.journal_entry_id,
-              }
-            : t
-        )
-      )
-
-      toast({ title: 'Faktura matchad', description: `Faktura ${invoiceNumber} markerad som betald` })
-      return true
-    } catch {
-      toast({ title: t('match_failed_title'), description: t('match_failed_with_invoice'), variant: 'destructive' })
-      return false
-    }
-  }
-
   function handleSelectInvoiceFromPicker(invoice: Invoice & { customer?: Customer }) {
     if (!invoicePickerTransaction) return
     // Don't POST directly from the picker. Route through the confirm dialog
@@ -4264,7 +4222,6 @@ export default function TransactionsPage() {
       {invoicePickerOpen && <Dialog
         open
         onOpenChange={(open) => {
-          if (isMatchingFromPicker) return
           setInvoicePickerOpen(open)
           if (!open) setInvoicePickerTransaction(null)
         }}
@@ -4284,7 +4241,6 @@ export default function TransactionsPage() {
               <InvoicePicker
                 transaction={invoicePickerTransaction}
                 onSelect={handleSelectInvoiceFromPicker}
-                isProcessing={isMatchingFromPicker}
               />
             </>
           )}
@@ -4294,7 +4250,6 @@ export default function TransactionsPage() {
       {supplierInvoicePickerOpen && <Dialog
         open
         onOpenChange={(open) => {
-          if (isMatchingSupplierFromPicker) return
           setSupplierInvoicePickerOpen(open)
           if (!open) setSupplierInvoicePickerTransaction(null)
         }}
@@ -4314,7 +4269,6 @@ export default function TransactionsPage() {
               <SupplierInvoicePicker
                 transaction={supplierInvoicePickerTransaction}
                 onSelect={handleSelectSupplierInvoiceFromPicker}
-                isProcessing={isMatchingSupplierFromPicker}
               />
             </>
           )}

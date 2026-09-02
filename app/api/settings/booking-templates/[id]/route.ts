@@ -1,3 +1,4 @@
+import { BookingTemplateLineSchema, BookingTemplateCategorySchema, BookingTemplateEntityTypeSchema } from '@/lib/bookkeeping/booking-template-schemas'
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { z } from 'zod'
@@ -5,24 +6,11 @@ import { validateBody } from '@/lib/api/validate'
 import { sparsePatchBody } from '@/lib/api/sparse-patch'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
-const BookingTemplateLineSchema = z.object({
-  account: z.string().regex(/^\d{4}$/),
-  label: z.string().min(1),
-  side: z.enum(['debit', 'credit']),
-  type: z.enum(['business', 'vat', 'settlement']),
-  ratio: z.number().min(0).max(10).optional(),
-  vat_rate: z.number().min(0).max(1).optional(),
-})
-
 const UpdateBookingTemplateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   description: z.string().max(2000).optional(),
-  category: z.enum([
-    'eu_trade', 'tax_account', 'private_transfer',
-    'salary', 'representation', 'year_end',
-    'vat', 'financial', 'other',
-  ]).optional(),
-  entity_type: z.enum(['all', 'enskild_firma', 'aktiebolag']).optional(),
+  category: BookingTemplateCategorySchema.optional(),
+  entity_type: BookingTemplateEntityTypeSchema.optional(),
   lines: z.array(BookingTemplateLineSchema).min(2).optional(),
 })
 

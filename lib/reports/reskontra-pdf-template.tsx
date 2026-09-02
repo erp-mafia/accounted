@@ -5,7 +5,8 @@ import {
   View,
   StyleSheet,
 } from '@react-pdf/renderer'
-import { pdfNumberText } from '@/lib/pdf/number-text'
+import { formatDateSv, pdfAmount } from '@/lib/pdf/number-text'
+import { formatOrgNumber } from '@/lib/utils'
 import type { CompanySettings } from '@/types'
 
 const styles = StyleSheet.create({
@@ -201,30 +202,6 @@ const styles = StyleSheet.create({
   },
 })
 
-function formatAmount(amount: number): string {
-  // pdfNumberText: Intl's U+2212 has no glyph in the bundled Helvetica/Courier,
-  // so a credit note or overpayment would print unsigned (issue #1982).
-  return pdfNumberText(
-    new Intl.NumberFormat('sv-SE', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(amount),
-  )
-}
-
-function formatOrgNumber(orgNumber: string): string {
-  const cleaned = orgNumber.replace(/\D/g, '')
-  if (cleaned.length === 10) {
-    return `${cleaned.slice(0, 6)}-${cleaned.slice(6)}`
-  }
-  return orgNumber
-}
-
-function formatDateSv(iso: string): string {
-  if (!iso) return ''
-  return new Date(iso).toLocaleDateString('sv-SE')
-}
-
 export interface ReskontraAgingRow {
   name: string
   current: number
@@ -323,16 +300,16 @@ export function ReskontraPDF({
         <View style={styles.summaryRow}>
           <View style={styles.summaryItem}>
             <Text style={styles.summaryLabel}>TOTALT UTESTÅENDE</Text>
-            <Text style={styles.summaryValue}>{formatAmount(totals.total_outstanding)} kr</Text>
+            <Text style={styles.summaryValue}>{pdfAmount(totals.total_outstanding)} kr</Text>
           </View>
           <View style={styles.summaryItem}>
             <Text style={styles.summaryLabel}>EJ FÖRFALLET</Text>
-            <Text style={styles.summaryValue}>{formatAmount(totals.current)} kr</Text>
+            <Text style={styles.summaryValue}>{pdfAmount(totals.current)} kr</Text>
           </View>
           <View style={styles.summaryItem}>
             <Text style={styles.summaryLabel}>FÖRFALLET</Text>
             <Text style={styles.summaryValue}>
-              {formatAmount(totals.total_outstanding - totals.current)} kr
+              {pdfAmount(totals.total_outstanding - totals.current)} kr
             </Text>
           </View>
           <View style={styles.summaryItem}>
@@ -365,7 +342,7 @@ export function ReskontraPDF({
                 <Text style={styles.colName}>{row.name}</Text>
                 {AGING_COLUMNS.map((col) => (
                   <Text key={col.key} style={styles.colAmount}>
-                    {formatAmount(row[col.key] as number)}
+                    {pdfAmount(row[col.key] as number)}
                   </Text>
                 ))}
               </View>
@@ -374,7 +351,7 @@ export function ReskontraPDF({
               <Text style={[styles.colName, styles.bold]}>Summa</Text>
               {AGING_COLUMNS.map((col) => (
                 <Text key={col.key} style={[styles.colAmount, styles.bold]}>
-                  {formatAmount(totals[col.key] as number)}
+                  {pdfAmount(totals[col.key] as number)}
                 </Text>
               ))}
             </View>
@@ -415,12 +392,12 @@ export function ReskontraPDF({
                 <Text style={styles.colInvNumber}>{inv.invoice_number}</Text>
                 <Text style={styles.colInvDate}>{inv.invoice_date}</Text>
                 <Text style={styles.colInvDate}>{inv.due_date}</Text>
-                <Text style={styles.colInvAmount}>{formatAmount(inv.outstanding)}</Text>
+                <Text style={styles.colInvAmount}>{pdfAmount(inv.outstanding)}</Text>
                 {hasForeignCurrency &&
                   (inv.outstanding_sek === null ? (
                     <Text style={styles.colInvSekMissing}>saknas</Text>
                   ) : (
-                    <Text style={styles.colInvSek}>{formatAmount(inv.outstanding_sek)}</Text>
+                    <Text style={styles.colInvSek}>{pdfAmount(inv.outstanding_sek)}</Text>
                   ))}
                 <Text style={styles.colInvDays}>{inv.days_overdue > 0 ? inv.days_overdue : ''}</Text>
                 <Text style={styles.colInvCurrency}>{inv.currency}</Text>
@@ -434,7 +411,7 @@ export function ReskontraPDF({
                 <Text style={styles.colInvDate} />
                 {/* Deliberately blank: mixed currencies do not add up. */}
                 <Text style={styles.colInvAmount} />
-                <Text style={[styles.colInvSek, styles.bold]}>{formatAmount(invoiceSekTotal)}</Text>
+                <Text style={[styles.colInvSek, styles.bold]}>{pdfAmount(invoiceSekTotal)}</Text>
                 <Text style={styles.colInvDays} />
                 <Text style={styles.colInvCurrency}>SEK</Text>
               </View>

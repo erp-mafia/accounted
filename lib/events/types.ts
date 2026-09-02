@@ -213,18 +213,6 @@ export type CoreEvent =
   | { type: 'skattekonto.balance.changed'; payload: { previousBalance: number; currentBalance: number; userId: string; companyId: string } }
   | { type: 'skattekonto.transaction.upcoming'; payload: { transaktionsdatum: string; forfallodatum: string; transaktionstext: string; beloppSkatteverket: number; userId: string; companyId: string } }
   | { type: 'skattekonto.connection.expired'; payload: { reason: 'REFRESH_EXHAUSTED' | 'SESSION_EXPIRED' | 'TOKEN_CORRUPTED'; userId: string; companyId: string } }
-  // Fired when the SKV saldo and GL 1630 sum diverge beyond the configured
-  // tolerance. The drift handler emails the company contact; UI surfaces a
-  // dashboard tile via /api/extensions/skatteverket/skattekonto/drift.
-  | { type: 'skattekonto.drift_detected'; payload: {
-      drift: number                       // SKV saldo - GL 1630 sum (signed)
-      saldoSkatteverket: number
-      glSum1630: number
-      fetchedAt: number                   // ms epoch from the snapshot
-      unbookedCount: number               // skattekonto rows without journal_entry_id ≤ fetchedAt
-      userId: string
-      companyId: string
-    } }
   // Company & account lifecycle
   | { type: 'company.deleted'; payload: { companyId: string; userId: string; archivedAt: string } }
   | { type: 'account.deleted'; payload: { userId: string; deletedAt: string } }
@@ -380,8 +368,3 @@ export type EventPayload<T extends CoreEventType> = Extract<CoreEvent, { type: T
 /** Handler function for a specific event type */
 export type EventHandler<T extends CoreEventType> = (payload: EventPayload<T>) => Promise<void> | void
 
-/** Subscription: event type + handler */
-export interface EventSubscription<T extends CoreEventType = CoreEventType> {
-  eventType: T
-  handler: EventHandler<T>
-}

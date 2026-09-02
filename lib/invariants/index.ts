@@ -34,8 +34,8 @@ export {
 } from './fiscal-year'
 
 export {
-  ORG_NUMBER_LENGTH,
   stripOrgNumberFormatting,
+
   isOrgNumberShaped,
   normalizeOrgNumber,
   isValidOrgNumber,

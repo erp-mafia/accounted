@@ -7,16 +7,13 @@
 
 import type { FiscalPeriod } from '@/types'
 import { ALL_YEARS_VALUE } from '@/components/common/fiscal-year-storage'
-
-export function todayIso(): string {
-  return new Date().toISOString().split('T')[0]
-}
+import { todayIsoUtc } from '@/lib/dates/iso'
 
 /** Newest first; optionally drops periods that have not started yet. */
 export function prepareFiscalPeriods(
   periods: readonly FiscalPeriod[],
   hideFuturePeriods: boolean,
-  today: string = todayIso(),
+  today: string = todayIsoUtc(),
 ): FiscalPeriod[] {
   return periods
     .filter((p) => !hideFuturePeriods || p.period_start <= today)
@@ -52,7 +49,7 @@ export function resolveInitialFiscalScope(
   const newest = periods[0] ?? null
 
   if (options.preferLatestEnded) {
-    const today = options.today ?? todayIso()
+    const today = options.today ?? todayIsoUtc()
     const pick = periods.find((p) => p.period_end < today) ?? newest
     return pick ? { periodId: pick.id, period: pick } : null
   }

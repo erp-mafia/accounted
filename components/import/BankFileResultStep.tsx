@@ -10,7 +10,7 @@ import {
   ArrowRight,
   RotateCcw,
 } from 'lucide-react'
-import type { IngestResult } from '@/lib/transactions/ingest'
+import type { IngestResult } from '@/types'
 
 interface BankFileResultStepProps {
   result: IngestResult

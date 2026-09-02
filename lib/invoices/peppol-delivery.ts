@@ -33,6 +33,11 @@ export interface StagedPeppolDelivery extends PeppolDeliverySummary {
   filename: string
 }
 
+/** Error text for a peppol_* row's failure column: message or String(err), capped at 500 chars. */
+export function describeError(err: unknown): string {
+  return (err instanceof Error ? err.message : String(err)).slice(0, 500)
+}
+
 export function sha256Hex(value: string | Uint8Array): string {
   return createHash('sha256').update(value).digest('hex')
 }

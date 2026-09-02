@@ -8,13 +8,9 @@
 import type {
   ArcimProvider,
   ConsentRecord,
-  OtcResponse,
   PaginatedResponse,
   CompanyInformationDto,
   CustomerDto,
-  SupplierDto,
-  SalesInvoiceDto,
-  SupplierInvoiceDto,
 } from '../types'
 
 function getBaseUrl(): string {
@@ -105,70 +101,6 @@ export async function getConsent(consentId: string): Promise<ConsentRecord> {
   return request<ConsentRecord>(`/api/v1/consents/${consentId}`)
 }
 
-export async function generateOtc(
-  consentId: string,
-  expiresInMinutes: number = 60
-): Promise<OtcResponse> {
-  return request<OtcResponse>(`/api/v1/consents/${consentId}/otc`, {
-    method: 'POST',
-    body: JSON.stringify({ expiresInMinutes }),
-  })
-}
-
-export async function deleteConsent(consentId: string): Promise<void> {
-  await request(`/api/v1/consents/${consentId}`, { method: 'DELETE' })
-}
-
-// ── OAuth helpers ───────────────────────────────────────────────────
-
-export async function getAuthUrl(
-  provider: ArcimProvider,
-  state?: string,
-  redirectUri?: string
-): Promise<{ url: string }> {
-  const params = new URLSearchParams()
-  if (state) params.set('state', state)
-  if (redirectUri) params.set('redirectUri', redirectUri)
-  const qs = params.toString()
-  return request<{ url: string }>(`/api/v1/auth/${provider}/url${qs ? `?${qs}` : ''}`)
-}
-
-export async function exchangeAuthToken(
-  consentId: string,
-  provider: ArcimProvider,
-  otcCode: string,
-  oauthCode: string,
-  redirectUri?: string
-): Promise<{ success: boolean; consentId: string }> {
-  return request(`/api/v1/auth/${provider}/callback`, {
-    method: 'POST',
-    body: JSON.stringify({
-      code: oauthCode,
-      consentId,
-      otcCode,
-      ...(redirectUri ? { redirectUri } : {}),
-    }),
-  })
-}
-
-// ── Token-based auth (Bokio, Björn Lundén, Briox) ──────────────────
-
-export async function submitProviderToken(
-  consentId: string,
-  provider: ArcimProvider,
-  apiToken: string,
-  companyId?: string
-): Promise<{ success: boolean; consentId: string }> {
-  return request(`/api/v1/auth/${provider}/callback`, {
-    method: 'POST',
-    body: JSON.stringify({
-      code: apiToken,
-      consentId,
-      ...(companyId ? { companyId } : {}),
-    }),
-  })
-}
-
 // ── Resource fetching (paginated) ───────────────────────────────────
 
 async function fetchAllPages<T>(
@@ -213,24 +145,6 @@ export async function fetchCompanyInfo(
 
 export async function fetchCustomers(consentId: string): Promise<CustomerDto[]> {
   return fetchAllPages<CustomerDto>(consentId, 'customers')
-}
-
-export async function fetchSuppliers(consentId: string): Promise<SupplierDto[]> {
-  return fetchAllPages<SupplierDto>(consentId, 'suppliers')
-}
-
-export async function fetchSalesInvoices(
-  consentId: string,
-  params?: Record<string, string>
-): Promise<SalesInvoiceDto[]> {
-  return fetchAllPages<SalesInvoiceDto>(consentId, 'salesinvoices', params)
-}
-
-export async function fetchSupplierInvoices(
-  consentId: string,
-  params?: Record<string, string>
-): Promise<SupplierInvoiceDto[]> {
-  return fetchAllPages<SupplierInvoiceDto>(consentId, 'supplierinvoices', params)
 }
 
 // The gateway SIE export path (fetchSIEExport/SIEExportFile) was deliberately

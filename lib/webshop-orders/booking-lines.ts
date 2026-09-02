@@ -37,8 +37,6 @@ import type {
  * it is a claim on the payment provider, not on the customer.
  */
 export const DEFAULT_PAYMENT_ACCOUNT = '1686'
-/** BAS 2026 name for DEFAULT_PAYMENT_ACCOUNT; used when adding it to a chart. */
-export const DEFAULT_PAYMENT_ACCOUNT_NAME = 'Fordringar för kontokort och kuponger'
 
 /**
  * Default revenue account per Swedish VAT rate: the standard BAS 2026

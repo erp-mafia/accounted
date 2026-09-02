@@ -4,6 +4,8 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
 import { markSignatureSigned } from '@/lib/bokslut/arsredovisning/signature-service'
+import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
+
 import { createServiceClient } from '@/lib/supabase/server'
 
 // PATCH transitions: pending → signed (manual entry for the paper / outside-
@@ -34,19 +36,11 @@ const PatchSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('declined') }).strict(),
 ])
 
-function stockholmDate(instant: string | Date): string {
-  return new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Stockholm',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(typeof instant === 'string' ? new Date(instant) : instant)
-}
-
 function isSignatureDateAllowed(signedAt: string, finalizedAt: string): boolean {
-  const signedDate = stockholmDate(signedAt)
-  const finalizedDate = stockholmDate(finalizedAt)
-  const today = stockholmDate(new Date())
+  const signedDate = getSwedishLocalDate(new Date(signedAt))
+  const finalizedDate = getSwedishLocalDate(new Date(finalizedAt))
+  const today = getSwedishLocalDate()
+
   return signedDate >= finalizedDate && signedDate <= today
 }
 

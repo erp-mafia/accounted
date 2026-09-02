@@ -58,7 +58,7 @@ import { decodeFileContent } from '@/lib/import/shared/encoding'
 import type { BankFileParseResult, BankFileFormatId, BankFileDuplicateInfo, GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
 import type { SkattekontoFileParseResult } from '@/lib/import/skattekonto-file/types'
 import type { SkattekontoFileImportResult } from '@/components/import/SkattekontoFileResultStep'
-import type { IngestResult } from '@/lib/transactions/ingest'
+import type { IngestResult } from '@/types'
 import type {
   ImportWizardStep,
   ParsedSIEFile,

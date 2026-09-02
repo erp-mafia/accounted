@@ -14,8 +14,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 import { parseReportDateRange, type DateRange } from '@/lib/reports/date-range'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from './errors'
-
-const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+import { UUID_RE } from '@/lib/invariants/uuid'
 
 export interface FiscalPeriodRow {
   id: string

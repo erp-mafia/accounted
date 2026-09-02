@@ -10,15 +10,10 @@ import type {
   DetectedArticleColumns,
 } from '@/lib/import/articles/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { normalizeNameKey as nameKey } from '@/lib/import/shared/column-utils'
 
 const ALLOWED_EXTENSIONS = ['.xlsx', '.xls', '.csv', '.ods']
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
-
-/** Lowercased dedup key for matching an article by name. */
-function nameKey(value: string | null): string | null {
-  if (!value) return null
-  return value.trim().toLowerCase() || null
-}
 
 /**
  * POST /api/import/articles/parse

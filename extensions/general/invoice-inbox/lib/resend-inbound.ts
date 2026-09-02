@@ -1,8 +1,6 @@
 import { Resend } from 'resend'
 import type { EmailReceivedEvent, GetReceivingEmailResponseSuccess, WebhookEventPayload } from 'resend'
 
-export type ResendInboundEvent = EmailReceivedEvent
-
 export type ResendReceivedEmail = GetReceivingEmailResponseSuccess
 
 export interface ResendAttachmentDownload {

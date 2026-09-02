@@ -145,15 +145,6 @@ export interface TransactionsResponse {
  */
 export type TransactionsFetchStrategy = 'default' | 'longest'
 
-// Legacy types for backward compatibility
-export interface Bank {
-  id: string
-  name: string
-  bic?: string
-  countries: string[]
-  logo_url?: string
-}
-
 export interface BankTransaction {
   id: string
   date: string
@@ -454,32 +445,6 @@ export async function getPreferredAuthMethod(
 ): Promise<string | undefined> {
   const method = await getPreferredAuthMethodDetails(aspspName, country, psuType)
   return method?.name
-}
-
-/**
- * Get list of supported banks (legacy format for backward compatibility)
- */
-export async function getSupportedBanks(): Promise<Bank[]> {
-  try {
-    const aspsps = await getASPSPs('SE')
-
-    return aspsps.map((aspsp) => ({
-      id: `${aspsp.name.toLowerCase().replace(/\s+/g, '-')}-se`,
-      name: aspsp.name,
-      bic: aspsp.bic,
-      countries: [aspsp.country],
-      logo_url: aspsp.logo,
-    }))
-  } catch (error) {
-    console.error('Error fetching banks:', error)
-    // Return fallback list
-    return [
-      { id: 'nordea-se', name: 'Nordea', bic: 'NDEASESS', countries: ['SE'] },
-      { id: 'seb-se', name: 'SEB', bic: 'ESSESESS', countries: ['SE'] },
-      { id: 'swedbank-se', name: 'Swedbank', bic: 'SWEDSESS', countries: ['SE'] },
-      { id: 'handelsbanken-se', name: 'Handelsbanken', bic: 'HANDSESS', countries: ['SE'] },
-    ]
-  }
 }
 
 /**
@@ -1169,19 +1134,6 @@ export function convertTransaction(tx: Transaction, accountCurrency: string): Ba
     bank_transaction_code: tx.bank_transaction_code,
     proprietary_bank_transaction_code: tx.proprietary_bank_transaction_code,
   }
-}
-
-/**
- * Get transactions in legacy format
- */
-export async function getTransactions(
-  accountUid: string,
-  fromDate?: string,
-  toDate?: string,
-  accountCurrency: string = 'SEK'
-): Promise<BankTransaction[]> {
-  const transactions = await getAllTransactions(accountUid, fromDate, toDate)
-  return transactions.map(tx => convertTransaction(tx, accountCurrency))
 }
 
 /**

@@ -45,7 +45,7 @@ import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
@@ -271,17 +271,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     const bodyResult = InvoiceSendBody.safeParse(rawBody)
-    if (!bodyResult.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: bodyResult.error.issues.map((issue) => ({
-            field: issue.path.join('.'),
-            message: issue.message,
-          })),
-        },
-      })
-    }
+    if (!bodyResult.success) return v1ValidationError(ctx, bodyResult.error)
 
     // Reject delivery notes: they have a different (D-series) lifecycle.
     if (typed.document_type === 'delivery_note') {

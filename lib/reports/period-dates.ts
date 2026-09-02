@@ -4,7 +4,9 @@
  * specific belongs in the calling module.
  */
 
-export type PeriodType = 'monthly' | 'quarterly' | 'yearly'
+import type { MomsPeriod } from '@/types'
+
+export type PeriodType = MomsPeriod
 
 /**
  * Calculate inclusive start and end dates for a fiscal-calendar period.

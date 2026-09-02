@@ -12,6 +12,7 @@ import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import type { InvoiceExtractionResult } from '@/types'
 import { PDFDocument } from 'pdf-lib'
 import path from 'node:path'
+import { escapeHtml } from '@/lib/email/user-text'
 
 // Verdicts decidable before touching the file. `ai_unconfigured` is the
 // deployment-level "no AI backend" state (self-host without a key), distinct
@@ -138,15 +139,6 @@ export const UPLOAD_ALLOWED_MIME_TYPES = new Set([
 // NOT added to UPLOAD_ALLOWED_MIME_TYPES: HTML only enters through the
 // inbound webhook, where the preview surfaces render it fully sandboxed.
 export const EMAIL_ALLOWED_MIME_TYPES = new Set([...UPLOAD_ALLOWED_MIME_TYPES, 'text/html'])
-
-function escapeHtml(raw: string): string {
-  return raw
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
 
 /**
  * Wrap HTML in a minimal document shell unless it already is a full document.

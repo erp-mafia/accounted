@@ -32,8 +32,8 @@ import {
   type ErrorLocale,
 } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import type { DeductionType } from '@/lib/invoices/rot-rut-rules'
 
-type DeductionType = 'rot' | 'rut'
 type RequestStatus =
   | 'generated'
   | 'submitted'

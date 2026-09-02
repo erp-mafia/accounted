@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { PRIVATE_NO_STORE_HEADERS, privateNoStore } from '@/lib/api/private-no-store'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { invoicePdfFilename, paymentConfirmationPdfFilename } from '@/lib/invoices/pdf-filename'
@@ -13,8 +14,6 @@ import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
-
-const PRIVATE_NO_STORE_HEADERS = { 'Cache-Control': 'private, no-store' }
 
 /**
  * `?disposition=inline` serves the PDF for in-browser review instead of forcing
@@ -36,11 +35,6 @@ function resolveDisposition(request: Request): 'inline' | 'attachment' {
 function resolveVariant(request: Request): 'invoice' | 'paid' {
   const requested = new URL(request.url).searchParams.get('variant')
   return requested === 'paid' ? 'paid' : 'invoice'
-}
-
-function privateNoStore(response: NextResponse): NextResponse {
-  response.headers.set('Cache-Control', 'private, no-store')
-  return response
 }
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(

@@ -8,14 +8,9 @@ import {
   dateColumn,
   integerColumn,
   xlsxFilename,
+  parseCellDate,
 } from '@/lib/reports/xlsx-export'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-function toDate(s: string): Date | null {
-  if (!s) return null
-  const d = new Date(s)
-  return isNaN(d.getTime()) ? null : d
-}
 
 export const GET = withRouteContext('report.salary_journal.xlsx', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
@@ -62,7 +57,7 @@ export const GET = withRouteContext('report.salary_journal.xlsx', async (request
           r.employmentType,
           r.periodYear,
           r.periodMonth,
-          toDate(r.paymentDate),
+          parseCellDate(r.paymentDate),
           r.grossSalary,
           r.taxWithheld,
           r.netSalary,

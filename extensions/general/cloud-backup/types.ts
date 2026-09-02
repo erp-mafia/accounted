@@ -75,9 +75,6 @@ export interface CloudFileState {
   uploaded_at: string
 }
 
-/** @deprecated Use {@link CloudFileState}. Kept for existing call sites. */
-export type DriveFileState = CloudFileState
-
 /**
  * Last-sync snapshot stored under key `google_drive_last_sync` /
  * `dropbox_last_sync`.

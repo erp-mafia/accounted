@@ -25,7 +25,8 @@ import {
 import { parseExpand } from '@/lib/api/v1/expand'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1, type ApiV1Context } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
@@ -229,15 +230,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       date_to: url.searchParams.get('date_to') ?? undefined,
     })
     if (!filtersResult.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: filtersResult.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
+      return v1ValidationError(ctx, filtersResult.error)
     }
     const filters = filtersResult.data
 
@@ -455,27 +448,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    let rawBody: unknown
-    try {
-      rawBody = await request.json()
-    } catch {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'body', message: 'Body is not valid JSON.' },
-      })
-    }
+    const raw = await readV1JsonBody(request, ctx)
+    if (!raw.ok) return raw.response
 
-    const parsed = CreateInvoiceSchema.safeParse(rawBody)
+    const parsed = CreateInvoiceSchema.safeParse(raw.body)
     if (!parsed.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: parsed.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
+      return v1ValidationError(ctx, parsed.error)
     }
     const input = parsed.data
 
@@ -622,8 +600,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const { invoiceFields, items: itemRows } = build
 
     // Dry-run: validation-only preview. Drafts have no journal-entry side
-    // effects yet, so no pending_operations staging needed; the
-    // dryRunStaged() variant lands in PR-B-2b for :send.
+    // effects yet, so no pending_operations staging needed; a staged
+    // preview variant belongs to :send.
     if (ctx.dryRun) {
       // Never echo the encrypted personnummer blob in a preview; last4 is
       // the display-safe representation the response columns expose too.

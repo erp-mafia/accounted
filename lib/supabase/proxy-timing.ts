@@ -1,3 +1,5 @@
+import { UUID_RE } from '@/lib/invariants/uuid'
+
 /**
  * Per-request timing for the auth proxy (lib/supabase/middleware.ts).
  *
@@ -72,8 +74,6 @@ export function classifyProxyRequest(
   return 'page'
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const NUMERIC_RE = /^\d+$/
 /** Prefixes whose tail is a secret (invite tokens, payslip links, PKCE). */
 const TOKEN_PREFIXES = ['/invite', '/payslip', '/auth']

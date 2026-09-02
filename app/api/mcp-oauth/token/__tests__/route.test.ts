@@ -36,9 +36,32 @@ function formRequest(body: Record<string, string>) {
   })
 }
 
+const codeExchange = {
+  grant_type: 'authorization_code',
+  code: 'ciphertext',
+  code_verifier: 'verifier',
+  redirect_uri: 'https://claude.ai/api/cb',
+}
+
+/**
+ * Query results in the order handleAuthorizationCodeGrant issues them:
+ * used-code insert, expired-code cleanup, (role lookup when a company is
+ * known), api_keys insert. The role step is skipped for companyless grants.
+ */
+function exchangeResults(role: { role: string } | null | 'skip' = { role: 'owner' }) {
+  const results: { data?: unknown; error?: unknown }[] = [
+    { data: null, error: null }, // insert into oauth_used_codes
+    { data: null, error: null }, // delete expired codes (best-effort)
+  ]
+  if (role !== 'skip') results.push({ data: role, error: null }) // company_members role
+  results.push({ data: null, error: null }) // insert into api_keys
+  return results
+}
+
 describe('POST /api/mcp-oauth/token', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.getActiveCompanyId.mockResolvedValue('company-1')
   })
 
   describe('grant_type validation', () => {
@@ -72,20 +95,9 @@ describe('POST /api/mcp-oauth/token', () => {
 
       const { supabase, enqueueMany } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueueMany([
-        { data: null, error: null }, // insert into oauth_used_codes
-        { data: null, error: null }, // delete expired codes (best-effort)
-        { data: null, error: null }, // insert into api_keys
-      ])
+      enqueueMany(exchangeResults())
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'authorization_code',
-          code: 'ciphertext',
-          code_verifier: 'verifier',
-          redirect_uri: 'https://claude.ai/api/cb',
-        })
-      )
+      const res = await POST(formRequest(codeExchange))
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.access_token).toMatch(/^gnubok_sk_/)
@@ -97,11 +109,14 @@ describe('POST /api/mcp-oauth/token', () => {
     it('mints an unbound key (company_id null) when the user has no company yet', async () => {
       // Signup inside the OAuth popup (issue #1814): the account exists, the
       // company does not. The key is stored unbound and validateApiKey binds
-      // it on the first call after the company is created.
+      // it on the first call after the company is created. No company means
+      // no role to cap against: the consented scopes go through as-is.
       vi.mocked(decryptAuthCode).mockReturnValue({
         userId: 'user-1',
         codeChallenge: 'challenge',
         redirectUri: 'https://claude.ai/api/cb',
+        scopes: ['companies:read', 'companies:write'],
+        companyId: null,
         exp: Date.now() + 60_000,
       })
       vi.mocked(verifyPkce).mockReturnValue(true)
@@ -109,28 +124,19 @@ describe('POST /api/mcp-oauth/token', () => {
 
       const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueueMany([
-        { data: null, error: null }, // insert into oauth_used_codes
-        { data: null, error: null }, // delete expired codes (best-effort)
-        { data: null, error: null }, // insert into api_keys
-      ])
+      enqueueMany(exchangeResults('skip'))
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'authorization_code',
-          code: 'ciphertext',
-          code_verifier: 'verifier',
-          redirect_uri: 'https://claude.ai/api/cb',
-        })
-      )
+      const res = await POST(formRequest(codeExchange))
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.access_token).toMatch(/^gnubok_sk_/)
+      expect(body.scope).toBe('companies:read companies:write')
 
       const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
       expect(inserted).toBeDefined()
       expect(inserted.user_id).toBe('user-1')
       expect(inserted.company_id).toBeNull()
+      expect(findCall('company_members', 'select')).toBeUndefined()
     })
 
     it('rejects an already-used auth code (replay)', async () => {
@@ -146,14 +152,7 @@ describe('POST /api/mcp-oauth/token', () => {
       mocks.supabaseFactory.mockReturnValue(supabase)
       enqueue({ data: null, error: { message: 'unique violation' } })
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'authorization_code',
-          code: 'ciphertext',
-          code_verifier: 'verifier',
-          redirect_uri: 'https://claude.ai/api/cb',
-        })
-      )
+      const res = await POST(formRequest(codeExchange))
       expect(res.status).toBe(400)
       const body = await res.json()
       expect(body.error).toBe('invalid_grant')
@@ -168,18 +167,185 @@ describe('POST /api/mcp-oauth/token', () => {
       })
       vi.mocked(verifyPkce).mockReturnValue(false)
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'authorization_code',
-          code: 'ciphertext',
-          code_verifier: 'wrong',
-          redirect_uri: 'https://claude.ai/api/cb',
-        })
-      )
+      const res = await POST(formRequest({ ...codeExchange, code_verifier: 'wrong' }))
       expect(res.status).toBe(400)
       const body = await res.json()
       expect(body.error).toBe('invalid_grant')
       expect(body.error_description).toContain('PKCE')
+    })
+  })
+
+  describe('company binding and role cap', () => {
+    beforeEach(() => {
+      vi.mocked(verifyPkce).mockReturnValue(true)
+    })
+
+    it('binds the key to the company carried in the code instead of re-resolving the active company', async () => {
+      // The consent page showed company-7 and capped the grant to the user's
+      // role there; the key must land on that company, not on whatever the
+      // user switched to in the meantime.
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        scopes: ['reports:read'],
+        companyId: 'company-7',
+        exp: Date.now() + 60_000,
+      })
+
+      const { supabase, enqueueMany, findCall, findCalls } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults({ role: 'member' }))
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(200)
+
+      expect(mocks.getActiveCompanyId).not.toHaveBeenCalled()
+      const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
+      expect(inserted.company_id).toBe('company-7')
+      // The role lookup ran against that same company.
+      const eqArgs = findCalls('company_members', 'eq')
+      expect(eqArgs).toContainEqual(['company_id', 'company-7'])
+      expect(eqArgs).toContainEqual(['user_id', 'user-1'])
+    })
+
+    it('viewer consent yields a read-only key even when the code carries write scopes', async () => {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        scopes: ['transactions:read', 'transactions:write', 'pending_operations:approve', 'reports:read'],
+        companyId: 'company-1',
+        exp: Date.now() + 60_000,
+      })
+
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults({ role: 'viewer' }))
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.scope.split(' ').sort()).toEqual(['reports:read', 'transactions:read'])
+
+      const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
+      expect(inserted.scopes).toEqual(['transactions:read', 'reports:read'])
+      expect(inserted.sod_acknowledged_at).toBeNull()
+      expect(inserted.sod_acknowledged_by).toBeNull()
+    })
+
+    it('viewer whose code carries only write scopes falls back to the read-only defaults', async () => {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        scopes: ['bookkeeping:write'],
+        companyId: 'company-1',
+        exp: Date.now() + 60_000,
+      })
+
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults({ role: 'viewer' }))
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(200)
+      const granted = (await res.json()).scope.split(' ')
+      expect(granted).toContain('reports:read')
+      expect(granted).not.toContain('bookkeeping:write')
+      expect(granted.every((s: string) => s.endsWith(':read'))).toBe(true)
+    })
+
+    it('membership removed between consent and exchange caps to read-only', async () => {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        scopes: ['transactions:read', 'transactions:write'],
+        companyId: 'company-1',
+        exp: Date.now() + 60_000,
+      })
+
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults(null))
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(200)
+      expect((await res.json()).scope).toBe('transactions:read')
+    })
+
+    it('records the segregation-of-duties acknowledgement when stage and approve are both granted', async () => {
+      // Mirrors app/api/settings/api-keys: the combination is allowed for a
+      // writer role but leaves a durable self-attestation on the key row.
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        scopes: ['transactions:write', 'pending_operations:approve'],
+        companyId: 'company-1',
+        exp: Date.now() + 60_000,
+      })
+
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults({ role: 'member' }))
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const res = await POST(formRequest(codeExchange))
+      warn.mockRestore()
+      expect(res.status).toBe(200)
+
+      const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
+      expect(inserted.scopes).toEqual(['transactions:write', 'pending_operations:approve'])
+      expect(typeof inserted.sod_acknowledged_at).toBe('string')
+      expect(inserted.sod_acknowledged_by).toBe('user-1')
+    })
+
+    it('records no acknowledgement for a non-conflicting grant', async () => {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        scopes: ['transactions:write', 'pending_operations:read'],
+        companyId: 'company-1',
+        exp: Date.now() + 60_000,
+      })
+
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults({ role: 'owner' }))
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(200)
+      const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
+      expect(inserted.sod_acknowledged_at).toBeNull()
+    })
+
+    it('returns 500 and mints no key when the role lookup fails', async () => {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        scopes: ['transactions:read'],
+        companyId: 'company-1',
+        exp: Date.now() + 60_000,
+      })
+
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany([
+        { data: null, error: null },
+        { data: null, error: null },
+        { data: null, error: { message: 'connection reset' } },
+      ])
+
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const res = await POST(formRequest(codeExchange))
+      error.mockRestore()
+      expect(res.status).toBe(500)
+      expect((await res.json()).error).toBe('server_error')
+      expect(findCall('api_keys', 'insert')).toBeUndefined()
     })
   })
 
@@ -317,20 +483,9 @@ describe('POST /api/mcp-oauth/token', () => {
 
       const { supabase, enqueueMany } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueueMany([
-        { data: null, error: null },
-        { data: null, error: null },
-        { data: null, error: null },
-      ])
+      enqueueMany(exchangeResults())
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'authorization_code',
-          code: 'ciphertext',
-          code_verifier: 'verifier',
-          redirect_uri: 'https://claude.ai/api/cb',
-        })
-      )
+      const res = await POST(formRequest(codeExchange))
       expect(res.status).toBe(200)
       const body = await res.json()
       // DEFAULT_OAUTH_SCOPES is read-only by design. Write and approval scopes
@@ -366,23 +521,33 @@ describe('POST /api/mcp-oauth/token', () => {
 
       const { supabase, enqueueMany } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueueMany([
-        { data: null, error: null },
-        { data: null, error: null },
-        { data: null, error: null },
-      ])
+      enqueueMany(exchangeResults())
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'authorization_code',
-          code: 'ciphertext',
-          code_verifier: 'verifier',
-          redirect_uri: 'https://claude.ai/api/cb',
-        })
-      )
+      const res = await POST(formRequest(codeExchange))
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.scope).toBe('transactions:read invoices:read')
+    })
+
+    it('keeps an owner grant with write scopes intact (no cap for writer roles)', async () => {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        scopes: ['transactions:read', 'transactions:write', 'bookkeeping:write'],
+        companyId: 'company-1',
+        exp: Date.now() + 60_000,
+      })
+      vi.mocked(verifyPkce).mockReturnValue(true)
+
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults({ role: 'owner' }))
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.scope).toBe('transactions:read transactions:write bookkeeping:write')
     })
 
     it('rejects a code whose embedded scopes are all unknown', async () => {
@@ -406,14 +571,7 @@ describe('POST /api/mcp-oauth/token', () => {
         { data: null, error: null }, // delete expired codes
       ])
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'authorization_code',
-          code: 'ciphertext',
-          code_verifier: 'verifier',
-          redirect_uri: 'https://claude.ai/api/cb',
-        })
-      )
+      const res = await POST(formRequest(codeExchange))
       expect(res.status).toBe(400)
       const body = await res.json()
       expect(body.error).toBe('invalid_grant')

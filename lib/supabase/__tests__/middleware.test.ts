@@ -6,7 +6,9 @@ import { NextRequest } from 'next/server'
  *
  * Focus: every auth bounce must (a) remember where the user was heading,
  * (b) reject an off-origin destination, and (c) not leak the original query
- * string onto the auth page. MFA enforcement conditions must be unchanged.
+ * string onto the auth page. MFA enforcement decides on server-authenticated
+ * data only (the getUser() factor list and the signature-verified `aal`
+ * claim), never on the editable cookie session.
  */
 
 const state = vi.hoisted(() => ({
@@ -14,12 +16,26 @@ const state = vi.hoisted(() => ({
     id: string
     email?: string
     app_metadata?: Record<string, unknown>
+    // What GoTrue returns on /user: the server-side factor list.
+    factors?: Array<{ id: string; status: string; factor_type: string }>
   },
   sessionId: 'session-1' as string | null,
   authError: null as unknown,
-  aal: null as null | { currentLevel: string; nextLevel: string },
-  factors: null as null | { totp: Array<{ id: string; status: string }> },
-  listFactors: vi.fn(async () => ({ data: state.factors })),
+  // `aal` claim of the (mock) signature-verified access token, i.e. what
+  // getClaims() reports. null = the token carries no aal claim.
+  jwtAal: null as string | null,
+  // Make getClaims() fail: an error result or a throw.
+  claimsFailure: null as null | 'error' | 'throw',
+  // The cookie-derived assurance lookup and the listFactors round trip. The
+  // proxy must call NEITHER any more: the first computes nextLevel from the
+  // editable cookie session, the second is a getUser() the proxy has already
+  // paid for. Spies so tests can prove it. getAal answers the way a cookie
+  // with `user.factors` stripped would: "nothing to step up to".
+  getAal: vi.fn(async () => ({
+    data: { currentLevel: 'aal1', nextLevel: 'aal1' },
+    error: null,
+  })),
+  listFactors: vi.fn(async () => ({ data: { totp: [] }, error: null })),
   company: {
     data: [{ company_id: 'company-1', locale: 'sv', used_fallback: false }],
     error: null as unknown,
@@ -86,13 +102,32 @@ vi.mock('@supabase/ssr', () => ({
           error: state.authError,
         }
       }),
-      getClaims: vi.fn(async () => ({
-        data: { claims: state.sessionId ? { session_id: state.sessionId } : {} },
-      })),
+      getClaims: vi.fn(async () => {
+        if (state.claimsFailure === 'throw') throw new Error('jwks fetch failed')
+        if (state.claimsFailure === 'error') {
+          return {
+            data: null,
+            error: { name: 'AuthInvalidJwtError', message: 'Invalid JWT signature' },
+          }
+        }
+        return {
+          data: {
+            claims: {
+              ...(state.sessionId ? { session_id: state.sessionId } : {}),
+              ...(state.jwtAal ? { aal: state.jwtAal } : {}),
+              // Satisfy the iss/aud pinning the MFA gates apply (lib/auth/claims.ts).
+              iss: `${(process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/\/+$/, '')}/auth/v1`,
+              aud: 'authenticated',
+              sub: state.user?.id,
+            },
+          },
+          error: null,
+        }
+      }),
       signOut: state.signOut,
       mfa: {
-        getAuthenticatorAssuranceLevel: vi.fn(async () => ({ data: state.aal })),
-        listFactors: (...args: unknown[]) => state.listFactors(...args),
+        getAuthenticatorAssuranceLevel: () => state.getAal(),
+        listFactors: () => state.listFactors(),
       },
     },
     rpc: vi.fn(async () => state.company),
@@ -172,6 +207,9 @@ import { SESSION_TIMEOUT_COOKIE } from '@/lib/auth/session-timeout-shared'
 
 const ORIGIN = 'http://localhost:3000'
 const SIGNED_IN = { id: 'user-1', app_metadata: {} }
+const VERIFIED_TOTP = { id: 'f1', status: 'verified', factor_type: 'totp' }
+/** A user whose server-side record carries a verified TOTP factor. */
+const MFA_USER = { ...SIGNED_IN, factors: [VERIFIED_TOTP] }
 
 function locationOf(response: Response) {
   return response.headers.get('location')
@@ -199,12 +237,13 @@ describe('updateSession redirect destinations', () => {
     vi.clearAllMocks()
     logState.info.mockClear()
     state.listFactors.mockClear()
+    state.getAal.mockClear()
     state.user = null
     state.sessionId = 'session-1'
     state.authError = null
     state.cookieWrites = []
-    state.aal = null
-    state.factors = null
+    state.jwtAal = null
+    state.claimsFailure = null
     state.company = {
       data: [{ company_id: 'company-1', locale: 'sv', used_fallback: false }],
       error: null,
@@ -619,8 +658,9 @@ describe('updateSession redirect destinations', () => {
   describe('MFA step-up bounce to /mfa/verify', () => {
     beforeEach(() => {
       process.env.NEXT_PUBLIC_REQUIRE_MFA = 'true'
-      state.user = SIGNED_IN
-      state.aal = { currentLevel: 'aal1', nextLevel: 'aal2' }
+      // Verified factor on the server-side user, single-factor token.
+      state.user = MFA_USER
+      state.jwtAal = 'aal1'
     })
 
     it('preserves the destination as ?returnTo=', async () => {
@@ -657,14 +697,48 @@ describe('updateSession redirect destinations', () => {
       expect(new URL(locationOf(response)!).pathname).toBe('/mfa/verify')
       expect(response.cookies.get('sb-test-auth-token')?.value).toBe('rotated')
     })
+
+    it('decides on the server-side factor list, never on the cookie session', async () => {
+      // The attack: the sb-*-auth-token cookie is unsigned JSON, so the
+      // password holder strips `user.factors` and the local assurance lookup
+      // reports nextLevel aal1 ("nothing to step up to"). state.getAal is
+      // that view; the proxy must not even ask for it.
+      const response = await run('/invoices')
+
+      expect(new URL(locationOf(response)!).pathname).toBe('/mfa/verify')
+      expect(state.getAal).not.toHaveBeenCalled()
+      expect(state.listFactors).not.toHaveBeenCalled()
+    })
+
+    it.each(['error', 'throw'] as const)(
+      'fails closed when getClaims reports %s',
+      async (failure) => {
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+        state.claimsFailure = failure
+
+        const response = await run('/invoices')
+
+        expect(new URL(locationOf(response)!).pathname).toBe('/mfa/verify')
+        expect(errorSpy).toHaveBeenCalled()
+        errorSpy.mockRestore()
+      },
+    )
+
+    it('fails closed when the verified claims carry no aal', async () => {
+      state.jwtAal = null
+
+      const response = await run('/invoices')
+
+      expect(new URL(locationOf(response)!).pathname).toBe('/mfa/verify')
+    })
   })
 
   describe('forced enrollment bounce to /mfa/enroll', () => {
     beforeEach(() => {
       process.env.NEXT_PUBLIC_REQUIRE_MFA = 'true'
+      // No factor on the server-side user, single-factor token.
       state.user = SIGNED_IN
-      state.aal = { currentLevel: 'aal1', nextLevel: 'aal1' }
-      state.factors = { totp: [] }
+      state.jwtAal = 'aal1'
     })
 
     it('preserves the destination as ?returnTo=', async () => {
@@ -675,12 +749,15 @@ describe('updateSession redirect destinations', () => {
       expect(url.searchParams.get('returnTo')).toBe('/invoices/new')
     })
 
-    it('still forces enrollment (the gate itself is unchanged)', async () => {
-      state.factors = { totp: [{ id: 'f1', status: 'verified' }] }
+    it('steps up instead of enrolling when the server-side user already has a verified factor', async () => {
+      // Previously this scenario (cookie says no factor, server says one
+      // exists, token at aal1) rendered the page at AAL1: the verify bounce
+      // trusted the cookie and the enrolment check then found the factor.
+      state.user = MFA_USER
 
       const response = await run('/invoices/new')
 
-      expect(response.status).toBe(200)
+      expect(new URL(locationOf(response)!).pathname).toBe('/mfa/verify')
     })
 
     it('skips enrollment for a user with no company, as before', async () => {
@@ -691,18 +768,19 @@ describe('updateSession redirect destinations', () => {
       expect(response.status).toBe(200)
     })
 
-    it('still asks for the factor list at aal1/aal1 before bouncing', async () => {
+    it('reads the factor list off the getUser() round trip, not a second auth call', async () => {
       const response = await run('/invoices/new')
 
       expect(new URL(locationOf(response)!).pathname).toBe('/mfa/enroll')
-      expect(state.listFactors).toHaveBeenCalledTimes(1)
+      expect(state.listFactors).not.toHaveBeenCalled()
+      expect(state.getAal).not.toHaveBeenCalled()
     })
 
-    it('never calls listFactors once the session is at aal2 (a verified factor is implied)', async () => {
-      state.aal = { currentLevel: 'aal2', nextLevel: 'aal2' }
-      // Even a factor list that would read as "none" must not matter here:
-      // the call is skipped, not just its result ignored.
-      state.factors = { totp: [] }
+    it('lets an aal2 token through even when the server-side user has no factor left', async () => {
+      // A user who unenrols their last factor mid-session keeps aal2 until
+      // the next token refresh; the enrolment bounce lands on the refresh,
+      // not on the next click (unchanged deferral, PR #1922).
+      state.jwtAal = 'aal2'
 
       const response = await run('/invoices/new')
 
@@ -711,12 +789,123 @@ describe('updateSession redirect destinations', () => {
     })
 
     it('does not spend an MFA lookup on RSC and prefetch requests at aal2 either', async () => {
-      state.aal = { currentLevel: 'aal2', nextLevel: 'aal2' }
+      state.jwtAal = 'aal2'
 
       await run('/invoices', { headers: { rsc: '1' } })
       await run('/invoices', { headers: { 'next-router-prefetch': '1', rsc: '1' } })
 
       expect(state.listFactors).not.toHaveBeenCalled()
+      expect(state.getAal).not.toHaveBeenCalled()
+    })
+  })
+
+  // ── API branch: the MFA gate for cookie sessions ──────────────────────
+
+  describe('API MFA gate for cookie sessions', () => {
+    const FORBIDDEN = { error: 'MFA-verifiering krävs.' }
+
+    beforeEach(() => {
+      process.env.NEXT_PUBLIC_REQUIRE_MFA = 'true'
+      state.user = MFA_USER
+      state.jwtAal = 'aal1'
+    })
+
+    it('returns 403 for an AAL1 session whose server-side user has a verified factor', async () => {
+      const response = await run('/api/invoices')
+
+      expect(response.status).toBe(403)
+      await expect(response.json()).resolves.toEqual(FORBIDDEN)
+    })
+
+    it('never consults the cookie-derived assurance level or a second factor lookup', async () => {
+      // state.getAal reports nextLevel aal1: the answer a cookie with
+      // `user.factors` stripped produces. It must not be asked at all.
+      const response = await run('/api/invoices')
+
+      expect(response.status).toBe(403)
+      expect(state.getAal).not.toHaveBeenCalled()
+      expect(state.listFactors).not.toHaveBeenCalled()
+    })
+
+    it('lets an AAL2 session through', async () => {
+      state.jwtAal = 'aal2'
+
+      const response = await run('/api/invoices')
+
+      expect(response.status).toBe(200)
+    })
+
+    it.each(['error', 'throw'] as const)(
+      'fails closed when getClaims reports %s',
+      async (failure) => {
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+        state.claimsFailure = failure
+
+        const response = await run('/api/invoices')
+
+        expect(response.status).toBe(403)
+        expect(errorSpy).toHaveBeenCalled()
+        errorSpy.mockRestore()
+      },
+    )
+
+    it('fails closed when the verified claims carry no aal', async () => {
+      state.jwtAal = null
+
+      const response = await run('/api/invoices')
+
+      expect(response.status).toBe(403)
+    })
+
+    it("passes a user with nothing to step up to (enrolment stays the page gate's job)", async () => {
+      state.user = SIGNED_IN
+
+      expect((await run('/api/invoices')).status).toBe(200)
+
+      state.user = {
+        ...SIGNED_IN,
+        factors: [{ id: 'f2', status: 'unverified', factor_type: 'totp' }],
+      }
+
+      expect((await run('/api/invoices')).status).toBe(200)
+      expect(state.getAal).not.toHaveBeenCalled()
+    })
+
+    it('keeps the AAL1 escape hatches and the OAuth endpoints open', async () => {
+      for (const path of ['/api/account/delete', '/api/company/current', '/api/mcp-oauth/token']) {
+        expect((await run(path)).status).toBe(200)
+      }
+    })
+
+    it('skips Bearer-auth surfaces by path, and only with the header present', async () => {
+      const headers = { authorization: 'Bearer key' }
+
+      expect((await run('/api/v1/companies/c1/invoices', { headers })).status).toBe(200)
+      expect((await run('/api/extensions/ext/mcp-server/mcp', { headers })).status).toBe(200)
+      // A cookie session on a v1 path without the header is still a cookie session.
+      expect((await run('/api/v1/companies/c1/invoices')).status).toBe(403)
+      // A forged header on a cookie-authenticated route never disables the gate.
+      expect((await run('/api/invoices', { headers })).status).toBe(403)
+    })
+
+    it('does not gate BankID-linked users, nor anyone when MFA is off', async () => {
+      state.user = { ...MFA_USER, app_metadata: { bankid_linked: true } }
+      expect((await run('/api/invoices')).status).toBe(200)
+
+      state.user = MFA_USER
+      delete process.env.NEXT_PUBLIC_REQUIRE_MFA
+      expect((await run('/api/invoices')).status).toBe(200)
+    })
+
+    it('carries the rotated auth cookie on the 403', async () => {
+      state.cookieWrites = [
+        { name: 'sb-test-auth-token', value: 'rotated', options: { path: '/' } },
+      ]
+
+      const response = await run('/api/invoices')
+
+      expect(response.status).toBe(403)
+      expect(response.cookies.get('sb-test-auth-token')?.value).toBe('rotated')
     })
   })
 
@@ -1080,8 +1269,8 @@ describe('updateSession redirect destinations', () => {
 
   describe('MFA-disabled and self-hosted paths are unchanged', () => {
     it('does not redirect when NEXT_PUBLIC_REQUIRE_MFA is unset', async () => {
-      state.user = SIGNED_IN
-      state.aal = { currentLevel: 'aal1', nextLevel: 'aal2' }
+      state.user = MFA_USER
+      state.jwtAal = 'aal1'
 
       const response = await run('/settings/tax')
 
@@ -1091,9 +1280,8 @@ describe('updateSession redirect destinations', () => {
     it('does not redirect on self-hosted even with MFA required', async () => {
       process.env.NEXT_PUBLIC_REQUIRE_MFA = 'true'
       process.env.NEXT_PUBLIC_SELF_HOSTED = 'true'
-      state.user = SIGNED_IN
-      state.aal = { currentLevel: 'aal1', nextLevel: 'aal2' }
-      state.factors = { totp: [] }
+      state.user = MFA_USER
+      state.jwtAal = 'aal1'
 
       const response = await run('/settings/tax')
 
@@ -1102,8 +1290,8 @@ describe('updateSession redirect destinations', () => {
 
     it('does not redirect BankID-linked users, who are already 2FA', async () => {
       process.env.NEXT_PUBLIC_REQUIRE_MFA = 'true'
-      state.user = { id: 'user-1', app_metadata: { bankid_linked: true } }
-      state.aal = { currentLevel: 'aal1', nextLevel: 'aal2' }
+      state.user = { ...MFA_USER, app_metadata: { bankid_linked: true } }
+      state.jwtAal = 'aal1'
 
       const response = await run('/settings/tax')
 

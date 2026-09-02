@@ -57,6 +57,7 @@
  * payments it initiates. Subject to 7-year retention.
  */
 
+import { escapeXml } from '@/lib/xml/escape'
 import { roundOre } from '@/lib/money'
 import { splitDomesticBankAccount } from '@/lib/salary/payment/bank-account'
 import type { PaymentReference, SupplierPayee } from './supplier-payee'
@@ -343,15 +344,6 @@ function sanitizeText(value: string): string {
   let transliterated = ''
   for (const ch of value.normalize('NFC')) transliterated += TRANSLITERATIONS[ch] ?? ch
   return transliterated.replace(DISALLOWED_TEXT, '?')
-}
-
-function escapeXml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
 }
 
 function formatDecimal(amount: number): string {

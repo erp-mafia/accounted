@@ -18,6 +18,67 @@
 
 export const STORAGE_PROXY_ROUTE = '/api/storage'
 
+/**
+ * Content types a browser renders natively without a script context: PDF
+ * and the raster image formats the document archive accepts. These are the
+ * only types either document-serving route (the inline preview proxy and the
+ * signed-URL proxy below) hands to the browser as-is. Everything else that
+ * can reach the archive (text/html mail bodies, application/xhtml+xml
+ * iXBRL, Peppol application/xml and text/xml, image/svg+xml, application/json,
+ * unknown or legacy types) is active content when it lands on our origin:
+ * an uploader-controlled <script> inside it would run with the app origin's
+ * authority (stored XSS). Those types are served under OPAQUE_DOCUMENT_CSP.
+ */
+export const INLINE_SAFE_MIME_TYPES: ReadonlySet<string> = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'image/heic',
+  'image/heif',
+])
+
+/**
+ * Policy for every served document that is not natively inline-safe.
+ * `sandbox` (no tokens) makes the rendered document opaque-origin and
+ * script-free wherever it is opened, iframe or direct tab. The source
+ * directives block outbound requests on top of that: sandbox alone still
+ * loads remote images, so a tracking pixel in a mail body would notify the
+ * sender when the preview is opened. Inline styles and embedded data:/blob:
+ * images keep working, so HTML mail previews and XML views still render.
+ */
+export const OPAQUE_DOCUMENT_CSP =
+  "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:"
+
+/**
+ * Canonical (lower-case, parameter-free) form of `mimeType` when it is one
+ * of INLINE_SAFE_MIME_TYPES, else null. Legacy rows hold client-declared
+ * strings, so parameters and case are tolerated on the way in but never
+ * echoed back out.
+ */
+export function inlineSafeMimeType(mimeType: string | null | undefined): string | null {
+  if (!mimeType) return null
+  const essence = mimeType.split(';')[0]?.trim().toLowerCase() ?? ''
+  return INLINE_SAFE_MIME_TYPES.has(essence) ? essence : null
+}
+
+/**
+ * The documents-bucket object key behind a proxied download path
+ * (`sign/documents/<key>`, still percent-encoded), decoded so it can be
+ * matched against `document_attachments.storage_path`. Null for upload paths
+ * and anything else.
+ */
+export function documentKeyFromProxyPath(objectPath: string): string | null {
+  const prefix = 'sign/documents/'
+  if (!objectPath.startsWith(prefix)) return null
+  try {
+    return decodeURIComponent(objectPath.slice(prefix.length))
+  } catch {
+    return null
+  }
+}
+
 /** Upstream prefix under the Storage API that every signed object URL shares. */
 const UPSTREAM_OBJECT_PREFIX = '/storage/v1/object/'
 

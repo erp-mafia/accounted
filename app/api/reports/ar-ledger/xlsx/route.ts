@@ -9,6 +9,7 @@ import {
   dateColumn,
   integerColumn,
   xlsxFilename,
+  parseCellDate,
 } from '@/lib/reports/xlsx-export'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -33,12 +34,6 @@ interface InvoiceRow {
   outstanding_sek: number | null
   days_overdue: number
   currency: string
-}
-
-function toDate(s: string): Date | null {
-  if (!s) return null
-  const d = new Date(s)
-  return isNaN(d.getTime()) ? null : d
 }
 
 export const GET = withRouteContext('report.ar_ledger.xlsx', async (request, { supabase, companyId }) => {
@@ -70,8 +65,8 @@ export const GET = withRouteContext('report.ar_ledger.xlsx', async (request, { s
         invoiceRows.push({
           customer_name: e.customer_name,
           invoice_number: inv.invoice_number,
-          invoice_date: toDate(inv.invoice_date) ?? inv.invoice_date,
-          due_date: toDate(inv.due_date) ?? inv.due_date,
+          invoice_date: parseCellDate(inv.invoice_date) ?? inv.invoice_date,
+          due_date: parseCellDate(inv.due_date) ?? inv.due_date,
           total: inv.total,
           paid_amount: inv.paid_amount,
           outstanding: inv.outstanding,

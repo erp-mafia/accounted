@@ -38,3 +38,23 @@ export function pdfNumberText(text: string): string {
 export function pdfText(text: string): string {
   return text.replaceAll(UNICODE_MINUS, '-')
 }
+
+/**
+ * Two-decimal sv-SE amount for a react-pdf <Text>: the same Intl call as
+ * lib/utils formatAmount, run through pdfNumberText so a negative årets
+ * resultat or a credit note never prints unsigned (issue #1982).
+ */
+export function pdfAmount(amount: number): string {
+  return pdfNumberText(
+    new Intl.NumberFormat('sv-SE', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount),
+  )
+}
+
+/** ISO date string as sv-SE (YYYY-MM-DD in the server timezone); empty input stays empty. */
+export function formatDateSv(iso: string): string {
+  if (!iso) return ''
+  return new Date(iso).toLocaleDateString('sv-SE')
+}

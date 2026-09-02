@@ -94,14 +94,7 @@ const STATE_FOR_QUESTION: Record<QuestionType, WhatsAppConversation['state']> = 
   resend: 'awaiting_resend',
 }
 
-// Injectable sleep so tests never wait on real debounce windows.
-let sleepFn: (ms: number) => Promise<void> = (ms) =>
-  new Promise((resolve) => setTimeout(resolve, ms))
-
-/** Test-only: replace (or restore) the debounce sleep implementation. */
-export function __setSleepForTests(fn: ((ms: number) => Promise<void>) | null): void {
-  sleepFn = fn ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
-}
+const sleepFn = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 function fallbackFilename(mime: string): string {
   const ext = EXTENSION_FOR_MIME[mime] ?? 'bin'

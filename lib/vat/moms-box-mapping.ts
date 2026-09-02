@@ -201,15 +201,3 @@ export function getBoxForAccount(accountNumber: string): MomsBox | undefined {
 export function getBoxLabel(box: MomsBox): string {
   return BOX_LABELS[box]
 }
-
-/** Boxes that represent VAT-exempt export/EU sales (no output VAT) */
-export const EXPORT_BOXES: MomsBox[] = ['35', '36', '38', '39', '40']
-
-/** Boxes that represent taxable domestic sales (have output VAT) */
-export const DOMESTIC_BOXES: MomsBox[] = ['05', '06', '07', '08']
-
-/** Boxes that represent output VAT */
-export const OUTPUT_VAT_BOXES: MomsBox[] = ['10', '11', '12']
-
-/** Boxes that represent input VAT */
-export const INPUT_VAT_BOXES: MomsBox[] = ['48']

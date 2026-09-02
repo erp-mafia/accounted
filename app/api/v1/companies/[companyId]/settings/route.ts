@@ -27,6 +27,7 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { readV1JsonBody } from '@/lib/api/v1/body'
 import { InvoiceEmailTextsSchema, UpdateSettingsSchema } from '@/lib/api/schemas'
 import { UpdateCompanySettingsParamsSchema } from '@/lib/pending-operations/schemas/company-settings'
 
@@ -195,15 +196,9 @@ registerEndpoint({
 export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'companies.settings.update',
   async (request, ctx) => {
-    let rawBody: unknown
-    try {
-      rawBody = await request.json()
-    } catch {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'body', message: 'Body is not valid JSON.' },
-      })
-    }
+    const rawBodyResult = await readV1JsonBody(request, ctx)
+    if (!rawBodyResult.ok) return rawBodyResult.response
+    const rawBody = rawBodyResult.body
 
     if (rawBody === null || typeof rawBody !== 'object' || Array.isArray(rawBody)) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {

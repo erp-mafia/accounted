@@ -6,7 +6,6 @@ import type {
   JournalDto, AccountingEntryDto,
   AccountingAccountDto, AccountType,
   CompanyInformationDto,
-  PaymentDto,
   AmountType, PartyDto,
 } from '../dto';
 import { readNumber, resolveVatTriple, lineVatFromPercent } from '../amounts';
@@ -376,18 +375,6 @@ export function mapFortnoxToCompanyInformation(raw: Record<string, unknown>): Co
       telephone: raw['Phone1'] as string | undefined,
       website: raw['WWW'] as string | undefined,
     },
-    _raw: raw,
-  };
-}
-
-export function mapFortnoxToPayment(raw: Record<string, unknown>, invoiceId?: string): PaymentDto {
-  return {
-    id: String(raw['Number'] ?? ''),
-    paymentNumber: String(raw['Number'] ?? ''),
-    invoiceId: invoiceId ?? String(raw['InvoiceNumber'] ?? ''),
-    paymentDate: (raw['PaymentDate'] as string) ?? '',
-    amount: amount(raw['Amount'] as number ?? 0, (raw['Currency'] as string) ?? 'SEK'),
-    reference: raw['Reference'] as string | undefined,
     _raw: raw,
   };
 }

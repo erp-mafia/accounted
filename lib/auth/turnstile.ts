@@ -8,8 +8,6 @@
  * fail open as "disabled" rather than render a broken widget.
  */
 
-export const TURNSTILE_SITE_KEY_ENV = 'NEXT_PUBLIC_TURNSTILE_SITE_KEY'
-
 const UNCONFIGURED_SITE_KEYS = new Set([
   '',
   '__NEXT_PUBLIC_TURNSTILE_SITE_KEY__',

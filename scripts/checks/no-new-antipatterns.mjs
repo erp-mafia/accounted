@@ -547,8 +547,6 @@ function findFoldedPublicFlags() {
 // Files whose whitespace-nowrap cells are fixed-width numeric/tabular columns
 // living inside their OWN overflow-x-auto scroll container, so they cannot
 // widen the dialog itself:
-// - MockDataImportDialog: CSV preview built on the Table primitive, which
-//   self-wraps in overflow-auto (components/ui/table.tsx).
 // - PaymentFileDialog: payment-line table wrapped in an overflow-x-auto div.
 // 11. direct-ai-client. Every model call goes through the job-shaped service
 // in lib/ai (getAiService): that is what lets hosted stay on Bedrock while a
@@ -596,7 +594,6 @@ function findDirectAiClients() {
 }
 
 const DIALOG_NOWRAP_ALLOWED = new Set([
-  'components/extensions/shared/MockDataImportDialog.tsx',
   'components/supplier-invoices/PaymentFileDialog.tsx',
 ])
 

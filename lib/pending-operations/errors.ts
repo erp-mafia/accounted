@@ -29,7 +29,3 @@ export class PartialCommitError extends Error {
     this.cause = cause
   }
 }
-
-export function isPartialCommitError(err: unknown): err is PartialCommitError {
-  return err instanceof PartialCommitError
-}

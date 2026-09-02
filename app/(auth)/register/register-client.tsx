@@ -246,6 +246,15 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
         return
       }
 
+      // Since 20260902101000 a BankID signup confirms the typed e-mail before
+      // the identity is linked: no session is minted here, the user follows
+      // the mailed link. Same inbox screen as the e-mail signup path.
+      if (json.data?.status === 'confirmation_sent') {
+        setEmail(json.data.email ?? emailValue)
+        setIsRegistered(true)
+        return
+      }
+
       // Exchange token hash for Supabase session
       const { error } = await supabase.auth.verifyOtp({
         token_hash: json.data.tokenHash,

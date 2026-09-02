@@ -27,6 +27,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getEmailService } from '@/lib/email/service'
 import { createLogger } from '@/lib/logger'
 import { resolveMemberEmail } from '@/lib/notifications/member-email'
+import { escapeHtml } from '@/lib/email/user-text'
 
 const log = createLogger('skv-kvittens-notification')
 
@@ -173,11 +174,3 @@ async function releaseClaim(
   }
 }
 
-function escapeHtml(input: string): string {
-  return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
