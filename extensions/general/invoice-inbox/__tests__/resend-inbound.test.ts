@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { extractLocalPartForDomain, parseRecipients } from '@/extensions/general/invoice-inbox/lib/resend-inbound'
+import {
+  extractLocalPartForDomain,
+  kindHintFromTag,
+  parseRecipients,
+} from '@/extensions/general/invoice-inbox/lib/resend-inbound'
 
 describe('extractLocalPartForDomain', () => {
   it('returns the local part when a recipient matches the domain', () => {
@@ -7,7 +11,7 @@ describe('extractLocalPartForDomain', () => {
       ['acme-ab-x7f2@arcim.io', 'billing@acme.se'],
       'arcim.io'
     )
-    expect(result).toBe('acme-ab-x7f2')
+    expect(result).toEqual({ localPart: 'acme-ab-x7f2', tag: null })
   })
 
   it('lowercases the local part and matches domain case-insensitively', () => {
@@ -15,7 +19,39 @@ describe('extractLocalPartForDomain', () => {
       ['ACME-AB-X7F2@ARCIM.IO'],
       'arcim.io'
     )
-    expect(result).toBe('acme-ab-x7f2')
+    expect(result).toEqual({ localPart: 'acme-ab-x7f2', tag: null })
+  })
+
+  it('splits a plus-address into local part and tag', () => {
+    expect(extractLocalPartForDomain(['acme-ab-x7f2+lev@arcim.io'], 'arcim.io')).toEqual({
+      localPart: 'acme-ab-x7f2',
+      tag: 'lev',
+    })
+    expect(extractLocalPartForDomain(['acme-ab-x7f2+ver@arcim.io'], 'arcim.io')).toEqual({
+      localPart: 'acme-ab-x7f2',
+      tag: 'ver',
+    })
+  })
+
+  it('lowercases the tag and splits at the first plus only', () => {
+    expect(extractLocalPartForDomain(['Acme-AB-x7f2+LEV+extra@arcim.io'], 'arcim.io')).toEqual({
+      localPart: 'acme-ab-x7f2',
+      tag: 'lev+extra',
+    })
+  })
+
+  it('treats an empty tag as no tag', () => {
+    expect(extractLocalPartForDomain(['acme-ab-x7f2+@arcim.io'], 'arcim.io')).toEqual({
+      localPart: 'acme-ab-x7f2',
+      tag: null,
+    })
+  })
+
+  it('does not read a plus in a foreign-domain recipient', () => {
+    expect(extractLocalPartForDomain(['x+lev@acme.se', 'acme-ab-x7f2@arcim.io'], 'arcim.io')).toEqual({
+      localPart: 'acme-ab-x7f2',
+      tag: null,
+    })
   })
 
   it('returns null when no recipient matches', () => {
@@ -39,7 +75,7 @@ describe('extractLocalPartForDomain', () => {
       ['first-abcd@arcim.io', 'second-efgh@arcim.io'],
       'arcim.io'
     )
-    expect(result).toBe('first-abcd')
+    expect(result?.localPart).toBe('first-abcd')
   })
 
   it('trims whitespace inside candidate addresses', () => {
@@ -47,7 +83,22 @@ describe('extractLocalPartForDomain', () => {
       ['  acme-xxx@arcim.io  '],
       'arcim.io'
     )
-    expect(result).toBe('acme-xxx')
+    expect(result?.localPart).toBe('acme-xxx')
+  })
+})
+
+describe('kindHintFromTag', () => {
+  it('maps the two documented tags', () => {
+    expect(kindHintFromTag('lev')).toBe('supplier_invoice')
+    expect(kindHintFromTag('ver')).toBe('receipt')
+  })
+
+  it('returns null for unknown, empty or missing tags', () => {
+    expect(kindHintFromTag('faktura')).toBeNull()
+    expect(kindHintFromTag('lev+extra')).toBeNull()
+    expect(kindHintFromTag('')).toBeNull()
+    expect(kindHintFromTag(null)).toBeNull()
+    expect(kindHintFromTag(undefined)).toBeNull()
   })
 })
 
