@@ -1157,11 +1157,11 @@ export default function ExpenseClaimsPage() {
         <DialogContent
           className={
             receiptDoc && showReceipt
-              ? 'max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto'
+              ? 'flex max-h-[88vh] max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] flex-col overflow-y-hidden'
               : 'sm:max-w-xl'
           }
         >
-          <DialogHeader>
+          <DialogHeader className="shrink-0">
             <DialogTitle>
               {t('new_claim')}
               <span className="ml-3 text-sm font-normal text-muted-foreground">
@@ -1174,7 +1174,7 @@ export default function ExpenseClaimsPage() {
           </DialogHeader>
 
           {receiptDoc && (
-            <div className="flex justify-end">
+            <div className="flex shrink-0 justify-end">
               <Button type="button" variant="ghost" size="sm" onClick={() => setShowReceipt((v) => !v)}>
                 <FileText className="mr-1.5 h-3.5 w-3.5" />
                 {showReceipt ? t('hide_receipt') : t('show_receipt')}
@@ -1185,12 +1185,12 @@ export default function ExpenseClaimsPage() {
           <div
             className={
               receiptDoc && showReceipt
-                ? 'grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]'
+                ? 'grid min-h-0 flex-1 grid-cols-1 gap-6 overflow-y-auto lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]'
                 : undefined
             }
           >
             {receiptDoc && showReceipt && (
-              <div className="flex h-[45vh] flex-col lg:sticky lg:top-0 lg:h-[72vh] lg:self-start">
+              <div className="flex h-[40vh] flex-col lg:sticky lg:top-0 lg:h-[58vh] lg:self-start">
                 <DocumentViewerPane
                   documentId={receiptDoc.id}
                   fileName={receiptDoc.fileName}
@@ -1741,7 +1741,7 @@ export default function ExpenseClaimsPage() {
             </div>
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="shrink-0">
             <Button type="button" variant="outline" onClick={resetCreate} disabled={submitting}>
               {t('form_cancel')}
             </Button>
