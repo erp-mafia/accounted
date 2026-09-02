@@ -63,8 +63,28 @@ describe('expense_claims RLS', () => {
     ).rejects.toThrow(/row-level security/)
   })
 
-  it('members cannot write into another company', async () => {
+  it('viewers cannot update or delete claims', async () => {
     const { userId, companyId } = await seedCompany()
+    const claimId = await insertClaim(companyId, userId)
+    const viewer = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: viewer, role: 'viewer' })
+
+    // RLS filters the rows out of UPDATE/DELETE scope: 0 rows affected.
+    const upd = await withUserContext(viewer, (client) =>
+      client.query(`UPDATE public.expense_claims SET description = 'x' WHERE id = $1`, [claimId]),
+    )
+    expect(upd.rowCount).toBe(0)
+    const der = await withUserContext(viewer, (client) =>
+      client.query(`DELETE FROM public.expense_claims WHERE id = $1`, [claimId]),
+    )
+    expect(der.rowCount).toBe(0)
+
+    const still = await getPool().query(`SELECT description FROM public.expense_claims WHERE id = $1`, [claimId])
+    expect(still.rows[0].description).toBe('USB-hubb')
+  })
+
+  it('members cannot write into another company', async () => {
+    const { userId } = await seedCompany()
     const other = await seedCompany()
 
     await expect(

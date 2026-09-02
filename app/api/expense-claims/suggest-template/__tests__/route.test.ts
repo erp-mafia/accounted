@@ -27,6 +27,12 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
+const requireCapabilityMock = vi.fn()
+vi.mock('@/lib/entitlements/has-capability', () => ({
+  requireCapability: (...args: unknown[]) => requireCapabilityMock(...args),
+}))
+vi.mock('@/lib/entitlements/keys', () => ({ CAPABILITY: { ai: 'ai' } }))
+
 const generateStructuredMock = vi.fn()
 const getAiStatusMock = vi.fn()
 vi.mock('@/lib/ai', () => ({
@@ -55,6 +61,7 @@ describe('/api/expense-claims/suggest-template', () => {
     reset()
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
     requireWriteMock.mockResolvedValue({ ok: true })
+    requireCapabilityMock.mockResolvedValue(null)
     getAiStatusMock.mockReturnValue({ configured: true })
     generateStructuredMock.mockResolvedValue({ value: { template_ids: ['static:software_saas'] } })
   })
@@ -78,6 +85,15 @@ describe('/api/expense-claims/suggest-template', () => {
   it('returns 400 when candidates are empty', async () => {
     const response = await POST(post({ description: 'Supabase', candidates: [] }), {} as never)
     expect(response.status).toBe(400)
+  })
+
+  it('returns the capability response when the AI capability is blocked', async () => {
+    requireCapabilityMock.mockResolvedValue(
+      NextResponse.json({ error: 'AI-funktioner ingår inte i din plan.' }, { status: 402 }),
+    )
+    const response = await POST(post(validBody), {} as never)
+    expect(response.status).toBe(402)
+    expect(generateStructuredMock).not.toHaveBeenCalled()
   })
 
   it('returns empty ids without calling the AI when it is unavailable', async () => {

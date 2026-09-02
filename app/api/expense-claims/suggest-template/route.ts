@@ -4,6 +4,8 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { getAiService, getAiStatus } from '@/lib/ai'
+import { requireCapability } from '@/lib/entitlements/has-capability'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 
 ensureInitialized()
 
@@ -31,9 +33,12 @@ const SuggestTemplateSchema = z.object({
 
 export const POST = withRouteContext(
   'expense_claims.suggest_template',
-  async (request, { log }) => {
+  async (request, { supabase, companyId, log }) => {
     const validation = await validateBody(request, SuggestTemplateSchema)
     if (!validation.success) return validation.response
+
+    const capBlocked = await requireCapability(supabase, companyId, CAPABILITY.ai)
+    if (capBlocked) return capBlocked
 
     const { description, amount, candidates } = validation.data
     if (!getAiStatus().configured) {

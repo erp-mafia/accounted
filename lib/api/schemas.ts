@@ -3553,7 +3553,6 @@ export const ByraBrandUpdateSchema = z.object({
 
 // ============ Expense claims (utlägg) ============
 
-const expenseLiabilityAccount = z.enum(['2893', '2820', '2018', '2890'])
 const expenseCurrency = z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'])
 
 export const CreateExpenseClaimSchema = z
@@ -3566,8 +3565,9 @@ export const CreateExpenseClaimSchema = z
     vat_amount: z.number().nonnegative().default(0),
     currency: expenseCurrency.default('SEK'),
     exchange_rate: z.number().positive().optional(),
-    expense_account: accountNumberSchema,
-    liability_account: expenseLiabilityAccount.optional(),
+    expense_account: accountNumberSchema.refine((a) => /^[4-8]/.test(a), {
+      message: 'Kostnadskontot måste vara ett resultatkonto (klass 4-8)',
+    }),
     employee_id: uuid.optional().nullable(),
     claimant_name: z.string().trim().max(200).optional(),
     document_id: uuid.optional().nullable(),

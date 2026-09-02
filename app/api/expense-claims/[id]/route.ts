@@ -13,6 +13,10 @@ const DELETE_ERROR_MESSAGES: Record<string, { message: string; status: number }>
     message: 'Utlägget är redan utbetalt och kan inte tas bort.',
     status: 409,
   },
+  UNLINKED: {
+    message: 'Utlägget saknar koppling till sitt verifikat och kan inte tas bort automatiskt.',
+    status: 409,
+  },
   DELETE_FAILED: { message: 'Utlägget kunde inte tas bort.', status: 500 },
 }
 
@@ -41,7 +45,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
       log.error('failed to delete expense claim', err as Error)
       return NextResponse.json(
         { error: getErrorMessage(err, { context: 'journal_entry' }) },
-        { status: 400 },
+        { status: 500 },
       )
     }
   },

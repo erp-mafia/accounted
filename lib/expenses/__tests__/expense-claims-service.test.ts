@@ -38,7 +38,36 @@ describe('registerExpenseClaim', () => {
     createJournalEntryMock.mockResolvedValue({ id: 'je-1' })
   })
 
+  it('books an enskild firma owner claim on 2018 (egen insättning)', async () => {
+    enqueue({ data: { entity_type: 'enskild_firma' } }) // companies entity_type
+    enqueue({ data: { id: 'claim-ef', amount_sek: 500, vat_sek: 100 } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'USB-hubb',
+      expense_date: '2026-09-01',
+      amount: 500,
+      vat_amount: 100,
+      currency: 'SEK',
+      expense_account: '5410',
+      claimant_name: 'Joakim Hansson',
+    })
+
+    expect(result.ok).toBe(true)
+    const input = createJournalEntryMock.mock.calls[0][3]
+    expect(input.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ account_number: '2018', credit_amount: 500 }),
+      ]),
+    )
+    const insertCall = findCall('expense_claims', 'insert')
+    expect(insertCall?.[0]).toEqual(
+      expect.objectContaining({ liability_account: '2018' }),
+    )
+  })
+
   it('books an SEK owner claim: cost + VAT debit, liability credit', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
     enqueue({ data: { id: 'claim-1', amount_sek: 500, vat_sek: 100 } }) // insert
     enqueue({ data: null }) // journal_entry_id update
 
@@ -63,6 +92,7 @@ describe('registerExpenseClaim', () => {
   })
 
   it('defaults an employee claim to liability 2820', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
     enqueue({ data: { id: 'emp-1', first_name: 'Sofie', last_name: 'Persson' } }) // employee lookup
     enqueue({ data: { id: 'claim-1' } }) // insert
     enqueue({ data: null }) // update
@@ -85,6 +115,7 @@ describe('registerExpenseClaim', () => {
   })
 
   it('converts foreign currency at the explicit rate, VAT included', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
     enqueue({ data: { id: 'claim-1' } }) // insert
     enqueue({ data: null }) // update
 
@@ -108,6 +139,7 @@ describe('registerExpenseClaim', () => {
   })
 
   it('fails with RATE_UNAVAILABLE when Riksbanken has no rate', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
     fetchExchangeRateMock.mockResolvedValue(null)
 
     const result = await registerExpenseClaim(sb, COMPANY, USER, {
@@ -139,6 +171,7 @@ describe('registerExpenseClaim', () => {
   })
 
   it('requires a claimant when no employee is given', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
     const result = await registerExpenseClaim(sb, COMPANY, USER, {
       description: 'x',
       expense_date: '2026-09-01',
@@ -151,6 +184,7 @@ describe('registerExpenseClaim', () => {
   })
 
   it('returns EMPLOYEE_NOT_FOUND for an employee outside the company', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
     enqueue({ data: null }) // employee lookup
 
     const result = await registerExpenseClaim(sb, COMPANY, USER, {
@@ -166,6 +200,7 @@ describe('registerExpenseClaim', () => {
   })
 
   it('links an unanchored receipt document to the new verifikat', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
     enqueue({ data: { id: 'claim-1' } }) // insert
     enqueue({ data: null }) // journal_entry_id update
     enqueue({ data: { journal_entry_id: null, user_id: 'user-1', storage_path: 'p', file_name: 'kvitto.pdf', file_size_bytes: 1, mime_type: 'application/pdf', sha256_hash: 'x', uploaded_by: 'user-1', upload_source: 'file_upload' } }) // document lookup
@@ -188,6 +223,7 @@ describe('registerExpenseClaim', () => {
   })
 
   it('copies an already-anchored receipt instead of re-pointing it (BFL immutability)', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
     enqueue({ data: { id: 'claim-1' } }) // insert
     enqueue({ data: null }) // journal_entry_id update
     enqueue({ data: { journal_entry_id: 'je-old', user_id: 'user-1', storage_path: 'receipts/plaud.pdf', file_name: 'plaud.pdf', file_size_bytes: 42, mime_type: 'application/pdf', sha256_hash: 'abc', uploaded_by: 'user-1', upload_source: 'file_upload' } }) // document lookup
@@ -216,6 +252,7 @@ describe('registerExpenseClaim', () => {
   })
 
   it('books custom lines (reverse charge) converted at the claim rate', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
     enqueue({ data: { id: 'claim-1' } }) // insert
     enqueue({ data: null }) // update
 
@@ -249,6 +286,7 @@ describe('registerExpenseClaim', () => {
   })
 
   it('rejects unbalanced custom lines before touching the ledger', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
     const result = await registerExpenseClaim(sb, COMPANY, USER, {
       description: 'x',
       expense_date: '2026-09-01',
@@ -267,6 +305,7 @@ describe('registerExpenseClaim', () => {
   })
 
   it('rejects custom lines whose liability credit does not match the gross', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
     const result = await registerExpenseClaim(sb, COMPANY, USER, {
       description: 'x',
       expense_date: '2026-09-01',
@@ -284,6 +323,7 @@ describe('registerExpenseClaim', () => {
   })
 
   it('removes the claim row again when the booking throws', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
     enqueue({ data: { id: 'claim-1' } }) // insert
     enqueue({ data: null }) // delete (cleanup)
     createJournalEntryMock.mockRejectedValue(new Error('period locked'))

@@ -61,7 +61,7 @@ export const POST = withRouteContext(
       log.error('failed to create expense payout', err as Error)
       return NextResponse.json(
         { error: getErrorMessage(err, { context: 'journal_entry' }) },
-        { status: 400 },
+        { status: 500 },
       )
     }
   },

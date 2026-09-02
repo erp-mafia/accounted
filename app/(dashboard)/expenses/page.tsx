@@ -37,6 +37,8 @@ import type { BookingTemplateWithUsage } from '@/lib/reference-data/fetchers'
 import { TemplateForm } from '@/components/settings/TemplateForm'
 import { applyTemplate, deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
 import { BOOKING_TEMPLATES, findMatchingTemplates } from '@/lib/bookkeeping/booking-templates'
+import { computeProposalLines } from '@/lib/bookkeeping/proposal-lines'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { roundOre, sumOre } from '@/lib/money'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { useToast } from '@/components/ui/use-toast'
@@ -109,6 +111,17 @@ interface BookingRow {
 let bookingRowKey = 0
 const nextRowKey = () => ++bookingRowKey
 
+const EXCLUDED_TEMPLATE_CATEGORIES = ['salary', 'year_end', 'vat', 'tax_account', 'private_transfer']
+/** Expense-shaped library template: every business line is a debit and no
+ *  2614/2645 legs: the country selector owns the reverse-charge variant. */
+const isExpenseLibraryTemplate = (tpl: BookingTemplateWithUsage) => {
+  const business = tpl.lines.filter((l) => l.type === 'business')
+  if (business.length === 0) return false
+  if (!business.every((l) => l.side === 'debit')) return false
+  if (tpl.lines.some((l) => l.account === '2614' || l.account === '2645')) return false
+  return true
+}
+
 const CURRENCIES = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'] as const
 const UPLOAD_ACCEPT = '.pdf,.jpg,.jpeg,.png,.webp,.heic'
 /** Deferred inbox extraction usually lands within ~20 s; stop polling after this. */
@@ -141,8 +154,10 @@ export default function ExpenseClaimsPage() {
   const [employees, setEmployees] = useState<EmployeeOption[]>([])
   const { accounts } = useAccounts()
   const [inboxOptions, setInboxOptions] = useState<InboxOption[]>([])
+  const [inboxLoaded, setInboxLoaded] = useState(false)
   const [payoutBatches, setPayoutBatches] = useState<PayoutBatch[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [statusFilter, setStatusFilter] = useState<'all' | 'registered' | 'paid'>('all')
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
@@ -163,6 +178,7 @@ export default function ExpenseClaimsPage() {
   // time. Seller country + cost account generate them, OR an applied
   // template owns them, OR a manual edit freezes them into `bookingRows`.
   const [sellerCountry, setSellerCountry] = useState<SellerCountry>('se')
+  const [reverseCharge, setReverseCharge] = useState(false)
   const [bookingMode, setBookingMode] = useState<'choose' | 'book'>('choose')
   const { templates } = useBookingTemplates()
   const [templateSearch, setTemplateSearch] = useState('')
@@ -192,8 +208,22 @@ export default function ExpenseClaimsPage() {
       const res = await fetch('/api/expense-claims')
       if (res.ok) {
         const { data } = await res.json()
-        setClaims(data || [])
+        const rows: ExpenseClaim[] = data || []
+        setClaims(rows)
+        setLoadError(false)
+        // Prune ids that no longer exist or are no longer payable, so a
+        // payout request never names a claim deleted or paid in another tab.
+        setSelected((prev) => {
+          const next = new Set(
+            [...prev].filter((id) => rows.some((r) => r.id === id && r.status === 'registered')),
+          )
+          return next.size === prev.size ? prev : next
+        })
+      } else {
+        setLoadError(true)
       }
+    } catch {
+      setLoadError(true)
     } finally {
       setLoading(false)
     }
@@ -228,6 +258,8 @@ export default function ExpenseClaimsPage() {
       )
     } catch {
       setInboxOptions([])
+    } finally {
+      setInboxLoaded(true)
     }
   }, [])
 
@@ -293,48 +325,51 @@ export default function ExpenseClaimsPage() {
     new Set(selectedClaims.map((c) => c.employee_id ?? OWNER_VALUE)).size === 1 &&
     new Set(selectedClaims.map((c) => c.liability_account)).size === 1
 
-  const liabilityAccount = claimant === OWNER_VALUE ? '2893' : '2820'
+  // Entity type drives the owner liability account (AB creditor vs enskild
+  // firma egen insättning); the server resolves the same way and is the
+  // authority. Outside a provider we fall back to AB's 2893.
+  const entityType = useCompanyOptional()?.company?.entity_type ?? null
+  const ownerLiability = entityType === 'enskild_firma' ? '2018' : '2893'
+  const liabilityAccount = claimant === OWNER_VALUE ? ownerLiability : '2820'
   const parsedAmount = parseFloat(amount) || 0
   const parsedVat = parseFloat(vatAmount) || 0
   const netAmount = Math.max(0, parsedAmount - parsedVat)
 
-  // Seller country resolves the VAT mechanics (the Bokio model): Sweden
-  // books the receipt VAT on 2641; EU / outside EU books the gross as
-  // reverse-charge basis on the ruta-bearing account with the 2614/2645 pair.
+  // Seller country resolves the VAT mechanics: Sweden books the receipt VAT
+  // on 2641. Foreign sellers default to gross-as-cost: hotel, restaurant,
+  // taxi and the like are taxed where performed (ML 6 kap.), the foreign VAT
+  // is not deductible and no omvänd skattskyldighet applies. Reverse charge
+  // (goods, services under huvudregeln like SaaS) is an explicit opt-in and
+  // rides computeProposalLines, the client mirror of the engine's builder.
   const generatedRows = useMemo<BookingRow[]>(() => {
     if (sellerCountry === 'se') {
       return [
-        { key: nextRowKey(), account: expenseAccount, debit: netAmount.toFixed(2), credit: '' },
+        { key: -1, account: expenseAccount, debit: netAmount.toFixed(2), credit: '' },
         ...(parsedVat > 0
-          ? [{ key: nextRowKey(), account: '2641', debit: parsedVat.toFixed(2), credit: '' }]
+          ? [{ key: -2, account: '2641', debit: parsedVat.toFixed(2), credit: '' }]
           : []),
       ]
     }
-    // The engine's house pattern (same as supplier invoices and the
-    // transactions flow): the cost stays on the chosen cost account, the
-    // fiktiv-moms pair books 2645/2614, and the basbelopp pair (45xx debet /
-    // 4598 kredit) feeds ruta 21/22 while netting to zero in the P&L. When
-    // the chosen account already IS a basis account the pair is skipped.
-    const isBasisCost = /^4[45]\d{2}$/.test(expenseAccount)
-    const basisAccount = isBasisCost
-      ? expenseAccount
-      : sellerCountry === 'eu'
-        ? '4535'
-        : '4531'
-    const rcRate = /^45(36|32)/.test(basisAccount) ? 0.12 : /^45(37|33)/.test(basisAccount) ? 0.06 : 0.25
-    const rc = roundOre(parsedAmount * rcRate)
-    return [
-      { key: nextRowKey(), account: expenseAccount, debit: parsedAmount.toFixed(2), credit: '' },
-      ...(isBasisCost
-        ? []
-        : [
-            { key: nextRowKey(), account: basisAccount, debit: parsedAmount.toFixed(2), credit: '' },
-            { key: nextRowKey(), account: '4598', debit: '', credit: parsedAmount.toFixed(2) },
-          ]),
-      { key: nextRowKey(), account: '2645', debit: rc.toFixed(2), credit: '' },
-      { key: nextRowKey(), account: '2614', debit: '', credit: rc.toFixed(2) },
-    ]
-  }, [sellerCountry, expenseAccount, netAmount, parsedAmount, parsedVat])
+    if (!reverseCharge) {
+      return [
+        { key: -1, account: expenseAccount, debit: parsedAmount.toFixed(2), credit: '' },
+      ]
+    }
+    return computeProposalLines({
+      amount: -parsedAmount,
+      templateDebitAccount: expenseAccount,
+      templateCreditAccount: liabilityAccount,
+      templateVatTreatment: 'reverse_charge',
+      templateSupplierType: sellerCountry === 'eu' ? 'eu_business' : 'non_eu_business',
+    })
+      .filter((line) => !line.settlement)
+      .map((line, i) => ({
+        key: -(i + 1),
+        account: line.account,
+        debit: line.side === 'debet' ? line.amount.toFixed(2) : '',
+        credit: line.side === 'kredit' ? line.amount.toFixed(2) : '',
+      }))
+  }, [sellerCountry, reverseCharge, expenseAccount, liabilityAccount, netAmount, parsedAmount, parsedVat])
 
   const editorRows = bookingRows ?? generatedRows
   const rowSum = (side: 'debit' | 'credit') => sumOre(editorRows.map((r) => parseFloat(r[side]) || 0))
@@ -347,16 +382,6 @@ export default function ExpenseClaimsPage() {
     return ACCOUNT_NUMBER_RE.test(r.account) && (d > 0) !== (c > 0)
   })
 
-  const EXCLUDED_TEMPLATE_CATEGORIES = ['salary', 'year_end', 'vat', 'tax_account', 'private_transfer']
-  /** Expense-shaped library template: every business line is a debit and no
-   *  2614/2645 legs: the country selector owns the reverse-charge variant. */
-  const isExpenseLibraryTemplate = (tpl: BookingTemplateWithUsage) => {
-    const business = tpl.lines.filter((l) => l.type === 'business')
-    if (business.length === 0) return false
-    if (!business.every((l) => l.side === 'debit')) return false
-    if (tpl.lines.some((l) => l.account === '2614' || l.account === '2645')) return false
-    return true
-  }
   interface ChooserItem {
     id: string
     name: string
@@ -395,7 +420,7 @@ export default function ExpenseClaimsPage() {
       staticAccount: tpl.debit_account_ab ?? tpl.debit_account,
     }))
     return [...libraryItems, ...staticItems]
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [templates])
 
   // Recommendations ride the categorization matcher against the step-1
@@ -530,6 +555,7 @@ export default function ExpenseClaimsPage() {
 
   const applyCountry = (country: SellerCountry) => {
     setSellerCountry(country)
+    setReverseCharge(false)
     setBookingRows(null)
   }
 
@@ -603,7 +629,9 @@ export default function ExpenseClaimsPage() {
     setInboxChoice(NO_RECEIPT_VALUE)
     setUpload({ phase: 'idle' })
     setShowReceipt(true)
+    setExpenseDate(new Date().toISOString().slice(0, 10))
     setSellerCountry('se')
+    setReverseCharge(false)
     setBookingMode('choose')
     setTemplateSearch('')
     setAppliedTemplate(null)
@@ -651,7 +679,7 @@ export default function ExpenseClaimsPage() {
     if (appliedDeepLink.current) return
     if (searchParams.get('new') !== '1') return
     const wanted = searchParams.get('inbox_item')
-    if (wanted && inboxOptions.length === 0) return // wait for the inbox load
+    if (wanted && !inboxLoaded) return // wait for the inbox answer (may be empty)
     appliedDeepLink.current = true
     setCreating(true)
     if (wanted) {
@@ -662,7 +690,7 @@ export default function ExpenseClaimsPage() {
       }
     }
     router.replace('/expenses')
-  }, [searchParams, inboxOptions, applyExtraction, router])
+  }, [searchParams, inboxOptions, inboxLoaded, applyExtraction, router])
 
   const startUpload = useCallback(
     async (file: File) => {
@@ -862,7 +890,7 @@ export default function ExpenseClaimsPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          claim_ids: [...selected],
+          claim_ids: selectedClaims.map((c) => c.id),
           payout_date: payoutDate,
           cash_account: cashAccount,
         }),
@@ -889,10 +917,7 @@ export default function ExpenseClaimsPage() {
   }
 
   const stepOneValid =
-    description.trim().length > 0 &&
-    parsedAmount > 0 &&
-    parsedVat < parsedAmount &&
-    (claimant !== OWNER_VALUE || true)
+    description.trim().length > 0 && parsedAmount > 0 && parsedVat < parsedAmount
 
   return (
     <div className="space-y-8">
@@ -965,6 +990,13 @@ export default function ExpenseClaimsPage() {
           <Skeleton className="h-4 w-full" />
           <Skeleton className="h-4 w-5/6" />
           <Skeleton className="h-4 w-2/3" />
+        </div>
+      ) : loadError ? (
+        <div className="space-y-3 rounded-lg border border-border px-4 py-6 text-center text-sm text-muted-foreground">
+          <p>{t('load_failed')}</p>
+          <Button type="button" variant="outline" size="sm" onClick={() => load()}>
+            {t('load_retry')}
+          </Button>
         </div>
       ) : visibleClaims.length === 0 ? (
         <EmptyState
@@ -1300,7 +1332,7 @@ export default function ExpenseClaimsPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value={OWNER_VALUE}>{t('form_claimant_owner')}</SelectItem>
+                      <SelectItem value={OWNER_VALUE}>{t('form_claimant_owner', { account: ownerLiability })}</SelectItem>
                       {employees.map((e) => (
                         <SelectItem key={e.id} value={e.id}>
                           {e.first_name} {e.last_name}
@@ -1517,9 +1549,25 @@ export default function ExpenseClaimsPage() {
                     </div>
                   )}
                   {bookingRows === null && sellerCountry !== 'se' && (
-                    <p className="text-xs text-muted-foreground">
-                      {sellerCountry === 'eu' ? t('seller_country_eu_hint') : t('seller_country_noneu_hint')}
-                    </p>
+                    <div className="space-y-2">
+                      <label className="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={reverseCharge}
+                          onCheckedChange={(v) => {
+                            setReverseCharge(v === true)
+                            setBookingRows(null)
+                          }}
+                        />
+                        {t('rc_toggle')}
+                      </label>
+                      <p className="text-xs text-muted-foreground">
+                        {!reverseCharge
+                          ? t('seller_country_gross_hint')
+                          : sellerCountry === 'eu'
+                            ? t('seller_country_eu_hint')
+                            : t('seller_country_noneu_hint')}
+                      </p>
+                    </div>
                   )}
                   <div className="flex flex-wrap items-center gap-2">
                     <Button

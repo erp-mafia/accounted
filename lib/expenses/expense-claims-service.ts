@@ -67,7 +67,6 @@ export interface RegisterExpenseClaimInput {
   exchange_rate?: number
   expense_account: string
   /** Defaults per claimant kind: employee → 2820, otherwise → 2893. */
-  liability_account?: ExpenseLiabilityAccount
   employee_id?: string
   /** Required when employee_id is absent (e.g. the owner's name). */
   claimant_name?: string
@@ -101,6 +100,8 @@ export type RegisterExpenseClaimResult =
         | 'INVALID_LINES'
         | 'FISCAL_PERIOD_NOT_FOUND'
         | 'CLAIM_INSERT_FAILED'
+        | 'COMPANY_NOT_FOUND'
+        | 'LINK_WRITE_FAILED'
       detail?: string
     }
 
@@ -110,10 +111,24 @@ export async function registerExpenseClaim(
   userId: string,
   input: RegisterExpenseClaimInput,
 ): Promise<RegisterExpenseClaimResult> {
-  // Resolve claimant + default liability account
+  if (!input.lines && (input.vat_amount < 0 || input.vat_amount >= input.amount)) {
+    return { ok: false, code: 'VAT_EXCEEDS_AMOUNT' }
+  }
+
+  // Resolve claimant + liability account. Entity type drives the owner
+  // account, same resolver as the privately-paid supplier-invoice path:
+  // AB owners are creditors (2893), enskild firma owners make egna
+  // insättningar (2018); employees are 2820 regardless of entity type.
+  const { data: company } = await supabase
+    .from('companies')
+    .select('entity_type')
+    .eq('id', companyId)
+    .single()
+  if (!company?.entity_type) return { ok: false, code: 'COMPANY_NOT_FOUND' }
+  const ownerLiability = company.entity_type === 'enskild_firma' ? '2018' : '2893'
   let claimantName = input.claimant_name?.trim() ?? ''
   let employeeId: string | null = null
-  let liability: string = input.liability_account ?? '2893'
+  let liability: string = ownerLiability
   if (input.employee_id) {
     const { data: emp } = await supabase
       .from('employees')
@@ -124,13 +139,9 @@ export async function registerExpenseClaim(
     if (!emp) return { ok: false, code: 'EMPLOYEE_NOT_FOUND' }
     employeeId = emp.id
     claimantName = claimantName || `${emp.first_name} ${emp.last_name}`
-    liability = input.liability_account ?? '2820'
+    liability = '2820'
   }
   if (!claimantName) return { ok: false, code: 'CLAIMANT_REQUIRED' }
-
-  if (!input.lines && (input.vat_amount < 0 || input.vat_amount >= input.amount)) {
-    return { ok: false, code: 'VAT_EXCEEDS_AMOUNT' }
-  }
 
   // Custom lines: validate in claim currency before any conversion.
   if (input.lines) {
@@ -313,11 +324,20 @@ export async function registerExpenseClaim(
     throw err
   }
 
-  await supabase
+  const { error: linkError } = await supabase
     .from('expense_claims')
     .update({ journal_entry_id: journalEntryId })
     .eq('id', claim.id)
     .eq('company_id', companyId)
+  if (linkError) {
+    // The verifikat is posted and immutable; without the back-link the claim
+    // cannot be storno-deleted or paid out safely, so surface it loudly.
+    return {
+      ok: false,
+      code: 'LINK_WRITE_FAILED',
+      detail: `claim ${claim.id} posted as entry ${journalEntryId}: ${linkError.message}`,
+    }
+  }
 
   // Attach the receipt to the verifikat and settle the inbox item, both
   // best-effort: the booking above is the legally significant part.
@@ -410,7 +430,7 @@ export async function listExpenseClaims(
 
 export type DeleteExpenseClaimResult =
   | { ok: true; reversal_entry_id: string | null }
-  | { ok: false; code: 'NOT_FOUND' | 'ALREADY_PAID' | 'DELETE_FAILED'; detail?: string }
+  | { ok: false; code: 'NOT_FOUND' | 'ALREADY_PAID' | 'UNLINKED' | 'DELETE_FAILED'; detail?: string }
 
 /**
  * Remove a registered claim. The booked verifikat is never deleted: it is
@@ -434,11 +454,13 @@ export async function deleteExpenseClaim(
   if (!claim) return { ok: false, code: 'NOT_FOUND' }
   if (claim.status === 'paid') return { ok: false, code: 'ALREADY_PAID' }
 
-  let reversalEntryId: string | null = null
-  if (claim.journal_entry_id) {
-    const reversal = await reverseEntry(supabase, companyId, userId, claim.journal_entry_id)
-    reversalEntryId = reversal.id
+  if (!claim.journal_entry_id) {
+    // Registered claims always book a verifikat; a missing link means the
+    // back-link write failed. Hard-deleting would orphan the posted entry.
+    return { ok: false, code: 'UNLINKED', detail: `claim ${claimId} has no journal_entry_id` }
   }
+  const reversal = await reverseEntry(supabase, companyId, userId, claim.journal_entry_id)
+  const reversalEntryId: string | null = reversal.id
 
   const { error: deleteError } = await supabase
     .from('expense_claims')
@@ -495,7 +517,10 @@ export async function createPayoutBatch(
   if (rows.some((c) => c.status !== 'registered')) return { ok: false, code: 'ALREADY_PAID' }
 
   // One batch = one transfer to one person against one liability account.
-  const claimantKey = (c: ExpenseClaimRow) => `${c.employee_id ?? 'owner'}`
+  // employee_id when present; otherwise the normalized free-text name, so two
+  // distinct non-employee claimants never merge into one batch.
+  const claimantKey = (c: ExpenseClaimRow) =>
+    c.employee_id ?? `name:${c.claimant_name.trim().toLocaleLowerCase('sv-SE')}`
   if (new Set(rows.map(claimantKey)).size > 1) return { ok: false, code: 'MIXED_CLAIMANTS' }
   if (new Set(rows.map((c) => c.liability_account)).size > 1) {
     return { ok: false, code: 'MIXED_LIABILITY' }
@@ -562,11 +587,18 @@ export async function createPayoutBatch(
     throw err
   }
 
-  await supabase
+  const { error: batchLinkError } = await supabase
     .from('expense_payout_batches')
     .update({ journal_entry_id: journalEntryId })
     .eq('id', batch.id)
     .eq('company_id', companyId)
+  if (batchLinkError) {
+    return {
+      ok: false,
+      code: 'BATCH_INSERT_FAILED',
+      detail: `batch ${batch.id} posted as entry ${journalEntryId}: ${batchLinkError.message}`,
+    }
+  }
 
   const { error: markError } = await supabase
     .from('expense_claims')
