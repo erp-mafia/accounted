@@ -59,13 +59,25 @@ export async function POST(request: Request) {
   // rate limit against double-clicks). Once they are older than that, the
   // confirmation links may have expired and the user's only recovery path is
   // re-running the change, so fall through to GoTrue, which restarts the
-  // change and re-sends both mails. new_email/email_change_sent_at are absent
-  // on the claims-mapped fast path; then GoTrue's own rate limit is the
-  // backstop.
-  if (user.new_email && email === user.new_email.toLowerCase()) {
-    const sentAt = user.email_change_sent_at
-      ? Date.parse(user.email_change_sent_at)
-      : Number.NaN
+  // change and re-sends both mails.
+  //
+  // new_email/email_change_sent_at live on the GoTrue user, not in the JWT,
+  // so they are absent on the claims-mapped fast path of requireAuth. Reading
+  // them from the claims alone made every re-submit look like a brand-new
+  // request: GoTrue re-issued both tokens and voided the links the user was
+  // about to click, which is exactly the "link invalid" loop users hit after
+  // pressing the button twice. Fetch the fresh user when the claims carry no
+  // pending state; the extra round trip is fine on a route this rare.
+  let pendingEmail = user.new_email
+  let pendingSentAt = user.email_change_sent_at
+  if (!pendingEmail) {
+    const { data } = await supabase.auth.getUser()
+    pendingEmail = data?.user?.new_email
+    pendingSentAt = data?.user?.email_change_sent_at
+  }
+
+  if (pendingEmail && email === pendingEmail.toLowerCase()) {
+    const sentAt = pendingSentAt ? Date.parse(pendingSentAt) : Number.NaN
     const fresh =
       Number.isFinite(sentAt) && Date.now() - sentAt < FRESH_PENDING_MS
     if (fresh) {
@@ -79,10 +91,16 @@ export async function POST(request: Request) {
   // can be an internal origin (dead confirmation links on self-hosted), and
   // auth links may never follow an attacker-chosen host. Registered
   // white-label hosts pass through so the mail carries the right brand.
+  //
+  // flow=email_change marks the callback so the stock GoTrue links (verified
+  // on the GoTrue host, returned here via redirect_to with ?message=, ?error=
+  // or ?code= instead of a token_hash) land on the email-change status page
+  // rather than the silent login bounce. The Send Email hook preserves this
+  // query on its token_hash links, so both link styles share the marker.
   const origin = resolveRequestAppOrigin(request)
   const { error: updateError } = await supabase.auth.updateUser(
     { email },
-    { emailRedirectTo: `${origin}/auth/callback` },
+    { emailRedirectTo: `${origin}/auth/callback?flow=email_change` },
   )
 
   if (updateError) {

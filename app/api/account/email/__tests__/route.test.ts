@@ -12,14 +12,29 @@ import { POST } from '../route'
 function mockUserClient(opts: {
   user: { id: string; email?: string } | null
   updateUserError?: { message: string; status?: number; code?: string } | null
+  // What GoTrue returns for the fresh user (the pending-change fields the
+  // claims fast path lacks). Defaults to "no pending change".
+  freshUser?: {
+    new_email?: string
+    email_change_sent_at?: string
+  } | null
 }) {
   const updateUser = vi.fn().mockResolvedValue({
     data: {},
     error: opts.updateUserError ?? null,
   })
+  const getUser = vi.fn().mockResolvedValue({
+    data: {
+      user:
+        opts.freshUser === null
+          ? null
+          : { id: opts.user?.id, email: opts.user?.email, ...(opts.freshUser ?? {}) },
+    },
+    error: null,
+  })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const supabase = { auth: { updateUser } } as any
+  const supabase = { auth: { updateUser, getUser } } as any
 
   if (opts.user) {
     requireAuthMock.mockResolvedValue({ user: opts.user, supabase, error: null })
@@ -31,7 +46,7 @@ function mockUserClient(opts: {
     })
   }
 
-  return { updateUser }
+  return { updateUser, getUser }
 }
 
 beforeEach(() => {
@@ -101,7 +116,11 @@ describe('POST /api/account/email', () => {
     expect(updateUser).toHaveBeenCalledTimes(1)
     const [attrs, options] = updateUser.mock.calls[0]
     expect(attrs).toEqual({ email: 'new@testbrand.example' })
-    expect(String(options.emailRedirectTo)).toMatch(/\/auth\/callback$/)
+    // flow=email_change routes the stock GoTrue redirect (message/error/code)
+    // to the email-change status page in /auth/callback.
+    expect(String(options.emailRedirectTo)).toMatch(
+      /\/auth\/callback\?flow=email_change$/,
+    )
   })
 
   it('short-circuits a repeat request while the pending mails are fresh', async () => {
@@ -166,6 +185,96 @@ describe('POST /api/account/email', () => {
 
     expect(status).toBe(200)
     expect(updateUser).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads pending state from GoTrue when the session claims lack it (fresh: no-op)', async () => {
+    // The claims fast path carries no new_email; before this the route
+    // re-issued tokens on every re-submit and voided the mails just sent.
+    const { updateUser, getUser } = mockUserClient({
+      user: { id: 'user-1', email: 'old@testbrand.example' },
+      freshUser: {
+        new_email: 'pending@testbrand.example',
+        email_change_sent_at: new Date(Date.now() - 3 * 60_000).toISOString(),
+      },
+    })
+
+    const req = createMockRequest('/api/account/email', {
+      method: 'POST',
+      body: { email: 'pending@testbrand.example' },
+    })
+    const { status, body } = await parseJsonResponse<{
+      data?: { ok: boolean; pending_email: string; resent: boolean }
+    }>(await POST(req))
+
+    expect(status).toBe(200)
+    expect(body.data?.resent).toBe(false)
+    expect(getUser).toHaveBeenCalledTimes(1)
+    expect(updateUser).not.toHaveBeenCalled()
+  })
+
+  it('reads pending state from GoTrue when the session claims lack it (stale: re-send)', async () => {
+    const { updateUser } = mockUserClient({
+      user: { id: 'user-1', email: 'old@testbrand.example' },
+      freshUser: {
+        new_email: 'pending@testbrand.example',
+        email_change_sent_at: new Date(
+          Date.now() - 2 * 60 * 60 * 1000,
+        ).toISOString(),
+      },
+    })
+
+    const req = createMockRequest('/api/account/email', {
+      method: 'POST',
+      body: { email: 'pending@testbrand.example' },
+    })
+    const { status, body } = await parseJsonResponse<{
+      data?: { resent: boolean }
+    }>(await POST(req))
+
+    expect(status).toBe(200)
+    expect(body.data?.resent).toBe(true)
+    expect(updateUser).toHaveBeenCalledTimes(1)
+  })
+
+  it('requests a different address even while another change is pending and fresh', async () => {
+    const { updateUser } = mockUserClient({
+      user: { id: 'user-1', email: 'old@testbrand.example' },
+      freshUser: {
+        new_email: 'pending@testbrand.example',
+        email_change_sent_at: new Date(Date.now() - 60_000).toISOString(),
+      },
+    })
+
+    const req = createMockRequest('/api/account/email', {
+      method: 'POST',
+      body: { email: 'other@testbrand.example' },
+    })
+    const { status } = await parseJsonResponse(await POST(req))
+
+    expect(status).toBe(200)
+    expect(updateUser).toHaveBeenCalledTimes(1)
+    expect(updateUser.mock.calls[0][0]).toEqual({ email: 'other@testbrand.example' })
+  })
+
+  it('does not consult GoTrue when the claims already carry the pending change', async () => {
+    const { updateUser, getUser } = mockUserClient({
+      user: {
+        id: 'user-1',
+        email: 'old@testbrand.example',
+        new_email: 'pending@testbrand.example',
+        email_change_sent_at: new Date(Date.now() - 60_000).toISOString(),
+      } as { id: string; email?: string },
+    })
+
+    const req = createMockRequest('/api/account/email', {
+      method: 'POST',
+      body: { email: 'pending@testbrand.example' },
+    })
+    const { status } = await parseJsonResponse(await POST(req))
+
+    expect(status).toBe(200)
+    expect(getUser).not.toHaveBeenCalled()
+    expect(updateUser).not.toHaveBeenCalled()
   })
 
   it('returns 409 when the address already belongs to another account', async () => {

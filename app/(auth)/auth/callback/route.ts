@@ -135,6 +135,37 @@ async function reconcilePendingBankIdIdentity(
   }
 }
 
+type EmailChangeStatus = 'partial' | 'done' | 'failed'
+
+/**
+ * Status of a stock (GoTrue-hosted) email-change link that came back through
+ * redirect_to. GoTrue puts the outcome in the query for PKCE links: a
+ * half-completed secure change carries ?message=, a dead link ?error= /
+ * ?error_code=, and the completing click ?code=. Implicit-flow links put the
+ * same outcome in the URL fragment, which never reaches the server; the
+ * fallback reads the user's pending state instead of guessing.
+ */
+async function resolveStockEmailChangeStatus(
+  supabase: ReturnType<typeof createServerClient>,
+  searchParams: URLSearchParams,
+  code: string | null,
+): Promise<EmailChangeStatus> {
+  if (searchParams.get('error') || searchParams.get('error_code')) return 'failed'
+  if (searchParams.get('message')) return 'partial'
+  if (code) {
+    const { error } = await supabase.auth.exchangeCodeForSession(code)
+    if (!error) return 'done'
+    // The verify already completed the change before the code was minted;
+    // a failed exchange (clicked in another browser, no PKCE verifier) must
+    // not be reported as a failed change. Fall through to the state check.
+  }
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return 'failed'
+  return user.new_email ? 'partial' : 'done'
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url)
   const code = searchParams.get('code')
@@ -168,6 +199,26 @@ export async function GET(request: NextRequest) {
       },
     }
   )
+
+  // Stock GoTrue email-change links (no Send Email hook) verify on the GoTrue
+  // host and come back here through redirect_to instead of carrying a
+  // token_hash: with secure email change the first of the two confirmations
+  // arrives as ?message=..., a dead link as ?error=..., and the completing
+  // click as ?code= (PKCE). /api/account/email stamps flow=email_change on
+  // emailRedirectTo so all three land on the status page like the token_hash
+  // branch below. Before this they fell through to the login bounce with no
+  // message, which reads as "det funkar inte" and invites a retry that voids
+  // the mails just sent.
+  if (searchParams.get('flow') === 'email_change' && !token_hash) {
+    const status = await resolveStockEmailChangeStatus(supabase, searchParams, code)
+    const response = NextResponse.redirect(
+      new URL(`/auth/email-change?status=${status}`, origin),
+    )
+    for (const { name, value, options } of pendingCookies) {
+      response.cookies.set({ name, value, ...options })
+    }
+    return response
+  }
 
   let authenticated = false
 
