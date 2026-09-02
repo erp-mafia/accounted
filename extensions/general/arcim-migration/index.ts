@@ -38,6 +38,11 @@ import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
 import type { ProviderName } from '@/lib/providers/types'
 import { FORTNOX_DOCUMENT_SCOPES_APPROVED } from '@/lib/providers/fortnox/oauth'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import {
+  requireFlowInitiator,
+  FLOW_INITIATOR_MISMATCH_MESSAGE,
+} from '@/lib/auth/oauth-flow-binding'
 import { classifyProviderError } from '@/lib/providers/with-provider-call'
 import { getProviderResourceForbiddenMessage } from '@/lib/errors/get-error-message'
 import { FortnoxApiError, fortnoxErrorMessage } from '@/lib/providers/fortnox/client'
@@ -53,6 +58,15 @@ const moduleLog = createLogger('extensions/arcim-migration')
  */
 const STATE_REJECTED_MESSAGE =
   'Ingen giltig migrationssession hittades. Starta om anslutningen.'
+
+/**
+ * A valid state reached the callback but the browser carries no session. The
+ * state is already spent by then (consumeOAuthState is atomic and runs first),
+ * so unlike the bank/Stripe callbacks there is nothing to resume after a
+ * login: the user starts the connect again from the wizard.
+ */
+const SESSION_MISSING_MESSAGE =
+  'Ingen inloggad session hittades i det här fönstret. Logga in och starta om anslutningen.'
 
 /**
  * Map known OAuth error codes from providers (Fortnox, Visma) to actionable
@@ -126,12 +140,14 @@ function resolveArcimCallbackUrl(provider: ArcimProvider | ProviderName): string
 async function buildArcimOAuthUrl(
   consentId: string,
   provider: ArcimProvider,
+  initiatedByUserId: string,
   options?: { documentScopes?: boolean },
 ): Promise<string> {
-  // Server-side state row: consent id, provider (via the consent), expiry and a
-  // consumed marker all live in provider_otc. The `state` handed to the provider
-  // is that row's opaque random primary key, nothing more.
-  const otc = await generateOtc(consentId)
+  // Server-side state row: consent id, provider (via the consent), the user who
+  // started the flow, expiry and a consumed marker all live in provider_otc.
+  // The `state` handed to the provider is that row's opaque random primary
+  // key, nothing more.
+  const otc = await generateOtc(consentId, initiatedByUserId)
 
   const callbackUrl = resolveArcimCallbackUrl(provider)
 
@@ -346,7 +362,7 @@ export const arcimMigrationExtension: Extension = {
                 await ctx.settings.set('provider', provider)
               }
               if (providerInfo.authType === 'oauth') {
-                const authUrl = await buildArcimOAuthUrl(stale.id, provider, {
+                const authUrl = await buildArcimOAuthUrl(stale.id, provider, user.id, {
                   documentScopes: documentScopes === true,
                 })
                 return NextResponse.json({
@@ -431,7 +447,7 @@ export const arcimMigrationExtension: Extension = {
           }
 
           if (providerInfo.authType === 'oauth') {
-            const authUrl = await buildArcimOAuthUrl(consent.id, provider)
+            const authUrl = await buildArcimOAuthUrl(consent.id, provider, user.id)
 
             return NextResponse.json({
               consentId: consent.id,
@@ -674,7 +690,39 @@ export const arcimMigrationExtension: Extension = {
             return respondWithError(STATE_REJECTED_MESSAGE)
           }
 
-          const { consentId, provider } = resolvedState
+          const { consentId, provider, userId: initiatedByUserId } = resolvedState
+
+          // The state proves this callback belongs to a flow WE started; it
+          // says nothing about who is finishing it. Before the code is
+          // exchanged, the completing browser's own session must belong to the
+          // user recorded on the state row at connect time. Otherwise a victim
+          // lured into approving a consent someone else started has their
+          // Fortnox/Visma account bound to that someone's consent, and the
+          // next migration imports the victim's ledger into a stranger's
+          // company. Checked before callbackConsentId is set: a refused
+          // completion must not hand the consent id to whoever is refused.
+          if (!initiatedByUserId) {
+            // Row minted before provider_otc.user_id existed (or written
+            // outside generateOtc): nobody to bind to, so nobody may finish it.
+            // Such rows expire within 10 minutes of the deploy.
+            log.error('OAuth callback state carries no initiator; refusing', { consentId })
+            return respondWithError(STATE_REJECTED_MESSAGE)
+          }
+          const initiator = await requireFlowInitiator(request, initiatedByUserId, {
+            flow: 'arcim-migration.callback',
+          })
+          if (!initiator.ok) {
+            log.error('OAuth callback refused: completing session is not the initiator', {
+              consentId,
+              reason: initiator.reason,
+            })
+            return respondWithError(
+              initiator.reason === 'no_session'
+                ? SESSION_MISSING_MESSAGE
+                : FLOW_INITIATOR_MISMATCH_MESSAGE,
+            )
+          }
+
           callbackConsentId = consentId
 
           // Must match the redirect_uri the authorization request was built
@@ -711,6 +759,16 @@ export const arcimMigrationExtension: Extension = {
           })
         } catch (error) {
           log.error('OAuth callback exchange failed', error)
+          // Valid tokens for the WRONG company: exchangeAuthToken stored
+          // nothing. Show the user-facing sentence from the error registry
+          // (the same one /submit-token answers with for Bokio/WINT) instead
+          // of the English diagnostic on the error object.
+          if (error instanceof ProviderCompanyMismatchError) {
+            return respondWithError(
+              getErrorEntry('PROVIDER_COMPANY_MISMATCH')?.message_sv ?? error.message,
+              callbackConsentId,
+            )
+          }
           const reason = error instanceof Error ? error.message : 'Okänt fel vid tokenutbyte.'
           return respondWithError(reason, callbackConsentId)
         }
