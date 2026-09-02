@@ -1989,6 +1989,48 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
   },
 }
 
+/**
+ * Agent-triggered PSD2 sync (v1 bank-connections sync + MCP gnubok_sync_bank).
+ * Emitted by extensions/general/enable-banking/lib/trigger-sync.ts.
+ */
+const BANK_SYNC: Record<string, StructuredErrorEntry> = {
+  BANK_SYNC_NOT_ACTIVE: {
+    httpStatus: 409,
+    message_sv: 'Bankanslutningen är inte aktiv och kan inte synkas. Förnya den med BankID i webbläsaren.',
+    message_en: 'The bank connection is not active and cannot be synced. It needs BankID re-authorisation in a browser.',
+    remediation: {
+      description: 'Give the user the connect_url from gnubok_connect_bank (or GET /bank-connections); only they can re-authorise with BankID.',
+      tool: 'gnubok_connect_bank',
+    },
+  },
+  BANK_SYNC_NO_ACCOUNTS: {
+    httpStatus: 409,
+    message_sv: 'Inga konton är valda för synkning. Aktivera minst ett konto under Inställningar, Bank.',
+    message_en: 'No accounts are selected for syncing. The user must enable at least one under Settings, Bank.',
+  },
+  BANK_SYNC_COOLDOWN: {
+    httpStatus: 429,
+    message_sv: 'Anslutningen synkades nyligen. Vänta tills next_allowed_at innan du synkar igen.',
+    message_en: 'This connection was synced recently. Wait until next_allowed_at before syncing again; the data you have is already fresh.',
+    retryable: true,
+  },
+  BANK_SESSION_EXPIRED: {
+    httpStatus: 409,
+    message_sv: 'Bankanslutningen har löpt ut. Förnya anslutningen med BankID för att fortsätta synka.',
+    message_en: 'The bank session has expired. The connection is now marked expired; only the user can renew it with BankID in a browser.',
+    remediation: {
+      description: 'Give the user the connect_url from gnubok_connect_bank (or GET /bank-connections). Do not retry: no API call can revive a dead consent.',
+      tool: 'gnubok_connect_bank',
+    },
+  },
+  BANK_SYNC_FAILED: {
+    httpStatus: 502,
+    message_sv: 'Banksynkningen misslyckades. Försök igen om en stund, eller förnya anslutningen om felet kvarstår.',
+    message_en: 'The bank sync failed upstream. Retry after the cooldown; if it keeps failing the user should renew the connection.',
+    retryable: true,
+  },
+}
+
 const SKATTEKONTO_FILE: Record<string, StructuredErrorEntry> = {
   SKATTEKONTO_FILE_NO_FILE: {
     httpStatus: 400,
@@ -4172,6 +4214,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...TAX_DECL,
   ...SIE_IMPORT,
   ...BANK_FILE,
+  ...BANK_SYNC,
   ...SKATTEKONTO_FILE,
   ...OPENING_BALANCE_IMPORT,
   ...REGISTER_IMPORT,

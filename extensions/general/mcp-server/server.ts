@@ -251,6 +251,7 @@ import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplica
 import { getEmailService } from '@/lib/email/service'
 import { hasCapability, capabilityBlockedError } from '@/lib/entitlements/has-capability'
 import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
+import { triggerConnectionSync } from '@/extensions/general/enable-banking/lib/trigger-sync'
 import {
   completePendingDocumentUpload,
   createPendingDocumentUpload,
@@ -3755,6 +3756,85 @@ export const tools: McpTool[] = [
                 ? ''
                 : 'BETTER LINK AVAILABLE: if you know (or can ask) which bank the company uses, call this tool again with bank=<name>; the link then opens that bank\'s consent directly instead of a picker. ') +
               'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there. They approve with BankID (consent up to 180 days), then CONFIRM WHICH ACCOUNTS to sync in the dialog that opens; the first transactions arrive within a minute of that save. Banks cap PSD2 history (often ~90 days): older history comes via SIE import, not the bank. When the user is back, call this tool again to verify status=active, then continue straight to gnubok_list_uncategorized_transactions without asking.',
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_sync_bank',
+    keywords: ['synka bank', 'banksynk', 'hämta banktransaktioner', 'uppdatera bank', 'synka nu'],
+    title: 'Sync Bank Now',
+    description:
+      'Sync one PSD2 bank connection now instead of waiting for the nightly run. Use when gnubok_connect_bank shows a stale last_synced_at on an active connection. Server picks the window; synced=false with next_allowed_at means it ran within 15 min and the data is already fresh.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connection_id'],
+      properties: {
+        connection_id: {
+          type: 'string',
+          description: 'connection_id from gnubok_connect_bank.',
+        },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        synced: { type: 'boolean' },
+        connection_id: { type: 'string' },
+        bank: { type: ['string', 'null'] },
+        imported: { type: 'integer' },
+        duplicates: { type: 'integer' },
+        last_synced_at: { type: ['string', 'null'] },
+        next_allowed_at: { type: ['string', 'null'] },
+        instructions: { type: 'string' },
+      },
+      required: ['synced', 'connection_id', 'instructions'],
+    },
+    annotations: ANNOTATIONS_WRITE_OPEN_WORLD,
+    async execute(args, companyId, userId, supabase) {
+      const connectionId = typeof args.connection_id === 'string' ? args.connection_id.trim() : ''
+      const result = await triggerConnectionSync(supabase, {
+        companyId,
+        userId,
+        connectionId,
+        log,
+      })
+
+      if (!result.ok) {
+        // Cooldown is not a failure: the data is fresh. Say so in-band so the
+        // agent reads on instead of retrying; everything else is a real
+        // error and flows through the structured envelope (BANK_SYNC_* codes
+        // carry the remediation, incl. "hand the user the connect link").
+        if (result.code === 'BANK_SYNC_COOLDOWN') {
+          return {
+            synced: false,
+            connection_id: result.connection_id,
+            bank: null,
+            last_synced_at: null,
+            next_allowed_at: result.next_allowed_at ?? null,
+            instructions:
+              'This connection synced within the last 15 minutes, so transactions and balances are already current. Do NOT call again before next_allowed_at; continue with gnubok_list_uncategorized_transactions.',
+          }
+        }
+        throw Object.assign(
+          new Error(`Bank sync refused for connection ${result.connection_id}: ${result.code}`),
+          { code: result.code },
+        )
+      }
+
+      return {
+        synced: true,
+        connection_id: result.connection_id,
+        bank: result.bank,
+        imported: result.imported,
+        duplicates: result.duplicates,
+        last_synced_at: result.last_synced_at,
+        next_allowed_at: null,
+        instructions:
+          result.imported > 0
+            ? `${result.imported} new transaction(s) fetched from the bank (${result.from_date} to ${result.to_date}). Continue with gnubok_list_uncategorized_transactions.`
+            : `The bank had nothing new for ${result.from_date} to ${result.to_date}: the data was already complete. Banks report with up to 48 hours of delay, so today's transactions often arrive tomorrow; do not call again for that.`,
       }
     },
   },
