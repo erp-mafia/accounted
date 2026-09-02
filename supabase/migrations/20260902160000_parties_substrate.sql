@@ -306,6 +306,9 @@ GRANT EXECUTE ON FUNCTION public.ensure_party(uuid, uuid, text, text, text, text
 -- party; nothing is merged on name. Rows with an empty name (three exist on
 -- prod: one supplier, two customers) keep party_id NULL: ensure_party
 -- refuses a nameless party, and the suggestion pipeline names them later.
+-- Rows in a company archived by a migration reset (company_migration_resets
+-- .source_company_id) are frozen by block_migration_reset_source_mutation
+-- and are skipped too: that archive is immutable by design.
 DO $$
 DECLARE
   r record;
@@ -315,6 +318,7 @@ BEGIN
       FROM public.suppliers
      WHERE party_id IS NULL AND company_id IS NOT NULL
        AND nullif(btrim(name), '') IS NOT NULL
+       AND company_id NOT IN (SELECT source_company_id FROM public.company_migration_resets)
      ORDER BY created_at, id
   LOOP
     UPDATE public.suppliers
@@ -327,6 +331,7 @@ BEGIN
       FROM public.customers
      WHERE party_id IS NULL AND company_id IS NOT NULL
        AND nullif(btrim(name), '') IS NOT NULL
+       AND company_id NOT IN (SELECT source_company_id FROM public.company_migration_resets)
      ORDER BY created_at, id
   LOOP
     UPDATE public.customers

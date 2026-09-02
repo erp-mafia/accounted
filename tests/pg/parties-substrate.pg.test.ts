@@ -139,6 +139,29 @@ describe('parties substrate (pg)', () => {
     expect(visibleToStranger).toBe(0)
   })
 
+  it('a supplier in a company archived by a migration reset cannot take a party_id (why the backfill skips it)', async () => {
+    const frozen = await seedCompany()
+    const replacement = await seedCompany()
+    const { rows } = await getPool().query<{ id: string }>(
+      `INSERT INTO public.suppliers (company_id, user_id, name) VALUES ($1, $2, 'Frozen Supplier') RETURNING id`,
+      [frozen.companyId, frozen.userId],
+    )
+    await getPool().query(
+      `INSERT INTO public.company_migration_resets (source_company_id, replacement_company_id, actor_id, reason, confirmation_snapshot, source_counts)
+       VALUES ($1, $2, $3, 'pg test: the party backfill must skip archived companies', '{}'::jsonb, '{}'::jsonb)`,
+      [frozen.companyId, replacement.companyId, frozen.userId],
+    )
+    const partyId = await getPool().query<{ id: string }>(
+      `SELECT public.ensure_party($1, $2, 'Frozen Supplier', NULL, 'company', 'backfill') AS id`,
+      [replacement.companyId, replacement.userId],
+    )
+    await expect(
+      getPool().query(`UPDATE public.suppliers SET party_id = $1 WHERE id = $2`, [partyId.rows[0]!.id, rows[0]!.id]),
+    ).rejects.toMatchObject({ code: 'P0001' })
+    const still = await getPool().query<{ party_id: string | null }>(`SELECT party_id FROM public.suppliers WHERE id = $1`, [rows[0]!.id])
+    expect(still.rows[0]!.party_id).toBeNull()
+  })
+
   it('ensure_party refuses a p_user_id that is not the authenticated caller', async () => {
     const mine = await seedCompany()
     const other = await seedCompany()
