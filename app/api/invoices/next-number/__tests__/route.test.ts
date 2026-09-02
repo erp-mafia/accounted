@@ -14,7 +14,7 @@ vi.mock('@/lib/company/context', () => ({
 import { GET } from '../route'
 
 function get(query: string) {
-  return GET(createMockRequest(`/api/invoices/next-number${query}`, { method: 'GET' }))
+  return GET(createMockRequest(`/api/invoices/next-number${query}`, { method: 'GET' }), { params: Promise.resolve({}) })
 }
 
 describe('GET /api/invoices/next-number', () => {

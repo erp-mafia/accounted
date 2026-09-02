@@ -824,7 +824,7 @@ describe('POST /api/invoices (create credit note)', () => {
         items: [{ description: 'Consulting', quantity: 10, unit: 'tim', unit_price: 1000 }],
       },
     })
-    const response = await POST(request)
+    const response = await POST(request, { params: Promise.resolve({}) })
     const { status, body } = await parseJsonResponse<{ data: { invoice_number: string | null } }>(response)
 
     expect(status).toBe(200)
@@ -852,7 +852,7 @@ describe('POST /api/invoices (create credit note)', () => {
         items: [{ description: 'Consulting', quantity: 1, unit: 'st', unit_price: 100 }],
       },
     })
-    const response = await POST(request)
+    const response = await POST(request, { params: Promise.resolve({}) })
     const { status, body } = await parseJsonResponse<{ errors: Array<{ field: string }> }>(response)
 
     expect(status).toBe(400)
