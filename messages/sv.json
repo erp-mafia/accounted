@@ -7451,6 +7451,8 @@
     "underlag_intro": "En SIE-fil innehåller bokföringen men inte underlagen. Om ditt gamla system namngav varje underlag efter sitt verifikat kan de kopplas automatiskt, utan AI-tolkning.",
     "underlag_intro_formats": "Filnamn som fungerar: A31_abc123.pdf, A31.pdf, A-31 kvitto.pdf, 2024-A-31.pdf. Matchningen sker mot verifikatnumret i ditt gamla system, inte mot numret här.",
     "underlag_pick_files": "Välj filer",
+    "underlag_pick_folder": "Välj mapp",
+    "underlag_folder_no_documents": "Mappen innehåller inga PDF- eller bildfiler (PDF, JPEG, PNG, WebP).",
     "underlag_year_help": "Verifikatnumret i filnamnet räknas om varje år i det gamla systemet, så A31 pekar bara ut ett verifikat inom ett år. Välj det år exporten kommer från. Filerna kopplas aldrig till något annat år.",
     "underlag_year_required": "Välj ett räkenskapsår ovan för att fortsätta. Saknas det år du söker har bokföringen för det året inte importerats via SIE.",
     "underlag_year_label": "Vilket räkenskapsår gäller underlagen?",

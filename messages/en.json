@@ -7451,6 +7451,8 @@
     "underlag_intro": "A SIE file carries the bookkeeping but not the receipts. If your old system named each receipt after its verifikat, they can be attached automatically, with no AI reading required.",
     "underlag_intro_formats": "Filenames that work: A31_abc123.pdf, A31.pdf, A-31 receipt.pdf, 2024-A-31.pdf. Matching uses the voucher number from your old system, not the number here.",
     "underlag_pick_files": "Pick files",
+    "underlag_pick_folder": "Pick a folder",
+    "underlag_folder_no_documents": "The folder holds no PDF or image files (PDF, JPEG, PNG, WebP).",
     "underlag_year_help": "The old system restarts voucher numbering every year, so A31 only identifies a verifikat within one year. Pick the year the export came from. Files are never attached to any other year.",
     "underlag_year_required": "Pick a fiscal year above to continue. If the year you want is missing, its bookkeeping was not imported via SIE.",
     "underlag_year_label": "Which fiscal year are these receipts from?",

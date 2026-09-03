@@ -19,7 +19,7 @@ import { FyPicker } from '@/components/common/FyPicker'
 import { mapWithConcurrency } from '@/lib/concurrency'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatDate } from '@/lib/utils'
-import { FileUp, Loader2 } from 'lucide-react'
+import { FileUp, FolderUp, Loader2 } from 'lucide-react'
 import type { FiscalPeriod } from '@/types'
 import type {
   UnderlagPlan,
@@ -49,6 +49,7 @@ import type {
 type Step = 'select' | 'review' | 'result'
 
 const ACCEPTED_TYPES = 'application/pdf,image/jpeg,image/png,image/webp'
+const ACCEPTED_MIME = new Set(ACCEPTED_TYPES.split(','))
 
 /**
  * Parallel attach requests during the final step. Same size as the
@@ -105,6 +106,7 @@ export default function UnderlagImportWizard() {
   const { toast } = useToast()
   const { dialogProps, confirm } = useDestructiveConfirm()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const folderInputRef = useRef<HTMLInputElement>(null)
 
   const [step, setStep] = useState<Step>('select')
   const [isLoading, setIsLoading] = useState(false)
@@ -162,7 +164,7 @@ export default function UnderlagImportWizard() {
   )
 
   const handleFilesSelected = useCallback(
-    async (fileList: FileList | null) => {
+    async (fileList: FileList | File[] | null) => {
       if (!fileList || fileList.length === 0) return
       if (!fiscalPeriodId) return
       const files = Array.from(fileList)
@@ -205,6 +207,27 @@ export default function UnderlagImportWizard() {
       }
     },
     [fetchPlan, fiscalPeriod, fiscalPeriodId],
+  )
+
+  // Folder pick (#2189): a migration's underlag arrives as one folder, and
+  // Ctrl+A in the file picker is not obvious to everyone. A directory pick
+  // ignores `accept` and includes every file in the tree (Thumbs.db,
+  // .DS_Store, the export tool's own CSV), so keep only the document types
+  // the attach route takes before planning; the plan keys on file.name, so
+  // subfolders flatten harmlessly.
+  const handleFolderSelected = useCallback(
+    (fileList: FileList | null) => {
+      if (!fileList || fileList.length === 0) return
+      const files = Array.from(fileList).filter(
+        (f) => ACCEPTED_MIME.has(f.type) && !f.name.startsWith('.'),
+      )
+      if (files.length === 0) {
+        setError(t('underlag_folder_no_documents'))
+        return
+      }
+      void handleFilesSelected(files)
+    },
+    [handleFilesSelected, t],
   )
 
   const updateRow = useCallback((id: string, patch: Partial<ReviewRow>) => {
@@ -433,18 +456,39 @@ export default function UnderlagImportWizard() {
               className="hidden"
               onChange={(e) => handleFilesSelected(e.target.files)}
             />
+            {/* webkitdirectory is not in React's input typings but is what
+                every current browser honours for a folder pick; spread so
+                the attribute reaches the DOM without a type escape hatch. */}
+            <input
+              ref={folderInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => handleFolderSelected(e.target.files)}
+              {...({ webkitdirectory: '' } as Record<string, string>)}
+            />
 
-            <Button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isLoading || !fiscalPeriodId}
-            >
-              {isLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <FileUp className="h-4 w-4" />
-              )}
-              {t('underlag_pick_files')}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isLoading || !fiscalPeriodId}
+              >
+                {isLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <FileUp className="h-4 w-4" />
+                )}
+                {t('underlag_pick_files')}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => folderInputRef.current?.click()}
+                disabled={isLoading || !fiscalPeriodId}
+              >
+                <FolderUp className="h-4 w-4" />
+                {t('underlag_pick_folder')}
+              </Button>
+            </div>
 
             {/* Both the picker and the button are disabled until a year is
                 chosen, and if the company has no fiscal years at all the
