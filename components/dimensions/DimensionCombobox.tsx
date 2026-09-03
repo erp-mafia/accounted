@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Loader2, Plus } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -65,6 +65,13 @@ export default function DimensionCombobox({
     () => dimension?.values.filter((v) => v.is_active) ?? [],
     [dimension],
   )
+  // The committed value's registry row, looked up in the FULL list: an
+  // archived code stays readable in history even though it is never offered.
+  const selected = useMemo(
+    () => (value ? dimension?.values.find((v) => v.code === value) ?? null : null),
+    [dimension, value],
+  )
+  const selectedNameId = useId()
   const [isCreating, setIsCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -249,6 +256,14 @@ export default function DimensionCombobox({
     }, 150)
   }
 
+  // After a pick the field holds only the code ("1"), which told the user
+  // nothing (issue #2219). Write the value's full name under it, exactly as
+  // AccountCombobox does for the account name, whenever the field shows the
+  // committed code and the name adds something beyond the code itself.
+  const showSelectedName = Boolean(
+    selected && selected.name !== selected.code && value !== null && search === value,
+  )
+
   return (
     <div ref={containerRef} className="relative">
       <Input
@@ -261,7 +276,18 @@ export default function DimensionCombobox({
         disabled={disabled}
         className={`font-mono ${className ?? ''}`.trim()}
         autoComplete="off"
+        aria-describedby={showSelectedName ? selectedNameId : undefined}
       />
+
+      {showSelectedName && selected ? (
+        <p
+          id={selectedNameId}
+          data-ph-mask=""
+          className="mt-1 break-words px-1 text-xs leading-snug text-muted-foreground"
+        >
+          {selected.name}
+        </p>
+      ) : null}
 
       {/* Dropdown */}
       {isOpen && !disabled && (

@@ -1,0 +1,412 @@
+'use client'
+
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
+import { Lock } from 'lucide-react'
+import { ContextPicker, type ContextPickerItem } from '@/components/common/ContextPicker'
+import { AttnLine } from '@/components/ui/attn-line'
+import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { EmptyState } from '@/components/ui/empty-state'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { PageHeader } from '@/components/ui/page-header'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { Skeleton } from '@/components/ui/skeleton'
+import { ToastAction } from '@/components/ui/toast'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
+import { useToast } from '@/components/ui/use-toast'
+import { MergeDialog, type MergeCandidate } from '@/components/parties/MergeDialog'
+import { ObservedTable } from '@/components/parties/ObservedTable'
+import { PartyDossier } from '@/components/parties/PartyDossier'
+import { SuggestionQueue } from '@/components/parties/SuggestionQueue'
+import { hasHardKey } from '@/components/parties/format'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
+import type { PartyRole, Register, RegisterPeriod, RegisterRow, RegisterView } from '@/lib/parties/register'
+
+const VIEWS: RegisterView[] = ['suggested', 'observed']
+
+async function post<T>(url: string, body?: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(String(res.status))
+  const json = (await res.json()) as { data: T }
+  return json.data
+}
+
+function roleSummary(t: (k: string, v?: Record<string, string | number>) => string, items: Array<{ roles: PartyRole[] }>): string {
+  const suppliers = items.filter((i) => i.roles.includes('supplier')).length
+  const customers = items.filter((i) => i.roles.includes('customer')).length
+  const parts: string[] = []
+  if (suppliers) parts.push(t('summary_suppliers', { count: suppliers }))
+  if (customers) parts.push(t('summary_customers', { count: customers }))
+  return parts.join(' · ')
+}
+
+/**
+ * Förslag från bokföringen: the queue in front of Leverantörer and Kunder.
+ * Nothing here is a register of its own; confirming creates the supplier or
+ * customer row, and "Bara i bokföringen" shows what the vouchers name that
+ * nothing owns yet.
+ */
+function SuggestionsPage() {
+  const t = useTranslations('parties')
+  const tCommon = useTranslations('common')
+  const { toast } = useToast()
+  const { canWrite } = useCanWrite()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+
+  const initialView: RegisterView = searchParams.get('view') === 'observed' ? 'observed' : 'suggested'
+  const [view, setView] = useState<RegisterView>(initialView)
+  const [query, setQuery] = useState('')
+  const [debounced, setDebounced] = useState('')
+  const [period, setPeriod] = useState<RegisterPeriod>('12m')
+  const [register, setRegister] = useState<Register | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [failed, setFailed] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [roleOverrides, setRoleOverrides] = useState<Record<string, PartyRole[]>>({})
+  const [busy, setBusy] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [dossierId, setDossierId] = useState<string | null>(null)
+  const [dossierReload, setDossierReload] = useState(0)
+  const [merge, setMerge] = useState<{ subject: MergeCandidate; suggested: MergeCandidate[] } | null>(null)
+  const preselected = useRef<string | null>(null)
+
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(query.trim()), 250)
+    return () => clearTimeout(id)
+  }, [query])
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    const params = new URLSearchParams({ view, period })
+    if (debounced) params.set('q', debounced)
+    fetch(`/api/parties?${params.toString()}`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(String(res.status))
+        const json = (await res.json()) as { data: Register }
+        if (cancelled) return
+        setRegister(json.data)
+        setFailed(false)
+        // Only rows with a hard key arrive pre-ticked, once per queue load.
+        if (view === 'suggested' && preselected.current !== `${reloadKey}:${debounced}`) {
+          preselected.current = `${reloadKey}:${debounced}`
+          setSelected(new Set(json.data.rows.filter(hasHardKey).map((r) => r.id)))
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [view, debounced, period, reloadKey])
+
+  const reload = useCallback(() => {
+    setReloadKey((k) => k + 1)
+    setDossierReload((k) => k + 1)
+  }, [])
+
+  const counts = register?.counts
+  const viewOptions = useMemo(
+    () =>
+      VIEWS.map((v) => ({
+        value: v,
+        label: t(`view_${v}`),
+        count: counts ? counts[v] : undefined,
+      })),
+    [counts, t],
+  )
+  const periodItems: ContextPickerItem[] = useMemo(
+    () => [
+      { id: '12m', label: t('period_12m') },
+      { id: 'all', label: t('period_all') },
+    ],
+    [t],
+  )
+
+  const fail = useCallback(() => toast({ title: t('action_failed'), variant: 'destructive' }), [toast, t])
+  const rolesFor = useCallback((row: RegisterRow): PartyRole[] => roleOverrides[row.id] ?? row.defaultRoles, [roleOverrides])
+
+  async function refreshSuggestions() {
+    if (refreshing) return
+    setRefreshing(true)
+    try {
+      const summary = await post<{ created: number; attached: number }>('/api/parties/suggest')
+      toast({ title: t('refreshed_title'), description: t('refreshed_description', { created: summary.created, attached: summary.attached }) })
+      reload()
+    } catch {
+      fail()
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  function undoToast(title: string, undoUrl: string, ids: string[], undoneTitle: string) {
+    toast({
+      title,
+      action: (
+        <ToastAction
+          altText={t('undo')}
+          onClick={() => {
+            post(undoUrl, { partyIds: ids })
+              .then(() => {
+                toast({ title: undoneTitle })
+                reload()
+              })
+              .catch(fail)
+          }}
+        >
+          {t('undo')}
+        </ToastAction>
+      ),
+    })
+  }
+
+  async function promote(items: Array<{ partyId: string; roles: PartyRole[] }>) {
+    if (items.length === 0) return
+    setBusy(true)
+    try {
+      const r = await post<{ parties: number; suppliers: number; customers: number }>('/api/parties/promote', { items })
+      undoToast(t('promoted_title', { count: r.parties, detail: roleSummary(t, items) }), '/api/parties/promote/undo', items.map((i) => i.partyId), t('undone_title'))
+      setSelected((prev) => {
+        const next = new Set(prev)
+        for (const i of items) next.delete(i.partyId)
+        return next
+      })
+      reload()
+    } catch {
+      fail()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function dismiss(ids: string[]) {
+    if (ids.length === 0) return
+    setBusy(true)
+    try {
+      const { count } = await post<{ count: number }>('/api/parties/decide', { partyIds: ids, kind: 'dismiss' })
+      undoToast(t('dismissed_title', { count }), '/api/parties/decide/undo', ids, t('undone_title'))
+      setSelected((prev) => {
+        const next = new Set(prev)
+        for (const id of ids) next.delete(id)
+        return next
+      })
+      reload()
+    } catch {
+      fail()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function runMerge(survivorId: string, mergedIds: string[]) {
+    setBusy(true)
+    try {
+      const { decisionId } = await post<{ decisionId: string }>('/api/parties/merge', { survivorId, mergedIds })
+      toast({
+        title: t('merged_title'),
+        action: (
+          <ToastAction
+            altText={t('undo')}
+            onClick={() => {
+              post('/api/parties/merge/undo', { decisionId })
+                .then(() => {
+                  toast({ title: t('merge_undone_title') })
+                  reload()
+                })
+                .catch(fail)
+            }}
+          >
+            {t('undo')}
+          </ToastAction>
+        ),
+      })
+      setMerge(null)
+      if (dossierId && mergedIds.includes(dossierId)) setDossierId(survivorId)
+      reload()
+    } catch {
+      fail()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const rows = register?.rows ?? []
+  const searching = debounced.length > 0
+  const selectedItems = rows.filter((r) => selected.has(r.id)).map((r) => ({ partyId: r.id, roles: rolesFor(r) }))
+
+  let attn: React.ReactNode = null
+  if (counts && counts.suggested === 0 && counts.observed > 0 && canWrite && view === 'suggested') {
+    attn = <AttnLine action={{ label: t('refresh'), onClick: () => void refreshSuggestions() }}>{t('attn_observed', { count: counts.observed })}</AttnLine>
+  }
+
+  function empty() {
+    if (searching) return <EmptyState title={t('empty_search_title')} description={t('empty_search_description')} />
+    if (view === 'observed') return <EmptyState title={t('empty_observed_title')} description={t('empty_observed_description')} />
+    return (
+      <EmptyState
+        title={t('empty_suggested_title')}
+        description={t('empty_suggested_description')}
+        actionLabel={canWrite ? t('refresh') : undefined}
+        onAction={canWrite ? () => void refreshSuggestions() : undefined}
+        secondaryActionLabel={t('go_suppliers')}
+        secondaryActionHref="/suppliers"
+      />
+    )
+  }
+
+  function content() {
+    if (failed) return <EmptyState title={t('load_failed')} description={t('action_failed')} actionLabel={tCommon('retry')} onAction={reload} />
+    if (loading && !register)
+      return (
+        <div className="space-y-3">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+        </div>
+      )
+    if (!register) return null
+    if (view === 'observed') {
+      if (register.observed.length === 0 && register.generic.count === 0) return empty()
+      return <ObservedTable rows={register.observed} generic={register.generic} />
+    }
+    if (rows.length === 0) return empty()
+    return (
+      <SuggestionQueue
+        rows={rows}
+        selected={selected}
+        roles={rolesFor}
+        canWrite={canWrite}
+        busy={busy}
+        onToggle={(id) =>
+          setSelected((prev) => {
+            const next = new Set(prev)
+            if (next.has(id)) next.delete(id)
+            else next.add(id)
+            return next
+          })
+        }
+        onSelectAll={() => setSelected(new Set(rows.map((r) => r.id)))}
+        onClear={() => setSelected(new Set())}
+        onRoles={(id, roles) => setRoleOverrides((prev) => ({ ...prev, [id]: roles }))}
+        onConfirmSelected={() => setConfirmOpen(true)}
+        onDismiss={(row) => void dismiss([row.id])}
+        onOpen={setDossierId}
+      />
+    )
+  }
+
+  return (
+    <div className="space-y-8">
+      <PageHeader
+        title={t('title')}
+        description={counts ? t('summary', { suggested: counts.suggested, observed: counts.observed }) : undefined}
+        help={
+          <HelpPopover>
+            <p>{t('help')}</p>
+          </HelpPopover>
+        }
+        action={
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void refreshSuggestions()}
+            disabled={!canWrite || refreshing}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+          >
+            {!canWrite ? <Lock className="mr-2 h-4 w-4" aria-hidden="true" /> : null}
+            {refreshing ? t('refreshing') : t('refresh')}
+          </Button>
+        }
+      />
+
+      {attn}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <SegmentedControl<RegisterView>
+          value={view}
+          onChange={(v) => {
+            setView(v)
+            router.replace(v === 'observed' ? '/parties?view=observed' : '/parties', { scroll: false })
+          }}
+          options={viewOptions}
+        />
+        <ToolbarSearch value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('search_placeholder')} aria-label={t('search_placeholder')} />
+        <div className="ml-auto flex items-center gap-2">
+          <ContextPicker
+            items={periodItems}
+            value={period}
+            onChange={(id) => setPeriod(id as RegisterPeriod)}
+            triggerLabel={periodItems.find((i) => i.id === period)?.label ?? t('period_12m')}
+            ariaLabel={t('period_label')}
+          />
+        </div>
+      </div>
+
+      {content()}
+
+      {register && view === 'suggested' && rows.length > 0 ? (
+        <p className="px-1 text-xs text-muted-foreground tabular-nums">{t('count_summary', { count: rows.length })}</p>
+      ) : null}
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title={t('promote_dialog_title', { count: selectedItems.length })}
+        description={t('promote_dialog_body', { detail: roleSummary(t, selectedItems) })}
+        confirmLabel={t('promote_n', { count: selectedItems.length })}
+        onConfirm={async () => {
+          setConfirmOpen(false)
+          await promote(selectedItems)
+        }}
+      />
+
+      <PartyDossier
+        partyId={dossierId}
+        period={period}
+        canWrite={canWrite}
+        busy={busy}
+        reloadKey={dossierReload}
+        onClose={() => setDossierId(null)}
+        onPromote={(id, roles) => void promote([{ partyId: id, roles }])}
+        onDismiss={(id) => {
+          void dismiss([id])
+          setDossierId(null)
+        }}
+        onMerge={(subject, suggested) => setMerge({ subject, suggested })}
+      />
+
+      {merge ? (
+        <MergeDialog
+          open
+          onOpenChange={(open) => (!open ? setMerge(null) : undefined)}
+          subject={merge.subject}
+          suggested={merge.suggested}
+          busy={busy}
+          onMerge={runMerge}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+export default function PartiesPage() {
+  return (
+    <Suspense fallback={null}>
+      <SuggestionsPage />
+    </Suspense>
+  )
+}

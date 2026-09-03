@@ -49,13 +49,15 @@ describe('validatePeriodDuration', () => {
   })
 
   it('returns error when start is not 1st of month (default)', () => {
-    expect(validatePeriodDuration('2025-01-15', '2025-12-31')).toBe(
-      'Period start must be the 1st of a month'
-    )
+    const result = validatePeriodDuration('2025-01-15', '2025-12-31')
+    expect(result).toContain('Period start must be the 1st of a month')
+    // Says what IS allowed and why, not only "no" (issue #2237).
+    expect(result).toContain('first fiscal year may start mid-month')
+    expect(result).toContain('BFL 3 kap.')
   })
 
   it('returns error when start is not 1st of month (isFirstPeriod: false)', () => {
-    expect(validatePeriodDuration('2025-03-25', '2025-12-31', { isFirstPeriod: false })).toBe(
+    expect(validatePeriodDuration('2025-03-25', '2025-12-31', { isFirstPeriod: false })).toContain(
       'Period start must be the 1st of a month'
     )
   })

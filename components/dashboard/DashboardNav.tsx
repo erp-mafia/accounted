@@ -509,9 +509,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   useEffect(() => {
     if (!company?.id) return
 
-    // Realtime keeps the badges live; a trailing debounce collapses event
-    // bursts (bulk booking / bulk approvals emit one event per row) into a
-    // single SWR revalidation instead of a request stampede.
+    // Realtime keeps the badges live (bank rows, skattekonto rows, staged
+    // operations); a trailing debounce collapses event bursts (bulk booking
+    // / bulk approvals emit one event per row) into a single SWR
+    // revalidation instead of a request stampede.
     let debounce: ReturnType<typeof setTimeout> | null = null
     const queueRefresh = () => {
       if (debounce) clearTimeout(debounce)
@@ -526,6 +527,16 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           event: '*',
           schema: 'public',
           table: 'transactions',
+          filter: `company_id=eq.${company.id}`,
+        },
+        queueRefresh,
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'skattekonto_transactions',
           filter: `company_id=eq.${company.id}`,
         },
         queueRefresh,

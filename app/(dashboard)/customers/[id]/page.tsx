@@ -23,6 +23,7 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatDate } from '@/lib/utils'
 import { invoiceNumberDisplay } from '@/lib/invoices/display'
+import { getCountryName } from '@/lib/vat/country-codes'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
@@ -272,7 +273,7 @@ export default function CustomerDetailPage({
               {(customer.postal_code || customer.city) && (
                 <p>{[customer.postal_code, customer.city].filter(Boolean).join(' ')}</p>
               )}
-              {customer.country && <p>{customer.country}</p>}
+              {customer.country && <p>{getCountryName(customer.country, errorLocale)}</p>}
             </div>
           ) : (
             <DefEmpty />

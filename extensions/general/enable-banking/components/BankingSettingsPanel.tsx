@@ -532,9 +532,15 @@ export default function BankingSettingsPanel() {
         duplicates: data.duplicates,
       })
 
+      // A bank that refused the requested window answered a narrower one:
+      // say from which date the sync is complete instead of presenting a
+      // truncated history as a full one (#2202).
       toast({
         title: 'Synkronisering klar',
-        description: `${data.imported} nya transaktioner importerade`,
+        description:
+          data.history_narrowed && data.history_from
+            ? `${data.imported} nya transaktioner importerade. Banken lämnade bara ut historik från ${data.history_from}.`
+            : `${data.imported} nya transaktioner importerade`,
       })
 
       setShowCsvFallback(false)

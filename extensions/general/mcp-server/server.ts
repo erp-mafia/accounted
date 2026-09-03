@@ -140,6 +140,12 @@ import {
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { normalizeVatRateToDecimal } from '@/lib/vat/supplier-invoice-line-checks'
 import {
+  COUNTRY_CONSISTENCY_MESSAGES,
+  checkCountryConsistency,
+  defaultCountryForParty,
+  normalizeCountryCode,
+} from '@/lib/vat/country-codes'
+import {
   ACCOUNT_VAT_TREATMENTS,
   defaultRateForVatTreatment,
   isAccountVatTreatment,
@@ -5949,7 +5955,7 @@ export const tools: McpTool[] = [
         address: { type: 'string', description: 'Street address' },
         postal_code: { type: 'string' },
         city: { type: 'string' },
-        country: { type: 'string', description: 'Country (default Sweden)' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 (default SE; a name is normalised). Must agree with customer_type and the VAT prefix.' },
         dry_run: {
           type: 'boolean',
           description: 'If true, validate inputs and return the would-be preview without staging or creating. No DB writes, no side-effects.',
@@ -6023,6 +6029,35 @@ export const tools: McpTool[] = [
         throw new Error('personal_number must be a Swedish personnummer: YYYYMMDD-XXXX, YYMMDD-XXXX or the digits alone.')
       }
 
+      // Country: stored as ISO 3166-1 alpha-2 (a name is accepted and
+      // normalised), and it must agree with the customer type and the VAT
+      // prefix. An EU customer saved with country SE used to get reverse
+      // charge with nothing objecting until the periodisk sammanställning
+      // (#2025). Checked at staging so the user never approves an operation
+      // that then fails at commit.
+      const countryArg = typeof args.country === 'string' ? args.country.trim() : ''
+      const vatNumberArg = typeof args.vat_number === 'string' ? args.vat_number : null
+      const country = countryArg
+        ? normalizeCountryCode(countryArg)
+        : defaultCountryForParty(customerType, vatNumberArg)
+      if (!country) {
+        throw new Error(
+          countryArg
+            ? `country "${countryArg}" is not an ISO 3166-1 alpha-2 code or a known country name. Use a code such as SE, DE or NO.`
+            : customerType === 'eu_business'
+              ? 'country is required for an EU business unless vat_number carries an EU country prefix (e.g. DE811234567).'
+              : 'country is required for a non-EU business.',
+        )
+      }
+      const countryIssue = checkCountryConsistency({
+        partyType: customerType,
+        country,
+        vatNumber: vatNumberArg,
+      })
+      if (countryIssue) {
+        throw new Error(`country: ${COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en}`)
+      }
+
       // Resolved at staging, not at commit, so the approval preview shows the
       // terms the row will actually get: the caller's value, else the
       // company's invoice_default_days, else 30. (Staging `|| 30` here is why
@@ -6045,7 +6080,7 @@ export const tools: McpTool[] = [
         address: (args.address as string) || null,
         postal_code: (args.postal_code as string) || null,
         city: (args.city as string) || null,
-        country: (args.country as string) || 'Sweden',
+        country,
         // The preview (and the approval UI that renders it) only ever sees
         // the masked form.
         personal_number_masked: personalNumber ? maskCustomerPersonalNumber(personalNumber) : null,
@@ -6103,7 +6138,7 @@ export const tools: McpTool[] = [
         address_line2: { type: 'string' },
         postal_code: { type: 'string' },
         city: { type: 'string' },
-        country: { type: 'string' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 (a name is normalised). Must agree with customer_type and the VAT prefix.' },
         org_number: { type: 'string' },
         personal_number: {
           type: ['string', 'null'],
@@ -6197,6 +6232,24 @@ export const tools: McpTool[] = [
       const effectiveCustomerType = (parsed.data.changes.customer_type ?? current.customer_type) as string
       if (personalNumber && effectiveCustomerType !== 'individual') {
         throw new Error('personal_number is only allowed for customer_type "individual".')
+      }
+
+      // Country vs type vs VAT prefix, judged on the row as it will END UP:
+      // a type change alone can make a stored country wrong, and a country
+      // change alone can contradict the stored VAT number (#2025). Judged
+      // only when one of the three is in the update: a legacy row that is
+      // already contradictory must still be able to change its email.
+      const { customer_type: newType, country: newCountry, vat_number: newVat } = parsed.data.changes
+      const countryIssue =
+        newType !== undefined || newCountry !== undefined || newVat !== undefined
+          ? checkCountryConsistency({
+              partyType: effectiveCustomerType,
+              country: newCountry ?? current.country,
+              vatNumber: newVat ?? current.vat_number,
+            })
+          : null
+      if (countryIssue) {
+        throw new Error(`country: ${COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en}`)
       }
 
       const currentPreview = {
@@ -6845,13 +6898,13 @@ export const tools: McpTool[] = [
       }
 
       // VAT rules from customer type (same logic as web UI)
-      const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
+      const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
       // The DEFAULT set governs article-rate adoption (web parity: the picker
       // only adopts a rate the customer could have picked themselves); a
       // customer locked to a single rate (foreign business 0%) adopts nothing.
       // Gating below stays on the PERMITTED set: adoption and validation are
       // deliberately different sets.
-      const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated)
+      const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated, customer.country)
 
       // Article prefill (web line picker parity): the line's own values win,
       // the referenced article fills whatever the agent left out.
@@ -6922,7 +6975,7 @@ export const tools: McpTool[] = [
       // The default is still 0% (vatRules.rate is the fallback below), so a
       // Swedish rate only reaches the staged operation when the agent set it on
       // that line explicitly.
-      const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated)
+      const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country)
       const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
       // Calculate per-item VAT (line totals net of any per-line discount)
@@ -7240,7 +7293,7 @@ export const tools: McpTool[] = [
       // Article prefill with the same rules as gnubok_create_invoice: the
       // line's own values win, the article fills the rest, and its VAT rate
       // is adopted only inside the customer's default rate set.
-      const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated)
+      const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated, customer.country)
       const articleIds = Array.from(new Set(rawItems.map((i) => i.article_id).filter((a): a is string => !!a)))
       const articlesById = new Map<string, InvoiceLineArticle>()
       if (articleIds.length > 0) {
@@ -15438,7 +15491,7 @@ export const tools: McpTool[] = [
       additionalProperties: false,
       properties: {
         salary_run_id: { type: 'string', description: 'UUID of the salary run (must be draft)' },
-        payment_date: { type: 'string', description: 'New payment date (YYYY-MM-DD); the date the salary verifikat will be booked on. Must stay within the run\'s period month (AGI is declared per payment month); supplying it clears the run\'s calculation.' },
+        payment_date: { type: 'string', description: 'New payment date (YYYY-MM-DD); the date the salary verifikat will be booked on. May fall outside the run\'s period month (lön i efterskott): the AGI is declared for the payment month. Supplying it clears the run\'s calculation.' },
         voucher_series: { type: 'string', description: 'Voucher series letter (single A-Z)' },
         notes: { type: ['string', 'null'], description: 'Free-text note on the run (max 2000 chars); null clears it' },
       },
@@ -18076,7 +18129,7 @@ export const tools: McpTool[] = [
         // for individuals); never decrypted, staged, or returned here.
         const { data: customer, error: custError } = await supabase
           .from('customers')
-          .select('customer_type, vat_number_validated, personal_number')
+          .select('customer_type, vat_number_validated, country, personal_number')
           .eq('id', invoice.customer_id)
           .eq('company_id', companyId)
           .single()
@@ -18084,9 +18137,9 @@ export const tools: McpTool[] = [
           throw new Error('Customer not found: they may have been deleted. The draft cannot be edited without its customer.')
         }
 
-        const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
+        const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
         defaultVatRate = vatRules.rate
-        const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated)
+        const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated, customer.country)
 
         const articleIds = Array.from(new Set(rawItems.map((i) => i.article_id).filter((a): a is string => !!a)))
         const articlesById = new Map<string, InvoiceLineArticle>()
@@ -18114,7 +18167,7 @@ export const tools: McpTool[] = [
         // carry Swedish VAT even to a foreign business); the default stays
         // vatRules.rate, so a Swedish rate only lands here when set on the
         // line or adopted from an article within the default set.
-        const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated)
+        const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country)
         const allowedRates = new Set(permittedRates.map((r) => r.rate))
         for (const item of items) {
           // Text rows carry no amounts and never book: exclude them from the

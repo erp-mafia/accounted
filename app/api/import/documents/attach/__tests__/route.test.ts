@@ -312,6 +312,8 @@ describe('POST /api/import/documents/attach', () => {
       // key is the entry, not the bytes.
       idempotency_key: TARGET_ID,
       upload_source: 'file_upload',
+      // The verifikat is already booked: no per-file model pass (#2188).
+      extractionOwner: 'none',
     })
   })
 

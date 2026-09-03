@@ -38,6 +38,16 @@ export function BrandHomeLink({ showLabel = false }: { showLabel?: boolean }) {
           width={26}
           height={26}
           className="h-[26px] w-[26px] rounded-lg object-contain"
+          // Tenant logos live on the deployment's Supabase Storage host, and
+          // the image optimizer only allows that host when
+          // NEXT_PUBLIC_SUPABASE_URL was known at BUILD time. The generic
+          // Docker image bakes a sentinel and substitutes the real URL at
+          // container start, so on self-hosted installs /_next/image answered
+          // 400 '"url" parameter is not allowed' and the sidebar mark rendered
+          // broken while the favicon (same URL, no optimizer) worked (issue
+          // #2203). The browser fetches the public object directly instead; at
+          // 26px there is nothing to optimize anyway.
+          unoptimized
         />
       ) : (
         <Image

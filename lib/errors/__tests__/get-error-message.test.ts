@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { getErrorMessage, getProviderResourceForbiddenMessage } from '../get-error-message'
-import { getErrorEntry } from '../structured-errors'
+import {
+  getErrorMessage,
+  getProviderResourceForbiddenMessage,
+  isSwedishUserMessage,
+  looksLikeUserFacingSwedish,
+} from '../get-error-message'
+import { getErrorEntry, listErrorCodes } from '../structured-errors'
 import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
@@ -599,5 +604,68 @@ describe('getErrorMessage: INVOICE_SEND_PAYMENT_ACCOUNT_MISSING (#2126)', () => 
     expect(msg).toBe(getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')!.message_sv)
     const unknown = getErrorMessage(envelope('JPY'), { statusCode: 400 })
     expect(unknown).toBe(getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')!.message_sv)
+  })
+})
+
+
+// Issue #2086: the keyword heuristic dropped correct Swedish route messages
+// that happened to lack one of its ~30 keywords and replaced them with generic
+// HTTP text whose advice was sometimes wrong. A sentence that reads as Swedish
+// and shows no sign of a technical leak now passes through.
+describe('getErrorMessage: Swedish route messages without a keyword pass through (#2086)', () => {
+  it('shows the skattekonto sync reason instead of the generic 500 text', () => {
+    const msg = getErrorMessage(
+      { error: 'Inget skattekonto är registrerat hos Skatteverket.' },
+      { statusCode: 500 },
+    )
+    expect(msg).toBe('Inget skattekonto är registrerat hos Skatteverket.')
+  })
+
+  it.each([
+    'Datumet ligger utanför det valda räkenskapsåret.',
+    'Rättelsen motsvarar ingen ekonomisk händelse: det finns inget att rätta.',
+    'Funktionen är inte implementerad ännu.',
+  ])('passes through %s', (text) => {
+    expect(getErrorMessage({ error: text }, { statusCode: 400 })).toBe(text)
+    expect(getErrorMessage({ message: text }, { statusCode: 400 })).toBe(text)
+  })
+
+  it('still hides English and technical text behind the status/context fallback', () => {
+    expect(getErrorMessage({ error: 'Failed to fetch customer' }, { statusCode: 500 })).toBe(
+      'Ett oväntat serverfel uppstod. Försök igen senare.',
+    )
+    expect(
+      getErrorMessage({ error: 'TypeError: Cannot read properties of undefined (reading "id")' }, { statusCode: 500 }),
+    ).toBe('Ett oväntat serverfel uppstod. Försök igen senare.')
+    // Swedish words next to a leak are still a leak.
+    expect(
+      getErrorMessage({ error: 'Kontot är trasigt: TypeError: x is not a function' }, { statusCode: 500 }),
+    ).toBe('Ett oväntat serverfel uppstod. Försök igen senare.')
+    expect(
+      getErrorMessage({ error: 'Det gick inte att läsa relation "public.invoices"' }, { statusCode: 500 }),
+    ).toBe('Ett oväntat serverfel uppstod. Försök igen senare.')
+  })
+
+  it('looksLikeUserFacingSwedish scores on å/ä/ö, a strong Swedish word, or two weak ones, never on English', () => {
+    expect(looksLikeUserFacingSwedish('Inget skattekonto är registrerat hos Skatteverket.')).toBe(true)
+    expect(looksLikeUserFacingSwedish('Det finns inget att rätta.')).toBe(true)
+    expect(looksLikeUserFacingSwedish('Kopplingen misslyckades.')).toBe(true)
+    expect(looksLikeUserFacingSwedish('Ingen fil bifogad.')).toBe(true)
+    expect(looksLikeUserFacingSwedish('Kan hittas med den.')).toBe(true) // two weak words
+    expect(looksLikeUserFacingSwedish('Not found')).toBe(false)
+    expect(looksLikeUserFacingSwedish('Request failed with status 500')).toBe(false)
+    expect(looksLikeUserFacingSwedish('Invalid input: expected string, received undefined')).toBe(false)
+    expect(looksLikeUserFacingSwedish('')).toBe(false)
+    // A lone weak word is not enough ("till" is also English).
+    expect(looksLikeUserFacingSwedish('Redirect till /login')).toBe(false)
+    expect(looksLikeUserFacingSwedish('Set the value for det')).toBe(false)
+  })
+
+  it('every message_sv in the structured-error registry passes the combined test', () => {
+    const failing = listErrorCodes().filter((code) => {
+      const entry = getErrorEntry(code)
+      return entry ? !isSwedishUserMessage(entry.message_sv) : false
+    })
+    expect(failing).toEqual([])
   })
 })
