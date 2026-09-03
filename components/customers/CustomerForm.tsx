@@ -86,7 +86,14 @@ export default function CustomerForm({
       .optional()
       .or(z.literal('')),
     language: z.enum(['sv', 'en']).optional(),
-    default_payment_terms: z.number().min(1).optional(),
+    // 0 is a real value (betalning direkt). The old min(1) made the form
+    // unsavable on "0" with no message at all (issue #2070); now the rule is
+    // whole days 0-365 and the field says so when it does not hold.
+    default_payment_terms: z
+      .number({ message: t('payment_terms_invalid') })
+      .int(t('payment_terms_invalid'))
+      .min(0, t('payment_terms_invalid'))
+      .max(365, t('payment_terms_invalid')),
     notes: z.string().optional(),
   }).superRefine((customer, ctx) => {
     // Country vs customer type vs VAT prefix (#2025): an EU customer with
@@ -170,7 +177,8 @@ export default function CustomerForm({
       vat_number: initialData?.vat_number || '',
       personal_number: initialData?.personal_number || '',
       language: initialData?.language || 'sv',
-      default_payment_terms: initialData?.default_payment_terms || 30,
+      // ?? not ||: a stored 0 (betalning direkt) must not reopen as 30.
+      default_payment_terms: initialData?.default_payment_terms ?? 30,
       notes: initialData?.notes || '',
     },
   })
@@ -538,8 +546,15 @@ export default function CustomerForm({
         <Input
           id="payment_terms"
           type="number"
+          min={0}
+          max={365}
+          step={1}
           {...register('default_payment_terms', { valueAsNumber: true })}
         />
+        <p className="text-xs text-muted-foreground">{t('payment_terms_help')}</p>
+        {errors.default_payment_terms && (
+          <p className="text-sm text-destructive">{errors.default_payment_terms.message}</p>
+        )}
       </div>
 
       {/* Invoice language */}
