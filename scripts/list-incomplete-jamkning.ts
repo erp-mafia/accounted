@@ -9,8 +9,9 @@
  * while the stored beslut says otherwise. Every write path now rejects the
  * shape; this script finds the rows that were stored before that.
  *
- * WHAT IT DOES: lists the rows per company with employee id, masked name,
- * percentage and start date. It writes NOTHING. The repair is a per-company
+ * WHAT IT DOES: lists the rows per company with employee id, percentage and
+ * start date. No names or other PII are selected: the employee page shows the
+ * name once you open the id. It writes NOTHING. The repair is a per-company
  * decision (set an end date, or clear the beslut): either changes the next
  * payslip, so it is made by a human through the employee page or the API,
  * not by this script.
@@ -40,19 +41,10 @@ const supabase = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSessio
 interface Row {
   id: string
   company_id: string
-  first_name: string
-  last_name: string
   is_active: boolean
   jamkning_percentage: number
   jamkning_valid_from: string | null
   jamkning_valid_to: string | null
-}
-
-/** Initials only: this output may end up in a ticket. */
-function maskName(first: string, last: string): string {
-  const f = first.trim().charAt(0)
-  const l = last.trim().charAt(0)
-  return `${f}${f ? '.' : ''} ${l}${l ? '.' : ''}`.trim()
 }
 
 async function main() {
@@ -61,7 +53,7 @@ async function main() {
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabase
       .from('employees')
-      .select('id, company_id, first_name, last_name, is_active, jamkning_percentage, jamkning_valid_from, jamkning_valid_to')
+      .select('id, company_id, is_active, jamkning_percentage, jamkning_valid_from, jamkning_valid_to')
       .not('jamkning_percentage', 'is', null)
       .is('jamkning_valid_to', null)
       .order('company_id')
@@ -97,7 +89,7 @@ async function main() {
     for (const r of rows.filter((x) => x.company_id === companyId)) {
       const state = r.is_active ? 'active  ' : 'inactive'
       const from = r.jamkning_valid_from ?? '(no start date)'
-      console.log(`  ${r.id}  ${state}  ${maskName(r.first_name, r.last_name).padEnd(6)}  ${r.jamkning_percentage} %  from ${from}  to (null)`)
+      console.log(`  ${r.id}  ${state}  ${r.jamkning_percentage} %  from ${from}  to (null)`)
     }
     console.log('')
   }

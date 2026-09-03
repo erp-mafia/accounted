@@ -565,7 +565,7 @@ describe('gnubok_create_employee', () => {
     await expect(
       createEmployee.execute(
         { ...validArgs, jamkning_percentage: 15, jamkning_valid_from: '2026-01-01' },
-        'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
       ),
     ).rejects.toThrow(/jamkning_valid_to/)
   })
@@ -642,7 +642,7 @@ describe('gnubok_update_employee', () => {
     await expect(
       updateEmployee.execute(
         { employee_id: 'emp-1', jamkning_percentage: 15, jamkning_valid_from: '2026-01-01' },
-        'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
       ),
     ).rejects.toThrow(/jamkning_valid_to/)
   })
@@ -657,7 +657,7 @@ describe('gnubok_update_employee', () => {
 
     const result = (await updateEmployee.execute(
       { employee_id: 'emp-1', monthly_salary: 38000 },
-      'company-1', 'user-1', supabaseMock as never, { type: 'agent_chat' },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
     )) as { staged: boolean }
 
     expect(result.staged).toBe(true)
