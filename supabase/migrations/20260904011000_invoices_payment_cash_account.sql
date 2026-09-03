@@ -18,14 +18,19 @@ ALTER TABLE public.invoices
     CHECK (payment_details IS NULL OR jsonb_typeof(payment_details) = 'object');
 
 -- Same-company proof in the constraint itself (the composite target
--- cash_accounts(id, company_id) exists since 20260903150000): a direct
+-- cash_accounts(id, company_id) exists since 20260904010000): a direct
 -- PostgREST write cannot attach another tenant's account. SET NULL is scoped
 -- to the account column (PG15 column list); company_id must never be nulled.
-ALTER TABLE public.invoices
-  ADD CONSTRAINT invoices_payment_cash_account_same_company
-    FOREIGN KEY (payment_cash_account_id, company_id)
-    REFERENCES public.cash_accounts(id, company_id)
-    ON DELETE SET NULL (payment_cash_account_id);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'invoices_payment_cash_account_same_company') THEN
+    ALTER TABLE public.invoices
+      ADD CONSTRAINT invoices_payment_cash_account_same_company
+        FOREIGN KEY (payment_cash_account_id, company_id)
+        REFERENCES public.cash_accounts(id, company_id)
+        ON DELETE SET NULL (payment_cash_account_id);
+  END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_invoices_payment_cash_account
   ON public.invoices (company_id, payment_cash_account_id)

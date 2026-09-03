@@ -82,14 +82,22 @@ COMMENT ON COLUMN public.cash_accounts.payee_iban IS
 
 -- (id, company_id) target so child tables can prove same-company membership
 -- with one composite FK (same pattern as parties in 20260902160000).
-ALTER TABLE public.cash_accounts
-  ADD CONSTRAINT cash_accounts_id_company_unique UNIQUE (id, company_id);
+-- Every statement in this file is rerunnable: the first issue of this
+-- migration (20260903150000) ran on staging and on preview branches before
+-- it failed on prod, and this re-issue must apply cleanly on top of it.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cash_accounts_id_company_unique') THEN
+    ALTER TABLE public.cash_accounts
+      ADD CONSTRAINT cash_accounts_id_company_unique UNIQUE (id, company_id);
+  END IF;
+END $$;
 
 -- ============================================================
 -- 2. Per-currency defaults
 -- ============================================================
 
-CREATE TABLE public.invoice_payee_defaults (
+CREATE TABLE IF NOT EXISTS public.invoice_payee_defaults (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id      uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
   currency        text NOT NULL CHECK (currency IN ('SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK')),
@@ -102,11 +110,15 @@ CREATE TABLE public.invoice_payee_defaults (
     REFERENCES public.cash_accounts(id, company_id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_invoice_payee_defaults_cash_account
+CREATE INDEX IF NOT EXISTS idx_invoice_payee_defaults_cash_account
   ON public.invoice_payee_defaults (cash_account_id);
 
 ALTER TABLE public.invoice_payee_defaults ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "invoice_payee_defaults_select" ON public.invoice_payee_defaults;
+DROP POLICY IF EXISTS "invoice_payee_defaults_insert" ON public.invoice_payee_defaults;
+DROP POLICY IF EXISTS "invoice_payee_defaults_update" ON public.invoice_payee_defaults;
+DROP POLICY IF EXISTS "invoice_payee_defaults_delete" ON public.invoice_payee_defaults;
 CREATE POLICY "invoice_payee_defaults_select" ON public.invoice_payee_defaults
   FOR SELECT USING (company_id IN (SELECT public.user_company_ids()));
 CREATE POLICY "invoice_payee_defaults_insert" ON public.invoice_payee_defaults
@@ -118,6 +130,7 @@ CREATE POLICY "invoice_payee_defaults_update" ON public.invoice_payee_defaults
 CREATE POLICY "invoice_payee_defaults_delete" ON public.invoice_payee_defaults
   FOR DELETE USING (public.user_is_company_admin(company_id));
 
+DROP TRIGGER IF EXISTS invoice_payee_defaults_updated_at ON public.invoice_payee_defaults;
 CREATE TRIGGER invoice_payee_defaults_updated_at
   BEFORE UPDATE ON public.invoice_payee_defaults
   FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
@@ -125,6 +138,7 @@ CREATE TRIGGER invoice_payee_defaults_updated_at
 -- Behandlingshistorik: which account customer invoices pay to is a
 -- behandlingsregel (BFNAR 2013:2 p. 9.16), same as the voucher-series
 -- override on cash_accounts (20260902124513).
+DROP TRIGGER IF EXISTS audit_invoice_payee_defaults ON public.invoice_payee_defaults;
 CREATE TRIGGER audit_invoice_payee_defaults
   AFTER INSERT OR UPDATE OR DELETE ON public.invoice_payee_defaults
   FOR EACH ROW EXECUTE FUNCTION public.write_audit_log();
@@ -357,6 +371,7 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION public.trg_mirror_invoice_payee_defaults() FROM PUBLIC, anon, authenticated;
 
+DROP TRIGGER IF EXISTS mirror_invoice_payee_defaults_on_defaults ON public.invoice_payee_defaults;
 CREATE TRIGGER mirror_invoice_payee_defaults_on_defaults
   AFTER INSERT OR UPDATE OR DELETE ON public.invoice_payee_defaults
   FOR EACH ROW EXECUTE FUNCTION public.trg_mirror_invoice_payee_defaults();
@@ -364,6 +379,7 @@ CREATE TRIGGER mirror_invoice_payee_defaults_on_defaults
 -- Payee-field edits or a revoke on an account that is a default for some
 -- currency must reach the mirror too. Bank sync churn (balances, names, the
 -- enabled flag, the bank identity iban) never fires this.
+DROP TRIGGER IF EXISTS mirror_invoice_payee_defaults_on_cash_account ON public.cash_accounts;
 CREATE TRIGGER mirror_invoice_payee_defaults_on_cash_account
   AFTER UPDATE ON public.cash_accounts
   FOR EACH ROW
