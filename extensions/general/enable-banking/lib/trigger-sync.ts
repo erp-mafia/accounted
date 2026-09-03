@@ -26,6 +26,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { syncAccountTransactions, type SyncOptions } from './sync'
 import {
   SessionExpiredError,
+  AspspUnavailableError,
   REAUTH_REQUIRED_MESSAGE,
   SYNC_FAILED_MESSAGE,
 } from './api-client'
@@ -272,6 +273,25 @@ export async function triggerConnectionSync(
         code: 'BANK_SESSION_EXPIRED',
         connection_id: connectionId,
         status: 'expired',
+      }
+    }
+
+    if (error instanceof AspspUnavailableError) {
+      // The bank is refusing right now (a window it has answered before, or
+      // every narrower one): retryable, not a dead session, not a broken
+      // row. Warn, leave error_message alone (no renewal advice), and answer
+      // with the retryable code (#2202).
+      log.warn('agent-triggered bank sync: bank unavailable', {
+        connectionId,
+        reason: error.reason,
+        dateFrom: error.dateFrom,
+        status: error.status,
+      })
+      return {
+        ok: false,
+        code: 'BANK_SYNC_FAILED',
+        connection_id: connectionId,
+        status: connection.status as string,
       }
     }
 
