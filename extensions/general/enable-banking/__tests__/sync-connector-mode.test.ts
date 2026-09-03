@@ -91,3 +91,24 @@ describe('syncAccountTransactions in connector mode', () => {
     await expect(syncAccountTransactions(supabase, 'company-1', 'user-1', 'conn-1', account, '2026-08-01', '2026-09-03', vi.fn())).rejects.toThrow(/unexpected shape/)
   })
 })
+
+describe('connector timeout covers the body read', () => {
+  it('aborts a response whose body stalls instead of hanging past the budget', async () => {
+    vi.useFakeTimers()
+    try {
+      const stalled = { ok: true, status: 200, text: () => new Promise<string>(() => {}) } as unknown as Response
+      fetchMock.mockImplementationOnce(() => Promise.resolve(stalled))
+      const pending = syncAccountTransactions(supabase, 'company-1', 'user-1', 'conn-1', account, '2026-08-01', '2026-09-03', vi.fn())
+      // Only the abort signal can end this: the body promise never settles.
+      const raced = Promise.race([pending.then(() => 'settled', () => 'settled'), new Promise((r) => setTimeout(r, 200_000, 'timed-out'))])
+      await vi.advanceTimersByTimeAsync(130_000)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const signal = (fetchMock.mock.calls[0] as [string, RequestInit])[1].signal as AbortSignal
+      expect(signal.aborted).toBe(true)
+      await vi.advanceTimersByTimeAsync(200_000)
+      await raced
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

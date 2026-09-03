@@ -33,8 +33,8 @@ export const CONNECTOR_KEY_HEADER = 'x-connector-key'
 
 export const CONNECTOR_ENTITLEMENTS_PATH = '/api/connect/entitlements'
 
-/** Default hosted origin. app.gnubok.se stays the machine-facing host for API traffic. */
-export const DEFAULT_CONNECT_BASE_URL = 'https://app.gnubok.se'
+/** Default origin of the connector service. Installations that pointed at the hosted app's copy of the routes set GNUBOK_CONNECT_URL explicitly. */
+export const DEFAULT_CONNECT_BASE_URL = 'https://connect.accounted.se'
 
 /**
  * Request headers an installation sends alongside its key. The company header
@@ -131,14 +131,15 @@ export const bankSyncRequestSchema = z.object({
   session_id: z.string().trim().min(1).max(200),
   account_uid: z.string().trim().min(1).max(200),
   account_currency: z.string().trim().length(3),
-  date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  date_from: z.iso.date().optional(),
+  date_to: z.iso.date().optional(),
   strategy: z.enum(['default', 'longest']).optional(),
 })
 export type BankSyncRequest = z.infer<typeof bankSyncRequestSchema>
 
 export const normalizedBankTransactionSchema = z.object({
-  booking_date: z.string(),
+  /** A real calendar date: the installation's stored keys and ledger date derive from it. */
+  booking_date: z.iso.date(),
   amount: z.number(),
   currency: z.string(),
   description: z.string(),

@@ -39,8 +39,8 @@ describe('connector-mode detection', () => {
   it('routes to the hosted proxy when a key is set and no own credentials exist', () => {
     clear()
     vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_x')
-    expect(bankConnectorMode()).toEqual({ baseUrl: 'https://app.gnubok.se/api/connect/bank', key: 'gnubok_ck_x' })
-    expect(skatteverketConnectorMode()).toEqual({ baseUrl: 'https://app.gnubok.se/api/connect/skv', key: 'gnubok_ck_x' })
+    expect(bankConnectorMode()).toEqual({ baseUrl: 'https://connect.accounted.se/api/connect/bank', key: 'gnubok_ck_x' })
+    expect(skatteverketConnectorMode()).toEqual({ baseUrl: 'https://connect.accounted.se/api/connect/skv', key: 'gnubok_ck_x' })
   })
 
   it('honours GNUBOK_CONNECT_URL and strips a trailing slash', () => {
@@ -64,7 +64,7 @@ describe('peppol connector mode', () => {
     clear()
     expect(peppolConnectorMode()).toBeNull()
     vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_x')
-    expect(peppolConnectorMode()).toEqual({ baseUrl: 'https://app.gnubok.se/api/connect/peppol', key: 'gnubok_ck_x' })
+    expect(peppolConnectorMode()).toEqual({ baseUrl: 'https://connect.accounted.se/api/connect/peppol', key: 'gnubok_ck_x' })
     vi.stubEnv('QVALIA_PARTNER_REG_NO', '5560000000')
     expect(hasOwnPeppolCredentials()).toBe(true)
     expect(peppolConnectorMode()).toBeNull()
@@ -80,7 +80,7 @@ describe('bank canary companies', () => {
     vi.stubEnv('CONNECT_BANK_CANARY_COMPANIES', 'c-1, c-2')
     expect(bankConnectorMode()).toBeNull()
     expect(bankConnectorMode('c-9')).toBeNull()
-    expect(bankConnectorMode('c-1')).toEqual({ baseUrl: 'https://app.gnubok.se/api/connect/bank', key: 'gnubok_ck_x' })
+    expect(bankConnectorMode('c-1')).toEqual({ baseUrl: 'https://connect.accounted.se/api/connect/bank', key: 'gnubok_ck_x' })
     expect(bankConnectorMode('c-2')).not.toBeNull()
   })
 

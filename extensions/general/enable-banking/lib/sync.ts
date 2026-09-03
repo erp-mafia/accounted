@@ -94,9 +94,12 @@ async function fetchBookedViaConnector(
   if (error) throw new Error(`Connector bank sync could not read the connection: ${error.message}`)
   const sessionId = (row as { session_id: string | null } | null)?.session_id
   if (!sessionId) throw new Error('Connector bank sync requires a connection with a session id')
+  // The body is read INSIDE the timeout window: a service that sends headers
+  // and then stalls the body must not hold the sync open past the budget.
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), CONNECTOR_SYNC_TIMEOUT_MS)
   let response: Response
+  let text: string
   try {
     response = await fetch(`${connector.baseUrl}/sync`, {
       method: 'POST',
@@ -117,10 +120,10 @@ async function fetchBookedViaConnector(
         ...(args.strategy ? { strategy: args.strategy } : {}),
       }),
     })
+    text = await response.text()
   } finally {
     clearTimeout(timeout)
   }
-  const text = await response.text()
   let json: unknown = null
   try {
     json = text ? JSON.parse(text) : null

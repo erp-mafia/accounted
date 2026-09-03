@@ -114,6 +114,8 @@ describe('bank sync operation', () => {
     expect(bankSyncRequestSchema.safeParse({ session_id: 's', account_uid: 'a', account_currency: 'SEK', date_from: '2026-08-01', date_to: '2026-09-03', strategy: 'longest' }).success).toBe(true)
     expect(bankSyncRequestSchema.safeParse({ session_id: 's', account_uid: 'a', account_currency: 'SEKK' }).success).toBe(false)
     expect(bankSyncRequestSchema.safeParse({ session_id: 's', account_uid: 'a', account_currency: 'SEK', date_from: '2026/08/01' }).success).toBe(false)
+    expect(bankSyncRequestSchema.safeParse({ session_id: 's', account_uid: 'a', account_currency: 'SEK', date_from: '2026-02-30' }).success).toBe(false)
+    expect(bankSyncResponseSchema.safeParse({ transactions: [{ booking_date: '', amount: 1, currency: 'SEK', description: 'x', counterparty_name: null, counterparty_account: null, reference: null, merchant_category_code: null, bank_transaction_code: null, proprietary_bank_transaction_code: null }], raw_pages: [], skipped_pending: 0, returned_min_booking_date: null, returned_max_booking_date: null, effective_date_from: null, pages: 0 }).success).toBe(false)
     expect(
       bankSyncResponseSchema.safeParse({
         transactions: [{ booking_date: '2026-09-01', amount: -12.5, currency: 'SEK', description: 'x', counterparty_name: null, counterparty_account: null, reference: null, merchant_category_code: null, bank_transaction_code: null, proprietary_bank_transaction_code: null }],
