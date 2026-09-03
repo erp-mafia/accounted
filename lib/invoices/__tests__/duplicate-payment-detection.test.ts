@@ -203,8 +203,8 @@ describe('detectDuplicatePaymentVoucher', () => {
         date: '2026-05-15',
       }),
     ])
-    // invoice_payments has a row linking this JE
-    enqueue({ data: [{ journal_entry_id: 'je-3' }], error: null })
+    // invoice_payments has a row linking this JE to a bank transaction
+    enqueue({ data: [{ journal_entry_id: 'je-3', transaction_id: 'tx-bank' }], error: null })
     enqueue({ data: [], error: null })
 
     const result = await detectDuplicatePaymentVoucher(supabase as never, {
@@ -216,6 +216,33 @@ describe('detectDuplicatePaymentVoucher', () => {
     })
 
     expect(result).toBeNull()
+  })
+
+  // #2019: "Markera som betald" and Stripe now write a payment row WITHOUT a
+  // bank transaction. That row means "paid by hand", not "reconciled to a
+  // bank line", so the voucher must still surface when the real bank line
+  // arrives; otherwise a second payment voucher posts silently.
+  it('still flags a voucher whose payment row carries no bank transaction (manual settlement)', async () => {
+    enqueueLines([
+      makeLineRow({
+        je_id: 'je-manual',
+        account: '1930',
+        debit: 1000,
+        date: '2026-05-15',
+      }),
+    ])
+    enqueue({ data: [{ journal_entry_id: 'je-manual', transaction_id: null }], error: null })
+    enqueue({ data: [], error: null })
+
+    const result = await detectDuplicatePaymentVoucher(supabase as never, {
+      companyId: 'company-1',
+      transactionId: 'tx-1',
+      transactionDate: '2026-05-15',
+      transactionAmount: 1000,
+      transactionCurrency: 'SEK',
+    })
+
+    expect(result?.journal_entry_id).toBe('je-manual')
   })
 
   it('excludes JEs already linked from another transaction', async () => {
