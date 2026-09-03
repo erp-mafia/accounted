@@ -177,6 +177,13 @@ export const POST = withRouteContext(
         {
           upload_source: 'file_upload',
           journal_entry_id: journalEntryId,
+          // The file lands on a posted verifikat by construction, so the
+          // booking is already known and a model pass per file buys nothing.
+          // Run inline through document.uploaded (the bus awaits its
+          // handlers), that pass was the bulk of a 10-minute foreground wait
+          // on a few hundred migrated files (#2188). Same opt-out as the
+          // provider underlag sweep (#1783), for the same reason.
+          extractionOwner: 'none',
           // Scope the deterministic id to the target verifikat: the same
           // receipt may legitimately back several verifikat, so content alone
           // must not dedupe across them.
