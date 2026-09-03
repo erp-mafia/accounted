@@ -17,10 +17,12 @@
 -- apply_party_suggestions gains the VAT number as a hard key beside the org
 -- number, for foreign suppliers.
 --
--- Repair: suggested parties the pipeline made under the old keys and that
+-- Repair: suggested parties the pipeline made under the old keys, that
 -- nobody touched (no decisions, no role links, no user or registry facts)
--- are removed; the queue recreates them under the new keys on its next
--- visit. On prod that is 28 rows in one company, all from tonight.
+-- and that no posted voucher maps to any more under the new function are
+-- removed; the queue recreates their counterparts under the new keys on
+-- its next visit. Suggestions whose key is unchanged stay. On prod that
+-- is at most 27 rows in one company, all from 2026-09-03.
 
 CREATE OR REPLACE FUNCTION public.ledger_key(raw text)
 RETURNS text
@@ -206,7 +208,10 @@ BEGIN
 END;
 $$;
 
--- Repair: untouched pipeline suggestions made under the old keys.
+-- Repair: untouched pipeline suggestions made under the old keys that the
+-- new ledger_key no longer produces from any posted voucher of the company
+-- (same evidence filter as get_ledger_key_evidence). Rows still backed by
+-- a voucher under the new keys are left alone.
 DELETE FROM public.parties p
 WHERE p.status = 'suggested'
   AND p.merged_into IS NULL
@@ -214,6 +219,15 @@ WHERE p.status = 'suggested'
   AND NOT EXISTS (SELECT 1 FROM public.party_decisions d WHERE d.party_id = p.id)
   AND NOT EXISTS (SELECT 1 FROM public.suppliers s WHERE s.party_id = p.id)
   AND NOT EXISTS (SELECT 1 FROM public.customers c WHERE c.party_id = p.id)
-  AND NOT EXISTS (SELECT 1 FROM public.party_facts f WHERE f.party_id = p.id AND f.source IN ('user', 'registry_scb', 'registry_tic', 'vies', 'peppol'));
+  AND NOT EXISTS (SELECT 1 FROM public.party_facts f WHERE f.party_id = p.id AND f.source IN ('user', 'registry_scb', 'registry_tic', 'vies', 'peppol'))
+  AND NOT EXISTS (
+    SELECT 1 FROM public.journal_entries je
+    WHERE je.company_id = p.company_id
+      AND je.status = 'posted'
+      AND je.source_type NOT IN ('storno', 'opening_balance', 'year_end', 'vat_settlement')
+      AND je.description IS NOT NULL
+      AND btrim(je.description) <> ''
+      AND public.ledger_key(je.description) = ANY (p.alias_keys)
+  );
 
 NOTIFY pgrst, 'reload schema';
