@@ -176,7 +176,8 @@ export const POST = withRouteContext(
         company_id: companyId,
         invoice_number: invoiceNumber,
         ...build.invoiceFields,
-        ...payeeChoice.fields,
+        payment_cash_account_id: payeeChoice.fields.payment_cash_account_id,
+        payment_details: payeeChoice.fields.payment_details,
       })
       .select()
       .single()

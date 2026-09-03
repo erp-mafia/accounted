@@ -5,7 +5,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateInvoiceSchema } from '@/lib/api/schemas'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
-import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
+import { resolveInvoicePayeeChoice, type InvoicePayeeFields } from '@/lib/invoices/invoice-payee'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
@@ -168,7 +168,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     // Payee choice: omitted = unchanged (a partial update must not clear a
     // draft's chosen account); null = back to the per-currency default.
-    let payeeFields: Record<string, unknown> = {}
+    let payeeFields: Partial<InvoicePayeeFields> = {}
     if (input.payment_cash_account_id !== undefined) {
       const payeeChoice = await resolveInvoicePayeeChoice(
         supabase,
@@ -198,7 +198,12 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
         : build.invoiceFields
     const { data: updated, error: updateError } = await supabase
       .from('invoices')
-      .update({ ...updateFields, ...payeeFields, updated_at: new Date().toISOString() })
+      .update({
+        ...updateFields,
+        payment_cash_account_id: payeeFields.payment_cash_account_id,
+        payment_details: payeeFields.payment_details,
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', id)
       .eq('company_id', companyId!)
       .eq('status', 'draft')

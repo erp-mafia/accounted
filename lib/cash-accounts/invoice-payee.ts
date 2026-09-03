@@ -137,19 +137,11 @@ export async function updateCashAccountPayee(
   cashAccountId: string,
   update: PayeeUpdate,
 ): Promise<CashAccount | null> {
-  const payload: Record<string, unknown> = {}
-  for (const field of PAYEE_FIELDS) {
-    if (field in update) payload[field] = clean(update[field])
-  }
-  if ('name' in update) payload.name = clean(update.name)
-  if (update.invoice_payee !== undefined) payload.invoice_payee = update.invoice_payee
-  if (payload.iban !== undefined && payload.iban !== null) {
-    payload.iban = String(payload.iban).replace(/\s/g, '').toUpperCase()
-  }
-  if (payload.bic !== undefined && payload.bic !== null) {
-    payload.bic = String(payload.bic).replace(/\s/g, '').toUpperCase()
-  }
-  if (Object.keys(payload).length === 0) {
+  // Literal payload (the phantom-column guard reads literal keys): a key the
+  // caller did not supply stays undefined and is dropped by supabase-js, so
+  // only supplied fields are written and explicit null still clears.
+  const has = (key: keyof PayeeUpdate) => key in update && update[key] !== undefined
+  if (!(Object.keys(update) as (keyof PayeeUpdate)[]).some(has)) {
     const { data } = await supabase
       .from('cash_accounts')
       .select('*')
@@ -160,7 +152,20 @@ export async function updateCashAccountPayee(
   }
   const { data, error } = await supabase
     .from('cash_accounts')
-    .update(payload)
+    .update({
+      bank_name: has('bank_name') ? clean(update.bank_name) : undefined,
+      clearing_number: has('clearing_number') ? clean(update.clearing_number) : undefined,
+      account_number: has('account_number') ? clean(update.account_number) : undefined,
+      bankgiro: has('bankgiro') ? clean(update.bankgiro) : undefined,
+      plusgiro: has('plusgiro') ? clean(update.plusgiro) : undefined,
+      swish: has('swish') ? clean(update.swish) : undefined,
+      iban: has('iban') ? compact(clean(update.iban), true) : undefined,
+      bic: has('bic') ? compact(clean(update.bic), true) : undefined,
+      bank_code: has('bank_code') ? clean(update.bank_code) : undefined,
+      foreign_account_number: has('foreign_account_number') ? clean(update.foreign_account_number) : undefined,
+      name: has('name') ? clean(update.name) : undefined,
+      invoice_payee: update.invoice_payee,
+    })
     .eq('company_id', companyId)
     .eq('id', cashAccountId)
     .select('*')
@@ -244,25 +249,28 @@ export async function createManualBankAccount(
   }
 
   const payee = input.payee ?? {}
-  const payload: Record<string, unknown> = {
-    company_id: companyId,
-    ledger_account: ledger,
-    currency,
-    name: input.name.trim(),
-    enabled: true,
-    is_primary: false,
-    source: 'manual',
-    invoice_payee: input.invoice_payee ?? true,
-  }
-  for (const field of PAYEE_FIELDS) {
-    if (field in payee) payload[field] = clean(payee[field])
-  }
-  if (payload.iban) payload.iban = String(payload.iban).replace(/\s/g, '').toUpperCase()
-  if (payload.bic) payload.bic = String(payload.bic).replace(/\s/g, '').toUpperCase()
-
   const { data, error } = await supabase
     .from('cash_accounts')
-    .insert(payload)
+    .insert({
+      company_id: companyId,
+      ledger_account: ledger,
+      currency,
+      name: input.name.trim(),
+      enabled: true,
+      is_primary: false,
+      source: 'manual',
+      invoice_payee: input.invoice_payee ?? true,
+      bank_name: clean(payee.bank_name),
+      clearing_number: clean(payee.clearing_number),
+      account_number: clean(payee.account_number),
+      bankgiro: clean(payee.bankgiro),
+      plusgiro: clean(payee.plusgiro),
+      swish: clean(payee.swish),
+      iban: compact(clean(payee.iban), true),
+      bic: compact(clean(payee.bic), true),
+      bank_code: clean(payee.bank_code),
+      foreign_account_number: clean(payee.foreign_account_number),
+    })
     .select('*')
     .single()
   if (error) throw new Error(`cash_accounts insert failed: ${error.message}`)
@@ -358,4 +366,11 @@ function clean(value: string | null | undefined): string | null {
   if (value === undefined || value === null) return null
   const trimmed = value.trim()
   return trimmed ? trimmed : null
+}
+
+/** Strip inner whitespace (IBAN, BIC), optionally upper-casing. */
+function compact(value: string | null, upper = false): string | null {
+  if (value === null) return null
+  const stripped = value.replace(/\s/g, '')
+  return upper ? stripped.toUpperCase() : stripped
 }

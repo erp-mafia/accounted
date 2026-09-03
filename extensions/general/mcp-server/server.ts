@@ -6796,7 +6796,7 @@ export const tools: McpTool[] = [
         },
         payment_cash_account_id: {
           type: 'string',
-          description: 'Bank account (cash_accounts UUID) the invoice asks the customer to pay to. Omit for the company default per currency. Must be one of the company accounts flagged as invoice payee (see gnubok_get_company_settings) and usable for the invoice currency (IBAN for non-SEK).',
+          description: 'Bank account UUID to print as payee; omit for the company default.',
         },
       },
       required: ['customer_id', 'items'],

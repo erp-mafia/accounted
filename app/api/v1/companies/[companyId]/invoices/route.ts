@@ -691,7 +691,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         company_id: ctx.companyId!,
         invoice_number: invoiceNumber,
         ...invoiceFields,
-        ...payeeChoice.fields,
+        payment_cash_account_id: payeeChoice.fields.payment_cash_account_id,
+        payment_details: payeeChoice.fields.payment_details,
       })
       .select(INVOICE_RESPONSE_COLUMNS)
       .single()

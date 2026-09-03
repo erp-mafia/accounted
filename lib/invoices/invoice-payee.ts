@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CashAccount, Currency, Invoice, InvoicePaymentAccount } from '@/types'
 import { cashAccountPayee, isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee'
 import { invoiceRequiresPaymentAccount } from '@/lib/invoices/payment-accounts'
+import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('invoices/payee')
@@ -147,5 +148,5 @@ export async function resolveInvoiceSettlementAccount(
     return '1930'
   }
   const ledger = (data as { ledger_account?: string } | null)?.ledger_account
-  return ledger && /^\d{4}$/.test(ledger) ? ledger : '1930'
+  return ledger && ACCOUNT_NUMBER_RE.test(ledger) ? ledger : '1930'
 }

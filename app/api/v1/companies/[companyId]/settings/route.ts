@@ -286,7 +286,6 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // statically verify every column name. Fields the caller did not supply
     // are `undefined` here and are dropped by supabase-js JSON serialization,
     // so only supplied fields are written; explicit null still clears.
-    const SETTINGS_SELECT = 'bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference, email, phone, website, invoice_email_texts'
     const updateResult = await ctx.supabase
       .from('company_settings')
       .update({
@@ -305,7 +304,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
         invoice_email_texts: changes.invoice_email_texts,
       })
       .eq('company_id', ctx.companyId!)
-      .select(SETTINGS_SELECT)
+      .select('bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference, email, phone, website, invoice_email_texts')
       .maybeSingle()
     const error = updateResult.error
     let data = updateResult.data
@@ -323,7 +322,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
         if (written.length > 0) {
           const reread = await ctx.supabase
             .from('company_settings')
-            .select(SETTINGS_SELECT)
+            .select('bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference, email, phone, website, invoice_email_texts')
             .eq('company_id', ctx.companyId!)
             .maybeSingle()
           if (!reread.error && reread.data) data = reread.data

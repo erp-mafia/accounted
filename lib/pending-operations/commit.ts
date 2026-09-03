@@ -657,12 +657,11 @@ async function commitUpdateCompanySettings(
     throw err
   }
 
-  const SETTINGS_SELECT = 'bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference, email, phone, website, invoice_email_texts'
   const { data, error } = await supabase
     .from('company_settings')
     .update(validated.changes)
     .eq('company_id', companyId)
-    .select(SETTINGS_SELECT)
+    .select('bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference, email, phone, website, invoice_email_texts')
     .single()
 
   if (error) {
@@ -681,7 +680,7 @@ async function commitUpdateCompanySettings(
     if (written.length > 0) {
       const reread = await supabase
         .from('company_settings')
-        .select(SETTINGS_SELECT)
+        .select('bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference, email, phone, website, invoice_email_texts')
         .eq('company_id', companyId)
         .single()
       if (!reread.error && reread.data) row = reread.data

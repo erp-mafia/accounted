@@ -338,7 +338,8 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
           details: payeeChoice.details,
         })
       }
-      Object.assign(updateData, payeeChoice.fields)
+      updateData.payment_cash_account_id = payeeChoice.fields.payment_cash_account_id
+      updateData.payment_details = payeeChoice.fields.payment_details
     }
 
     // Shared predicate with the dashboard PATCH: draft, no verifikat, not a
