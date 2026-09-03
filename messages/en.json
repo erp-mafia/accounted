@@ -6534,6 +6534,7 @@
     "band_bevaka": "Monitor",
     "row_book_transactions": "Transactions to record",
     "row_book_transactions_stale": "{count} older than 14 days",
+    "row_book_skattekonto": "Tax account events to record",
     "row_inbox_documents": "Documents to handle",
     "row_inbox_documents_detail": "Match to a transaction or record directly",
     "row_supplier_approval": "Supplier invoices to approve",

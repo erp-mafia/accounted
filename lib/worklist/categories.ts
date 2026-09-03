@@ -68,6 +68,28 @@ export async function countUnbookedTransactions(
 }
 
 /**
+ * Unbooked skattekonto rows: every Skatteverket-side event the Transaktioner
+ * inbox lists (status = 'booked', i.e. "tidigare") that has no verifikat and
+ * was not ignored. `status` is Skatteverket's status, not booking status:
+ * 'upcoming' rows are future charges with nothing to book. journal_entry_id
+ * is the booked marker here (unlike bank transactions, which use is_business).
+ */
+export async function countUnbookedSkattekontoRows(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<number> {
+  const { count, error } = await supabase
+    .from('skattekonto_transactions')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('status', 'booked')
+    .is('journal_entry_id', null)
+    .eq('is_ignored', false)
+  if (error) return logAndZero('book_skattekonto', companyId, error)
+  return count ?? 0
+}
+
+/**
  * Unconsumed inbox documents. Mirrors /api/documents/inbox-available:
  * items with a file that have not become a supplier invoice, a journal
  * entry, or a transaction match, and whose document is still unlinked
