@@ -29,7 +29,7 @@ export const GET = withRouteContext('sales_order.list', async (request, { supaba
     orders = await fetchAllRows<SalesOrder>(({ from, to }) => {
       let qb = supabase
         .from('sales_orders')
-        .select('*, customer:customers(id, name, customer_number, customer_type), items:sales_order_items(*)')
+        .select('*, customer:customers(id, name, customer_number, customer_type), items:sales_order_items!sales_order_items_sales_order_id_fkey(*)')
         .eq('company_id', companyId)
       if (status) qb = qb.eq('status', status)
       if (customer_id) qb = qb.eq('customer_id', customer_id)
