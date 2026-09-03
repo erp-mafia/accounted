@@ -313,11 +313,15 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
-  -- An account revoked as payee, or disabled, stops being a default: the
-  -- map then keeps its last entry as fallback until an admin picks anew.
-  IF TG_TABLE_NAME = 'cash_accounts' AND TG_OP = 'UPDATE'
-     AND (NEW.invoice_payee = false OR NEW.enabled = false) THEN
-    DELETE FROM public.invoice_payee_defaults WHERE cash_account_id = NEW.id;
+  -- An account revoked as payee, or disabled, stops being a default (the
+  -- defaults DELETE trigger then drops that currency from the map). The
+  -- field reads sit in their own branch: plpgsql resolves NEW.<field> per
+  -- expression, and this function also fires for invoice_payee_defaults
+  -- rows, which have no invoice_payee column.
+  IF TG_TABLE_NAME = 'cash_accounts' THEN
+    IF TG_OP = 'UPDATE' AND (NEW.invoice_payee = false OR NEW.enabled = false) THEN
+      DELETE FROM public.invoice_payee_defaults WHERE cash_account_id = NEW.id;
+    END IF;
   END IF;
   IF TG_TABLE_NAME = 'invoice_payee_defaults' THEN
     IF TG_OP = 'DELETE' THEN
