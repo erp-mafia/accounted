@@ -1,3 +1,4 @@
+-- pg-test: covered-by tests/pg/party-suggestions.pg.test.ts
 -- Parties: ledger keys for the descriptions our own booking flows write.
 --
 -- Vouchers created through the assistant and the transaction inbox carry
