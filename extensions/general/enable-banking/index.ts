@@ -1402,6 +1402,7 @@ export const enableBankingExtension: Extension = {
                 currency: a.currency,
                 ledger_account: ledgerAccount,
                 iban: a.iban ?? null,
+                bban: a.bban ?? null,
                 name: a.name ?? null,
                 balance: a.balance ?? null,
                 available_balance: a.available_balance ?? null,

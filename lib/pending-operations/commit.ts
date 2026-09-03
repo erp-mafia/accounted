@@ -53,6 +53,7 @@ import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-paym
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { booksInvoicesOnIssue, cashPartialBlockReason, supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
+import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
 import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import {
   canApproveSupplierInvoice,
@@ -655,11 +656,12 @@ async function commitUpdateCompanySettings(
     throw err
   }
 
+  const SETTINGS_SELECT = 'bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference, email, phone, website, invoice_email_texts'
   const { data, error } = await supabase
     .from('company_settings')
     .update(validated.changes)
     .eq('company_id', companyId)
-    .select('bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference, email, phone, website, invoice_email_texts')
+    .select(SETTINGS_SELECT)
     .single()
 
   if (error) {
@@ -668,23 +670,41 @@ async function commitUpdateCompanySettings(
     }
     return { error: error.message, status: 500 }
   }
+  let row = data
+
+  // The bank columns mirror the default SEK payee account (migration
+  // 20260903150000): write the change through so the invoice PDF prints what
+  // the agent set, then read the row back as the mirror left it.
+  try {
+    const written = await propagateLegacyPayeeWrite(supabase, companyId, validated.changes)
+    if (written.length > 0) {
+      const reread = await supabase
+        .from('company_settings')
+        .select(SETTINGS_SELECT)
+        .eq('company_id', companyId)
+        .single()
+      if (!reread.error && reread.data) row = reread.data
+    }
+  } catch (err) {
+    log.error('update_company_settings: payee write-through failed', err as Error)
+  }
 
   return {
     data: {
       company_id: companyId,
-      bank_name: data.bank_name ?? null,
-      clearing_number: data.clearing_number ?? null,
-      account_number: data.account_number ?? null,
-      bankgiro: data.bankgiro ?? null,
-      plusgiro: data.plusgiro ?? null,
-      swish: data.swish ?? null,
-      iban: data.iban ?? null,
-      bic: data.bic ?? null,
-      contact_person: data.default_our_reference ?? null,
-      email: data.email ?? null,
-      phone: data.phone ?? null,
-      website: data.website ?? null,
-      invoice_email_texts: data.invoice_email_texts ?? null,
+      bank_name: row.bank_name ?? null,
+      clearing_number: row.clearing_number ?? null,
+      account_number: row.account_number ?? null,
+      bankgiro: row.bankgiro ?? null,
+      plusgiro: row.plusgiro ?? null,
+      swish: row.swish ?? null,
+      iban: row.iban ?? null,
+      bic: row.bic ?? null,
+      contact_person: row.default_our_reference ?? null,
+      email: row.email ?? null,
+      phone: row.phone ?? null,
+      website: row.website ?? null,
+      invoice_email_texts: row.invoice_email_texts ?? null,
     },
   }
 }

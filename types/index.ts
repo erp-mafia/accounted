@@ -643,13 +643,35 @@ export interface BankAccount {
 // drops it 30 days after this PR.
 export type CashAccountSource = 'enable_banking' | 'manual' | 'sie_import'
 
-export interface CashAccount {
+/**
+ * What a customer pays to. Lives on cash_accounts (migration 20260903150000)
+ * and is the single source for the payee printed on customer invoices; the
+ * per-currency map on company_settings is a trigger-maintained mirror of the
+ * default account per currency.
+ */
+export interface CashAccountPayeeFields {
+  bank_name: string | null
+  clearing_number: string | null
+  account_number: string | null
+  bankgiro: string | null
+  plusgiro: string | null
+  swish: string | null
+  iban: string | null
+  bic: string | null
+  bank_code: string | null
+  foreign_account_number: string | null
+}
+
+export interface CashAccount extends CashAccountPayeeFields {
   id: string
   company_id: string
   bank_connection_id: string | null
   external_uid: string | null    // PSD2 StoredAccount.uid
-  iban: string | null
-  bg_pg: string | null
+  // Raw BBAN from the bank connection (Swedish: clearing + account number,
+  // no separator). Prefill only; clearing_number/account_number print.
+  bban: string | null
+  // True when the account may be printed as the payee on customer invoices.
+  invoice_payee: boolean
   name: string | null
   currency: string                // 3-char ISO; broader than Currency union to
                                   // tolerate future currencies without DB-driven enum drift
@@ -664,6 +686,20 @@ export interface CashAccount {
   // account. null = follow company_settings.default_voucher_series_per_source_type.
   // See 20260902121420_cash_accounts_voucher_series.sql.
   voucher_series: string | null
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * Which cash account an invoice in `currency` prints as payee when the
+ * invoice does not choose one itself. One account may be the default for
+ * several currencies (a SEK account with an IBAN is the usual EUR payee).
+ */
+export interface InvoicePayeeDefault {
+  id: string
+  company_id: string
+  currency: Currency
+  cash_account_id: string
   created_at: string
   updated_at: string
 }

@@ -2140,6 +2140,35 @@ const InvoicePaymentAccountSchema = z.object({
     .or(z.literal('')),
 })
 
+/**
+ * PATCH /api/cash-accounts/[id]: the verifikationsserie override plus the
+ * payee fields (migration 20260903150000). Payee keys share the field rules
+ * of InvoicePaymentAccountSchema so the settings form, the legacy settings
+ * writers and this route agree on what a valid bankgiro is.
+ */
+export const UpdateCashAccountSchema = InvoicePaymentAccountSchema.extend({
+  voucher_series: UpdateCashAccountVoucherSeriesSchema.shape.voucher_series.optional(),
+  name: z.string().trim().min(1).max(100).nullable().optional(),
+  invoice_payee: z.boolean().optional(),
+}).strict().refine((body) => Object.keys(body).length > 0, {
+  message: 'Inget att uppdatera',
+})
+
+/** POST /api/cash-accounts: a bank account typed by hand (no bank connection). */
+export const CreateCashAccountSchema = z.object({
+  name: z.string().trim().min(1, 'Ange ett namn').max(100),
+  currency: CurrencySchema,
+  ledger_account: z.string().regex(/^19\d\d$/, 'Bankkonton bokförs på 1900-1999').optional(),
+  invoice_payee: z.boolean().optional(),
+  payee: InvoicePaymentAccountSchema.optional(),
+}).strict()
+
+/** PUT /api/cash-accounts/payee-defaults: which account invoices in a currency pay to. */
+export const SetInvoicePayeeDefaultSchema = z.object({
+  currency: CurrencySchema,
+  cash_account_id: uuid.nullable(),
+}).strict()
+
 const InvoicePaymentAccountsSchema = z
   .partialRecord(CurrencySchema, InvoicePaymentAccountSchema)
   .superRefine((accounts, ctx) => {

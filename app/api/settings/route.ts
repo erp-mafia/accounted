@@ -11,6 +11,7 @@ import { validateBody } from '@/lib/api/validate'
 import { UpdateSettingsSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
 
 export const GET = withRouteContext(
   'settings.get',
@@ -252,18 +253,41 @@ export const PUT = withRouteContext(
       )
     }
 
-    const { data, error } = await supabase
+    const updateResult = await supabase
       .from('company_settings')
       .update(body)
       .eq('company_id', companyId)
       .select()
       .single()
+    const error = updateResult.error
+    let data = updateResult.data
 
     if (error) {
       if (error.code === 'PGRST116') {
         return NextResponse.json({ error: 'Inställningarna hittades inte.' }, { status: 404 })
       }
       return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
+    }
+
+    // Payment instructions live on cash_accounts since migration
+    // 20260903150000; the columns just written are a mirror of the default
+    // payee account per currency. Write the change through to those accounts
+    // so the mirror does not undo it on the next payee edit, then return the
+    // row as the mirror trigger left it.
+    if (changesInvoicePaymentInstructions) {
+      try {
+        const written = await propagateLegacyPayeeWrite(supabase, companyId, body)
+        if (written.length > 0) {
+          const reread = await supabase
+            .from('company_settings')
+            .select()
+            .eq('company_id', companyId)
+            .single()
+          if (!reread.error && reread.data) data = reread.data
+        }
+      } catch (err) {
+        log.error('failed to write payment instructions through to cash accounts', err as Error)
+      }
     }
 
     // Regenerate when the save touches tax-relevant fields: the statutory

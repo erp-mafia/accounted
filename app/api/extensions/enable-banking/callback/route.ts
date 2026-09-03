@@ -828,6 +828,7 @@ async function finalizeConnection(
         currency: account.currency,
         ledger_account: targetLedger,
         iban: account.iban ?? null,
+        bban: account.bban ?? null,
         name: account.name ?? null,
         enabled: account.enabled ?? true,
         reuse_cash_account_id: reuseCashAccountId,

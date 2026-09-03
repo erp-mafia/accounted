@@ -30,6 +30,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { InvoiceEmailTextsSchema, UpdateSettingsSchema } from '@/lib/api/schemas'
 import { UpdateCompanySettingsParamsSchema } from '@/lib/pending-operations/schemas/company-settings'
+import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
 
 // Flat body keys copied into the update payload verbatim. Mirrors the MCP
 // tool gnubok_update_company_settings field for field; contact_person is
@@ -285,7 +286,8 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // statically verify every column name. Fields the caller did not supply
     // are `undefined` here and are dropped by supabase-js JSON serialization,
     // so only supplied fields are written; explicit null still clears.
-    const { data, error } = await ctx.supabase
+    const SETTINGS_SELECT = 'bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference, email, phone, website, invoice_email_texts'
+    const updateResult = await ctx.supabase
       .from('company_settings')
       .update({
         bank_name: changes.bank_name,
@@ -303,11 +305,32 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
         invoice_email_texts: changes.invoice_email_texts,
       })
       .eq('company_id', ctx.companyId!)
-      .select('bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference, email, phone, website, invoice_email_texts')
+      .select(SETTINGS_SELECT)
       .maybeSingle()
+    const error = updateResult.error
+    let data = updateResult.data
 
     if (error) {
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
+    }
+
+    // The bank columns mirror the default SEK payee account (migration
+    // 20260903150000): write the change through to it so the PDF prints
+    // what this call set, then return the mirrored row.
+    if (data) {
+      try {
+        const written = await propagateLegacyPayeeWrite(ctx.supabase, ctx.companyId!, changes)
+        if (written.length > 0) {
+          const reread = await ctx.supabase
+            .from('company_settings')
+            .select(SETTINGS_SELECT)
+            .eq('company_id', ctx.companyId!)
+            .maybeSingle()
+          if (!reread.error && reread.data) data = reread.data
+        }
+      } catch (err) {
+        ctx.log.error('companies.settings.update: payee write-through failed', err as Error)
+      }
     }
     if (!data) {
       ctx.log.warn('companies.settings.update: settings row not found', {
