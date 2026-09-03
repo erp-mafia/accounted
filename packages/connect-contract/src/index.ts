@@ -19,7 +19,7 @@ import { z } from 'zod'
  * breaking change is a new operation or family name, never a changed one.
  */
 
-export const CONTRACT_VERSION = '2026-09-02'
+export const CONTRACT_VERSION = '2026-09-03'
 
 // ---------------------------------------------------------------------------
 // Keys, headers and paths
@@ -114,6 +114,58 @@ export const CONNECTOR_ERROR_CODES = [
   'PEPPOL_REGISTRATION_CAP_REACHED',
 ] as const
 export type ConnectorErrorCode = (typeof CONNECTOR_ERROR_CODES)[number]
+
+// ---------------------------------------------------------------------------
+// Bank sync operation (installation -> service, POST /api/connect/bank/sync)
+// ---------------------------------------------------------------------------
+
+/**
+ * The installation holds the PSD2 session and the account; the service does
+ * the provider paging, the booked-only filter and the normalization, and
+ * returns what the installation ingests plus the raw provider pages it
+ * archives. Stored keys (external ids) stay computed on the installation from
+ * booking_date, amount and its own account scope, exactly as before.
+ */
+export const bankSyncRequestSchema = z.object({
+  /** The Enable Banking session id the installation obtained (ownership is checked). */
+  session_id: z.string().trim().min(1).max(200),
+  account_uid: z.string().trim().min(1).max(200),
+  account_currency: z.string().trim().length(3),
+  date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  strategy: z.enum(['default', 'longest']).optional(),
+})
+export type BankSyncRequest = z.infer<typeof bankSyncRequestSchema>
+
+export const normalizedBankTransactionSchema = z.object({
+  booking_date: z.string(),
+  amount: z.number(),
+  currency: z.string(),
+  description: z.string(),
+  counterparty_name: z.string().nullable(),
+  counterparty_account: z.string().nullable(),
+  reference: z.string().nullable(),
+  merchant_category_code: z.string().nullable(),
+  bank_transaction_code: z.string().nullable(),
+  proprietary_bank_transaction_code: z.string().nullable(),
+})
+export type NormalizedBankTransaction = z.infer<typeof normalizedBankTransactionSchema>
+
+export const bankSyncResponseSchema = z.object({
+  transactions: z.array(normalizedBankTransactionSchema),
+  /** Raw provider pages, verbatim, for the installation's archive. */
+  raw_pages: z.array(z.string()),
+  skipped_pending: z.number().int().min(0),
+  returned_min_booking_date: z.string().nullable(),
+  returned_max_booking_date: z.string().nullable(),
+  /** Set when the provider rejected the window and a narrower date_from was used. */
+  effective_date_from: z.string().nullable(),
+  pages: z.number().int().min(0),
+})
+export type BankSyncResponse = z.infer<typeof bankSyncResponseSchema>
+
+/** Error codes specific to the bank sync operation. */
+export const BANK_SYNC_ERROR_CODES = ['CONNECTOR_BANK_SESSION_EXPIRED', 'CONNECTOR_BANK_UPSTREAM_ERROR'] as const
 
 // ---------------------------------------------------------------------------
 // Peppol operations (installation -> service, /api/connect/peppol/*)

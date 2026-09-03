@@ -8,7 +8,7 @@ import {
   hasOwnSkatteverketCredentials,
 } from '../upstreams'
 
-const ENV = ['GNUBOK_CONNECTOR_KEY', 'GNUBOK_CONNECT_URL', 'ENABLE_BANKING_PRIVATE_KEY', 'ENABLE_BANKING_APP_ID', 'ENABLE_BANKING_PRIVATE_KEY_PRODUCTION', 'ENABLE_BANKING_APP_ID_PRODUCTION', 'SKATTEVERKET_OAUTH2_CLIENT_ID', 'SKATTEVERKET_APIGW_CLIENT_ID', 'QVALIA_API_KEY', 'QVALIA_PARTNER_REG_NO'] as const
+const ENV = ['GNUBOK_CONNECTOR_KEY', 'GNUBOK_CONNECT_URL', 'ENABLE_BANKING_PRIVATE_KEY', 'ENABLE_BANKING_APP_ID', 'ENABLE_BANKING_PRIVATE_KEY_PRODUCTION', 'ENABLE_BANKING_APP_ID_PRODUCTION', 'SKATTEVERKET_OAUTH2_CLIENT_ID', 'SKATTEVERKET_APIGW_CLIENT_ID', 'QVALIA_API_KEY', 'QVALIA_PARTNER_REG_NO', 'CONNECT_BANK_CANARY_COMPANIES'] as const
 
 afterEach(() => vi.unstubAllEnvs())
 function clear() {
@@ -68,5 +68,26 @@ describe('peppol connector mode', () => {
     vi.stubEnv('QVALIA_PARTNER_REG_NO', '5560000000')
     expect(hasOwnPeppolCredentials()).toBe(true)
     expect(peppolConnectorMode()).toBeNull()
+  })
+})
+
+describe('bank canary companies', () => {
+  it('routes only the listed companies through the connector while own credentials exist', () => {
+    clear()
+    vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_x')
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'app-id')
+    vi.stubEnv('ENABLE_BANKING_PRIVATE_KEY', 'pk')
+    vi.stubEnv('CONNECT_BANK_CANARY_COMPANIES', 'c-1, c-2')
+    expect(bankConnectorMode()).toBeNull()
+    expect(bankConnectorMode('c-9')).toBeNull()
+    expect(bankConnectorMode('c-1')).toEqual({ baseUrl: 'https://app.gnubok.se/api/connect/bank', key: 'gnubok_ck_x' })
+    expect(bankConnectorMode('c-2')).not.toBeNull()
+  })
+
+  it('ignores the canary list without a connector key', () => {
+    clear()
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'app-id')
+    vi.stubEnv('CONNECT_BANK_CANARY_COMPANIES', 'c-1')
+    expect(bankConnectorMode('c-1')).toBeNull()
   })
 })
