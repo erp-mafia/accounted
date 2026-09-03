@@ -15721,7 +15721,7 @@ export const tools: McpTool[] = [
         vaxa_stod_eligible: { type: 'boolean' },
         vaxa_stod_start: { type: 'string' },
         vaxa_stod_end: { type: 'string' },
-        jamkning_percentage: { type: 'number', description: 'Needs both dates or never applied' },
+        jamkning_percentage: { type: 'number', description: 'Requires both dates, else rejected' },
         jamkning_valid_from: { type: 'string' },
         jamkning_valid_to: { type: 'string' },
         default_dimensions: {
@@ -15835,7 +15835,7 @@ export const tools: McpTool[] = [
         vaxa_stod_eligible: { type: 'boolean' },
         vaxa_stod_start: { type: 'string' },
         vaxa_stod_end: { type: 'string' },
-        jamkning_percentage: { type: ['number', 'null'], description: 'null clears; needs both dates or never applied' },
+        jamkning_percentage: { type: ['number', 'null'], description: 'null clears; else requires both dates' },
         jamkning_valid_from: { type: ['string', 'null'] },
         jamkning_valid_to: { type: ['string', 'null'] },
         default_dimensions: {
