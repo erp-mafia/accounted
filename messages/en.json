@@ -8355,6 +8355,7 @@
     "picker_confirm_empty": "Choose a company",
     "picker_taken_title": "Org number already on {name}",
     "picker_taken_description": "Merge the two instead of choosing the same company twice.",
+    "reason_org_picked": "Org number {org} chosen in the business register",
     "fact_trade_name": "Trade name",
     "open_dossier": "Open {name}"
   }

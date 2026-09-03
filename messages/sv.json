@@ -8355,6 +8355,7 @@
     "picker_confirm_empty": "Välj ett företag",
     "picker_taken_title": "Org.nr finns redan på {name}",
     "picker_taken_description": "Slå ihop de två i stället för att välja samma företag två gånger.",
+    "reason_org_picked": "Org.nr {org} valt i företagsregistret",
     "fact_trade_name": "Firma",
     "open_dossier": "Öppna {name}"
   }

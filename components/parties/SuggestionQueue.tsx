@@ -107,7 +107,7 @@ export function SuggestionQueue({
                       </Badge>
                     ) : null}
                   </td>
-                  <td className={`${TD_CLASS} text-muted-foreground`}>{reasonText(t, row.reason, row.stats?.rhythm ?? null)}</td>
+                  <td className={`${TD_CLASS} text-muted-foreground`}>{reasonText(t, row.reason, row.stats?.rhythm ?? null, row.orgNumber)}</td>
                   <td className={`${TD_CLASS} whitespace-nowrap`}>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
