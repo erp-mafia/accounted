@@ -1,0 +1,40 @@
+import type { LedgerStats, RegisterRow } from '@/lib/parties/register'
+import type { SuggestionReason } from '@/lib/parties/suggest'
+import { formatOrgNumber } from '@/lib/utils'
+
+/** next-intl translator shape the register components accept. */
+export type Translate = (key: string, values?: Record<string, string | number>) => string
+
+export function rhythmLabel(t: Translate, rhythm: LedgerStats['rhythm']): string {
+  return rhythm ? t(`rhythm_${rhythm}`) : ''
+}
+
+export function roleLabel(t: Translate, roles: RegisterRow['roles']): string {
+  const parts: string[] = []
+  if (roles.customerId) parts.push(t('role_customer'))
+  if (roles.supplierId) parts.push(t('role_supplier'))
+  return parts.length ? parts.join(' · ') : t('role_contact')
+}
+
+/** "Org.nr 556354-5185 i 3 underlag · 12 verifikat · varje månad": why a row is in the queue. */
+export function reasonText(t: Translate, reason: SuggestionReason | null, rhythm: LedgerStats['rhythm']): string {
+  if (!reason) return ''
+  const parts: string[] = []
+  const docs = Math.max(0, (reason.docs ?? 0) - (reason.self_docs ?? 0))
+  if (reason.org_number) parts.push(t('reason_org', { org: formatOrgNumber(reason.org_number), docs }))
+  else if (reason.ambiguous_orgs?.length) parts.push(t('reason_ambiguous'))
+  else if (docs > 0) parts.push(t('reason_docs', { docs }))
+  parts.push(t('reason_vouchers', { count: reason.occurrences ?? 0 }))
+  if (rhythm && rhythm !== 'irregular') parts.push(rhythmLabel(t, rhythm))
+  if (!reason.org_number && !reason.ambiguous_orgs?.length && docs === 0) parts.push(t('reason_ledger_only'))
+  if (reason.similar_to?.length) parts.push(t('reason_similar', { name: reason.similar_to[0]!.display_name }))
+  return parts.join(' · ')
+}
+
+export function isDuplicateCandidate(row: RegisterRow): boolean {
+  return Boolean(row.reason?.similar_to?.length)
+}
+
+export function hasHardKey(row: RegisterRow): boolean {
+  return Boolean(row.reason?.org_number)
+}

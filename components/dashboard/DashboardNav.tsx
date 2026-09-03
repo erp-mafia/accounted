@@ -23,6 +23,7 @@ import {
   X,
   HelpCircle,
   Building2,
+  BookUser,
   Wallet,
   TrendingUp,
   ClipboardCheck,
@@ -127,6 +128,7 @@ type NavLabelKey =
   | 'articles'
   | 'supplier_invoices'
   | 'suppliers'
+  | 'parties'
   | 'review'
   | 'transactions'
   | 'reconciliation'
@@ -257,6 +259,7 @@ const navItems: NavItem[] = [
   // payroll monthly), so it lives here while Löner stays in Arbeta.
   { href: '/customers', labelKey: 'customers', icon: Users, group: 'data', fold: 'register' },
   { href: '/suppliers', labelKey: 'suppliers', icon: Building2, group: 'data', fold: 'register' },
+  { href: '/parties', labelKey: 'parties', icon: BookUser, group: 'data', fold: 'register' },
   { href: '/articles', labelKey: 'articles', icon: Tag, group: 'data', fold: 'register' },
   { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'data', fold: 'register', employerOnly: true },
   { href: '/assets', labelKey: 'assets', icon: Package, group: 'data', fold: 'register' },
