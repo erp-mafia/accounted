@@ -98,6 +98,30 @@ export async function POST(request: Request) {
   // rather than the silent login bounce. The Send Email hook preserves this
   // query on its token_hash links, so both link styles share the marker.
   const origin = resolveRequestAppOrigin(request)
+
+  // Cross-instance gate (migration 20260903083000). The pending-state read
+  // above is not atomic: two concurrent requests (two tabs, a retried fetch)
+  // can both see nothing pending, and each updateUser re-issues the tokens
+  // and voids the other's mails. claim_email_change_request is one
+  // INSERT ... ON CONFLICT row lock per user, so exactly one caller per
+  // address per window proceeds; the rest answer "already pending" and send
+  // nothing. A different address always wins the claim. Best effort: if the
+  // RPC itself fails, fall through to GoTrue rather than block the change.
+  const { data: claimed, error: claimError } = await supabase.rpc(
+    'claim_email_change_request',
+    { p_email: email, p_window_seconds: FRESH_PENDING_MS / 1000 },
+  )
+  if (claimError) {
+    log.warn('email change claim failed; proceeding without it', {
+      userId: user.id,
+      code: claimError.code,
+    })
+  } else if (claimed === false) {
+    return NextResponse.json({
+      data: { ok: true, pending_email: email, resent: false },
+    })
+  }
+
   const { error: updateError } = await supabase.auth.updateUser(
     { email },
     { emailRedirectTo: `${origin}/auth/callback?flow=email_change` },
@@ -109,6 +133,17 @@ export async function POST(request: Request) {
       code: updateError.code,
       status: updateError.status,
     })
+    // GoTrue sent nothing, so the claim must not block a retry (after MFA,
+    // with another address, once the network is back).
+    if (!claimError) {
+      const { error: releaseError } = await supabase.rpc('release_email_change_request')
+      if (releaseError) {
+        log.warn('email change claim release failed', {
+          userId: user.id,
+          code: releaseError.code,
+        })
+      }
+    }
     // Addresses are unique per auth user: a change to an already-registered
     // address is refused by GoTrue, never merged. Accounts are consolidated
     // via company invitations, not email changes.

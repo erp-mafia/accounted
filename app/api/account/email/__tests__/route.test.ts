@@ -18,10 +18,22 @@ function mockUserClient(opts: {
     new_email?: string
     email_change_sent_at?: string
   } | null
+  // Outcome of claim_email_change_request: true (won, default), false
+  // (another request holds the claim), or an error object (RPC failed).
+  claim?: boolean | { message: string; code?: string }
 }) {
   const updateUser = vi.fn().mockResolvedValue({
     data: {},
     error: opts.updateUserError ?? null,
+  })
+  const rpc = vi.fn().mockImplementation(async (name: string) => {
+    if (name === 'claim_email_change_request') {
+      const claim = opts.claim ?? true
+      return typeof claim === 'boolean'
+        ? { data: claim, error: null }
+        : { data: null, error: claim }
+    }
+    return { data: null, error: null }
   })
   const getUser = vi.fn().mockResolvedValue({
     data: {
@@ -34,7 +46,7 @@ function mockUserClient(opts: {
   })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const supabase = { auth: { updateUser, getUser } } as any
+  const supabase = { auth: { updateUser, getUser }, rpc } as any
 
   if (opts.user) {
     requireAuthMock.mockResolvedValue({ user: opts.user, supabase, error: null })
@@ -46,7 +58,7 @@ function mockUserClient(opts: {
     })
   }
 
-  return { updateUser, getUser }
+  return { updateUser, getUser, rpc }
 }
 
 beforeEach(() => {
@@ -275,6 +287,91 @@ describe('POST /api/account/email', () => {
     expect(status).toBe(200)
     expect(getUser).not.toHaveBeenCalled()
     expect(updateUser).not.toHaveBeenCalled()
+  })
+
+  it('claims the address atomically before calling GoTrue', async () => {
+    const { updateUser, rpc } = mockUserClient({
+      user: { id: 'user-1', email: 'old@testbrand.example' },
+    })
+
+    const req = createMockRequest('/api/account/email', {
+      method: 'POST',
+      body: { email: 'new@testbrand.example' },
+    })
+    const { status } = await parseJsonResponse(await POST(req))
+
+    expect(status).toBe(200)
+    expect(rpc).toHaveBeenCalledWith('claim_email_change_request', {
+      p_email: 'new@testbrand.example',
+      p_window_seconds: 30 * 60,
+    })
+    // Claim strictly before the GoTrue call.
+    expect(rpc.mock.invocationCallOrder[0]).toBeLessThan(
+      updateUser.mock.invocationCallOrder[0],
+    )
+    expect(rpc).not.toHaveBeenCalledWith('release_email_change_request')
+  })
+
+  it('answers already-pending without calling GoTrue when a concurrent request holds the claim', async () => {
+    // Both requests read "nothing pending" from GoTrue; only the claim
+    // winner may re-issue the tokens.
+    const { updateUser } = mockUserClient({
+      user: { id: 'user-1', email: 'old@testbrand.example' },
+      claim: false,
+    })
+
+    const req = createMockRequest('/api/account/email', {
+      method: 'POST',
+      body: { email: 'new@testbrand.example' },
+    })
+    const { status, body } = await parseJsonResponse<{
+      data?: { ok: boolean; pending_email: string; resent: boolean }
+    }>(await POST(req))
+
+    expect(status).toBe(200)
+    expect(body.data).toEqual({
+      ok: true,
+      pending_email: 'new@testbrand.example',
+      resent: false,
+    })
+    expect(updateUser).not.toHaveBeenCalled()
+  })
+
+  it('proceeds without the claim when the RPC itself fails', async () => {
+    const { updateUser, rpc } = mockUserClient({
+      user: { id: 'user-1', email: 'old@testbrand.example' },
+      claim: { message: 'function does not exist', code: '42883' },
+    })
+
+    const req = createMockRequest('/api/account/email', {
+      method: 'POST',
+      body: { email: 'new@testbrand.example' },
+    })
+    const { status } = await parseJsonResponse(await POST(req))
+
+    expect(status).toBe(200)
+    expect(updateUser).toHaveBeenCalledTimes(1)
+    expect(rpc).not.toHaveBeenCalledWith('release_email_change_request')
+  })
+
+  it('releases the claim when GoTrue refuses the change', async () => {
+    const { rpc } = mockUserClient({
+      user: { id: 'user-1', email: 'old@testbrand.example' },
+      updateUserError: {
+        message: 'AAL2 session is required',
+        status: 403,
+        code: 'insufficient_aal',
+      },
+    })
+
+    const req = createMockRequest('/api/account/email', {
+      method: 'POST',
+      body: { email: 'new@testbrand.example' },
+    })
+    const { status } = await parseJsonResponse(await POST(req))
+
+    expect(status).toBe(400)
+    expect(rpc).toHaveBeenCalledWith('release_email_change_request')
   })
 
   it('returns 409 when the address already belongs to another account', async () => {
