@@ -384,7 +384,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
       overlapping: [],
     })
     const req = createMockRequest({ name: '2022/2023', period_start: '2022-07-22', period_end: '2023-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, { params: Promise.resolve({}) })
     expect(res.status).toBe(200)
   })
 
@@ -393,7 +393,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
       allPeriods: [{ id: 'p2024', period_start: '2024-01-01', period_end: '2024-12-31', is_closed: false }],
     })
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-15', period_end: '2025-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, { params: Promise.resolve({}) })
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error).toMatch(/1st of a month/)
