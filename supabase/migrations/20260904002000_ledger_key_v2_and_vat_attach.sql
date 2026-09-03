@@ -211,23 +211,35 @@ $$;
 -- Repair: untouched pipeline suggestions made under the old keys that the
 -- new ledger_key no longer produces from any posted voucher of the company
 -- (same evidence filter as get_ledger_key_evidence). Rows still backed by
--- a voucher under the new keys are left alone.
+-- a voucher under the new keys are left alone. The live key set is built
+-- once per affected company: one ledger_key call per voucher, not one per
+-- candidate and voucher (538 candidates over 2,400 vouchers on prod).
+WITH cand AS (
+  SELECT p.id, p.company_id, p.alias_keys
+  FROM public.parties p
+  WHERE p.status = 'suggested'
+    AND p.merged_into IS NULL
+    AND p.origin IN ('ledger', 'document')
+    AND NOT EXISTS (SELECT 1 FROM public.party_decisions d WHERE d.party_id = p.id)
+    AND NOT EXISTS (SELECT 1 FROM public.suppliers s WHERE s.party_id = p.id)
+    AND NOT EXISTS (SELECT 1 FROM public.customers c WHERE c.party_id = p.id)
+    AND NOT EXISTS (SELECT 1 FROM public.party_facts f WHERE f.party_id = p.id AND f.source IN ('user', 'registry_scb', 'registry_tic', 'vies', 'peppol'))
+),
+live_keys AS (
+  SELECT DISTINCT je.company_id, public.ledger_key(je.description) AS k
+  FROM public.journal_entries je
+  WHERE je.company_id IN (SELECT DISTINCT company_id FROM cand)
+    AND je.status = 'posted'
+    AND je.source_type NOT IN ('storno', 'opening_balance', 'year_end', 'vat_settlement')
+    AND je.description IS NOT NULL
+    AND btrim(je.description) <> ''
+)
 DELETE FROM public.parties p
-WHERE p.status = 'suggested'
-  AND p.merged_into IS NULL
-  AND p.origin IN ('ledger', 'document')
-  AND NOT EXISTS (SELECT 1 FROM public.party_decisions d WHERE d.party_id = p.id)
-  AND NOT EXISTS (SELECT 1 FROM public.suppliers s WHERE s.party_id = p.id)
-  AND NOT EXISTS (SELECT 1 FROM public.customers c WHERE c.party_id = p.id)
-  AND NOT EXISTS (SELECT 1 FROM public.party_facts f WHERE f.party_id = p.id AND f.source IN ('user', 'registry_scb', 'registry_tic', 'vies', 'peppol'))
+USING cand
+WHERE p.id = cand.id
   AND NOT EXISTS (
-    SELECT 1 FROM public.journal_entries je
-    WHERE je.company_id = p.company_id
-      AND je.status = 'posted'
-      AND je.source_type NOT IN ('storno', 'opening_balance', 'year_end', 'vat_settlement')
-      AND je.description IS NOT NULL
-      AND btrim(je.description) <> ''
-      AND public.ledger_key(je.description) = ANY (p.alias_keys)
+    SELECT 1 FROM live_keys lk
+    WHERE lk.company_id = cand.company_id AND lk.k = ANY (cand.alias_keys)
   );
 
 NOTIFY pgrst, 'reload schema';
