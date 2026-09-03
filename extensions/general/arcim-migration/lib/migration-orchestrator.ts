@@ -37,6 +37,7 @@ import {
   fetchSupplierInvoicesHydrated,
 } from '@/lib/providers/provider-data-fetcher'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { suggestPartiesForCompany } from '@/lib/parties/suggest'
 import { createLogger } from '@/lib/logger'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import {
@@ -1115,6 +1116,15 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         console.error('Failed to reconcile supplier invoice payments:', err)
         recordStepError(results, 'reconciliation', err, runState)
       }
+    }
+
+    // Fill the Kontakter register from the migrated vouchers and documents
+    // (non-blocking): suggested parties only, confirmed by the user later.
+    try {
+      const summary = await suggestPartiesForCompany(supabase, companyId, userId)
+      console.log(`[migration] party suggestions: ${summary.created} new, ${summary.attached} attached, ${summary.skipped} skipped`)
+    } catch (err) {
+      console.error('Failed to suggest parties after migration:', err)
     }
 
     emitProgress(options, { status: 'completed', progress: 100, results })

@@ -18,6 +18,7 @@ import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { SuggestionsAttn } from '@/components/parties/SuggestionsAttn'
 import type { Supplier, SupplierType, CreateSupplierInput } from '@/types'
 
 const SupplierForm = dynamic(
@@ -170,6 +171,7 @@ export default function SuppliersPage() {
           </Dialog>
         </div>
       </div>
+      <SuggestionsAttn side="supplier" />
 
       {/* Toolbar: search (concept) */}
       <div className="flex flex-wrap items-center gap-2">
