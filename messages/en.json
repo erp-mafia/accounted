@@ -1751,6 +1751,7 @@
     "reset_archive_too_large_with_size": "The retained archive is about {size} MB. Turn off documents for a structured-data ZIP, then contact support for the complete document package.",
     "reset_archive_too_large": "Turn off documents for a structured-data ZIP, then contact support for the complete document package.",
     "danger_button": "Delete company",
+    "danger_confirm_hint": "Nothing happens right away: you confirm in the next step by typing the company name.",
     "danger_dialog_title": "Delete {companyName}",
     "danger_dialog_description": "The company is hidden from {appName}. The bookkeeping is retained securely for 7 years per BFL. Type the company name exactly to confirm.",
     "danger_confirm_label": "Type <strong>{companyName}</strong> to confirm",
@@ -1962,6 +1963,7 @@
     "fab_load_retry": "Try again"
   },
   "settings_account_danger": {
+    "confirm_hint": "Nothing happens right away: you confirm in the next step by typing your email address.",
     "heading": "Delete account",
     "blockers_title": "Companies you own",
     "blockers_description": "The account can only be deleted once you have deleted or handed over every company you own.",
