@@ -70,7 +70,12 @@ export default function SupplierForm({
     clearing_number: z.string().optional(),
     account_number: z.string().optional(),
     default_expense_account: z.string().optional(),
-    default_payment_terms: z.number().min(1).optional(),
+    // Whole days 0-365; 0 = betalning direkt (issue #2070, same as CustomerForm).
+    default_payment_terms: z
+      .number({ message: t('default_payment_terms_invalid') })
+      .int(t('default_payment_terms_invalid'))
+      .min(0, t('default_payment_terms_invalid'))
+      .max(365, t('default_payment_terms_invalid')),
     default_currency: z.string().optional(),
     notes: z.string().optional(),
   }), [t])
@@ -103,7 +108,8 @@ export default function SupplierForm({
       clearing_number: initialData?.clearing_number || '',
       account_number: initialData?.account_number || '',
       default_expense_account: initialData?.default_expense_account || '',
-      default_payment_terms: initialData?.default_payment_terms || 30,
+      // ?? not ||: a stored 0 (betalning direkt) must not reopen as 30.
+      default_payment_terms: initialData?.default_payment_terms ?? 30,
       default_currency: initialData?.default_currency || 'SEK',
       notes: initialData?.notes || '',
     },
@@ -332,8 +338,15 @@ export default function SupplierForm({
             <Input
               id="payment_terms"
               type="number"
+              min={0}
+              max={365}
+              step={1}
               {...register('default_payment_terms', { valueAsNumber: true })}
             />
+            <p className="text-xs text-muted-foreground">{t('default_payment_terms_help')}</p>
+            {errors.default_payment_terms && (
+              <p className="text-sm text-destructive">{errors.default_payment_terms.message}</p>
+            )}
           </div>
           <div className="space-y-2">
             <Label htmlFor="default_currency">{t('default_currency_label')}</Label>
