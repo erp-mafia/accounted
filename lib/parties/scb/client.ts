@@ -4,36 +4,15 @@ import { isLegalPersonOrgNumber, toPeOrgNr } from './org-number'
 import { scbJson } from './transport'
 
 /**
- * The wire format of the current SokPaVar API. Everything SCB-shaped is in
- * this file; scripts/scb/discover.ts prints the live variable list and
- * category tables so the names below are checked, not remembered.
+ * The wire format of the current SokPaVar API, checked against the live
+ * service on 2026-09-03 (scripts/scb/discover.ts, help page at
+ * <base>/help). A search is a list of variable filters; an identity lookup
+ * is one filter on "OrgNr (10 siffror)" with operator ArLikaMed, and
+ * without Företagsstatus/Registreringsstatus so a deregistered company is
+ * still returned (an empty string there is rejected with 400). The row
+ * comes back with every purchased column, codes and texts side by side.
  */
-export const SCB_JE_VARIABLES = [
-  'Företagsnamn',
-  'Firma',
-  'PeOrgNr',
-  'F-skattstatus',
-  'Momsstatus',
-  'Arbetsgivarstatus',
-  'Företagsstatus',
-  'Juridisk form',
-  'Status hos Bolagsverket',
-  'Storleksklass Anställda',
-  'Bransch_1',
-  'Bransch_1, text',
-  'Postadress',
-  'PostNr',
-  'PostOrt',
-  'COadress',
-  'Säteskommun',
-  'Säteslän',
-  'Registreringsdatum',
-  'Startdatum',
-  'Slutdatum',
-  'Telefon',
-  'E-post',
-  'Antal arbetsställen',
-]
+export const SCB_ORG_VARIABLE = 'OrgNr (10 siffror)'
 
 export interface ScbLookupResult {
   found: boolean
@@ -49,6 +28,13 @@ export interface ScbClient {
   lookupByOrgNumber(orgNumber: string): Promise<ScbLookupResult>
 }
 
+export function identityLookupBody(orgNumber10: string) {
+  return {
+    Variabler: [{ Variabel: SCB_ORG_VARIABLE, Operator: 'ArLikaMed', Varde1: orgNumber10, Varde2: '' }],
+    Kategorier: [],
+  }
+}
+
 export function createScbClient(config: ScbConfig, deps: { json?: typeof scbJson } = {}): ScbClient {
   const json = deps.json ?? scbJson
   return {
@@ -58,20 +44,12 @@ export function createScbClient(config: ScbConfig, deps: { json?: typeof scbJson
       if (!isLegalPersonOrgNumber(orgNumber)) {
         throw new Error('SCB-uppslag görs bara på organisationsnummer för juridiska personer.')
       }
-      const peOrgNr = toPeOrgNr(orgNumber)
+      const org10 = orgNumber.replace(/[^0-9]/g, '')
+      const peOrgNr = toPeOrgNr(org10)
       const fetchedAt = new Date().toISOString()
-      // One company by identity: the Je layout filtered on PeOrgNr, all
-      // requested variables back. Verified shape lives in __tests__/fixtures.
-      const body = {
-        Företagsstatus: '',
-        Registreringsstatus: '',
-        variabler: SCB_JE_VARIABLES,
-        Kategorier: [],
-        Identiteter: [peOrgNr],
-      }
-      const rows = await json<ScbCompanyRow[] | { data?: ScbCompanyRow[] }>(config, 'POST', '/api/Je/HamtaForetag', body)
-      const list = Array.isArray(rows) ? rows : (rows.data ?? [])
-      const row = list.find((r) => String(Object.values(r).find((v) => typeof v === 'string' && v.replace(/[^0-9]/g, '') === peOrgNr) ?? '') !== '') ?? list[0] ?? null
+      const rows = await json<ScbCompanyRow[]>(config, 'POST', '/api/Je/HamtaForetag', identityLookupBody(org10))
+      const list = Array.isArray(rows) ? rows : []
+      const row = list.find((r) => String(r.OrgNr ?? r.PeOrgNr ?? '').replace(/[^0-9]/g, '').endsWith(org10)) ?? null
       return { found: Boolean(row), peOrgNr, row, facts: row ? factsFromScbCompany(row) : [], fetchedAt }
     },
   }

@@ -8338,6 +8338,8 @@
     "fact_phone": "Phone",
     "fact_email": "Email",
     "fact_workplaces": "Workplaces",
+    "fact_turnover_band": "Turnover",
+    "fact_registered_skv": "Skatteverket",
     "fact_trade_name": "Trade name",
     "open_dossier": "Open {name}"
   }

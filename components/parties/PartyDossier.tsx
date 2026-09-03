@@ -25,7 +25,9 @@ const REGISTRY_FIELDS = [
   'legal_form',
   'bolagsverket_status',
   'employees_band',
+  'turnover_band',
   'industry',
+  'registered_skv',
   'postal_address',
   'seat',
   'registered_at',
@@ -53,13 +55,14 @@ function registryValue(value: unknown): React.ReactNode {
   if (typeof value === 'string' || typeof value === 'number') return String(value)
   const v = value as Record<string, unknown>
   if (typeof v.label === 'string') {
-    return v.warning ? <span className="text-warning">{v.label}</span> : v.label
+    const label = typeof v.year === 'string' && v.year ? `${v.label} (${v.year})` : v.label
+    return v.warning ? <span className="text-warning">{label}</span> : label
   }
   if ('street' in v || 'city' in v) {
     return [v.co, v.street, [v.postal_code, v.city].filter(Boolean).join(' ')].filter(Boolean).join(', ')
   }
+  if ('municipality' in v || 'municipality_code' in v) return [v.municipality ?? v.municipality_code, v.county ?? v.county_code].filter(Boolean).join(', ')
   if ('code' in v) return String(v.code)
-  if ('municipality_code' in v) return [v.municipality_code, v.county_code].filter(Boolean).join(' · ')
   return JSON.stringify(v)
 }
 

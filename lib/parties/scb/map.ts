@@ -145,10 +145,11 @@ const STORLEKSKLASS: Record<string, string> = {
 export const BOLAGSVERKET_WARNING_CODES = new Set(['11', '12', '13', '20', '32', '33', '36', '37', '40', '41', '49', '50', '51', '52', '53', '54', '60', '61', '62', '63', '64', '70', '71', '73', '80', '85', '90', '91'])
 
 /**
- * A company row as the API returns it. Keys are SCB's variable names; the
- * exact spelling is confirmed by scripts/scb/discover.ts against the live
- * API and pinned in the fixture next to the tests. Lookups are tolerant of
- * case and diacritics so a renamed column in the new API still maps.
+ * A company row as the API returns it (fixture: __tests__/fixtures/
+ * volvo-je.json, fetched live 2026-09-03). Codes come as "<name>, kod" and
+ * SCB's own text as "<name>"; values are space-padded. Lookups are tolerant
+ * of case, spacing and diacritics so a renamed column in the new API still
+ * maps, and SCB's text wins over our label table when both exist.
  */
 export type ScbCompanyRow = Record<string, unknown>
 
@@ -165,10 +166,10 @@ function pick(row: ScbCompanyRow, ...names: string[]): string | null {
   return null
 }
 
-function coded(field: string, code: string | null, table: Record<string, string>, extra: Record<string, unknown> = {}): ScbFact | null {
+function coded(field: string, code: string | null, table: Record<string, string>, extra: Record<string, unknown> = {}, text: string | null = null): ScbFact | null {
   if (code === null) return null
   const c = code.replace(/^0+(?=\d)/, '') || '0'
-  return { field, value: { code: c, label: table[c] ?? `Kod ${c}`, ...extra } }
+  return { field, value: { code: c, label: text ?? table[c] ?? `Kod ${c}`, ...extra } }
 }
 
 function isoDate(s: string | null): string | null {
@@ -191,28 +192,46 @@ export function factsFromScbCompany(row: ScbCompanyRow): ScbFact[] {
   const firma = pick(row, 'Firma')
   if (firma && firma !== name) push({ field: 'trade_name', value: firma })
 
-  push(coded('f_tax', pick(row, 'F-skattstatus', 'Fskattstatus', 'FSkattStatus'), F_SKATT))
-  push(coded('vat_registration', pick(row, 'Momsstatus'), MOMS))
-  push(coded('employer_registration', pick(row, 'Arbetsgivarstatus'), ARBETSGIVARE))
-  push(coded('company_status', pick(row, 'Företagsstatus', 'Foretagsstatus'), FORETAGSSTATUS))
-  push(coded('legal_form', pick(row, 'Juridisk form', 'Juridiskform', 'JuridiskForm'), JURIDISK_FORM))
-  const bv = pick(row, 'Status hos Bolagsverket', 'Bolagsverketstatus', 'StatusBolagsverket')
-  push(coded('bolagsverket_status', bv, BOLAGSVERKET_STATUS, bv ? { warning: BOLAGSVERKET_WARNING_CODES.has(bv.replace(/^0+(?=\d)/, '') || '0') } : {}))
-  push(coded('employees_band', pick(row, 'Storleksklass Anställda', 'StorleksklassAnstallda', 'Storleksklass anställda', 'AnstSME'), STORLEKSKLASS))
+  // "<name>, kod" carries the code, "<name>" SCB's text. A column without
+  // the ", kod" twin (older layouts) is a bare code.
+  const codeOf = (...names: string[]) => pick(row, ...names.map((n) => `${n}, kod`), ...names)
+  const textOf = (...names: string[]) => {
+    const t = pick(row, ...names)
+    return t && !/^\d+$/.test(t) ? t : null
+  }
+  push(coded('f_tax', codeOf('Fskattstatus', 'F-skattstatus'), F_SKATT, {}, textOf('Fskattstatus', 'F-skattstatus')))
+  push(coded('vat_registration', codeOf('Momsstatus'), MOMS, {}, textOf('Momsstatus')))
+  push(coded('employer_registration', codeOf('Arbetsgivarstatus'), ARBETSGIVARE, {}, textOf('Arbetsgivarstatus')))
+  push(coded('company_status', codeOf('Företagsstatus', 'Foretagsstatus'), FORETAGSSTATUS, {}, textOf('Företagsstatus', 'Foretagsstatus')))
+  push(coded('legal_form', codeOf('Juridisk form'), JURIDISK_FORM, {}, textOf('Juridisk form')))
+  const bv = codeOf('Bolagsstatus', 'Status hos Bolagsverket')
+  push(coded('bolagsverket_status', bv, BOLAGSVERKET_STATUS, bv ? { warning: BOLAGSVERKET_WARNING_CODES.has(bv.replace(/^0+(?=\d)/, '') || '0') } : {}, textOf('Bolagsstatus', 'Status hos Bolagsverket')))
+  push(coded('employees_band', codeOf('Stkl', 'Storleksklass Anställda'), STORLEKSKLASS, {}, textOf('Storleksklass', 'Storleksklass Anställda')))
+  const registeredSkv = codeOf('Registrerad hos SKV', 'Registrerad hos Skatteverket')
+  if (registeredSkv) push({ field: 'registered_skv', value: { code: registeredSkv, label: textOf('Registrerad hos SKV') ?? (registeredSkv === '1' ? 'Registrerad' : `Kod ${registeredSkv}`) } })
 
-  const sni = pick(row, 'Bransch', 'Bransch_1', 'SNI', 'Näringsgren', 'Naringsgren')
-  const sniText = pick(row, 'Bransch_1, text', 'Branschtext', 'Bransch text', 'Näringsgren, text', 'Naringsgrentext')
-  if (sni) push({ field: 'industry', value: { code: sni, label: sniText ?? null } })
+  const sni = pick(row, 'Bransch_1, kod', 'Bransch_1', 'Bransch', 'SNI')
+  const sniText = textOf('Bransch_1', 'Bransch_1, text', 'Bransch')
+  if (sni && /^\d/.test(sni)) push({ field: 'industry', value: { code: sni, label: sniText } })
 
-  const street = pick(row, 'Postadress', 'PostAdress')
+  const street = pick(row, 'PostAdress', 'Postadress')
   const postal = pick(row, 'PostNr', 'Postnr', 'Postnummer')
   const city = pick(row, 'PostOrt', 'Postort')
-  const co = pick(row, 'COadress', 'COAdress', 'C/O-adress')
+  const co = pick(row, 'COAdress', 'COadress', 'C/O-adress')
   if (street || postal || city) push({ field: 'postal_address', value: { street, co, postal_code: postal, city } })
 
-  const municipality = pick(row, 'Säteskommun', 'Sateskommun', 'Säte kommun', 'Kommun')
-  const county = pick(row, 'Säteslän', 'Sateslan', 'Säte län', 'Län')
-  if (municipality || county) push({ field: 'seat', value: { municipality_code: municipality, county_code: county } })
+  const municipality = pick(row, 'Säteskommun, kod', 'Sateskommun, kod')
+  const county = pick(row, 'Säteslän, kod', 'Sateslan, kod')
+  const municipalityName = textOf('Säteskommun', 'Sateskommun')
+  const countyName = textOf('Säteslän', 'Sateslan')
+  if (municipality || county || municipalityName) {
+    push({ field: 'seat', value: { municipality_code: municipality, county_code: county, municipality: municipalityName, county: countyName } })
+  }
+
+  const turnoverYear = pick(row, 'Omsättning, år', 'Omsattning, ar')
+  const turnoverBand = textOf('Storleksklass, oms')
+  const turnoverCode = codeOf('Stkl, oms')
+  if (turnoverBand || turnoverCode) push({ field: 'turnover_band', value: { code: turnoverCode, label: turnoverBand, year: turnoverYear } })
 
   const registered = isoDate(pick(row, 'Registreringsdatum'))
   if (registered) push({ field: 'registered_at', value: registered })
