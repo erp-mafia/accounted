@@ -39,6 +39,7 @@ async function post<T>(url: string, body?: unknown): Promise<T> {
 
 export default function PartiesPage() {
   const t = useTranslations('parties')
+  const tCommon = useTranslations('common')
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
 
@@ -231,7 +232,7 @@ export default function PartiesPage() {
   }
 
   function content() {
-    if (failed) return <EmptyState title={t('load_failed')} description={t('action_failed')} actionLabel={t('attn_review')} onAction={reload} />
+    if (failed) return <EmptyState title={t('load_failed')} description={t('action_failed')} actionLabel={tCommon('retry')} onAction={reload} />
     if (loading && !register)
       return (
         <div className="space-y-3">
