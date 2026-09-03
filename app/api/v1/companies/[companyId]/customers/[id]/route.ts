@@ -23,6 +23,13 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { UpdateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 import { COUNTRY_CONSISTENCY_MESSAGES, checkCountryConsistency } from '@/lib/vat/country-codes'
+
+/** The stored fields the country-vs-type rule and the personnummer guards read. */
+interface ExistingCountryRow {
+  customer_type?: string
+  country?: string | null
+  vat_number?: string | null
+}
 import {
   encryptCustomerPersonalNumber,
   maskCustomerRow,
@@ -310,7 +317,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     // it will be after the update; read the stored values when the body
     // touches any of the fields involved.
     let effectiveType: string | undefined = body.customer_type
-    let existing: { customer_type?: string; country?: string | null; vat_number?: string | null } | null = null
+    let existing: ExistingCountryRow | null = null
     if (
       (personalNumberSubmitted && body.personal_number)
       || body.org_number
@@ -324,14 +331,18 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         .eq('company_id', ctx.companyId!)
         .eq('id', customerId)
         .maybeSingle()
-      existing = data as typeof existing
+      existing = data as ExistingCountryRow | null
       effectiveType ??= existing?.customer_type
     }
 
     // Country vs type vs VAT prefix on the row as it will END UP (#2025): a
     // type change alone can make the stored country wrong, and a country
-    // change alone can contradict the stored VAT number.
-    if (existing && effectiveType) {
+    // change alone can contradict the stored VAT number. Judged only when one
+    // of the three is in the body, so a contradictory legacy row can still
+    // change its email.
+    const countryRuleTouched =
+      body.customer_type !== undefined || body.country !== undefined || body.vat_number !== undefined
+    if (countryRuleTouched && existing && effectiveType) {
       const countryIssue = checkCountryConsistency({
         partyType: effectiveType,
         country: body.country ?? existing.country,
@@ -340,9 +351,12 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       if (countryIssue) {
         return v1ErrorResponseFromCode('CUSTOMER_COUNTRY_MISMATCH', ctx.log, {
           requestId: ctx.requestId,
-          messageSv: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv,
-          messageEn: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en,
-          details: { field: 'country', issue: countryIssue },
+          details: {
+            field: 'country',
+            issue: countryIssue,
+            message_sv: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv,
+            message_en: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en,
+          },
         })
       }
     }

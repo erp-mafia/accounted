@@ -185,6 +185,20 @@ describe('gnubok_update_customer: country', () => {
     ).rejects.toThrow(/prefix/i)
   })
 
+  it('lets a contradictory legacy row change unrelated fields', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: currentCustomer({ customer_type: 'eu_business', country: 'SE', vat_number: 'DE811234567' }) })
+
+    const result = (await updateTool().execute(
+      { customer_id: CUSTOMER_ID, email: 'new@example.test', dry_run: true },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { preview: { proposed?: Record<string, unknown> } }
+
+    expect(result.preview.proposed).toMatchObject({ email: 'new@example.test', country: 'SE' })
+  })
+
   it('refuses a country it cannot read as a code before touching the database', async () => {
     const { supabase } = createQueuedMockSupabase()
 

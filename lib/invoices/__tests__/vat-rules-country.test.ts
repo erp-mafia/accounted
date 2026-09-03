@@ -36,9 +36,13 @@ describe('reverse charge requires an EU country other than Sweden', () => {
     expect(getArticleVatRateAdoptionSet('eu_business', true, 'SE')).toEqual(new Set([25, 12, 6, 0]))
   })
 
-  it('refuses reverse charge when the country is outside the EU', () => {
-    expect(getVatRules('eu_business', true, 'NO').treatment).toBe('standard_25')
-    expect(getVatRules('eu_business', true, 'US').treatment).toBe('standard_25')
+  it('keeps reverse charge for a validated number with a non-EU address', () => {
+    // The VIES-validated number is the stronger evidence of an EU
+    // registration: a Swiss company registered in Germany, Monaco,
+    // Northern Ireland. Only Sweden refuses.
+    expect(getVatRules('eu_business', true, 'CH').treatment).toBe('reverse_charge')
+    expect(getVatRules('eu_business', true, 'MC').treatment).toBe('reverse_charge')
+    expect(getVatRules('eu_business', true, 'GB').treatment).toBe('reverse_charge')
   })
 
   it('reads a legacy country name the same way as its code', () => {

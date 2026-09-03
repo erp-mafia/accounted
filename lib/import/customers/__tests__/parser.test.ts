@@ -150,4 +150,26 @@ describe('parseCustomersFile', () => {
     expect(result.rows[2].validation_errors.join(' ')).toMatch(/Okänt land/)
     expect(result.rows[3].country).toBe('SE')
   })
+
+  it('derives a missing country from the type and flags a contradictory row', () => {
+    const buffer = buildXlsx([
+      ['Namn', 'Kundtyp', 'Land', 'VAT-nummer'],
+      ['Muster GmbH', 'eu_business', '', 'DE811234567'],
+      ['Falsch GmbH', 'eu_business', 'Sverige', 'DE811234567'],
+      ['Far Ltd', 'non_eu_business', '', ''],
+      ['Acme AB', 'swedish_business', '', ''],
+    ])
+
+    const result = parseCustomersFile(buffer, 'kunder.xlsx')
+
+    expect(result.rows[0].country).toBe('DE')
+    expect(result.rows[0].is_valid).toBe(true)
+    expect(result.rows[1].country).toBe('SE')
+    expect(result.rows[1].is_valid).toBe(false)
+    expect(result.rows[1].validation_errors.join(' ')).toMatch(/EU-företag/)
+    expect(result.rows[2].is_valid).toBe(false)
+    expect(result.rows[2].validation_errors.join(' ')).toMatch(/Land saknas/)
+    expect(result.rows[3].country).toBe('SE')
+    expect(result.rows[3].is_valid).toBe(true)
+  })
 })

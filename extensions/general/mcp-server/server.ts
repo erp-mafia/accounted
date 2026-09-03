@@ -6236,12 +6236,18 @@ export const tools: McpTool[] = [
 
       // Country vs type vs VAT prefix, judged on the row as it will END UP:
       // a type change alone can make a stored country wrong, and a country
-      // change alone can contradict the stored VAT number (#2025).
-      const countryIssue = checkCountryConsistency({
-        partyType: effectiveCustomerType,
-        country: parsed.data.changes.country ?? current.country,
-        vatNumber: parsed.data.changes.vat_number ?? current.vat_number,
-      })
+      // change alone can contradict the stored VAT number (#2025). Judged
+      // only when one of the three is in the update: a legacy row that is
+      // already contradictory must still be able to change its email.
+      const { customer_type: newType, country: newCountry, vat_number: newVat } = parsed.data.changes
+      const countryIssue =
+        newType !== undefined || newCountry !== undefined || newVat !== undefined
+          ? checkCountryConsistency({
+              partyType: effectiveCustomerType,
+              country: newCountry ?? current.country,
+              vatNumber: newVat ?? current.vat_number,
+            })
+          : null
       if (countryIssue) {
         throw new Error(`country: ${COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en}`)
       }

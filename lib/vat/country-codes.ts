@@ -131,6 +131,14 @@ const NAME_TO_CODE: Map<string, string> = (() => {
 const ALPHA2_RE = /^[A-Z]{2}$/
 
 /**
+ * Every folded name the TypeScript table knows, with its code. Exists so a
+ * test can hold the SQL twin in migration 20260903170000 to the same table.
+ */
+export function listKnownCountryNames(): Array<[name: string, code: string]> {
+  return [...NAME_TO_CODE.entries()]
+}
+
+/**
  * Turn user, agent or legacy input into an ISO 3166-1 alpha-2 code.
  *
  * Accepts a code in any case ("de", "DE"), the Skatteverket/VIES spelling
@@ -218,8 +226,8 @@ export const COUNTRY_CONSISTENCY_MESSAGES: Record<
     en: 'An EU business cannot have country SE. Pick the customer\'s country, or choose Swedish business if the customer is Swedish.',
   },
   EU_BUSINESS_REQUIRES_EU_COUNTRY: {
-    sv: 'Ett EU-företag måste ha ett land inom EU. Välj kundtypen Företag utanför EU för ett land utanför EU.',
-    en: 'An EU business must have an EU country. Choose Non-EU business for a country outside the EU.',
+    sv: 'Ett EU-företag måste ha ett land inom EU, eller ett VAT-nummer registrerat i ett annat EU-land. Välj annars kundtypen Företag utanför EU.',
+    en: 'An EU business must have an EU country, or a VAT number registered in another EU country. Otherwise choose Non-EU business.',
   },
   NON_EU_BUSINESS_REQUIRES_NON_EU_COUNTRY: {
     sv: 'Ett företag utanför EU kan inte ha ett EU-land. Välj kundtypen EU-företag, eller Svenskt företag för Sverige.',
@@ -231,9 +239,34 @@ export const COUNTRY_CONSISTENCY_MESSAGES: Record<
   },
 }
 
-/** The VIES/Skatteverket prefix for an ISO code (Greece is EL, not GR). */
+/**
+ * VIES prefixes that name an EU VAT registration: the 27 members (EL for
+ * Greece) plus XI, Northern Ireland, which stays in the EU goods VAT area
+ * under the Protocol and appears with that prefix in VIES and SKV 5740.
+ */
+const EU_TRADE_VAT_PREFIXES = new Set([...EU_COUNTRIES.map((c) => c.vatPrefix), 'XI'])
+
+/**
+ * Territories inside another member's VAT area: a customer there carries
+ * that member's prefix (Monaco is French for VAT, Article 7 of the VAT
+ * Directive) and is an EU customer for reverse charge and SKV 5740.
+ */
+const VAT_TERRITORY_OF: Record<string, string> = { MC: 'FR' }
+
+/** The VIES/Skatteverket prefix for an ISO code (Greece is EL, Monaco is FR). */
 export function vatPrefixForCountry(code: string): string {
-  return code === 'GR' ? 'EL' : code
+  const member = VAT_TERRITORY_OF[code] ?? code
+  return member === 'GR' ? 'EL' : member
+}
+
+/** True when the prefix names a VAT registration in an EU country other than Sweden. */
+export function isEuTradeVatPrefix(prefix: string | null | undefined): boolean {
+  return !!prefix && prefix !== 'SE' && EU_TRADE_VAT_PREFIXES.has(prefix)
+}
+
+/** True when the country is in the EU VAT area: a member, or a territory of one. */
+export function isEuVatAreaCountry(code: string): boolean {
+  return isEuMemberCountry(code) || code in VAT_TERRITORY_OF
 }
 
 /**
@@ -274,8 +307,11 @@ export function defaultCountryForParty(
  * Does the country agree with the party type (and the VAT number's prefix)?
  *
  * - swedish_business: country must be SE.
- * - eu_business: country must be an EU member other than SE, and a VAT
- *   number that carries a prefix must carry that country's prefix.
+ * - eu_business: country must not be SE. Inside the EU VAT area (a member,
+ *   or Monaco) a VAT number that carries a prefix must carry that country's
+ *   prefix. Outside it the customer counts as EU only through an EU VAT
+ *   registration: a Swiss company registered in Germany, or Northern
+ *   Ireland with its XI prefix.
  * - non_eu_business: country must not be an EU member (SE included).
  * - individual: no rule. A private person abroad is still a customer taxed
  *   with Swedish VAT (or OSS), so the country is free.
@@ -297,10 +333,12 @@ export function checkCountryConsistency(input: {
 
     case 'eu_business': {
       if (code === 'SE') return 'EU_BUSINESS_COUNTRY_IS_SE'
-      if (!isEuMemberCountry(code)) return 'EU_BUSINESS_REQUIRES_EU_COUNTRY'
       const prefix = vatNumberCountryPrefix(input.vatNumber)
-      if (prefix && prefix !== vatPrefixForCountry(code)) return 'VAT_PREFIX_COUNTRY_MISMATCH'
-      return null
+      if (isEuVatAreaCountry(code)) {
+        if (prefix && prefix !== vatPrefixForCountry(code)) return 'VAT_PREFIX_COUNTRY_MISMATCH'
+        return null
+      }
+      return isEuTradeVatPrefix(prefix) ? null : 'EU_BUSINESS_REQUIRES_EU_COUNTRY'
     }
 
     case 'non_eu_business':
@@ -315,15 +353,18 @@ export function checkCountryConsistency(input: {
  * Does this country allow the reverse-charge (0%, ruta 39) treatment an
  * EU-business customer with a validated VAT number gets?
  *
- * Only an EU member other than Sweden does. An unknown or unmapped country
- * (null, or legacy text that is not a code) does NOT block it: refusing
- * reverse charge on a genuine German customer whose row still says
- * "Deutschland" would put Swedish VAT on a correct invoice, which is the
- * worse error. The consistency check above stops new rows like that from
- * being saved.
+ * Only Sweden refuses it: a buyer established here owes Swedish VAT
+ * whatever foreign number it also holds (#2025). Any other country keeps
+ * it, because the VIES-validated number is the stronger evidence of an EU
+ * registration than the address (a Swiss company registered in Germany,
+ * Monaco with a French number, Northern Ireland with XI). An unknown or
+ * unmapped country (null, or legacy text that is not a code) does not block
+ * either: refusing reverse charge on a genuine German customer whose row
+ * still says "Deutschland" would put Swedish VAT on a correct invoice, which
+ * is the worse error. The consistency check above stops new contradictory
+ * rows from being saved, and migration 20260903170000 repairs the old ones
+ * whose country was only ever the writer default.
  */
 export function countryPermitsReverseCharge(country: string | null | undefined): boolean {
-  const code = normalizeCountryCode(country)
-  if (!code) return true
-  return code !== 'SE' && isEuMemberCountry(code)
+  return normalizeCountryCode(country) !== 'SE'
 }

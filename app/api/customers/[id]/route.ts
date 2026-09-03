@@ -132,12 +132,18 @@ export const PATCH = withRouteContext(
 
     // Country vs type vs VAT prefix on the row as it will END UP (#2025): a
     // type change alone can make the stored country wrong, and a country
-    // change alone can contradict the stored VAT number.
-    const countryIssue = checkCountryConsistency({
-      partyType: effectiveType,
-      country: body.country ?? existing.country,
-      vatNumber: body.vat_number ?? existing.vat_number,
-    })
+    // change alone can contradict the stored VAT number. Judged only when
+    // one of the three is in the body: a legacy row that is already
+    // contradictory must still be able to change its email.
+    const countryRuleTouched =
+      body.customer_type !== undefined || body.country !== undefined || body.vat_number !== undefined
+    const countryIssue = countryRuleTouched
+      ? checkCountryConsistency({
+          partyType: effectiveType,
+          country: body.country ?? existing.country,
+          vatNumber: body.vat_number ?? existing.vat_number,
+        })
+      : null
     if (countryIssue) {
       return errorResponseFromCode('CUSTOMER_COUNTRY_MISMATCH', opLog, {
         requestId,

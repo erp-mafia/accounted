@@ -9,9 +9,10 @@ export interface VatRateOption {
 
 /**
  * Reverse charge (0%, ruta 39) needs all three: EU-business type, a VIES-
- * validated VAT number, and a country that is an EU member other than
- * Sweden. `country` undefined means the caller did not have it, which
- * keeps the pre-2026-09 behaviour (type + validation only).
+ * validated VAT number, and a country other than Sweden (a buyer
+ * established here owes Swedish VAT whatever foreign number it holds).
+ * `country` undefined means the caller did not have it, which keeps the
+ * pre-2026-09 behaviour (type + validation only).
  */
 export function isReverseChargeCustomer(
   customerType: CustomerType,
@@ -45,10 +46,10 @@ export function isReverseChargeCustomer(
  * (momsfri) server-side, so a non-momsregistrerad company never books output VAT.
  *
  * `country` is the customer's ISO 3166-1 alpha-2 country. Reverse charge is
- * only granted when it is an EU member other than SE (or unknown: see
- * countryPermitsReverseCharge). An eu_business row with a validated German
- * VAT number but country SE used to get 0% here and only be caught by the
- * periodisk sammanställning after the invoice was sent (#2025).
+ * refused when it is SE (see countryPermitsReverseCharge). An eu_business
+ * row with a validated German VAT number but country SE used to get 0% here
+ * and only be caught by the periodisk sammanställning after the invoice was
+ * sent (#2025).
  */
 export function getAvailableVatRates(
   customerType: CustomerType,
@@ -180,8 +181,8 @@ export interface VatRule {
  *
  * Rules:
  * - Swedish customers: 25% VAT, moms ruta 05
- * - EU business with validated VAT in another EU country: 0% reverse charge, moms ruta 39
- * - EU business without validated VAT, or with country SE / outside the EU: 25% VAT, moms ruta 05
+ * - EU business with validated VAT and a country other than SE: 0% reverse charge, moms ruta 39
+ * - EU business without validated VAT, or with country SE: 25% VAT, moms ruta 05
  * - Non-EU business: 0% export, moms ruta 40
  *
  * Independent of the seller's VAT registration status. A non-momsregistrerad
@@ -212,7 +213,7 @@ export function getVatRules(
         }
       }
       // EU business without validated VAT number, or one whose country is
-      // Sweden or outside the EU, must be charged Swedish VAT
+      // Sweden, must be charged Swedish VAT
       return {
         treatment: 'standard_25',
         rate: 25,

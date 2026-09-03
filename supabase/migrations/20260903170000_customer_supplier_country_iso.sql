@@ -14,9 +14,16 @@
 --      were (and listed in country_raw); the periodisk report already warns
 --      on those and the customer form asks for a pick before it saves.
 --
+--   4. for eu_business rows whose country is missing or only the old writer
+--      default (SE) while the VAT number names another EU member, takes the
+--      country from the VAT prefix. The pre-2026-09 VAT rules granted reverse
+--      charge on type + VIES validation alone, so these rows invoiced at 0%;
+--      without this step they would flip to 25% Swedish VAT on the next
+--      invoice. country_raw = '' marks a row whose country was null.
+--
 -- Rollback (restores the original text on every touched row):
---   update public.customers set country = country_raw where country_raw is not null;
---   update public.suppliers set country = country_raw where country_raw is not null;
+--   update public.customers set country = nullif(country_raw, '') where country_raw is not null;
+--   update public.suppliers set country = nullif(country_raw, '') where country_raw is not null;
 --
 -- Rows still unmapped after the backfill:
 --   select id, company_id, name, country from public.customers
@@ -201,5 +208,26 @@ update public.suppliers
        country = case when btrim(country) = '' then null else coalesce(public.normalize_country_code(country), country) end
  where country is not null
    and country !~ '^[A-Z]{2}$';
+
+-- Step 4: EU-business rows with a missing or defaulted (SE) country and a
+-- VAT number registered in another EU member. Only a prefix that names a
+-- member is used; a number without a prefix derives nothing and the row
+-- keeps its country.
+update public.customers c
+   set country_raw = coalesce(c.country_raw, c.country, ''),
+       country = d.code
+  from (
+    select id,
+           public.normalize_country_code(
+             substring(upper(regexp_replace(coalesce(vat_number, ''), '[\s.\-]', '', 'g')) from 1 for 2)
+           ) as code
+      from public.customers
+     where customer_type = 'eu_business'
+       and (country is null or country = 'SE')
+  ) d
+ where d.id = c.id
+   and d.code is not null
+   and d.code <> 'SE'
+   and d.code in ('AT','BE','BG','HR','CY','CZ','DK','EE','FI','FR','DE','GR','HU','IE','IT','LV','LT','LU','MT','NL','PL','PT','RO','SK','SI','ES');
 
 NOTIFY pgrst, 'reload schema';

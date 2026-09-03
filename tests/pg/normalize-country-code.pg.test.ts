@@ -46,6 +46,8 @@ describe('normalize_country_code()', () => {
     expect(await normalize('Atlantis')).toBeNull()
     expect(await normalize('S')).toBeNull()
     expect(await normalize('SWE')).toBeNull()
+    // The two leading characters of a prefix-less VAT number (backfill step 4).
+    expect(await normalize('81')).toBeNull()
   })
 })
 

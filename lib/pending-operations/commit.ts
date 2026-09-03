@@ -576,12 +576,17 @@ async function commitUpdateCustomer(
   if (!current) return { error: 'Customer not found', status: 404 }
 
   // Country vs type vs VAT prefix on the row as it will end up (same check
-  // as staging; repeated here as the tamper gate).
-  const countryIssue = checkCountryConsistency({
-    partyType: changes.customer_type ?? current.customer_type,
-    country: changes.country ?? current.country,
-    vatNumber: changes.vat_number ?? current.vat_number,
-  })
+  // as staging; repeated here as the tamper gate), only when one of the
+  // three is part of the update.
+  const countryRuleTouched =
+    changes.customer_type !== undefined || changes.country !== undefined || changes.vat_number !== undefined
+  const countryIssue = countryRuleTouched
+    ? checkCountryConsistency({
+        partyType: changes.customer_type ?? current.customer_type,
+        country: changes.country ?? current.country,
+        vatNumber: changes.vat_number ?? current.vat_number,
+      })
+    : null
   if (countryIssue) {
     return { error: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv, status: 400 }
   }

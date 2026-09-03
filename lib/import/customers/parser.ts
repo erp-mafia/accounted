@@ -2,7 +2,12 @@ import type { CustomerType } from '@/types'
 import { detectCustomerColumns } from './column-detector'
 import { cellOrNull, parsePaymentTerms } from '../shared/column-utils'
 import { classifyCustomer } from '../shared/classify'
-import { normalizeCountryCode } from '@/lib/vat/country-codes'
+import {
+  COUNTRY_CONSISTENCY_MESSAGES,
+  checkCountryConsistency,
+  defaultCountryForParty,
+  normalizeCountryCode,
+} from '@/lib/vat/country-codes'
 import { readBestSheet } from '../shared/workbook-reader'
 import type {
   DetectedCustomerColumns,
@@ -36,16 +41,6 @@ function normalizeCustomerType(value: string | null): CustomerType | null {
   return VALID_CUSTOMER_TYPES.includes(lower as CustomerType)
     ? (lower as CustomerType)
     : null
-}
-
-/**
- * ISO 3166-1 alpha-2 (customers.country is a code). A name the register
- * cannot map is kept as typed so the preview can show it; the row is then
- * flagged invalid below and the execute route refuses it.
- */
-function normalizeCountry(value: string | null): string {
-  if (!value) return 'SE'
-  return normalizeCountryCode(value) ?? value.trim()
 }
 
 /**
@@ -136,7 +131,6 @@ export function parseCustomersFile(
     const countryRaw = columns.country_col !== null
       ? cellOrNull(row[columns.country_col])
       : null
-    const country = normalizeCountry(countryRaw)
     const vatNumber = columns.vat_number_col !== null
       ? cellOrNull(row[columns.vat_number_col])
       : null
@@ -157,12 +151,26 @@ export function parseCustomersFile(
         country: countryRaw,
       })
 
+    // ISO 3166-1 alpha-2 (customers.country is a code). A name the register
+    // cannot map is kept as typed so the preview can show it and the row is
+    // flagged. A missing country follows the type: SE for Swedish types,
+    // the VAT prefix for an EU business, nothing for a non-EU business.
+    const derivedCountry = countryRaw ? null : defaultCountryForParty(customerType, vatNumber)
+    const country = countryRaw
+      ? (normalizeCountryCode(countryRaw) ?? countryRaw.trim())
+      : (derivedCountry ?? 'SE')
+
     const validationErrors: string[] = []
     if (email && !EMAIL_RE.test(email)) {
       validationErrors.push('Ogiltig e-postadress')
     }
     if (countryRaw && !normalizeCountryCode(countryRaw)) {
       validationErrors.push(`Okänt land: ${countryRaw.trim()} (ange landskod, t.ex. SE eller DE)`)
+    } else if (!countryRaw && !derivedCountry) {
+      validationErrors.push('Land saknas (ange landskod, t.ex. NO eller US)')
+    } else {
+      const countryIssue = checkCountryConsistency({ partyType: customerType, country, vatNumber })
+      if (countryIssue) validationErrors.push(COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv)
     }
     if (orgNumber && !/^[\d\s\-]{6,20}$/.test(orgNumber)) {
       validationErrors.push('Ogiltigt org-/personnummer')

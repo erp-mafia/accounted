@@ -212,6 +212,21 @@ describe('country on PATCH /api/customers/[id]', () => {
     expect(captured.update).toHaveLength(0)
   })
 
+  it('lets a contradictory legacy row change unrelated fields', async () => {
+    queryResult = {
+      data: { id: CUSTOMER_ID, customer_type: 'eu_business', country: 'SE', vat_number: 'DE811234567' },
+      error: null,
+    }
+    const request = createMockRequest(`/api/customers/${CUSTOMER_ID}`, {
+      method: 'PATCH',
+      body: { email: 'new@example.test' },
+    })
+
+    const response = await PATCH(request, params)
+    expect(response.status).toBe(200)
+    expect(captured.update).toHaveLength(1)
+  })
+
   it('accepts a country and type changed together into a consistent row', async () => {
     queryResult = {
       data: { id: CUSTOMER_ID, customer_type: 'swedish_business', country: 'SE', vat_number: null },

@@ -7,8 +7,10 @@ import {
   getCountryName,
   getCountryOptions,
   isCountryCode,
+  isEuTradeVatPrefix,
   normalizeCountryCode,
   vatNumberCountryPrefix,
+  vatPrefixForCountry,
 } from '../country-codes'
 import { EU_COUNTRIES } from '../eu-countries'
 
@@ -103,6 +105,21 @@ describe('vatNumberCountryPrefix', () => {
   })
 })
 
+describe('vatPrefixForCountry / isEuTradeVatPrefix', () => {
+  it('maps Greece to EL and Monaco to FR, and knows XI as an EU-trade prefix', () => {
+    expect(vatPrefixForCountry('GR')).toBe('EL')
+    expect(vatPrefixForCountry('MC')).toBe('FR')
+    expect(vatPrefixForCountry('DE')).toBe('DE')
+    expect(isEuTradeVatPrefix('DE')).toBe(true)
+    expect(isEuTradeVatPrefix('EL')).toBe(true)
+    expect(isEuTradeVatPrefix('XI')).toBe(true)
+    expect(isEuTradeVatPrefix('SE')).toBe(false)
+    expect(isEuTradeVatPrefix('GB')).toBe(false)
+    expect(isEuTradeVatPrefix('CH')).toBe(false)
+    expect(isEuTradeVatPrefix(null)).toBe(false)
+  })
+})
+
 describe('defaultCountryForParty', () => {
   it('is SE for Swedish types', () => {
     expect(defaultCountryForParty('swedish_business')).toBe('SE')
@@ -153,7 +170,23 @@ describe('checkCountryConsistency', () => {
     )
   })
 
-  it('refuses an EU business outside the EU and a non-EU business inside it', () => {
+  it('accepts an EU VAT registration outside the EU and Monaco under the French prefix', () => {
+    expect(checkCountryConsistency({ partyType: 'eu_business', country: 'CH', vatNumber: 'DE811234567' })).toBeNull()
+    expect(checkCountryConsistency({ partyType: 'eu_business', country: 'GB', vatNumber: 'XI123456789' })).toBeNull()
+    expect(checkCountryConsistency({ partyType: 'eu_business', country: 'MC', vatNumber: 'FR12345678901' })).toBeNull()
+    expect(checkCountryConsistency({ partyType: 'eu_business', country: 'MC' })).toBeNull()
+    expect(checkCountryConsistency({ partyType: 'eu_business', country: 'MC', vatNumber: 'DE811234567' })).toBe(
+      'VAT_PREFIX_COUNTRY_MISMATCH',
+    )
+    expect(checkCountryConsistency({ partyType: 'eu_business', country: 'GB', vatNumber: 'GB123456789' })).toBe(
+      'EU_BUSINESS_REQUIRES_EU_COUNTRY',
+    )
+    expect(checkCountryConsistency({ partyType: 'eu_business', country: 'CH', vatNumber: 'SE556677889901' })).toBe(
+      'EU_BUSINESS_REQUIRES_EU_COUNTRY',
+    )
+  })
+
+  it('refuses an EU business outside the EU without an EU registration, and a non-EU business inside it', () => {
     expect(checkCountryConsistency({ partyType: 'eu_business', country: 'NO' })).toBe(
       'EU_BUSINESS_REQUIRES_EU_COUNTRY',
     )
@@ -188,17 +221,21 @@ describe('checkCountryConsistency', () => {
 })
 
 describe('countryPermitsReverseCharge', () => {
-  it('allows an EU member other than Sweden, by code or by legacy name', () => {
+  it('allows any country other than Sweden, by code or by legacy name', () => {
     expect(countryPermitsReverseCharge('DE')).toBe(true)
     expect(countryPermitsReverseCharge('Germany')).toBe(true)
     expect(countryPermitsReverseCharge('gr')).toBe(true)
+    // A VIES-validated number outweighs a non-EU address (Swiss company
+    // registered in Germany, Monaco, Northern Ireland).
+    expect(countryPermitsReverseCharge('CH')).toBe(true)
+    expect(countryPermitsReverseCharge('MC')).toBe(true)
+    expect(countryPermitsReverseCharge('GB')).toBe(true)
   })
 
-  it('refuses Sweden and countries outside the EU', () => {
+  it('refuses Sweden only (#2025)', () => {
     expect(countryPermitsReverseCharge('SE')).toBe(false)
     expect(countryPermitsReverseCharge('Sweden')).toBe(false)
-    expect(countryPermitsReverseCharge('NO')).toBe(false)
-    expect(countryPermitsReverseCharge('US')).toBe(false)
+    expect(countryPermitsReverseCharge('Sverige')).toBe(false)
   })
 
   it('does not block on an unknown country: that is the consistency check\'s job', () => {

@@ -59,6 +59,8 @@ interface SelfBilledCustomer {
   name: string
   customer_type: string
   vat_number_validated: boolean | null
+  /** ISO 3166-1 alpha-2; gates reverse charge together with the two above. */
+  country?: string | null
 }
 
 export interface SelfBilledSaleComputedItem {

@@ -2832,6 +2832,18 @@ const ImportedCustomerRowSchema = z.object({
   vat_number: z.string().nullable(),
   default_payment_terms: z.number().int().min(0).max(365),
   notes: z.string().nullable(),
+}).superRefine((row, ctx) => {
+  // The preview flags these rows and the wizard refuses to continue with
+  // them; repeated here so a hand-built request cannot import an EU
+  // business with country SE (#2025).
+  const countryIssue = checkCountryConsistency({
+    partyType: row.customer_type,
+    country: row.country,
+    vatNumber: row.vat_number,
+  })
+  if (countryIssue) {
+    ctx.addIssue({ code: 'custom', path: ['country'], message: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en })
+  }
 })
 
 export const CustomerImportExecuteSchema = z.object({
