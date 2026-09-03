@@ -1210,6 +1210,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   // document_attachments when the underlying data is legally removed.
   document_integrity_checks:
     'WORM verification log (SHA-256 recompute outcomes); failures reach the archive via audit_log in revision/behandlingshistorik.json',
+  email_change_requests:
+    'per-user in-flight login-email change claim (migration 20260903083000); gates token re-issue, not räkenskapsinformation',
   event_log: '30-day TTL event bus log',
   extension_data: 'extension runtime state (includes this backup\'s own state)',
   idempotency_keys: 'infrastructure',

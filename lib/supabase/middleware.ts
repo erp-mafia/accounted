@@ -325,10 +325,15 @@ async function updateSessionInner(
   // requests off these paths (a) dropped the confirmation click before
   // verifyOtp could consume the token, so the change never completed, and
   // (b) hid the /auth/email-change status page in exactly the success case.
+  // Hook-built links carry type=email_change; stock GoTrue links verify on
+  // the GoTrue host and return through redirect_to with only the
+  // flow=email_change marker that /api/account/email stamps on it, so both
+  // shapes must pass.
   if (
     pathname.startsWith('/auth/email-change') ||
     (pathname.startsWith('/auth/callback') &&
-      request.nextUrl.searchParams.get('type') === 'email_change')
+      (request.nextUrl.searchParams.get('type') === 'email_change' ||
+        request.nextUrl.searchParams.get('flow') === 'email_change'))
   ) {
     return supabaseResponse
   }

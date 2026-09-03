@@ -34,10 +34,23 @@ export interface ConnectorUpstream {
   key: string
 }
 
-export function bankConnectorMode(): ConnectorUpstream | null {
-  if (hasOwnEnableBankingCredentials()) return null
+/**
+ * Company ids that use the connector for bank sync even though this
+ * installation has its own Enable Banking credentials: the canary switch for
+ * moving an installation upstream by upstream (hosted Accounted moves its
+ * bank sync to Connect a few companies at a time before dropping its own
+ * keys). Comma-separated. Ignored without a connector key.
+ */
+function bankCanaryCompanies(): Set<string> {
+  const raw = process.env.CONNECT_BANK_CANARY_COMPANIES?.trim()
+  if (!raw) return new Set()
+  return new Set(raw.split(',').map((v) => v.trim()).filter(Boolean))
+}
+
+export function bankConnectorMode(companyId?: string): ConnectorUpstream | null {
   const cfg = getConnectorConfig()
   if (!cfg) return null
+  if (hasOwnEnableBankingCredentials() && !(companyId && bankCanaryCompanies().has(companyId))) return null
   return { baseUrl: `${cfg.baseUrl}/api/connect/bank`, key: cfg.key }
 }
 
