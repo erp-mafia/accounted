@@ -1363,7 +1363,7 @@ export interface Invoice {
   stripe_payment_link_id?: string | null
   // Per-invoice opt-out for automatic payment link creation on send.
   payment_link_auto?: boolean
-  // Per-invoice payee (migration 20260903183000): the bank account this
+  // Per-invoice payee (migration 20260903193000): the bank account this
   // invoice asks the customer to pay to (null = the per-currency default),
   // and its payee fields frozen when chosen and refreshed at issue. Issued
   // invoices print from payment_details; the resolver falls back to the

@@ -4,7 +4,7 @@ import { insertAuthUser, insertCashAccount, insertCompany } from './fixtures'
 import { getPool } from './setup'
 
 /**
- * Migration 20260903183000: invoices.payment_cash_account_id (FK, SET NULL)
+ * Migration 20260903193000: invoices.payment_cash_account_id (FK, SET NULL)
  * and invoices.payment_details (object snapshot).
  */
 
@@ -28,7 +28,7 @@ async function insertInvoice(companyId: string, userId: string, customerId: stri
   return id
 }
 
-describe('invoice payee columns (20260903183000)', () => {
+describe('invoice payee columns (20260903193000)', () => {
   it('stores the choice and the snapshot; deleting the account nulls the reference but keeps the snapshot', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
