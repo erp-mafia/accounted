@@ -191,7 +191,7 @@ async function createOneInvoice(
   // immune to refactoring drift.
   const { data: customer } = await supabase
     .from('customers')
-    .select('id, customer_type, vat_number_validated')
+    .select('id, customer_type, vat_number_validated, country')
     .eq('company_id', companyId)
     .eq('id', input.customer_id)
     .maybeSingle()
@@ -207,6 +207,7 @@ async function createOneInvoice(
   const vatRules = getVatRules(
     customer.customer_type as Parameters<typeof getVatRules>[0],
     customer.vat_number_validated,
+    customer.country,
   )
   // Gate on the PERMITTED set, not the picker default, exactly like
   // buildInvoiceWriteData: the ML 6 kap. supplies taxed where they are performed
@@ -217,6 +218,7 @@ async function createOneInvoice(
   const permittedRates = getPermittedVatRates(
     customer.customer_type as Parameters<typeof getPermittedVatRates>[0],
     customer.vat_number_validated,
+    customer.country,
   )
   const allowedRates = new Set(permittedRates.map((r) => r.rate))
 

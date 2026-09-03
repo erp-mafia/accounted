@@ -5,7 +5,7 @@ import { useAccounts } from '@/lib/reference-data/hooks'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Loader2, Lock, X } from 'lucide-react'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { getCountryOptions, normalizeCountryCode } from '@/lib/vat/country-codes'
 import type { CreateSupplierInput } from '@/types'
 
 interface SupplierFormProps {
@@ -29,6 +30,8 @@ export default function SupplierForm({
 }: SupplierFormProps) {
   const { canWrite } = useCanWrite()
   const t = useTranslations('form_supplier')
+  const locale = useLocale() === 'en' ? 'en' : 'sv'
+  const countryOptions = useMemo(() => getCountryOptions(locale), [locale])
   // Chart of accounts from the session cache (lib/reference-data): the
   // konto combobox is populated on the first paint; without the chart it
   // still accepts a typed 4-digit number.
@@ -55,7 +58,9 @@ export default function SupplierForm({
     address_line2: z.string().optional(),
     postal_code: z.string().optional(),
     city: z.string().optional(),
-    country: z.string().optional(),
+    // ISO 3166-1 alpha-2; an unmapped legacy name is shown as-is and has to
+    // be replaced before the form saves.
+    country: z.string().refine((v) => normalizeCountryCode(v) !== null, t('country_invalid')),
     org_number: z.string().optional(),
     vat_number: z.string().optional(),
     bankgiro: z.string().optional(),
@@ -76,6 +81,7 @@ export default function SupplierForm({
     register,
     handleSubmit,
     control,
+    watch,
     formState: { errors },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -87,7 +93,7 @@ export default function SupplierForm({
       address_line1: initialData?.address_line1 || '',
       postal_code: initialData?.postal_code || '',
       city: initialData?.city || '',
-      country: initialData?.country || 'SE',
+      country: normalizeCountryCode(initialData?.country) ?? initialData?.country ?? 'SE',
       org_number: initialData?.org_number || '',
       vat_number: initialData?.vat_number || '',
       bankgiro: initialData?.bankgiro || '',
@@ -102,6 +108,13 @@ export default function SupplierForm({
       notes: initialData?.notes || '',
     },
   })
+
+  const countryValue = watch('country')
+  // A stored value the picker does not list (an unmapped legacy name, or a
+  // code outside the curated list) still has to be visible, or the field
+  // would look empty while holding something.
+  const countryValueUnlisted =
+    countryValue && !countryOptions.some((option) => option.code === countryValue)
 
   // Empty strings go through as-is: the API schemas normalize them (dropped on
   // create, null on update so a cleared field actually clears the column).
@@ -214,7 +227,34 @@ export default function SupplierForm({
           </div>
           <div className="space-y-2">
             <Label htmlFor="country">{t('country_label')}</Label>
-            <Input id="country" placeholder="SE" {...register('country')} />
+            <Controller
+              name="country"
+              control={control}
+              render={({ field }) => (
+                <Select value={field.value} onValueChange={(v) => { if (v) field.onChange(v) }}>
+                  <SelectTrigger id="country">
+                    <SelectValue placeholder={t('country_placeholder')} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {countryValueUnlisted && (
+                      <SelectItem value={countryValue}>
+                        {normalizeCountryCode(countryValue)
+                          ? countryValue
+                          : t('country_unknown_option', { value: countryValue })}
+                      </SelectItem>
+                    )}
+                    {countryOptions.map((option) => (
+                      <SelectItem key={option.code} value={option.code}>
+                        {locale === 'en' ? option.nameEn : option.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            />
+            {errors.country && (
+              <p className="text-sm text-destructive">{errors.country.message}</p>
+            )}
           </div>
         </div>
       </div>
