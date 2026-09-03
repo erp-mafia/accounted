@@ -1514,6 +1514,21 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   // POST /api/invoices/{id}/peppol/send. The Access Point is an environment
   // decision (PEPPOL_TRANSPORT_PROVIDER + adapter credentials); the product
   // never pretends to send when no adapter is switched on.
+  SCB_NOT_CONFIGURED: {
+    httpStatus: 503,
+    message_sv: 'Uppslag mot SCB:s företagsregister är inte aktiverat i den här miljön.',
+    message_en: 'Lookups against the SCB business register are not enabled in this environment.',
+  },
+  SCB_LOOKUP_FAILED: {
+    httpStatus: 502,
+    message_sv: 'SCB:s företagsregister svarade inte. Försök igen om en stund.',
+    message_en: 'The SCB business register did not answer. Try again shortly.',
+  },
+  SCB_NOT_A_LEGAL_PERSON: {
+    httpStatus: 400,
+    message_sv: 'Uppgifter hämtas bara för juridiska personer, inte för enskilda firmor.',
+    message_en: 'Details are fetched for legal persons only, not for sole traders.',
+  },
   PEPPOL_TRANSPORT_UNAVAILABLE: {
     httpStatus: 503,
     message_sv: 'Peppol-utskick är inte aktiverat i den här miljön. En avtalad Peppol-operatör måste vara konfigurerad.',
