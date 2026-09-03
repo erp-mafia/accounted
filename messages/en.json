@@ -6465,6 +6465,8 @@
     "create_self_desc": "Register a self-billing invoice from your customer",
     "create_quote": "New quote",
     "create_quote_desc": "Create a quote that can become an invoice",
+    "create_proforma": "New proforma invoice",
+    "create_proforma_desc": "Advance invoice that is not booked and can become a real invoice",
     "bulkbar_selected": "{count, plural, one {invoice selected} other {invoices selected}}",
     "bulk_select_all": "Select all ({count})",
     "bulk_clear": "Clear",

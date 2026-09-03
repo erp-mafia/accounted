@@ -6465,6 +6465,8 @@
     "create_self_desc": "Registrera en självfaktura från din kund",
     "create_quote": "Ny offert",
     "create_quote_desc": "Skapa en offert som kan bli en faktura",
+    "create_proforma": "Ny proformafaktura",
+    "create_proforma_desc": "Förhandsfaktura som inte bokförs och kan bli en riktig faktura",
     "bulkbar_selected": "{count, plural, one {faktura vald} other {fakturor valda}}",
     "bulk_select_all": "Markera alla ({count})",
     "bulk_clear": "Rensa",
