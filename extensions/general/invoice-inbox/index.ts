@@ -33,8 +33,9 @@ import {
   verifyInboundWebhook,
   fetchReceivingEmail,
   fetchInboundAttachment,
-  extractLocalPartForDomain,
-  kindHintFromTag,
+  extractSharedRecipientsForDomain,
+  groupSharedRecipientsByInbox,
+  resolveKindHintForTags,
   type InboxKindHint,
   parseRecipients,
   isEmailReceivedEvent,
@@ -100,6 +101,11 @@ import { simpleParser } from 'mailparser'
 import type { InboxChannelContext, InvoiceExtractionResult, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 const MAX_ATTACHMENTS_PER_EMAIL = 20
+// Received-mail panel window (#2181): 30 days covers "the mail I sent last
+// week"; the hard cap keeps the query bounded.
+const INBOUND_HISTORY_DEFAULT_DAYS = 30
+const INBOUND_HISTORY_MAX_DAYS = 365
+const INBOUND_HISTORY_LIMIT = 200
 
 // Partial-update schema for the /items/:id/fields PATCH route. Only the
 // scalar fields the UI exposes for inline editing: line items and
@@ -1777,49 +1783,83 @@ export const invoiceInboxExtension: Extension = {
           process.env.SUPABASE_SERVICE_ROLE_KEY!
         )
 
-        // Recipient → company resolution. Shared-domain addresses first
-        // (existing local_part flow), then per-company verified custom
-        // domains. Custom domains are catch-all by design: MX routing is
-        // per-domain, and a supplier typing fakturor@ instead of faktura@
-        // must land in the inbox rather than silently vanish (Resend has
-        // already accepted the message; there is no bounce path).
-        let companyId: string | null = null
+        // Recipient → company resolution. Every shared-domain recipient is
+        // read (#2181): one mail can name the same inbox under two tags, or
+        // two inboxes at once, and reading only the first lost the rest with
+        // no trace. Per-company verified custom domains come after, and only
+        // when no shared address resolved. Custom domains are catch-all by
+        // design: MX routing is per-domain, and a supplier typing fakturor@
+        // instead of faktura@ must land in the inbox rather than silently
+        // vanish (Resend has already accepted the message; there is no
+        // bounce path).
+        interface InboundTarget {
+          companyId: string
+          inboxId: string | null
+          /** The addresses that resolved this target, as received (lowercased). */
+          recipients: string[]
+          tags: string[]
+          kindHint: InboxKindHint | null
+          tagConflict: boolean
+        }
+        const targets: InboundTarget[] = []
         let sharedInboxStatus: string | null = null
+        let localPart: string | null = null
+        const domainLower = domain.toLowerCase()
 
-        const sharedRecipient = extractLocalPartForDomain(to, domain)
-        const localPart = sharedRecipient?.localPart ?? null
-        // Sender-declared kind from the +lev / +ver tag on the shared
-        // address. Set only when that address is the one that resolved the
-        // company: a tag on an unknown or retired shared address must not
-        // ride along onto a custom-domain match further down. Custom domains
-        // are catch-all and stay unhinted.
-        let kindHint: InboxKindHint | null = null
-        if (localPart) {
+        const sharedRecipients = extractSharedRecipientsForDomain(to, domain)
+        for (const group of groupSharedRecipientsByInbox(sharedRecipients)) {
+          localPart ??= group.localPart
           const { data: inbox } = await serviceSupabase
             .from('company_inboxes')
             .select('id, company_id, status')
-            .eq('local_part', localPart)
+            .eq('local_part', group.localPart)
             .maybeSingle()
-          if (inbox) {
-            sharedInboxStatus = inbox.status
-            if (inbox.status === 'active') {
-              companyId = inbox.company_id
-              kindHint = kindHintFromTag(sharedRecipient?.tag)
+          if (!inbox) continue
+          if (inbox.status !== 'active') {
+            sharedInboxStatus ??= inbox.status
+            continue
+          }
+          // Two active addresses of one company file once.
+          if (targets.some((t) => t.companyId === inbox.company_id)) continue
+          // Sender-declared kind from the +lev / +ver tag. Set only from the
+          // addresses that resolved this company: a tag on an unknown or
+          // retired shared address must not ride along onto a custom-domain
+          // match further down. Custom domains are catch-all and stay
+          // unhinted. Contradicting tags on one mail resolve to no hint.
+          const { kindHint, conflict } = resolveKindHintForTags(group.tags)
+          targets.push({
+            companyId: inbox.company_id,
+            inboxId: inbox.id,
+            recipients: sharedRecipients
+              .filter((r) => r.localPart === group.localPart)
+              .map((r) => `${r.localPart}${r.tag ? `+${r.tag}` : ''}@${domainLower}`),
+            tags: group.tags,
+            kindHint,
+            tagConflict: conflict,
+          })
+        }
+
+        if (targets.length === 0) {
+          const customRecipients = parseRecipients(to).filter((r) => r.domain !== domainLower)
+          const customDomains = customRecipients.map((r) => r.domain)
+          if (customDomains.length > 0) {
+            const match = await findCompanyForRecipientDomains(serviceSupabase, customDomains)
+            if (match) {
+              targets.push({
+                companyId: match.companyId,
+                inboxId: null,
+                recipients: customRecipients
+                  .filter((r) => r.domain === match.domain.toLowerCase())
+                  .map((r) => `${r.localPart}@${r.domain}`),
+                tags: [],
+                kindHint: null,
+                tagConflict: false,
+              })
             }
           }
         }
 
-        if (!companyId) {
-          const customDomains = parseRecipients(to)
-            .map((r) => r.domain)
-            .filter((d) => d !== domain.toLowerCase())
-          if (customDomains.length > 0) {
-            const match = await findCompanyForRecipientDomains(serviceSupabase, customDomains)
-            if (match) companyId = match.companyId
-          }
-        }
-
-        if (!companyId) {
+        if (targets.length === 0) {
           // Preserve the pre-custom-domain status semantics: 410 for a
           // deprecated/blocked shared address, 404 otherwise.
           if (sharedInboxStatus && sharedInboxStatus !== 'active') {
@@ -1832,17 +1872,20 @@ export const invoiceInboxExtension: Extension = {
           )
         }
 
-        const { data: company } = await serviceSupabase
-          .from('companies')
-          .select('created_by')
-          .eq('id', companyId)
-          .single()
+        const owners = new Map<string, string>()
+        for (const target of targets) {
+          const { data: company } = await serviceSupabase
+            .from('companies')
+            .select('created_by')
+            .eq('id', target.companyId)
+            .single()
 
-        if (!company?.created_by) {
-          console.error('[invoice-inbox/inbound] Company has no created_by', companyId)
-          return NextResponse.json({ error: 'Company owner missing' }, { status: 500 })
+          if (!company?.created_by) {
+            console.error('[invoice-inbox/inbound] Company has no created_by', target.companyId)
+            return NextResponse.json({ error: 'Company owner missing' }, { status: 500 })
+          }
+          owners.set(target.companyId, company.created_by)
         }
-        const userId = company.created_by
 
         let fullEmail
         try {
@@ -1856,150 +1899,141 @@ export const invoiceInboxExtension: Extension = {
         const bodyText = fullEmail.text ?? null
         const rawAttachments = fullEmail.attachments ?? []
 
-        // Per-company rate limit (30/min, 500/day). Same Postgres-backed
-        // RPC as /upload. Acknowledge + drop on cap: returning 429 to
-        // Resend would just consume more budget via their retry.
-        const limit = await checkInboxUploadRateLimit(serviceSupabase, companyId)
-        if (!limit.ok) {
-          try {
-            await appendProcessingHistory({
-              companyId,
-              correlationId: email_id,
-              aggregateType: 'System',
-              aggregateId: email_id,
-              eventType: 'RateLimitedDropped',
-              // No `from` / `subject`: processing_history is append-only
-              // (UPDATE is trigger-blocked) and outside the archive's erasure
-              // path, so the sender address and the free-text subject may not
-              // land here. correlationId is the Resend email_id, which reaches
-              // both through invoice_inbox_items.
-              payload: {
-                scope: limit.scope,
-                retry_after_sec: limit.retryAfterSec,
-                attachment_count: rawAttachments.length,
-              },
-              actor: { type: 'system', id: 'resend-inbound' },
-              occurredAt: new Date(),
-            })
-          } catch (err) {
-            console.error('[invoice-inbox/inbound] RateLimitedDropped append failed:', err)
-          }
-          return NextResponse.json({ data: { processed: 0, reason: 'rate_limited' } })
-        }
-
         // Per-email attachment cap. 20 covers any legitimate batched
         // supplier email; an attacker stuffing 500 PDFs into one message
         // gets truncated and a single history event records the drop.
         const totalAttachments = rawAttachments.length
         const attachments = rawAttachments.slice(0, MAX_ATTACHMENTS_PER_EMAIL)
         const truncatedCount = totalAttachments - attachments.length
-        if (truncatedCount > 0) {
-          try {
-            await appendProcessingHistory({
-              companyId,
-              correlationId: email_id,
-              aggregateType: 'System',
-              aggregateId: email_id,
-              eventType: 'AttachmentsTruncated',
-              // Counts only, for the same reason as RateLimitedDropped above.
-              payload: {
-                total: totalAttachments,
-                processed: attachments.length,
-                dropped: truncatedCount,
-              },
-              actor: { type: 'system', id: 'resend-inbound' },
-              occurredAt: new Date(),
-            })
-          } catch (err) {
-            console.error('[invoice-inbox/inbound] AttachmentsTruncated append failed:', err)
-          }
+
+        type AttachmentResult = { attachment_id: string; inbox_item_id?: string; error?: string; duplicate?: boolean }
+        /**
+         * What became of one attachment, for the mail's history event. Codes
+         * only: the free-text error and the filename stay out of
+         * processing_history (append-only, outside the erasure path).
+         */
+        type AttachmentOutcome = {
+          id: string
+          outcome: 'filed' | 'duplicate' | 'rejected' | 'failed'
+          inbox_item_id?: string
+          reason?: string
+          mime?: string
+        }
+        type TargetOutcome = {
+          processed: number
+          reason?: string
+          inbox_item_id?: string
+          results?: AttachmentResult[]
+          attachments: AttachmentOutcome[]
         }
 
-        if (attachments.length === 0) {
-          // Body-only mail: for many suppliers the HTML body IS the invoice
-          // (SaaS receipts, e-mail invoices), and often the only underlag the
-          // user has. Store the body as a text/html document and run the
-          // normal extract pipeline instead of dead-ending in an error row.
-          // Mails with an empty body keep the old error row.
-          const bodyDoc = buildEmailBodyHtmlDocument(fullEmail.html ?? null, bodyText)
-          if (bodyDoc && bodyDoc.byteLength <= MAX_FILE_SIZE) {
-            // Resend retries the webhook on failure: a retry after success
-            // must not duplicate the body document. Body items carry the
-            // email_id with a NULL attachment id.
-            const { data: existingBody } = await serviceSupabase
-              .from('invoice_inbox_items')
-              .select('id')
-              .eq('resend_email_id', email_id)
-              .is('resend_attachment_id', null)
-              .maybeSingle()
-            if (existingBody) {
-              return NextResponse.json(
-                { data: { processed: 0, reason: 'email_body_duplicate', inbox_item_id: existingBody.id } }
-              )
-            }
+        const processForTarget = async (target: InboundTarget): Promise<TargetOutcome> => {
+          const { companyId, kindHint } = target
+          const userId = owners.get(companyId)!
+          const attachmentOutcomes: AttachmentOutcome[] = []
+
+          // Per-company rate limit (30/min, 500/day). Same Postgres-backed
+          // RPC as /upload. Acknowledge + drop on cap: returning 429 to
+          // Resend would just consume more budget via their retry.
+          const limit = await checkInboxUploadRateLimit(serviceSupabase, companyId)
+          if (!limit.ok) {
             try {
-              const result = await uploadAndExtract(
-                serviceSupabase,
-                userId,
+              await appendProcessingHistory({
                 companyId,
-                {
-                  name: `mail-${sanitiseFilename(subject, 'meddelande')}.html`,
-                  buffer: bodyDoc,
-                  type: 'text/html',
+                correlationId: email_id,
+                aggregateType: 'System',
+                aggregateId: email_id,
+                eventType: 'RateLimitedDropped',
+                // No `from` / `subject`: processing_history is append-only
+                // (UPDATE is trigger-blocked) and outside the archive's erasure
+                // path, so the sender address and the free-text subject may not
+                // land here. correlationId is the Resend email_id, which reaches
+                // both through invoice_inbox_items.
+                payload: {
+                  scope: limit.scope,
+                  retry_after_sec: limit.retryAfterSec,
+                  attachment_count: rawAttachments.length,
                 },
-                'email',
-                {
-                  from,
-                  subject,
-                  receivedAt: created_at,
-                  messageId: message_id,
-                  bodyText,
-                  resendEmailId: email_id,
-                  kindHint,
-                }
-              )
-              return NextResponse.json(
-                { data: { processed: 1, reason: 'email_body', inbox_item_id: result.inbox_item_id } }
-              )
+                actor: { type: 'system', id: 'resend-inbound' },
+                occurredAt: new Date(),
+              })
             } catch (err) {
-              // Fall through to the error row so the mail never vanishes.
-              console.error('[invoice-inbox/inbound] Email-body document failed:', err)
+              console.error('[invoice-inbox/inbound] RateLimitedDropped append failed:', err)
+            }
+            return { processed: 0, reason: 'rate_limited', attachments: [] }
+          }
+
+          if (truncatedCount > 0) {
+            try {
+              await appendProcessingHistory({
+                companyId,
+                correlationId: email_id,
+                aggregateType: 'System',
+                aggregateId: email_id,
+                eventType: 'AttachmentsTruncated',
+                // Counts only, for the same reason as RateLimitedDropped above.
+                payload: {
+                  total: totalAttachments,
+                  processed: attachments.length,
+                  dropped: truncatedCount,
+                },
+                actor: { type: 'system', id: 'resend-inbound' },
+                occurredAt: new Date(),
+              })
+            } catch (err) {
+              console.error('[invoice-inbox/inbound] AttachmentsTruncated append failed:', err)
             }
           }
-          await serviceSupabase.from('invoice_inbox_items').insert({
-            company_id: companyId,
-            user_id: userId,
-            status: 'error',
-            source: 'email',
-            email_from: from,
-            email_subject: subject,
-            email_received_at: created_at,
-            email_body_text: bodyText,
-            resend_email_id: email_id,
-            kind_hint: kindHint,
-            error_message: 'Email had no attachments',
-            raw_email_payload: { messageId: message_id },
-          })
-          return NextResponse.json({ data: { processed: 0, reason: 'no_attachments' } })
-        }
 
-        const results: Array<{ attachment_id: string; inbox_item_id?: string; error?: string; duplicate?: boolean }> = []
-
-        // Persist a "rejected" inbox row so the user has visibility into the drop.
-        // Without this, attachments that fail MIME validation vanish silently,
-        // a common Gmail "forward as attachment" foot-gun until we added .eml
-        // handling below.
-        const logRejection = async (
-          attachmentId: string,
-          attachmentName: string | null,
-          mime: string,
-          reason: string,
-        ) => {
-          // attachment_name and mime are attacker-controlled (they come from the
-          // forwarded email headers); sanitise before they land in the JSONB
-          // raw_email_payload column so they can't surface as injection or
-          // oversized values when read back into the UI / audit trails.
-          try {
+          if (attachments.length === 0) {
+            // Body-only mail: for many suppliers the HTML body IS the invoice
+            // (SaaS receipts, e-mail invoices), and often the only underlag the
+            // user has. Store the body as a text/html document and run the
+            // normal extract pipeline instead of dead-ending in an error row.
+            // Mails with an empty body keep the old error row.
+            const bodyDoc = buildEmailBodyHtmlDocument(fullEmail.html ?? null, bodyText)
+            if (bodyDoc && bodyDoc.byteLength <= MAX_FILE_SIZE) {
+              // Resend retries the webhook on failure: a retry after success
+              // must not duplicate the body document. Body items carry the
+              // email_id with a NULL attachment id. Scoped to the company:
+              // one mail to two inboxes files once per inbox (#2181).
+              const { data: existingBody } = await serviceSupabase
+                .from('invoice_inbox_items')
+                .select('id')
+                .eq('company_id', companyId)
+                .eq('resend_email_id', email_id)
+                .is('resend_attachment_id', null)
+                .maybeSingle()
+              if (existingBody) {
+                return { processed: 0, reason: 'email_body_duplicate', inbox_item_id: existingBody.id, attachments: [] }
+              }
+              try {
+                const result = await uploadAndExtract(
+                  serviceSupabase,
+                  userId,
+                  companyId,
+                  {
+                    name: `mail-${sanitiseFilename(subject, 'meddelande')}.html`,
+                    buffer: bodyDoc,
+                    type: 'text/html',
+                  },
+                  'email',
+                  {
+                    from,
+                    subject,
+                    receivedAt: created_at,
+                    messageId: message_id,
+                    bodyText,
+                    resendEmailId: email_id,
+                    kindHint,
+                  }
+                )
+                return { processed: 1, reason: 'email_body', inbox_item_id: result.inbox_item_id, attachments: [] }
+              } catch (err) {
+                // Fall through to the error row so the mail never vanishes.
+                console.error('[invoice-inbox/inbound] Email-body document failed:', err)
+              }
+            }
             await serviceSupabase.from('invoice_inbox_items').insert({
               company_id: companyId,
               user_id: userId,
@@ -2010,61 +2044,154 @@ export const invoiceInboxExtension: Extension = {
               email_received_at: created_at,
               email_body_text: bodyText,
               resend_email_id: email_id,
-              resend_attachment_id: attachmentId,
               kind_hint: kindHint,
-              error_message: reason.slice(0, 500),
-              raw_email_payload: {
-                messageId: message_id,
-                attachment_name: sanitiseFilename(attachmentName, 'unknown'),
-                mime: sanitiseMime(mime),
-              },
+              error_message: 'Email had no attachments',
+              raw_email_payload: { messageId: message_id },
             })
-          } catch (insertErr) {
-            console.error('[invoice-inbox/inbound] Failed to log rejected attachment:', insertErr)
+            return { processed: 0, reason: 'no_attachments', attachments: [] }
           }
-        }
 
-        for (const att of attachments) {
-          try {
-            const { data: existing } = await serviceSupabase
-              .from('invoice_inbox_items')
-              .select('id')
-              .eq('resend_email_id', email_id)
-              .eq('resend_attachment_id', att.id)
-              .maybeSingle()
-            if (existing) {
-              results.push({ attachment_id: att.id, inbox_item_id: existing.id, duplicate: true })
-              continue
+          const results: AttachmentResult[] = []
+
+          // Persist a "rejected" inbox row so the user has visibility into the drop.
+          // Without this, attachments that fail MIME validation vanish silently,
+          // a common Gmail "forward as attachment" foot-gun until we added .eml
+          // handling below.
+          const logRejection = async (
+            attachmentId: string,
+            attachmentName: string | null,
+            mime: string,
+            reason: string,
+          ): Promise<string | undefined> => {
+            // attachment_name and mime are attacker-controlled (they come from the
+            // forwarded email headers); sanitise before they land in the JSONB
+            // raw_email_payload column so they can't surface as injection or
+            // oversized values when read back into the UI / audit trails.
+            try {
+              const { data: row } = await serviceSupabase
+                .from('invoice_inbox_items')
+                .insert({
+                  company_id: companyId,
+                  user_id: userId,
+                  status: 'error',
+                  source: 'email',
+                  email_from: from,
+                  email_subject: subject,
+                  email_received_at: created_at,
+                  email_body_text: bodyText,
+                  resend_email_id: email_id,
+                  resend_attachment_id: attachmentId,
+                  kind_hint: kindHint,
+                  error_message: reason.slice(0, 500),
+                  raw_email_payload: {
+                    messageId: message_id,
+                    attachment_name: sanitiseFilename(attachmentName, 'unknown'),
+                    mime: sanitiseMime(mime),
+                  },
+                })
+                .select('id')
+                .maybeSingle()
+              return row?.id ?? undefined
+            } catch (insertErr) {
+              console.error('[invoice-inbox/inbound] Failed to log rejected attachment:', insertErr)
+              return undefined
             }
+          }
 
-            const download = await fetchInboundAttachment(email_id, att.id)
+          for (const att of attachments) {
+            try {
+              // Scoped to the company so one mail to two inboxes files once
+              // per inbox rather than treating the second as a retry (#2181).
+              const { data: existing } = await serviceSupabase
+                .from('invoice_inbox_items')
+                .select('id')
+                .eq('company_id', companyId)
+                .eq('resend_email_id', email_id)
+                .eq('resend_attachment_id', att.id)
+                .maybeSingle()
+              if (existing) {
+                results.push({ attachment_id: att.id, inbox_item_id: existing.id, duplicate: true })
+                attachmentOutcomes.push({ id: att.id, outcome: 'duplicate', inbox_item_id: existing.id })
+                continue
+              }
 
-            // Gmail "Forward as attachment" wraps the original email as message/rfc822.
-            // Unwrap it and process the inner attachments as if they had arrived
-            // directly, carrying the inner email's subject/from into our metadata.
-            if (download.contentType === 'message/rfc822') {
-              const parsed = await simpleParser(Buffer.from(download.buffer))
-              const innerAttachments = parsed.attachments || []
-              const innerFrom = parsed.from?.text || from
-              const innerSubject = parsed.subject || subject
-              if (innerAttachments.length === 0) {
-                // Gmail "Forward as attachment" of a body-only HTML invoice:
-                // the forwarded mail's body is the underlag. Same treatment
-                // as a direct body-only mail; empty bodies keep the rejection.
-                const innerBodyDoc = buildEmailBodyHtmlDocument(
-                  typeof parsed.html === 'string' ? parsed.html : null,
-                  parsed.text ?? null
-                )
-                if (innerBodyDoc && innerBodyDoc.byteLength <= MAX_FILE_SIZE) {
-                  const innerBodyResult = await uploadAndExtract(
+              const download = await fetchInboundAttachment(email_id, att.id)
+
+              // Gmail "Forward as attachment" wraps the original email as message/rfc822.
+              // Unwrap it and process the inner attachments as if they had arrived
+              // directly, carrying the inner email's subject/from into our metadata.
+              if (download.contentType === 'message/rfc822') {
+                const parsed = await simpleParser(Buffer.from(download.buffer))
+                const innerAttachments = parsed.attachments || []
+                const innerFrom = parsed.from?.text || from
+                const innerSubject = parsed.subject || subject
+                if (innerAttachments.length === 0) {
+                  // Gmail "Forward as attachment" of a body-only HTML invoice:
+                  // the forwarded mail's body is the underlag. Same treatment
+                  // as a direct body-only mail; empty bodies keep the rejection.
+                  const innerBodyDoc = buildEmailBodyHtmlDocument(
+                    typeof parsed.html === 'string' ? parsed.html : null,
+                    parsed.text ?? null
+                  )
+                  if (innerBodyDoc && innerBodyDoc.byteLength <= MAX_FILE_SIZE) {
+                    const innerBodyResult = await uploadAndExtract(
+                      serviceSupabase,
+                      userId,
+                      companyId,
+                      {
+                        name: `mail-${sanitiseFilename(innerSubject, 'meddelande')}.html`,
+                        buffer: innerBodyDoc,
+                        type: 'text/html',
+                      },
+                      'email',
+                      {
+                        from: innerFrom,
+                        subject: innerSubject,
+                        receivedAt: created_at,
+                        messageId: message_id,
+                        bodyText,
+                        resendEmailId: email_id,
+                        resendAttachmentId: att.id,
+                        kindHint,
+                      }
+                    )
+                    results.push({ attachment_id: att.id, inbox_item_id: innerBodyResult.inbox_item_id })
+                    attachmentOutcomes.push({ id: att.id, outcome: 'filed', inbox_item_id: innerBodyResult.inbox_item_id })
+                    continue
+                  }
+                  const rejectedId = await logRejection(att.id, download.filename, download.contentType, 'Det vidarebefordrade meddelandet innehöll inga bilagor')
+                  results.push({ attachment_id: att.id, error: 'eml_no_inner_attachments' })
+                  attachmentOutcomes.push({ id: att.id, outcome: 'rejected', reason: 'eml_no_inner_attachments', inbox_item_id: rejectedId })
+                  continue
+                }
+                for (let i = 0; i < innerAttachments.length; i++) {
+                  const inner = innerAttachments[i]
+                  const innerType = sanitiseMime(inner.contentType)
+                  const innerName = sanitiseFilename(inner.filename, `attachment-${i}`)
+                  const innerBuffer = inner.content
+                  if (!innerBuffer) continue
+                  const innerId = `${att.id}#${i}`
+                  if (!EMAIL_ALLOWED_MIME_TYPES.has(innerType)) {
+                    const rejectedId = await logRejection(innerId, innerName, innerType, `Avvisad bilaga från vidarebefordrat mejl: filtypen ${innerType} stöds inte`)
+                    results.push({ attachment_id: innerId, error: `Unsupported type ${innerType}` })
+                    attachmentOutcomes.push({ id: innerId, outcome: 'rejected', reason: 'unsupported_type', mime: innerType, inbox_item_id: rejectedId })
+                    continue
+                  }
+                  if (innerBuffer.byteLength > MAX_FILE_SIZE) {
+                    const rejectedId = await logRejection(innerId, innerName, innerType, 'Bilagan i det vidarebefordrade mejlet är för stor')
+                    results.push({ attachment_id: innerId, error: 'Inner attachment too large' })
+                    attachmentOutcomes.push({ id: innerId, outcome: 'rejected', reason: 'too_large', inbox_item_id: rejectedId })
+                    continue
+                  }
+                  const innerArrayBuffer =
+                    innerType === 'text/html'
+                      ? ensureHtmlDocument(innerBuffer.toString('utf8'))
+                      : new Uint8Array(innerBuffer).buffer
+                  const innerResult = await uploadAndExtract(
                     serviceSupabase,
                     userId,
                     companyId,
-                    {
-                      name: `mail-${sanitiseFilename(innerSubject, 'meddelande')}.html`,
-                      buffer: innerBodyDoc,
-                      type: 'text/html',
-                    },
+                    { name: innerName, buffer: innerArrayBuffer, type: innerType },
                     'email',
                     {
                       from: innerFrom,
@@ -2073,106 +2200,197 @@ export const invoiceInboxExtension: Extension = {
                       messageId: message_id,
                       bodyText,
                       resendEmailId: email_id,
-                      resendAttachmentId: att.id,
+                      resendAttachmentId: innerId,
                       kindHint,
                     }
                   )
-                  results.push({ attachment_id: att.id, inbox_item_id: innerBodyResult.inbox_item_id })
-                  continue
+                  results.push({ attachment_id: innerId, inbox_item_id: innerResult.inbox_item_id })
+                  attachmentOutcomes.push({ id: innerId, outcome: 'filed', inbox_item_id: innerResult.inbox_item_id })
                 }
-                await logRejection(att.id, download.filename, download.contentType, 'Det vidarebefordrade meddelandet innehöll inga bilagor')
-                results.push({ attachment_id: att.id, error: 'eml_no_inner_attachments' })
                 continue
               }
-              for (let i = 0; i < innerAttachments.length; i++) {
-                const inner = innerAttachments[i]
-                const innerType = sanitiseMime(inner.contentType)
-                const innerName = sanitiseFilename(inner.filename, `attachment-${i}`)
-                const innerBuffer = inner.content
-                if (!innerBuffer) continue
-                const innerId = `${att.id}#${i}`
-                if (!EMAIL_ALLOWED_MIME_TYPES.has(innerType)) {
-                  await logRejection(innerId, innerName, innerType, `Avvisad bilaga från vidarebefordrat mejl: filtypen ${innerType} stöds inte`)
-                  results.push({ attachment_id: innerId, error: `Unsupported type ${innerType}` })
-                  continue
+
+              if (!EMAIL_ALLOWED_MIME_TYPES.has(download.contentType)) {
+                const rejectedId = await logRejection(att.id, download.filename, download.contentType, `Avvisad: filtypen ${download.contentType} stöds inte`)
+                results.push({ attachment_id: att.id, error: `Unsupported type ${download.contentType}` })
+                attachmentOutcomes.push({ id: att.id, outcome: 'rejected', reason: 'unsupported_type', mime: sanitiseMime(download.contentType), inbox_item_id: rejectedId })
+                continue
+              }
+              if (download.buffer.byteLength > MAX_FILE_SIZE) {
+                const rejectedId = await logRejection(att.id, download.filename, download.contentType, 'Bilagan är för stor')
+                results.push({ attachment_id: att.id, error: 'Attachment too large' })
+                attachmentOutcomes.push({ id: att.id, outcome: 'rejected', reason: 'too_large', inbox_item_id: rejectedId })
+                continue
+              }
+
+              // Attached .html invoices are often fragments; wrap them into a
+              // self-contained document so the archive holds a renderable file.
+              const attachmentBuffer =
+                download.contentType === 'text/html'
+                  ? ensureHtmlDocument(Buffer.from(download.buffer).toString('utf8'))
+                  : download.buffer
+
+              const result = await uploadAndExtract(
+                serviceSupabase,
+                userId,
+                companyId,
+                { name: download.filename, buffer: attachmentBuffer, type: download.contentType },
+                'email',
+                {
+                  from,
+                  subject,
+                  receivedAt: created_at,
+                  messageId: message_id,
+                  bodyText,
+                  resendEmailId: email_id,
+                  resendAttachmentId: att.id,
+                  kindHint,
                 }
-                if (innerBuffer.byteLength > MAX_FILE_SIZE) {
-                  await logRejection(innerId, innerName, innerType, 'Bilagan i det vidarebefordrade mejlet är för stor')
-                  results.push({ attachment_id: innerId, error: 'Inner attachment too large' })
-                  continue
-                }
-                const innerArrayBuffer =
-                  innerType === 'text/html'
-                    ? ensureHtmlDocument(innerBuffer.toString('utf8'))
-                    : new Uint8Array(innerBuffer).buffer
-                const innerResult = await uploadAndExtract(
-                  serviceSupabase,
-                  userId,
-                  companyId,
-                  { name: innerName, buffer: innerArrayBuffer, type: innerType },
-                  'email',
-                  {
-                    from: innerFrom,
-                    subject: innerSubject,
-                    receivedAt: created_at,
-                    messageId: message_id,
-                    bodyText,
-                    resendEmailId: email_id,
-                    resendAttachmentId: innerId,
-                    kindHint,
-                  }
+              )
+              results.push({ attachment_id: att.id, inbox_item_id: result.inbox_item_id })
+              attachmentOutcomes.push({ id: att.id, outcome: 'filed', inbox_item_id: result.inbox_item_id })
+            } catch (err) {
+              console.error('[invoice-inbox/inbound] Attachment processing failed:', err)
+              const message = err instanceof Error ? err.message : 'Unknown error'
+              results.push({ attachment_id: att.id, error: message })
+              // The failure used to leave nothing behind: the webhook answered
+              // 200, Resend never retried, and the attachment was gone (#2181,
+              // the reporter's second PDF). An error row keeps it in the inbox
+              // where the user can see it and send it again. Skipped when the
+              // upload got as far as its own row before throwing.
+              let failedItemId: string | undefined
+              try {
+                const { data: partial } = await serviceSupabase
+                  .from('invoice_inbox_items')
+                  .select('id')
+                  .eq('company_id', companyId)
+                  .eq('resend_email_id', email_id)
+                  .eq('resend_attachment_id', att.id)
+                  .maybeSingle()
+                failedItemId = partial?.id ?? undefined
+              } catch {
+                failedItemId = undefined
+              }
+              if (!failedItemId) {
+                failedItemId = await logRejection(
+                  att.id,
+                  att.filename ?? null,
+                  att.content_type ?? 'application/octet-stream',
+                  `Bilagan kunde inte tas emot: ${message.slice(0, 200)}. Skicka den igen.`,
                 )
-                results.push({ attachment_id: innerId, inbox_item_id: innerResult.inbox_item_id })
               }
-              continue
+              attachmentOutcomes.push({ id: att.id, outcome: 'failed', inbox_item_id: failedItemId })
             }
+          }
 
-            if (!EMAIL_ALLOWED_MIME_TYPES.has(download.contentType)) {
-              await logRejection(att.id, download.filename, download.contentType, `Avvisad: filtypen ${download.contentType} stöds inte`)
-              results.push({ attachment_id: att.id, error: `Unsupported type ${download.contentType}` })
-              continue
-            }
-            if (download.buffer.byteLength > MAX_FILE_SIZE) {
-              await logRejection(att.id, download.filename, download.contentType, 'Bilagan är för stor')
-              results.push({ attachment_id: att.id, error: 'Attachment too large' })
-              continue
-            }
+          return { processed: results.length, results, attachments: attachmentOutcomes }
+        }
 
-            // Attached .html invoices are often fragments; wrap them into a
-            // self-contained document so the archive holds a renderable file.
-            const attachmentBuffer =
-              download.contentType === 'text/html'
-                ? ensureHtmlDocument(Buffer.from(download.buffer).toString('utf8'))
-                : download.buffer
-
-            const result = await uploadAndExtract(
-              serviceSupabase,
-              userId,
-              companyId,
-              { name: download.filename, buffer: attachmentBuffer, type: download.contentType },
-              'email',
-              {
-                from,
-                subject,
-                receivedAt: created_at,
-                messageId: message_id,
-                bodyText,
-                resendEmailId: email_id,
-                resendAttachmentId: att.id,
-                kindHint,
-              }
-            )
-            results.push({ attachment_id: att.id, inbox_item_id: result.inbox_item_id })
-          } catch (err) {
-            console.error('[invoice-inbox/inbound] Attachment processing failed:', err)
-            results.push({
-              attachment_id: att.id,
-              error: err instanceof Error ? err.message : 'Unknown error',
+        const outcomes: Array<{ target: InboundTarget; outcome: TargetOutcome }> = []
+        for (const target of targets) {
+          const outcome = await processForTarget(target)
+          outcomes.push({ target, outcome })
+          // One durable record per mail and inbox, whatever became of it
+          // (#2181): the inbox list only shows rows that were filed, so a
+          // mail whose every attachment failed had no trace a user could
+          // find. Recipient addresses are the company's own inbox addresses;
+          // sender and subject stay out (see RateLimitedDropped above).
+          try {
+            await appendProcessingHistory({
+              companyId: target.companyId,
+              correlationId: email_id,
+              aggregateType: 'System',
+              aggregateId: email_id,
+              eventType: 'InboundMailReceived',
+              payload: {
+                recipients: target.recipients,
+                tags: target.tags,
+                inbox_id: target.inboxId,
+                kind_hint: target.kindHint,
+                tag_conflict: target.tagConflict,
+                outcome: outcome.reason ?? 'attachments',
+                attachment_count: totalAttachments,
+                inbox_item_id: outcome.inbox_item_id ?? null,
+                attachments: outcome.attachments,
+              },
+              actor: { type: 'system', id: 'resend-inbound' },
+              occurredAt: new Date(),
             })
+          } catch (err) {
+            console.error('[invoice-inbox/inbound] InboundMailReceived append failed:', err)
           }
         }
 
-        return NextResponse.json({ data: { processed: results.length, results } })
+        if (outcomes.length === 1) {
+          const { processed, reason, inbox_item_id, results } = outcomes[0].outcome
+          return NextResponse.json({
+            data: {
+              processed,
+              ...(reason ? { reason } : {}),
+              ...(inbox_item_id ? { inbox_item_id } : {}),
+              ...(results ? { results } : {}),
+            },
+          })
+        }
+        return NextResponse.json({
+          data: {
+            processed: outcomes.reduce((sum, o) => sum + o.outcome.processed, 0),
+            targets: outcomes.map(({ target, outcome }) => ({
+              company_id: target.companyId,
+              processed: outcome.processed,
+              ...(outcome.reason ? { reason: outcome.reason } : {}),
+              ...(outcome.inbox_item_id ? { inbox_item_id: outcome.inbox_item_id } : {}),
+              ...(outcome.results ? { results: outcome.results } : {}),
+            })),
+          },
+        })
+      },
+    },
+
+    // ── Received-mail history (#2181) ─────────────────────────
+    // One row per mail and inbox from the InboundMailReceived events the
+    // webhook appends, so a user can tell "never arrived" from "arrived
+    // and was rejected" or "arrived and is hidden by a filter". Sender and
+    // subject are not in the payload (see the webhook); the filed item ids
+    // are, which is what the panel links to.
+    {
+      method: 'GET',
+      path: '/inbound-history',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+        const url = new URL(request.url)
+        const rawDays = url.searchParams.get('days')
+        const days = rawDays === null ? INBOUND_HISTORY_DEFAULT_DAYS : Number(rawDays)
+        if (!Number.isInteger(days) || days < 1 || days > INBOUND_HISTORY_MAX_DAYS) {
+          return NextResponse.json(
+            { error: `days must be an integer between 1 and ${INBOUND_HISTORY_MAX_DAYS}` },
+            { status: 400 }
+          )
+        }
+        const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+
+        const { data, error } = await ctx.supabase
+          .from('processing_history')
+          .select('event_id, correlation_id, occurred_at, payload')
+          .eq('company_id', ctx.companyId)
+          .eq('event_type', 'InboundMailReceived')
+          .gte('occurred_at', since)
+          .order('occurred_at', { ascending: false })
+          .limit(INBOUND_HISTORY_LIMIT)
+
+        if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+        return NextResponse.json({
+          data: {
+            days,
+            mails: (data ?? []).map((row) => ({
+              event_id: row.event_id,
+              email_id: row.correlation_id,
+              occurred_at: row.occurred_at,
+              ...(row.payload as Record<string, unknown>),
+            })),
+          },
+        })
       },
     },
 
