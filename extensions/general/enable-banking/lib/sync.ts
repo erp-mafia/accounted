@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getAllTransactionsWithRaw, convertTransaction, getAccountBalance, SessionExpiredError } from './api-client'
+import { historyWindowDays } from './history-window'
 import { bankSyncResponseSchema, connectorErrorSchema } from '@accounted/connect-contract'
 import { bankConnectorMode, CONNECTOR_COMPANY_HEADER } from '@/lib/connect/instance/upstreams'
 import { uploadDocument } from '@/lib/core/documents/document-service'
@@ -46,6 +47,17 @@ export interface SyncResult {
   returnedMinBookingDate?: string
   /** Latest booking date the ASPSP returned. Undefined when no transactions came back. */
   returnedMaxBookingDate?: string
+  /** The date_from asked of the bank. */
+  requestedFromDate: string
+  /**
+   * The date_from the bank actually answered. Equal to requestedFromDate
+   * unless the bank refused the window and a narrower one was used; the sync
+   * is then complete only from this date on (#2202). Undefined through the
+   * hosted connector, which does not report it.
+   */
+  effectiveFromDate?: string
+  /** True when the bank refused the requested window and the history was cut. */
+  historyNarrowed: boolean
 }
 
 /** The subset of a converted bank transaction that the ingest mapping below reads. */
@@ -185,6 +197,8 @@ export async function syncAccountTransactions(
   let rawPages: string[]
   let bookedEntries: Array<{ tx: BookedTransactionFields; bookingDate: string }>
   let totalFetched: number
+  let effectiveFromDate: string | undefined
+  let historyNarrowed = false
   if (connector) {
     const remote = await fetchBookedViaConnector(connector, {
       supabase,
@@ -217,9 +231,31 @@ export async function syncAccountTransactions(
       fromDate,
       toDate,
       syncOptions?.strategy,
+      { acceptedHistoryDays: account.accepted_history_days },
     )
     rawPages = fetched.rawPages
     totalFetched = fetched.transactions.length
+    effectiveFromDate = fetched.effectiveDateFrom
+    historyNarrowed = fetched.narrowed === true
+    // Remember the widest window this bank has ANSWERED for the account, so a
+    // later rejection of a window no wider than it is read as the bank being
+    // unavailable rather than as a too-wide window (#2202). Never shrinks:
+    // an incremental 7-day sync must not forget that 90 days once worked.
+    // Stamped on the account object; the caller's accounts_data write-back
+    // persists it, exactly like dedup_scope and the balance fields.
+    const acceptedDays = historyWindowDays(fetched.effectiveDateFrom, toDate)
+    if (acceptedDays !== undefined && acceptedDays > (account.accepted_history_days ?? -1)) {
+      account.accepted_history_days = acceptedDays
+    }
+    if (historyNarrowed) {
+      console.warn('[enable-banking] Bank refused the requested history window; synced a narrower one', {
+        connectionId,
+        accountUid: account.uid,
+        requestedFromDate: fromDate,
+        effectiveFromDate,
+        toDate,
+      })
+    }
     const bankTransactions = fetched.transactions.map(tx => convertTransaction(tx, account.currency))
     // Only ingest BOOKED transactions: those the ASPSP returned with a real
     // booking_date. Pending entries are intentionally skipped: a pending row is
@@ -257,6 +293,7 @@ export async function syncAccountTransactions(
     transactionCount: totalFetched,
     rawPageCount: rawPages.length,
     requestedFromDate: fromDate,
+    effectiveFromDate,
     requestedToDate: toDate,
     returnedMinBookingDate: minBookingDate,
     returnedMaxBookingDate: maxBookingDate,
@@ -407,5 +444,8 @@ export async function syncAccountTransactions(
     errors: ingestResult.errors,
     returnedMinBookingDate: minBookingDate,
     returnedMaxBookingDate: maxBookingDate,
+    requestedFromDate: fromDate,
+    effectiveFromDate,
+    historyNarrowed,
   }
 }
