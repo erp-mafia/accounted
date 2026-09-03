@@ -254,8 +254,10 @@ async function main() {
 
   // 5. Behandlingshistorik: one event per company naming every row written.
   // The rows feed the bokslut cut-off, so the run is a change to processing
-  // (BFL 5 kap 11 §, BFNAR 2013:2 p. 9.16). A failed append is a logged gap,
-  // not a reason to roll the rows back: they are tagged and listed above.
+  // (BFL 5 kap 11 §, BFNAR 2013:2 p. 9.16). Rows without their change-log
+  // entry must not stay: if the append fails, that company's rows from this
+  // run are deleted again (by id, tag-guarded) so data and audit trail move
+  // together, and the company is listed for a re-run.
   const runId = randomUUID()
   const byCompany = new Map<string, Array<{ invoice: BackfillInvoice; row: BackfillPaymentRow }>>()
   for (const item of toInsert) {
@@ -264,6 +266,7 @@ async function main() {
     byCompany.set(item.row.company_id, list)
   }
   let appended = 0
+  const rolledBack: string[] = []
   for (const [companyId, items] of byCompany) {
     try {
       await appendProcessingHistoryWithClient(supabase, {
@@ -289,10 +292,28 @@ async function main() {
         `processing_history append failed for company ${companyId}: ` +
           (err instanceof Error ? err.message : String(err)),
       )
+      const { error: rollbackError } = await supabase
+        .from('invoice_payments')
+        .delete()
+        .eq('company_id', companyId)
+        .in('invoice_id', items.map((i) => i.invoice.id))
+        .like('notes', `${BACKFILL_NOTES_TAG}%`)
+      if (rollbackError) {
+        console.error(
+          `  rollback of ${items.length} row(s) for ${companyId} FAILED: ${rollbackError.message}. ` +
+            `Delete by hand: DELETE FROM invoice_payments WHERE company_id = '${companyId}' AND notes LIKE '${BACKFILL_NOTES_TAG}%';`,
+        )
+      } else {
+        console.error(`  rolled back ${items.length} row(s) for ${companyId}; re-run the script for this company.`)
+        rolledBack.push(companyId)
+      }
       process.exitCode = 1
     }
   }
   console.log(`Behandlingshistorik: ${appended}/${byCompany.size} company event(s) appended (run ${runId}).`)
+  if (rolledBack.length > 0) {
+    console.log(`Rolled back (no audit event): ${rolledBack.join(', ')}`)
+  }
 }
 
 main().catch((err) => {

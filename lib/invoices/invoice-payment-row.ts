@@ -1,5 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+
+const log = createLogger('invoice-payment-row')
 
 /**
  * The AR sub-ledger row for a payment that no bank transaction drives:
@@ -75,23 +78,34 @@ export async function recordInvoicePaymentRow(
 /**
  * Undo the row on a failed settlement. Best-effort like the voucher storno
  * next to it: the caller is already on a decided error path (race or update
- * failure), and that response must not be replaced by a delete error. A
- * stranded row is visible in the Betalningar view and repairable; a swallowed
- * CAS result is not.
+ * failure), and that response must not be replaced by a delete error. Never
+ * throws, but never silent either: a row that survives here points at a
+ * cancelled voucher for an invoice that never reached paid, and the
+ * kontantmetod cut-off would read it as a settlement, so the failure is
+ * logged at error level with everything an operator needs to delete it.
+ *
+ * @returns true when the row is gone, false when it may be stranded.
  */
 export async function removeInvoicePaymentRow(
   supabase: SupabaseClient,
   companyId: string,
   paymentRowId: string | null,
-): Promise<void> {
-  if (!paymentRowId) return
+): Promise<boolean> {
+  if (!paymentRowId) return true
+  const ctx = { companyId, invoicePaymentId: paymentRowId }
   try {
-    await supabase
+    const { error } = await supabase
       .from('invoice_payments')
       .delete()
       .eq('id', paymentRowId)
       .eq('company_id', companyId)
-  } catch {
-    // Swallowed by design; see above.
+    if (error) {
+      log.error('invoice_payments rollback failed (row may be stranded)', error, ctx)
+      return false
+    }
+    return true
+  } catch (err) {
+    log.error('invoice_payments rollback threw (row may be stranded)', err as Error, ctx)
+    return false
   }
 }
