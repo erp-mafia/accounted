@@ -6766,6 +6766,7 @@
     "back_to_salary": "Tillbaka till löner",
     "payment_date_label": "Utbetalning",
     "payment_date_edit_aria": "Ändra utbetalningsdag",
+    "agi_period_note": "AGI redovisas för {period} (utbetalningsmånaden)",
     "toast_payment_date_updated": "Utbetalningsdag uppdaterad",
     "header_employees": "{count, plural, one {# anställd} other {# anställda}}",
     "not_found": "Lönekörning hittades inte",

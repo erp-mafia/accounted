@@ -6766,6 +6766,7 @@
     "back_to_salary": "Back to payroll",
     "payment_date_label": "Payment",
     "payment_date_edit_aria": "Change payment date",
+    "agi_period_note": "AGI is declared for {period} (the payout month)",
     "toast_payment_date_updated": "Payment date updated",
     "header_employees": "{count, plural, one {# employee} other {# employees}}",
     "not_found": "Payroll run not found",
