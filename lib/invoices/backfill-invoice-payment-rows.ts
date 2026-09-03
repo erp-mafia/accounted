@@ -12,6 +12,8 @@
  * or a row already present (bank-matched, link-to-voucher, or an earlier run).
  */
 
+import { roundOre } from '@/lib/money'
+
 /** Tag written to invoice_payments.notes so one DELETE reverts a whole run. */
 export const BACKFILL_NOTES_TAG = 'backfill:#2019'
 
@@ -56,11 +58,11 @@ export function settlementSekFromLines(
   const credit1510 = lines
     .filter((l) => l.account_number === '1510')
     .reduce((sum, l) => sum + Number(l.credit_amount ?? 0), 0)
-  if (credit1510 > 0) return Math.round(credit1510 * 100) / 100
+  if (credit1510 > 0) return roundOre(credit1510)
   const settlementDebit = lines
     .filter((l) => l.account_number.startsWith('19') || l.account_number === '1686')
     .reduce((sum, l) => sum + Number(l.debit_amount ?? 0), 0)
-  if (settlementDebit > 0) return Math.round(settlementDebit * 100) / 100
+  if (settlementDebit > 0) return roundOre(settlementDebit)
   return null
 }
 
@@ -114,7 +116,7 @@ export function planInvoicePaymentBackfill(
 ): BackfillPlan {
   const paidAmountRaw = Number(invoice.paid_amount ?? 0)
   if (existing.count > 0) {
-    const short = Math.round((paidAmountRaw - existing.sum) * 100) / 100
+    const short = roundOre(paidAmountRaw - existing.sum)
     return short > 0 ? { kind: 'skip', reason: 'rows_short' } : { kind: 'skip', reason: 'has_rows' }
   }
   if (invoice.document_type && invoice.document_type !== 'invoice') {
@@ -182,7 +184,7 @@ export function planInvoicePaymentBackfill(
       company_id: invoice.company_id,
       invoice_id: invoice.id,
       payment_date: paymentDate,
-      amount: Math.round(paidAmount * 100) / 100,
+      amount: roundOre(paidAmount),
       currency: invoice.currency ?? 'SEK',
       exchange_rate: invoice.exchange_rate ?? null,
       journal_entry_id: voucher.id,

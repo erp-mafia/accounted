@@ -47,6 +47,7 @@ config({ path: '.env.local' })
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { roundOre } from '@/lib/money'
 import { appendProcessingHistoryWithClient } from '@/lib/processing-history/append'
 import {
   BACKFILL_NOTES_TAG,
@@ -125,7 +126,7 @@ async function main() {
     for (const r of rows) {
       const acc = existingRows.get(r.invoice_id) ?? { count: 0, sum: 0 }
       acc.count += 1
-      acc.sum = Math.round((acc.sum + Number(r.amount ?? 0)) * 100) / 100
+      acc.sum = roundOre(acc.sum + Number(r.amount ?? 0))
       existingRows.set(r.invoice_id, acc)
     }
 
