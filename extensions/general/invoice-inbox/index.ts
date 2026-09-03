@@ -107,6 +107,12 @@ const MAX_ATTACHMENTS_PER_EMAIL = 20
 const INBOUND_HISTORY_DEFAULT_DAYS = 30
 const INBOUND_HISTORY_MAX_DAYS = 365
 const INBOUND_HISTORY_LIMIT = 200
+// One mail can name several inboxes (#2181), but the recipient list is
+// sender-controlled and every target costs a full download-and-extract
+// pass: cap the fan-out so a mail addressed to fifty known inboxes cannot
+// multiply the work fifty times. A consultant forwarding to a handful of
+// clients fits; beyond that the rest is dropped with a log line.
+const MAX_INBOUND_TARGETS_PER_EMAIL = 5
 
 // Partial-update schema for the /items/:id/fields PATCH route. Only the
 // scalar fields the UI exposes for inline editing: line items and
@@ -1810,7 +1816,14 @@ export const invoiceInboxExtension: Extension = {
         const domainLower = domain.toLowerCase()
 
         const sharedRecipients = extractSharedRecipientsForDomain(to, domain)
-        for (const group of groupSharedRecipientsByInbox(sharedRecipients)) {
+        const inboxGroups = groupSharedRecipientsByInbox(sharedRecipients)
+        if (inboxGroups.length > MAX_INBOUND_TARGETS_PER_EMAIL) {
+          console.warn('[invoice-inbox/inbound] Recipient fan-out capped', {
+            addressed: inboxGroups.length,
+            processed: MAX_INBOUND_TARGETS_PER_EMAIL,
+          })
+        }
+        for (const group of inboxGroups.slice(0, MAX_INBOUND_TARGETS_PER_EMAIL)) {
           localPart ??= group.localPart
           const { data: inbox } = await serviceSupabase
             .from('company_inboxes')
@@ -1921,6 +1934,8 @@ export const invoiceInboxExtension: Extension = {
           inbox_item_id?: string
           reason?: string
           mime?: string
+          /** The transient error row a redelivery replaced (BFL 5 kap 5 §: the replacement leaves a trace). */
+          replaced_item_id?: string
         }
         type TargetOutcome = {
           processed: number
@@ -2106,6 +2121,7 @@ export const invoiceInboxExtension: Extension = {
           }
 
           for (const att of attachments) {
+            let replacedItemId: string | undefined
             try {
               // Scoped to the company so one mail to two inboxes files once
               // per inbox rather than treating the second as a retry (#2181).
@@ -2132,6 +2148,7 @@ export const invoiceInboxExtension: Extension = {
                   continue
                 }
                 await serviceSupabase.from('invoice_inbox_items').delete().eq('id', existing.id)
+                replacedItemId = existing.id
               }
 
               const download = await fetchInboundAttachment(email_id, att.id)
@@ -2267,7 +2284,12 @@ export const invoiceInboxExtension: Extension = {
                 }
               )
               results.push({ attachment_id: att.id, inbox_item_id: result.inbox_item_id })
-              attachmentOutcomes.push({ id: att.id, outcome: 'filed', inbox_item_id: result.inbox_item_id })
+              attachmentOutcomes.push({
+                id: att.id,
+                outcome: 'filed',
+                inbox_item_id: result.inbox_item_id,
+                ...(replacedItemId ? { replaced_item_id: replacedItemId } : {}),
+              })
             } catch (err) {
               console.error('[invoice-inbox/inbound] Attachment processing failed:', err)
               const message = err instanceof Error ? err.message : 'Unknown error'
@@ -2299,7 +2321,12 @@ export const invoiceInboxExtension: Extension = {
                   true,
                 )
               }
-              attachmentOutcomes.push({ id: att.id, outcome: 'failed', inbox_item_id: failedItemId })
+              attachmentOutcomes.push({
+                id: att.id,
+                outcome: 'failed',
+                inbox_item_id: failedItemId,
+                ...(replacedItemId ? { replaced_item_id: replacedItemId } : {}),
+              })
             }
           }
 
@@ -2403,14 +2430,18 @@ export const invoiceInboxExtension: Extension = {
           .eq('event_type', 'InboundMailReceived')
           .gte('occurred_at', since)
           .order('occurred_at', { ascending: false })
-          .limit(INBOUND_HISTORY_LIMIT)
+          // One past the cap: the extra row only says whether older mail in
+          // the window was cut off, so the panel can say so.
+          .limit(INBOUND_HISTORY_LIMIT + 1)
 
         if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+        const hasMore = (data ?? []).length > INBOUND_HISTORY_LIMIT
+        const page = (data ?? []).slice(0, INBOUND_HISTORY_LIMIT)
 
         // The event stores inbox_id only (no address, see the webhook); the
         // company's own addresses are resolved here, for its own members.
         const inboxes = new Map<string, { local_part: string; status: string }>()
-        if ((data ?? []).length > 0) {
+        if (page.length > 0) {
           const { data: rows } = await ctx.supabase
             .from('company_inboxes')
             .select('id, local_part, status')
@@ -2421,7 +2452,8 @@ export const invoiceInboxExtension: Extension = {
         return NextResponse.json({
           data: {
             days,
-            mails: (data ?? []).map((row) => {
+            has_more: hasMore,
+            mails: page.map((row) => {
               const payload = row.payload as Record<string, unknown>
               const inbox = typeof payload.inbox_id === 'string' ? inboxes.get(payload.inbox_id) : undefined
               return {

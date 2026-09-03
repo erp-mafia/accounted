@@ -69,10 +69,11 @@ describe('GET /inbound-history (#2181)', () => {
     enqueue({ data: [{ id: 'inbox-1', local_part: 'acme-ab-x7f2', status: 'active' }] }) // company's inboxes
     const res = await route.handler(createMockRequest('/inbound-history'), buildCtx(supabase))
     const { status, body } = await parseJsonResponse<{
-      data: { days: number; mails: Array<Record<string, unknown>> }
+      data: { days: number; has_more: boolean; mails: Array<Record<string, unknown>> }
     }>(res)
     expect(status).toBe(200)
     expect(body.data.days).toBe(30)
+    expect(body.data.has_more).toBe(false)
     expect(body.data.mails).toEqual([
       {
         event_id: 'evt-1',
@@ -113,7 +114,19 @@ describe('GET /inbound-history (#2181)', () => {
     enqueue({ data: [] })
     const res = await route.handler(createMockRequest('/inbound-history?days=7'), buildCtx(supabase))
     const { body } = await parseJsonResponse<{ data: { days: number; mails: unknown[] } }>(res)
-    expect(body.data).toEqual({ days: 7, mails: [] })
+    expect(body.data).toEqual({ days: 7, has_more: false, mails: [] })
+  })
+
+  it('caps the list at 200 and says when older mail in the window was cut off', async () => {
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ data: Array.from({ length: 201 }, (_, i) => ({ ...EVENT_ROW, event_id: `evt-${i}` })) })
+    enqueue({ data: [{ id: 'inbox-1', local_part: 'acme-ab-x7f2', status: 'active' }] })
+    const res = await route.handler(createMockRequest('/inbound-history'), buildCtx(supabase))
+    const { body } = await parseJsonResponse<{ data: { has_more: boolean; mails: unknown[] } }>(res)
+    expect(body.data.has_more).toBe(true)
+    expect(body.data.mails).toHaveLength(200)
+    const limit = calls.find((c) => c.table === 'processing_history' && c.method === 'limit')
+    expect(limit?.args).toEqual([201])
   })
 
   it('returns 500 when the read fails', async () => {

@@ -3343,6 +3343,7 @@
     "inbound_mail_custom_domain": "Custom domain",
     "inbound_mail_former_address": "Former inbox address",
     "inbound_unknown_tags": "{count, plural, =1 {1 unknown tag} other {# unknown tags}}",
+    "inbound_mail_truncated": "More mail than this reached the address in the last {days} days: the latest {count} are shown.",
     "payment_label": "Paid with",
     "payment_card": "Card",
     "payment_swish": "Swish",

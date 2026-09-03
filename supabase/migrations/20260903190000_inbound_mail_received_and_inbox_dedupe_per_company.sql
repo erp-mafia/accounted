@@ -57,6 +57,10 @@ CREATE TRIGGER processing_history_strip_inbound_mail_pii
   FOR EACH ROW
   EXECUTE FUNCTION public.strip_inbound_mail_pii_from_processing_history();
 
+-- Plain DROP INDEX / CREATE INDEX (not CONCURRENTLY): Supabase branching
+-- applies migrations inside a transaction, where CONCURRENTLY is not allowed
+-- (same call as 20260706120000 and 20260710101000). invoice_inbox_items is a
+-- few thousand rows on prod; both statements take milliseconds.
 DROP INDEX IF EXISTS public.idx_invoice_inbox_items_resend_email_attachment;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_invoice_inbox_items_company_resend_email_attachment

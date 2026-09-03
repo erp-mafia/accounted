@@ -668,6 +668,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // the sources strip costs nothing for people who never look.
   const [inboundMails, setInboundMails] = useState<InboundMail[] | null>(null)
   const [inboundMailsFailed, setInboundMailsFailed] = useState(false)
+  // The route caps the list; when the window held more, say so rather than
+  // let "every mail" stand over a list that is missing the oldest ones.
+  const [inboundMailsTruncated, setInboundMailsTruncated] = useState(false)
 
   const fetchInboundMails = useCallback(async () => {
     try {
@@ -677,6 +680,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       if (!res.ok) throw new Error(`inbound-history ${res.status}`)
       const { data } = await res.json()
       setInboundMails(Array.isArray(data?.mails) ? data.mails : [])
+      setInboundMailsTruncated(data?.has_more === true)
       setInboundMailsFailed(false)
     } catch (err) {
       console.error('[invoice-inbox] fetchInboundMails failed:', err)
@@ -1620,7 +1624,11 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 <ChevronRight className="h-3 w-3 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
               </summary>
               <div className="px-4 pb-2.5 pl-11 text-[11px] text-muted-foreground space-y-1.5">
-                <p>{t('inbound_mail_hint', { days: INBOUND_MAIL_DAYS })}</p>
+                <p>
+                  {inboundMailsTruncated && inboundMails
+                    ? t('inbound_mail_truncated', { count: inboundMails.length, days: INBOUND_MAIL_DAYS })
+                    : t('inbound_mail_hint', { days: INBOUND_MAIL_DAYS })}
+                </p>
                 {inboundMailsFailed ? (
                   <AttnLine
                     action={{ label: t('retry'), onClick: () => { void fetchInboundMails() } }}

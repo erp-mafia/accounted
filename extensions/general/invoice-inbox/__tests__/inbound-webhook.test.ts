@@ -942,9 +942,32 @@ describe('POST /inbound with several recipients (#2181)', () => {
     expect(del).toBeDefined()
     const delEq = calls.filter((c) => c.table === 'invoice_inbox_items' && c.method === 'eq').find((c) => c.args[0] === 'id')
     expect(delEq?.args).toEqual(['id', 'err-1'])
+    // The replacement leaves a trace: the record names the row it replaced.
     expect(receivedEvents()[0].payload).toMatchObject({
-      attachments: [{ id: 'att_1', outcome: 'filed', inbox_item_id: 'item-healed' }],
+      attachments: [{ id: 'att_1', outcome: 'filed', inbox_item_id: 'item-healed', replaced_item_id: 'err-1' }],
     })
+  })
+
+  it('caps the fan-out at five inboxes per mail', async () => {
+    const to = Array.from({ length: 7 }, (_, i) => `inbox-${i}-abcd@arcim.io`)
+    vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ to, attachments: [] }) as never)
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    for (let i = 0; i < 5; i++) {
+      enqueue({ data: { id: `inbox-${i}`, company_id: `company-${i}`, status: 'active' } })
+    }
+    for (let i = 0; i < 5; i++) enqueue({ data: { created_by: `owner-${i}` } })
+    for (let i = 0; i < 5; i++) enqueue({ data: null }) // body-document dedupe checks
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-body' } as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue(fullEmailFor(to, [], { html: '<p>Kvitto</p>' }) as never)
+
+    const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.targets).toHaveLength(5)
+    expect(calls.filter((c) => c.table === 'company_inboxes' && c.method === 'eq')).toHaveLength(5)
+    expect(uploadAndExtract).toHaveBeenCalledTimes(5)
+    expect(receivedEvents()).toHaveLength(5)
   })
 
   it('keeps a rejected attachment (bad type) as a duplicate on redelivery', async () => {

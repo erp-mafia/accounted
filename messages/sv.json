@@ -3343,6 +3343,7 @@
     "inbound_mail_custom_domain": "Egen domän",
     "inbound_mail_former_address": "Tidigare inkorgsadress",
     "inbound_unknown_tags": "{count, plural, =1 {1 okänd tagg} other {# okända taggar}}",
+    "inbound_mail_truncated": "Fler mejl än så nådde adressen de senaste {days} dagarna: de {count} senaste visas.",
     "payment_label": "Betalsätt",
     "payment_card": "Kort",
     "payment_swish": "Swish",
