@@ -219,6 +219,19 @@ describe('POST /api/salary/employees', () => {
     })
   })
 
+  it('returns 400 on a jämkning percentage without an end date, without inserting (#2058)', async () => {
+    const { supabase, insert } = supabaseWithInsert({ id: 'emp-new', personnummer: encryptPersonnummer(NEW_PNR) })
+    authed(supabase)
+
+    const res = await POST(
+      postRequest({ ...CREATE_BASE, jamkning_percentage: 12.5, jamkning_valid_from: '2026-01-01' }),
+      params,
+    )
+
+    expect(res.status).toBe(400)
+    expect(insert).not.toHaveBeenCalled()
+  })
+
   it('inserts null jämkning fields when the body omits them', async () => {
     const { supabase, insert } = supabaseWithInsert({ id: 'emp-new', personnummer: encryptPersonnummer(NEW_PNR) })
     authed(supabase)

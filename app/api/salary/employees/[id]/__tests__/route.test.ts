@@ -220,6 +220,7 @@ describe('personnummer contract on /api/salary/employees/[id]', () => {
  */
 describe('jämkning on PATCH /api/salary/employees/[id]', () => {
   const JAMKNING_START_REQUIRED = 'Jämkningens startdatum måste anges när jämkningsprocent sätts'
+  const JAMKNING_END_REQUIRED = 'Jämkningens slutdatum måste anges när jämkningsprocent sätts'
   const JAMKNING_ORDER = 'Jämkningens slutdatum måste vara efter startdatumet'
 
   function useRow(existing: Record<string, unknown>) {
@@ -256,6 +257,20 @@ describe('jämkning on PATCH /api/salary/employees/[id]', () => {
 
     expect(status).toBe(400)
     expect(body.error).toContain(JAMKNING_START_REQUIRED)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 when a percentage is set with a start date but no end date (#2058)', async () => {
+    const captured = useRow({ ...EXISTING_ROW, jamkning_percentage: null, jamkning_valid_from: null, jamkning_valid_to: null })
+
+    const response = await PATCH(
+      patchRequest({ jamkning_percentage: 20, jamkning_valid_from: '2026-01-01', jamkning_valid_to: null }),
+      params,
+    )
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain(JAMKNING_END_REQUIRED)
     expect(captured.updates).toBeNull()
   })
 

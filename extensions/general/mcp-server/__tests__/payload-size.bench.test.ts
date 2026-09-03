@@ -401,6 +401,12 @@ describe('tools/list payload size guard', () => {
     //     gnubok_get_arsredovisning_filing_status to search-only: iXBRL
     //     filing is off until the Bolagsverket avtal exists, so no client
     //     polls it. Ceiling unchanged.
+    //   * 2026-09-03, jamkning (#2240) landing on top of proforma (#2254):
+    //     two one-line field notes on create/update_employee measured 60 010
+    //     after merging main. Demoted gnubok_list_arsredovisning_versions to
+    //     search-only: versions exist only once a report is rendered for
+    //     signing or filing, which is the same switched-off iXBRL path as its
+    //     sibling filing_status tool. Ceiling unchanged.
     expect(approxTokens).toBeLessThan(60_000)
   })
 
