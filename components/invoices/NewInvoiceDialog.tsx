@@ -30,7 +30,7 @@ interface Props {
   copyFromId?: string | null
   /** Preselect the självfaktura tab (split-button entry on /invoices). */
   selfBilled?: boolean
-  /** Preselect a document type, e.g. 'quote' ("Ny offert" split-button entry). */
+  /** Preselect a document type: 'quote' ("Ny offert") or 'proforma' ("Ny proformafaktura") split-button entries. */
   documentType?: InvoiceDocumentType
 }
 
@@ -146,7 +146,9 @@ export default function NewInvoiceDialog({
             ? t('title_copy')
             : documentType === 'quote' && !selfBilled
               ? t('title_quote')
-              : t('title_invoice')}
+              : documentType === 'proforma' && !selfBilled
+                ? t('title_proforma')
+                : t('title_invoice')}
         </DialogTitle>
         {copyFromId ? (
           copyLoadFailed ? (
