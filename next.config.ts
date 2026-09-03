@@ -35,11 +35,16 @@ const supabaseWsUrl =
   supabaseUrl.replace(/^http(s?):/, "ws$1:");
 
 // Brand logos (WL-12 slice A3) are served from Supabase Storage public
-// objects and rendered via next/image, which requires the host to be
-// allowlisted. The pattern stays narrow: public storage objects only.
-// try/catch because Docker builds may bake a sentinel value that is not a
-// parseable URL; no hostname simply means no remote images are allowed,
-// exactly as before.
+// objects. The tenant-logo <Image> elements (components/branding/) render
+// them `unoptimized` since issue #2203: this allowlist is fixed at build
+// time, and the generic Docker image bakes a sentinel for
+// NEXT_PUBLIC_SUPABASE_URL that docker-entrypoint.sh substitutes only at
+// container start, so the optimizer rejected the runtime host with 400
+// '"url" parameter is not allowed'. The pattern is kept for builds where the
+// real URL is present at build time (hosted, local) so any other remote
+// image from the same public bucket still passes. Narrow on purpose: public
+// storage objects only. try/catch because the sentinel is not a parseable
+// URL; no hostname simply means no remote images are allowed, as before.
 let supabaseImageHostname = "";
 try {
   supabaseImageHostname = supabaseUrl ? new URL(supabaseUrl).hostname : "";
