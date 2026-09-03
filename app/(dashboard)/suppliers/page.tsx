@@ -13,7 +13,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { useToast } from '@/components/ui/use-toast'
-import { Plus, Building2, Lock } from 'lucide-react'
+import { Plus, Lock, Truck } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -194,13 +194,13 @@ export default function SuppliersPage() {
       ) : filteredSuppliers.length === 0 ? (
         searchTerm ? (
           <EmptyState
-            icon={Building2}
+            icon={Truck}
             title={t('no_search_results_title')}
             description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
           />
         ) : (
           <EmptyState
-            icon={Building2}
+            icon={Truck}
             title={t('empty_title')}
             description={t('empty_description')}
             actionLabel={canWrite ? t('new_supplier') : undefined}
