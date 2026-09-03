@@ -183,7 +183,17 @@ export async function GET(request: Request) {
       // is a real regression and lands in the error path below like any
       // other failure.
       log.error('Reconciliation failed', { declarationId, companyId, period, message })
-      results.push({ declarationId, period, status: 'error', error: getErrorMessage(err) })
+      // A gateway refusal keeps its machine-readable code in the body (as the
+      // expired_token / grant_revoked rows do): the keyword heuristic in
+      // getErrorMessage misses the gateway wording and would collapse it
+      // into "Något gick fel". The full guidance is in the error log above.
+      const isGatewayRefusal = err instanceof SkatteverketAuthError && err.code === 'ACCESS_DENIED'
+      results.push({
+        declarationId,
+        period,
+        status: 'error',
+        error: isGatewayRefusal ? err.code : getErrorMessage(err),
+      })
     }
   }
 

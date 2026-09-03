@@ -327,7 +327,8 @@ describe('AGI kvittenser cron', () => {
     expect(body.results[0]).toMatchObject({
       declarationId: 'decl-1',
       status: 'error',
-      error: expect.any(String),
+      // Machine-readable code, never the generic "Något gick fel" fallback.
+      error: 'ACCESS_DENIED',
     })
     // companyId is internal log context, never response payload.
     expect(body.results[0]).not.toHaveProperty('companyId')
