@@ -35,6 +35,14 @@ export interface StructuredErrorEntry {
    * locked) MUST stay false: retrying won't change the outcome.
    */
   retryable?: boolean
+  /**
+   * When true, the thrower composes the Swedish message at runtime (a date,
+   * an amount) and getErrorMessage() passes that message through verbatim;
+   * message_sv is only the static fallback for an envelope that carries no
+   * message. Without this flag a registered code always resolves to
+   * message_sv, which would drop the runtime detail.
+   */
+  thrown_message_sv?: boolean
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -4316,6 +4324,84 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Reconciliation sign-off (lib/reconciliation/signoff.ts)
+// ─────────────────────────────────────────────────────────────────
+
+// Policy refusals from signOffAccount / reopenSignoff. Shipped as-is on the
+// dashboard, v1 and MCP surfaces before this registry knew them, so the code
+// names stay. The thrower's Swedish text is the message (thrown_message_sv):
+// before that, getErrorMessage() fell through to its generic fallback and the
+// user read "Något gick fel. Försök igen." for a refused sign-off.
+const RECONCILIATION_SIGNOFF: Record<string, StructuredErrorEntry> = {
+  INVALID_DATE: {
+    httpStatus: 400,
+    message_sv: 'Ogiltigt datum. Ange ÅÅÅÅ-MM-DD.',
+    message_en: 'Invalid date. Use YYYY-MM-DD.',
+    thrown_message_sv: true,
+  },
+  DATE_IN_FUTURE: {
+    httpStatus: 400,
+    message_sv: 'Du kan inte stämma av framåt i tiden.',
+    message_en: 'The through date cannot be in the future.',
+    thrown_message_sv: true,
+  },
+  NOT_FETCHED_THROUGH: {
+    httpStatus: 400,
+    message_sv: 'Skattekontot är inte hämtat t.o.m. det datumet. Hämta igen innan du stämmer av ett senare datum.',
+    message_en: 'The skattekonto has not been fetched through that date. Fetch it again before signing off a later date.',
+    thrown_message_sv: true,
+  },
+  OUTSIDE_UNKNOWN: {
+    httpStatus: 400,
+    message_sv: 'Saldot utanför bokföringen är okänt, så kontot kan inte stämmas av. Hämta det först, eller signera med en notering.',
+    message_en: 'The outside balance is unknown, so the account cannot be reconciled. Fetch it first, or sign with force and a note.',
+    thrown_message_sv: true,
+  },
+  NOT_RECONCILED: {
+    httpStatus: 400,
+    message_sv: 'Kontot har en oförklarad differens. Koppla eller bokför raderna först, eller signera med en notering.',
+    message_en: 'The account has an unexplained difference. Link or book the rows first, or sign with force and a note.',
+    thrown_message_sv: true,
+  },
+  NOTE_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Skriv en rad om varför du signerar trots att allt inte är förklarat.',
+    message_en: 'A note is required when signing with force.',
+    thrown_message_sv: true,
+  },
+  ALREADY_SIGNED_OFF: {
+    httpStatus: 409,
+    message_sv: 'Kontot är redan avstämt t.o.m. ett senare datum. Öppna den signeringen igen om du vill ändra.',
+    message_en: 'The account is already signed off through that date or later. Reopen that sign-off to change it.',
+    thrown_message_sv: true,
+  },
+  SIGNOFF_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Signeringen hittades inte.',
+    message_en: 'The sign-off was not found.',
+    thrown_message_sv: true,
+  },
+  ALREADY_REOPENED: {
+    httpStatus: 409,
+    message_sv: 'Signeringen är redan öppnad igen.',
+    message_en: 'The sign-off is already reopened.',
+    thrown_message_sv: true,
+  },
+  SIGNOFF_RACE: {
+    httpStatus: 409,
+    message_sv: 'Kontot signerades precis av någon annan. Ladda om.',
+    message_en: 'Someone else just changed this sign-off. Reload and try again.',
+    thrown_message_sv: true,
+  },
+  EXTERNAL_BALANCE_NOT_ALLOWED: {
+    httpStatus: 400,
+    message_sv: 'Kontot har redan en sanning utanför bokföringen (bank, Skatteverket, reskontra eller beräkning). Ange inget saldo manuellt; signera med en notering om något avviker.',
+    message_en: 'The account already has an outside truth (bank, Skatteverket, ledger or calculation). Do not state a balance; sign with a note if something differs.',
+    thrown_message_sv: true,
+  },
+}
+
 const NODE_SYSTEM: Record<string, StructuredErrorEntry> = {
   ECONNREFUSED: NETWORK_TRANSIENT_ENTRY,
   ECONNRESET: NETWORK_TRANSIENT_ENTRY,
@@ -4373,6 +4459,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...ASSETS,
   ...DIMENSION,
   ...WEBSHOP_ORDERS,
+  ...RECONCILIATION_SIGNOFF,
   ...NODE_SYSTEM,
 }
 

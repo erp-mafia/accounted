@@ -7770,6 +7770,7 @@
     "signoff_date": "Avstämd t.o.m.",
     "signoff_note": "Notering",
     "signoff_note_placeholder": "Valfritt. Obligatoriskt om något är oförklarat.",
+    "signoff_preview_pending": "Kontrollerar mot bokföringen…",
     "signoff_unexplained_warning": "{amount} är inte förklarat. Du kan signera ändå med en notering, men det syns i historiken.",
     "signoff_force": "Signera trots oförklarad differens",
     "signoff_confirm": "Signera",
