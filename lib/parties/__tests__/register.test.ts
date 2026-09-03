@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { getDossier } from '../register'
+import { defaultRoles, getDossier } from '../register'
+import type { LedgerStats } from '../register'
 
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 const PARTY = '11111111-1111-4111-8111-111111111111'
@@ -51,5 +52,33 @@ describe('getDossier', () => {
     enqueue({ data: null })
     expect(await getDossier(supabase as never, 'company-1', PARTY)).toBeNull()
     expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('defaultRoles', () => {
+  const stats = (over: Partial<LedgerStats>): LedgerStats => ({
+    occurrences: 3,
+    expenseSek: 0,
+    revenueSek: 0,
+    firstSeen: null,
+    lastSeen: null,
+    cadenceDays: null,
+    rhythm: null,
+    dominantAccount: null,
+    dominantShare: null,
+    variants: [],
+    ...over,
+  })
+
+  it('reads the ledger side', () => {
+    expect(defaultRoles(stats({ expenseSek: 1000 }))).toEqual(['supplier'])
+    expect(defaultRoles(stats({ revenueSek: 1000 }))).toEqual(['customer'])
+    expect(defaultRoles(stats({ expenseSek: 10, revenueSek: 10 }))).toEqual(['supplier', 'customer'])
+  })
+
+  it('falls back to the dominant account, then to supplier', () => {
+    expect(defaultRoles(stats({ dominantAccount: '3011' }))).toEqual(['customer'])
+    expect(defaultRoles(stats({ dominantAccount: '6212' }))).toEqual(['supplier'])
+    expect(defaultRoles(null)).toEqual(['supplier'])
   })
 })

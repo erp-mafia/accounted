@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Lock } from 'lucide-react'
 import { ContextPicker, type ContextPickerItem } from '@/components/common/ContextPicker'
@@ -18,13 +19,12 @@ import { useToast } from '@/components/ui/use-toast'
 import { MergeDialog, type MergeCandidate } from '@/components/parties/MergeDialog'
 import { ObservedTable } from '@/components/parties/ObservedTable'
 import { PartyDossier } from '@/components/parties/PartyDossier'
-import { RegisterTable } from '@/components/parties/RegisterTable'
 import { SuggestionQueue } from '@/components/parties/SuggestionQueue'
 import { hasHardKey } from '@/components/parties/format'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import type { Register, RegisterPeriod, RegisterRow, RegisterView } from '@/lib/parties/register'
+import type { PartyRole, Register, RegisterPeriod, RegisterRow, RegisterView } from '@/lib/parties/register'
 
-const VIEWS: RegisterView[] = ['all', 'customers', 'suppliers', 'suggested', 'observed']
+const VIEWS: RegisterView[] = ['suggested', 'observed']
 
 async function post<T>(url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -37,13 +37,31 @@ async function post<T>(url: string, body?: unknown): Promise<T> {
   return json.data
 }
 
-export default function PartiesPage() {
+function roleSummary(t: (k: string, v?: Record<string, string | number>) => string, items: Array<{ roles: PartyRole[] }>): string {
+  const suppliers = items.filter((i) => i.roles.includes('supplier')).length
+  const customers = items.filter((i) => i.roles.includes('customer')).length
+  const parts: string[] = []
+  if (suppliers) parts.push(t('summary_suppliers', { count: suppliers }))
+  if (customers) parts.push(t('summary_customers', { count: customers }))
+  return parts.join(' · ')
+}
+
+/**
+ * Förslag från bokföringen: the queue in front of Leverantörer and Kunder.
+ * Nothing here is a register of its own; confirming creates the supplier or
+ * customer row, and "Bara i bokföringen" shows what the vouchers name that
+ * nothing owns yet.
+ */
+function SuggestionsPage() {
   const t = useTranslations('parties')
   const tCommon = useTranslations('common')
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
+  const router = useRouter()
+  const searchParams = useSearchParams()
 
-  const [view, setView] = useState<RegisterView>('all')
+  const initialView: RegisterView = searchParams.get('view') === 'observed' ? 'observed' : 'suggested'
+  const [view, setView] = useState<RegisterView>(initialView)
   const [query, setQuery] = useState('')
   const [debounced, setDebounced] = useState('')
   const [period, setPeriod] = useState<RegisterPeriod>('12m')
@@ -52,6 +70,7 @@ export default function PartiesPage() {
   const [failed, setFailed] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [roleOverrides, setRoleOverrides] = useState<Record<string, PartyRole[]>>({})
   const [busy, setBusy] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -118,6 +137,7 @@ export default function PartiesPage() {
   )
 
   const fail = useCallback(() => toast({ title: t('action_failed'), variant: 'destructive' }), [toast, t])
+  const rolesFor = useCallback((row: RegisterRow): PartyRole[] => roleOverrides[row.id] ?? row.defaultRoles, [roleOverrides])
 
   async function refreshSuggestions() {
     if (refreshing) return
@@ -133,29 +153,52 @@ export default function PartiesPage() {
     }
   }
 
-  async function decide(ids: string[], kind: 'confirm' | 'dismiss') {
+  function undoToast(title: string, undoUrl: string, ids: string[], undoneTitle: string) {
+    toast({
+      title,
+      action: (
+        <ToastAction
+          altText={t('undo')}
+          onClick={() => {
+            post(undoUrl, { partyIds: ids })
+              .then(() => {
+                toast({ title: undoneTitle })
+                reload()
+              })
+              .catch(fail)
+          }}
+        >
+          {t('undo')}
+        </ToastAction>
+      ),
+    })
+  }
+
+  async function promote(items: Array<{ partyId: string; roles: PartyRole[] }>) {
+    if (items.length === 0) return
+    setBusy(true)
+    try {
+      const r = await post<{ parties: number; suppliers: number; customers: number }>('/api/parties/promote', { items })
+      undoToast(t('promoted_title', { count: r.parties, detail: roleSummary(t, items) }), '/api/parties/promote/undo', items.map((i) => i.partyId), t('undone_title'))
+      setSelected((prev) => {
+        const next = new Set(prev)
+        for (const i of items) next.delete(i.partyId)
+        return next
+      })
+      reload()
+    } catch {
+      fail()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function dismiss(ids: string[]) {
     if (ids.length === 0) return
     setBusy(true)
     try {
-      const { count } = await post<{ count: number }>('/api/parties/decide', { partyIds: ids, kind })
-      toast({
-        title: kind === 'confirm' ? t('confirmed_title', { count }) : t('dismissed_title', { count }),
-        action: (
-          <ToastAction
-            altText={t('undo')}
-            onClick={() => {
-              post('/api/parties/decide/undo', { partyIds: ids })
-                .then(() => {
-                  toast({ title: t('undone_title') })
-                  reload()
-                })
-                .catch(fail)
-            }}
-          >
-            {t('undo')}
-          </ToastAction>
-        ),
-      })
+      const { count } = await post<{ count: number }>('/api/parties/decide', { partyIds: ids, kind: 'dismiss' })
+      undoToast(t('dismissed_title', { count }), '/api/parties/decide/undo', ids, t('undone_title'))
       setSelected((prev) => {
         const next = new Set(prev)
         for (const id of ids) next.delete(id)
@@ -202,33 +245,27 @@ export default function PartiesPage() {
   }
 
   const rows = register?.rows ?? []
-  const suggestedRows: RegisterRow[] = view === 'suggested' ? rows : []
   const searching = debounced.length > 0
+  const selectedItems = rows.filter((r) => selected.has(r.id)).map((r) => ({ partyId: r.id, roles: rolesFor(r) }))
 
   let attn: React.ReactNode = null
-  if (counts && counts.suggested > 0 && view !== 'suggested') {
-    attn = (
-      <AttnLine action={{ label: t('attn_review'), onClick: () => setView('suggested') }}>
-        {t('attn_suggestions', { count: counts.suggested })}
-      </AttnLine>
-    )
-  } else if (counts && counts.all + counts.suggested === 0 && counts.observed > 0 && canWrite) {
+  if (counts && counts.suggested === 0 && counts.observed > 0 && canWrite && view === 'suggested') {
     attn = <AttnLine action={{ label: t('refresh'), onClick: () => void refreshSuggestions() }}>{t('attn_observed', { count: counts.observed })}</AttnLine>
   }
 
   function empty() {
     if (searching) return <EmptyState title={t('empty_search_title')} description={t('empty_search_description')} />
-    if (view === 'suggested')
-      return (
-        <EmptyState
-          title={t('empty_suggested_title')}
-          description={t('empty_suggested_description')}
-          actionLabel={canWrite ? t('refresh') : undefined}
-          onAction={canWrite ? () => void refreshSuggestions() : undefined}
-        />
-      )
     if (view === 'observed') return <EmptyState title={t('empty_observed_title')} description={t('empty_observed_description')} />
-    return <EmptyState title={t('empty_all_title')} description={t('empty_all_description')} />
+    return (
+      <EmptyState
+        title={t('empty_suggested_title')}
+        description={t('empty_suggested_description')}
+        actionLabel={canWrite ? t('refresh') : undefined}
+        onAction={canWrite ? () => void refreshSuggestions() : undefined}
+        secondaryActionLabel={t('go_suppliers')}
+        secondaryActionHref="/suppliers"
+      />
+    )
   }
 
   function content() {
@@ -247,39 +284,36 @@ export default function PartiesPage() {
       return <ObservedTable rows={register.observed} generic={register.generic} />
     }
     if (rows.length === 0) return empty()
-    if (view === 'suggested') {
-      return (
-        <SuggestionQueue
-          rows={suggestedRows}
-          selected={selected}
-          canWrite={canWrite}
-          busy={busy}
-          onToggle={(id) =>
-            setSelected((prev) => {
-              const next = new Set(prev)
-              if (next.has(id)) next.delete(id)
-              else next.add(id)
-              return next
-            })
-          }
-          onSelectAll={() => setSelected(new Set(suggestedRows.map((r) => r.id)))}
-          onClear={() => setSelected(new Set())}
-          onConfirmSelected={() => setConfirmOpen(true)}
-          onDismiss={(row) => void decide([row.id], 'dismiss')}
-          onOpen={setDossierId}
-        />
-      )
-    }
-    return <RegisterTable rows={rows} onOpen={setDossierId} />
+    return (
+      <SuggestionQueue
+        rows={rows}
+        selected={selected}
+        roles={rolesFor}
+        canWrite={canWrite}
+        busy={busy}
+        onToggle={(id) =>
+          setSelected((prev) => {
+            const next = new Set(prev)
+            if (next.has(id)) next.delete(id)
+            else next.add(id)
+            return next
+          })
+        }
+        onSelectAll={() => setSelected(new Set(rows.map((r) => r.id)))}
+        onClear={() => setSelected(new Set())}
+        onRoles={(id, roles) => setRoleOverrides((prev) => ({ ...prev, [id]: roles }))}
+        onConfirmSelected={() => setConfirmOpen(true)}
+        onDismiss={(row) => void dismiss([row.id])}
+        onOpen={setDossierId}
+      />
+    )
   }
-
-  const selectedCount = [...selected].filter((id) => suggestedRows.some((r) => r.id === id)).length
 
   return (
     <div className="space-y-8">
       <PageHeader
         title={t('title')}
-        description={counts ? t('summary', { all: counts.all, suggested: counts.suggested, observed: counts.observed }) : undefined}
+        description={counts ? t('summary', { suggested: counts.suggested, observed: counts.observed }) : undefined}
         help={
           <HelpPopover>
             <p>{t('help')}</p>
@@ -302,7 +336,14 @@ export default function PartiesPage() {
       {attn}
 
       <div className="flex flex-wrap items-center gap-2">
-        <SegmentedControl<RegisterView> value={view} onChange={setView} options={viewOptions} />
+        <SegmentedControl<RegisterView>
+          value={view}
+          onChange={(v) => {
+            setView(v)
+            router.replace(v === 'observed' ? '/parties?view=observed' : '/parties', { scroll: false })
+          }}
+          options={viewOptions}
+        />
         <ToolbarSearch value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('search_placeholder')} aria-label={t('search_placeholder')} />
         <div className="ml-auto flex items-center gap-2">
           <ContextPicker
@@ -317,19 +358,19 @@ export default function PartiesPage() {
 
       {content()}
 
-      {register && view !== 'observed' && rows.length > 0 ? (
+      {register && view === 'suggested' && rows.length > 0 ? (
         <p className="px-1 text-xs text-muted-foreground tabular-nums">{t('count_summary', { count: rows.length })}</p>
       ) : null}
 
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title={t('confirm_dialog_title', { count: selectedCount })}
-        description={t('confirm_dialog_body')}
-        confirmLabel={t('confirm_n', { count: selectedCount })}
+        title={t('promote_dialog_title', { count: selectedItems.length })}
+        description={t('promote_dialog_body', { detail: roleSummary(t, selectedItems) })}
+        confirmLabel={t('promote_n', { count: selectedItems.length })}
         onConfirm={async () => {
           setConfirmOpen(false)
-          await decide([...selected].filter((id) => suggestedRows.some((r) => r.id === id)), 'confirm')
+          await promote(selectedItems)
         }}
       />
 
@@ -340,9 +381,9 @@ export default function PartiesPage() {
         busy={busy}
         reloadKey={dossierReload}
         onClose={() => setDossierId(null)}
-        onConfirm={(id) => void decide([id], 'confirm')}
+        onPromote={(id, roles) => void promote([{ partyId: id, roles }])}
         onDismiss={(id) => {
-          void decide([id], 'dismiss')
+          void dismiss([id])
           setDossierId(null)
         }}
         onMerge={(subject, suggested) => setMerge({ subject, suggested })}
@@ -359,5 +400,13 @@ export default function PartiesPage() {
         />
       ) : null}
     </div>
+  )
+}
+
+export default function PartiesPage() {
+  return (
+    <Suspense fallback={null}>
+      <SuggestionsPage />
+    </Suspense>
   )
 }

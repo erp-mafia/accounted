@@ -1,12 +1,14 @@
 /**
- * Parties, phase 1: the read model behind the Kontakter register.
+ * Parties, phase 1: the read model behind "Förslag från bokföringen".
  *
- * One list, three tiers (plan section 03): confirmed parties carry roles and
- * money; suggested parties wait in the queue with a reason per row; observed
- * parties are computed from the ledger and never stored. Money, rhythm and
- * the dominant account for every tier come from get_observed_parties, joined
- * to a party through its alias keys, so a confirmed party the books know
- * shows the same numbers a migrant saw in the reveal.
+ * The user's registers are Leverantörer and Kunder (founder decision
+ * 2026-09-03: no third noun). This model serves the queue in front of them:
+ * suggested parties with a reason per row and the role each will become,
+ * and observed parties the ledger names but nothing owns yet. Money, rhythm
+ * and the dominant account come from get_observed_parties joined through the
+ * party's alias keys, so a suggestion shows the numbers a migrant saw in
+ * the reveal. Confirmed parties are read here only for counts and for the
+ * dossier; the user sees them as suppliers and customers.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
@@ -15,7 +17,8 @@ import { coreKey } from './ledger-key'
 import { getObservedParties, type ObservedParty } from './observed'
 import type { SuggestionReason } from './suggest'
 
-export type RegisterView = 'all' | 'customers' | 'suppliers' | 'suggested' | 'observed'
+export type RegisterView = 'suggested' | 'observed'
+export type PartyRole = 'supplier' | 'customer'
 export type RegisterPeriod = '12m' | 'all'
 
 export interface PartyRoleLink {
@@ -49,6 +52,8 @@ export interface RegisterRow {
   reason: SuggestionReason | null
   /** Live parties sharing this party's core name: a merge question, never a merge. */
   similar: Array<{ id: string; displayName: string }>
+  /** What confirming this suggestion creates, read from which side of the ledger it sits on. */
+  defaultRoles: PartyRole[]
   createdAt: string
 }
 
@@ -60,11 +65,12 @@ export interface ObservedRow {
 }
 
 export interface RegisterCounts {
-  all: number
-  customers: number
-  suppliers: number
   suggested: number
+  /** Suggestions whose default role includes supplier / customer (a row can count in both). */
+  suggestedSuppliers: number
+  suggestedCustomers: number
   observed: number
+  confirmed: number
 }
 
 export interface Register {
@@ -174,6 +180,23 @@ export function similarAmong(parties: Array<{ id: string; display_name: string; 
   return out
 }
 
+/**
+ * Expense side becomes a supplier, revenue side a customer, both sides both.
+ * A row with no money at all (documents only) is a supplier: the documents
+ * that carry hard keys are supplier invoices.
+ */
+export function defaultRoles(stats: LedgerStats | null): PartyRole[] {
+  if (!stats) return ['supplier']
+  const roles: PartyRole[] = []
+  if (stats.expenseSek > 0) roles.push('supplier')
+  if (stats.revenueSek > 0) roles.push('customer')
+  if (roles.length === 0) {
+    if (stats.dominantAccount && /^3/.test(stats.dominantAccount)) return ['customer']
+    return ['supplier']
+  }
+  return roles
+}
+
 function periodStart(period: RegisterPeriod, now = new Date()): string | null {
   if (period === 'all') return null
   const d = new Date(now)
@@ -260,6 +283,7 @@ export async function getRegister(
     if (p.archived_at) continue
     const customerId = customerByParty.get(p.id) ?? null
     const supplierId = supplierByParty.get(p.id) ?? null
+    const stats = mergeStats(parts)
     rows.push({
       id: p.id,
       displayName: p.display_name,
@@ -267,10 +291,11 @@ export async function getRegister(
       kind: p.kind,
       status: p.status,
       roles: { customerId, supplierId },
-      stats: mergeStats(parts),
+      stats,
       invoiceCount: (customerId ? (invoicesByCustomer.get(customerId) ?? 0) : 0) + (supplierId ? (invoicesBySupplier.get(supplierId) ?? 0) : 0),
       reason: p.status === 'suggested' ? p.suggested_reason : null,
       similar: similarById.get(p.id) ?? [],
+      defaultRoles: p.kind === 'person' ? ['customer'] : defaultRoles(stats),
       createdAt: p.created_at,
     })
   }
@@ -289,37 +314,20 @@ export async function getRegister(
   }
   generic.expenseSek = roundOre(generic.expenseSek)
 
-  const confirmed = rows.filter((r) => r.status === 'confirmed')
+  const suggestedRows = rows.filter((r) => r.status === 'suggested')
   const counts: RegisterCounts = {
-    all: confirmed.length,
-    customers: confirmed.filter((r) => r.roles.customerId).length,
-    suppliers: confirmed.filter((r) => r.roles.supplierId).length,
-    suggested: rows.filter((r) => r.status === 'suggested').length,
+    suggested: suggestedRows.length,
+    suggestedSuppliers: suggestedRows.filter((r) => r.defaultRoles.includes('supplier')).length,
+    suggestedCustomers: suggestedRows.filter((r) => r.defaultRoles.includes('customer')).length,
     observed: observedRows.length,
+    confirmed: rows.length - suggestedRows.length,
   }
 
-  const view = options.view ?? 'all'
+  const view = options.view ?? 'suggested'
   const byMoney = (a: RegisterRow, b: RegisterRow) =>
     (b.stats?.expenseSek ?? 0) + (b.stats?.revenueSek ?? 0) - ((a.stats?.expenseSek ?? 0) + (a.stats?.revenueSek ?? 0)) ||
     a.displayName.localeCompare(b.displayName, 'sv')
-  let selected: RegisterRow[]
-  switch (view) {
-    case 'customers':
-      selected = confirmed.filter((r) => r.roles.customerId)
-      break
-    case 'suppliers':
-      selected = confirmed.filter((r) => r.roles.supplierId)
-      break
-    case 'suggested':
-      selected = rows.filter((r) => r.status === 'suggested')
-      break
-    case 'observed':
-      selected = []
-      break
-    default:
-      selected = confirmed
-  }
-  selected = selected.filter((r) => matches(q, r.displayName, r.orgNumber)).sort(byMoney)
+  const selected = (view === 'suggested' ? suggestedRows : []).filter((r) => matches(q, r.displayName, r.orgNumber)).sort(byMoney)
   const observedSelected =
     view === 'observed'
       ? observedRows
@@ -498,6 +506,7 @@ export async function getDossier(supabase: SupabaseClient, companyId: string, pa
       invoiceCount: 0,
       reason,
       similar: similar.map((s) => ({ id: s.id, displayName: s.displayName })),
+      defaultRoles: p.kind === 'person' ? ['customer'] : defaultRoles(stats),
       createdAt: p.created_at,
     },
     facts: ((facts.data ?? []) as Array<Record<string, unknown>>).map((f) => ({

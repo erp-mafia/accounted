@@ -37,6 +37,8 @@ import { POST as decidePost } from '../decide/route'
 import { POST as undoDecidePost } from '../decide/undo/route'
 import { POST as mergePost } from '../merge/route'
 import { POST as undoMergePost } from '../merge/undo/route'
+import { POST as promotePost } from '../promote/route'
+import { POST as undoPromotePost } from '../promote/undo/route'
 
 const user = { id: 'user-1', email: 'test@test.se' }
 const noParams = { params: Promise.resolve({}) }
@@ -69,14 +71,19 @@ describe('GET /api/parties', () => {
   })
 
   it('passes view, query and period to the read model for the active company', async () => {
-    const register = { counts: { all: 1, customers: 0, suppliers: 1, suggested: 0, observed: 0 }, rows: [], observed: [], generic: { count: 0, expenseSek: 0, examples: [] }, period: 'all' }
+    const register = { counts: { suggested: 1, suggestedSuppliers: 1, suggestedCustomers: 0, observed: 0, confirmed: 3 }, rows: [], observed: [], generic: { count: 0, expenseSek: 0, examples: [] }, period: 'all' }
     getRegister.mockResolvedValue(register)
     const { status, body } = await parseJsonResponse<{ data: typeof register }>(
-      await listGet(createMockRequest('/api/parties?view=suppliers&q=beijer&period=all'), noParams),
+      await listGet(createMockRequest('/api/parties?view=observed&q=beijer&period=all'), noParams),
     )
     expect(status).toBe(200)
     expect(body.data).toEqual(register)
-    expect(getRegister).toHaveBeenCalledWith(mockSupabase, 'company-1', { view: 'suppliers', q: 'beijer', period: 'all' })
+    expect(getRegister).toHaveBeenCalledWith(mockSupabase, 'company-1', { view: 'observed', q: 'beijer', period: 'all' })
+  })
+
+  it('no longer accepts the register views that moved to Leverantörer and Kunder', async () => {
+    const { status } = await parseJsonResponse(await listGet(createMockRequest('/api/parties?view=suppliers'), noParams))
+    expect(status).toBe(400)
   })
 })
 
@@ -201,5 +208,56 @@ describe('POST /api/parties/merge/undo', () => {
     expect(status).toBe(200)
     expect(body.data).toEqual({ restored: 2 })
     expect(mockSupabase.rpc).toHaveBeenCalledWith('undo_party_merge', { p_company_id: 'company-1', p_user_id: 'user-1', p_decision_id: DECISION })
+  })
+})
+
+describe('POST /api/parties/promote', () => {
+  it('rejects an item without roles', async () => {
+    const { status } = await parseJsonResponse(await promotePost(json('/api/parties/promote', { items: [{ partyId: PARTY, roles: [] }] }), noParams))
+    expect(status).toBe(400)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('maps a foreign or archived party to 404', async () => {
+    enqueue({ data: null, error: { code: '23503', message: 'not a live party' } })
+    const { status } = await parseJsonResponse(await promotePost(json('/api/parties/promote', { items: [{ partyId: PARTY, roles: ['supplier'] }] }), noParams))
+    expect(status).toBe(404)
+  })
+
+  it('calls promote_parties with snake_case items and returns the counts', async () => {
+    enqueue({ data: { parties: 2, suppliers: 1, customers: 1 } })
+    const { status, body } = await parseJsonResponse<{ data: { parties: number; suppliers: number; customers: number } }>(
+      await promotePost(
+        json('/api/parties/promote', {
+          items: [
+            { partyId: PARTY, roles: ['supplier'] },
+            { partyId: OTHER, roles: ['customer'] },
+          ],
+        }),
+        noParams,
+      ),
+    )
+    expect(status).toBe(200)
+    expect(body.data).toEqual({ parties: 2, suppliers: 1, customers: 1 })
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('promote_parties', {
+      p_company_id: 'company-1',
+      p_user_id: 'user-1',
+      p_items: [
+        { party_id: PARTY, roles: ['supplier'] },
+        { party_id: OTHER, roles: ['customer'] },
+      ],
+    })
+  })
+})
+
+describe('POST /api/parties/promote/undo', () => {
+  it('reverses promotions for the given parties', async () => {
+    enqueue({ data: 2 })
+    const { status, body } = await parseJsonResponse<{ data: { count: number } }>(
+      await undoPromotePost(json('/api/parties/promote/undo', { partyIds: [PARTY, OTHER] }), noParams),
+    )
+    expect(status).toBe(200)
+    expect(body.data).toEqual({ count: 2 })
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('undo_party_promotions', { p_company_id: 'company-1', p_user_id: 'user-1', p_party_ids: [PARTY, OTHER] })
   })
 })

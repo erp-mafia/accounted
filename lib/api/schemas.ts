@@ -3916,7 +3916,7 @@ export const SalesOrderListQuerySchema = z.object({
 // ── Parties (Kontakter register) ───────────────────────────────────────────
 
 export const PartiesRegisterQuerySchema = z.object({
-  view: z.enum(['all', 'customers', 'suppliers', 'suggested', 'observed']).optional(),
+  view: z.enum(['suggested', 'observed']).optional(),
   q: z.string().max(120).optional(),
   period: z.enum(['12m', 'all']).optional(),
 })
@@ -3925,6 +3925,18 @@ export const PartyDecideSchema = z.object({
   partyIds: z.array(uuid).min(1).max(500),
   kind: z.enum(['confirm', 'dismiss']),
   note: z.string().max(500).optional(),
+})
+
+export const PartyPromoteSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        partyId: uuid,
+        roles: z.array(z.enum(['supplier', 'customer'])).min(1).max(2),
+      }),
+    )
+    .min(1)
+    .max(500),
 })
 
 export const PartyUndoDecisionsSchema = z.object({

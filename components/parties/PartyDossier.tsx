@@ -6,10 +6,10 @@ import { Button } from '@/components/ui/button'
 import { VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SlideOver, SlideOverBody, SlideOverContent, SlideOverHeader } from '@/components/ui/slide-over'
-import type { Dossier, RegisterPeriod } from '@/lib/parties/register'
+import type { Dossier, PartyRole, RegisterPeriod } from '@/lib/parties/register'
 import { formatCurrency, formatDate, formatOrgNumber } from '@/lib/utils'
 import { AccountNub } from './AccountNub'
-import { formatPaymentIdentity, rhythmLabel } from './format'
+import { formatPaymentIdentity, rhythmLabel, roleLabel } from './format'
 import type { MergeCandidate } from './MergeDialog'
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
@@ -39,7 +39,7 @@ export function PartyDossier({
   canWrite,
   busy,
   onClose,
-  onConfirm,
+  onPromote,
   onDismiss,
   onMerge,
   reloadKey,
@@ -49,7 +49,7 @@ export function PartyDossier({
   canWrite: boolean
   busy: boolean
   onClose: () => void
-  onConfirm: (id: string) => void
+  onPromote: (id: string, roles: PartyRole[]) => void
   onDismiss: (id: string) => void
   onMerge: (subject: MergeCandidate, suggested: MergeCandidate[]) => void
   reloadKey: number
@@ -84,7 +84,7 @@ export function PartyDossier({
   const p = dossier?.party
   const stats = p?.stats ?? null
   const suggested = p?.status === 'suggested'
-  const kicker = p ? (suggested ? t('dossier_kicker_suggested') : t('dossier_kicker_confirmed')) : ''
+  const kicker = p ? (suggested ? t('dossier_kicker_suggested') : roleLabel(t, p.roles)) : ''
   const subtitle = stats
     ? [
         t('dossier_seen', { count: stats.occurrences }),
@@ -122,9 +122,26 @@ export function PartyDossier({
               <div className="space-y-3">
                 {subtitle ? <p className="text-[13px] text-muted-foreground">{subtitle}</p> : null}
                 <div className="flex flex-wrap gap-2">
-                  {suggested ? (
-                    <Button type="button" size="sm" onClick={() => onConfirm(p.id)} disabled={!canWrite || busy}>
-                      {t('confirm')}
+                  {suggested || !p.roles.supplierId ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={p.defaultRoles.includes('supplier') ? 'default' : 'outline'}
+                      onClick={() => onPromote(p.id, ['supplier'])}
+                      disabled={!canWrite || busy}
+                    >
+                      {t('promote_supplier')}
+                    </Button>
+                  ) : null}
+                  {suggested || !p.roles.customerId ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={p.defaultRoles.includes('customer') && !p.defaultRoles.includes('supplier') ? 'default' : 'outline'}
+                      onClick={() => onPromote(p.id, ['customer'])}
+                      disabled={!canWrite || busy}
+                    >
+                      {t('promote_customer')}
                     </Button>
                   ) : null}
                   <Button

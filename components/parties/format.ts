@@ -1,4 +1,4 @@
-import type { LedgerStats, RegisterRow } from '@/lib/parties/register'
+import type { LedgerStats, PartyRole, RegisterRow } from '@/lib/parties/register'
 import type { SuggestionReason } from '@/lib/parties/suggest'
 import { formatOrgNumber } from '@/lib/utils'
 
@@ -11,9 +11,17 @@ export function rhythmLabel(t: Translate, rhythm: LedgerStats['rhythm']): string
 
 export function roleLabel(t: Translate, roles: RegisterRow['roles']): string {
   const parts: string[] = []
-  if (roles.customerId) parts.push(t('role_customer'))
   if (roles.supplierId) parts.push(t('role_supplier'))
-  return parts.length ? parts.join(' · ') : t('role_contact')
+  if (roles.customerId) parts.push(t('role_customer'))
+  return parts.length ? parts.join(' · ') : t('role_none')
+}
+
+/** "Leverantör", "Kund" or "Leverantör · Kund": what a suggestion becomes. */
+export function rolesLabel(t: Translate, roles: PartyRole[]): string {
+  const parts: string[] = []
+  if (roles.includes('supplier')) parts.push(t('role_supplier'))
+  if (roles.includes('customer')) parts.push(t('role_customer'))
+  return parts.join(' · ')
 }
 
 /** "Org.nr 556354-5185 i 3 underlag · 12 verifikat · varje månad": why a row is in the queue. */
