@@ -38,3 +38,13 @@ describe('classifyKey', () => {
     expect(classifyKey({ key: '12 34' })).toBe('unsure')
   })
 })
+
+describe('classifyKey on fee descriptions and authorities (prod 2026-09-03)', () => {
+  it('keeps state fees and authorities out of the party queue', async () => {
+    const { classifyKey } = await import('../classify')
+    expect(classifyKey({ key: 'registeringsavgift finansinspektionen', acct: '6991' })).toBe('authority')
+    expect(classifyKey({ key: 'finansinspektionen', acct: '6991' })).toBe('authority')
+    expect(classifyKey({ key: 'utlägg', acct: '5420' })).toBe('category')
+    expect(classifyKey({ key: 'utlägg anthropic', acct: '5420' })).toBe('party')
+  })
+})
