@@ -21,6 +21,7 @@ import { CUSTOM_INVOICE_FONT_RENDER_PREFIX } from '@/lib/invoices/pdf-fonts'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { isTextLikeLine } from '@/lib/invoices/display'
 import { maskedDeductionPersonnummer } from '@/lib/invoices/deduction-personnummer'
+import { getCountryName } from '@/lib/vat/country-codes'
 
 type PdfLang = 'sv' | 'en'
 
@@ -1007,7 +1008,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 <Text>{customer.postal_code} {customer.city}</Text>
               )}
               {customer.country && customer.country !== 'SE' && (
-                <Text>{customer.country}</Text>
+                <Text>{getCountryName(customer.country, lang)}</Text>
               )}
               {/* Seller-assigned kundnummer: no per-customer-type guard needed,
                   it identifies the customer in the seller's own register and

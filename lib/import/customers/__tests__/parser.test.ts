@@ -131,4 +131,23 @@ describe('parseCustomersFile', () => {
     expect(result.rows[0].city).toBe('GÖTEBORG')
     expect(result.rows[1].city).toBe('HISINGS KÄRRA')
   })
+
+  it('stores the country as an ISO code and flags a name it cannot map', () => {
+    const buffer = buildXlsx([
+      ['Namn', 'Orgnr', 'Land'],
+      ['Acme AB', '5560217780', 'Sverige'],
+      ['Muster GmbH', '', 'Tyskland'],
+      ['Nowhere Ltd', '', 'Atlantis'],
+      ['Blank AB', '5562345678', ''],
+    ])
+
+    const result = parseCustomersFile(buffer, 'kunder.xlsx')
+
+    expect(result.rows[0].country).toBe('SE')
+    expect(result.rows[1].country).toBe('DE')
+    expect(result.rows[2].country).toBe('Atlantis')
+    expect(result.rows[2].is_valid).toBe(false)
+    expect(result.rows[2].validation_errors.join(' ')).toMatch(/Okänt land/)
+    expect(result.rows[3].country).toBe('SE')
+  })
 })

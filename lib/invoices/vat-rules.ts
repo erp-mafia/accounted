@@ -1,9 +1,28 @@
 import type { CustomerType, VatTreatment } from '@/types'
+import { countryPermitsReverseCharge } from '@/lib/vat/country-codes'
 
 export interface VatRateOption {
   rate: number
   label: string
   treatment: VatTreatment
+}
+
+/**
+ * Reverse charge (0%, ruta 39) needs all three: EU-business type, a VIES-
+ * validated VAT number, and a country that is an EU member other than
+ * Sweden. `country` undefined means the caller did not have it, which
+ * keeps the pre-2026-09 behaviour (type + validation only).
+ */
+export function isReverseChargeCustomer(
+  customerType: CustomerType,
+  vatNumberValidated: boolean = false,
+  country?: string | null,
+): boolean {
+  return (
+    customerType === 'eu_business' &&
+    vatNumberValidated &&
+    countryPermitsReverseCharge(country)
+  )
 }
 
 /**
@@ -24,13 +43,20 @@ export interface VatRateOption {
  * form hides the Moms column entirely when company_settings.vat_registered is
  * false, and both the create route and the MCP commit force every line to 0%
  * (momsfri) server-side, so a non-momsregistrerad company never books output VAT.
+ *
+ * `country` is the customer's ISO 3166-1 alpha-2 country. Reverse charge is
+ * only granted when it is an EU member other than SE (or unknown: see
+ * countryPermitsReverseCharge). An eu_business row with a validated German
+ * VAT number but country SE used to get 0% here and only be caught by the
+ * periodisk sammanställning after the invoice was sent (#2025).
  */
 export function getAvailableVatRates(
   customerType: CustomerType,
   vatNumberValidated: boolean = false,
+  country?: string | null,
 ): VatRateOption[] {
   // EU business with validated VAT → reverse charge, locked to 0%
-  if (customerType === 'eu_business' && vatNumberValidated) {
+  if (isReverseChargeCustomer(customerType, vatNumberValidated, country)) {
     return [{ rate: 0, label: '0% (omvänd skattskyldighet)', treatment: 'reverse_charge' }]
   }
 
@@ -61,8 +87,9 @@ export function getAvailableVatRates(
 export function getArticleVatRateAdoptionSet(
   customerType: CustomerType,
   vatNumberValidated: boolean = false,
+  country?: string | null,
 ): ReadonlySet<number> {
-  const offered = getAvailableVatRates(customerType, vatNumberValidated)
+  const offered = getAvailableVatRates(customerType, vatNumberValidated, country)
   return new Set(offered.length > 1 ? offered.map((r) => r.rate) : [])
 }
 
@@ -102,12 +129,13 @@ export function getArticleVatRateAdoptionSet(
 export function getPermittedVatRates(
   customerType: CustomerType,
   vatNumberValidated: boolean = false,
+  country?: string | null,
 ): VatRateOption[] {
-  const offered = getAvailableVatRates(customerType, vatNumberValidated)
+  const offered = getAvailableVatRates(customerType, vatNumberValidated, country)
 
   const isForeignBusiness =
     customerType === 'non_eu_business' ||
-    (customerType === 'eu_business' && vatNumberValidated)
+    isReverseChargeCustomer(customerType, vatNumberValidated, country)
   if (!isForeignBusiness) {
     return offered
   }
@@ -152,8 +180,8 @@ export interface VatRule {
  *
  * Rules:
  * - Swedish customers: 25% VAT, moms ruta 05
- * - EU business with validated VAT: 0% reverse charge, moms ruta 39
- * - EU business without validated VAT: 25% VAT, moms ruta 05
+ * - EU business with validated VAT in another EU country: 0% reverse charge, moms ruta 39
+ * - EU business without validated VAT, or with country SE / outside the EU: 25% VAT, moms ruta 05
  * - Non-EU business: 0% export, moms ruta 40
  *
  * Independent of the seller's VAT registration status. A non-momsregistrerad
@@ -163,6 +191,7 @@ export interface VatRule {
 export function getVatRules(
   customerType: CustomerType,
   vatNumberValidated: boolean = false,
+  country?: string | null,
 ): VatRule {
   switch (customerType) {
     case 'individual':
@@ -174,7 +203,7 @@ export function getVatRules(
       }
 
     case 'eu_business':
-      if (vatNumberValidated) {
+      if (isReverseChargeCustomer(customerType, vatNumberValidated, country)) {
         return {
           treatment: 'reverse_charge',
           rate: 0,
@@ -182,7 +211,8 @@ export function getVatRules(
           reverseChargeText: 'Omvänd skattskyldighet / Reverse charge - VAT to be accounted for by the recipient as per Article 196, Council Directive 2006/112/EC',
         }
       }
-      // EU business without validated VAT number must be charged Swedish VAT
+      // EU business without validated VAT number, or one whose country is
+      // Sweden or outside the EU, must be charged Swedish VAT
       return {
         treatment: 'standard_25',
         rate: 25,

@@ -2,6 +2,7 @@ import type { CustomerType } from '@/types'
 import { detectCustomerColumns } from './column-detector'
 import { cellOrNull, parsePaymentTerms } from '../shared/column-utils'
 import { classifyCustomer } from '../shared/classify'
+import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { readBestSheet } from '../shared/workbook-reader'
 import type {
   DetectedCustomerColumns,
@@ -37,12 +38,14 @@ function normalizeCustomerType(value: string | null): CustomerType | null {
     : null
 }
 
+/**
+ * ISO 3166-1 alpha-2 (customers.country is a code). A name the register
+ * cannot map is kept as typed so the preview can show it; the row is then
+ * flagged invalid below and the execute route refuses it.
+ */
 function normalizeCountry(value: string | null): string {
-  if (!value) return 'Sweden'
-  const trimmed = value.trim()
-  const lower = trimmed.toLowerCase()
-  if (lower === 'se' || lower === 'sverige' || lower === 'sweden') return 'Sweden'
-  return trimmed
+  if (!value) return 'SE'
+  return normalizeCountryCode(value) ?? value.trim()
 }
 
 /**
@@ -157,6 +160,9 @@ export function parseCustomersFile(
     const validationErrors: string[] = []
     if (email && !EMAIL_RE.test(email)) {
       validationErrors.push('Ogiltig e-postadress')
+    }
+    if (countryRaw && !normalizeCountryCode(countryRaw)) {
+      validationErrors.push(`Okänt land: ${countryRaw.trim()} (ange landskod, t.ex. SE eller DE)`)
     }
     if (orgNumber && !/^[\d\s\-]{6,20}$/.test(orgNumber)) {
       validationErrors.push('Ogiltigt org-/personnummer')

@@ -87,6 +87,7 @@ import type { Invoice, InvoiceItem, InvoiceStatus, InvoiceReminder, InvoiceDocum
 import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useBranding } from '@/lib/branding/brand-context'
+import { getCountryName } from '@/lib/vat/country-codes'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
 /** Minimized Peppol delivery projection from GET /api/invoices/[id]/peppol/deliveries. */
@@ -1918,7 +1919,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 {customer.address_line2 && <p>{customer.address_line2}</p>}
                 <p>
                   {[customer.postal_code, customer.city].filter(Boolean).join(' ')}
-                  {customer.country && customer.country !== 'SE' && `, ${customer.country}`}
+                  {customer.country && customer.country !== 'SE' && `, ${getCountryName(customer.country, locale === 'en' ? 'en' : 'sv')}`}
                 </p>
               </div>
             ) : (

@@ -59,7 +59,7 @@ export const POST = withRouteContext(
         address_line2: body.address_line2,
         postal_code: body.postal_code,
         city: body.city,
-        country: body.country || 'SE',
+        country: body.country ?? 'SE',
         org_number: body.org_number,
         vat_number: body.vat_number,
         bankgiro: body.bankgiro,

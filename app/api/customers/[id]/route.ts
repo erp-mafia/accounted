@@ -13,6 +13,7 @@ import {
 } from '@/lib/customers/personal-number-shape'
 import { isMaskedPersonalNumber } from '@/lib/customers/mask-personal-number'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { COUNTRY_CONSISTENCY_MESSAGES, checkCountryConsistency } from '@/lib/vat/country-codes'
 
 export const GET = withRouteContext(
   'customer.get',
@@ -66,7 +67,7 @@ export const PATCH = withRouteContext(
 
     const { data: existing, error: existingError } = await supabase
       .from('customers')
-      .select('id, customer_type')
+      .select('id, customer_type, country, vat_number')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -127,6 +128,23 @@ export const PATCH = withRouteContext(
       && personalNumberDigits(body.personal_number) !== personalNumberDigits(reroutedPersonalNumber)
     ) {
       return errorResponseFromCode('CUSTOMER_PERSONAL_NUMBER_CONFLICT', opLog, { requestId })
+    }
+
+    // Country vs type vs VAT prefix on the row as it will END UP (#2025): a
+    // type change alone can make the stored country wrong, and a country
+    // change alone can contradict the stored VAT number.
+    const countryIssue = checkCountryConsistency({
+      partyType: effectiveType,
+      country: body.country ?? existing.country,
+      vatNumber: body.vat_number ?? existing.vat_number,
+    })
+    if (countryIssue) {
+      return errorResponseFromCode('CUSTOMER_COUNTRY_MISMATCH', opLog, {
+        requestId,
+        messageSv: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv,
+        messageEn: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en,
+        details: { issue: countryIssue, field: 'country' },
+      })
     }
 
     const updateData: Record<string, unknown> = {}

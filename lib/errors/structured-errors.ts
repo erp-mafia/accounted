@@ -2759,6 +2759,11 @@ const ARTICLE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The org number looks like a Swedish personal identity number. Save the customer as an individual instead, so the number is stored protected and masked in lists.',
   },
+  CUSTOMER_COUNTRY_MISMATCH: {
+    httpStatus: 400,
+    message_sv: 'Landet stämmer inte med kundtypen eller VAT-numrets landsprefix.',
+    message_en: 'The country does not agree with the customer type or the VAT number\'s country prefix.',
+  },
   CUSTOMER_PERSONAL_NUMBER_CONFLICT: {
     httpStatus: 400,
     message_sv:

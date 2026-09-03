@@ -104,7 +104,7 @@ export async function resolveSelfBilledSaleDraft(
   // the fields used (data minimisation).
   const { data: customer, error: customerError } = await supabase
     .from('customers')
-    .select('id, name, customer_type, vat_number_validated')
+    .select('id, name, customer_type, vat_number_validated, country')
     .eq('id', input.customer_id)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -119,6 +119,7 @@ export async function resolveSelfBilledSaleDraft(
   const vatRules = getVatRules(
     c.customer_type as Parameters<typeof getVatRules>[0],
     c.vat_number_validated ?? undefined,
+    c.country,
   )
   // Gate on the PERMITTED set, not the picker default, exactly like
   // buildInvoiceWriteData: the ML 6 kap. supplies taxed where they are performed
@@ -130,6 +131,7 @@ export async function resolveSelfBilledSaleDraft(
   const permittedRates = getPermittedVatRates(
     c.customer_type as Parameters<typeof getPermittedVatRates>[0],
     c.vat_number_validated ?? undefined,
+    c.country,
   )
   const allowedRates = new Set(permittedRates.map((r) => r.rate))
 

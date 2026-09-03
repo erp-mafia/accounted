@@ -22,6 +22,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { UpdateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber } from '@/lib/vat/vies-client'
+import { COUNTRY_CONSISTENCY_MESSAGES, checkCountryConsistency } from '@/lib/vat/country-codes'
 import {
   encryptCustomerPersonalNumber,
   maskCustomerRow,
@@ -105,7 +106,7 @@ registerEndpoint({
         org_number: '556677-8899',
         vat_number: 'SE556677889901',
         vat_number_validated: true,
-        country: 'Sweden',
+        country: 'SE',
         default_payment_terms: 30,
         archived_at: null,
         created_at: '2025-04-12T08:30:00Z',
@@ -304,21 +305,46 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     const personalNumberSubmitted =
       body.personal_number !== undefined && !isMaskedPersonalNumber(body.personal_number)
 
-    // The individual-only rule for personal_number and the personnummer
-    // guard on org_number both depend on the customer_type the row will
-    // have after the update; read the stored type when the body is silent.
+    // The individual-only rule for personal_number, the personnummer guard
+    // on org_number and the country-vs-type check all depend on the row as
+    // it will be after the update; read the stored values when the body
+    // touches any of the fields involved.
     let effectiveType: string | undefined = body.customer_type
+    let existing: { customer_type?: string; country?: string | null; vat_number?: string | null } | null = null
     if (
-      effectiveType === undefined &&
-      ((personalNumberSubmitted && body.personal_number) || body.org_number)
+      (personalNumberSubmitted && body.personal_number)
+      || body.org_number
+      || body.customer_type !== undefined
+      || body.country !== undefined
+      || body.vat_number !== undefined
     ) {
-      const { data: existing } = await ctx.supabase
+      const { data } = await ctx.supabase
         .from('customers')
-        .select('customer_type')
+        .select('customer_type, country, vat_number')
         .eq('company_id', ctx.companyId!)
         .eq('id', customerId)
         .maybeSingle()
-      effectiveType = (existing as { customer_type?: string } | null)?.customer_type
+      existing = data as typeof existing
+      effectiveType ??= existing?.customer_type
+    }
+
+    // Country vs type vs VAT prefix on the row as it will END UP (#2025): a
+    // type change alone can make the stored country wrong, and a country
+    // change alone can contradict the stored VAT number.
+    if (existing && effectiveType) {
+      const countryIssue = checkCountryConsistency({
+        partyType: effectiveType,
+        country: body.country ?? existing.country,
+        vatNumber: body.vat_number ?? existing.vat_number,
+      })
+      if (countryIssue) {
+        return v1ErrorResponseFromCode('CUSTOMER_COUNTRY_MISMATCH', ctx.log, {
+          requestId: ctx.requestId,
+          messageSv: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv,
+          messageEn: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en,
+          details: { field: 'country', issue: countryIssue },
+        })
+      }
     }
 
     if (personalNumberSubmitted && body.personal_number && effectiveType !== 'individual') {
