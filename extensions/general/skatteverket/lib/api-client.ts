@@ -419,7 +419,11 @@ export async function skvRequestWithAuth(
   // System (CCG) auth is deliberately NOT brokered: background ombud reads
   // are a hosted-only feature and stay on the direct path, where a
   // credential-less self-host fails with SYSTEM_AUTH_FAILED.
-  const connector = auth.mode === 'user' ? skatteverketConnectorMode() : null
+  // The company id lets CONNECT_SKV_CANARY_COMPANIES route a few companies
+  // through the connector while this installation still has own credentials
+  // (hosted moving to Connect upstream by upstream); token refresh stays on
+  // whichever path the installation as a whole is on.
+  const connector = auth.mode === 'user' ? skatteverketConnectorMode(auth.companyId) : null
   const effectiveBase = options?.baseUrl || getApiBaseUrl()
   let url: string
   const headers: Record<string, string> = {}
