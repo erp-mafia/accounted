@@ -4,7 +4,7 @@ import { getClient, getPool } from '@/tests/pg/setup'
 import { seedCompany } from '@/tests/pg/fixtures'
 
 /**
- * Migration 20260903190000 (#2181): the InboundMailReceived catalog row, and
+ * Migration 20260904001000 (#2181): the InboundMailReceived catalog row, and
  * the per-attachment idempotency index on invoice_inbox_items becoming
  * company-scoped so one mail addressed to two inboxes files once per inbox.
  * tests/pg/processing-event-types.pg.test.ts already proves every emitted
