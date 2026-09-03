@@ -1,3 +1,4 @@
+-- pg-test: covered-by tests/pg/cash-accounts-invoice-payee.pg.test.ts
 -- Named invoice payee accounts.
 --
 -- Until now a company had exactly one set of payment instructions per invoice
@@ -384,11 +385,16 @@ CREATE TRIGGER mirror_invoice_payee_defaults_on_cash_account
 
 -- One row per (company, currency) that has payment instructions today: the
 -- map entry, or for SEK the legacy columns when the map has no SEK key.
+-- Source companies of a migration reset are skipped: their settings are
+-- immutable (block_migration_reset_source_mutation), and the mirror trigger
+-- on invoice_payee_defaults writes company_settings, so a default for them
+-- aborts the whole migration (prod, 2026-09-03: one such company).
 CREATE TEMP TABLE payee_backfill_entries AS
 SELECT cs.company_id, k.key AS currency, k.value AS payee
   FROM public.company_settings cs
   CROSS JOIN LATERAL jsonb_each(cs.invoice_payment_accounts) k
  WHERE cs.invoice_payment_accounts <> '{}'::jsonb
+   AND NOT EXISTS (SELECT 1 FROM public.company_migration_resets r WHERE r.source_company_id = cs.company_id)
 UNION ALL
 SELECT cs.company_id, 'SEK',
        jsonb_strip_nulls(jsonb_build_object(
@@ -403,6 +409,7 @@ SELECT cs.company_id, 'SEK',
        ))
   FROM public.company_settings cs
  WHERE NOT (COALESCE(cs.invoice_payment_accounts, '{}'::jsonb) ? 'SEK')
+   AND NOT EXISTS (SELECT 1 FROM public.company_migration_resets r WHERE r.source_company_id = cs.company_id)
    AND COALESCE(
          NULLIF(btrim(cs.bank_name), ''), NULLIF(btrim(cs.clearing_number), ''),
          NULLIF(btrim(cs.account_number), ''), NULLIF(btrim(cs.bankgiro), ''),
