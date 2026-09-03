@@ -317,18 +317,31 @@ function apigwOrScopeMessage(url: string): string {
 
 /**
  * Connector-mode variant of the gateway-refusal guidance: the APIGW client
- * and its subscriptions belong to the HOSTED broker (Arcim), so telling a
- * self-host operator to check SKATTEVERKET_APIGW_CLIENT_ID or visit
- * Utvecklarportalen points at knobs their instance does not have. The token
- * they hold was also minted by the broker, so the only local actions are
- * checking the connector status and contacting support.
+ * and its subscriptions belong to the connector's OPERATOR (the broker the
+ * instance routes through), so telling a self-host operator to check
+ * SKATTEVERKET_APIGW_CLIENT_ID or visit Utvecklarportalen points at knobs
+ * their instance does not have. The token they hold was also minted by the
+ * broker, so the only local actions are checking the connector status and
+ * contacting the operator. The message names the operator by the connector
+ * host rather than saying "support": hosted is itself a Connect
+ * installation for the canary companies (#2209), so "support" no longer
+ * says whose (#2226).
  */
-function connectorGatewayMessage(url: string): string {
+function connectorGatewayMessage(url: string, connectBaseUrl: string): string {
   return (
     `Skatteverkets API-gateway nekade anropet till tjänsten "${apiHintFromUrl(url)}" via connectorn. ` +
-    'Detta är ett konfigurationsproblem på värdtjänstens sida (gateway-prenumeration eller scope), ' +
-    'inte på din instans: kontakta supporten. Anslutningsläget syns på /api/connector/status.'
+    `Felet ligger hos connectorns operatör (${connectorHost(connectBaseUrl)}), i gateway-prenumerationen ` +
+    'eller scope-listan, inte på din instans: kontakta operatören. Anslutningsläget syns på /api/connector/status.'
   )
+}
+
+/** The connector operator's host, for messages that have to say WHOM to contact. */
+function connectorHost(connectBaseUrl: string): string {
+  try {
+    return new URL(connectBaseUrl).host
+  } catch {
+    return connectBaseUrl
+  }
 }
 
 /**
@@ -567,7 +580,7 @@ export async function skvRequestWithAuth(
     // so either verdict re-arms the banner the user just tried to clear.
     if (isApigwScopeContractError(text)) {
       throw new SkatteverketAuthError(
-        connector ? connectorGatewayMessage(url) : apigwOrScopeMessage(url),
+        connector ? connectorGatewayMessage(url, connector.baseUrl) : apigwOrScopeMessage(url),
         'ACCESS_DENIED'
       )
     }
@@ -631,7 +644,7 @@ export async function skvRequestWithAuth(
       // Connector mode: the gateway client is the broker's, not the instance's.
       throw new SkatteverketAuthError(
         connector
-          ? connectorGatewayMessage(url)
+          ? connectorGatewayMessage(url, connector.baseUrl)
           : `Skatteverkets API-gateway nekade anropet till "${apiHintFromUrl(url)}". ` +
             'Kontrollera att din APIGW-klient (SKATTEVERKET_APIGW_CLIENT_ID) har ' +
             'prenumeration på denna tjänst i Utvecklarportalen.',
@@ -649,7 +662,7 @@ export async function skvRequestWithAuth(
     // likely fix instead.
     if (!text) {
       if (connector) {
-        throw new SkatteverketAuthError(connectorGatewayMessage(url), 'ACCESS_DENIED')
+        throw new SkatteverketAuthError(connectorGatewayMessage(url, connector.baseUrl), 'ACCESS_DENIED')
       }
       const apiHint = apiHintFromUrl(url)
       throw new SkatteverketAuthError(
@@ -717,7 +730,7 @@ export async function skvRequestWithAuth(
     // scope actually exists, so it can never be automatic.
     if (isApigwScopeContractError(text)) {
       throw new SkatteverketAuthError(
-        connector ? connectorGatewayMessage(url) : apigwOrScopeMessage(url),
+        connector ? connectorGatewayMessage(url, connector.baseUrl) : apigwOrScopeMessage(url),
         'ACCESS_DENIED'
       )
     }
