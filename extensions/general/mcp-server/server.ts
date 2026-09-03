@@ -15721,9 +15721,9 @@ export const tools: McpTool[] = [
         vaxa_stod_eligible: { type: 'boolean' },
         vaxa_stod_start: { type: 'string' },
         vaxa_stod_end: { type: 'string' },
-        jamkning_percentage: { type: 'number' },
-        jamkning_valid_from: { type: 'string' },
-        jamkning_valid_to: { type: 'string' },
+        jamkning_percentage: { type: 'number', description: 'Skatteverket jamkningsbeslut percentage. Requires BOTH jamkning_valid_from and jamkning_valid_to; the engine applies the beslut only inside that window.' },
+        jamkning_valid_from: { type: 'string', description: 'YYYY-MM-DD. Required with jamkning_percentage.' },
+        jamkning_valid_to: { type: 'string', description: 'YYYY-MM-DD. Required with jamkning_percentage (a beslut normally lapses at income-year end).' },
         default_dimensions: {
           type: 'object',
           additionalProperties: { type: 'string' },
@@ -15835,9 +15835,9 @@ export const tools: McpTool[] = [
         vaxa_stod_eligible: { type: 'boolean' },
         vaxa_stod_start: { type: 'string' },
         vaxa_stod_end: { type: 'string' },
-        jamkning_percentage: { type: ['number', 'null'], description: 'null clears the beslut' },
-        jamkning_valid_from: { type: ['string', 'null'] },
-        jamkning_valid_to: { type: ['string', 'null'] },
+        jamkning_percentage: { type: ['number', 'null'], description: 'Skatteverket jamkningsbeslut percentage; null clears the beslut. A non-null value requires BOTH dates on the merged row; the engine applies the beslut only inside that window.' },
+        jamkning_valid_from: { type: ['string', 'null'], description: 'YYYY-MM-DD. Required while a percentage is set.' },
+        jamkning_valid_to: { type: ['string', 'null'], description: 'YYYY-MM-DD. Required while a percentage is set (a beslut normally lapses at income-year end).' },
         default_dimensions: {
           type: 'object',
           additionalProperties: { type: 'string' },
@@ -15882,6 +15882,15 @@ export const tools: McpTool[] = [
         .maybeSingle()
       if (error) throw dbError(error)
       if (!existing) throw new Error('Employee not found')
+
+      // Preflight the jämkning contract on the merged row so the agent gets
+      // the error at staging time instead of at approval (#2058). The
+      // executor (updateEmployee) runs the same shared validator again.
+      const { touchesJamkning, validateJamkning } = await import('@/lib/salary/jamkning-rules')
+      if (touchesJamkning(patch)) {
+        const [issue] = validateJamkning({ ...(existing as Record<string, unknown>), ...patch })
+        if (issue) throw new Error(`${issue.field}: ${issue.message}`)
+      }
 
       const changes = Object.entries(patch).map(([field, to]) => ({
         field,

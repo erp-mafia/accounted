@@ -27,6 +27,7 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { UpdateEmployeeSchema } from '@/lib/api/schemas'
 import { maskPersonnummer } from '@/lib/api/v1/mask-personnummer'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
+import { JAMKNING_ORDER, touchesJamkning, validateJamkning, type JamkningFields } from '@/lib/salary/jamkning-rules'
 
 const EmploymentType = z.enum(['employee', 'company_owner', 'board_member'])
 const SalaryType = z.enum(['monthly', 'hourly'])
@@ -341,46 +342,25 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       })
     }
 
-    // Merged-state jämkning check (same pattern as växa-stöd): a non-null
-    // percentage needs a start date, but the schema can only see the body.
-    // Also validate merged date ordering when only one of the dates is
-    // updated. Setting jamkning_percentage to null clears the beslut and
-    // skips these checks. Only run when the PATCH touches a jamkning field:
-    // a legacy row with inconsistent jamkning_* state must not block
-    // unrelated updates (fixing it requires touching those very fields).
-    const jamkningTouched =
-      'jamkning_percentage' in updates ||
-      'jamkning_valid_from' in updates ||
-      'jamkning_valid_to' in updates
-    if (jamkningTouched) {
-      const mergedJamkningPct =
-        'jamkning_percentage' in updates
-          ? (updates.jamkning_percentage as number | null)
-          : ((existing as Record<string, unknown>).jamkning_percentage as number | null)
-      const mergedJamkningFrom =
-        'jamkning_valid_from' in updates
-          ? (updates.jamkning_valid_from as string | null)
-          : ((existing as Record<string, unknown>).jamkning_valid_from as string | null)
-      const mergedJamkningTo =
-        'jamkning_valid_to' in updates
-          ? (updates.jamkning_valid_to as string | null)
-          : ((existing as Record<string, unknown>).jamkning_valid_to as string | null)
-      if (mergedJamkningPct !== null && mergedJamkningPct !== undefined && !mergedJamkningFrom) {
+    // Merged-state jämkning check through the shared validator (same pattern
+    // as växa-stöd): a non-null percentage needs both dates, but the schema
+    // can only see the body. Setting jamkning_percentage to null clears the
+    // beslut and skips these checks. Only run when the PATCH touches a
+    // jamkning field: a legacy row with inconsistent jamkning_* state must
+    // not block unrelated updates (fixing it requires touching those very
+    // fields). #2058
+    if (touchesJamkning(updates)) {
+      const mergedJamkning = { ...(existing as Record<string, unknown>), ...updates } as JamkningFields
+      const [issue] = validateJamkning(mergedJamkning)
+      if (issue) {
         return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
           requestId: ctx.requestId,
           details: {
-            field: 'jamkning_valid_from',
+            field: issue.field,
             message:
-              'Jämkningens startdatum måste anges när jämkningsprocent sätts. Skicka även `jamkning_valid_from` i samma PATCH.',
-          },
-        })
-      }
-      if (mergedJamkningFrom && mergedJamkningTo && mergedJamkningTo < mergedJamkningFrom) {
-        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-          requestId: ctx.requestId,
-          details: {
-            field: 'jamkning_valid_to',
-            message: 'Jämkningens slutdatum måste vara efter startdatumet.',
+              issue.message === JAMKNING_ORDER
+                ? `${issue.message}.`
+                : `${issue.message}. Skicka även \`${issue.field}\` i samma PATCH.`,
           },
         })
       }

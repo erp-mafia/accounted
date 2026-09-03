@@ -554,6 +554,16 @@ describe('gnubok_create_employee', () => {
     ).rejects.toThrow(/Invalid employee/)
   })
 
+  it('rejects a jämkning percentage without an end date (#2058)', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      createEmployee.execute(
+        { ...validArgs, jamkning_percentage: 15, jamkning_valid_from: '2026-01-01' },
+        'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+      ),
+    ).rejects.toThrow(/jamkning_valid_to/)
+  })
+
   it('blocks EF owners on payroll (entity-type preflight)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { entity_type: 'ef' } }) // company_settings
@@ -616,6 +626,35 @@ describe('gnubok_update_employee', () => {
       params: { patch: Record<string, unknown> }
     }
     expect(inserted.params.patch.default_dimensions).toEqual({})
+  })
+
+  it('rejects a jämkning percentage without an end date at staging time (#2058)', async () => {
+    // Preflight on the merged row: the agent gets the error now, not at
+    // approval. The executor runs the same shared validator again.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...EXISTING, jamkning_percentage: null, jamkning_valid_from: null, jamkning_valid_to: null } })
+    await expect(
+      updateEmployee.execute(
+        { employee_id: 'emp-1', jamkning_percentage: 15, jamkning_valid_from: '2026-01-01' },
+        'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+      ),
+    ).rejects.toThrow(/jamkning_valid_to/)
+  })
+
+  it('stages an unrelated edit on a legacy row that lacks valid_to (touched gate)', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      employees: { data: { ...EXISTING, jamkning_percentage: 15, jamkning_valid_from: '2026-01-01', jamkning_valid_to: null } },
+      fiscal_periods: { data: null },
+      company_settings: { data: null },
+      pending_operations: { data: { id: 'op-legacy' }, error: null },
+    })
+
+    const result = (await updateEmployee.execute(
+      { employee_id: 'emp-1', monthly_salary: 38000 },
+      'company-1', 'user-1', supabaseMock as never, { type: 'agent_chat' },
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
   })
 
   it('rejects personnummer changes at the tool boundary', async () => {

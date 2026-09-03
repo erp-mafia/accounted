@@ -630,6 +630,36 @@ describe('commitPendingOperation: create_employee', () => {
     expect(JSON.stringify(result.data)).not.toContain(encrypted)
   })
 
+  it('rejects a jämkning percentage without an end date before inserting (#2058)', async () => {
+    const { encryptPersonnummer } = await import('@/lib/salary/personnummer')
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { entity_type: 'ab' } }) // entity type
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'create_employee',
+      params: {
+        first_name: 'Anna',
+        last_name: 'Andersson',
+        personnummer_encrypted: encryptPersonnummer('190001010000'),
+        personnummer_last4: '0000',
+        employment_start: '2026-01-15',
+        salary_type: 'monthly',
+        monthly_salary: 35000,
+        tax_table_number: 33,
+        jamkning_percentage: 15,
+        jamkning_valid_from: '2026-01-01',
+        jamkning_valid_to: null,
+      },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).not.toBe('committed')
+    expect(result.error).toMatch(/slutdatum/)
+    expect(calls.some((c) => c.table === 'employees' && c.method === 'insert')).toBe(false)
+  })
+
   it('maps duplicate personnummer to a clean rejection', async () => {
     const { encryptPersonnummer } = await import('@/lib/salary/personnummer')
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -809,6 +839,78 @@ describe('commitPendingOperation: update_employee', () => {
 
     expect(result.status).toBe('rejected')
     expect(result.http_status).toBe(409)
+  })
+
+  it('rejects a jämkning percentage without an end date on the merged row (#2058)', async () => {
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'emp-1',
+        first_name: 'Anna',
+        last_name: 'Andersson',
+        salary_type: 'monthly',
+        monthly_salary: 35000,
+        tax_table_number: 33,
+        is_sidoinkomst: false,
+        f_skatt_status: 'a_skatt',
+        vaxa_stod_eligible: false,
+        jamkning_percentage: null,
+        jamkning_valid_from: null,
+        jamkning_valid_to: null,
+      },
+    }) // fetch existing
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'update_employee',
+      params: {
+        employee_id: 'emp-1',
+        patch: { jamkning_percentage: 15, jamkning_valid_from: '2026-01-01' },
+      },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).not.toBe('committed')
+    expect(result.error).toMatch(/slutdatum/)
+    expect(calls.some((c) => c.table === 'employees' && c.method === 'update')).toBe(false)
+  })
+
+  it('leaves a legacy row without valid_to editable in unrelated ways (touched gate)', async () => {
+    const { encryptPersonnummer } = await import('@/lib/salary/personnummer')
+    const encrypted = encryptPersonnummer('190001010000')
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'emp-1',
+        first_name: 'Anna',
+        last_name: 'Andersson',
+        personnummer: encrypted,
+        salary_type: 'monthly',
+        monthly_salary: 35000,
+        tax_table_number: 33,
+        is_sidoinkomst: false,
+        f_skatt_status: 'a_skatt',
+        vaxa_stod_eligible: false,
+        jamkning_percentage: 15,
+        jamkning_valid_from: '2026-01-01',
+        jamkning_valid_to: null,
+        is_active: true,
+      },
+    }) // fetch existing
+    enqueue({
+      data: { id: 'emp-1', first_name: 'Anna', last_name: 'Andersson', personnummer: encrypted, is_active: true },
+    }) // update
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'update_employee',
+      params: { employee_id: 'emp-1', patch: { monthly_salary: 38000 } },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
   })
 
   it('fails merged validation when clearing salary below zero-state', async () => {
