@@ -223,9 +223,10 @@ interface InboxAddress {
 }
 
 // One received mail per inbox, from the InboundMailReceived history event
-// the inbound webhook appends (#2181). Sender and subject are deliberately
-// absent (processing_history is outside the erasure path); the filed item
-// ids are what the panel links to.
+// the inbound webhook appends (#2181). Sender, subject and address are
+// deliberately absent from the event (processing_history is outside the
+// erasure path); the route resolves inbox_id to the company's own address
+// at read time, and the filed item ids are what the panel links to.
 interface InboundMailAttachment {
   id: string
   outcome: 'filed' | 'duplicate' | 'rejected' | 'failed'
@@ -237,8 +238,12 @@ interface InboundMail {
   event_id: string
   email_id: string
   occurred_at: string
-  recipients: string[]
+  inbox_id: string | null
+  custom_domain: boolean
   tags: string[]
+  unknown_tag_count: number
+  inbox_local_part: string | null
+  inbox_status: string | null
   kind_hint: string | null
   tag_conflict: boolean
   outcome: string
@@ -1632,7 +1637,12 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 ) : (
                   <ul className="space-y-1.5">
                     {inboundMails.map((mail) => (
-                      <InboundMailRow key={mail.event_id} mail={mail} onOpenItem={handleSelect} />
+                      <InboundMailRow
+                        key={mail.event_id}
+                        mail={mail}
+                        domain={inboxAddress.address.split('@')[1] ?? ''}
+                        onOpenItem={handleSelect}
+                      />
                     ))}
                   </ul>
                 )}
@@ -2266,12 +2276,25 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
 function InboundMailRow({
   mail,
+  domain,
   onOpenItem,
 }: {
   mail: InboundMail
+  /** The shared inbound domain, from the company's own address. */
+  domain: string
   onOpenItem: (id: string) => void
 }) {
   const t = useTranslations('inbox_workspace')
+  // The address is reconstructed from the inbox row, never read from the
+  // event: one line per tag the mail used, or the bare address.
+  const tags = mail.tags ?? []
+  const address = mail.custom_domain
+    ? t('inbound_mail_custom_domain')
+    : mail.inbox_local_part
+      ? (tags.length > 0 ? tags : [null])
+          .map((tag) => `${mail.inbox_local_part}${tag ? `+${tag}` : ''}@${domain}`)
+          .join(', ')
+      : t('inbound_mail_former_address')
   const counts = { filed: 0, duplicate: 0, rejected: 0, failed: 0 }
   for (const a of mail.attachments ?? []) {
     if (a.outcome in counts) counts[a.outcome] += 1
@@ -2298,7 +2321,10 @@ function InboundMailRow({
     <li className="space-y-0.5">
       <div className="flex flex-wrap items-baseline gap-x-2">
         <span className="tabular-nums shrink-0">{formatDateTime(mail.occurred_at)}</span>
-        <span className="truncate text-foreground">{mail.recipients.join(', ')}</span>
+        <span className="truncate text-foreground">{address}</span>
+        {(mail.unknown_tag_count ?? 0) > 0 && (
+          <span>{t('inbound_unknown_tags', { count: mail.unknown_tag_count })}</span>
+        )}
       </div>
       <div className="flex flex-wrap items-baseline gap-x-2">
         <span className={cn(hasFailure && 'text-destructive')}>{parts.join(', ')}</span>

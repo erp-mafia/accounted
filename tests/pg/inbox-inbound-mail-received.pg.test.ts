@@ -41,6 +41,47 @@ describe('InboundMailReceived event type (#2181)', () => {
   })
 })
 
+describe('InboundMailReceived DB-side PII strip (#2181)', () => {
+  it('drops address and free-text keys on insert but keeps the ids and codes', async () => {
+    const { companyId } = await seedCompany()
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const aggregateId = randomUUID()
+      const { rows } = await client.query<{ payload: Record<string, unknown> }>(
+        `INSERT INTO public.processing_history
+           (company_id, correlation_id, aggregate_type, aggregate_id, event_type,
+            payload, actor, occurred_at)
+         VALUES ($1, $2, 'System', $2, 'InboundMailReceived', $3::jsonb,
+                 '{"type":"system","id":"inbound-mail-received-test"}', now())
+         RETURNING payload`,
+        [
+          companyId,
+          aggregateId,
+          JSON.stringify({
+            recipients: ['anna-andersson-x7f2+lev@example.test'],
+            to: ['anna-andersson-x7f2+lev@example.test'],
+            from: 'avsandare@example.test',
+            subject: 'Faktura',
+            inbox_id: aggregateId,
+            tags: ['lev'],
+            unknown_tag_count: 0,
+            outcome: 'attachments',
+          }),
+        ],
+      )
+      expect(rows[0].payload).not.toHaveProperty('recipients')
+      expect(rows[0].payload).not.toHaveProperty('to')
+      expect(rows[0].payload).not.toHaveProperty('from')
+      expect(rows[0].payload).not.toHaveProperty('subject')
+      expect(rows[0].payload).toMatchObject({ inbox_id: aggregateId, tags: ['lev'], unknown_tag_count: 0, outcome: 'attachments' })
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
+  })
+})
+
 describe('invoice_inbox_items idempotency per company (#2181)', () => {
   async function insertItem(
     client: Awaited<ReturnType<typeof getClient>>,

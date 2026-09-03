@@ -156,6 +156,25 @@ export function kindHintFromTag(tag: string | null | undefined): InboxKindHint |
   return null
 }
 
+/** The documented plus-address tags. Anything else is sender-typed free text. */
+export const KNOWN_INBOX_TAGS: readonly string[] = ['lev', 'ver']
+
+/**
+ * Splits a mail's tags into the documented ones (safe to store: a closed
+ * vocabulary) and a count of the rest. The rest is never stored: the part
+ * after `+` is whatever the sender typed, and processing_history is
+ * append-only and outside the erasure path (#2181 skeptic finding).
+ */
+export function splitKnownInboxTags(tags: readonly string[]): { known: string[]; unknownCount: number } {
+  const known: string[] = []
+  let unknownCount = 0
+  for (const tag of tags) {
+    if (KNOWN_INBOX_TAGS.includes(tag)) known.push(tag)
+    else unknownCount += 1
+  }
+  return { known, unknownCount }
+}
+
 /**
  * The one kind hint for a mail that reached the same inbox under several
  * tags. Distinct documented tags contradict each other (+lev and +ver on one

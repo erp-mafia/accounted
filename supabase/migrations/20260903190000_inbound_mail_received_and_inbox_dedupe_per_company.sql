@@ -12,6 +12,12 @@
 --    record would be silently lost. Catalog row only: aggregate_type 'System'
 --    is already permitted by the CHECK.
 --
+--    The event carries ids and a closed vocabulary (inbox_id, +lev/+ver
+--    tags, outcome codes). The database strips any address or free text an
+--    older or wrong emitter might send, the same way 20260901110000 does for
+--    RateLimitedDropped and AttachmentsTruncated: the invariant belongs to
+--    the table, not to one emitter's good behaviour.
+--
 -- 2. Make the per-attachment idempotency key company-scoped. One mail can be
 --    addressed to two companies' inbox addresses at once; the webhook now
 --    files it once per inbox, and the old (resend_email_id,
@@ -22,6 +28,34 @@
 INSERT INTO public.processing_event_types (event_type) VALUES
   ('InboundMailReceived')
 ON CONFLICT (event_type) DO NOTHING;
+
+CREATE OR REPLACE FUNCTION public.strip_inbound_mail_pii_from_processing_history()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF NEW.event_type IN ('RateLimitedDropped', 'AttachmentsTruncated', 'InboundMailReceived')
+     AND jsonb_typeof(NEW.payload) = 'object'
+  THEN
+    NEW.payload := NEW.payload - 'from' - 'subject' - 'recipients' - 'to';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.strip_inbound_mail_pii_from_processing_history()
+  FROM PUBLIC, anon, authenticated;
+
+-- Recreated rather than assumed: the trigger ships in 20260901110000, but a
+-- database that skipped that file (the staging branch did) would otherwise
+-- carry the new function with nothing calling it.
+DROP TRIGGER IF EXISTS processing_history_strip_inbound_mail_pii ON public.processing_history;
+
+CREATE TRIGGER processing_history_strip_inbound_mail_pii
+  BEFORE INSERT ON public.processing_history
+  FOR EACH ROW
+  EXECUTE FUNCTION public.strip_inbound_mail_pii_from_processing_history();
 
 DROP INDEX IF EXISTS public.idx_invoice_inbox_items_resend_email_attachment;
 

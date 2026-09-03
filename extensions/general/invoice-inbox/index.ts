@@ -36,6 +36,7 @@ import {
   extractSharedRecipientsForDomain,
   groupSharedRecipientsByInbox,
   resolveKindHintForTags,
+  splitKnownInboxTags,
   type InboxKindHint,
   parseRecipients,
   isEmailReceivedEvent,
@@ -1795,9 +1796,11 @@ export const invoiceInboxExtension: Extension = {
         interface InboundTarget {
           companyId: string
           inboxId: string | null
-          /** The addresses that resolved this target, as received (lowercased). */
-          recipients: string[]
+          customDomain: boolean
+          /** The documented tags (+lev / +ver) that reached this inbox. */
           tags: string[]
+          /** Tags outside the documented set: counted, never stored. */
+          unknownTagCount: number
           kindHint: InboxKindHint | null
           tagConflict: boolean
         }
@@ -1827,31 +1830,31 @@ export const invoiceInboxExtension: Extension = {
           // match further down. Custom domains are catch-all and stay
           // unhinted. Contradicting tags on one mail resolve to no hint.
           const { kindHint, conflict } = resolveKindHintForTags(group.tags)
+          const { known, unknownCount } = splitKnownInboxTags(group.tags)
           targets.push({
             companyId: inbox.company_id,
             inboxId: inbox.id,
-            recipients: sharedRecipients
-              .filter((r) => r.localPart === group.localPart)
-              .map((r) => `${r.localPart}${r.tag ? `+${r.tag}` : ''}@${domainLower}`),
-            tags: group.tags,
+            customDomain: false,
+            tags: known,
+            unknownTagCount: unknownCount,
             kindHint,
             tagConflict: conflict,
           })
         }
 
         if (targets.length === 0) {
-          const customRecipients = parseRecipients(to).filter((r) => r.domain !== domainLower)
-          const customDomains = customRecipients.map((r) => r.domain)
+          const customDomains = parseRecipients(to)
+            .map((r) => r.domain)
+            .filter((d) => d !== domainLower)
           if (customDomains.length > 0) {
             const match = await findCompanyForRecipientDomains(serviceSupabase, customDomains)
             if (match) {
               targets.push({
                 companyId: match.companyId,
                 inboxId: null,
-                recipients: customRecipients
-                  .filter((r) => r.domain === match.domain.toLowerCase())
-                  .map((r) => `${r.localPart}@${r.domain}`),
+                customDomain: true,
                 tags: [],
+                unknownTagCount: 0,
                 kindHint: null,
                 tagConflict: false,
               })
@@ -2062,6 +2065,9 @@ export const invoiceInboxExtension: Extension = {
             attachmentName: string | null,
             mime: string,
             reason: string,
+            // A catch-path row: the attachment itself was fine, our side
+            // failed. A Resend retry may replace it (see the loop below).
+            transient = false,
           ): Promise<string | undefined> => {
             // attachment_name and mime are attacker-controlled (they come from the
             // forwarded email headers); sanitise before they land in the JSONB
@@ -2087,6 +2093,7 @@ export const invoiceInboxExtension: Extension = {
                     messageId: message_id,
                     attachment_name: sanitiseFilename(attachmentName, 'unknown'),
                     mime: sanitiseMime(mime),
+                    ...(transient ? { transient: true } : {}),
                   },
                 })
                 .select('id')
@@ -2104,15 +2111,27 @@ export const invoiceInboxExtension: Extension = {
               // per inbox rather than treating the second as a retry (#2181).
               const { data: existing } = await serviceSupabase
                 .from('invoice_inbox_items')
-                .select('id')
+                .select('id, status, raw_email_payload')
                 .eq('company_id', companyId)
                 .eq('resend_email_id', email_id)
                 .eq('resend_attachment_id', att.id)
                 .maybeSingle()
               if (existing) {
-                results.push({ attachment_id: att.id, inbox_item_id: existing.id, duplicate: true })
-                attachmentOutcomes.push({ id: att.id, outcome: 'duplicate', inbox_item_id: existing.id })
-                continue
+                // A row the catch below wrote for a failure on our side
+                // (download, storage) is not a filing: a redelivery gets to
+                // try again, as it did before the row existed. The row is
+                // replaced so the unique key stays free; if the retry fails
+                // too, the catch writes a fresh one. Rejections (bad type,
+                // too large) and filed rows stay duplicates.
+                const transient =
+                  existing.status === 'error' &&
+                  (existing.raw_email_payload as { transient?: unknown } | null)?.transient === true
+                if (!transient) {
+                  results.push({ attachment_id: att.id, inbox_item_id: existing.id, duplicate: true })
+                  attachmentOutcomes.push({ id: att.id, outcome: 'duplicate', inbox_item_id: existing.id })
+                  continue
+                }
+                await serviceSupabase.from('invoice_inbox_items').delete().eq('id', existing.id)
               }
 
               const download = await fetchInboundAttachment(email_id, att.id)
@@ -2277,6 +2296,7 @@ export const invoiceInboxExtension: Extension = {
                   att.filename ?? null,
                   att.content_type ?? 'application/octet-stream',
                   `Bilagan kunde inte tas emot: ${message.slice(0, 200)}. Skicka den igen.`,
+                  true,
                 )
               }
               attachmentOutcomes.push({ id: att.id, outcome: 'failed', inbox_item_id: failedItemId })
@@ -2293,8 +2313,13 @@ export const invoiceInboxExtension: Extension = {
           // One durable record per mail and inbox, whatever became of it
           // (#2181): the inbox list only shows rows that were filed, so a
           // mail whose every attachment failed had no trace a user could
-          // find. Recipient addresses are the company's own inbox addresses;
-          // sender and subject stay out (see RateLimitedDropped above).
+          // find. Ids and a closed vocabulary only: no sender, no subject,
+          // no address (the local part of an enskild firma's inbox is the
+          // owner's name) and no sender-typed tag. processing_history is
+          // append-only and outside the erasure path, and the PII validator
+          // in appendProcessingHistory would refuse a numeric tag outright,
+          // losing the one record this exists to keep. The panel derives
+          // the address from inbox_id at read time.
           try {
             await appendProcessingHistory({
               companyId: target.companyId,
@@ -2303,9 +2328,10 @@ export const invoiceInboxExtension: Extension = {
               aggregateId: email_id,
               eventType: 'InboundMailReceived',
               payload: {
-                recipients: target.recipients,
-                tags: target.tags,
                 inbox_id: target.inboxId,
+                custom_domain: target.customDomain,
+                tags: target.tags,
+                unknown_tag_count: target.unknownTagCount,
                 kind_hint: target.kindHint,
                 tag_conflict: target.tagConflict,
                 outcome: outcome.reason ?? 'attachments',
@@ -2380,15 +2406,33 @@ export const invoiceInboxExtension: Extension = {
           .limit(INBOUND_HISTORY_LIMIT)
 
         if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+        // The event stores inbox_id only (no address, see the webhook); the
+        // company's own addresses are resolved here, for its own members.
+        const inboxes = new Map<string, { local_part: string; status: string }>()
+        if ((data ?? []).length > 0) {
+          const { data: rows } = await ctx.supabase
+            .from('company_inboxes')
+            .select('id, local_part, status')
+            .eq('company_id', ctx.companyId)
+          for (const row of rows ?? []) inboxes.set(row.id, { local_part: row.local_part, status: row.status })
+        }
+
         return NextResponse.json({
           data: {
             days,
-            mails: (data ?? []).map((row) => ({
-              event_id: row.event_id,
-              email_id: row.correlation_id,
-              occurred_at: row.occurred_at,
-              ...(row.payload as Record<string, unknown>),
-            })),
+            mails: (data ?? []).map((row) => {
+              const payload = row.payload as Record<string, unknown>
+              const inbox = typeof payload.inbox_id === 'string' ? inboxes.get(payload.inbox_id) : undefined
+              return {
+                event_id: row.event_id,
+                email_id: row.correlation_id,
+                occurred_at: row.occurred_at,
+                ...payload,
+                inbox_local_part: inbox?.local_part ?? null,
+                inbox_status: inbox?.status ?? null,
+              }
+            }),
           },
         })
       },

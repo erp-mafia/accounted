@@ -819,9 +819,10 @@ describe('POST /inbound with several recipients (#2181)', () => {
     expect(events[0].companyId).toBe('company-1')
     expect(events[0].correlationId).toBe('em_123')
     expect(events[0].payload).toMatchObject({
-      recipients: to,
-      tags: ['lev', 'ver'],
       inbox_id: 'inbox-1',
+      custom_domain: false,
+      tags: ['lev', 'ver'],
+      unknown_tag_count: 0,
       kind_hint: null,
       tag_conflict: true,
       outcome: 'attachments',
@@ -830,6 +831,27 @@ describe('POST /inbound with several recipients (#2181)', () => {
     })
     expect(JSON.stringify(events[0].payload)).not.toContain('billing@supplier.com')
     expect(JSON.stringify(events[0].payload)).not.toContain('Faktura')
+    // No address at all: an enskild firma's local part is the owner's name.
+    expect(JSON.stringify(events[0].payload)).not.toContain('@')
+    expect(JSON.stringify(events[0].payload)).not.toContain('acme-ab-x7f2')
+  })
+
+  it('counts a sender-typed tag without storing it, so a numeric tag cannot trip the PII validator', async () => {
+    const to = ['acme-ab-x7f2+8501011234@arcim.io', 'acme-ab-x7f2+lev@arcim.io']
+    vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ to, attachments: [] }) as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: null }) // body-document dedupe check
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-body' } as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue(fullEmailFor(to, [], { html: '<p>Kvitto</p>' }) as never)
+
+    const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+    expect(res.status).toBe(200)
+    const [event] = receivedEvents()
+    expect(event.payload).toMatchObject({ tags: ['lev'], unknown_tag_count: 1, kind_hint: 'supplier_invoice', tag_conflict: false })
+    expect(JSON.stringify(event.payload)).not.toContain('8501011234')
   })
 
   it('files a mail addressed to two inboxes once per inbox, deduped per company', async () => {
@@ -873,8 +895,8 @@ describe('POST /inbound with several recipients (#2181)', () => {
 
     const events = receivedEvents()
     expect(events.map((e) => e.companyId)).toEqual(['company-1', 'company-2'])
-    expect(events[0].payload).toMatchObject({ recipients: ['acme-ab-x7f2+lev@arcim.io'], tags: ['lev'], kind_hint: 'supplier_invoice', tag_conflict: false })
-    expect(events[1].payload).toMatchObject({ recipients: ['beta-ab-q9z1@arcim.io'], tags: [], kind_hint: null, inbox_id: 'inbox-2' })
+    expect(events[0].payload).toMatchObject({ inbox_id: 'inbox-1', tags: ['lev'], kind_hint: 'supplier_invoice', tag_conflict: false })
+    expect(events[1].payload).toMatchObject({ inbox_id: 'inbox-2', tags: [], kind_hint: null, custom_domain: false })
   })
 
   it('skips a retired address in the list and still files for the active one', async () => {
@@ -897,6 +919,48 @@ describe('POST /inbound with several recipients (#2181)', () => {
     // The retired address's tag does not leak onto the active inbox's hint.
     expect(vi.mocked(uploadAndExtract).mock.calls[0][5]?.kindHint).toBe('receipt')
     expect(receivedEvents()[0].payload).toMatchObject({ outcome: 'email_body', inbox_item_id: 'item-body' })
+  })
+
+  it('lets a Resend redelivery replace a transient error row and file the attachment (self-heal kept)', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    // The first delivery's download failed and the catch wrote this row.
+    enqueue({ data: { id: 'err-1', status: 'error', raw_email_payload: { messageId: 'm', transient: true } } })
+    enqueue({ data: null }) // delete of the transient row
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-healed' } as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue(fullEmailFor(['acme-ab-x7f2@arcim.io'], [PDF_ATTACHMENT]) as never)
+    vi.mocked(fetchInboundAttachment).mockResolvedValue(PDF_DOWNLOAD)
+
+    const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.results).toEqual([{ attachment_id: 'att_1', inbox_item_id: 'item-healed' }])
+    const del = calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'delete')
+    expect(del).toBeDefined()
+    const delEq = calls.filter((c) => c.table === 'invoice_inbox_items' && c.method === 'eq').find((c) => c.args[0] === 'id')
+    expect(delEq?.args).toEqual(['id', 'err-1'])
+    expect(receivedEvents()[0].payload).toMatchObject({
+      attachments: [{ id: 'att_1', outcome: 'filed', inbox_item_id: 'item-healed' }],
+    })
+  })
+
+  it('keeps a rejected attachment (bad type) as a duplicate on redelivery', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: { id: 'rej-1', status: 'error', raw_email_payload: { messageId: 'm', mime: 'application/zip' } } })
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue(fullEmailFor(['acme-ab-x7f2@arcim.io'], [PDF_ATTACHMENT]) as never)
+
+    const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+    const body = await res.json()
+    expect(body.data.results[0]).toEqual({ attachment_id: 'att_1', inbox_item_id: 'rej-1', duplicate: true })
+    expect(fetchInboundAttachment).not.toHaveBeenCalled()
+    expect(calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'delete')).toBeUndefined()
   })
 
   it('records a duplicate outcome when Resend retries the webhook', async () => {
@@ -967,6 +1031,7 @@ describe('POST /inbound with several recipients (#2181)', () => {
       resend_email_id: 'em_123',
       resend_attachment_id: 'att_1',
       kind_hint: 'supplier_invoice',
+      raw_email_payload: { transient: true },
     })
     expect((insert?.args[0] as { error_message: string }).error_message).toMatch(/^Bilagan kunde inte tas emot: Download URL returned 503/)
 

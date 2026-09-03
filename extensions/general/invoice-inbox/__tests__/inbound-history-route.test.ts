@@ -30,9 +30,10 @@ const EVENT_ROW = {
   correlation_id: '6ec3164f-1f59-40e7-acd2-ebedf9c4d56e',
   occurred_at: '2026-09-02T14:21:56Z',
   payload: {
-    recipients: ['acme-ab-x7f2+ver@arcim.io'],
-    tags: ['ver'],
     inbox_id: 'inbox-1',
+    custom_domain: false,
+    tags: ['ver'],
+    unknown_tag_count: 0,
     kind_hint: 'receipt',
     tag_conflict: false,
     outcome: 'attachments',
@@ -65,6 +66,7 @@ describe('GET /inbound-history (#2181)', () => {
   it('returns the company-scoped InboundMailReceived events, newest first, 30 days by default', async () => {
     const { supabase, enqueue, calls } = createQueuedMockSupabase()
     enqueue({ data: [EVENT_ROW] })
+    enqueue({ data: [{ id: 'inbox-1', local_part: 'acme-ab-x7f2', status: 'active' }] }) // company's inboxes
     const res = await route.handler(createMockRequest('/inbound-history'), buildCtx(supabase))
     const { status, body } = await parseJsonResponse<{
       data: { days: number; mails: Array<Record<string, unknown>> }
@@ -77,8 +79,14 @@ describe('GET /inbound-history (#2181)', () => {
         email_id: '6ec3164f-1f59-40e7-acd2-ebedf9c4d56e',
         occurred_at: '2026-09-02T14:21:56Z',
         ...EVENT_ROW.payload,
+        // Resolved at read time for the company's own members; the event
+        // itself carries no address.
+        inbox_local_part: 'acme-ab-x7f2',
+        inbox_status: 'active',
       },
     ])
+    const inboxLookup = calls.find((c) => c.table === 'company_inboxes' && c.method === 'eq')
+    expect(inboxLookup?.args).toEqual(['company_id', 'company-1'])
 
     const eqs = calls.filter((c) => c.table === 'processing_history' && c.method === 'eq').map((c) => c.args)
     expect(eqs).toEqual([
@@ -89,6 +97,15 @@ describe('GET /inbound-history (#2181)', () => {
     expect(gte?.args[0]).toBe('occurred_at')
     const order = calls.find((c) => c.table === 'processing_history' && c.method === 'order')
     expect(order?.args).toEqual(['occurred_at', { ascending: false }])
+  })
+
+  it('marks a mail whose inbox row is gone with no address', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [EVENT_ROW] })
+    enqueue({ data: [] }) // inbox rotated away and removed
+    const res = await route.handler(createMockRequest('/inbound-history'), buildCtx(supabase))
+    const { body } = await parseJsonResponse<{ data: { mails: Array<{ inbox_local_part: string | null }> } }>(res)
+    expect(body.data.mails[0].inbox_local_part).toBeNull()
   })
 
   it('honours an explicit window', async () => {

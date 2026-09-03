@@ -6,6 +6,7 @@ import {
   kindHintFromTag,
   parseRecipients,
   resolveKindHintForTags,
+  splitKnownInboxTags,
 } from '@/extensions/general/invoice-inbox/lib/resend-inbound'
 
 describe('extractLocalPartForDomain', () => {
@@ -192,5 +193,15 @@ describe('resolveKindHintForTags (#2181)', () => {
   it('resolves +lev and +ver on one mail to no hint, flagged as a conflict', () => {
     expect(resolveKindHintForTags(['lev', 'ver'])).toEqual({ kindHint: null, conflict: true })
     expect(resolveKindHintForTags(['ver', 'lev'])).toEqual({ kindHint: null, conflict: true })
+  })
+})
+
+describe('splitKnownInboxTags (#2181)', () => {
+  it('keeps the documented tags and only counts the rest', () => {
+    expect(splitKnownInboxTags(['lev', '8501011234', 'ver', 'anna-svensson'])).toEqual({
+      known: ['lev', 'ver'],
+      unknownCount: 2,
+    })
+    expect(splitKnownInboxTags([])).toEqual({ known: [], unknownCount: 0 })
   })
 })
