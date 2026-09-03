@@ -17,6 +17,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { bulkBookMatchedInboxItems, categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
 import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
+import {
+  COUNTRY_CONSISTENCY_MESSAGES,
+  checkCountryConsistency,
+  defaultCountryForParty,
+  normalizeCountryCode,
+} from '@/lib/vat/country-codes'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import {
   resolveSupplierInvoiceExchangeRate,
@@ -473,6 +479,31 @@ async function commitCreateCustomer(
     typeof params.payment_terms === 'number' ? params.payment_terms : undefined,
   )
 
+  // Country: ISO 3166-1 alpha-2, consistent with the type and VAT prefix.
+  // Staging already checked this; re-checked here so a tampered or
+  // pre-2026-09 pending_operations row cannot write a name or a
+  // contradiction (#2025, #2028).
+  const countryParam = typeof params.country === 'string' ? params.country.trim() : ''
+  const country = countryParam
+    ? normalizeCountryCode(countryParam)
+    : defaultCountryForParty(params.customer_type as string, (params.vat_number as string) || null)
+  if (!country) {
+    return {
+      error: countryParam
+        ? `country "${countryParam}" is not an ISO 3166-1 alpha-2 code or a known country name`
+        : 'country is required for this customer type',
+      status: 400,
+    }
+  }
+  const countryIssue = checkCountryConsistency({
+    partyType: params.customer_type as string,
+    country,
+    vatNumber: (params.vat_number as string) || null,
+  })
+  if (countryIssue) {
+    return { error: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv, status: 400 }
+  }
+
   const { data, error } = await supabase
     .from('customers')
     .insert({
@@ -489,7 +520,7 @@ async function commitCreateCustomer(
       address_line1: (params.address as string) || null,
       postal_code: (params.postal_code as string) || null,
       city: (params.city as string) || null,
-      country: (params.country as string) || 'Sweden',
+      country,
     })
     .select()
     .single()
@@ -538,13 +569,29 @@ async function commitUpdateCustomer(
   const { customer_id: customerId, changes } = validated
   const { data: current, error: currentError } = await supabase
     .from('customers')
-    .select('customer_type')
+    .select('customer_type, country, vat_number')
     .eq('id', customerId)
     .eq('company_id', companyId)
     .maybeSingle()
 
   if (currentError) return { error: currentError.message, status: 500 }
   if (!current) return { error: 'Customer not found', status: 404 }
+
+  // Country vs type vs VAT prefix on the row as it will end up (same check
+  // as staging; repeated here as the tamper gate), only when one of the
+  // three is part of the update.
+  const countryRuleTouched =
+    changes.customer_type !== undefined || changes.country !== undefined || changes.vat_number !== undefined
+  const countryIssue = countryRuleTouched
+    ? checkCountryConsistency({
+        partyType: changes.customer_type ?? current.customer_type,
+        country: changes.country ?? current.country,
+        vatNumber: changes.vat_number ?? current.vat_number,
+      })
+    : null
+  if (countryIssue) {
+    return { error: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv, status: 400 }
+  }
 
   // personal_number never travels in plaintext: staging validated the input
   // and stored AES-256-GCM ciphertext under personal_number_encrypted (see
@@ -1914,14 +1961,14 @@ async function commitCreateInvoice(
     return { error: 'Customer not found: they may have been deleted.', status: 404 }
   }
 
-  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
+  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
   // Gate on the PERMITTED set, not the picker default, exactly like
   // buildInvoiceWriteData: the ML 6 kap. supplies taxed where they are performed
   // (hotel/restaurang 12%, persontransport and event admission 6%,
   // fastighetstjänst and korttidsuthyrning 25%) carry Swedish VAT even to a
   // foreign business customer. The default is still 0% (vatRules.rate is the
   // fallback below), so a Swedish rate only lands here when staged explicitly.
-  const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated)
+  const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country)
   const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
   // VAT registration gate (mirrors app/api/invoices/route.ts). A
