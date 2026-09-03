@@ -186,7 +186,7 @@ export async function buildInvoiceWriteData(params: {
   const { supabase, companyId, customer, documentType, input, existingPersonnummer } = params
   const items = input.items
 
-  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
+  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
   // Gate on the PERMITTED set, not the picker default. Under huvudregeln
   // (ML 6 kap. 34 §) a service to a foreign business is taxed where the buyer
   // is established, so 0% is the default; but the ML 6 kap. exceptions taxed
@@ -196,7 +196,7 @@ export async function buildInvoiceWriteData(params: {
   // Refusing every non-zero rate made a Stockholm hotel night or a conference
   // ticket impossible to invoice. The default is still 0% (vatRules.rate is
   // the fallback below), so a Swedish rate only lands here when set explicitly.
-  const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated)
+  const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country)
   const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
   // VAT registration gate (defense in depth: the invoice form already hides

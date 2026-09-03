@@ -1155,7 +1155,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   }, 0)
 
   const vatRules = selectedCustomer
-    ? getVatRules(selectedCustomer.customer_type, selectedCustomer.vat_number_validated)
+    ? getVatRules(selectedCustomer.customer_type, selectedCustomer.vat_number_validated, selectedCustomer.country)
     : null
 
   // Rendered options and the default are deliberately two different sets:

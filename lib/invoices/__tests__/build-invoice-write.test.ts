@@ -129,7 +129,7 @@ describe('buildInvoiceWriteData', () => {
     enqueue({ data: { vat_registered: true }, error: null })
 
     // 10% is not a Swedish momssats (ML 9 kap: 25 / 12 / 6) for any customer.
-    const customer = makeCustomer({ customer_type: 'eu_business', vat_number_validated: true })
+    const customer = makeCustomer({ customer_type: 'eu_business', country: 'DE', vat_number: 'DE811234567', vat_number_validated: true })
     const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
       ...baseHeader,
       items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 10 }],
@@ -149,7 +149,7 @@ describe('buildInvoiceWriteData', () => {
     enqueue({ data: { vat_registered: true }, error: null })
 
     // Huvudregeln (ML 6 kap. 34 §): taxed where the buyer is established.
-    const customer = makeCustomer({ customer_type: 'eu_business', vat_number_validated: true })
+    const customer = makeCustomer({ customer_type: 'eu_business', country: 'DE', vat_number: 'DE811234567', vat_number_validated: true })
     const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
       ...baseHeader,
       items: [{ description: 'Konsult', quantity: 10, unit: 'tim', unit_price: 1000, vat_rate: 0 }],
@@ -170,7 +170,7 @@ describe('buildInvoiceWriteData', () => {
 
     // Widening the permitted set must not change the default: an omitted
     // vat_rate still falls back to getVatRules().rate === 0.
-    const customer = makeCustomer({ customer_type: 'eu_business', vat_number_validated: true })
+    const customer = makeCustomer({ customer_type: 'eu_business', country: 'DE', vat_number: 'DE811234567', vat_number_validated: true })
     const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
       ...baseHeader,
       items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000 }],
@@ -190,7 +190,7 @@ describe('buildInvoiceWriteData', () => {
     // Stockholm hotel night invoiced to a German company. Restaurang/hotell is
     // taxed where performed (ML 6 kap. exception), so Swedish 12% applies even
     // though the buyer is an EU business. This was refused outright before.
-    const customer = makeCustomer({ customer_type: 'eu_business', vat_number_validated: true })
+    const customer = makeCustomer({ customer_type: 'eu_business', country: 'DE', vat_number: 'DE811234567', vat_number_validated: true })
     const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
       ...baseHeader,
       items: [{ description: 'Hotellnatt Stockholm', quantity: 2, unit: 'natt', unit_price: 1000, vat_rate: 12 }],
@@ -254,7 +254,7 @@ describe('buildInvoiceWriteData', () => {
     // 0% consulting (huvudregeln, reverse charge) + 12% hotel (taxed where
     // performed) on one invoice. The buyer IS liable for the consulting line,
     // so the notation is required; the 12% line still carries Swedish VAT.
-    const customer = makeCustomer({ customer_type: 'eu_business', vat_number_validated: true })
+    const customer = makeCustomer({ customer_type: 'eu_business', country: 'DE', vat_number: 'DE811234567', vat_number_validated: true })
     const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
       ...baseHeader,
       items: [
