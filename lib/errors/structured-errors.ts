@@ -4151,6 +4151,31 @@ const DIMENSION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Dimensionen kunde inte uppdateras.',
     message_en: 'Failed to update dimension.',
   },
+  DIMENSION_SYSTEM_DELETE: {
+    httpStatus: 400,
+    message_sv: 'Systemdimensioner (kostnadsställe och projekt) kan inte tas bort: avaktivera dem istället.',
+    message_en: 'System dimensions (kostnadsställe/projekt) cannot be deleted: archive (inactivate) them instead.',
+  },
+  // The DB registry guard (enforce_dimension_registry_guards) raises when any
+  // posted/reversed line is tagged with the dimension's number, and the value
+  // retention trigger fires on the cascade to dimension_values. Routes surface
+  // the trigger's own Swedish message via `messageSv`.
+  DIMENSION_REFERENCED: {
+    httpStatus: 409,
+    message_sv:
+      'Dimensionen används på bokförda verifikat och kan inte tas bort: avaktivera den istället.',
+    message_en:
+      'The dimension is referenced by posted vouchers and cannot be deleted: archive (inactivate) it instead.',
+    remediation: {
+      description:
+        'Archive the dimension instead: PATCH /api/dimensions/[id] with { "is_active": false }. Numbers tagged on posted lines are retained for the BFL 7-year period.',
+    },
+  },
+  DIMENSION_DELETE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Dimensionen kunde inte tas bort.',
+    message_en: 'Failed to delete dimension.',
+  },
   DIMENSION_VALUE_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Dimensionsvärdet kunde inte hittas.',
