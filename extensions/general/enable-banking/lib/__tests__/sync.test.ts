@@ -152,7 +152,8 @@ describe('syncAccountTransactions', () => {
       'acc-uid-1',
       '2024-01-01',
       '2024-12-31',
-      'longest'
+      'longest',
+      { acceptedHistoryDays: undefined }
     )
   })
 
@@ -178,7 +179,8 @@ describe('syncAccountTransactions', () => {
       'acc-uid-1',
       '2024-01-01',
       '2024-12-31',
-      undefined
+      undefined,
+      { acceptedHistoryDays: undefined }
     )
   })
 
@@ -555,6 +557,101 @@ describe('syncAccountTransactions', () => {
 
     expect(result.returnedMinBookingDate).toBeUndefined()
     expect(result.returnedMaxBookingDate).toBeUndefined()
+  })
+
+  // Issue #2202: ASPSP_ERROR cannot say whether the window was too wide or the
+  // bank is refusing right now, so the sync records the widest window each
+  // account's bank has answered and reports a narrowed sync as narrowed.
+  it('hands the accepted history width to the fetch and records the widest window the bank answered', async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [],
+      rawPages: ['{}'],
+      requestedDateFrom: '2026-04-27',
+      effectiveDateFrom: '2026-06-26',
+      narrowed: true,
+    })
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const account = makeAccount({ accepted_history_days: 30 })
+    const result = await syncAccountTransactions(
+      {} as never,
+      COMPANY_ID,
+      USER_ID,
+      CONNECTION_ID,
+      account,
+      '2026-04-27',
+      '2026-08-19',
+      mockIngest
+    )
+
+    expect(mockGetAllTransactionsWithRaw).toHaveBeenCalledWith(
+      'acc-uid-1',
+      '2026-04-27',
+      '2026-08-19',
+      undefined,
+      { acceptedHistoryDays: 30 }
+    )
+    // 2026-06-26 .. 2026-08-19 = 54 days: wider than the 30 on record.
+    expect(account.accepted_history_days).toBe(54)
+    expect(result).toMatchObject({
+      requestedFromDate: '2026-04-27',
+      effectiveFromDate: '2026-06-26',
+      historyNarrowed: true,
+    })
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[enable-banking] Bank refused the requested history window; synced a narrower one',
+      expect.objectContaining({ requestedFromDate: '2026-04-27', effectiveFromDate: '2026-06-26' })
+    )
+    warnSpy.mockRestore()
+  })
+
+  it('never shrinks accepted_history_days: an incremental sync keeps the wider record', async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [],
+      rawPages: ['{}'],
+      requestedDateFrom: '2026-08-12',
+      effectiveDateFrom: '2026-08-12',
+      narrowed: false,
+    })
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+
+    const account = makeAccount({ accepted_history_days: 90 })
+    const result = await syncAccountTransactions(
+      {} as never,
+      COMPANY_ID,
+      USER_ID,
+      CONNECTION_ID,
+      account,
+      '2026-08-12',
+      '2026-08-19',
+      mockIngest
+    )
+
+    expect(account.accepted_history_days).toBe(90)
+    expect(result.historyNarrowed).toBe(false)
+    expect(result.effectiveFromDate).toBe('2026-08-12')
+  })
+
+  it('leaves accepted_history_days alone when the fetch reports no effective window (legacy shape)', async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: ['{}'] })
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+
+    const account = makeAccount()
+    const result = await syncAccountTransactions(
+      {} as never,
+      COMPANY_ID,
+      USER_ID,
+      CONNECTION_ID,
+      account,
+      '2026-08-12',
+      '2026-08-19',
+      mockIngest
+    )
+
+    expect(account.accepted_history_days).toBeUndefined()
+    expect(result.historyNarrowed).toBe(false)
+    expect(result.effectiveFromDate).toBeUndefined()
   })
 
   it('passes account.ledger_account as IngestOptions.settlementAccount when set', async () => {
