@@ -65,3 +65,10 @@ CREATE TABLE IF NOT EXISTS auth.identities (
   CONSTRAINT identities_provider_id_provider_unique UNIQUE (provider_id, provider)
 );
 CREATE INDEX IF NOT EXISTS identities_user_id_idx ON auth.identities (user_id);
+
+-- auth.audit_log_entries ships in the Postgres image without the ip_address
+-- column GoTrue adds on first boot (NOT NULL DEFAULT '' on every hosted
+-- project). unlink_old_address_identities writes GoTrue's audit table with
+-- that column, so the CI double must carry it too.
+ALTER TABLE IF EXISTS auth.audit_log_entries
+  ADD COLUMN IF NOT EXISTS ip_address varchar(64) NOT NULL DEFAULT '';
