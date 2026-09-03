@@ -285,16 +285,22 @@ describe('gnubok_update_salary_run', () => {
     expect(result.preview.new_payment_date).toBe('2026-04-07')
   })
 
-  it('rejects a payment_date outside the run period month (kontantprincipen)', async () => {
+  it('stages a payment_date in the month after the period (lön i efterskott, #2191)', async () => {
+    // The AGI redovisningsperiod follows payment_date, so a March run paid
+    // in April is declared for April; no period guard refuses it.
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: RUN_ROW }) // draft gate passes; period is 2026-03
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
 
-    await expect(
-      updateSalaryRun.execute(
-        { salary_run_id: 'run-1', payment_date: '2026-04-05' },
-        'company-1', 'user-1', supabase as never, { type: 'user' },
-      ),
-    ).rejects.toThrow(/SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD/)
+    const result = (await updateSalaryRun.execute(
+      { salary_run_id: 'run-1', payment_date: '2026-04-05' },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.new_payment_date).toBe('2026-04-05')
   })
 
   it('throws SALARY_RUN_NOT_FOUND for a foreign or unknown run', async () => {

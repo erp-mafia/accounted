@@ -249,11 +249,15 @@ describe('commitPendingOperation: update_salary_run', () => {
     expect(findCall('salary_run_employees', 'update')).toEqual([{ calculation_breakdown: null }])
   })
 
-  it('rejects a payment_date outside the run period month with 400', async () => {
+  it('commits a payment_date in the month after the period (lön i efterskott, #2191)', async () => {
+    // The AGI redovisningsperiod follows payment_date, so a March run paid
+    // in April is declared for April; no period guard refuses it.
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: RUN_ROW }) // draft gate passes; period is 2026-03
-    enqueue({ data: null, error: null }) // finalize (rejected)
+    enqueue({ data: { ...RUN_ROW, payment_date: '2026-04-05' } }) // optimistic-locked update
+    enqueue({ data: null, error: null }) // roster calculation_breakdown clear
+    enqueue({ data: null, error: null }) // finalize
 
     const op = makePendingOp({
       operation_type: 'update_salary_run',
@@ -261,8 +265,8 @@ describe('commitPendingOperation: update_salary_run', () => {
     })
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
-    expect(result.status).not.toBe('committed')
-    expect(result.http_status).toBe(400)
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ payment_date: '2026-04-05' })
   })
 
   it('fails when the calculation-invalidation clear errors (guard is not best-effort)', async () => {
