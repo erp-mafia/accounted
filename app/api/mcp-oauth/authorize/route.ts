@@ -828,12 +828,18 @@ export async function GET(request: Request) {
   // form-action re-checks every hop in the redirect chain. With only 'self'
   // the browser would block the post-consent redirect. The origin is safe
   // to whitelist here because resolveRedirectUri() already gated it above.
-  const redirectOrigin = new URL(redirectUri).origin
+  //
+  // A custom-scheme callback (cursor://...) has the opaque origin "null",
+  // which CSP would read as a host literally named "null" and match nothing,
+  // so the post-consent 303 would be blocked in Chromium. A scheme-source
+  // (cursor:) is the only form CSP offers for such a URI.
+  const redirectUrl = new URL(redirectUri)
+  const formActionSource = redirectUrl.origin === 'null' ? redirectUrl.protocol : redirectUrl.origin
   const csp = [
     "default-src 'none'",
     `script-src 'nonce-${cspNonce}'`,
     "style-src 'unsafe-inline'",
-    `form-action 'self' ${redirectOrigin}`,
+    `form-action 'self' ${formActionSource}`,
     "base-uri 'none'",
     "frame-ancestors 'none'",
   ].join('; ')
@@ -1094,6 +1100,13 @@ function describeClient(
         return { name: 'ChatGPT (OpenAI)', tag: 'Verifierad', verified: true }
       case 'grok':
         return { name: 'Grok (xAI)', tag: 'Verifierad', verified: true }
+      case 'cursor':
+        return { name: 'Cursor (Anysphere)', tag: 'Verifierad', verified: true }
+      case 'cursor_deeplink':
+        // A custom scheme can be claimed by any local app (RFC 8252 section
+        // 8.4), so it carries loopback trust, not vendor trust: same tag as
+        // localhost, never marked verified.
+        return { name: 'Cursor (Anysphere)', tag: 'Din egen dator', verified: false }
       case 'local':
         return { name: 'Lokal utveckling (localhost)', tag: 'Din egen dator', verified: false }
     }
