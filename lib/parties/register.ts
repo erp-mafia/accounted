@@ -11,6 +11,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { coreKey } from './ledger-key'
 import { getObservedParties, type ObservedParty } from './observed'
 import type { SuggestionReason } from './suggest'
 
@@ -46,6 +47,8 @@ export interface RegisterRow {
   /** Sales invoices for a customer role; supplier invoices for a supplier role. */
   invoiceCount: number
   reason: SuggestionReason | null
+  /** Live parties sharing this party's core name: a merge question, never a merge. */
+  similar: Array<{ id: string; displayName: string }>
   createdAt: string
 }
 
@@ -125,6 +128,52 @@ export function mergeStats(parts: ObservedParty[]): LedgerStats | null {
   return out
 }
 
+/**
+ * Same-core parties among the live rows. Read-time, never stored: the
+ * selection eval measured 9% false merges on shared trade names, so this
+ * only ever asks.
+ */
+export function similarAmong(parties: Array<{ id: string; display_name: string; alias_keys: string[] }>): Map<string, Array<{ id: string; displayName: string }>> {
+  const byCore = new Map<string, Array<{ id: string; displayName: string }>>()
+  const coresOf = new Map<string, Set<string>>()
+  for (const p of parties) {
+    const cores = new Set<string>()
+    const c = coreKey(p.display_name)
+    if (c) cores.add(c)
+    for (const a of p.alias_keys) {
+      const ac = coreKey(a)
+      if (ac) cores.add(ac)
+    }
+    coresOf.set(p.id, cores)
+    for (const core of cores) byCore.set(core, [...(byCore.get(core) ?? []), { id: p.id, displayName: p.display_name }])
+  }
+  // Cores that extend another core by whole words share its first word:
+  // "fortnox finans" reaches "fortnox" and the other way round.
+  const byFirstWord = new Map<string, string[]>()
+  for (const core of byCore.keys()) {
+    const first = core.split(' ')[0]!
+    byFirstWord.set(first, [...(byFirstWord.get(first) ?? []), core])
+  }
+  const extendsCore = (a: string, b: string) => a === b || a.startsWith(b + ' ') || b.startsWith(a + ' ')
+  const out = new Map<string, Array<{ id: string; displayName: string }>>()
+  for (const p of parties) {
+    const seen = new Set<string>([p.id])
+    const similar: Array<{ id: string; displayName: string }> = []
+    for (const core of coresOf.get(p.id) ?? []) {
+      for (const candidate of byFirstWord.get(core.split(' ')[0]!) ?? []) {
+        if (!extendsCore(core, candidate)) continue
+        for (const other of byCore.get(candidate) ?? []) {
+          if (seen.has(other.id)) continue
+          seen.add(other.id)
+          similar.push(other)
+        }
+      }
+    }
+    out.set(p.id, similar)
+  }
+  return out
+}
+
 function periodStart(period: RegisterPeriod, now = new Date()): string | null {
   if (period === 'all') return null
   const d = new Date(now)
@@ -197,6 +246,7 @@ export async function getRegister(
 
   const observedByKey = new Map(observed.map((o) => [o.key, o]))
   const claimedKeys = new Set<string>()
+  const similarById = similarAmong(parties.filter((p) => !p.archived_at))
   const rows: RegisterRow[] = []
   for (const p of parties) {
     const parts: ObservedParty[] = []
@@ -220,6 +270,7 @@ export async function getRegister(
       stats: mergeStats(parts),
       invoiceCount: (customerId ? (invoicesByCustomer.get(customerId) ?? 0) : 0) + (supplierId ? (invoicesBySupplier.get(supplierId) ?? 0) : 0),
       reason: p.status === 'suggested' ? p.suggested_reason : null,
+      similar: similarById.get(p.id) ?? [],
       createdAt: p.created_at,
     })
   }
@@ -402,24 +453,22 @@ export async function getDossier(supabase: SupabaseClient, companyId: string, pa
   }
 
   const reason = p.status === 'suggested' ? p.suggested_reason : null
-  let similar: Dossier['similar'] = []
-  if (reason?.similar_to?.length) {
-    const { data } = await supabase
+  const live = await fetchAllRows<{ id: string; display_name: string; org_number: string | null; status: string; alias_keys: string[] }>(({ from, to }) =>
+    supabase
       .from('parties')
-      .select('id, display_name, org_number, status')
+      .select('id, display_name, org_number, status, alias_keys')
       .eq('company_id', companyId)
-      .in(
-        'id',
-        reason.similar_to.map((s) => s.party_id),
-      )
       .is('merged_into', null)
-    similar = ((data ?? []) as Array<{ id: string; display_name: string; org_number: string | null; status: string }>).map((s) => ({
-      id: s.id,
-      displayName: s.display_name,
-      orgNumber: s.org_number,
-      status: s.status,
-    }))
-  }
+      .is('archived_at', null)
+      .range(from, to),
+  )
+  const liveById = new Map(live.map((l) => [l.id, l]))
+  const similarIds = new Set<string>((similarAmong(live).get(p.id) ?? []).map((s) => s.id))
+  for (const s of reason?.similar_to ?? []) if (liveById.has(s.party_id) && s.party_id !== p.id) similarIds.add(s.party_id)
+  const similar: Dossier['similar'] = [...similarIds].map((id) => {
+    const l = liveById.get(id)!
+    return { id: l.id, displayName: l.display_name, orgNumber: l.org_number, status: l.status }
+  })
 
   return {
     party: {
@@ -435,6 +484,7 @@ export async function getDossier(supabase: SupabaseClient, companyId: string, pa
       stats,
       invoiceCount: 0,
       reason,
+      similar: similar.map((s) => ({ id: s.id, displayName: s.displayName })),
       createdAt: p.created_at,
     },
     facts: ((facts.data ?? []) as Array<Record<string, unknown>>).map((f) => ({

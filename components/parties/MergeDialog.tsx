@@ -36,25 +36,15 @@ export function MergeDialog({
   onMerge: (survivorId: string, mergedIds: string[]) => Promise<void>
 }) {
   const t = useTranslations('parties')
+  const tCommon = useTranslations('common')
   const [picked, setPicked] = useState<Set<string>>(new Set(suggested.map((s) => s.id)))
   const [survivor, setSurvivor] = useState<string>(subject.id)
   const [query, setQuery] = useState('')
   const [found, setFound] = useState<MergeCandidate[]>([])
 
   useEffect(() => {
-    if (!open) return
-    setPicked(new Set(suggested.map((s) => s.id)))
-    setSurvivor(subject.id)
-    setQuery('')
-    setFound([])
-  }, [open, subject.id, suggested])
-
-  useEffect(() => {
     const q = query.trim()
-    if (q.length < 2) {
-      setFound([])
-      return
-    }
+    if (q.length < 2) return
     const ctrl = new AbortController()
     const timer = setTimeout(async () => {
       try {
@@ -80,13 +70,14 @@ export function MergeDialog({
   const candidates = useMemo(() => {
     const seen = new Set<string>()
     const out: MergeCandidate[] = []
-    for (const c of [...suggested, ...found]) {
+    const searched = query.trim().length >= 2 ? found : []
+    for (const c of [...suggested, ...searched]) {
       if (seen.has(c.id) || c.id === subject.id) continue
       seen.add(c.id)
       out.push(c)
     }
     return out
-  }, [suggested, found, subject.id])
+  }, [suggested, found, query, subject.id])
 
   const members = [subject, ...candidates.filter((c) => picked.has(c.id))]
   const mergedIds = members.filter((m) => m.id !== survivor).map((m) => m.id)
@@ -156,7 +147,7 @@ export function MergeDialog({
         </div>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            {t('deselect')}
+            {tCommon('cancel')}
           </Button>
           <Button type="button" onClick={() => void onMerge(survivor, mergedIds)} disabled={busy || mergedIds.length === 0}>
             {t('merge_confirm', { count: mergedIds.length })}

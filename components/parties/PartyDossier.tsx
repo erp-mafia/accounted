@@ -9,7 +9,7 @@ import { SlideOver, SlideOverBody, SlideOverContent, SlideOverHeader } from '@/c
 import type { Dossier, RegisterPeriod } from '@/lib/parties/register'
 import { formatCurrency, formatDate, formatOrgNumber } from '@/lib/utils'
 import { AccountNub } from './AccountNub'
-import { rhythmLabel } from './format'
+import { formatPaymentIdentity, rhythmLabel } from './format'
 import type { MergeCandidate } from './MergeDialog'
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
@@ -55,27 +55,26 @@ export function PartyDossier({
   reloadKey: number
 }) {
   const t = useTranslations('parties')
-  const [dossier, setDossier] = useState<Dossier | null>(null)
-  const [loading, setLoading] = useState(false)
+  // { partyId, reloadKey } stamps the loaded dossier, so "loading" and
+  // "failed" are derived instead of set from inside the effect.
+  const [loaded, setLoaded] = useState<{ partyId: string; reloadKey: number; dossier: Dossier | null } | null>(null)
+  const current = loaded && loaded.partyId === partyId && loaded.reloadKey === reloadKey ? loaded : null
+  const dossier = partyId ? (current?.dossier ?? (loaded?.partyId === partyId ? loaded.dossier : null)) : null
+  const loading = Boolean(partyId) && current === null
+  const failed = Boolean(partyId) && current !== null && current.dossier === null
 
   useEffect(() => {
-    if (!partyId) {
-      setDossier(null)
-      return
-    }
+    if (!partyId) return
     let cancelled = false
-    setLoading(true)
+    const key = reloadKey
     fetch(`/api/parties/${partyId}`)
       .then(async (res) => {
         if (!res.ok) throw new Error(String(res.status))
         const json = (await res.json()) as { data: Dossier }
-        if (!cancelled) setDossier(json.data)
+        if (!cancelled) setLoaded({ partyId, reloadKey: key, dossier: json.data })
       })
       .catch(() => {
-        if (!cancelled) setDossier(null)
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) setLoaded({ partyId, reloadKey: key, dossier: null })
       })
     return () => {
       cancelled = true
@@ -116,7 +115,7 @@ export function PartyDossier({
               <Skeleton className="h-4 w-1/2" />
               <Skeleton className="h-24 w-full" />
             </div>
-          ) : !dossier || !p ? (
+          ) : failed || !dossier || !p ? (
             <p className="text-sm text-muted-foreground">{t('load_failed')}</p>
           ) : (
             <div className="space-y-8">
@@ -154,18 +153,22 @@ export function PartyDossier({
                 <SectionTitle>{t('section_money')}</SectionTitle>
                 <table className="w-full text-[13px]">
                   <tbody>
-                    <Row
-                      label={t('money_expense')}
-                      value={stats?.expenseSek ? formatCurrency(stats.expenseSek) : '·'}
-                      note={period === '12m' ? t('money_period_12m') : t('money_period_all')}
-                    />
-                    <Row
-                      label={t('money_revenue')}
-                      value={stats?.revenueSek ? formatCurrency(stats.revenueSek) : '·'}
-                      note={period === '12m' ? t('money_period_12m') : t('money_period_all')}
-                    />
-                    <Row label={t('money_first')} value={stats?.firstSeen ? formatDate(stats.firstSeen) : '·'} />
-                    <Row label={t('money_last')} value={stats?.lastSeen ? formatDate(stats.lastSeen) : '·'} />
+                    {stats?.expenseSek || !stats?.revenueSek ? (
+                      <Row
+                        label={t('money_expense')}
+                        value={formatCurrency(stats?.expenseSek ?? 0)}
+                        note={period === '12m' ? t('money_period_12m') : t('money_period_all')}
+                      />
+                    ) : null}
+                    {stats?.revenueSek ? (
+                      <Row
+                        label={t('money_revenue')}
+                        value={formatCurrency(stats.revenueSek)}
+                        note={period === '12m' ? t('money_period_12m') : t('money_period_all')}
+                      />
+                    ) : null}
+                    {stats?.firstSeen ? <Row label={t('money_first')} value={formatDate(stats.firstSeen)} /> : null}
+                    {stats?.lastSeen ? <Row label={t('money_last')} value={formatDate(stats.lastSeen)} /> : null}
                   </tbody>
                 </table>
               </section>
@@ -211,7 +214,7 @@ export function PartyDossier({
                       <Row
                         key={i.id}
                         label={i.scheme === 'bankgiro' ? t('fact_bankgiro') : i.scheme === 'plusgiro' ? t('fact_plusgiro') : i.scheme}
-                        value={i.value}
+                        value={formatPaymentIdentity(i.scheme, i.value)}
                         note={`${t('fact_from_documents', { count: i.seenCount })} · ${i.status === 'known' ? t('identity_known') : t('identity_unverified')}`}
                       />
                     ))}

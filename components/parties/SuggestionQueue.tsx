@@ -70,6 +70,7 @@ export function SuggestionQueue({
               <th className={TH_CLASS}>{t('th_name')}</th>
               <th className={TH_CLASS}>{t('th_why')}</th>
               <th className={TH_CLASS}>{t('th_account')}</th>
+              <th className={`${TH_CLASS} text-right`}>{t('th_revenue')}</th>
               <th className={`${TH_CLASS} text-right`}>{t('th_expense')}</th>
               <th className={`${TH_CLASS} w-16`} />
             </tr>
@@ -106,6 +107,7 @@ export function SuggestionQueue({
                   <td className={TD_CLASS}>
                     <AccountNub account={row.stats?.dominantAccount ?? null} />
                   </td>
+                  <td className={`${TD_CLASS} text-right tabular-nums`}>{row.stats?.revenueSek ? formatCurrency(row.stats.revenueSek) : ''}</td>
                   <td className={`${TD_CLASS} text-right tabular-nums`}>{row.stats?.expenseSek ? formatCurrency(row.stats.expenseSek) : ''}</td>
                   <td className={`${TD_CLASS} text-right`}>
                     <button

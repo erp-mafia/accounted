@@ -31,8 +31,16 @@ export function reasonText(t: Translate, reason: SuggestionReason | null, rhythm
   return parts.join(' · ')
 }
 
+/** 53170900 reads 5317-0900; 7-digit bankgiro 531-7090; plusgiro keeps its check digit after the hyphen. */
+export function formatPaymentIdentity(scheme: string, value: string): string {
+  const d = value.replace(/[^0-9]/g, '')
+  if (scheme === 'bankgiro' && (d.length === 7 || d.length === 8)) return `${d.slice(0, d.length - 4)}-${d.slice(-4)}`
+  if (scheme === 'plusgiro' && d.length >= 2) return `${d.slice(0, -1)}-${d.slice(-1)}`
+  return value
+}
+
 export function isDuplicateCandidate(row: RegisterRow): boolean {
-  return Boolean(row.reason?.similar_to?.length)
+  return row.similar.length > 0 || Boolean(row.reason?.similar_to?.length)
 }
 
 export function hasHardKey(row: RegisterRow): boolean {

@@ -88,6 +88,20 @@ describe('get_ledger_key_evidence (pg)', () => {
     expect(loopia!.plusgiro).toEqual([])
   })
 
+  it('keeps hard keys for a company that has no org number of its own', async () => {
+    const c = await seedCompany()
+    await getPool().query(`UPDATE public.companies SET org_number = NULL WHERE id = $1`, [c.companyId])
+    const e = await insertPostedJournalEntry({ userId: c.userId, companyId: c.companyId, fiscalPeriodId: c.fiscalPeriodId, sourceType: 'import', description: 'Levfakt Loopia AB', lines: expense('6540', 100) })
+    await linkDocument({ ...c, journalEntryId: e, supplier: { name: 'Loopia AB', orgNumber: '556666-1012', vatNumber: null, bankgiro: '5317-0900', plusgiro: null } })
+    const rows = await evidence(c.companyId, c.userId)
+    const loopia = rows.find((r) => r.key === 'loopia')
+    expect(loopia).toBeDefined()
+    expect(loopia!.self_docs).toBe(0)
+    expect(loopia!.orgs).toEqual([{ org: LOOPIA_ORG, n: 1 }])
+    expect(loopia!.names).toEqual([{ name: 'Loopia AB', n: 1 }])
+    expect(loopia!.bankgiro.map((b) => b.value)).toEqual(['53170900'])
+  })
+
   it('is invisible across companies', async () => {
     const mine = await seedCompany()
     const theirs = await seedCompany()

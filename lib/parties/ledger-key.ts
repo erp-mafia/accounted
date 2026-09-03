@@ -54,3 +54,19 @@ export function coreKey(key: string): string {
     .filter(Boolean)
     .join(' ')
 }
+
+const DISPLAY_PREFIX =
+  /^(levfakt|levfkt|lev\.?fakt\.?|leverantörsfaktura från\s+\d*|leverantörsfaktura|levbet\.?|kundbet\.?|kundfaktura|kundfakt|inbetalning från|inbetalning|utbetalning till|utbetalning|betalning till|betalning|faktura från|faktura|kvitto|utgift)\s+/i
+const DISPLAY_SUFFIX = /(\s*[,(]\s*\d{1,6}\s*\)?|\s+\d{1,4})+$/
+
+/**
+ * A display name from raw voucher text: the AP/AR prefix and the supplier
+ * number go, the casing and the legal form stay. "Levfakt BEIJER
+ * BYGGMATERIAL AB (2089)" reads "BEIJER BYGGMATERIAL AB"; "Kundbet Acme
+ * Konsult AB" reads "Acme Konsult AB". Used only when no document carries
+ * a printed name; nothing here is generated, only removed.
+ */
+export function displayNameFromVoucherText(raw: string): string {
+  const cleaned = raw.trim().replace(DISPLAY_PREFIX, '').replace(DISPLAY_SUFFIX, '').trim()
+  return cleaned.length >= 2 ? cleaned : raw.trim()
+}

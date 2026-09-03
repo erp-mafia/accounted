@@ -17,7 +17,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { coreKey } from './ledger-key'
+import { coreKey, displayNameFromVoucherText } from './ledger-key'
 import { getObservedParties, type ObservedParty } from './observed'
 
 export interface IdentityEvidence {
@@ -110,7 +110,7 @@ function pickName(observed: ObservedParty, evidence: LedgerKeyEvidence | undefin
   // upper-cased, truncated and prefixed by whatever the source system did.
   const printed = evidence?.names[0]?.name
   if (printed && printed.length >= 2) return { display: printed, legal: printed }
-  return { display: observed.name || observed.key }
+  return { display: displayNameFromVoucherText(observed.name || observed.key) }
 }
 
 function identitiesFrom(evidence: LedgerKeyEvidence | undefined): SuggestionIdentity[] {
