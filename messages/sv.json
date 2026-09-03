@@ -6534,6 +6534,7 @@
     "band_bevaka": "Bevaka",
     "row_book_transactions": "Bokföra transaktioner",
     "row_book_transactions_stale": "{count} äldre än 14 dagar",
+    "row_book_skattekonto": "Bokföra skattekontohändelser",
     "row_inbox_documents": "Underlag att hantera",
     "row_inbox_documents_detail": "Matcha mot transaktion eller bokför direkt",
     "row_supplier_approval": "Leverantörsfakturor att attestera",
