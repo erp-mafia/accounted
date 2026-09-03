@@ -102,16 +102,46 @@ describe('unlink old-address identities on auth email change', () => {
     expect(await providers(userId)).toEqual(['email'])
   })
 
-  it('matches the old address case-insensitively', async () => {
+  it('gives a Google-only account an email identity for the new address', async () => {
+    // Signed up with Google, never set a password: no 'email' identity.
+    // Removing the Google identity must not leave zero identities; the email
+    // identity is what Google with the new address links through and what
+    // password recovery resolves.
     const userId = await insertAuthUser()
     const oldEmail = await currentEmail(userId)
+    const newEmail = `pg-real-new-${userId}@test.invalid`
     await insertIdentity({ userId, provider: 'google', email: oldEmail.toUpperCase() })
     await setProviders(userId, ['google'])
 
+    await changeEmail(userId, newEmail)
+
+    expect(await identities(userId)).toEqual([{ provider: 'email', email: newEmail }])
+    const { rows } = await getPool().query<{ provider_id: string; identity_data: Record<string, unknown> }>(
+      `SELECT provider_id, identity_data FROM auth.identities WHERE user_id = $1`,
+      [userId],
+    )
+    expect(rows[0]!.provider_id).toBe(userId)
+    expect(rows[0]!.identity_data).toMatchObject({
+      sub: userId,
+      email: newEmail,
+      email_verified: true,
+    })
+    expect(await providers(userId)).toEqual(['email'])
+  })
+
+  it('does not create a second email identity when one already exists', async () => {
+    const userId = await insertAuthUser()
+    const oldEmail = await currentEmail(userId)
+    await insertIdentity({ userId, provider: 'email', email: oldEmail })
+    await insertIdentity({ userId, provider: 'google', email: oldEmail })
+
     await changeEmail(userId, `pg-real-new-${userId}@test.invalid`)
 
-    expect(await identities(userId)).toEqual([])
-    expect(await providers(userId)).toEqual([])
+    const { rows } = await getPool().query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM auth.identities WHERE user_id = $1 AND provider = 'email'`,
+      [userId],
+    )
+    expect(rows[0]!.n).toBe(1)
   })
 
   it('never touches the email identity, even though it carries the old address', async () => {

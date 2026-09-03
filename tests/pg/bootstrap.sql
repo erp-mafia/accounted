@@ -46,3 +46,22 @@ CREATE OR REPLACE FUNCTION storage.foldername(name text)
 AS $$
   SELECT string_to_array(name, '/');
 $$;
+
+-- auth.identities is created by GoTrue at startup, not by the Postgres
+-- image, and GoTrue does not run in CI. Triggers on auth.users that touch
+-- identities (20260903110000 unlink_old_address_identities) need the table
+-- to exist so an email change in a pg-real test does not fail with 42P01.
+-- Shape mirrors GoTrue's migration (same PK, unique key, generated email).
+CREATE TABLE IF NOT EXISTS auth.identities (
+  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider_id      text NOT NULL,
+  user_id          uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  identity_data    jsonb NOT NULL,
+  provider         text NOT NULL,
+  last_sign_in_at  timestamptz,
+  created_at       timestamptz,
+  updated_at       timestamptz,
+  email            text GENERATED ALWAYS AS (lower(identity_data ->> 'email')) STORED,
+  CONSTRAINT identities_provider_id_provider_unique UNIQUE (provider_id, provider)
+);
+CREATE INDEX IF NOT EXISTS identities_user_id_idx ON auth.identities (user_id);
