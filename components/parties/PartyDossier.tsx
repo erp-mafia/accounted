@@ -62,7 +62,11 @@ function registryValue(value: unknown): React.ReactNode {
   if ('street' in v || 'city' in v) {
     return [v.co, v.street, [v.postal_code, v.city].filter(Boolean).join(' ')].filter(Boolean).join(', ')
   }
-  if ('municipality' in v || 'municipality_code' in v) return [v.municipality ?? v.municipality_code, v.county ?? v.county_code].filter(Boolean).join(', ')
+  if ('municipality' in v || 'municipality_code' in v) {
+    const parts = [v.municipality ?? v.municipality_code, v.county ?? v.county_code].filter(Boolean) as string[]
+    // "Stockholm, Stockholm": the county adds nothing when it repeats the municipality.
+    return parts.filter((x, i) => i === 0 || x !== parts[0]).join(', ')
+  }
   if ('code' in v) return String(v.code)
   return JSON.stringify(v)
 }
