@@ -16,7 +16,7 @@ vi.mock('@/lib/auth/cron', () => ({
 // The route and the reconcile helper log through '@/lib/logger'. The real
 // logger suppresses info/warn under NODE_ENV=test, so warn/error output is
 // observed via these recorders instead of console spies. Console spies stay
-// for the route's remaining console.* lines (APIGW warn, summary, skip).
+// for the route's remaining console.* lines (summary, skip).
 const { warnRecorder, errorRecorder } = vi.hoisted(() => ({
   warnRecorder: vi.fn(),
   errorRecorder: vi.fn(),
@@ -304,7 +304,6 @@ describe('AGI kvittenser cron', () => {
     expect(body.processed).toBe(1)
     expect(body.grantRevoked).toBe(1)
     expect(body.errors).toBe(0)
-    expect(body.apigwConfig).toBe(0)
     expect(body.results[0]).toMatchObject({ status: 'grant_revoked', error: 'OMBUD_GRANT_MISSING' })
     expect(mockMarkGrantRevoked).toHaveBeenCalledWith('comp-1', expect.any(String), 'lasombud', 'OMBUD_GRANT_MISSING')
 
@@ -312,7 +311,7 @@ describe('AGI kvittenser cron', () => {
     expect(summaryLine).toContain('1 grants revoked')
   })
 
-  it('logs a warn (not error) and records apigw_config on ACCESS_DENIED', async () => {
+  it('treats ACCESS_DENIED as a real error now that the APIGW subscription is expected (#2226)', async () => {
     mockCreateClient.mockReturnValueOnce(stubHappyTables())
     mockAgiGetKvittenser.mockRejectedValueOnce(
       new SkatteverketAuthError('Skatteverkets API-gateway nekade anropet.', 'ACCESS_DENIED'),
@@ -322,80 +321,35 @@ describe('AGI kvittenser cron', () => {
     const body = await res.json()
 
     expect(body.processed).toBe(1)
-    expect(body.apigwConfig).toBe(1)
-    expect(body.errors).toBe(0)
+    expect(body.errors).toBe(1)
+    // The old known-gap bucket is gone from the response contract.
+    expect(body).not.toHaveProperty('apigwConfig')
     expect(body.results[0]).toMatchObject({
       declarationId: 'decl-1',
-      status: 'apigw_config',
+      status: 'error',
+      // Machine-readable code, never the generic "Något gick fel" fallback.
       error: 'ACCESS_DENIED',
     })
     // companyId is internal log context, never response payload.
     expect(body.results[0]).not.toHaveProperty('companyId')
 
-    // Warn carries the actionable config hint plus the context to act on it.
-    expect(warnSpy).toHaveBeenCalledTimes(1)
-    const [warnMessage, warnContext] = warnSpy.mock.calls[0]
-    expect(warnMessage).toContain('Utvecklarportalen')
-    expect(warnMessage).toContain('SKATTEVERKET_APIGW_CLIENT_ID')
-    expect(warnContext).toMatchObject({
+    // A gateway refusal is a regression, not a known gap: error level with
+    // the gateway's message in context, no warn-once suppression, no
+    // reconsent flagging.
+    expect(errorRecorder).toHaveBeenCalledTimes(1)
+    expect(String(errorRecorder.mock.calls[0][0])).toContain('Reconciliation failed')
+    expect(errorRecorder.mock.calls[0][1]).toMatchObject({
       declarationId: 'decl-1',
       companyId: 'comp-1',
-      period: expect.any(String),
+      message: 'Skatteverkets API-gateway nekade anropet.',
     })
-
-    // The whole point: no error-level log for a config gap retries cannot heal.
-    expect(errorSpy).not.toHaveBeenCalled()
-    expect(errorRecorder).not.toHaveBeenCalled()
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(warnRecorder).not.toHaveBeenCalled()
     expect(mockMarkNeedsReconsent).not.toHaveBeenCalled()
 
-    // The config gap stays visible in the run summary.
     const summaryLine = logSpy.mock.calls.map(c => String(c[0])).find(m => m.includes('Processed'))
-    expect(summaryLine).toContain('1 apigw config gaps')
-  })
-
-  it('warns once per run on ACCESS_DENIED but records apigw_config for every declaration', async () => {
-    mockCreateClient.mockReturnValueOnce(
-      makeSupabaseStub({
-        agi_declarations: {
-          data: [
-            PENDING_DECLARATION,
-            { ...PENDING_DECLARATION, id: 'decl-2', company_id: 'comp-2' },
-            { ...PENDING_DECLARATION, id: 'decl-3', company_id: 'comp-3' },
-          ],
-        },
-        skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
-        company_settings: { data: { org_number: '556123-4567', entity_type: 'aktiebolag' } },
-      }),
-    )
-    for (let i = 0; i < 3; i++) {
-      mockAgiGetKvittenser.mockRejectedValueOnce(
-        new SkatteverketAuthError('Skatteverkets API-gateway nekade anropet.', 'ACCESS_DENIED'),
-      )
-    }
-
-    const res = await GET(makeRequest())
-    const body = await res.json()
-
-    // Every affected declaration still gets its apigw_config outcome.
-    expect(body.processed).toBe(3)
-    expect(body.apigwConfig).toBe(3)
-    expect(body.errors).toBe(0)
-    expect(body.results.map((r: { declarationId: string }) => r.declarationId)).toEqual([
-      'decl-1',
-      'decl-2',
-      'decl-3',
-    ])
-    expect(body.results.every((r: { status: string }) => r.status === 'apigw_config')).toBe(true)
-    expect(body.results.every((r: Record<string, unknown>) => !('companyId' in r))).toBe(true)
-
-    // But the identical config-gap warning is logged exactly once per run.
-    expect(warnSpy).toHaveBeenCalledTimes(1)
-    expect(String(warnSpy.mock.calls[0][0])).toContain('Utvecklarportalen')
-    expect(errorSpy).not.toHaveBeenCalled()
-    expect(errorRecorder).not.toHaveBeenCalled()
-
-    const summaryLine = logSpy.mock.calls.map(c => String(c[0])).find(m => m.includes('Processed'))
-    expect(summaryLine).toContain('3 apigw config gaps')
+    expect(summaryLine).toContain('1 errors')
+    expect(summaryLine).not.toContain('apigw')
   })
 
   it('still flags reconsent codes as expired_token and marks the connection', async () => {
@@ -408,7 +362,6 @@ describe('AGI kvittenser cron', () => {
     const body = await res.json()
 
     expect(body.expired).toBe(1)
-    expect(body.apigwConfig).toBe(0)
     expect(body.results[0]).toMatchObject({ status: 'expired_token', error: 'SESSION_EXPIRED' })
     expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'user-1', 'comp-1', 'SESSION_EXPIRED')
     expect(errorSpy).not.toHaveBeenCalled()
@@ -443,7 +396,6 @@ describe('AGI kvittenser cron', () => {
     const body = await res.json()
 
     expect(body.errors).toBe(1)
-    expect(body.apigwConfig).toBe(0)
     expect(body.results[0]).toMatchObject({ status: 'error', error: 'Du har inte behörighet.' })
     expect(errorRecorder).toHaveBeenCalledTimes(1)
     expect(String(errorRecorder.mock.calls[0][0])).toContain('Reconciliation failed')

@@ -96,6 +96,8 @@ function queueFor(
 const euCustomer = makeCustomer({
   id: 'cust-1',
   customer_type: 'eu_business',
+  country: 'DE',
+  vat_number: 'DE811234567',
   vat_number_validated: true,
 })
 

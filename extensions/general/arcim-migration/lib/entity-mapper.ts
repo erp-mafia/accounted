@@ -9,6 +9,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 import { normalizeVatRateToFraction } from '@/lib/vat/vat-rate-unit'
+import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { sumLineVat, lineVatFromPercent } from '@/lib/providers/amounts'
 import type { Currency, CustomerType, ExchangeRate, SupplierType, VatTreatment } from '@/types'
 import type {
@@ -46,7 +47,10 @@ function formatAddress(addr?: PostalAddress): {
     address_line2: addr.additionalStreetName || null,
     postal_code: addr.postalZone || null,
     city: addr.cityName || null,
-    country: addr.countryCode || null,
+    // customers.country is ISO 3166-1 alpha-2; some providers hand over a
+    // name (Fortnox's Country is "Sverige"), which is mapped when known and
+    // kept as-is otherwise so the periodisk report can point at it.
+    country: normalizeCountryCode(addr.countryCode) ?? addr.countryCode ?? null,
   }
 }
 

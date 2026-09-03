@@ -700,7 +700,12 @@ const SIE_STEP_LABELS: Record<ImportWizardStep, string> = {
   result: 'Resultat',
 }
 
-function SIEImportWizard() {
+function SIEImportWizard({
+  onOpenManualOpeningBalances,
+}: {
+  /** Switch to the manual "Ingående balanser" wizard (SIE preview, issue #2082). */
+  onOpenManualOpeningBalances?: () => void
+}) {
   const { toast } = useToast()
 
   const [step, setStep] = useState<ImportWizardStep>('upload')
@@ -1143,7 +1148,8 @@ function SIEImportWizard() {
       {step === 'preview' && preview && (
         <SIEPreviewStep preview={preview} issues={issues} missingAccounts={missingAccounts}
           onCreateAccounts={handleCreateAccounts} isCreatingAccounts={isCreatingAccounts}
-          onContinue={() => goToStep(showMappingStep ? 'mapping' : 'review')} onBack={goBack} />
+          onContinue={() => goToStep(showMappingStep ? 'mapping' : 'review')} onBack={goBack}
+          onOpenManualOpeningBalances={onOpenManualOpeningBalances} />
       )}
       {step === 'mapping' && (
         <AccountMappingStep mappings={mappings} basAccounts={basAccounts}
@@ -2747,7 +2753,9 @@ export default function ImportPage() {
       )}
       {mode === 'bank' && <BankFileImportWizard />}
       {mode === 'skattekonto' && <SkattekontoImportWizard />}
-      {mode === 'sie' && <SIEImportWizard />}
+      {/* The CSV/Excel wizard opens on "Ingående balanser" by default, which is
+          exactly the manual path the SIE preview offers on an IB imbalance. */}
+      {mode === 'sie' && <SIEImportWizard onOpenManualOpeningBalances={() => setMode('csv_data')} />}
       {mode === 'underlag' && <UnderlagImportWizard />}
       {mode === 'csv_data' && <CSVDataImportWizard />}
       {mode === 'migration' && (

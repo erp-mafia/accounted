@@ -453,3 +453,36 @@ describe('reconcilePsAgainstVatDeclaration', () => {
     expect(reconciled.reconciliation.matches).toBeNull()
   })
 })
+
+describe('legacy country names on customers (#2028)', () => {
+  it('reads a stored country name as its ISO code: no false warnings, correct CSV country', async () => {
+    const legacy = invDE()
+    legacy.customer!.country = 'Germany'
+    results = [
+      { data: [entryEU('inv-de')], error: null },
+      { data: [lineEU('3308', 15000, 'inv-de')], error: null },
+      { data: [legacy], error: null },
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    expect(report.warnings).toEqual([])
+    expect(report.rows).toHaveLength(1)
+    expect(report.rows[0]).toMatchObject({ country: 'DE', vatNumber: '123456789', services: 15000 })
+  })
+
+  it('still names an unmapped country in the warning', async () => {
+    const legacy = invDE()
+    legacy.customer!.country = 'Atlantis'
+    results = [
+      { data: [entryEU('inv-de')], error: null },
+      { data: [lineEU('3308', 15000, 'inv-de')], error: null },
+      { data: [legacy], error: null },
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    expect(report.warnings.map((w) => w.code)).toContain('NON_EU_COUNTRY_ON_EU_ACCOUNT')
+    expect(report.warnings.find((w) => w.code === 'NON_EU_COUNTRY_ON_EU_ACCOUNT')?.message).toContain('ATLANTIS')
+  })
+})
