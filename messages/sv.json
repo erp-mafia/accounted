@@ -3343,6 +3343,7 @@
     "inbound_outcome_empty": "Tomt mejl utan bilagor",
     "inbound_outcome_body": "Mejltexten sparad som underlag",
     "inbound_outcome_body_duplicate": "Dubblett av ett tidigare mejl",
+    "inbound_outcome_fan_out_capped": "Inte behandlat: mejlet gick till fler än fem inkorgar. Skicka det till den här adressen separat.",
     "inbound_tag_conflict": "Både +lev och +ver i samma mejl: typen avgörs av tolkningen.",
     "inbound_open": "Öppna",
     "inbound_open_nth": "Öppna {n}",

@@ -111,7 +111,9 @@ const INBOUND_HISTORY_LIMIT = 200
 // sender-controlled and every target costs a full download-and-extract
 // pass: cap the fan-out so a mail addressed to fifty known inboxes cannot
 // multiply the work fifty times. A consultant forwarding to a handful of
-// clients fits; beyond that the rest is dropped with a log line.
+// clients fits. Every addressed inbox is still resolved (one cheap lookup
+// each) and the ones past the cap get a history record saying the mail
+// arrived and was not processed, so no company is left without a trace.
 const MAX_INBOUND_TARGETS_PER_EMAIL = 5
 
 // Partial-update schema for the /items/:id/fields PATCH route. Only the
@@ -1816,14 +1818,7 @@ export const invoiceInboxExtension: Extension = {
         const domainLower = domain.toLowerCase()
 
         const sharedRecipients = extractSharedRecipientsForDomain(to, domain)
-        const inboxGroups = groupSharedRecipientsByInbox(sharedRecipients)
-        if (inboxGroups.length > MAX_INBOUND_TARGETS_PER_EMAIL) {
-          console.warn('[invoice-inbox/inbound] Recipient fan-out capped', {
-            addressed: inboxGroups.length,
-            processed: MAX_INBOUND_TARGETS_PER_EMAIL,
-          })
-        }
-        for (const group of inboxGroups.slice(0, MAX_INBOUND_TARGETS_PER_EMAIL)) {
+        for (const group of groupSharedRecipientsByInbox(sharedRecipients)) {
           localPart ??= group.localPart
           const { data: inbox } = await serviceSupabase
             .from('company_inboxes')
@@ -1873,6 +1868,16 @@ export const invoiceInboxExtension: Extension = {
               })
             }
           }
+        }
+
+        // Fan-out cap: the first targets in recipient order are processed,
+        // the rest only recorded (below), never downloaded or extracted.
+        const deferredTargets = targets.splice(MAX_INBOUND_TARGETS_PER_EMAIL)
+        if (deferredTargets.length > 0) {
+          console.warn('[invoice-inbox/inbound] Recipient fan-out capped', {
+            addressed: targets.length + deferredTargets.length,
+            processed: targets.length,
+          })
         }
 
         if (targets.length === 0) {
@@ -2374,7 +2379,35 @@ export const invoiceInboxExtension: Extension = {
           }
         }
 
-        if (outcomes.length === 1) {
+        for (const target of deferredTargets) {
+          try {
+            await appendProcessingHistory({
+              companyId: target.companyId,
+              correlationId: email_id,
+              aggregateType: 'System',
+              aggregateId: email_id,
+              eventType: 'InboundMailReceived',
+              payload: {
+                inbox_id: target.inboxId,
+                custom_domain: target.customDomain,
+                tags: target.tags,
+                unknown_tag_count: target.unknownTagCount,
+                kind_hint: target.kindHint,
+                tag_conflict: target.tagConflict,
+                outcome: 'fan_out_capped',
+                attachment_count: totalAttachments,
+                inbox_item_id: null,
+                attachments: [],
+              },
+              actor: { type: 'system', id: 'resend-inbound' },
+              occurredAt: new Date(),
+            })
+          } catch (err) {
+            console.error('[invoice-inbox/inbound] InboundMailReceived (capped) append failed:', err)
+          }
+        }
+
+        if (outcomes.length === 1 && deferredTargets.length === 0) {
           const { processed, reason, inbox_item_id, results } = outcomes[0].outcome
           return NextResponse.json({
             data: {
@@ -2395,6 +2428,9 @@ export const invoiceInboxExtension: Extension = {
               ...(outcome.inbox_item_id ? { inbox_item_id: outcome.inbox_item_id } : {}),
               ...(outcome.results ? { results: outcome.results } : {}),
             })),
+            ...(deferredTargets.length > 0
+              ? { deferred: deferredTargets.map((t) => ({ company_id: t.companyId, reason: 'fan_out_capped' })) }
+              : {}),
           },
         })
       },

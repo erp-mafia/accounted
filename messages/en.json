@@ -3343,6 +3343,7 @@
     "inbound_outcome_empty": "Empty mail without attachments",
     "inbound_outcome_body": "Mail body saved as a document",
     "inbound_outcome_body_duplicate": "Duplicate of an earlier mail",
+    "inbound_outcome_fan_out_capped": "Not processed: the mail went to more than five inboxes. Send it to this address on its own.",
     "inbound_tag_conflict": "Both +lev and +ver on one mail: the type is decided by extraction.",
     "inbound_open": "Open",
     "inbound_open_nth": "Open {n}",

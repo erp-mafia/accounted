@@ -948,11 +948,18 @@ describe('POST /inbound with several recipients (#2181)', () => {
     })
   })
 
-  it('caps the fan-out at five inboxes per mail', async () => {
-    const to = Array.from({ length: 7 }, (_, i) => `inbox-${i}-abcd@arcim.io`)
+  it('processes five inboxes per mail and records the rest as not processed', async () => {
+    // Two unknown local parts first: they must not use up the cap.
+    const to = [
+      'unknown-a-0000@arcim.io',
+      'unknown-b-0000@arcim.io',
+      ...Array.from({ length: 7 }, (_, i) => `inbox-${i}-abcd@arcim.io`),
+    ]
     vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ to, attachments: [] }) as never)
     const { supabase, enqueue, calls } = createQueuedMockSupabase()
-    for (let i = 0; i < 5; i++) {
+    enqueue({ data: null }) // unknown-a
+    enqueue({ data: null }) // unknown-b
+    for (let i = 0; i < 7; i++) {
       enqueue({ data: { id: `inbox-${i}`, company_id: `company-${i}`, status: 'active' } })
     }
     for (let i = 0; i < 5; i++) enqueue({ data: { created_by: `owner-${i}` } })
@@ -964,10 +971,23 @@ describe('POST /inbound with several recipients (#2181)', () => {
     const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
     const body = await res.json()
     expect(res.status).toBe(200)
-    expect(body.data.targets).toHaveLength(5)
-    expect(calls.filter((c) => c.table === 'company_inboxes' && c.method === 'eq')).toHaveLength(5)
+    // Every addressed inbox is looked up; the first five resolved are processed.
+    expect(calls.filter((c) => c.table === 'company_inboxes' && c.method === 'eq')).toHaveLength(9)
+    expect(body.data.targets.map((t: { company_id: string }) => t.company_id)).toEqual(
+      ['company-0', 'company-1', 'company-2', 'company-3', 'company-4'],
+    )
+    expect(body.data.deferred).toEqual([
+      { company_id: 'company-5', reason: 'fan_out_capped' },
+      { company_id: 'company-6', reason: 'fan_out_capped' },
+    ])
     expect(uploadAndExtract).toHaveBeenCalledTimes(5)
-    expect(receivedEvents()).toHaveLength(5)
+    // The two past the cap still get a record: arrived, not processed.
+    const events = receivedEvents()
+    expect(events).toHaveLength(7)
+    expect(events.slice(5).map((e) => [e.companyId, e.payload.outcome])).toEqual([
+      ['company-5', 'fan_out_capped'],
+      ['company-6', 'fan_out_capped'],
+    ])
   })
 
   it('keeps a rejected attachment (bad type) as a duplicate on redelivery', async () => {

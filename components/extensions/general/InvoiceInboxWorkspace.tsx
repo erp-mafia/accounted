@@ -2312,13 +2312,15 @@ function InboundMailRow({
   else if (mail.outcome === 'no_attachments') parts.push(t('inbound_outcome_empty'))
   else if (mail.outcome === 'email_body') parts.push(t('inbound_outcome_body'))
   else if (mail.outcome === 'email_body_duplicate') parts.push(t('inbound_outcome_body_duplicate'))
+  else if (mail.outcome === 'fan_out_capped') parts.push(t('inbound_outcome_fan_out_capped'))
   else {
     if (counts.filed > 0) parts.push(t('inbound_outcome_filed', { count: counts.filed }))
     if (counts.duplicate > 0) parts.push(t('inbound_outcome_duplicate', { count: counts.duplicate }))
     if (counts.rejected > 0) parts.push(t('inbound_outcome_rejected', { count: counts.rejected }))
     if (counts.failed > 0) parts.push(t('inbound_outcome_failed', { count: counts.failed }))
   }
-  const hasFailure = mail.outcome === 'rate_limited' || counts.rejected > 0 || counts.failed > 0
+  const hasFailure =
+    mail.outcome === 'rate_limited' || mail.outcome === 'fan_out_capped' || counts.rejected > 0 || counts.failed > 0
   // Every row the mail produced, in attachment order, each a click away.
   const openable: string[] = []
   if (mail.inbox_item_id) openable.push(mail.inbox_item_id)
