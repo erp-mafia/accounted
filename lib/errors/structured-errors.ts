@@ -2774,6 +2774,11 @@ const ARTICLE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The org number looks like a Swedish personal identity number. Save the customer as an individual instead, so the number is stored protected and masked in lists.',
   },
+  CUSTOMER_COUNTRY_MISMATCH: {
+    httpStatus: 400,
+    message_sv: 'Landet stämmer inte med kundtypen eller VAT-numrets landsprefix.',
+    message_en: 'The country does not agree with the customer type or the VAT number\'s country prefix.',
+  },
   CUSTOMER_PERSONAL_NUMBER_CONFLICT: {
     httpStatus: 400,
     message_sv:
@@ -3173,8 +3178,11 @@ const SALARY: Record<string, StructuredErrorEntry> = {
   // month, the run itself belongs in that period.
   SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD: {
     httpStatus: 400,
-    message_sv: 'Utbetalningsdagen måste ligga i lönekörningens period: AGI redovisas per utbetalningsmånad. Skapa en lönekörning för rätt period i stället.',
-    message_en: 'The payment date must fall within the salary run\'s period month: the AGI is declared per payment month. Create a salary run for the correct period instead.',
+    // No longer raised (#2191): the AGI period follows payment_date, so a
+    // payout in another month is legal. Kept so clients mapping the code
+    // keep compiling.
+    message_sv: 'Utbetalningsdagen måste ligga i lönekörningens period.',
+    message_en: 'The payment date must fall within the salary run\'s period month.',
   },
   SALARY_RUN_DELETE_NOT_DRAFT: {
     httpStatus: 400,
@@ -3225,6 +3233,13 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'AGI kan endast genereras för lönekörningar i status review, approved, paid, booked eller corrected.',
     message_en: 'AGI can only be generated for salary runs in review, approved, paid, booked, or corrected status.',
+  },
+  AGI_PERIOD_CONFLICT: {
+    httpStatus: 409,
+    message_sv:
+      'En annan lönekörning är redan deklarerad för samma redovisningsperiod (utbetalningsmånad). En arbetsgivardeklaration per månad ska omfatta alla utbetalningar den månaden: slå ihop körningarna eller rätta den befintliga deklarationen.',
+    message_en:
+      'Another salary run is already declared for the same reporting period (payout month). One employer declaration per month must cover every payment made that month: merge the runs or correct the existing declaration.',
   },
   AGI_INCOMPLETE_DATA: {
     httpStatus: 400,
@@ -4129,6 +4144,31 @@ const DIMENSION: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Dimensionen kunde inte uppdateras.',
     message_en: 'Failed to update dimension.',
+  },
+  DIMENSION_SYSTEM_DELETE: {
+    httpStatus: 400,
+    message_sv: 'Systemdimensioner (kostnadsställe och projekt) kan inte tas bort: avaktivera dem istället.',
+    message_en: 'System dimensions (kostnadsställe/projekt) cannot be deleted: archive (inactivate) them instead.',
+  },
+  // The DB registry guard (enforce_dimension_registry_guards) raises when any
+  // posted/reversed line is tagged with the dimension's number, and the value
+  // retention trigger fires on the cascade to dimension_values. Routes surface
+  // the trigger's own Swedish message via `messageSv`.
+  DIMENSION_REFERENCED: {
+    httpStatus: 409,
+    message_sv:
+      'Dimensionen används på bokförda verifikat och kan inte tas bort: avaktivera den istället.',
+    message_en:
+      'The dimension is referenced by posted vouchers and cannot be deleted: archive (inactivate) it instead.',
+    remediation: {
+      description:
+        'Archive the dimension instead: PATCH /api/dimensions/[id] with { "is_active": false }. Numbers tagged on posted lines are retained for the BFL 7-year period.',
+    },
+  },
+  DIMENSION_DELETE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Dimensionen kunde inte tas bort.',
+    message_en: 'Failed to delete dimension.',
   },
   DIMENSION_VALUE_NOT_FOUND: {
     httpStatus: 404,

@@ -47,9 +47,11 @@ export function validatePeriodDuration(start: string, end: string, options?: Val
     return 'Period end must be after period start'
   }
 
-  // start must be 1st of month: unless this is the first fiscal period (BFL 3 kap.)
+  // start must be 1st of month: unless this is the first fiscal period (BFL 3
+  // kap. 1 § for subsequent years, 3 kap. 3 § for the first). Say why and what
+  // is allowed, not only "no" (issue #2237).
   if (startParts.day !== 1 && !options?.isFirstPeriod) {
-    return 'Period start must be the 1st of a month'
+    return "Period start must be the 1st of a month: only the company's first fiscal year may start mid-month (BFL 3 kap. 1 and 3 §§)"
   }
 
   // end must be last day of month

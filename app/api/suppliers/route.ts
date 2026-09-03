@@ -59,7 +59,7 @@ export const POST = withRouteContext(
         address_line2: body.address_line2,
         postal_code: body.postal_code,
         city: body.city,
-        country: body.country || 'SE',
+        country: body.country ?? 'SE',
         org_number: body.org_number,
         vat_number: body.vat_number,
         bankgiro: body.bankgiro,
@@ -70,7 +70,8 @@ export const POST = withRouteContext(
         clearing_number: body.clearing_number,
         account_number: body.account_number,
         default_expense_account: body.default_expense_account,
-        default_payment_terms: body.default_payment_terms || 30,
+        // ?? not ||: 0 days (betalning direkt) is a value, not a missing one (#2070).
+        default_payment_terms: body.default_payment_terms ?? 30,
         default_currency: body.default_currency || 'SEK',
         notes: body.notes,
       })

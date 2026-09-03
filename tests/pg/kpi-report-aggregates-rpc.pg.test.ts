@@ -15,11 +15,14 @@
  *     year-end chain), mirroring excludeYearEndClosing;
  *   - ob sums the OB entry's lines with NO status filter (mirrors
  *     getOpeningBalances) but is company-guarded;
- *   - monthly is posted-only, classes 3-8, 8999 excluded, class 8 split
- *     per line by the sign of credit - debit, and (since migration
- *     20260730090000) it shares tb_ex_year_end's entry set so the
- *     resultatavslut cannot chart the whole year's revenue as negative
- *     income in the fiscal-year-end month;
+ *   - monthly shares tb_ex_year_end's entry set VERBATIM (posted AND
+ *     reversed, minus the undone year-end chain; since 20260903160000, issue
+ *     #2201: a reversed original and its storno cancel within the year so
+ *     sum(months) = Nettoresultat), classes 3-8, 8999 excluded, class 8
+ *     split per line by the sign of credit - debit, and (since
+ *     20260730090000) year-end entries stay out so the resultatavslut cannot
+ *     chart the whole year's revenue as negative income in the
+ *     fiscal-year-end month;
  *   - SECURITY INVOKER: a non-member gets empty sections under RLS.
  */
 import { describe, it, expect } from 'vitest'
@@ -161,7 +164,8 @@ async function seedFullScenario() {
       { account: '1930', debit: 12500, credit: 0 },
     ],
   })
-  // February: expense, plus a REVERSED entry (in tb, not in monthly)
+  // February: expense, plus a REVERSED entry (in tb AND in monthly: the
+  // monthly section shares tb_ex_year_end's entry set, issue #2201)
   await insertJournalEntry({
     ...ctx, voucherNumber: 3, entryDate: '2026-02-10',
     lines: [
@@ -321,14 +325,17 @@ describe('get_kpi_report_aggregates RPC', () => {
     expect(foreign.ob).toEqual([])
   })
 
-  it('monthly is posted-only, 8999 excluded, class 8 sign-split per line', async () => {
+  it('monthly counts posted and reversed originals, 8999 excluded, class 8 sign-split per line', async () => {
     const ctx = await seedFullScenario()
     const payload = await callRpc(ctx.companyId, ctx.fiscalPeriodId, ctx.obEntryId)
 
     // January: revenue only (class 2 VAT line ignored).
     expect(monthOf(payload, 2026, 1)).toMatchObject({ income: 10000, expenses: 0 })
-    // February: the reversed 3001 entry (700) must NOT appear.
-    expect(monthOf(payload, 2026, 2)).toMatchObject({ income: 0, expenses: 3000 })
+    // February: the reversed 3001 entry (700) IS counted, exactly as it is in
+    // tb_ex_year_end (3001 credit 10700). Before 20260903160000 the monthly
+    // section dropped reversed originals while keeping their stornos, so the
+    // months stopped summing to the year total (issue #2201).
+    expect(monthOf(payload, 2026, 2)).toMatchObject({ income: 700, expenses: 3000 })
     // March: 8310 credit 200 -> income; 8410 debit 500 -> expenses.
     expect(monthOf(payload, 2026, 3)).toMatchObject({ income: 200, expenses: 500 })
     // December: year_end entries ARE excluded from monthly as of migration
@@ -343,6 +350,41 @@ describe('get_kpi_report_aggregates RPC', () => {
     expect(monthOf(payload, 2026, 12)).toBeUndefined()
     // No phantom months, and no bokslut-only months.
     expect(payload.monthly.map((m) => m.month).sort((a, b) => a - b)).toEqual([1, 2, 3])
+  })
+
+  it('a same-year storno cancels within the year: sum(months) equals the tb_ex_year_end net result', async () => {
+    const ctx = await seedCompany()
+    // Ver 12 (March): 10 000 kr revenue on 3041, later reversed by storno in
+    // April. The year total nets to 0; the months must do the same.
+    const original = await insertJournalEntry({
+      ...ctx, voucherNumber: 12, status: 'reversed', entryDate: '2026-03-10',
+      lines: [
+        { account: '3041', debit: 0, credit: 10000 },
+        { account: '1930', debit: 10000, credit: 0 },
+      ],
+    })
+    await insertJournalEntry({
+      ...ctx, voucherNumber: 13, sourceType: 'storno', entryDate: '2026-04-02',
+      reversesId: original,
+      lines: [
+        { account: '3041', debit: 10000, credit: 0 },
+        { account: '1930', debit: 0, credit: 10000 },
+      ],
+    })
+
+    const payload = await callRpc(ctx.companyId, ctx.fiscalPeriodId)
+
+    // Year total: the original and the storno both count, netting to 0.
+    expect(byAccount(payload.tb_ex_year_end).get('3041')).toMatchObject({ debit: 10000, credit: 10000 })
+    // Months: March carries the revenue, April carries the reversal.
+    expect(monthOf(payload, 2026, 3)).toMatchObject({ income: 10000, expenses: 0 })
+    expect(monthOf(payload, 2026, 4)).toMatchObject({ income: -10000, expenses: 0 })
+    const monthsNet = payload.monthly.reduce((sum, m) => sum + m.income - m.expenses, 0)
+    const yearNet = payload.tb_ex_year_end
+      .filter((t) => /^[3-8]/.test(t.account_number))
+      .reduce((sum, t) => sum + t.credit - t.debit, 0)
+    expect(monthsNet).toBe(0)
+    expect(monthsNet).toBe(yearNet)
   })
 
   it('scopes to the requested company and returns empty sections for an empty one', async () => {

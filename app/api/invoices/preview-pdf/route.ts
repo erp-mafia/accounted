@@ -202,7 +202,7 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
   }
 
   // VAT rules are customer-type-driven and only know the customer side.
-  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
+  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
 
   const isDeliveryNote = docType === 'delivery_note'
 
