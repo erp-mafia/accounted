@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
@@ -14,6 +15,52 @@ import type { MergeCandidate } from './MergeDialog'
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{children}</h2>
+}
+
+const REGISTRY_FIELDS = [
+  'f_tax',
+  'vat_registration',
+  'employer_registration',
+  'company_status',
+  'legal_form',
+  'bolagsverket_status',
+  'employees_band',
+  'industry',
+  'postal_address',
+  'seat',
+  'registered_at',
+  'active_since',
+  'active_until',
+  'phone',
+  'email',
+  'workplaces',
+  'trade_name',
+] as const
+
+/** Live registry facts, in the order the dossier shows them. */
+function registryFacts(facts: Dossier['facts']): Dossier['facts'] {
+  const scb = facts.filter((f) => f.source === 'registry_scb')
+  return REGISTRY_FIELDS.flatMap((field) => scb.filter((f) => f.field === field))
+}
+
+function registryLabel(t: (k: string) => string, field: string): string {
+  return REGISTRY_FIELDS.includes(field as (typeof REGISTRY_FIELDS)[number]) ? t(`fact_${field}`) : field
+}
+
+/** Coded facts show their label; address and seat compose; the rest print. */
+function registryValue(value: unknown): React.ReactNode {
+  if (value === null || value === undefined) return '·'
+  if (typeof value === 'string' || typeof value === 'number') return String(value)
+  const v = value as Record<string, unknown>
+  if (typeof v.label === 'string') {
+    return v.warning ? <span className="text-warning">{v.label}</span> : v.label
+  }
+  if ('street' in v || 'city' in v) {
+    return [v.co, v.street, [v.postal_code, v.city].filter(Boolean).join(' ')].filter(Boolean).join(', ')
+  }
+  if ('code' in v) return String(v.code)
+  if ('municipality_code' in v) return [v.municipality_code, v.county_code].filter(Boolean).join(' · ')
+  return JSON.stringify(v)
 }
 
 function Row({ label, value, note }: { label: string; value: React.ReactNode; note?: React.ReactNode }) {
@@ -42,6 +89,8 @@ export function PartyDossier({
   onPromote,
   onDismiss,
   onMerge,
+  onFetchRegistry,
+  fetching = false,
   reloadKey,
 }: {
   partyId: string | null
@@ -52,6 +101,9 @@ export function PartyDossier({
   onPromote: (id: string, roles: PartyRole[]) => void
   onDismiss: (id: string) => void
   onMerge: (subject: MergeCandidate, suggested: MergeCandidate[]) => void
+  /** Fetch registry facts from SCB for this party; undefined hides the button. */
+  onFetchRegistry?: (id: string) => void
+  fetching?: boolean
   reloadKey: number
 }) {
   const t = useTranslations('parties')
@@ -144,6 +196,11 @@ export function PartyDossier({
                       {t('promote_customer')}
                     </Button>
                   ) : null}
+                  {onFetchRegistry && isLegalPersonOrgNumber(p.orgNumber) ? (
+                    <Button type="button" size="sm" variant="outline" onClick={() => onFetchRegistry(p.id)} disabled={!canWrite || busy || fetching}>
+                      {fetching ? t('fetching_registry') : t('fetch_registry')}
+                    </Button>
+                  ) : null}
                   <Button
                     type="button"
                     size="sm"
@@ -234,6 +291,9 @@ export function PartyDossier({
                         value={formatPaymentIdentity(i.scheme, i.value)}
                         note={`${t('fact_from_documents', { count: i.seenCount })} · ${i.status === 'known' ? t('identity_known') : t('identity_unverified')}`}
                       />
+                    ))}
+                    {registryFacts(dossier.facts).map((f) => (
+                      <Row key={f.id} label={registryLabel(t, f.field)} value={registryValue(f.value)} note={`${t('source_scb')} · ${formatDate(f.fetchedAt ?? f.recordedAt)}`} />
                     ))}
                   </tbody>
                 </table>

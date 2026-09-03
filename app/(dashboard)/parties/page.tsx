@@ -73,6 +73,7 @@ function SuggestionsPage() {
   const [roleOverrides, setRoleOverrides] = useState<Record<string, PartyRole[]>>({})
   const [busy, setBusy] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [fetchingRegistry, setFetchingRegistry] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [dossierId, setDossierId] = useState<string | null>(null)
   const [dossierReload, setDossierReload] = useState(0)
@@ -119,6 +120,7 @@ function SuggestionsPage() {
   }, [])
 
   const counts = register?.counts
+  const scbEnabled = Boolean(register?.scbConfigured)
   const viewOptions = useMemo(
     () =>
       VIEWS.map((v) => ({
@@ -209,6 +211,28 @@ function SuggestionsPage() {
       fail()
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function fetchRegistry(id: string) {
+    setFetchingRegistry(true)
+    try {
+      const res = await fetch(`/api/parties/${id}/enrich`, { method: 'POST' })
+      const json = (await res.json()) as { data?: { found: boolean; orgNumber: string; inserted: number; superseded: number; refreshed: number }; error?: { code: string } }
+      if (!res.ok || !json.data) {
+        toast({ title: t('registry_unavailable_title'), variant: 'destructive' })
+        return
+      }
+      if (!json.data.found) {
+        toast({ title: t('registry_not_found_title'), description: t('registry_not_found_description', { org: json.data.orgNumber }) })
+        return
+      }
+      toast({ title: t('registry_fetched_title'), description: t('registry_fetched_description', { inserted: json.data.inserted, superseded: json.data.superseded, refreshed: json.data.refreshed }) })
+      setDossierReload((k) => k + 1)
+    } catch {
+      toast({ title: t('registry_unavailable_title'), variant: 'destructive' })
+    } finally {
+      setFetchingRegistry(false)
     }
   }
 
@@ -387,6 +411,8 @@ function SuggestionsPage() {
           setDossierId(null)
         }}
         onMerge={(subject, suggested) => setMerge({ subject, suggested })}
+        onFetchRegistry={scbEnabled ? (id) => void fetchRegistry(id) : undefined}
+        fetching={fetchingRegistry}
       />
 
       {merge ? (
