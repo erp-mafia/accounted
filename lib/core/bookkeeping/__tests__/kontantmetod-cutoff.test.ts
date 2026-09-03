@@ -575,6 +575,26 @@ describe('collectKontantmetodCutoff', () => {
     expect(result.payables[0]).toMatchObject({ outstanding: 9200, vat: 1840 })
   })
 
+  // Issue #2019: a manual "Markera som betald" payment carries no bank
+  // transaction. The cut-off keys on payment DATE alone, so such a row must
+  // retire the fordran exactly like a bank-matched one.
+  it('treats a transaction-less manual payment as settling the fordran', async () => {
+    const result = await collectKontantmetodCutoff(makePagedSupabase({
+      invoices: [{
+        id: 'inv-manual', invoice_number: '001', invoice_date: '2026-08-01', status: 'paid',
+        total: 12500, vat_amount: 2500, vat_treatment: 'standard_25', document_type: 'invoice',
+        currency: 'SEK',
+      }],
+      invoice_payments: [{
+        id: 'ip-manual', invoice_id: 'inv-manual', amount: 12500, payment_date: '2026-08-28',
+        transaction_id: null, journal_entry_id: 'je-cash',
+      }],
+      supplier_invoices: [],
+      supplier_invoice_payments: [],
+    }), 'co-1', '2026-01-01', '2026-12-31')
+    expect(result.receivables).toEqual([])
+  })
+
   it('collects reverse-charge rate, supplier type, and scaled declaration basis', async () => {
     const result = await collectKontantmetodCutoff(makePagedSupabase({
       supplier_invoices: [{

@@ -1,0 +1,210 @@
+#!/usr/bin/env npx tsx
+/**
+ * Backfill for issue #2019: customer invoices settled through "Markera som
+ * betald" (or the Stripe payment sync) before settleInvoicePayment wrote the
+ * invoice_payments row.
+ *
+ * Why it matters: the kontantmetod bokslut cut-off reads invoice_payments
+ * ONLY (payment DATE, not remaining_amount), so a paid invoice without a row
+ * is re-booked as a fordran with vilande moms at year end, double-counting
+ * revenue and VAT. The same gap hides the payment from the "Betalningar"
+ * view and from the voucher -> invoice reference map.
+ *
+ * What it writes: one row per invoice, amount = paid_amount in invoice
+ * currency, payment_date from paid_at (voucher date for partials),
+ * journal_entry_id = the single posted payment voucher, transaction_id NULL,
+ * notes tagged `backfill:#2019` so the whole run reverts with one statement:
+ *
+ *   DELETE FROM invoice_payments WHERE notes LIKE 'backfill:#2019%';
+ *
+ * Never guesses (lib/invoices/backfill-invoice-payment-rows.ts): an invoice
+ * with zero or several posted payment vouchers is listed, not written.
+ * Idempotent: invoices that already have a row are excluded.
+ *
+ * Usage:
+ *   npx tsx scripts/backfill-invoice-payment-rows.ts                 # dry-run (default)
+ *   npx tsx scripts/backfill-invoice-payment-rows.ts --execute       # apply
+ *   npx tsx scripts/backfill-invoice-payment-rows.ts --company <id>  # one company only
+ *   npx tsx scripts/backfill-invoice-payment-rows.ts --verbose        # list every skipped invoice
+ *
+ * DRY-RUN IS THE DEFAULT. Point NEXT_PUBLIC_SUPABASE_URL /
+ * SUPABASE_SERVICE_ROLE_KEY (.env.local) at staging first; prod only after
+ * explicit confirmation. Service role bypasses RLS but not the
+ * payment_company_consistency trigger, so a row can never land on the wrong
+ * tenant.
+ */
+
+import { config } from 'dotenv'
+config({ path: '.env.local' })
+import { createClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import {
+  BACKFILL_NOTES_TAG,
+  PAYMENT_VOUCHER_SOURCE_TYPES,
+  planInvoicePaymentBackfill,
+  type BackfillInvoice,
+  type BackfillPaymentRow,
+  type BackfillSkipReason,
+  type BackfillVoucher,
+} from '@/lib/invoices/backfill-invoice-payment-rows'
+
+const EXECUTE = process.argv.includes('--execute')
+const VERBOSE = process.argv.includes('--verbose')
+const companyArgIndex = process.argv.indexOf('--company')
+const COMPANY_FILTER = companyArgIndex >= 0 ? process.argv[companyArgIndex + 1] : null
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+if (!supabaseUrl || !serviceRoleKey) {
+  console.error('Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env.local')
+  process.exit(1)
+}
+if (companyArgIndex >= 0 && !COMPANY_FILTER) {
+  console.error('--company needs a company id')
+  process.exit(1)
+}
+
+const supabase = createClient(supabaseUrl, serviceRoleKey)
+
+const CHUNK = 200
+const INSERT_BATCH = 100
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
+
+async function main() {
+  console.log(`Target: ${supabaseUrl}`)
+  console.log(EXECUTE ? 'MODE: EXECUTE (writing)' : 'MODE: dry-run (no writes)')
+  if (COMPANY_FILTER) console.log(`Company filter: ${COMPANY_FILTER}`)
+
+  // 1. Candidate invoices: paid or partially paid with money received.
+  const invoices = await fetchAllRows<BackfillInvoice>(({ from, to }) => {
+    let q = supabase
+      .from('invoices')
+      .select(
+        'id, company_id, user_id, invoice_number, status, document_type, currency, exchange_rate, paid_amount, paid_at',
+      )
+      .in('status', ['paid', 'partially_paid'])
+      .gt('paid_amount', 0)
+    if (COMPANY_FILTER) q = q.eq('company_id', COMPANY_FILTER)
+    return q.order('id', { ascending: true }).range(from, to)
+  })
+  console.log(`Paid / partially paid invoices with paid_amount > 0: ${invoices.length}`)
+
+  const invoiceIds = invoices.map((i) => i.id)
+
+  // 2. Existing sub-ledger rows and posted payment vouchers, per invoice.
+  const existingCount = new Map<string, number>()
+  const vouchersByInvoice = new Map<string, BackfillVoucher[]>()
+  for (const ids of chunk(invoiceIds, CHUNK)) {
+    const rows = await fetchAllRows<{ id: string; invoice_id: string }>(({ from, to }) =>
+      supabase
+        .from('invoice_payments')
+        .select('id, invoice_id')
+        .in('invoice_id', ids)
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    for (const r of rows) existingCount.set(r.invoice_id, (existingCount.get(r.invoice_id) ?? 0) + 1)
+
+    const vouchers = await fetchAllRows<BackfillVoucher>(({ from, to }) =>
+      supabase
+        .from('journal_entries')
+        .select('id, source_id, source_type, status, entry_date')
+        .in('source_id', ids)
+        .in('source_type', [...PAYMENT_VOUCHER_SOURCE_TYPES])
+        .eq('status', 'posted')
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    for (const v of vouchers) {
+      if (!v.source_id) continue
+      const list = vouchersByInvoice.get(v.source_id) ?? []
+      list.push(v)
+      vouchersByInvoice.set(v.source_id, list)
+    }
+  }
+
+  // 3. Plan.
+  const toInsert: Array<{ invoice: BackfillInvoice; row: BackfillPaymentRow }> = []
+  const skipped = new Map<BackfillSkipReason, BackfillInvoice[]>()
+  for (const invoice of invoices) {
+    const plan = planInvoicePaymentBackfill(
+      invoice,
+      vouchersByInvoice.get(invoice.id) ?? [],
+      existingCount.get(invoice.id) ?? 0,
+    )
+    if (plan.kind === 'insert') {
+      toInsert.push({ invoice, row: plan.row })
+    } else {
+      const list = skipped.get(plan.reason) ?? []
+      list.push(invoice)
+      skipped.set(plan.reason, list)
+    }
+  }
+
+  console.log('')
+  console.log(`Rows to insert: ${toInsert.length}`)
+  const perCompany = new Map<string, number>()
+  for (const { row } of toInsert) perCompany.set(row.company_id, (perCompany.get(row.company_id) ?? 0) + 1)
+  for (const [companyId, n] of perCompany) console.log(`  ${companyId}: ${n}`)
+  for (const { invoice, row } of toInsert) {
+    console.log(
+      `  + ${invoice.company_id} ${invoice.invoice_number ?? invoice.id} ` +
+        `${row.amount} ${row.currency} on ${row.payment_date} -> ${row.journal_entry_id}`,
+    )
+  }
+
+  console.log('')
+  console.log('Skipped:')
+  for (const [reason, list] of skipped) {
+    console.log(`  ${reason}: ${list.length}`)
+    // The only two reasons that need a human: a paid invoice with no voucher
+    // to hang the row on, or several vouchers whose split is unknown. On prod
+    // the first group is dominated by imported history (paid long before the
+    // company came here; thousands of rows), so it is summarised per company
+    // unless --verbose asks for every invoice.
+    if (reason === 'no_payment_voucher' || reason === 'multiple_payment_vouchers') {
+      if (VERBOSE) {
+        for (const inv of list) {
+          console.log(`    ${inv.company_id} ${inv.invoice_number ?? inv.id} (${inv.status}, paid ${inv.paid_amount})`)
+        }
+      } else {
+        const byCompany = new Map<string, number>()
+        for (const inv of list) byCompany.set(inv.company_id, (byCompany.get(inv.company_id) ?? 0) + 1)
+        for (const [companyId, n] of byCompany) console.log(`    ${companyId}: ${n}`)
+      }
+    }
+  }
+
+  if (!EXECUTE) {
+    console.log('')
+    console.log('Re-run with --execute to apply.')
+    return
+  }
+
+  // 4. Write in batches. A unique-index collision (a row written between the
+  // read and this insert) fails the batch loudly rather than being skipped.
+  let inserted = 0
+  for (const batch of chunk(toInsert, INSERT_BATCH)) {
+    const { error } = await supabase.from('invoice_payments').insert(batch.map((b) => b.row))
+    if (error) {
+      console.error(`Insert failed after ${inserted} rows: ${error.code ?? ''} ${error.message}`)
+      process.exitCode = 1
+      return
+    }
+    inserted += batch.length
+  }
+  console.log('')
+  console.log(`Inserted ${inserted} row(s) tagged "${BACKFILL_NOTES_TAG}".`)
+  console.log(`Rollback: DELETE FROM invoice_payments WHERE notes LIKE '${BACKFILL_NOTES_TAG}%';`)
+}
+
+main().catch((err) => {
+  console.error(err)
+  process.exit(1)
+})
