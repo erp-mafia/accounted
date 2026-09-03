@@ -10,6 +10,7 @@ import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { planInvoicePaymentForLines } from '@/lib/invoices/apply-invoice-payment'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { recordInvoicePaymentRow, removeInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events'
 import type { CreateJournalEntryInput, Customer, EntityType, Invoice } from '@/types'
@@ -276,36 +277,21 @@ export async function settleInvoicePayment(
     }
   }
 
-  // Sub-ledger row. Without it the payment has no DATE anywhere: the
-  // kontantmetod cut-off (lib/core/bookkeeping/kontantmetod-cutoff.ts) reads
-  // invoice_payments only and would book a paid invoice as a fordran with
-  // vilande moms at bokslut, double-counting revenue and VAT (#2019). Same
-  // shape as the bank-match path (app/api/transactions/[id]/match-invoice):
-  // amount in INVOICE currency, transaction_id null because no bank line
-  // drives this flow. The (transaction_id, invoice_id) unique index treats
-  // nulls as distinct, so several manual partials on one invoice coexist.
-  // Written BEFORE the CAS update so the failure branches below can undo it
-  // together with the voucher; a real invoice never reaches paid without it.
+  // Sub-ledger row (see lib/invoices/invoice-payment-row.ts for why and for
+  // the shape). Written BEFORE the CAS update so the failure branches below
+  // can undo it together with the voucher; a real invoice never reaches paid
+  // through this service without it.
   let paymentRowId: string | null = null
   if (isRealInvoice) {
-    const { data: paymentRow, error: paymentInsertError } = await supabase
-      .from('invoice_payments')
-      .insert({
-        user_id: userId,
-        company_id: companyId,
-        invoice_id: invoice.id,
-        payment_date: paymentDate,
-        amount: paymentAmountInInvoiceCurrency,
-        currency: invoice.currency,
-        exchange_rate: invoice.exchange_rate ?? null,
-        journal_entry_id: journalEntryId,
-        transaction_id: null,
-        notes: null,
-      })
-      .select('id')
-      .single()
-
-    if (paymentInsertError || !paymentRow) {
+    const recorded = await recordInvoicePaymentRow(supabase, {
+      userId,
+      companyId,
+      invoice,
+      paymentDate,
+      newPaidAmount,
+      journalEntryId,
+    })
+    if (!recorded.ok) {
       if (journalEntryId) {
         await cancelOrphanedPaymentEntry(
           supabase,
@@ -318,13 +304,10 @@ export async function settleInvoicePayment(
       return {
         ok: false,
         code: 'INVOICE_PAID_BOOK_FAILED',
-        details: {
-          reason: 'payment_row_insert_failed',
-          error: paymentInsertError?.message ?? 'no_row_returned',
-        },
+        details: { reason: 'payment_row_insert_failed', error: recorded.error },
       }
     }
-    paymentRowId = (paymentRow as { id: string }).id
+    paymentRowId = recorded.id
   }
 
   // CAS guard: only update if status is still in a payable state.
@@ -344,7 +327,7 @@ export async function settleInvoicePayment(
   if (updateError) {
     // The payment voucher already posted but the invoice row did not flip to
     // paid; cancel the orphan so the GL doesn't diverge from the sub-ledger.
-    await removePaymentRow(supabase, companyId, paymentRowId)
+    await removeInvoicePaymentRow(supabase, companyId, paymentRowId)
     if (journalEntryId) {
       await cancelOrphanedPaymentEntry(
         supabase,
@@ -360,7 +343,7 @@ export async function settleInvoicePayment(
   if (!updateResult || updateResult.length === 0) {
     // Status changed between read and write (concurrent settle): cancel the
     // orphaned payment voucher; the trigger documents the voucher gap.
-    await removePaymentRow(supabase, companyId, paymentRowId)
+    await removeInvoicePaymentRow(supabase, companyId, paymentRowId)
     if (journalEntryId) {
       await cancelOrphanedPaymentEntry(
         supabase,
@@ -411,30 +394,5 @@ export async function settleInvoicePayment(
     newRemaining,
     journalEntryId,
     paidAt,
-  }
-}
-
-/**
- * Undo the sub-ledger row on a failed settlement. Best-effort like the
- * voucher storno next to it: the caller is already on a decided error path
- * (race or update failure), and that response must not be replaced by a
- * delete error. A stranded row is visible in the Betalningar view and
- * repairable; a swallowed CAS result is not.
- */
-async function removePaymentRow(
-  supabase: SupabaseClient,
-  companyId: string,
-  paymentRowId: string | null,
-): Promise<void> {
-  if (!paymentRowId) return
-  try {
-    await supabase
-      .from('invoice_payments')
-      .delete()
-      .eq('id', paymentRowId)
-      .eq('company_id', companyId)
-  } catch {
-    // Swallowed by design: the voucher storno and the error response are the
-    // outcome that matters; a stranded row is repairable and visible.
   }
 }

@@ -591,7 +591,7 @@ describe('collectKontantmetodCutoff', () => {
       }],
       supplier_invoices: [],
       supplier_invoice_payments: [],
-    }), 'co-1', '2026-01-01', '2026-12-31')
+    }) as never, 'co-1', '2026-01-01', '2026-12-31')
     expect(result.receivables).toEqual([])
   })
 

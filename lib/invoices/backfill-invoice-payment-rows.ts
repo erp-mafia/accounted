@@ -37,6 +37,31 @@ export interface BackfillVoucher {
   source_type: string
   status: string
   entry_date: string
+  /**
+   * What the voucher actually applied to the receivable, in SEK: the 1510
+   * credit for a clearing entry (faktureringsmetoden), else the debit on the
+   * settlement account (19xx / 1686) for a kontantmetoden cash entry. null
+   * when neither leg exists; undefined when the caller did not load lines.
+   */
+  settlement_sek?: number | null
+}
+
+/**
+ * Derive `settlement_sek` from a voucher's lines. Exported for the script and
+ * its test; the planner only consumes the result.
+ */
+export function settlementSekFromLines(
+  lines: Array<{ account_number: string; debit_amount: number | null; credit_amount: number | null }>,
+): number | null {
+  const credit1510 = lines
+    .filter((l) => l.account_number === '1510')
+    .reduce((sum, l) => sum + Number(l.credit_amount ?? 0), 0)
+  if (credit1510 > 0) return Math.round(credit1510 * 100) / 100
+  const settlementDebit = lines
+    .filter((l) => l.account_number.startsWith('19') || l.account_number === '1686')
+    .reduce((sum, l) => sum + Number(l.debit_amount ?? 0), 0)
+  if (settlementDebit > 0) return Math.round(settlementDebit * 100) / 100
+  return null
 }
 
 export interface BackfillPaymentRow {
@@ -54,26 +79,44 @@ export interface BackfillPaymentRow {
 
 export type BackfillSkipReason =
   | 'has_rows'
+  | 'rows_short'
   | 'not_invoice'
   | 'not_paid'
   | 'no_paid_amount'
   | 'no_payment_voucher'
   | 'multiple_payment_vouchers'
+  | 'voucher_amount_mismatch'
+  | 'voucher_amount_unverifiable'
 
 export type BackfillPlan =
   | { kind: 'insert'; row: BackfillPaymentRow }
   | { kind: 'skip'; reason: BackfillSkipReason; voucherIds?: string[] }
 
+export interface ExistingPaymentRows {
+  count: number
+  /** Sum of invoice_payments.amount, invoice currency. */
+  sum: number
+}
+
 /**
  * Decide what to do for one invoice given every voucher whose source_id
- * points at it and how many invoice_payments rows it already has.
+ * points at it and the invoice_payments rows it already has.
+ *
+ * Rows present but summing to less than paid_amount means an earlier manual
+ * partial has no row while a later bank-matched one does. That invoice is
+ * `rows_short`: reported for a human, never patched, because the difference
+ * cannot be attributed to a voucher without guessing.
  */
 export function planInvoicePaymentBackfill(
   invoice: BackfillInvoice,
   vouchers: BackfillVoucher[],
-  existingRowCount: number,
+  existing: ExistingPaymentRows,
 ): BackfillPlan {
-  if (existingRowCount > 0) return { kind: 'skip', reason: 'has_rows' }
+  const paidAmountRaw = Number(invoice.paid_amount ?? 0)
+  if (existing.count > 0) {
+    const short = Math.round((paidAmountRaw - existing.sum) * 100) / 100
+    return short > 0 ? { kind: 'skip', reason: 'rows_short' } : { kind: 'skip', reason: 'has_rows' }
+  }
   if (invoice.document_type && invoice.document_type !== 'invoice') {
     return { kind: 'skip', reason: 'not_invoice' }
   }
@@ -101,11 +144,36 @@ export function planInvoicePaymentBackfill(
   }
   const voucher = paymentVouchers[0]
 
-  // paid_at is set from the payment date in the settle path (UTC noon), so
-  // its calendar date IS the payment date; a partial has no paid_at and
-  // falls back to the voucher date, which the same path stamps from the
-  // same input.
-  const paymentDate = invoice.paid_at ? invoice.paid_at.slice(0, 10) : voucher.entry_date
+  // The row must agree with what the voucher booked, or the cut-off inherits
+  // a header figure the ledger never carried. SEK invoices must match to the
+  // öre band; foreign-currency ones are checked through the invoice rate
+  // within 1 %. An unreadable voucher (no 1510 credit, no settlement debit) or
+  // a rate-less foreign invoice cannot be verified and is left to a human.
+  const settlementSek = voucher.settlement_sek
+  if (settlementSek === undefined || settlementSek === null) {
+    return { kind: 'skip', reason: 'voucher_amount_unverifiable', voucherIds: [voucher.id] }
+  }
+  const currency = invoice.currency ?? 'SEK'
+  if (currency === 'SEK') {
+    if (Math.abs(settlementSek - paidAmount) > 0.5) {
+      return { kind: 'skip', reason: 'voucher_amount_mismatch', voucherIds: [voucher.id] }
+    }
+  } else {
+    const rate = Number(invoice.exchange_rate ?? 0)
+    if (!(rate > 0)) {
+      return { kind: 'skip', reason: 'voucher_amount_unverifiable', voucherIds: [voucher.id] }
+    }
+    if (Math.abs(settlementSek / rate - paidAmount) > paidAmount * 0.01) {
+      return { kind: 'skip', reason: 'voucher_amount_mismatch', voucherIds: [voucher.id] }
+    }
+  }
+
+  // The voucher's entry_date is the affärshändelse date (BFL 5 kap 7 §) and
+  // is what the settle paths stamp from the user's payment date. paid_at is
+  // NOT usable: before 2026-08-02 (#1332) it was the wall-clock registration
+  // time, so a payment booked in January for a December date would land in
+  // the wrong year. The two agree for every row written since.
+  const paymentDate = voucher.entry_date
 
   return {
     kind: 'insert',
