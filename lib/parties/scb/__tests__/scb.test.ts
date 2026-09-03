@@ -75,6 +75,8 @@ describe('factsFromScbCompany on a live row', () => {
     expect(by.vat_number).toBeUndefined()
     expect(factsFromScbCompany({ OrgNr: '5560125790', 'Momsstatus, kod': '9' }).find((f) => f.field === 'vat_number')).toBeUndefined()
     expect(BOLAGSVERKET_WARNING_CODES.has('0')).toBe(false)
+    expect(BOLAGSVERKET_WARNING_CODES.has('49')).toBe(false) // fusion pågår
+    expect(BOLAGSVERKET_WARNING_CODES.has('41')).toBe(true) // upplöst genom fusion
     expect(factsFromScbCompany({})).toEqual([])
   })
 })
@@ -128,6 +130,9 @@ describe('name search', () => {
     expect(nameQuery('Leverantörsfaktura från 18 Loopia')).toBe('Loopia')
     expect(nameQuery('Adobe Systems Software')).toBe('Adobe Systems Software')
     expect(nameQuery("O'Learys Sundsvall AB")).toBe('OLearys Sundsvall')
+    // Foreign legal forms stay: they are part of the registered name and dropping them floods.
+    expect(nameQuery('Schmidt GmbH')).toBe('Schmidt GmbH')
+    expect(nameQuery('Google Cloud EMEA Limited')).toBe('Google Cloud EMEA Limited')
     expect(nameSearchBody('Telia', 'starts_with').Variabler[0]).toEqual({ Variabel: 'Namn', Operator: 'BorjarPa', Varde1: 'Telia', Varde2: '' })
     expect(nameSearchBody('Telia', 'contains').Variabler[0]!.Operator).toBe('Innehaller')
   })
@@ -155,7 +160,7 @@ describe('name search', () => {
     const r = await client.searchByName('Levfakt Adobe Systems (2)')
     expect(calls).toEqual(['/api/Je/RaknaForetag:BorjarPa', '/api/Je/HamtaForetag:BorjarPa'])
     expect(r.mode).toBe('starts_with')
-    expect(r.total).toBe(3)
+    expect(r.total).toBe(2)
     expect(r.candidates.map((c) => [c.name, c.active])).toEqual([
       ['Adobe Systems Nordic Aktiebolag', true],
       ['ADOBE SYSTEMS SOFTWARE IRELAND LTD', false],

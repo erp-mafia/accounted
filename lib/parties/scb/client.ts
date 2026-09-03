@@ -65,7 +65,7 @@ export function nameQuery(raw: string): string {
     .replace(/^(levfakt|levfkt|lev\.?fakt\.?|leverantörsfaktura från\s*\d*|leverantörsfaktura|levbet\.?|kundbet\.?|kundfaktura|faktura från|faktura|kvitto|utgift|inköp)\s+/i, '')
     .replace(/[(),]/g, ' ')
     .replace(/\b\d{1,6}\b/g, ' ')
-    .replace(/\s+(ab|aktiebolag|hb|kb|ltd|limited|oy|gmbh|inc|sarl|publ|filial)\.?\s*$/i, '')
+    .replace(/\s+(ab|aktiebolag|hb|kb|publ|\(publ\))\.?\s*$/i, '')
     .replace(/'/g, '')
     .replace(/\s+/g, ' ')
     .trim()
@@ -135,10 +135,12 @@ export function createScbClient(config: ScbConfig, deps: { json?: typeof scbJson
         const all = (Array.isArray(rows) ? rows : []).map(candidateFrom).filter((c): c is ScbCandidate => c !== null)
         // Active companies first, then by name; the cap keeps the picker a picker.
         all.sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name, 'sv'))
-        return { query, mode, total, truncated: all.length > SCB_SEARCH_CAP, candidates: all.slice(0, SCB_SEARCH_CAP) }
+        // total is what the picker can offer: SCB's count minus the natural
+        // persons and estates we never show ("Eismann" counted 1, offered 0).
+        return { query, mode, total: all.length, truncated: all.length > SCB_SEARCH_CAP, candidates: all.slice(0, SCB_SEARCH_CAP) }
       }
       const first = await run('starts_with')
-      if (first.total > 0 || query.length < 4) return first
+      if (first.total > 0 || first.truncated || query.length < 4) return first
       return run('contains')
     },
   }

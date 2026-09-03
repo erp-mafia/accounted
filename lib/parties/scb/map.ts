@@ -141,8 +141,14 @@ const STORLEKSKLASS: Record<string, string> = {
   '16': '10 000 anställda eller fler',
 }
 
-/** Which Bolagsverket statuses mean "do not treat this as a going concern". */
-export const BOLAGSVERKET_WARNING_CODES = new Set(['11', '12', '13', '20', '32', '33', '36', '37', '40', '41', '49', '50', '51', '52', '53', '54', '60', '61', '62', '63', '64', '70', '71', '73', '80', '85', '90', '91'])
+/**
+ * Which Bolagsverket statuses mean "do not treat this as a going concern":
+ * distress (ackord, konkurs, likvidation, rekonstruktion, resolution) and
+ * disappearance (avförd, avregistrerad, upplöst). A fusion or delning in
+ * progress is not a warning: Fortnox AB and Avanza Bank carried "Fusion
+ * pågår" on 2026-09-03 while trading normally.
+ */
+export const BOLAGSVERKET_WARNING_CODES = new Set(['11', '12', '13', '20', '32', '33', '36', '37', '41', '50', '51', '52', '53', '54', '60', '61', '62', '63', '64', '70', '71', '73', '77', '80', '85', '91'])
 
 /**
  * A company row as the API returns it (fixture: __tests__/fixtures/
