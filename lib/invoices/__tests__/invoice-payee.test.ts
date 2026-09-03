@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { CashAccount } from '@/types'
-import { resolveInvoicePayeeChoice, snapshotInvoicePayee } from '../invoice-payee'
+import { resolveInvoicePayeeChoice, resolveInvoiceSettlementAccount, snapshotInvoicePayee } from '../invoice-payee'
 
 const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
@@ -144,5 +144,20 @@ describe('snapshotInvoicePayee', () => {
     })
     expect(result).toMatchObject({ ok: false, code: 'INVOICE_SEND_PAYMENT_ACCOUNT_INVALID' })
     expect(findCalls('invoices', 'update')).toHaveLength(0)
+  })
+})
+
+describe('resolveInvoiceSettlementAccount', () => {
+  it('defaults to 1930 without a chosen account and never queries', async () => {
+    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: null })).toBe('1930')
+    expect(findCalls('cash_accounts', 'select')).toHaveLength(0)
+  })
+
+  it('debits the chosen account\'s ledger account, and falls back to 1930 when the row is gone', async () => {
+    enqueue({ data: { ledger_account: '1931' } })
+    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1931')
+    expect(findCalls('cash_accounts', 'eq')).toContainEqual(['company_id', 'company-1'])
+    enqueue({ data: null })
+    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1930')
   })
 })

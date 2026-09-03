@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
+import { useAccounts, useCashAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import {
@@ -95,6 +95,13 @@ export default function PaymentBookingDialog({
   // debit, accrual against a 1510 credit.
   const accountingMethod: 'accrual' | 'cash' =
     companySettings?.accounting_method === 'cash' ? 'cash' : 'accrual'
+  // The bank account the invoice asked to be paid to (1930 when none was
+  // chosen): the proposed debit lands there, same as the route's default.
+  const { cashAccounts } = useCashAccounts()
+  const chosenPaymentAccount = useMemo(() => {
+    const id = (invoice as { payment_cash_account_id?: string | null }).payment_cash_account_id
+    return id ? cashAccounts.find((a) => a.id === id)?.ledger_account ?? undefined : undefined
+  }, [cashAccounts, invoice])
   // source_type the booking will use: drives the voucher-series preview so the
   // number shown matches what mark-paid will actually create.
   const [sourceType, setSourceType] =
@@ -167,6 +174,7 @@ export default function PaymentBookingDialog({
           },
           accountingMethod,
           entityType,
+          paymentAccount: chosenPaymentAccount,
           companyOreRounding:
             typeof settings?.ore_rounding === 'boolean' ? settings.ore_rounding : undefined,
         })

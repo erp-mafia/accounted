@@ -121,3 +121,31 @@ export async function snapshotInvoicePayee(
   }
   return { ok: true, payee }
 }
+
+/**
+ * The BAS account a manual "mark as paid" debits: the chosen payee account's
+ * ledger account (1930, 1931, ...) when the invoice chose one and the row
+ * still exists, else the 1930 default the generators have always used.
+ * Bank-transaction matches never come here: they debit the account the
+ * money actually landed on (resolveSettlementAccount on the transaction).
+ */
+export async function resolveInvoiceSettlementAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: Partial<Pick<Invoice, 'payment_cash_account_id'>>,
+): Promise<string> {
+  const cashAccountId = invoice.payment_cash_account_id ?? null
+  if (!cashAccountId) return '1930'
+  const { data, error } = await supabase
+    .from('cash_accounts')
+    .select('ledger_account')
+    .eq('company_id', companyId)
+    .eq('id', cashAccountId)
+    .maybeSingle()
+  if (error) {
+    log.warn('settlement account lookup failed; defaulting to 1930', { cashAccountId, error: error.message })
+    return '1930'
+  }
+  const ledger = (data as { ledger_account?: string } | null)?.ledger_account
+  return ledger && /^\d{4}$/.test(ledger) ? ledger : '1930'
+}

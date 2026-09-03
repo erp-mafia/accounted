@@ -129,7 +129,7 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
-import { resolveInvoicePayeeChoice, snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
+import { resolveInvoicePayeeChoice, resolveInvoiceSettlementAccount, snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import {
   describeMissingInvoicePaymentAccount,
   hasRequiredInvoicePaymentAccount,
@@ -2625,14 +2625,19 @@ async function commitMarkInvoicePaid(
   }
 
   if (isRealInvoice) {
+    // Debit the bank account the invoice asked to be paid to (1930 when none
+    // was chosen): an agent marking a 1931-invoice paid must not land it on 1930.
+    const settlementAccountNumber = await resolveInvoiceSettlementAccount(supabase, companyId, invoice as Invoice)
     if (useCashEntry) {
       const je = await createInvoiceCashEntry(
-        supabase, companyId, userId, invoice as Invoice, paymentDate, entityType, invoice.customer?.name
+        supabase, companyId, userId, invoice as Invoice, paymentDate, entityType, invoice.customer?.name,
+        settlementAccountNumber,
       )
       journalEntryId = je?.id ?? null
     } else {
       const je = await createInvoicePaymentJournalEntry(
-        supabase, companyId, userId, invoice as Invoice, paymentDate, undefined, invoice.customer?.name
+        supabase, companyId, userId, invoice as Invoice, paymentDate, undefined, invoice.customer?.name,
+        undefined, settlementAccountNumber,
       )
       journalEntryId = je?.id ?? null
     }

@@ -37,6 +37,7 @@ import {
   createInvoiceCashEntry,
   createInvoicePaymentJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
+import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
@@ -488,6 +489,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           )
           journalEntryId = entry?.id ?? null
         } else if (useCashEntry) {
+          const settlementAccountNumber = await resolveInvoiceSettlementAccount(ctx.supabase, ctx.companyId!, typed)
           const entry = await createInvoiceCashEntry(
             ctx.supabase,
             ctx.companyId!,
@@ -496,9 +498,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             paymentDate,
             entityType,
             typed.customer?.name,
+            settlementAccountNumber,
           )
           journalEntryId = entry?.id ?? null
         } else {
+          const settlementAccountNumber = await resolveInvoiceSettlementAccount(ctx.supabase, ctx.companyId!, typed)
           const entry = await createInvoicePaymentJournalEntry(
             ctx.supabase,
             ctx.companyId!,
@@ -509,6 +513,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             typed.customer?.name,
             // Pass full or partial amount depending on path.
             customLines ? paymentAmount : undefined,
+            settlementAccountNumber,
           )
           journalEntryId = entry?.id ?? null
         }

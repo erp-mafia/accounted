@@ -6,6 +6,7 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { deriveCustomerSettlementAmount } from '@/lib/invoices/apply-invoice-payment'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
+import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
 import { roundOre } from '@/lib/money'
 import type { EntityType, Invoice } from '@/types'
 
@@ -242,6 +243,9 @@ export const POST = withRouteContext(
     // paymentAmountInInvoiceCurrency was resolved above, before the
     // duplicate-payment guard, so the guard comparison and the ledger math run
     // in the same unit as remaining_amount.
+    // The generated debit lands on the bank account the invoice asked to be
+    // paid to (1930 when none was chosen). Custom lines carry their own.
+    const settlementAccountNumber = await resolveInvoiceSettlementAccount(supabase, companyId!, invoice as Invoice)
     const result = await settleInvoicePayment(supabase, companyId!, user.id, {
       invoice: invoice as Invoice & { customer?: { name?: string | null } | null },
       paymentAmountInInvoiceCurrency,
@@ -250,6 +254,7 @@ export const POST = withRouteContext(
       entityType,
       exchangeRateDifference,
       customLines,
+      settlementAccountNumber,
     })
 
     if (!result.ok) {

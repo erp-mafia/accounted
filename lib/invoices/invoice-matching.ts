@@ -412,8 +412,14 @@ export async function findInvoiceMatchCandidates(
     }
   }
 
-  // Sort by confidence descending
-  matches.sort((a, b) => b.confidence - a.confidence)
+  // Sort by confidence descending. Ties (two open invoices for the same
+  // amount on the same day) prefer the invoice that asked to be paid to the
+  // account the money landed on. A tie-breaker only: scores are untouched, so
+  // nothing that did not auto-match before starts to.
+  const landedOn = (transaction as { cash_account_id?: string | null }).cash_account_id ?? null
+  const prefers = (m: InvoiceMatch): number =>
+    landedOn && m.invoice.payment_cash_account_id === landedOn ? 1 : 0
+  matches.sort((a, b) => b.confidence - a.confidence || prefers(b) - prefers(a))
 
   return {
     matches,
