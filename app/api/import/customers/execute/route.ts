@@ -148,7 +148,7 @@ export const POST = withRouteContext(
             address_line2: row.address_line2,
             postal_code: row.postal_code,
             city: row.city,
-            country: row.country || 'Sweden',
+            country: row.country || 'SE',
             org_number: row.org_number,
             vat_number: row.vat_number,
             default_payment_terms: row.default_payment_terms || 30,
