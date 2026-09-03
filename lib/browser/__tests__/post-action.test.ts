@@ -69,10 +69,10 @@ describe('postAction', () => {
       ok: false,
       reason: 'server',
       status: 404,
-      // The plain-string envelope this route emits is not recognized as a
-      // finished user sentence, so the status map answers: same text the old
-      // inline getErrorMessage(result, { statusCode }) produced.
-      message: 'Resursen kunde inte hittas.',
+      // The route's own Swedish sentence is shown as-is (issue #2086): it
+      // used to be dropped for lacking one of getErrorMessage's keywords and
+      // replaced by the status map's "Resursen kunde inte hittas.".
+      message: 'Ingen AGI för perioden 2026-04.',
     })
   })
 
