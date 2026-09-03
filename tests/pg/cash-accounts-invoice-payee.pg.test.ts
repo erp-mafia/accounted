@@ -221,6 +221,26 @@ describe('invoice payee accounts (20260903150000)', () => {
     expect(row.bankgiro).toBe('991-2346')
   })
 
+  it('refuses invoice_payee on anything but a giro/bank ledger (BAS 1920-1999), whoever writes it', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertSettings(userId, companyId)
+    for (const ledger of ['1686', '1910']) {
+      const res = await getPool()
+        .query(`INSERT INTO public.cash_accounts (company_id, ledger_account, currency, bankgiro, invoice_payee) VALUES ($1, $2, 'SEK', '5050-1234', true)`, [companyId, ledger])
+        .catch((err: Error) => err)
+      expect(res).toBeInstanceOf(Error)
+      expect((res as Error).message).toMatch(/INVOICE_PAYEE_ACCOUNT_INVALID/)
+    }
+    const till = await insertCashAccount({ companyId, ledgerAccount: '1910' })
+    const flip = await getPool()
+      .query(`UPDATE public.cash_accounts SET invoice_payee = true WHERE id = $1`, [till])
+      .catch((err: Error) => err)
+    expect(flip).toBeInstanceOf(Error)
+    const bank = await insertCashAccount({ companyId, ledgerAccount: '1920' })
+    await getPool().query(`UPDATE public.cash_accounts SET bankgiro = '5050-1234', invoice_payee = true WHERE id = $1`, [bank])
+  })
+
   it('revoking an account as payee drops its defaults; disabling it (member-level) does not', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })

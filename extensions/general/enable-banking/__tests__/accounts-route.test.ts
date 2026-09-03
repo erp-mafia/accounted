@@ -508,6 +508,8 @@ describe('PATCH /accounts (enable-banking)', () => {
   describe('inline initial backfill', () => {
     it('runs inline sync on pending_selection→active and writes initial-sync metadata', async () => {
       mockedSync.mockResolvedValue({
+        requestedFromDate: '2026-01-01',
+        historyNarrowed: false,
         imported: 47,
         duplicates: 3,
         errors: 0,
@@ -577,6 +579,8 @@ describe('PATCH /accounts (enable-banking)', () => {
 
     it('suppresses auto-categorization and reconciles per ledger account when the window overlaps an SIE import (renewal-flood guard)', async () => {
       mockedSync.mockResolvedValue({
+        requestedFromDate: '2026-01-01',
+        historyNarrowed: false,
         imported: 22,
         duplicates: 0,
         errors: 0,
@@ -663,6 +667,8 @@ describe('PATCH /accounts (enable-banking)', () => {
 
     it('runs no reconciliation sweep and keeps categorization on without SIE overlap', async () => {
       mockedSync.mockResolvedValue({
+        requestedFromDate: '2026-01-01',
+        historyNarrowed: false,
         imported: 10,
         duplicates: 0,
         errors: 0,
@@ -705,6 +711,8 @@ describe('PATCH /accounts (enable-banking)', () => {
 
     it('gives viewers rawInsertOnly and no sweep even with SIE overlap (viewers cannot write links)', async () => {
       mockedSync.mockResolvedValue({
+        requestedFromDate: '2026-01-01',
+        historyNarrowed: false,
         imported: 5,
         duplicates: 0,
         errors: 0,
@@ -747,6 +755,8 @@ describe('PATCH /accounts (enable-banking)', () => {
 
     it('skips the sweep for an account whose cash_accounts row did not resolve instead of widening to the pooled form', async () => {
       mockedSync.mockResolvedValue({
+        requestedFromDate: '2026-01-01',
+        historyNarrowed: false,
         imported: 6,
         duplicates: 0,
         errors: 0,
@@ -790,6 +800,8 @@ describe('PATCH /accounts (enable-banking)', () => {
 
     it('keeps the backfill successful when the reconciliation sweep throws (non-critical)', async () => {
       mockedSync.mockResolvedValue({
+        requestedFromDate: '2026-01-01',
+        historyNarrowed: false,
         imported: 8,
         duplicates: 0,
         errors: 0,
@@ -823,6 +835,8 @@ describe('PATCH /accounts (enable-banking)', () => {
 
     it('does NOT run inline sync when connection is already active (selection edit)', async () => {
       mockedSync.mockResolvedValue({
+        requestedFromDate: '2026-01-01',
+        historyNarrowed: false,
         imported: 99,
         duplicates: 0,
         errors: 0,
@@ -896,6 +910,8 @@ describe('PATCH /accounts (enable-banking)', () => {
 
     it('clamps initial_lookback_days to [30, 365]', async () => {
       mockedSync.mockResolvedValue({
+        requestedFromDate: '2026-01-01',
+        historyNarrowed: false,
         imported: 0,
         duplicates: 0,
         errors: 0,
@@ -931,6 +947,8 @@ describe('PATCH /accounts (enable-banking)', () => {
       // show a retry warning; the cron will gate on initial_sync_completed_at IS NULL
       // and self-heal on its next run.
       mockedSync.mockResolvedValue({
+        requestedFromDate: '2026-01-01',
+        historyNarrowed: false,
         imported: 12,
         duplicates: 0,
         errors: 0,
@@ -975,7 +993,7 @@ describe('PATCH /accounts (enable-banking)', () => {
 
   describe('per-account ledger mapping (account_mappings)', () => {
     it('persists ledger_account from account_mappings into accounts_data JSONB', async () => {
-      mockedSync.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0 })
+      mockedSync.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0, requestedFromDate: '2026-01-01', historyNarrowed: false })
 
       const stub: SupabaseStub = {
         authUser: { id: 'user-1' },
@@ -1132,7 +1150,7 @@ describe('PATCH /accounts (enable-banking)', () => {
       // the effective cash_accounts assignment, so the cleared account gets a
       // fresh allocation instead of an undefined that silently falls back to
       // 1930 at mirror time.
-      mockedSync.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0 })
+      mockedSync.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0, requestedFromDate: '2026-01-01', historyNarrowed: false })
 
       const stub: SupabaseStub = {
         authUser: { id: 'user-1' },
@@ -1236,7 +1254,7 @@ describe('PATCH /accounts (enable-banking)', () => {
       // claim release still point at the revoked connection. They must not
       // count as foreign claims: the save goes through and upsertFromPsd2
       // promotes the orphaned row in place.
-      mockedSync.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0 })
+      mockedSync.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0, requestedFromDate: '2026-01-01', historyNarrowed: false })
       mockGetRevokedConnectionIds.mockResolvedValue(new Set(['conn-REVOKED']))
 
       const stub: SupabaseStub = {
@@ -1283,7 +1301,7 @@ describe('PATCH /accounts (enable-banking)', () => {
     })
 
     it('allocates distinct ledgers for legacy accounts with no mapping at all', async () => {
-      mockedSync.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0 })
+      mockedSync.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0, requestedFromDate: '2026-01-01', historyNarrowed: false })
 
       const stub: SupabaseStub = {
         authUser: { id: 'user-1' },

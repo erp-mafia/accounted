@@ -14,6 +14,7 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 import { createClient } from '@/lib/supabase/server'
 import { POST } from '../route'
+import { createMockRouteParams } from '@/tests/helpers'
 
 function createMockRequest(body: unknown): Request {
   return new Request('http://localhost/api/bookkeeping/fiscal-periods', {
@@ -142,14 +143,14 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
   it('returns 401 when not authenticated', async () => {
     buildMockSupabase({ user: null })
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(401)
   })
 
   it('creates first period successfully', async () => {
     buildMockSupabase({ allPeriods: [] })
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data).toBeDefined()
@@ -164,7 +165,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     })
     // Forward chain from 2024, start = 2025-01-01
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(409)
     const body = await res.json()
     expect(body.error).toMatch(/Overlaps/)
@@ -180,7 +181,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     })
     // Starts inside FY 2025.
     const req = createMockRequest({ name: 'FY 2025 dup', period_start: '2025-07-01', period_end: '2026-06-30' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(409)
     const body = await res.json()
     expect(body.error).toMatch(/Overlaps/)
@@ -191,7 +192,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
       allPeriods: [{ id: 'p1', period_start: '2025-01-01', period_end: '2025-12-31', is_closed: true }],
     })
     const req = createMockRequest({ name: 'FY 2026', period_start: '2026-02-01', period_end: '2026-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error).toMatch(/must start on 2026-01-01/)
@@ -215,7 +216,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
       period_start: '2026-01-01',
       period_end: '2026-12-31',
     })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data).toBeDefined()
@@ -239,7 +240,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
       period_start: '2026-01-01',
       period_end: '2026-12-31',
     })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     const body = await res.json()
     expect(body.warnings[0].message).toMatch(/bokföra i det direkt/)
     expect(body.warnings[0].message).toMatch(/Ingående balanser bokförs automatiskt/)
@@ -266,7 +267,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
       period_start: '2026-01-01',
       period_end: '2026-12-31',
     })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.warnings).toHaveLength(1)
@@ -287,7 +288,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
       overlapping: [],
     })
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data).toBeDefined()
@@ -305,7 +306,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
       overlapping: [],
     })
     const req = createMockRequest({ name: 'Räkenskapsår 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data).toBeDefined()
@@ -324,7 +325,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
       overlapping: [],
     })
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.warnings).toHaveLength(1)
@@ -338,7 +339,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
       overlapping: [],
     })
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(200)
   })
 
@@ -347,7 +348,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
       allPeriods: [{ id: 'p1', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false }],
     })
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-11-30' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error).toMatch(/must end on 2025-12-31/)
@@ -361,7 +362,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
       overlapping: [],
     })
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(200)
     // The advisory is about the NEXT year's ingående balanser, so it belongs to
     // appends only. Backfilling an earlier year says nothing about IB.
@@ -384,7 +385,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
       overlapping: [],
     })
     const req = createMockRequest({ name: '2022/2023', period_start: '2022-07-22', period_end: '2023-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(200)
   })
 
@@ -393,7 +394,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
       allPeriods: [{ id: 'p2024', period_start: '2024-01-01', period_end: '2024-12-31', is_closed: false }],
     })
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-15', period_end: '2025-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error).toMatch(/1st of a month/)
@@ -414,7 +415,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
       overlapping: [],
     })
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data).toBeDefined()
@@ -429,7 +430,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     })
     // Starts 2025-02-01 instead of 2025-01-01: would leave a hole after FY 2024.
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-02-01', period_end: '2025-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error).toMatch(/must start on 2025-01-01/)
@@ -449,7 +450,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     })
     // Correct start (2025-01-01) but ends 2025-11-30: leaves a hole before FY 2026.
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-11-30' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error).toMatch(/must end on 2025-12-31/)
@@ -470,7 +471,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
       overlapping: [],
     })
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(200)
     // Gap fill is a backfill too: no IB advisory.
     const body = await res.json()
@@ -480,7 +481,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
   it('rejects invalid period duration (> 18 months)', async () => {
     buildMockSupabase({ allPeriods: [] })
     const req = createMockRequest({ name: 'Long period', period_start: '2025-01-01', period_end: '2026-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error).toMatch(/18 months/)
@@ -489,7 +490,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
   it('rejects invalid body', async () => {
     buildMockSupabase({})
     const req = createMockRequest({ name: '', period_start: 'bad', period_end: '2025-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
     expect(res.status).toBe(400)
   })
 
@@ -561,7 +562,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     ;(createClient as ReturnType<typeof vi.fn>).mockResolvedValue(supabase)
 
     const req = createMockRequest({ name: 'FY 2026', period_start: '2026-01-01', period_end: '2026-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
 
     expect(res.status).toBe(200)
     expect(insertSpy).toHaveBeenCalledTimes(1)
@@ -634,7 +635,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     ;(createClient as ReturnType<typeof vi.fn>).mockResolvedValue(supabase)
 
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
 
     expect(res.status).toBe(200)
     expect(insertSpy).toHaveBeenCalledTimes(1)
@@ -707,7 +708,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     ;(createClient as ReturnType<typeof vi.fn>).mockResolvedValue(supabase)
 
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
-    const res = await POST(req)
+    const res = await POST(req, createMockRouteParams({}))
 
     expect(res.status).toBe(200)
     // New period chains onto FY 2024 (the predecessor).

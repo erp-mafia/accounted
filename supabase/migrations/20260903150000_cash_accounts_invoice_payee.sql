@@ -194,6 +194,13 @@ BEGIN
     RAISE EXCEPTION 'INVOICE_PAYEE_ADMIN_ONLY: only owner or admin may change where customer invoices are paid'
       USING ERRCODE = '42501';
   END IF;
+  -- A customer pays to a giro or bank account (BAS 1920-1999). A PSP clearing
+  -- row (1584, 1680, 1686) or a till (1910-1919) can never be printed as
+  -- payee, whoever writes it: the routes check this too, this is the floor.
+  IF NEW.invoice_payee AND NEW.ledger_account !~ '^19[2-9]\d$' THEN
+    RAISE EXCEPTION 'INVOICE_PAYEE_ACCOUNT_INVALID: only a giro or bank account (BAS 1920-1999) can be printed as payee, not %', NEW.ledger_account
+      USING ERRCODE = '23514';
+  END IF;
   RETURN NEW;
 END;
 $$;
@@ -403,23 +410,27 @@ SELECT cs.company_id, 'SEK',
          NULLIF(btrim(cs.iban), ''), NULLIF(btrim(cs.bic), '')
        ) IS NOT NULL;
 
--- Target account per entry: the account whose bank IBAN equals the entry's
--- IBAN, else the primary in that currency, else the only enabled account in
--- that currency. Ambiguous or absent: no target, the entry stays in the map.
+-- Target account per entry, among giro/bank rows (BAS 1920-1999) only: the
+-- account whose bank IBAN equals the entry's IBAN, else the primary in that
+-- currency, else the only enabled account in that currency. Ambiguous or
+-- absent: no target, the entry stays in the map.
 CREATE TEMP TABLE payee_backfill_targets AS
 SELECT e.company_id, e.currency, e.payee,
        COALESCE(
          (SELECT ca.id FROM public.cash_accounts ca
            WHERE ca.company_id = e.company_id AND ca.enabled AND ca.currency = e.currency
+             AND ca.ledger_account ~ '^19[2-9]\d$'
              AND e.payee ->> 'iban' IS NOT NULL
              AND upper(regexp_replace(ca.iban, '\s', '', 'g')) = upper(regexp_replace(e.payee ->> 'iban', '\s', '', 'g'))
            ORDER BY ca.created_at, ca.id
            LIMIT 1),
          (SELECT ca.id FROM public.cash_accounts ca
            WHERE ca.company_id = e.company_id AND ca.enabled AND ca.currency = e.currency AND ca.is_primary
+             AND ca.ledger_account ~ '^19[2-9]\d$'
            LIMIT 1),
          (SELECT (array_agg(ca.id))[1] FROM public.cash_accounts ca
            WHERE ca.company_id = e.company_id AND ca.enabled AND ca.currency = e.currency
+             AND ca.ledger_account ~ '^19[2-9]\d$'
            HAVING count(*) = 1)
        ) AS cash_account_id
   FROM payee_backfill_entries e;
