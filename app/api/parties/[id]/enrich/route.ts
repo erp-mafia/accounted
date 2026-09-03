@@ -53,10 +53,22 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
     if (recordError) throw new Error(`record_party_facts failed: ${recordError.message}`)
 
-    // The registry's legal name fills an empty one; a name a person typed stays.
+    // Survivorship (plan section 05): user > registry > document. The
+    // registry's legal name replaces one read from documents or none at all,
+    // but never one a person entered (a legal_name fact with source 'user').
     const legal = lookup.facts.find((f) => f.field === 'legal_name')?.value
-    if (!p.legal_name && typeof legal === 'string' && legal) {
-      await supabase.from('parties').update({ legal_name: legal }).eq('company_id', companyId).eq('id', id)
+    if (typeof legal === 'string' && legal && legal !== p.legal_name) {
+      const { count } = await supabase
+        .from('party_facts')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .eq('party_id', id)
+        .eq('field', 'legal_name')
+        .eq('source', 'user')
+        .is('superseded_at', null)
+      if (!count) {
+        await supabase.from('parties').update({ legal_name: legal }).eq('company_id', companyId).eq('id', id)
+      }
     }
 
     const r = (summary ?? {}) as Partial<Record<'inserted' | 'superseded' | 'refreshed', number>>

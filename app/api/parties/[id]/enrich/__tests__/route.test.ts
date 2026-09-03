@@ -90,6 +90,7 @@ describe('POST /api/parties/[id]/enrich', () => {
       fetchedAt: '2026-09-03T10:00:00Z',
     })
     enqueue({ data: { inserted: 2, superseded: 0, refreshed: 0 } })
+    enqueue({ data: null, count: 0 }) // no user-entered legal name
     enqueue({ data: null }) // parties.update
     const { status, body } = await parseJsonResponse<{ data: { found: boolean; inserted: number; facts: unknown[] } }>(await call())
     expect(status).toBe(200)
@@ -107,5 +108,19 @@ describe('POST /api/parties/[id]/enrich', () => {
       p_fetched_at: '2026-09-03T10:00:00Z',
     })
     expect(lookupByOrgNumber).toHaveBeenCalledWith('5560125790')
+  })
+})
+
+describe('POST /api/parties/[id]/enrich, legal name survivorship', () => {
+  it('replaces a document-sourced legal name with the registry name, but never one a person entered', async () => {
+    enqueue({ data: { id: PARTY, org_number: '5560125790', legal_name: 'Beijer Bygg' } })
+    lookupByOrgNumber.mockResolvedValue({ found: true, peOrgNr: '165560125790', row: {}, facts: [{ field: 'legal_name', value: 'AKTIEBOLAGET VOLVO' }], fetchedAt: '2026-09-03T10:00:00Z' })
+    enqueue({ data: { inserted: 1, superseded: 0, refreshed: 0 } })
+    enqueue({ data: null, count: 1 }) // a user-entered legal name exists
+    const { status } = await parseJsonResponse(await call())
+    expect(status).toBe(200)
+    const updates = mockSupabase.from.mock.calls.filter((c) => c[0] === 'parties').length
+    // one lookup, no update
+    expect(updates).toBe(1)
   })
 })

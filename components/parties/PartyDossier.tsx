@@ -154,8 +154,10 @@ export function PartyDossier({
   const orgFact = dossier?.facts.find((f) => f.field === 'org_number')
   const docsFor = (field: string) => {
     const f = dossier?.facts.find((x) => x.field === field)
-    const n = (f?.reference as { docs?: number } | null)?.docs
-    return n ? t('fact_from_documents', { count: n }) : f?.source === 'ledger' ? t('fact_from_ledger') : f?.source === 'user' ? t('fact_from_user') : ''
+    if (!f) return ''
+    if (f.source === 'registry_scb') return `${t('source_scb')} · ${formatDate(f.fetchedAt ?? f.recordedAt)}`
+    const n = (f.reference as { docs?: number } | null)?.docs
+    return n ? t('fact_from_documents', { count: n }) : f.source === 'ledger' ? t('fact_from_ledger') : f.source === 'user' ? t('fact_from_user') : ''
   }
   const dominant = dossier?.facts.find((f) => f.field === 'dominant_account')?.value as { account?: string; count?: number } | undefined
 
