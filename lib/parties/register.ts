@@ -14,6 +14,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { coreKey } from './ledger-key'
+import { isScbConfigured } from './scb/config'
 import { getObservedParties, type ObservedParty } from './observed'
 import type { SuggestionReason } from './suggest'
 
@@ -80,6 +81,8 @@ export interface Register {
   /** Observed keys the pre-classifier calls a category: unattributed spend. */
   generic: { count: number; expenseSek: number; examples: string[] }
   period: RegisterPeriod
+  /** Whether this environment can fetch registry facts from SCB (gates the dossier button). */
+  scbConfigured: boolean
 }
 
 interface PartyRecord {
@@ -335,7 +338,7 @@ export async function getRegister(
           .sort((a, b) => b.stats.expenseSek + b.stats.revenueSek - (a.stats.expenseSek + a.stats.revenueSek))
       : []
 
-  return { counts, rows: selected, observed: observedSelected, generic, period }
+  return { counts, rows: selected, observed: observedSelected, generic, period, scbConfigured: isScbConfigured() }
 }
 
 // ── Dossier ─────────────────────────────────────────────────────────────────

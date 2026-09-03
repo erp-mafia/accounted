@@ -12,6 +12,7 @@ import { ISO_DATE_RE, ISO_DATE_MESSAGE_SV } from '@/lib/invariants/iso-date'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
+import { validateJamkning } from '@/lib/salary/jamkning-rules'
 import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
@@ -3105,31 +3106,12 @@ export const CreateEmployeeSchema = EmployeeSchemaBase.superRefine((data, ctx) =
     })
   }
 
-  // Jämkning: a percentage without a start date is meaningless. Note that the
-  // engine (isJamkningValid in lib/salary/calculation-engine.ts) applies the
-  // beslut only when BOTH dates are set; the API keeps valid_to optional for
-  // compatibility and the UI requires it.
-  if (
-    data.jamkning_percentage !== null &&
-    data.jamkning_percentage !== undefined &&
-    !data.jamkning_valid_from
-  ) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Jämkningens startdatum måste anges när jämkningsprocent sätts',
-      path: ['jamkning_valid_from'],
-    })
-  }
-  if (
-    data.jamkning_valid_from &&
-    data.jamkning_valid_to &&
-    data.jamkning_valid_to < data.jamkning_valid_from
-  ) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Jämkningens slutdatum måste vara efter startdatumet',
-      path: ['jamkning_valid_to'],
-    })
+  // Jämkning: the engine (isJamkningValid in lib/salary/calculation-engine.ts)
+  // applies the beslut only when BOTH dates are set, so a percentage needs
+  // both a start and an end date on every write path (#2058). The create body
+  // is the whole row, so the shared validator sees the final state here.
+  for (const issue of validateJamkning(data)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue.message, path: [issue.field] })
   }
 
   // Bank details: validate clearing/kontonummer structure at entry so a typo is
@@ -3235,21 +3217,13 @@ export const UpdateEmployeeSchema = EmployeeSchemaPatchBase.partial().superRefin
     })
   }
 
-  // Jämkning: same schema-visibility caveat as växa-stöd above. What the
-  // schema CAN see: a non-null percentage sent WITHOUT any start date in the
-  // same body is only valid if a start date already exists on the row: the
-  // route layer does the merged-state check. Within-body date ordering is
-  // checkable here.
-  if (
-    data.jamkning_valid_from &&
-    data.jamkning_valid_to &&
-    data.jamkning_valid_to < data.jamkning_valid_from
-  ) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Jämkningens slutdatum måste vara efter startdatumet',
-      path: ['jamkning_valid_to'],
-    })
+  // Jämkning: same schema-visibility caveat as växa-stöd above. A non-null
+  // percentage sent WITHOUT dates in the same body is only valid if the dates
+  // already exist on the row, so the route layer runs validateJamkning on the
+  // merged state. Within-body date ordering is checkable here: pass the
+  // percentage as null so only the ordering rule fires.
+  for (const issue of validateJamkning({ ...data, jamkning_percentage: null })) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue.message, path: [issue.field] })
   }
 })
 
@@ -4066,6 +4040,19 @@ export const PartyMergeSchema = z.object({
   survivorId: uuid,
   mergedIds: z.array(uuid).min(1).max(50),
   note: z.string().max(500).optional(),
+})
+
+export const PartyEnrichSchema = z.object({
+  /** Chosen from the SCB picker: sets the party's org number before the fetch. */
+  orgNumber: z
+    .string()
+    .transform((v) => v.replace(/[^0-9]/g, ''))
+    .pipe(z.string().regex(/^\d{10}$/))
+    .optional(),
+})
+
+export const PartySearchRegistryQuerySchema = z.object({
+  q: z.string().max(120).optional(),
 })
 
 export const PartyUndoMergeSchema = z.object({
