@@ -1,4 +1,5 @@
 -- Parties, phase 1e: the queue's confirm and dismiss are undoable for 30 days.
+-- pg-test: covered-by tests/pg/party-suggestions.pg.test.ts
 --
 -- decide_parties now snapshots the suggested_reason it clears, so a confirm
 -- can be reversed without losing why the row was suggested. A new decision
