@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { formatCurrency } from '@/lib/utils'
 import {
-  Building2,
   Calendar,
   FileText,
   CheckCircle,
@@ -16,6 +15,7 @@ import {
   ArrowRight,
   BarChart3,
   Info,
+  Briefcase,
 } from 'lucide-react'
 import type { ImportPreview, ParseIssue } from '@/lib/import/types'
 
@@ -62,7 +62,7 @@ export default function SIEPreviewStep({
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Building2 className="h-5 w-5" />
+            <Briefcase className="h-5 w-5" />
             Företagsinformation
           </CardTitle>
           <CardDescription>Information från SIE-filen</CardDescription>
