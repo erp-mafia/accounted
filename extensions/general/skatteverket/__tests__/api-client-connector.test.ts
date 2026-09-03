@@ -185,6 +185,10 @@ describe('skvRequestWithAuth: connector mode', () => {
       expect((e as SkatteverketAuthError).code).toBe('ACCESS_DENIED')
       const { message } = e as SkatteverketAuthError
       expect(message).toMatch(/connectorn/)
+      // Points at the connector's operator by host, not at an ambiguous
+      // "support": hosted is itself a Connect installation (#2226).
+      expect(message).toMatch(/operatör \(app\.hosted\.example\)/)
+      expect(message).not.toMatch(/supporten/)
       expect(message).not.toMatch(/SKATTEVERKET_APIGW_CLIENT_ID|Utvecklarportalen/)
     }
   })
@@ -198,6 +202,8 @@ describe('skvRequestWithAuth: connector mode', () => {
       expect((e as SkatteverketAuthError).code).toBe('ACCESS_DENIED')
       const { message } = e as SkatteverketAuthError
       expect(message).toMatch(/connectorn/)
+      expect(message).toMatch(/operatör \(app\.hosted\.example\)/)
+      expect(message).not.toMatch(/supporten/)
       expect(message).not.toMatch(/Utvecklarportalen/)
     }
   })
