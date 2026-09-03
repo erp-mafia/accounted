@@ -1,5 +1,5 @@
 /**
- * The backfill in migration 20260903170000 maps country names with a SQL
+ * The backfill in migration 20260903173000 maps country names with a SQL
  * function that carries its own copy of the name table. This test holds the
  * two copies to each other: every name the SQL knows must map to the same
  * code in TypeScript, and every name TypeScript knows must be in the SQL.
@@ -11,7 +11,7 @@ import { listKnownCountryNames, normalizeCountryCode } from '../country-codes'
 
 const MIGRATION = join(
   process.cwd(),
-  'supabase/migrations/20260903170000_customer_supplier_country_iso.sql',
+  'supabase/migrations/20260903173000_customer_supplier_country_iso.sql',
 )
 
 function sqlNameTable(): Map<string, string> {

@@ -132,7 +132,7 @@ const ALPHA2_RE = /^[A-Z]{2}$/
 
 /**
  * Every folded name the TypeScript table knows, with its code. Exists so a
- * test can hold the SQL twin in migration 20260903170000 to the same table.
+ * test can hold the SQL twin in migration 20260903173000 to the same table.
  */
 export function listKnownCountryNames(): Array<[name: string, code: string]> {
   return [...NAME_TO_CODE.entries()]
@@ -148,7 +148,7 @@ export function listKnownCountryNames(): Array<[name: string, code: string]> {
  * "unknown, keep the raw text" (reports, backfill) or a 400 (API writes).
  *
  * The SQL twin `public.normalize_country_code(text)` (migration
- * 20260903170000) carries the same table for the one-off backfill; keep them
+ * 20260903173000) carries the same table for the one-off backfill; keep them
  * in step when adding names here.
  */
 export function normalizeCountryCode(input: string | null | undefined): string | null {
@@ -362,7 +362,7 @@ export function checkCountryConsistency(input: {
  * either: refusing reverse charge on a genuine German customer whose row
  * still says "Deutschland" would put Swedish VAT on a correct invoice, which
  * is the worse error. The consistency check above stops new contradictory
- * rows from being saved, and migration 20260903170000 repairs the old ones
+ * rows from being saved, and migration 20260903173000 repairs the old ones
  * whose country was only ever the writer default.
  */
 export function countryPermitsReverseCharge(country: string | null | undefined): boolean {

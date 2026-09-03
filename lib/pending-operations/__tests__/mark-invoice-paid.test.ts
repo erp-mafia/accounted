@@ -122,6 +122,7 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
       error: null,
     }) // invoice fetch
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert (#2019)
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
@@ -157,6 +158,15 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
     // transaction, so nothing is excluded.
     expect(mockClearSuggestions).toHaveBeenCalledTimes(1)
     expect(mockClearSuggestions).toHaveBeenCalledWith(supabase, 'company-1', 'invoice', 'inv-1')
+    // #2019: the AR sub-ledger row is what the kontantmetod cut-off reads.
+    const paymentInserts = findCalls('invoice_payments', 'insert')
+    expect(paymentInserts).toHaveLength(1)
+    expect(paymentInserts[0][0]).toMatchObject({
+      user_id: 'user-1',
+      company_id: 'company-1',
+      invoice_id: 'inv-1',
+      transaction_id: null,
+    })
   })
 
   // No partial-payment counterpart here: this executor always settles the full
