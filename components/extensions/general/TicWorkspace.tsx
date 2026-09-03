@@ -17,7 +17,6 @@ import {
 import { useExtensionData } from '@/lib/extensions/use-extension-data'
 import { useToast } from '@/components/ui/use-toast'
 import {
-  Building2,
   CheckCircle,
   XCircle,
   MapPin,
@@ -29,6 +28,7 @@ import {
   ShieldCheck,
   Users,
   Receipt,
+  Briefcase,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import Link from 'next/link'
@@ -330,7 +330,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
-              <Building2 className="h-4 w-4" />
+              <Briefcase className="h-4 w-4" />
               {/* data-ph-mask: the looked-up company name is user data */}
               <span data-ph-mask="">{profile.companyName}</span>
             </CardTitle>

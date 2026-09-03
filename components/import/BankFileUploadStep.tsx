@@ -18,8 +18,8 @@ import {
   FileText,
   AlertCircle,
   CheckCircle,
-  Building2,
   HelpCircle,
+  Landmark,
 } from 'lucide-react'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 
@@ -187,7 +187,7 @@ export default function BankFileUploadStep({
                     {(selectedFile.size / 1024).toFixed(1)} KB
                   </p>
                   <Badge variant="secondary" className="mt-2">
-                    <Building2 className="mr-1 h-3 w-3" />
+                    <Landmark className="mr-1 h-3 w-3" />
                     {detectedFormat === 'wise_statement'
                       ? t('bank_format_wise_statement')
                       : detectedFormatName || FORMAT_NAMES[detectedFormat] || detectedFormat}
