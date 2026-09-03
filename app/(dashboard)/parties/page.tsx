@@ -123,7 +123,7 @@ export default function PartiesPage() {
     setRefreshing(true)
     try {
       const summary = await post<{ created: number; attached: number }>('/api/parties/suggest')
-      toast({ title: t('refreshed_title'), description: t('refreshed_description', summary) })
+      toast({ title: t('refreshed_title'), description: t('refreshed_description', { created: summary.created, attached: summary.attached }) })
       reload()
     } catch {
       fail()
@@ -278,7 +278,7 @@ export default function PartiesPage() {
     <div className="space-y-8">
       <PageHeader
         title={t('title')}
-        description={counts ? t('summary', counts) : undefined}
+        description={counts ? t('summary', { all: counts.all, suggested: counts.suggested, observed: counts.observed }) : undefined}
         help={
           <HelpPopover>
             <p>{t('help')}</p>
