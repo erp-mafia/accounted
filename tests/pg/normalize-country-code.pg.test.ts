@@ -1,5 +1,5 @@
 /**
- * pg-real test for migration 20260903170000: customers.country and
+ * pg-real test for migration 20260903173000: customers.country and
  * suppliers.country are ISO 3166-1 alpha-2 (#2025, #2028).
  *
  * The backfill ran once when the migration was applied, so what can be
@@ -51,7 +51,7 @@ describe('normalize_country_code()', () => {
   })
 })
 
-describe('country columns after migration 20260903170000', () => {
+describe('country columns after migration 20260903173000', () => {
   it('keeps the pre-backfill text in country_raw on both tables', async () => {
     const { rows } = await getPool().query<{ table_name: string; column_name: string }>(
       `select table_name, column_name
