@@ -129,6 +129,7 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { resolveInvoicePayeeChoice, snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import {
   describeMissingInvoicePaymentAccount,
   hasRequiredInvoicePaymentAccount,
@@ -2095,6 +2096,19 @@ async function commitCreateInvoice(
     quoteNumber = allocated as string
   }
 
+  // Which bank account the customer pays to; validated against the
+  // company's payee accounts (same rule as the web and v1 routes).
+  const payeeChoice = await resolveInvoicePayeeChoice(
+    supabase,
+    companyId,
+    currency as Currency,
+    typeof params.payment_cash_account_id === 'string' ? params.payment_cash_account_id : null,
+  )
+  if (!payeeChoice.ok) {
+    const entry = getErrorEntry(payeeChoice.code)
+    return { error: entry?.message_sv ?? payeeChoice.code, status: 400, data: payeeChoice.details }
+  }
+
   const { data: invoice, error: invoiceError } = await supabase
     .from('invoices')
     .insert({
@@ -2137,6 +2151,8 @@ async function commitCreateInvoice(
       notes: (params.notes as string) || null,
       payment_link_url: paymentLinkUrl,
       default_dimensions: defaultDimensions ?? {},
+      payment_cash_account_id: payeeChoice.fields.payment_cash_account_id,
+      payment_details: payeeChoice.fields.payment_details,
     })
     .select()
     .single()
@@ -2769,6 +2785,15 @@ async function commitSendInvoice(
   if (companyError || !company) return { error: 'Company settings missing', status: 500 }
 
   const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
+  // Freeze the chosen bank account's payee at issue (no-op without a choice).
+  const payeeSnapshot = await snapshotInvoicePayee(supabase, companyId, invoice as Invoice)
+  if (!payeeSnapshot.ok) {
+    return {
+      error: getErrorEntry(payeeSnapshot.code)?.message_sv ?? 'Bankkontot på fakturan kan inte längre användas.',
+      status: 400,
+    }
+  }
+  ;(invoice as Invoice).payment_details = payeeSnapshot.payee
   if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
     return {
       error: describeMissingInvoicePaymentAccount((invoice as Invoice).currency).sv,
@@ -2825,7 +2850,7 @@ async function commitSendInvoice(
       const preflight = await prepareInvoicePdfRender(
         company as CompanySettings,
         (invoice as Invoice).currency,
-        { paymentAccountRequired },
+        { paymentAccountRequired, payee: (invoice as Invoice).payment_details ?? null },
       )
       await renderToBuffer(
         InvoicePDF({
@@ -2882,7 +2907,7 @@ async function commitSendInvoice(
   const { branding, company: renderCompany } = await prepareInvoicePdfRender(
     company as CompanySettings,
     renderableInvoice.currency,
-    { paymentAccountRequired },
+    { paymentAccountRequired, payee: (invoice as Invoice).payment_details ?? null },
   )
   const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
   const pdfBuffer = await renderToBuffer(
@@ -3024,6 +3049,14 @@ async function commitMarkInvoiceSent(
 
   if (settingsError || !settings) return { error: 'Company settings missing', status: 500 }
 
+  const payeeSnapshot = await snapshotInvoicePayee(supabase, companyId, invoice as Invoice)
+  if (!payeeSnapshot.ok) {
+    return {
+      error: getErrorEntry(payeeSnapshot.code)?.message_sv ?? 'Bankkontot på fakturan kan inte längre användas.',
+      status: 400,
+    }
+  }
+  ;(invoice as Invoice).payment_details = payeeSnapshot.payee
   if (!hasRequiredInvoicePaymentAccount(settings as CompanySettings, invoice as Invoice)) {
     return {
       error: describeMissingInvoicePaymentAccount((invoice as Invoice).currency).sv,

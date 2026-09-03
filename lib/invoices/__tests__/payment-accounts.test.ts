@@ -258,3 +258,40 @@ describe('describeMissingInvoicePaymentAccount (#2126)', () => {
     expect(isInvoicePaymentAccountCurrency(42)).toBe(false)
   })
 })
+
+describe('per-invoice payee override (invoices.payment_details)', () => {
+  const frozen = {
+    bank_name: 'Sparbanken',
+    clearing_number: null,
+    account_number: null,
+    bankgiro: '5050-1055',
+    plusgiro: null,
+    swish: null,
+    iban: null,
+    bic: null,
+    bank_code: null,
+    foreign_account_number: null,
+  }
+
+  it('the invoice\'s frozen payee wins over the company account for the currency', () => {
+    const settings = company({
+      invoice_payment_accounts: {
+        SEK: { ...frozen, bank_name: 'Huvudbanken', bankgiro: '991-2346' },
+      },
+    })
+    expect(resolveInvoicePaymentAccount(settings, 'SEK', frozen)?.bankgiro).toBe('5050-1055')
+    expect(resolveInvoicePaymentAccount(settings, 'SEK', null)?.bankgiro).toBe('991-2346')
+    const rendered = companyWithInvoicePaymentAccount(settings, 'SEK', frozen)
+    expect(rendered.bank_name).toBe('Sparbanken')
+    expect(rendered.iban).toBeNull()
+  })
+
+  it('the send gate reads the frozen payee from the invoice row', () => {
+    const settings = company({ bankgiro: null, iban: null, plusgiro: null, swish: null, clearing_number: null, account_number: null })
+    const invoice = makeInvoice({ currency: 'SEK', document_type: 'invoice', credited_invoice_id: null })
+    expect(hasRequiredInvoicePaymentAccount(settings, invoice)).toBe(false)
+    expect(hasRequiredInvoicePaymentAccount(settings, { ...invoice, payment_details: frozen })).toBe(true)
+    // A frozen bankgiro-only payee is not enough for a EUR invoice.
+    expect(hasRequiredInvoicePaymentAccount(settings, { ...invoice, currency: 'EUR', payment_details: frozen })).toBe(false)
+  })
+})

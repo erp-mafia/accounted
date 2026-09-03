@@ -3785,7 +3785,10 @@
     "to_pay_label": "Att betala",
     "total_incl_vat_label": "Totalt inkl. moms",
     "review_customer_missing_title": "Kunduppgifterna kunde inte laddas",
-    "review_customer_missing_description": "Ladda om sidan och försök igen. Kontakta support om det inte hjälper."
+    "review_customer_missing_description": "Ladda om sidan och försök igen. Kontakta support om det inte hjälper.",
+    "payee_account_label": "Betalas till",
+    "payee_account_default": "Standard: {account}",
+    "payee_account_default_none": "Företagets standardkonto"
   },
   "invoice_review": {
     "forval_currency": "Valuta {currency}",

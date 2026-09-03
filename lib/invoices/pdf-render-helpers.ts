@@ -20,7 +20,7 @@
  */
 
 import QRCode from 'qrcode'
-import type { CompanySettings, Currency, Invoice } from '@/types'
+import type { CompanySettings, Currency, Invoice, InvoicePaymentAccount } from '@/types'
 import { brandingFromCompanySettings, SHOW_SWISH_ON_INVOICE, type InvoiceBranding } from '@/lib/invoices/pdf-template'
 import { buildSwishQrPayload } from '@/lib/payments/swish'
 import { getAmountToPay } from '@/lib/invoices/rounding'
@@ -53,6 +53,11 @@ export interface InvoicePdfRenderExtras {
 
 export interface InvoicePdfRenderOptions {
   paymentAccountRequired?: boolean
+  /**
+   * The invoice's own frozen payee (invoices.payment_details) when it chose
+   * a bank account. Null/undefined = the company's default for the currency.
+   */
+  payee?: Partial<InvoicePaymentAccount> | null
 }
 
 // A company's logo is reused across every invoice render, and twice per send
@@ -236,14 +241,14 @@ export async function prepareInvoicePdfRender(
   options: InvoicePdfRenderOptions = {},
 ): Promise<InvoicePdfRenderExtras> {
   if (currency && options.paymentAccountRequired !== false) {
-    assertInvoicePaymentAccountForRender(company, currency)
+    assertInvoicePaymentAccountForRender(company, currency, options.payee ?? null)
   }
   const branding = await prepareInvoiceFont(
     company,
     brandingFromCompanySettings(company),
   )
   const paymentCompany = currency
-    ? companyWithInvoicePaymentAccount(company, currency)
+    ? companyWithInvoicePaymentAccount(company, currency, options.payee ?? null)
     : company
   if (!paymentCompany.logo_url) return { branding, company: paymentCompany }
 

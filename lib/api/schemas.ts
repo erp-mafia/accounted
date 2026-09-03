@@ -627,6 +627,15 @@ const CreateInvoiceBaseSchema = z.object({
     .transform((v) => v || undefined)
     .optional(),
   received_date: optionalIsoDate,
+  // Which of the company's bank accounts the invoice asks the customer to pay
+  // to (migration 20260903160000). Omitted/null = the per-currency default.
+  // The route checks the account belongs to the company, is flagged as a
+  // payee and is usable for the invoice currency.
+  payment_cash_account_id: z
+    .union([uuid, z.literal('')])
+    .transform((v) => v || null)
+    .nullable()
+    .optional(),
   items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required'),
 })
 

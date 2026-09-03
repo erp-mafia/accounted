@@ -30,6 +30,7 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import {
   resolveSelfBilledSaleDraft,
@@ -670,6 +671,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       invoiceNumber = quoteNumber as string
     }
 
+    const payeeChoice = await resolveInvoicePayeeChoice(
+      ctx.supabase,
+      ctx.companyId!,
+      input.currency,
+      input.payment_cash_account_id,
+    )
+    if (!payeeChoice.ok) {
+      return v1ErrorResponseFromCode(payeeChoice.code, ctx.log, {
+        requestId: ctx.requestId,
+        details: payeeChoice.details,
+      })
+    }
+
     const { data: invoice, error: invoiceErr } = await ctx.supabase
       .from('invoices')
       .insert({
@@ -677,6 +691,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         company_id: ctx.companyId!,
         invoice_number: invoiceNumber,
         ...invoiceFields,
+        ...payeeChoice.fields,
       })
       .select(INVOICE_RESPONSE_COLUMNS)
       .single()

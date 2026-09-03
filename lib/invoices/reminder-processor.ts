@@ -129,7 +129,7 @@ export async function sendReminder(
   // with no payment account for the invoice currency would print nothing to
   // pay to, or (before this gate) the SEK account's IBAN on a EUR invoice.
   const currency = invoice.currency
-  if (!hasUsableInvoicePaymentAccount(resolveInvoicePaymentAccount(company, currency), currency)) {
+  if (!hasUsableInvoicePaymentAccount(resolveInvoicePaymentAccount(company, currency, invoice.payment_details ?? null), currency)) {
     log.warn('Skipping reminder: no payment account configured for invoice currency', {
       invoiceId: invoice.id,
       invoiceNumber: invoice.invoice_number,
@@ -306,7 +306,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
     const invoiceCurrency = invoice.currency
     if (
       !hasUsableInvoicePaymentAccount(
-        resolveInvoicePaymentAccount(company as CompanySettings, invoiceCurrency),
+        resolveInvoicePaymentAccount(company as CompanySettings, invoiceCurrency, invoice.payment_details ?? null),
         invoiceCurrency,
       )
     ) {

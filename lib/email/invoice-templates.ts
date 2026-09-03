@@ -231,7 +231,7 @@ function safeBrandingColor(value: string | null | undefined, fallback: string): 
  */
 export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
   const { invoice, customer } = data
-  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency)
+  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency, invoice.payment_details ?? null)
 
   const lang = resolveLang(customer)
   const L = LABELS[lang]
@@ -396,7 +396,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
  */
 export function generateInvoiceEmailText(data: InvoiceEmailData): string {
   const { invoice, customer } = data
-  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency)
+  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency, invoice.payment_details ?? null)
 
   const lang = resolveLang(customer)
   const L = LABELS[lang]

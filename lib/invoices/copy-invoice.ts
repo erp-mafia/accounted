@@ -47,6 +47,8 @@ export interface InvoiceCopyInitial {
   notes: string
   ore_rounding: boolean | null
   default_dimensions: Record<string, string>
+  /** The bank account the source asked to be paid to; reusable commercial content. */
+  payment_cash_account_id: string | null
   items: InvoiceCopyItem[]
 }
 
@@ -78,6 +80,7 @@ export function buildInvoiceCopyInitial(source: InvoiceCopySource): InvoiceCopyI
     notes: source.notes ?? '',
     ore_rounding: source.ore_rounding,
     default_dimensions: source.default_dimensions ?? {},
+    payment_cash_account_id: source.payment_cash_account_id ?? null,
     items: [...source.items]
       .sort((a, b) => a.sort_order - b.sort_order)
       .map((item) => ({

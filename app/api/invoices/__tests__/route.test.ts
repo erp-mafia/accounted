@@ -6,9 +6,10 @@ import {
   makeInvoice,
   makeCustomer,
 } from '@/tests/helpers'
+import { createMockRouteParams } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
-const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -158,6 +159,12 @@ describe('GET /api/invoices', () => {
 const VALID_UUID = '550e8400-e29b-41d4-a716-446655440000'
 const VALID_UUID_2 = '550e8400-e29b-41d4-a716-446655440001'
 
+const mockResolveInvoicePayeeChoice = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/invoices/invoice-payee', () => ({
+  resolveInvoicePayeeChoice: (...args: unknown[]) => mockResolveInvoicePayeeChoice(...args),
+  snapshotInvoicePayee: vi.fn().mockResolvedValue({ ok: true, payee: null }),
+}))
+
 describe('POST /api/invoices (create invoice)', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -166,6 +173,40 @@ describe('POST /api/invoices (create invoice)', () => {
     reset()
     eventBus.clear()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    mockResolveInvoicePayeeChoice.mockResolvedValue({
+      ok: true,
+      fields: { payment_cash_account_id: null, payment_details: null },
+    })
+  })
+
+  it('returns 400 when the chosen payee account is not usable for the invoice', async () => {
+    enqueue({ data: makeCustomer({ id: VALID_UUID }) })
+    mockResolveInvoicePayeeChoice.mockResolvedValue({
+      ok: false,
+      code: 'INVOICE_PAYEE_ACCOUNT_INVALID',
+      details: { cash_account_id: VALID_UUID_2, currency: 'SEK', reason: 'not_payee' },
+    })
+    mockGetVatRules.mockReturnValue({ treatment: 'standard_25', rate: 25, momsRuta: '10', reverseChargeText: null })
+    mockCalculateVat.mockReturnValue(250)
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: {
+        customer_id: VALID_UUID,
+        invoice_date: '2024-06-15',
+        due_date: '2024-07-15',
+        currency: 'SEK',
+        payment_cash_account_id: VALID_UUID_2,
+        items: [{ description: 'Test', quantity: 1, unit: 'st', unit_price: 1000 }],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAYEE_ACCOUNT_INVALID')
+    expect(mockResolveInvoicePayeeChoice).toHaveBeenCalledWith(expect.anything(), 'company-1', 'SEK', VALID_UUID_2)
+    expect(findCalls('invoices', 'insert')).toHaveLength(0)
   })
 
   it('returns 401 when not authenticated', async () => {

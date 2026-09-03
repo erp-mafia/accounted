@@ -12,7 +12,7 @@
  */
 
 export const INVOICE_FULL_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, ore_rounding, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, invoice_marking, notes, payment_link_url, stripe_payment_link_id, payment_link_auto, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, valid_until, quote_status, quote_decided_at, paid_at, paid_amount, remaining_amount, default_dimensions, deduction_total, deduction_personnummer_last4, created_at, updated_at'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, ore_rounding, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, invoice_marking, notes, payment_link_url, stripe_payment_link_id, payment_link_auto, payment_cash_account_id, payment_details, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, valid_until, quote_status, quote_decided_at, paid_at, paid_amount, remaining_amount, default_dimensions, deduction_total, deduction_personnummer_last4, created_at, updated_at'
 
 /**
  * Projection for the v1 PDF download route. Narrower than INVOICE_FULL_COLUMNS
@@ -32,7 +32,10 @@ export const INVOICE_PDF_COLUMNS =
   'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, document_type, ' +
   'currency, subtotal, vat_amount, total, ore_rounding, vat_treatment, vat_rate, moms_ruta, ' +
   'reverse_charge_text, your_reference, our_reference, invoice_marking, notes, credited_invoice_id, ' +
-  'paid_amount, remaining_amount, deduction_total, deduction_personnummer_last4'
+  'paid_amount, remaining_amount, deduction_total, deduction_personnummer_last4, ' +
+  // The frozen payee: an issued invoice that chose a bank account must print
+  // that account, not today's company default.
+  'payment_cash_account_id, payment_details'
 
 export const INVOICE_ITEM_FULL_COLUMNS =
   'id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, deduction_amount, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, dimensions, sales_order_item_id, created_at'

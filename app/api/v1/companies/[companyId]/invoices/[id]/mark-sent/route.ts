@@ -51,6 +51,7 @@ import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
 import {
   hasRequiredInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
+import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { eventBus } from '@/lib/events'
 import type { CompanySettings, EntityType, Invoice } from '@/types'
@@ -233,6 +234,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     const companySettings = settings as CompanySettings
+    // Freeze the chosen bank account's payee at issue (no-op without a choice).
+    const payeeSnapshot = await snapshotInvoicePayee(ctx.supabase, ctx.companyId!, typed)
+    if (!payeeSnapshot.ok) {
+      return v1ErrorResponseFromCode(payeeSnapshot.code, ctx.log, {
+        requestId: ctx.requestId,
+        details: payeeSnapshot.details,
+      })
+    }
+    typed.payment_details = payeeSnapshot.payee
     if (!hasRequiredInvoicePaymentAccount(companySettings, typed)) {
       return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
         requestId: ctx.requestId,

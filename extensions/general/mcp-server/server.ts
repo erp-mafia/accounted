@@ -6794,6 +6794,10 @@ export const tools: McpTool[] = [
           type: 'string',
           description: 'Optional https pay link for THIS invoice (e.g. Stripe); rendered in the invoice email and PDF.',
         },
+        payment_cash_account_id: {
+          type: 'string',
+          description: 'Bank account (cash_accounts UUID) the invoice asks the customer to pay to. Omit for the company default per currency. Must be one of the company accounts flagged as invoice payee (see gnubok_get_company_settings) and usable for the invoice currency (IBAN for non-SEK).',
+        },
       },
       required: ['customer_id', 'items'],
     },
@@ -6974,6 +6978,10 @@ export const tools: McpTool[] = [
           invoice_marking: (args.invoice_marking as string) || null,
           notes: (args.notes as string) || null,
           payment_link_url: paymentLinkUrl,
+          payment_cash_account_id:
+            typeof args.payment_cash_account_id === 'string' && args.payment_cash_account_id.trim()
+              ? args.payment_cash_account_id.trim()
+              : null,
         },
         {
           customer_name: customer.name,

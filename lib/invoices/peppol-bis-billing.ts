@@ -329,7 +329,7 @@ function prepareInvoice(input: PeppolInvoiceInput):
 
   // Same payee the PDF and the email print: the resolver, not the raw legacy
   // columns. Peppol is SEK-only (validated above), so resolve for SEK.
-  const payee = resolveInvoicePaymentAccount(company, 'SEK')
+  const payee = resolveInvoicePaymentAccount(company, 'SEK', invoice.payment_details ?? null)
   let payment: PreparedInvoice['payment'] | null = null
   if (hasText(payee?.bankgiro) && validateBankgiroNumber(payee.bankgiro)) {
     payment = {
