@@ -21,14 +21,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const { data: party, error } = await supabase
       .from('parties')
-      .select('id, org_number, legal_name')
+      .select('id, org_number, legal_name, vat_number')
       .eq('company_id', companyId)
       .eq('id', id)
       .is('merged_into', null)
       .maybeSingle()
     if (error) throw new Error(`parties lookup failed: ${error.message}`)
     if (!party) return errorResponseFromCode('NOT_FOUND', log, { requestId })
-    const p = party as { id: string; org_number: string | null; legal_name: string | null }
+    const p = party as { id: string; org_number: string | null; legal_name: string | null; vat_number: string | null }
     if (!isLegalPersonOrgNumber(p.org_number)) return errorResponseFromCode('SCB_NOT_A_LEGAL_PERSON', log, { requestId })
 
     let lookup
@@ -69,6 +69,12 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       if (!count) {
         await supabase.from('parties').update({ legal_name: legal }).eq('company_id', companyId).eq('id', id)
       }
+    }
+
+    // The VAT number has one valid form, so it fills an empty field outright.
+    const vat = lookup.facts.find((f) => f.field === 'vat_number')?.value
+    if (!p.vat_number && typeof vat === 'string' && vat) {
+      await supabase.from('parties').update({ vat_number: vat }).eq('company_id', companyId).eq('id', id)
     }
 
     const r = (summary ?? {}) as Partial<Record<'inserted' | 'superseded' | 'refreshed', number>>

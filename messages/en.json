@@ -8340,6 +8340,9 @@
     "fact_workplaces": "Workplaces",
     "fact_turnover_band": "Turnover",
     "fact_registered_skv": "Skatteverket",
+    "fact_postal_code_city": "Postal code and city",
+    "more_actions": "More actions",
+    "registry_group": "From SCB · fetched {date}",
     "fact_trade_name": "Trade name",
     "open_dossier": "Open {name}"
   }

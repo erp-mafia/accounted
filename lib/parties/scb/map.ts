@@ -207,8 +207,16 @@ export function factsFromScbCompany(row: ScbCompanyRow): ScbFact[] {
   const bv = codeOf('Bolagsstatus', 'Status hos Bolagsverket')
   push(coded('bolagsverket_status', bv, BOLAGSVERKET_STATUS, bv ? { warning: BOLAGSVERKET_WARNING_CODES.has(bv.replace(/^0+(?=\d)/, '') || '0') } : {}, textOf('Bolagsstatus', 'Status hos Bolagsverket')))
   push(coded('employees_band', codeOf('Stkl', 'Storleksklass Anställda'), STORLEKSKLASS, {}, textOf('Storleksklass', 'Storleksklass Anställda')))
-  const registeredSkv = codeOf('Registrerad hos SKV', 'Registrerad hos Skatteverket')
-  if (registeredSkv) push({ field: 'registered_skv', value: { code: registeredSkv, label: textOf('Registrerad hos SKV') ?? (registeredSkv === '1' ? 'Registrerad' : `Kod ${registeredSkv}`) } })
+
+  // A Swedish company registered for moms has VAT number SE + org number + 01
+  // by construction (Skatteverket assigns no other form), so the registry's
+  // moms flag gives the number itself. Represented as a fact so the source
+  // and date travel with it; the supplier row copies it on promotion.
+  const momsCode = codeOf('Momsstatus')
+  const org = pick(row, 'OrgNr')
+  if ((momsCode === '1' || momsCode === '3') && org && /^\d{10}$/.test(org)) {
+    push({ field: 'vat_number', value: `SE${org}01` })
+  }
 
   const sni = pick(row, 'Bransch_1, kod', 'Bransch_1', 'Bransch', 'SNI')
   const sniText = textOf('Bransch_1', 'Bransch_1, text', 'Bransch')

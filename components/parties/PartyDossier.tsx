@@ -3,7 +3,9 @@
 import { useEffect, useState } from 'react'
 import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
 import { useTranslations } from 'next-intl'
+import { MoreHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SlideOver, SlideOverBody, SlideOverContent, SlideOverHeader } from '@/components/ui/slide-over'
@@ -27,7 +29,6 @@ const REGISTRY_FIELDS = [
   'employees_band',
   'turnover_band',
   'industry',
-  'registered_skv',
   'postal_address',
   'seat',
   'registered_at',
@@ -39,7 +40,7 @@ const REGISTRY_FIELDS = [
   'trade_name',
 ] as const
 
-/** Live registry facts, in the order the dossier shows them. */
+/** Live registry facts, in the order the dossier shows them; the VAT number sits in its own row above. */
 function registryFacts(facts: Dossier['facts']): Dossier['facts'] {
   const scb = facts.filter((f) => f.source === 'registry_scb')
   return REGISTRY_FIELDS.flatMap((field) => scb.filter((f) => f.field === field))
@@ -155,11 +156,18 @@ export function PartyDossier({
   const docsFor = (field: string) => {
     const f = dossier?.facts.find((x) => x.field === field)
     if (!f) return ''
-    if (f.source === 'registry_scb') return `${t('source_scb')} · ${formatDate(f.fetchedAt ?? f.recordedAt)}`
+    if (f.source === 'registry_scb') return t('source_scb')
     const n = (f.reference as { docs?: number } | null)?.docs
     return n ? t('fact_from_documents', { count: n }) : f.source === 'ledger' ? t('fact_from_ledger') : f.source === 'user' ? t('fact_from_user') : ''
   }
   const dominant = dossier?.facts.find((f) => f.field === 'dominant_account')?.value as { account?: string; count?: number } | undefined
+  const registryVat = dossier?.facts.find((f) => f.field === 'vat_number' && f.source === 'registry_scb')?.value
+  // One primary action: the role the ledger suggests and the party does not
+  // have yet. The other role and everything else live behind the menu.
+  const missingRoles: PartyRole[] = p ? (['supplier', 'customer'] as PartyRole[]).filter((r) => (r === 'supplier' ? !p.roles.supplierId : !p.roles.customerId)) : []
+  const primaryRole: PartyRole | null = p ? (missingRoles.find((r) => p.defaultRoles.includes(r)) ?? missingRoles[0] ?? null) : null
+  const secondaryRole: PartyRole | null = missingRoles.find((r) => r !== primaryRole) ?? null
+  const scbFetchedAt = dossier?.facts.filter((f) => f.source === 'registry_scb').map((f) => f.fetchedAt ?? f.recordedAt).sort().at(-1) ?? null
 
   return (
     <SlideOver open={Boolean(partyId)} onOpenChange={(open) => (!open ? onClose() : undefined)}>
@@ -178,53 +186,42 @@ export function PartyDossier({
             <div className="space-y-8">
               <div className="space-y-3">
                 {subtitle ? <p className="text-[13px] text-muted-foreground">{subtitle}</p> : null}
-                <div className="flex flex-wrap gap-2">
-                  {suggested || !p.roles.supplierId ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={p.defaultRoles.includes('supplier') ? 'default' : 'outline'}
-                      onClick={() => onPromote(p.id, ['supplier'])}
-                      disabled={!canWrite || busy}
-                    >
-                      {t('promote_supplier')}
+                <div className="flex items-center gap-2">
+                  {primaryRole ? (
+                    <Button type="button" size="sm" onClick={() => onPromote(p.id, [primaryRole])} disabled={!canWrite || busy}>
+                      {primaryRole === 'supplier' ? t('promote_supplier') : t('promote_customer')}
                     </Button>
                   ) : null}
-                  {suggested || !p.roles.customerId ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={p.defaultRoles.includes('customer') && !p.defaultRoles.includes('supplier') ? 'default' : 'outline'}
-                      onClick={() => onPromote(p.id, ['customer'])}
-                      disabled={!canWrite || busy}
-                    >
-                      {t('promote_customer')}
-                    </Button>
-                  ) : null}
-                  {onFetchRegistry && isLegalPersonOrgNumber(p.orgNumber) ? (
-                    <Button type="button" size="sm" variant="outline" onClick={() => onFetchRegistry(p.id)} disabled={!canWrite || busy || fetching}>
-                      {fetching ? t('fetching_registry') : t('fetch_registry')}
-                    </Button>
-                  ) : null}
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={!canWrite || busy}
-                    onClick={() =>
-                      onMerge(
-                        { id: p.id, displayName: p.displayName, orgNumber: p.orgNumber, status: p.status },
-                        dossier.similar.map((s) => ({ id: s.id, displayName: s.displayName, orgNumber: s.orgNumber, status: s.status })),
-                      )
-                    }
-                  >
-                    {t('merge')}
-                  </Button>
-                  {suggested ? (
-                    <Button type="button" size="sm" variant="ghost" onClick={() => onDismiss(p.id)} disabled={!canWrite || busy}>
-                      {t('dismiss')}
-                    </Button>
-                  ) : null}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button type="button" size="sm" variant="outline" aria-label={t('more_actions')} disabled={!canWrite || busy}>
+                        <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      {secondaryRole ? (
+                        <DropdownMenuItem onSelect={() => onPromote(p.id, [secondaryRole])}>
+                          {secondaryRole === 'supplier' ? t('promote_supplier') : t('promote_customer')}
+                        </DropdownMenuItem>
+                      ) : null}
+                      {onFetchRegistry && isLegalPersonOrgNumber(p.orgNumber) ? (
+                        <DropdownMenuItem onSelect={() => onFetchRegistry(p.id)} disabled={fetching}>
+                          {fetching ? t('fetching_registry') : t('fetch_registry')}
+                        </DropdownMenuItem>
+                      ) : null}
+                      <DropdownMenuItem
+                        onSelect={() =>
+                          onMerge(
+                            { id: p.id, displayName: p.displayName, orgNumber: p.orgNumber, status: p.status },
+                            dossier.similar.map((s) => ({ id: s.id, displayName: s.displayName, orgNumber: s.orgNumber, status: s.status })),
+                          )
+                        }
+                      >
+                        {t('merge')}
+                      </DropdownMenuItem>
+                      {suggested ? <DropdownMenuItem onSelect={() => onDismiss(p.id)}>{t('dismiss')}</DropdownMenuItem> : null}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               </div>
 
@@ -288,7 +285,11 @@ export function PartyDossier({
                       value={p.orgNumber ? formatOrgNumber(p.orgNumber) : <span className="text-muted-foreground">{t('fact_missing')}</span>}
                       note={p.orgNumber && orgFact ? docsFor('org_number') : undefined}
                     />
-                    <Row label={t('fact_vat')} value={p.vatNumber ?? <span className="text-muted-foreground">{t('fact_missing')}</span>} />
+                    <Row
+                      label={t('fact_vat')}
+                      value={p.vatNumber ?? (registryVat ? String(registryVat) : <span className="text-muted-foreground">{t('fact_missing')}</span>)}
+                      note={p.vatNumber ? docsFor('vat_number') || undefined : registryVat ? docsFor('vat_number') : undefined}
+                    />
                     {dossier.identities.map((i) => (
                       <Row
                         key={i.id}
@@ -297,8 +298,19 @@ export function PartyDossier({
                         note={`${t('fact_from_documents', { count: i.seenCount })} · ${i.status === 'known' ? t('identity_known') : t('identity_unverified')}`}
                       />
                     ))}
+                    {scbFetchedAt && registryFacts(dossier.facts).length > 0 ? (
+                      <tr>
+                        <td colSpan={2} className="pt-4 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+                          {t('registry_group', { date: formatDate(scbFetchedAt) })}
+                        </td>
+                      </tr>
+                    ) : null}
                     {registryFacts(dossier.facts).map((f) => (
-                      <Row key={f.id} label={registryLabel(t, f.field)} value={registryValue(f.value)} note={`${t('source_scb')} · ${formatDate(f.fetchedAt ?? f.recordedAt)}`} />
+                      <Row
+                        key={f.id}
+                        label={f.field === 'postal_address' && !(f.value as { street?: string | null })?.street ? t('fact_postal_code_city') : registryLabel(t, f.field)}
+                        value={registryValue(f.value)}
+                      />
                     ))}
                   </tbody>
                 </table>
