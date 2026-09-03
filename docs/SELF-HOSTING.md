@@ -22,7 +22,7 @@ In the Supabase dashboard under **Authentication > URL Configuration**:
 1. Set **Site URL** to your deployment URL (e.g., `https://gnubok.example.com`).
 2. Add `https://gnubok.example.com/auth/callback` to the **Redirect URLs** allowlist.
 
-Accounted uses email + password authentication with magic link as a fallback. The default Supabase email auth settings work out of the box. For production, configure a custom SMTP provider under **Authentication > SMTP Settings** to avoid Supabase's built-in rate limits.
+Accounted uses email + password authentication with magic link as a fallback. The default Supabase email auth settings work out of the box. For production, configure a custom SMTP provider under **Authentication > SMTP Settings** to avoid Supabase's built-in rate limits. Keep **Secure email change** enabled (Authentication > Settings, on by default): a login-email change also removes social logins tied to the old address, so the old mailbox must confirm the change before it can lose its access.
 
 MFA (two-factor authentication via TOTP) is **not enforced** for self-hosted deployments: the Docker image sets `NEXT_PUBLIC_SELF_HOSTED=true` by default, which disables MFA enforcement. Users can still optionally enable 2FA in Settings > Säkerhet if they wish. Idle and absolute session timeouts are also off by default for self-hosted installs; operators can opt in with the variables below.
 
