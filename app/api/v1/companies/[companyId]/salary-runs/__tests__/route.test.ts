@@ -383,12 +383,14 @@ describe('PATCH /api/v1/companies/:companyId/salary-runs/:id', () => {
     expect(flex.from).toHaveBeenCalledWith('salary_run_employees')
   })
 
-  it('returns 400 SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD for a cross-month payment_date', async () => {
-    // Period 2026-05: moving the payment into June would book the verifikat
-    // in June while the AGI still declares 202605 (kontantprincipen).
+  it('accepts a cross-month payment_date: the AGI follows the payout month (#2191)', async () => {
+    // Period 2026-05 paid 5 June (lön i efterskott): the verifikat books in
+    // June and the AGI is declared for 202606, so nothing is out of step.
+    const updated = { ...SAMPLE_RUN, payment_date: '2026-06-05' }
     const flex = makeFlexibleSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      salary_runs: { data: SAMPLE_RUN, error: null },
+      salary_runs: [{ data: SAMPLE_RUN, error: null }, { data: updated, error: null }],
+      salary_run_employees: { data: null, error: null },
       idempotency_keys: { data: null, error: null },
     })
     mockServiceClient.mockReturnValue(flex)
@@ -401,10 +403,9 @@ describe('PATCH /api/v1/companies/:companyId/salary-runs/:id', () => {
       detailParams(COMPANY_ID, RUN_ID),
     )
 
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.error.code).toBe('SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD')
-    expect(flex.from).not.toHaveBeenCalledWith('salary_run_employees')
+    expect(body.data.payment_date).toBe('2026-06-05')
   })
 
   it('grandfathers day adjustments when the current date is already outside the period', async () => {

@@ -15485,7 +15485,7 @@ export const tools: McpTool[] = [
       additionalProperties: false,
       properties: {
         salary_run_id: { type: 'string', description: 'UUID of the salary run (must be draft)' },
-        payment_date: { type: 'string', description: 'New payment date (YYYY-MM-DD); the date the salary verifikat will be booked on. Must stay within the run\'s period month (AGI is declared per payment month); supplying it clears the run\'s calculation.' },
+        payment_date: { type: 'string', description: 'New payment date (YYYY-MM-DD); the date the salary verifikat will be booked on. May fall outside the run\'s period month (lön i efterskott): the AGI is declared for the payment month. Supplying it clears the run\'s calculation.' },
         voucher_series: { type: 'string', description: 'Voucher series letter (single A-Z)' },
         notes: { type: ['string', 'null'], description: 'Free-text note on the run (max 2000 chars); null clears it' },
       },

@@ -150,7 +150,7 @@ registerEndpoint({
   pitfalls: [
     'Returns 400 SALARY_RUN_PATCH_NOT_DRAFT if status !== "draft".',
     'period_year + period_month are immutable post-create.',
-    'payment_date must stay within the run\'s period month (400 SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD otherwise): the AGI is declared per payment month. A run whose current payment date already sits outside the period month may still be day-adjusted within that same month.',
+    'payment_date may fall outside the run\'s period month (lön i efterskott): the AGI redovisningsperiod follows the payment month (kontantprincipen), so a run for August paid on 25 September is declared for September.',
     'Supplying payment_date clears every roster row\'s calculation_breakdown, so an already-calculated run must be recalculated before :approve/:book.',
   ],
   example: {
@@ -235,27 +235,10 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       return ok(existing, { requestId: ctx.requestId })
     }
 
-    // Kontantprincipen guard (SFL 26 kap): the AGI derives its
-    // redovisningsperiod from period_year/period_month while the verifikat
-    // books on payment_date, so a payment date outside the run's period month
-    // would post the entries in one month and declare them in another. Same
-    // rule as lib/salary/update-run.ts and the internal dashboard PATCH,
-    // including the grandfather clause: a run created with an out-of-period
-    // payment date may still be day-adjusted within that same month, since
-    // creation does not (yet) enforce the coupling. No move can introduce a
-    // NEW wrong month.
-    if (typeof updates.payment_date === 'string') {
-      const ex = existing as { period_year: number; period_month: number; payment_date: string }
-      const periodPrefix = `${ex.period_year}-${String(ex.period_month).padStart(2, '0')}`
-      const newMonth = updates.payment_date.slice(0, 7)
-      const currentMonth = ex.payment_date.slice(0, 7)
-      if (newMonth !== periodPrefix && newMonth !== currentMonth) {
-        return v1ErrorResponseFromCode('SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD', ctx.log, {
-          requestId: ctx.requestId,
-          details: { period: periodPrefix, payment_date: updates.payment_date },
-        })
-      }
-    }
+    // The payment date may leave the run's period month: the AGI
+    // redovisningsperiod follows payment_date (kontantprincipen, #2191), so
+    // the verifikat and the declaration always share a month. Same rule as
+    // lib/salary/update-run.ts and the dashboard PATCH.
 
     if (ctx.dryRun) {
       const merged = { ...(existing as object), ...updates }

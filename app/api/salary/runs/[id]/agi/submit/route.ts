@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { eventBus } from '@/lib/events'
+import { agiReportingPeriod } from '@/lib/salary/agi/reporting-period'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
@@ -115,12 +116,16 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       // (extensions/general/skatteverket/index.ts /agi/kvittenser route) when
       // it observes a uuidKvittens for the period, mirroring SKV's signeradTid.
 
+      // Payout month, not the earned month (kontantprincipen): the period
+      // the declaration was generated under and that Skatteverket answers for.
+      const agiPeriod = agiReportingPeriod(run)
+
       await eventBus.emit({
         type: 'agi.submitted',
         payload: {
           salaryRunId: id,
-          periodYear: run.period_year,
-          periodMonth: run.period_month,
+          periodYear: agiPeriod.periodYear,
+          periodMonth: agiPeriod.periodMonth,
           userId: user.id,
           companyId,
         },
@@ -130,8 +135,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         data: {
           ...submitData.data,
           salaryRunId: id,
-          periodYear: run.period_year,
-          periodMonth: run.period_month,
+          periodYear: agiPeriod.periodYear,
+          periodMonth: agiPeriod.periodMonth,
           message: 'AGI-underlag inläst hos Skatteverket. Skapa granskningsunderlag och signera med BankID i Mina Sidor.',
         },
       })

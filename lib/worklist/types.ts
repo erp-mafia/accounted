@@ -25,6 +25,20 @@ export const WORKLIST_CATEGORIES = [
    */
   'book_transaction',
   /**
+   * Unbooked skattekonto rows ("N st skattekontohändelser att bokföra").
+   * Pending:  skattekonto_transactions with status = 'booked' (Skatteverket's
+   *           "tidigare": the event has happened on the tax account),
+   *           journal_entry_id IS NULL and is_ignored = false. Rows with
+   *           status = 'upcoming' are future charges with nothing to book
+   *           yet and never reach the Transaktioner inbox, so they are not
+   *           pending work either.
+   * Done:     the skattekonto booking flows set journal_entry_id (here it IS
+   *           the booked marker, unlike bank transactions), or the user
+   *           ignores the row (is_ignored = true). Same predicate as the
+   *           Transaktioner inbox's Skatteverket rows.
+   */
+  'book_skattekonto',
+  /**
    * Unconsumed documents in the inbox ("N st underlag att hantera").
    * Pending:  invoice_inbox_items with a document and no
    *           created_supplier_invoice_id / created_journal_entry_id /
