@@ -8,7 +8,7 @@ import {
   hasOwnSkatteverketCredentials,
 } from '../upstreams'
 
-const ENV = ['GNUBOK_CONNECTOR_KEY', 'GNUBOK_CONNECT_URL', 'ENABLE_BANKING_PRIVATE_KEY', 'ENABLE_BANKING_APP_ID', 'ENABLE_BANKING_PRIVATE_KEY_PRODUCTION', 'ENABLE_BANKING_APP_ID_PRODUCTION', 'SKATTEVERKET_OAUTH2_CLIENT_ID', 'SKATTEVERKET_APIGW_CLIENT_ID', 'QVALIA_API_KEY', 'QVALIA_PARTNER_REG_NO', 'CONNECT_BANK_CANARY_COMPANIES'] as const
+const ENV = ['GNUBOK_CONNECTOR_KEY', 'GNUBOK_CONNECT_URL', 'ENABLE_BANKING_PRIVATE_KEY', 'ENABLE_BANKING_APP_ID', 'ENABLE_BANKING_PRIVATE_KEY_PRODUCTION', 'ENABLE_BANKING_APP_ID_PRODUCTION', 'SKATTEVERKET_OAUTH2_CLIENT_ID', 'SKATTEVERKET_APIGW_CLIENT_ID', 'QVALIA_API_KEY', 'QVALIA_PARTNER_REG_NO', 'CONNECT_BANK_CANARY_COMPANIES', 'CONNECT_SKV_CANARY_COMPANIES'] as const
 
 afterEach(() => vi.unstubAllEnvs())
 function clear() {
@@ -89,5 +89,34 @@ describe('bank canary companies', () => {
     vi.stubEnv('ENABLE_BANKING_APP_ID', 'app-id')
     vi.stubEnv('CONNECT_BANK_CANARY_COMPANIES', 'c-1')
     expect(bankConnectorMode('c-1')).toBeNull()
+  })
+})
+
+describe('skatteverket canary companies', () => {
+  it('routes only the listed companies through the connector while own credentials exist', () => {
+    clear()
+    vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_x')
+    vi.stubEnv('SKATTEVERKET_OAUTH2_CLIENT_ID', 'client')
+    vi.stubEnv('SKATTEVERKET_APIGW_CLIENT_ID', 'gw')
+    vi.stubEnv('CONNECT_SKV_CANARY_COMPANIES', 'c-1, c-2')
+    expect(skatteverketConnectorMode()).toBeNull()
+    expect(skatteverketConnectorMode('c-9')).toBeNull()
+    expect(skatteverketConnectorMode('c-1')).toEqual({ baseUrl: 'https://connect.accounted.se/api/connect/skv', key: 'gnubok_ck_x' })
+    expect(skatteverketConnectorMode('c-2')).not.toBeNull()
+  })
+
+  it('does not let the bank list leak into Skatteverket routing', () => {
+    clear()
+    vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_x')
+    vi.stubEnv('SKATTEVERKET_OAUTH2_CLIENT_ID', 'client')
+    vi.stubEnv('CONNECT_BANK_CANARY_COMPANIES', 'c-1')
+    expect(skatteverketConnectorMode('c-1')).toBeNull()
+  })
+
+  it('ignores the canary list without a connector key', () => {
+    clear()
+    vi.stubEnv('SKATTEVERKET_OAUTH2_CLIENT_ID', 'client')
+    vi.stubEnv('CONNECT_SKV_CANARY_COMPANIES', 'c-1')
+    expect(skatteverketConnectorMode('c-1')).toBeNull()
   })
 })
