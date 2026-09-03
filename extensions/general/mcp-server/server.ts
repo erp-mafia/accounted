@@ -7060,7 +7060,7 @@ export const tools: McpTool[] = [
       let query = supabase
         .from('sales_orders')
         .select(
-          'id, order_number, status, customer_id, order_date, requested_delivery_date, last_delivery_date, currency, subtotal, vat_amount, total, customer:customers(name), items:sales_order_items(id, line_type, quantity, delivered_qty, sort_order)',
+          'id, order_number, status, customer_id, order_date, requested_delivery_date, last_delivery_date, currency, subtotal, vat_amount, total, customer:customers(name), items:sales_order_items!sales_order_items_sales_order_id_fkey(id, line_type, quantity, delivered_qty, sort_order)',
           { count: 'exact' },
         )
         .eq('company_id', companyId)
