@@ -93,9 +93,15 @@ export function assembleMonthlyBreakdown(
 /**
  * Generate monthly income vs expenses breakdown for a fiscal period.
  *
- * Groups posted journal entry lines by month and account class:
+ * Groups posted AND reversed journal entry lines by month and account class:
  * - Class 3 (30xx) = revenue (credit side)
  * - Class 4-7 (40xx-79xx) = expenses (debit side)
+ *
+ * Reversed originals are included on purpose (issue #2201): the year total
+ * (tb_ex_year_end / the income statement) counts posted + reversed, so a
+ * same-year storno nets to 0 there. Dropping the reversed original here but
+ * keeping the storno (itself posted) made the months stop summing to
+ * Nettoresultat. The same entry set on both paths keeps sum(months) = year.
  *
  * Year-end entries are excluded, including the storno/correction chain of a
  * REVERSED year-end entry (an undone bokslut). Without that the resultatavslut,
@@ -145,8 +151,8 @@ export async function generateMonthlyBreakdown(
     )
   ).map((r) => r.id)
 
-  // Get all posted journal entry lines for this period with their entry dates,
-  // via the two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts).
+  // Get all posted and reversed journal entry lines for this period with their
+  // entry dates, via the two-step entry-lines fetch (lib/bookkeeping/entry-lines.ts).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let lines: any[]
   try {
@@ -158,7 +164,8 @@ export async function generateMonthlyBreakdown(
         let query = q
           .eq('fiscal_period_id', fiscalPeriodId)
           .eq('company_id', companyId)
-          .eq('status', 'posted')
+          // posted + reversed: the same set as tb_ex_ye_entries in the RPC.
+          .in('status', ['posted', 'reversed'])
           .neq('source_type', 'year_end')
         if (reversedYearEndIds.length > 0) {
           const idList = `(${reversedYearEndIds.join(',')})`

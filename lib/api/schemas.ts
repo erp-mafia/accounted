@@ -26,6 +26,12 @@ import {
 import { NON_IBAN_CURRENCIES } from '@/lib/invoices/payment-accounts'
 import { PERSONAL_NUMBER_INPUT_RE } from '@/lib/customers/mask-personal-number'
 import {
+  COUNTRY_CONSISTENCY_MESSAGES,
+  checkCountryConsistency,
+  defaultCountryForParty,
+  normalizeCountryCode,
+} from '@/lib/vat/country-codes'
+import {
   looksLikeSwedishPersonalNumber,
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
@@ -946,6 +952,29 @@ export const SendInvoiceSchema = MarkInvoiceSentSchema.extend({
 // Customer schemas
 // ============================================================
 
+/**
+ * ISO 3166-1 alpha-2 country on customers and suppliers. A code in any case
+ * ("de", "DE"), Skatteverket's EL for Greece, or a Swedish/English country
+ * name ("Tyskland", "Germany") is normalised to the uppercase code; anything
+ * else is a 400. The column used to take free text, which put
+ * GERMANY811234567 in the SKV 5740 file (#2028). Empty string reads as
+ * "not supplied".
+ */
+const countryCode = z.string().transform((value, ctx) => {
+  const code = normalizeCountryCode(value)
+  if (!code) {
+    ctx.addIssue({
+      code: 'custom',
+      message:
+        `country "${value}" is not an ISO 3166-1 alpha-2 code or a known country name. `
+        + 'Use a code such as SE, DE or NO.',
+    })
+    return z.NEVER
+  }
+  return code
+})
+export const CountryCodeSchema = emptyStringAsUndefined(countryCode)
+
 export const CreateCustomerSchema = z.object({
   name: z.string().min(1, 'Customer name is required'),
   customer_type: CustomerTypeSchema,
@@ -966,7 +995,7 @@ export const CreateCustomerSchema = z.object({
   address_line2: z.string().optional(),
   postal_code: z.string().optional(),
   city: z.string().optional(),
-  country: z.string().optional(),
+  country: CountryCodeSchema,
   org_number: z.string().optional(),
   vat_number: z.string().optional(),
   personal_number: z
@@ -975,7 +1004,8 @@ export const CreateCustomerSchema = z.object({
     .optional()
     .nullable(),
   language: z.enum(['sv', 'en']).optional(),
-  default_payment_terms: z.number().int().positive().optional(),
+  // Whole days 0-365; 0 = betalning direkt / vid mottagande (issue #2070).
+  default_payment_terms: z.number().int().min(0).max(365).optional(),
   notes: z.string().optional(),
 }).superRefine((customer, ctx) => {
   if (customer.personal_number && customer.customer_type !== 'individual') {
@@ -984,6 +1014,37 @@ export const CreateCustomerSchema = z.object({
       path: ['personal_number'],
       message: 'Personal number is only allowed for individual customers',
     })
+  }
+  // Country vs customer type vs VAT prefix (#2025): an EU business with
+  // country SE got reverse charge and nothing objected until the periodisk
+  // sammanställning, after the invoice was sent. An omitted country is SE
+  // for Swedish types, derived from the VAT prefix for eu_business, and
+  // required for non_eu_business (see defaultCountryForParty); the
+  // transform below stores the resolved value.
+  const effectiveCountry =
+    customer.country ?? defaultCountryForParty(customer.customer_type, customer.vat_number)
+  if (!effectiveCountry) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['country'],
+      message:
+        customer.customer_type === 'eu_business'
+          ? 'country is required for an EU business unless vat_number carries an EU country prefix (e.g. DE811234567)'
+          : 'country is required for a non-EU business',
+    })
+  } else {
+    const countryIssue = checkCountryConsistency({
+      partyType: customer.customer_type,
+      country: effectiveCountry,
+      vatNumber: customer.vat_number,
+    })
+    if (countryIssue) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['country'],
+        message: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en,
+      })
+    }
   }
   // GDPR art. 5.1 c: a personnummer stored as a business org_number is shown
   // unmasked everywhere (only customer_type='individual' rows are masked), so
@@ -1030,7 +1091,13 @@ export const CreateCustomerSchema = z.object({
       message: `At most ${MAX_INVOICE_EMAIL_COPY_RECIPIENTS} customer invoice copy recipients are allowed in total`,
     })
   }
-}).transform((customer) => {
+}).transform((input) => {
+  // The resolved country (see the superRefine above): always a code here,
+  // the refine has already rejected the cases where none can be derived.
+  const customer = {
+    ...input,
+    country: input.country ?? defaultCountryForParty(input.customer_type, input.vat_number) ?? 'SE',
+  }
   // A personnummer-shaped org_number on customer_type='individual' IS the
   // personnummer, submitted in the wrong field (the MCP create tool had no
   // personal_number input until 2026-08-21, and the v1 docs long said
@@ -1060,7 +1127,7 @@ export const UpdateCustomerSchema = z.object({
   address_line2: z.string().optional(),
   postal_code: z.string().optional(),
   city: z.string().optional(),
-  country: z.string().optional(),
+  country: CountryCodeSchema,
   org_number: z.string().optional(),
   vat_number: z.string().optional(),
   // Plaintext personnummer (validated here, then encrypted by the route), or
@@ -1080,7 +1147,8 @@ export const UpdateCustomerSchema = z.object({
     .nullable()
     .optional(),
   language: z.enum(['sv', 'en']).optional(),
-  default_payment_terms: z.number().int().positive().optional(),
+  // Whole days 0-365; 0 = betalning direkt / vid mottagande (issue #2070).
+  default_payment_terms: z.number().int().min(0).max(365).optional(),
   notes: z.string().optional(),
 }).superRefine((customer, ctx) => {
   if (
@@ -1124,7 +1192,7 @@ export const CreateSupplierSchema = z.object({
   address_line2: z.string().optional(),
   postal_code: z.string().optional(),
   city: z.string().optional(),
-  country: z.string().optional(),
+  country: CountryCodeSchema,
   org_number: z.string().optional(),
   vat_number: z.string().optional(),
   bankgiro: z.string().optional(),
@@ -1135,7 +1203,8 @@ export const CreateSupplierSchema = z.object({
   clearing_number: z.string().optional(),
   account_number: z.string().optional(),
   default_expense_account: emptyStringAsUndefined(accountNumber),
-  default_payment_terms: z.number().int().positive().optional(),
+  // Whole days 0-365; 0 = betalning direkt / vid mottagande (issue #2070).
+  default_payment_terms: z.number().int().min(0).max(365).optional(),
   default_currency: CurrencySchema.nullable().optional(),
   notes: z.string().optional(),
 })
@@ -2763,10 +2832,22 @@ const ImportedCustomerRowSchema = z.object({
   address_line2: z.string().nullable(),
   postal_code: z.string().nullable(),
   city: z.string().nullable(),
-  country: z.string(),
+  country: countryCode,
   vat_number: z.string().nullable(),
   default_payment_terms: z.number().int().min(0).max(365),
   notes: z.string().nullable(),
+}).superRefine((row, ctx) => {
+  // The preview flags these rows and the wizard refuses to continue with
+  // them; repeated here so a hand-built request cannot import an EU
+  // business with country SE (#2025).
+  const countryIssue = checkCountryConsistency({
+    partyType: row.customer_type,
+    country: row.country,
+    vatNumber: row.vat_number,
+  })
+  if (countryIssue) {
+    ctx.addIssue({ code: 'custom', path: ['country'], message: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en })
+  }
 })
 
 export const CustomerImportExecuteSchema = z.object({
@@ -2785,7 +2866,7 @@ const ImportedSupplierRowSchema = z.object({
   address_line2: z.string().nullable(),
   postal_code: z.string().nullable(),
   city: z.string().nullable(),
-  country: z.string(),
+  country: countryCode,
   vat_number: z.string().nullable(),
   bankgiro: z.string().nullable(),
   plusgiro: z.string().nullable(),

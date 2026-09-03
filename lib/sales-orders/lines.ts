@@ -40,11 +40,11 @@ export type NormalizeLinesResult =
 
 export function normalizeSalesOrderLines(
   items: SalesOrderItemInput[],
-  customer: Pick<Customer, 'customer_type' | 'vat_number_validated'>,
+  customer: Pick<Customer, 'customer_type' | 'vat_number_validated'> & { country?: string | null },
 ): NormalizeLinesResult {
-  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
+  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
   const allowed = new Set(
-    getPermittedVatRates(customer.customer_type, customer.vat_number_validated).map((r) => r.rate),
+    getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country).map((r) => r.rate),
   )
 
   const rows: SalesOrderLineRow[] = []
