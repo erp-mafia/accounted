@@ -287,7 +287,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // are `undefined` here and are dropped by supabase-js JSON serialization,
     // so only supplied fields are written; explicit null still clears.
     // The bank columns mirror the default SEK payee account (migration
-    // 20260903150000): write the change through to it FIRST so a failure
+    // 20260904010000): write the change through to it FIRST so a failure
     // leaves nothing half-written, and the PDF prints what this call set.
     try {
       await propagateLegacyPayeeWrite(ctx.supabase, ctx.companyId!, changes)

@@ -43,6 +43,10 @@
 --      knew, including the IBAN): every invoice keeps printing exactly what
 --      it printed before. No rows are created: an entry with no matching
 --      account stays in the map as the fallback the resolver already honours.
+--      Companies that are a migration-reset source (company_migration_resets)
+--      are skipped: their rows are immutable by trigger, and the first attempt
+--      (as 20260903150000) failed on prod when the mirror wrote one of them.
+--      Their legacy map stays in company_settings, which the resolver reads.
 --
 -- The mirror runs SECURITY DEFINER because company_settings updates are
 -- admin-gated by RLS. The admin guard in (4) is what makes that safe: only an
@@ -389,6 +393,7 @@ SELECT cs.company_id, k.key AS currency, k.value AS payee
   FROM public.company_settings cs
   CROSS JOIN LATERAL jsonb_each(cs.invoice_payment_accounts) k
  WHERE cs.invoice_payment_accounts <> '{}'::jsonb
+   AND NOT EXISTS (SELECT 1 FROM public.company_migration_resets r WHERE r.source_company_id = cs.company_id)
 UNION ALL
 SELECT cs.company_id, 'SEK',
        jsonb_strip_nulls(jsonb_build_object(
@@ -403,6 +408,7 @@ SELECT cs.company_id, 'SEK',
        ))
   FROM public.company_settings cs
  WHERE NOT (COALESCE(cs.invoice_payment_accounts, '{}'::jsonb) ? 'SEK')
+   AND NOT EXISTS (SELECT 1 FROM public.company_migration_resets r WHERE r.source_company_id = cs.company_id)
    AND COALESCE(
          NULLIF(btrim(cs.bank_name), ''), NULLIF(btrim(cs.clearing_number), ''),
          NULLIF(btrim(cs.account_number), ''), NULLIF(btrim(cs.bankgiro), ''),

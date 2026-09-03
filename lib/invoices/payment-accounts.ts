@@ -99,7 +99,7 @@ export function normalizeInvoicePaymentAccount(
  *      written when the invoice chose a bank account and refreshed at issue).
  *   2. The company's payment account for the invoice currency
  *      (company_settings.invoice_payment_accounts, mirrored from the default
- *      cash account per currency since migration 20260903150000).
+ *      cash account per currency since migration 20260904010000).
  *   3. For SEK only, the legacy flat bank columns.
  */
 export function resolveInvoicePaymentAccount(

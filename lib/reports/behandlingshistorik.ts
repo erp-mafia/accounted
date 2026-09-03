@@ -214,7 +214,7 @@ export const AUDITED_TABLES = [
   // a behandlingsregel in the same sense.
   'cash_accounts',
   // Which bank account customer invoices pay to, per currency (migration
-  // 20260903150000).
+  // 20260904010000).
   'invoice_payee_defaults',
 ] as const
 
@@ -425,7 +425,7 @@ const MAPPING_RULE_FIELDS: Record<string, string> = {
  */
 const CASH_ACCOUNT_FIELDS: Record<string, string> = {
   voucher_series: 'Verifikationsserie',
-  // Payee fields (migration 20260903150000): what customer invoices print.
+  // Payee fields (migration 20260904010000): what customer invoices print.
   bank_name: 'Bank',
   clearing_number: 'Clearingnummer',
   account_number: 'Kontonummer',

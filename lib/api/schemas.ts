@@ -635,7 +635,7 @@ const CreateInvoiceBaseSchema = z.object({
     .optional(),
   received_date: optionalIsoDate,
   // Which of the company's bank accounts the invoice asks the customer to pay
-  // to (migration 20260903193000). Omitted/null = the per-currency default.
+  // to (migration 20260904011000). Omitted/null = the per-currency default.
   // The route checks the account belongs to the company, is flagged as a
   // payee and is usable for the invoice currency.
   payment_cash_account_id: z
@@ -2221,7 +2221,7 @@ const InvoicePaymentAccountSchema = z.object({
 
 /**
  * PATCH /api/cash-accounts/[id]: the verifikationsserie override plus the
- * payee fields (migration 20260903150000). Payee keys share the field rules
+ * payee fields (migration 20260904010000). Payee keys share the field rules
  * of InvoicePaymentAccountSchema so the settings form, the legacy settings
  * writers and this route agree on what a valid bankgiro is.
  */

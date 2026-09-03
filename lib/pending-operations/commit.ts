@@ -706,7 +706,7 @@ async function commitUpdateCompanySettings(
   }
 
   // The bank columns mirror the default SEK payee account (migration
-  // 20260903150000): write the change through FIRST so a failure leaves
+  // 20260904010000): write the change through FIRST so a failure leaves
   // nothing half-written, and the invoice PDF prints what the agent set.
   try {
     await propagateLegacyPayeeWrite(supabase, companyId, validated.changes)
