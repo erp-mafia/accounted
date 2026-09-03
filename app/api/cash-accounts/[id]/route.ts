@@ -76,7 +76,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
           details: { required_roles: ['owner', 'admin'] },
         })
       }
-      // Only bank accounts (19xx) can be printed as payee. Stripe, Woo and
+      // Only giro/bank accounts (1920-1999) can be printed as payee. Stripe, Woo and
       // Shopify clearing rows live in the same table and must stay out.
       const { data: existing, error: existingError } = await supabase
         .from('cash_accounts')

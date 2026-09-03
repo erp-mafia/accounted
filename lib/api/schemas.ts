@@ -2233,7 +2233,7 @@ export const UpdateCashAccountSchema = InvoicePaymentAccountSchema.extend({
 export const CreateCashAccountSchema = z.object({
   name: z.string().trim().min(1, 'Ange ett namn').max(100),
   currency: CurrencySchema,
-  ledger_account: z.string().regex(/^19\d\d$/, 'Bankkonton bokförs på 1900-1999').optional(),
+  ledger_account: z.string().regex(/^19[2-9]\d$/, 'Bankkonton bokförs på 1920-1999').optional(),
   invoice_payee: z.boolean().optional(),
   payee: InvoicePaymentAccountSchema.optional(),
 }).strict()

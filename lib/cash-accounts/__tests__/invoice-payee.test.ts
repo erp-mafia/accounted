@@ -94,9 +94,12 @@ describe('isUsableInvoicePayee', () => {
 })
 
 describe('isBankCashAccount', () => {
-  it('keeps 19xx rows and drops PSP clearing accounts', () => {
+  it('keeps giro/bank rows (1920-1999) and drops PSP clearing accounts and the cash till', () => {
+    expect(isBankCashAccount({ ledger_account: '1920' })).toBe(true)
     expect(isBankCashAccount({ ledger_account: '1930' })).toBe(true)
     expect(isBankCashAccount({ ledger_account: '1945' })).toBe(true)
+    expect(isBankCashAccount({ ledger_account: '1910' })).toBe(false)
+    expect(isBankCashAccount({ ledger_account: '1919' })).toBe(false)
     expect(isBankCashAccount({ ledger_account: '1686' })).toBe(false)
     expect(isBankCashAccount({ ledger_account: '1584' })).toBe(false)
   })

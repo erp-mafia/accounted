@@ -221,7 +221,7 @@ describe('invoice payee accounts (20260903150000)', () => {
     expect(row.bankgiro).toBe('991-2346')
   })
 
-  it('revoking an account as payee, or disabling it, drops its defaults', async () => {
+  it('revoking an account as payee drops its defaults; disabling it (member-level) does not', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
     await insertSettings(userId, companyId)
@@ -229,8 +229,16 @@ describe('invoice payee accounts (20260903150000)', () => {
     await getPool().query(`UPDATE public.cash_accounts SET bankgiro = '5050-1234', invoice_payee = true WHERE id = $1`, [main])
     await setDefault(companyId, 'SEK', main)
     await setDefault(companyId, 'EUR', main)
+
+    // "Synkas ej" in the bank picker is a member action and must not undo an
+    // admin's payee choice: the defaults and the mirrored columns stay.
+    await getPool().query(`UPDATE public.cash_accounts SET enabled = false WHERE id = $1`, [main])
+    let left = await getPool().query(`SELECT count(*)::int AS n FROM public.invoice_payee_defaults WHERE company_id = $1`, [companyId])
+    expect(left.rows[0].n).toBe(2)
+    expect((await settingsRow(companyId)).bankgiro).toBe('5050-1234')
+
     await getPool().query(`UPDATE public.cash_accounts SET invoice_payee = false WHERE id = $1`, [main])
-    const left = await getPool().query(`SELECT count(*)::int AS n FROM public.invoice_payee_defaults WHERE company_id = $1`, [companyId])
+    left = await getPool().query(`SELECT count(*)::int AS n FROM public.invoice_payee_defaults WHERE company_id = $1`, [companyId])
     expect(left.rows[0].n).toBe(0)
     expect((await settingsRow(companyId)).bankgiro).toBeNull()
   })
@@ -246,18 +254,29 @@ describe('invoice payee accounts (20260903150000)', () => {
     await setActiveCompany(memberId, companyId)
     const main = await insertCashAccount({ companyId, ledgerAccount: '1930', isPrimary: true })
 
+    // One transaction per expectation: a raised error aborts the transaction
+    // withUserContext runs in, so the next statement would fail for the
+    // wrong reason.
     await withUserContext(memberId, async (client) => {
       const res = await client
         .query(`UPDATE public.cash_accounts SET bankgiro = '999-9999' WHERE id = $1`, [main])
         .catch((err: Error) => err)
       expect(res).toBeInstanceOf(Error)
       expect((res as Error).message).toMatch(/INVOICE_PAYEE_ADMIN_ONLY/)
-      // Balance and the bank-identity iban are what sync writes: allowed.
-      await client.query(`UPDATE public.cash_accounts SET balance = 10, iban = 'SE4550000000058398257466' WHERE id = $1`, [main])
+    })
+    await withUserContext(memberId, async (client) => {
+      // Balance, the enabled flag and the bank-identity iban are what sync
+      // and the bank picker write: allowed for a member.
+      await client.query(`UPDATE public.cash_accounts SET balance = 10, enabled = false, iban = 'SE4550000000058398257466' WHERE id = $1`, [main])
+      const seen = await client.query(`SELECT balance::int AS balance, enabled FROM public.cash_accounts WHERE id = $1`, [main])
+      expect(seen.rows[0]).toEqual({ balance: 10, enabled: false })
+    })
+    await withUserContext(memberId, async (client) => {
       const insert = await client
         .query(`INSERT INTO public.cash_accounts (company_id, ledger_account, currency, bankgiro, invoice_payee) VALUES ($1, '1931', 'SEK', '999-9999', true)`, [companyId])
         .catch((err: Error) => err)
       expect(insert).toBeInstanceOf(Error)
+      expect((insert as Error).message).toMatch(/INVOICE_PAYEE_ADMIN_ONLY/)
     })
     await withUserContext(ownerId, async (client) => {
       await client.query(`UPDATE public.cash_accounts SET bankgiro = '5050-1234', invoice_payee = true WHERE id = $1`, [main])

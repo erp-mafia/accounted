@@ -33,7 +33,11 @@
 --      cash_accounts writes are member-level (bank sync touches them), but
 --      where customers are told to pay was admin-only before this migration
 --      (company_settings RLS) and must stay so. Revoking an account as payee
---      (invoice_payee = false) or disabling it drops its defaults.
+--      (invoice_payee = false, admin-only) drops its defaults. Disabling an
+--      account (enabled = false, member-level: the bank picker's "Synkas ej")
+--      does not: a member must not be able to undo an admin's payee choice;
+--      the pick lists exclude disabled accounts and the send gate refuses an
+--      invoice that chose one.
 --   5. Backfill from today's map onto existing cash accounts, copying each
 --      currency entry verbatim (the map entry wins over anything the account
 --      knew, including the IBAN): every invoice keeps printing exactly what
@@ -313,13 +317,15 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
-  -- An account revoked as payee, or disabled, stops being a default (the
-  -- defaults DELETE trigger then drops that currency from the map). The
-  -- field reads sit in their own branch: plpgsql resolves NEW.<field> per
+  -- An account revoked as payee stops being a default (the defaults DELETE
+  -- trigger then drops that currency from the map). invoice_payee is
+  -- admin-only (cash_accounts_payee_admin_only), so this cannot be reached
+  -- by a member; enabled is member-level and deliberately does not revoke.
+  -- The field read sits in its own branch: plpgsql resolves NEW.<field> per
   -- expression, and this function also fires for invoice_payee_defaults
   -- rows, which have no invoice_payee column.
   IF TG_TABLE_NAME = 'cash_accounts' THEN
-    IF TG_OP = 'UPDATE' AND (NEW.invoice_payee = false OR NEW.enabled = false) THEN
+    IF TG_OP = 'UPDATE' AND NEW.invoice_payee = false AND OLD.invoice_payee = true THEN
       DELETE FROM public.invoice_payee_defaults WHERE cash_account_id = NEW.id;
     END IF;
   END IF;
@@ -344,9 +350,9 @@ CREATE TRIGGER mirror_invoice_payee_defaults_on_defaults
   AFTER INSERT OR UPDATE OR DELETE ON public.invoice_payee_defaults
   FOR EACH ROW EXECUTE FUNCTION public.trg_mirror_invoice_payee_defaults();
 
--- Payee-field edits, a revoke, or a disable on an account that is a default
--- for some currency must reach the mirror too. Bank sync churn (balances,
--- names, the bank identity iban) never fires this.
+-- Payee-field edits or a revoke on an account that is a default for some
+-- currency must reach the mirror too. Bank sync churn (balances, names, the
+-- enabled flag, the bank identity iban) never fires this.
 CREATE TRIGGER mirror_invoice_payee_defaults_on_cash_account
   AFTER UPDATE ON public.cash_accounts
   FOR EACH ROW
@@ -362,7 +368,6 @@ CREATE TRIGGER mirror_invoice_payee_defaults_on_cash_account
     OR OLD.bank_code IS DISTINCT FROM NEW.bank_code
     OR OLD.foreign_account_number IS DISTINCT FROM NEW.foreign_account_number
     OR OLD.invoice_payee IS DISTINCT FROM NEW.invoice_payee
-    OR OLD.enabled IS DISTINCT FROM NEW.enabled
   )
   EXECUTE FUNCTION public.trg_mirror_invoice_payee_defaults();
 

@@ -73,6 +73,7 @@ describe('POST /api/cash-accounts (manual bank account)', () => {
     expect((await POST(postReq({ currency: 'SEK' }), createMockRouteParams({}))).status).toBe(400)
     expect((await POST(postReq({ name: 'X', currency: 'SEK', payee: { bankgiro: '12' } }), createMockRouteParams({}))).status).toBe(400)
     expect((await POST(postReq({ name: 'X', currency: 'SEK', ledger_account: '1510' }), createMockRouteParams({}))).status).toBe(400)
+    expect((await POST(postReq({ name: 'X', currency: 'SEK', ledger_account: '1910' }), createMockRouteParams({}))).status).toBe(400)
     expect(findCalls('cash_accounts', 'insert')).toHaveLength(0)
   })
 

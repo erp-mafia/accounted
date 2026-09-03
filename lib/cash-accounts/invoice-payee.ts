@@ -64,9 +64,13 @@ export function isUsableInvoicePayee(account: CashAccount, currency: Currency): 
     && hasUsableInvoicePaymentAccount(cashAccountPayee(account), currency)
 }
 
-/** Bank-type rows only: Stripe (1686), Woo (1680) and Shopify (1584) also live in cash_accounts. */
+/**
+ * Bank-type rows only: Stripe (1686), Woo (1680) and Shopify (1584) also live
+ * in cash_accounts, and so may a till (1910 Kassa, 1911-1919). A customer is
+ * paid to a giro or bank account (BAS 1920-1999), never to a cash till.
+ */
 export function isBankCashAccount(account: Pick<CashAccount, 'ledger_account'>): boolean {
-  return /^19\d\d$/.test(account.ledger_account)
+  return /^19[2-9]\d$/.test(account.ledger_account)
 }
 
 export interface InvoicePayeeState {
