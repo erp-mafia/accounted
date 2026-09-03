@@ -297,6 +297,43 @@ describe('ambiguous-embed: pair derivation from the migration history', () => {
     expect(deriveAmbiguousPairs(dir).size).toBe(0)
   })
 
+  it('drops a composite edge when DROP COLUMN removes one of its columns', () => {
+    // Postgres drops every foreign key a column takes part in. Keeping the
+    // composite edge would arm a pair that no longer exists and reject valid
+    // embeds (CodeRabbit on PR #2207).
+    const base = `
+      CREATE TABLE public.sales_order_items (
+        id uuid PRIMARY KEY,
+        company_id uuid NOT NULL,
+        sales_order_id uuid NOT NULL REFERENCES public.sales_orders(id),
+        CONSTRAINT sales_order_items_order_company_fkey
+          FOREIGN KEY (sales_order_id, company_id) REFERENCES public.sales_orders(id, company_id)
+      );
+    `
+    expect([...deriveAmbiguousPairs(migrationsRoot({ '1_a.sql': base }))]).toEqual([
+      pairKey('sales_order_items', 'sales_orders'),
+    ])
+    expect(
+      deriveAmbiguousPairs(
+        migrationsRoot({
+          '1_a.sql': base,
+          '2_b.sql': `ALTER TABLE public.sales_order_items DROP COLUMN company_id;`,
+        }),
+      ).size,
+    ).toBe(0)
+    // The dropped constraint's name is released too: a later DROP CONSTRAINT
+    // by that name must not delete an unrelated edge.
+    expect(
+      deriveAmbiguousPairs(
+        migrationsRoot({
+          '1_a.sql': base,
+          '2_b.sql': `ALTER TABLE public.sales_order_items DROP COLUMN company_id;`,
+          '3_c.sql': `ALTER TABLE public.sales_order_items DROP CONSTRAINT IF EXISTS sales_order_items_order_company_fkey;`,
+        }),
+      ).size,
+    ).toBe(0)
+  })
+
   it('reads a composite table-level constraint inside CREATE TABLE', () => {
     const dir = migrationsRoot({
       '1_a.sql': `

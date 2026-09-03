@@ -155,7 +155,17 @@ export function deriveForeignKeys(migrationsDir) {
           addEdge(table, normIdent(m[1]), normIdent(m[2]))
         }
         for (const m of stmt.matchAll(/drop\s+column\s+(?:if\s+exists\s+)?([\w"]+)/gi)) {
-          edges.delete(`${table}.${normIdent(m[1])}`)
+          // Postgres drops every foreign key the column takes part in, so a
+          // composite edge listing it goes too, not only the single-column key.
+          const column = normIdent(m[1])
+          for (const key of [...edges.keys()]) {
+            if (!key.startsWith(`${table}.`)) continue
+            if (!key.slice(table.length + 1).split(',').includes(column)) continue
+            edges.delete(key)
+            for (const [name, edge] of [...byConstraint]) {
+              if (edge === key) byConstraint.delete(name)
+            }
+          }
         }
         for (const m of stmt.matchAll(/drop\s+constraint\s+(?:if\s+exists\s+)?([\w"]+)/gi)) {
           const edge = byConstraint.get(normIdent(m[1]))
