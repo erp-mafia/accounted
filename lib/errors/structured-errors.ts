@@ -3158,8 +3158,11 @@ const SALARY: Record<string, StructuredErrorEntry> = {
   // month, the run itself belongs in that period.
   SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD: {
     httpStatus: 400,
-    message_sv: 'Utbetalningsdagen måste ligga i lönekörningens period: AGI redovisas per utbetalningsmånad. Skapa en lönekörning för rätt period i stället.',
-    message_en: 'The payment date must fall within the salary run\'s period month: the AGI is declared per payment month. Create a salary run for the correct period instead.',
+    // No longer raised (#2191): the AGI period follows payment_date, so a
+    // payout in another month is legal. Kept so clients mapping the code
+    // keep compiling.
+    message_sv: 'Utbetalningsdagen måste ligga i lönekörningens period.',
+    message_en: 'The payment date must fall within the salary run\'s period month.',
   },
   SALARY_RUN_DELETE_NOT_DRAFT: {
     httpStatus: 400,
@@ -3210,6 +3213,13 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'AGI kan endast genereras för lönekörningar i status review, approved, paid, booked eller corrected.',
     message_en: 'AGI can only be generated for salary runs in review, approved, paid, booked, or corrected status.',
+  },
+  AGI_PERIOD_CONFLICT: {
+    httpStatus: 409,
+    message_sv:
+      'En annan lönekörning är redan deklarerad för samma redovisningsperiod (utbetalningsmånad). En arbetsgivardeklaration per månad ska omfatta alla utbetalningar den månaden: slå ihop körningarna eller rätta den befintliga deklarationen.',
+    message_en:
+      'Another salary run is already declared for the same reporting period (payout month). One employer declaration per month must cover every payment made that month: merge the runs or correct the existing declaration.',
   },
   AGI_INCOMPLETE_DATA: {
     httpStatus: 400,

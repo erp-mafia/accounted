@@ -44,6 +44,11 @@ import { RunEmployeesTable } from '@/components/salary/run/RunEmployeesTable'
 import { RunCalculationDetails } from '@/components/salary/run/RunCalculationDetails'
 import { RunJournalPreview, type PreviewData } from '@/components/salary/run/RunJournalPreview'
 import { periodLabelOf, type RunDetail } from '@/components/salary/run/types'
+import {
+  agiReportingPeriod,
+  formatAgiPeriodCompact,
+  formatAgiPeriodDashed,
+} from '@/lib/salary/agi/reporting-period'
 import type { EmployeeMasked, SalaryRunEmployee } from '@/types'
 
 export default function SalaryRunPage({ params }: { params: Promise<{ id: string }> }) {
@@ -85,10 +90,11 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   // the progress rail and the panel's state machine (underlag submitted /
   // awaiting BankID signature / signed). Only booked runs can file AGI, so
   // the fetch is skipped (null period) for everything else.
+  // The period is the PAYOUT month (kontantprincipen), which for lön i
+  // efterskott is the month after run.period_*; every AGI and tax-payment
+  // surface below keys on it.
   const { submission: agiSubmission, refresh: refreshAgiSubmission } = useAgiSubmission(
-    run && run.status === 'booked'
-      ? `${run.period_year}${String(run.period_month).padStart(2, '0')}`
-      : null,
+    run && run.status === 'booked' ? formatAgiPeriodCompact(agiReportingPeriod(run)) : null,
   )
 
   async function loadRun() {
@@ -97,7 +103,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       const { data } = await res.json()
       setRun(data)
       if (data?.period_year && data?.period_month) {
-        const period = `${data.period_year}-${String(data.period_month).padStart(2, '0')}`
+        const period = formatAgiPeriodDashed(agiReportingPeriod(data))
         setTaxPaymentLoading(true)
         void fetch(`/api/skatteverket/tax-payments/${period}`)
           .then(async (txRes) => (txRes.ok ? txRes.json() : null))
@@ -720,7 +726,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       }
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
-      const compactPeriod = `${run.period_year}${String(run.period_month).padStart(2, '0')}`
+      const compactPeriod = formatAgiPeriodCompact(agiReportingPeriod(run))
       const a = document.createElement('a')
       a.href = url
       a.download = `AGI_${compactPeriod}.xml`
@@ -930,7 +936,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         <AGIPanel
           salaryRunId={id}
           arbetsgivare={run.arbetsgivare ?? ''}
-          period={`${run.period_year}${String(run.period_month).padStart(2, '0')}`}
+          period={formatAgiPeriodCompact(agiReportingPeriod(run))}
           agiGeneratedAt={run.agi_generated_at}
           agiSubmittedAt={run.agi_submitted_at}
           submission={agiSubmission}
