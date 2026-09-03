@@ -380,16 +380,29 @@ export interface Dossier {
   similar: Array<{ id: string; displayName: string; orgNumber: string | null; status: string }>
 }
 
-export async function getDossier(supabase: SupabaseClient, companyId: string, partyId: string): Promise<Dossier | null> {
+/**
+ * The dossier for one party. A dismissed (archived) party is hidden here as
+ * it is in the register; a merged party resolves to its survivor, so a
+ * stale link lands on the right dossier instead of a dead one.
+ */
+export async function getDossier(supabase: SupabaseClient, companyId: string, partyId: string, hops = 0): Promise<Dossier | null> {
   const { data: party, error } = await supabase
     .from('parties')
-    .select('id, display_name, legal_name, org_number, vat_number, kind, status, alias_keys, suggested_reason, created_at, merged_into')
+    .select('id, display_name, legal_name, org_number, vat_number, kind, status, alias_keys, suggested_reason, created_at, merged_into, archived_at')
     .eq('company_id', companyId)
     .eq('id', partyId)
     .maybeSingle()
   if (error) throw new Error(`parties lookup failed: ${error.message}`)
   if (!party) return null
   const p = party as PartyRecord & { legal_name: string | null; vat_number: string | null; merged_into: string | null }
+  if (p.merged_into) {
+    if (hops >= 16) return null
+    const { data: survivor, error: chainError } = await supabase.rpc('canonical_party_id', { p_party_id: p.id })
+    if (chainError) throw new Error(`canonical_party_id failed: ${chainError.message}`)
+    if (!survivor || survivor === p.id) return null
+    return getDossier(supabase, companyId, survivor as string, hops + 1)
+  }
+  if (p.archived_at) return null
 
   const [facts, identities, decisions, customer, supplier, observed] = await Promise.all([
     supabase
