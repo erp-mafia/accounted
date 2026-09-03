@@ -19,7 +19,7 @@ import { z } from 'zod'
  * breaking change is a new operation or family name, never a changed one.
  */
 
-export const CONTRACT_VERSION = '2026-09-02'
+export const CONTRACT_VERSION = '2026-09-03'
 
 // ---------------------------------------------------------------------------
 // Keys, headers and paths
@@ -33,8 +33,8 @@ export const CONNECTOR_KEY_HEADER = 'x-connector-key'
 
 export const CONNECTOR_ENTITLEMENTS_PATH = '/api/connect/entitlements'
 
-/** Default hosted origin. app.gnubok.se stays the machine-facing host for API traffic. */
-export const DEFAULT_CONNECT_BASE_URL = 'https://app.gnubok.se'
+/** Default origin of the connector service. Installations that pointed at the hosted app's copy of the routes set GNUBOK_CONNECT_URL explicitly. */
+export const DEFAULT_CONNECT_BASE_URL = 'https://connect.accounted.se'
 
 /**
  * Request headers an installation sends alongside its key. The company header
@@ -114,6 +114,59 @@ export const CONNECTOR_ERROR_CODES = [
   'PEPPOL_REGISTRATION_CAP_REACHED',
 ] as const
 export type ConnectorErrorCode = (typeof CONNECTOR_ERROR_CODES)[number]
+
+// ---------------------------------------------------------------------------
+// Bank sync operation (installation -> service, POST /api/connect/bank/sync)
+// ---------------------------------------------------------------------------
+
+/**
+ * The installation holds the PSD2 session and the account; the service does
+ * the provider paging, the booked-only filter and the normalization, and
+ * returns what the installation ingests plus the raw provider pages it
+ * archives. Stored keys (external ids) stay computed on the installation from
+ * booking_date, amount and its own account scope, exactly as before.
+ */
+export const bankSyncRequestSchema = z.object({
+  /** The Enable Banking session id the installation obtained (ownership is checked). */
+  session_id: z.string().trim().min(1).max(200),
+  account_uid: z.string().trim().min(1).max(200),
+  account_currency: z.string().trim().length(3),
+  date_from: z.iso.date().optional(),
+  date_to: z.iso.date().optional(),
+  strategy: z.enum(['default', 'longest']).optional(),
+})
+export type BankSyncRequest = z.infer<typeof bankSyncRequestSchema>
+
+export const normalizedBankTransactionSchema = z.object({
+  /** A real calendar date: the installation's stored keys and ledger date derive from it. */
+  booking_date: z.iso.date(),
+  amount: z.number(),
+  currency: z.string(),
+  description: z.string(),
+  counterparty_name: z.string().nullable(),
+  counterparty_account: z.string().nullable(),
+  reference: z.string().nullable(),
+  merchant_category_code: z.string().nullable(),
+  bank_transaction_code: z.string().nullable(),
+  proprietary_bank_transaction_code: z.string().nullable(),
+})
+export type NormalizedBankTransaction = z.infer<typeof normalizedBankTransactionSchema>
+
+export const bankSyncResponseSchema = z.object({
+  transactions: z.array(normalizedBankTransactionSchema),
+  /** Raw provider pages, verbatim, for the installation's archive. */
+  raw_pages: z.array(z.string()),
+  skipped_pending: z.number().int().min(0),
+  returned_min_booking_date: z.string().nullable(),
+  returned_max_booking_date: z.string().nullable(),
+  /** Set when the provider rejected the window and a narrower date_from was used. */
+  effective_date_from: z.string().nullable(),
+  pages: z.number().int().min(0),
+})
+export type BankSyncResponse = z.infer<typeof bankSyncResponseSchema>
+
+/** Error codes specific to the bank sync operation. */
+export const BANK_SYNC_ERROR_CODES = ['CONNECTOR_BANK_SESSION_EXPIRED', 'CONNECTOR_BANK_UPSTREAM_ERROR'] as const
 
 // ---------------------------------------------------------------------------
 // Peppol operations (installation -> service, /api/connect/peppol/*)
