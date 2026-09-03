@@ -574,9 +574,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             'Automatiskt makulerad: betalningsraden kunde inte sparas efter bokförd betalning',
           )
         }
+        // The raw driver text stays in the server log above; API callers get
+        // the reason code only.
         return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', ctx.log, {
           requestId: ctx.requestId,
-          details: { reason: 'payment_row_insert_failed', error: recorded.error },
+          details: { reason: 'payment_row_insert_failed' },
         })
       }
       paymentRowId = recorded.id

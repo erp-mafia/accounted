@@ -2683,6 +2683,12 @@ async function commitMarkInvoicePaid(
       journalEntryId,
     })
     if (!recorded.ok) {
+      // Raw driver text stays server-side; the user gets the outcome only.
+      log.error('mark_invoice_paid: invoice_payments insert failed', undefined, {
+        invoiceId,
+        companyId,
+        error: recorded.error,
+      })
       if (journalEntryId) {
         await cancelOrphanedPaymentEntry(
           supabase, companyId, userId, journalEntryId,
@@ -2691,7 +2697,7 @@ async function commitMarkInvoicePaid(
       }
       return {
         error:
-          'Betalningen kunde inte registreras i reskontran (' + recorded.error + '). ' +
+          'Betalningen kunde inte registreras i reskontran. ' +
           'Verifikationen har makulerats och fakturan har inte markerats som betald.',
         status: 500,
       }
