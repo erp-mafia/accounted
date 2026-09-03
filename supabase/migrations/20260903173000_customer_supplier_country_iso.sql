@@ -14,6 +14,11 @@
 --      were (and listed in country_raw); the periodisk report already warns
 --      on those and the customer form asks for a pick before it saves.
 --
+--   Rows of a company that is a migration-reset source (company_migration_resets)
+--   are immutable by trigger and are skipped by every UPDATE below; the first
+--   attempt (as 20260903170000) failed on prod because it touched them. Their
+--   legacy text is still read through normalizeCountryCode() at runtime.
+--
 --   4. for eu_business rows whose country is missing or only the old writer
 --      default (SE) while the VAT number names another EU member, takes the
 --      country from the VAT prefix. The pre-2026-09 VAT rules granted reverse
@@ -197,17 +202,19 @@ comment on column public.suppliers.country_raw is
 -- Backfill: every row that is not already an uppercase alpha-2 code. An
 -- empty string is "no country" and becomes null (the periodisk report
 -- already treats both the same); a null stays null, nothing is guessed.
-update public.customers
+update public.customers c
    set country_raw = country,
        country = case when btrim(country) = '' then null else coalesce(public.normalize_country_code(country), country) end
  where country is not null
-   and country !~ '^[A-Z]{2}$';
+   and country !~ '^[A-Z]{2}$'
+   and not exists (select 1 from public.company_migration_resets r where r.source_company_id = c.company_id);
 
-update public.suppliers
+update public.suppliers s
    set country_raw = country,
        country = case when btrim(country) = '' then null else coalesce(public.normalize_country_code(country), country) end
  where country is not null
-   and country !~ '^[A-Z]{2}$';
+   and country !~ '^[A-Z]{2}$'
+   and not exists (select 1 from public.company_migration_resets r where r.source_company_id = s.company_id);
 
 -- Step 4: EU-business rows with a missing or defaulted (SE) country and a
 -- VAT number registered in another EU member. Only a prefix that names a
@@ -228,6 +235,7 @@ update public.customers c
  where d.id = c.id
    and d.code is not null
    and d.code <> 'SE'
-   and d.code in ('AT','BE','BG','HR','CY','CZ','DK','EE','FI','FR','DE','GR','HU','IE','IT','LV','LT','LU','MT','NL','PL','PT','RO','SK','SI','ES');
+   and d.code in ('AT','BE','BG','HR','CY','CZ','DK','EE','FI','FR','DE','GR','HU','IE','IT','LV','LT','LU','MT','NL','PL','PT','RO','SK','SI','ES')
+   and not exists (select 1 from public.company_migration_resets r where r.source_company_id = c.company_id);
 
 NOTIFY pgrst, 'reload schema';

@@ -168,6 +168,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
           { data: PAID_INVOICE, error: null },
         ],
         company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
       }, calls),
     )
 
@@ -202,6 +203,23 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     )
     const invoiceUpdate = calls.find((call) => call.table === 'invoices' && call.method === 'update')
     expect(invoiceUpdate?.args[0]).toMatchObject({ paid_at: '2026-05-12T12:00:00Z' })
+    // #2019: the AR sub-ledger row (what the kontantmetod cut-off reads) is
+    // written with the voucher and no bank transaction, before the update.
+    const paymentInsert = calls.find(
+      (call) => call.table === 'invoice_payments' && call.method === 'insert',
+    )
+    expect(paymentInsert?.args[0]).toMatchObject({
+      user_id: USER_ID,
+      company_id: COMPANY_ID,
+      invoice_id: INVOICE_ID,
+      payment_date: '2026-05-12',
+      amount: 12500,
+      currency: 'SEK',
+      journal_entry_id: 'jjjjjjjj-jjjj-4jjj-8jjj-jjjjjjjjjjjj',
+      transaction_id: null,
+    })
+    expect(calls.findIndex((c) => c.table === 'invoice_payments' && c.method === 'insert'))
+      .toBeLessThan(calls.findIndex((c) => c.table === 'invoices' && c.method === 'update'))
     // Issue #1259: the invoice is settled, so no transaction may keep pointing
     // at it as a match suggestion.
     expect(mockClearSuggestions).toHaveBeenCalledTimes(1)
@@ -222,6 +240,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
           { data: PAID_INVOICE, error: null },
         ],
         company_settings: { data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
       }),
     )
 
@@ -248,6 +267,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
             { data: PAID_INVOICE, error: null },
           ],
           company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+          invoice_payments: { data: { id: 'ip-1' }, error: null },
         },
         calls,
       ),
@@ -289,6 +309,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
           { data: PAID_INVOICE, error: null },
         ],
         company_settings: { data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
       }),
     )
 
@@ -318,6 +339,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
             { data: PAID_INVOICE, error: null },
           ],
           company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+          invoice_payments: { data: { id: 'ip-1' }, error: null },
         },
         calls,
       ),
@@ -349,6 +371,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: SENT_INVOICE, error: null },
         company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
       }),
     )
 
@@ -376,6 +399,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: SENT_INVOICE, error: null },
         company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
       }),
     )
 
@@ -421,6 +445,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
           { data: { ...ROT_INVOICE, status: 'paid', remaining_amount: 0, paid_amount: 86800, paid_at: '2026-08-29T12:00:00Z' }, error: null },
         ],
         company_settings: { data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
         transactions: { data: [], error: null },
       }),
     )
@@ -468,6 +493,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: BOOKED_ROT_INVOICE, error: null },
         company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
         transactions: { data: [], error: null },
       }),
     )
@@ -506,6 +532,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: ROT_INVOICE, error: null },
         company_settings: { data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
         transactions: { data: [], error: null },
       }),
     )
@@ -552,6 +579,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
           { data: { ...ORE_INVOICE, status: 'paid', remaining_amount: 0, paid_amount: 1234.75 }, error: null },
         ],
         company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
         transactions: { data: [], error: null },
       }),
     )
@@ -627,6 +655,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: SENT_INVOICE, error: null },
         company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
       }),
     )
 
@@ -674,6 +703,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: SENT_INVOICE, error: null },
         company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
         transactions: {
           data: [
             {
@@ -715,6 +745,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
           { data: PAID_INVOICE, error: null },
         ],
         company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
         // transactions queue not consulted: force=true short-circuits the guard
       }),
     )
@@ -748,6 +779,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: SENT_INVOICE, error: null },
         company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
         transactions: {
           data: [
             {
@@ -854,6 +886,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
             },
           ],
           company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+          invoice_payments: { data: { id: 'ip-1' }, error: null },
           transactions: {
             data: [
               {
@@ -916,6 +949,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: EUR_INVOICE, error: null },
         company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
         transactions: {
           // In kronor: the candidate lookup scans transactions.amount, which is SEK.
           data: [
@@ -961,6 +995,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: { ...EUR_INVOICE, exchange_rate: null, total_sek: null }, error: null },
         company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
       }),
     )
 
@@ -1003,6 +1038,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
             },
           ],
           company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+          invoice_payments: { data: { id: 'ip-1' }, error: null },
         },
         calls,
       ),

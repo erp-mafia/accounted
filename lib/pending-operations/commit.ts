@@ -97,6 +97,7 @@ import {
   type LinkSupplierInvoiceToVoucherResult,
 } from '@/lib/invoices/supplier-voucher-matching'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { recordInvoicePaymentRow, removeInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import {
   clearSettledBatchAllocationSuggestions,
@@ -2662,6 +2663,48 @@ async function commitMarkInvoicePaid(
     }
   }
 
+  // AR sub-ledger row (#2019): the kontantmetod cut-off reads invoice_payments
+  // only, so a paid invoice without it is re-booked as a fordran at bokslut.
+  // Written before the CAS update so the failure branches undo it with the
+  // voucher. See lib/invoices/invoice-payment-row.ts.
+  let paymentRowId: string | null = null
+  if (isRealInvoice) {
+    const recorded = await recordInvoicePaymentRow(supabase, {
+      userId,
+      companyId,
+      invoice: {
+        id: invoiceId,
+        currency: invoice.currency,
+        exchange_rate: invoice.exchange_rate,
+        paid_amount: inv.paid_amount,
+      },
+      paymentDate,
+      newPaidAmount,
+      journalEntryId,
+    })
+    if (!recorded.ok) {
+      // Raw driver text stays server-side; the user gets the outcome only.
+      log.error('mark_invoice_paid: invoice_payments insert failed', undefined, {
+        invoiceId,
+        companyId,
+        error: recorded.error,
+      })
+      if (journalEntryId) {
+        await cancelOrphanedPaymentEntry(
+          supabase, companyId, userId, journalEntryId,
+          'Automatiskt makulerad: betalningsraden kunde inte sparas efter bokförd betalning',
+        )
+      }
+      return {
+        error:
+          'Betalningen kunde inte registreras i reskontran. ' +
+          'Verifikationen har makulerats och fakturan har inte markerats som betald.',
+        status: 500,
+      }
+    }
+    paymentRowId = recorded.id
+  }
+
   const paidAt = newStatus === 'paid' ? paidAtFromDate(paymentDate) : null
   // CAS guard: only flip from a payable status so a concurrently-settled
   // invoice no-ops here instead of double-booking the payment.
@@ -2681,6 +2724,7 @@ async function commitMarkInvoicePaid(
   if (updateError) {
     // The payment voucher already posted but the invoice row did not flip;
     // cancel the orphan so the GL doesn't diverge from the sub-ledger.
+    await removeInvoicePaymentRow(supabase, companyId, paymentRowId)
     if (journalEntryId) {
       await cancelOrphanedPaymentEntry(
         supabase, companyId, userId, journalEntryId,
@@ -2694,6 +2738,7 @@ async function commitMarkInvoicePaid(
     // Race lost: the invoice was settled concurrently between our read and
     // write. Cancel the orphaned payment voucher and document the gap rather
     // than leaving a double booking.
+    await removeInvoicePaymentRow(supabase, companyId, paymentRowId)
     if (journalEntryId) {
       await cancelOrphanedPaymentEntry(
         supabase, companyId, userId, journalEntryId,
