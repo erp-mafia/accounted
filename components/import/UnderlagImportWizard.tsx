@@ -16,6 +16,7 @@ import {
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
 import { FyPicker } from '@/components/common/FyPicker'
+import { mapWithConcurrency } from '@/lib/concurrency'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatDate } from '@/lib/utils'
 import { FileUp, Loader2 } from 'lucide-react'
@@ -48,6 +49,14 @@ import type {
 type Step = 'select' | 'review' | 'result'
 
 const ACCEPTED_TYPES = 'application/pdf,image/jpeg,image/png,image/webp'
+
+/**
+ * Parallel attach requests during the final step. Same size as the
+ * transactions page's batch actions: enough that a 300-file migration
+ * finishes in a few minutes instead of a coffee break, small enough that a
+ * laptop on hotel wifi does not choke on in-flight uploads.
+ */
+const ATTACH_CONCURRENCY = 4
 
 /** Message keys per status, spelled out so next-intl keeps checking them. */
 const STATUS_KEY: Record<UnderlagPlanStatus, string> = {
@@ -273,13 +282,15 @@ export default function UnderlagImportWizard() {
 
     setIsLoading(true)
     setAttached(0)
-    const results: AttachOutcome[] = []
+    let results: AttachOutcome[] = []
 
     try {
-      // Sequential on purpose: hundreds of uploads in parallel would swamp the
-      // browser and the storage bucket, and a visible one-by-one count is what
-      // makes a long migration legible.
-      for (const row of selectedRows) {
+      // A small worker pool, not one-after-another: each attach is a handful
+      // of serialized round trips (auth, company, plan, storage, insert), so
+      // a few hundred files took ten-plus minutes in sequence (#2188). The
+      // pool keeps the storage bucket and the browser bounded, the per-file
+      // counter still ticks, and mapWithConcurrency preserves plan order.
+      results = await mapWithConcurrency(selectedRows, ATTACH_CONCURRENCY, async (row) => {
         const formData = new FormData()
         formData.append('file', row.file)
         formData.append('journal_entry_id', row.targetId as string)
@@ -288,6 +299,7 @@ export default function UnderlagImportWizard() {
         formData.append('fiscal_period_id', plan.fiscal_period_id)
         if (row.manual) formData.append('override', 'true')
 
+        let outcome: AttachOutcome
         try {
           const res = await fetch('/api/import/documents/attach', {
             method: 'POST',
@@ -295,20 +307,21 @@ export default function UnderlagImportWizard() {
           })
           if (!res.ok) {
             const data = await res.json().catch(() => null)
-            results.push({
+            outcome = {
               file_name: row.file_name,
               ok: false,
               message: getErrorMessage(data, { statusCode: res.status }),
-            })
+            }
           } else {
-            results.push({ file_name: row.file_name, ok: true })
+            outcome = { file_name: row.file_name, ok: true }
           }
         } catch (err) {
-          results.push({ file_name: row.file_name, ok: false, message: getErrorMessage(err) })
+          outcome = { file_name: row.file_name, ok: false, message: getErrorMessage(err) }
         }
 
         setAttached((n) => n + 1)
-      }
+        return outcome
+      })
     } finally {
       // Whatever happens above, the wizard must not stay stuck "loading":
       // that state also freezes the year picker.
