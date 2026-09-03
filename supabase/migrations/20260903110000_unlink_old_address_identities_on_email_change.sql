@@ -5,15 +5,15 @@
 -- on the address, so after a secure email change from A to B the Google
 -- identity that was auto-linked for A stays on the account: "Logga in med
 -- Google" while signed into the A mailbox still opens the company, although
--- the user just told us A is no longer theirs (observed on prod 2026-09-03:
--- willemduplessis999 -> levandefisken kept both Google logins). Product
--- decision (Emil, 2026-09-03): a change is a change; only identities bound
--- to the address the user switched FROM go, everything else stays. Google
--- with the NEW address keeps working: GoTrue auto-links it on the first
--- sign-in through the email identity for that address, which this trigger
--- guarantees exists. Password, BankID and social identities on other
--- addresses are untouched, so the account always keeps a way in (at minimum
--- "Glömt lösenord" to the new address).
+-- the user just told us A is no longer theirs (reproduced on prod
+-- 2026-09-03 with a test account: both Google logins kept working after
+-- the change). Product decision (Emil, 2026-09-03): a change is a change;
+-- only identities bound to the address the user switched FROM go,
+-- everything else stays. Google with the NEW address keeps working: GoTrue
+-- auto-links it on the first sign-in through the email identity for that
+-- address, which this trigger guarantees exists. Password, BankID and
+-- social identities on other addresses are untouched, so the account always
+-- keeps a way in (at minimum "Glömt lösenord" to the new address).
 --
 -- A trigger rather than app code so every completion path is covered: the
 -- hook-built link, the stock GoTrue link, a click from a phone mail app with
@@ -23,7 +23,15 @@
 create or replace function public.unlink_old_address_identities()
 returns trigger as $$
 declare
-  v_removed integer;
+  v_removed     integer;
+  v_providers   text[];
+  -- GoTrue's ConfirmEmailChange writes email = email_change and clears
+  -- email_change in the same UPDATE, so "the pending address became the
+  -- address" is the signature of a change the user confirmed from both
+  -- mailboxes. Anything else (admin API, SQL) is unconfirmed.
+  v_confirmed   boolean := old.email_change is not null
+                       and old.email_change <> ''
+                       and lower(old.email_change) = lower(new.email);
 begin
   -- auth.identities is created by GoTrue at startup, not by the Postgres
   -- image. Where GoTrue has never run (a bare pg-real container, a fresh
@@ -33,11 +41,16 @@ begin
     return new;
   end if;
 
-  delete from auth.identities i
-   where i.user_id = new.id
-     and i.provider not in ('email', 'phone')
-     and lower(i.identity_data->>'email') = lower(old.email);
-  get diagnostics v_removed = row_count;
+  with removed as (
+    delete from auth.identities i
+     where i.user_id = new.id
+       and i.provider not in ('email', 'phone')
+       and lower(i.identity_data->>'email') = lower(old.email)
+     returning i.provider
+  )
+  select count(*), array_agg(provider order by provider)
+    into v_removed, v_providers
+    from removed;
 
   if v_removed > 0 then
     -- A Google-only account (signed up with Google, never set a password) has
@@ -45,12 +58,15 @@ begin
     -- zero identities. GoTrue links a later "Sign in with Google" for the NEW
     -- address, and resolves password recovery, through the email identity,
     -- so make sure one exists for the new address. Same shape GoTrue writes
-    -- itself (provider_id = user id). If GoTrue creates or updates the email
-    -- identity later in the same change, it finds this row and updates it.
+    -- itself (provider_id = user id). email_verified is only claimed for a
+    -- change the user confirmed; an admin-side change gets an unverified
+    -- identity, exactly as GoTrue would create it. If GoTrue creates or
+    -- updates the email identity later in the same change, it finds this row
+    -- and updates it.
     insert into auth.identities (id, user_id, provider, provider_id, identity_data, created_at, updated_at)
     select gen_random_uuid(), new.id, 'email', new.id::text,
            jsonb_build_object('sub', new.id::text, 'email', new.email,
-                              'email_verified', true, 'phone_verified', false),
+                              'email_verified', v_confirmed, 'phone_verified', false),
            now(), now()
      where not exists (
        select 1 from auth.identities i where i.user_id = new.id and i.provider = 'email'
@@ -70,6 +86,33 @@ begin
         '[]'::jsonb
       )
     );
+
+    -- Removing a login method is a security-relevant event; leave the same
+    -- trail GoTrue leaves for its own identity_unlink, in its own audit
+    -- table, so the account history reads as one sequence.
+    if to_regclass('auth.audit_log_entries') is not null then
+      insert into auth.audit_log_entries (instance_id, id, payload, created_at, ip_address)
+      values (
+        new.instance_id,
+        gen_random_uuid(),
+        jsonb_build_object(
+          'action', 'identity_unlink',
+          'actor_id', new.id,
+          'actor_username', old.email,
+          'actor_via_sso', false,
+          'log_type', 'user',
+          'traits', jsonb_build_object(
+            'reason', 'email_change',
+            'providers', to_jsonb(v_providers),
+            'old_email', old.email,
+            'new_email', new.email,
+            'confirmed', v_confirmed
+          )
+        )::json,
+        now(),
+        ''
+      );
+    end if;
   end if;
 
   return new;

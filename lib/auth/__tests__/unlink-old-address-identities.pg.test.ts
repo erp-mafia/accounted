@@ -6,8 +6,10 @@ import { insertAuthUser } from '@/tests/pg/fixtures'
 // on_auth_user_email_updated_unlink_old_identities
 // (20260903110000_unlink_old_address_identities_on_email_change.sql): when
 // auth.users.email changes, social identities bound to the OLD address are
-// removed and app_metadata.providers is recomputed. Everything else on the
-// account (email identity, social identities on other addresses) stays.
+// removed, app_metadata.providers is recomputed, an email identity for the
+// new address is guaranteed, and the removal is written to GoTrue's audit
+// table. Everything else on the account (email identity, social identities
+// on other addresses) stays.
 
 async function insertIdentity(params: {
   userId: string
@@ -40,7 +42,18 @@ async function setProviders(userId: string, providers: string[]): Promise<void> 
   )
 }
 
-async function changeEmail(userId: string, email: string): Promise<void> {
+// Mirrors GoTrue's ConfirmEmailChange: the pending address becomes the
+// address and the pending column is cleared in the same statement.
+async function confirmEmailChange(userId: string, email: string): Promise<void> {
+  await getPool().query(`UPDATE auth.users SET email_change = $2 WHERE id = $1`, [userId, email])
+  await getPool().query(
+    `UPDATE auth.users SET email = $2, email_change = '' WHERE id = $1`,
+    [userId, email],
+  )
+}
+
+// An admin-side or SQL change: no pending address involved.
+async function adminSetEmail(userId: string, email: string): Promise<void> {
   await getPool().query(`UPDATE auth.users SET email = $2 WHERE id = $1`, [userId, email])
 }
 
@@ -51,6 +64,18 @@ async function identities(userId: string): Promise<Array<{ provider: string; ema
     [userId],
   )
   return rows
+}
+
+async function emailIdentity(
+  userId: string,
+): Promise<{ provider_id: string; identity_data: Record<string, unknown> } | undefined> {
+  const { rows } = await getPool().query<{
+    provider_id: string
+    identity_data: Record<string, unknown>
+  }>(`SELECT provider_id, identity_data FROM auth.identities WHERE user_id = $1 AND provider = 'email'`, [
+    userId,
+  ])
+  return rows[0]
 }
 
 async function providers(userId: string): Promise<unknown> {
@@ -69,6 +94,16 @@ async function currentEmail(userId: string): Promise<string> {
   return rows[0]!.email
 }
 
+async function auditEntries(userId: string): Promise<Array<Record<string, unknown>>> {
+  const { rows } = await getPool().query<{ payload: Record<string, unknown> }>(
+    `SELECT payload FROM auth.audit_log_entries
+      WHERE payload->>'actor_id' = $1 AND payload->>'action' = 'identity_unlink'
+      ORDER BY created_at`,
+    [userId],
+  )
+  return rows.map((r) => r.payload)
+}
+
 describe('unlink old-address identities on auth email change', () => {
   it('removes the social identity bound to the old address and keeps the rest', async () => {
     const userId = await insertAuthUser()
@@ -79,7 +114,7 @@ describe('unlink old-address identities on auth email change', () => {
     await insertIdentity({ userId, provider: 'google', email: `other-${userId}@test.invalid` })
     await setProviders(userId, ['email', 'google'])
 
-    await changeEmail(userId, newEmail)
+    await confirmEmailChange(userId, newEmail)
 
     expect(await identities(userId)).toEqual([
       { provider: 'email', email: oldEmail },
@@ -96,37 +131,52 @@ describe('unlink old-address identities on auth email change', () => {
     await insertIdentity({ userId, provider: 'google', email: oldEmail })
     await setProviders(userId, ['email', 'google'])
 
-    await changeEmail(userId, `pg-real-new-${userId}@test.invalid`)
+    await confirmEmailChange(userId, `pg-real-new-${userId}@test.invalid`)
 
     expect(await identities(userId)).toEqual([{ provider: 'email', email: oldEmail }])
     expect(await providers(userId)).toEqual(['email'])
   })
 
-  it('gives a Google-only account an email identity for the new address', async () => {
+  it('gives a Google-only account a verified email identity after a confirmed change', async () => {
     // Signed up with Google, never set a password: no 'email' identity.
     // Removing the Google identity must not leave zero identities; the email
     // identity is what Google with the new address links through and what
-    // password recovery resolves.
+    // password recovery resolves. Old address matched case-insensitively.
     const userId = await insertAuthUser()
     const oldEmail = await currentEmail(userId)
     const newEmail = `pg-real-new-${userId}@test.invalid`
     await insertIdentity({ userId, provider: 'google', email: oldEmail.toUpperCase() })
     await setProviders(userId, ['google'])
 
-    await changeEmail(userId, newEmail)
+    await confirmEmailChange(userId, newEmail)
 
     expect(await identities(userId)).toEqual([{ provider: 'email', email: newEmail }])
-    const { rows } = await getPool().query<{ provider_id: string; identity_data: Record<string, unknown> }>(
-      `SELECT provider_id, identity_data FROM auth.identities WHERE user_id = $1`,
-      [userId],
-    )
-    expect(rows[0]!.provider_id).toBe(userId)
-    expect(rows[0]!.identity_data).toMatchObject({
+    const created = await emailIdentity(userId)
+    expect(created?.provider_id).toBe(userId)
+    expect(created?.identity_data).toMatchObject({
       sub: userId,
       email: newEmail,
       email_verified: true,
     })
     expect(await providers(userId)).toEqual(['email'])
+  })
+
+  it('creates the email identity unverified after an admin-side change', async () => {
+    // No pending address was confirmed by the user, so the trigger must not
+    // vouch for the new address.
+    const userId = await insertAuthUser()
+    const oldEmail = await currentEmail(userId)
+    const newEmail = `pg-real-new-${userId}@test.invalid`
+    await insertIdentity({ userId, provider: 'google', email: oldEmail })
+    await setProviders(userId, ['google'])
+
+    await adminSetEmail(userId, newEmail)
+
+    expect(await identities(userId)).toEqual([{ provider: 'email', email: newEmail }])
+    expect((await emailIdentity(userId))?.identity_data).toMatchObject({
+      email: newEmail,
+      email_verified: false,
+    })
   })
 
   it('does not create a second email identity when one already exists', async () => {
@@ -135,7 +185,7 @@ describe('unlink old-address identities on auth email change', () => {
     await insertIdentity({ userId, provider: 'email', email: oldEmail })
     await insertIdentity({ userId, provider: 'google', email: oldEmail })
 
-    await changeEmail(userId, `pg-real-new-${userId}@test.invalid`)
+    await confirmEmailChange(userId, `pg-real-new-${userId}@test.invalid`)
 
     const { rows } = await getPool().query<{ n: number }>(
       `SELECT count(*)::int AS n FROM auth.identities WHERE user_id = $1 AND provider = 'email'`,
@@ -152,10 +202,11 @@ describe('unlink old-address identities on auth email change', () => {
     await insertIdentity({ userId, provider: 'email', email: oldEmail })
     await setProviders(userId, ['email'])
 
-    await changeEmail(userId, `pg-real-new-${userId}@test.invalid`)
+    await confirmEmailChange(userId, `pg-real-new-${userId}@test.invalid`)
 
     expect(await identities(userId)).toEqual([{ provider: 'email', email: oldEmail }])
     expect(await providers(userId)).toEqual(['email'])
+    expect(await auditEntries(userId)).toEqual([])
   })
 
   it('leaves identities alone when the update does not change the email', async () => {
@@ -165,7 +216,7 @@ describe('unlink old-address identities on auth email change', () => {
     await setProviders(userId, ['google'])
 
     await getPool().query(`UPDATE auth.users SET updated_at = now() WHERE id = $1`, [userId])
-    await changeEmail(userId, oldEmail)
+    await adminSetEmail(userId, oldEmail)
 
     expect(await identities(userId)).toEqual([{ provider: 'google', email: oldEmail }])
     expect(await providers(userId)).toEqual(['google'])
@@ -175,13 +226,41 @@ describe('unlink old-address identities on auth email change', () => {
     const a = await insertAuthUser()
     const b = await insertAuthUser()
     const shared = `shared-${a}@test.invalid`
-    await getPool().query(`UPDATE auth.users SET email = $2 WHERE id = $1`, [a, shared])
+    await adminSetEmail(a, shared)
     await insertIdentity({ userId: a, provider: 'google', email: shared })
     await insertIdentity({ userId: b, provider: 'google', email: shared })
+    const newEmail = `pg-real-new-${a}@test.invalid`
 
-    await changeEmail(a, `pg-real-new-${a}@test.invalid`)
+    await confirmEmailChange(a, newEmail)
 
-    expect(await identities(a)).toEqual([])
+    // a lost its Google login and got an email identity for the new address.
+    expect(await identities(a)).toEqual([{ provider: 'email', email: newEmail }])
     expect(await identities(b)).toEqual([{ provider: 'google', email: shared }])
+  })
+
+  it('writes an identity_unlink entry to the auth audit log', async () => {
+    const userId = await insertAuthUser()
+    const oldEmail = await currentEmail(userId)
+    const newEmail = `pg-real-new-${userId}@test.invalid`
+    await insertIdentity({ userId, provider: 'email', email: oldEmail })
+    await insertIdentity({ userId, provider: 'google', email: oldEmail })
+
+    await confirmEmailChange(userId, newEmail)
+
+    const entries = await auditEntries(userId)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      action: 'identity_unlink',
+      actor_id: userId,
+      actor_username: oldEmail,
+      log_type: 'user',
+      traits: {
+        reason: 'email_change',
+        providers: ['google'],
+        old_email: oldEmail,
+        new_email: newEmail,
+        confirmed: true,
+      },
+    })
   })
 })
