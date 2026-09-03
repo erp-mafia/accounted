@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { createScbClient, identityLookupBody } from '../client'
+import { createScbClient, identityLookupBody, nameQuery, nameSearchBody, SCB_SEARCH_CAP } from '../client'
 import { isScbConfigured, scbConfigFromEnv } from '../config'
 import { factsFromScbCompany, BOLAGSVERKET_WARNING_CODES } from '../map'
 import { isLegalPersonOrgNumber, toPeOrgNr } from '../org-number'
+import { ScbApiError, scbJson } from '../transport'
 
 /** One Je row exactly as the live API returned it on 2026-09-03 (AB Volvo, public registry data). */
 const volvo = JSON.parse(readFileSync(join(__dirname, 'fixtures', 'volvo-je.json'), 'utf8')) as Record<string, string>
@@ -118,5 +119,95 @@ describe('createScbClient', () => {
     const r = await client.lookupByOrgNumber('5564300142')
     expect(r.found).toBe(false)
     expect(r.facts).toEqual([])
+  })
+})
+
+describe('name search', () => {
+  it('strips AP prefixes, numbers and legal forms from the query', () => {
+    expect(nameQuery('Levfakt Telia Sverige AB (17)')).toBe('Telia Sverige')
+    expect(nameQuery('Leverantörsfaktura från 18 Loopia')).toBe('Loopia')
+    expect(nameQuery('Adobe Systems Software')).toBe('Adobe Systems Software')
+    expect(nameQuery("O'Learys Sundsvall AB")).toBe('OLearys Sundsvall')
+    expect(nameSearchBody('Telia', 'starts_with').Variabler[0]).toEqual({ Variabel: 'Namn', Operator: 'BorjarPa', Varde1: 'Telia', Varde2: '' })
+    expect(nameSearchBody('Telia', 'contains').Variabler[0]!.Operator).toBe('Innehaller')
+  })
+
+  const cfg = { baseUrl: 'https://scb.test', pfx: Buffer.from('x'), passphrase: 'p', timeoutMs: 1 }
+  const row = (org: string, name: string, statusCode = '1', legalForm = '49', city = 'STOCKHOLM') => ({
+    OrgNr: org,
+    Företagsnamn: name,
+    PostOrt: city,
+    Bransch_1: 'Utgivning av annan programvara',
+    'Företagsstatus, kod': statusCode,
+    Företagsstatus: statusCode === '1' ? 'Är verksam' : 'Är ej längre verksam',
+    'Juridisk form, kod': legalForm,
+    'Juridisk form': 'Övriga aktiebolag',
+  })
+
+  it('counts first, prefers a prefix match, sorts active companies first and drops natural persons', async () => {
+    const calls: string[] = []
+    const json = async (_c: unknown, _m: string, path: string, body: { Variabler: Array<{ Operator: string }> }) => {
+      calls.push(`${path}:${body.Variabler[0]!.Operator}`)
+      if (path.endsWith('RaknaForetag')) return 3
+      return [row('5020594593', 'ADOBE SYSTEMS SOFTWARE IRELAND LTD', '9'), row('5564082161', 'Adobe Systems Nordic Aktiebolag'), row('8001011234', 'ADOBE, ANNA', '1', '10')]
+    }
+    const client = createScbClient(cfg, { json: json as never })
+    const r = await client.searchByName('Levfakt Adobe Systems (2)')
+    expect(calls).toEqual(['/api/Je/RaknaForetag:BorjarPa', '/api/Je/HamtaForetag:BorjarPa'])
+    expect(r.mode).toBe('starts_with')
+    expect(r.total).toBe(3)
+    expect(r.candidates.map((c) => [c.name, c.active])).toEqual([
+      ['Adobe Systems Nordic Aktiebolag', true],
+      ['ADOBE SYSTEMS SOFTWARE IRELAND LTD', false],
+    ])
+  })
+
+  it('falls back to a contains match when the prefix finds nothing, and refuses to pull a flood', async () => {
+    const calls: string[] = []
+    const json = async (_c: unknown, _m: string, path: string, body: { Variabler: Array<{ Operator: string; Varde1: string }> }) => {
+      calls.push(`${path}:${body.Variabler[0]!.Operator}`)
+      if (path.endsWith('RaknaForetag')) return body.Variabler[0]!.Operator === 'BorjarPa' ? 0 : 593
+      throw new Error('should not fetch rows for a flood')
+    }
+    const client = createScbClient(cfg, { json: json as never })
+    const r = await client.searchByName('UBER')
+    expect(calls).toEqual(['/api/Je/RaknaForetag:BorjarPa', '/api/Je/RaknaForetag:Innehaller'])
+    expect(r).toMatchObject({ mode: 'contains', total: 593, truncated: true, candidates: [] })
+    expect(SCB_SEARCH_CAP).toBe(25)
+  })
+
+  it('does not call SCB for a query shorter than two characters', async () => {
+    const json = async () => {
+      throw new Error('should not be called')
+    }
+    const r = await createScbClient(cfg, { json: json as never }).searchByName('Levfakt 17')
+    expect(r.candidates).toEqual([])
+  })
+})
+
+describe('scbJson', () => {
+  const cfg = { baseUrl: 'https://scb.test', pfx: Buffer.from('x'), passphrase: 'p', timeoutMs: 1 }
+
+  it('retries once on a dropped connection, then succeeds', async () => {
+    let n = 0
+    const request = async () => {
+      n += 1
+      if (n === 1) throw Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })
+      return { status: 200, body: '3' }
+    }
+    await expect(scbJson(cfg, 'POST', '/api/Je/RaknaForetag', {}, { request: request as never, delayMs: 0 })).resolves.toBe(3)
+    expect(n).toBe(2)
+  })
+
+  it('does not retry a non-transient error or a bad status', async () => {
+    let n = 0
+    const boom = async () => {
+      n += 1
+      throw new Error('certificate unknown')
+    }
+    await expect(scbJson(cfg, 'GET', '/x', undefined, { request: boom as never, delayMs: 0 })).rejects.toThrow(/certificate/)
+    expect(n).toBe(1)
+    const bad = async () => ({ status: 400, body: '{"Message":"Ogiltigt"}' })
+    await expect(scbJson(cfg, 'GET', '/x', undefined, { request: bad as never })).rejects.toBeInstanceOf(ScbApiError)
   })
 })

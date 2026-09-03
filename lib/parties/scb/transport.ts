@@ -50,8 +50,34 @@ export function scbRequest(config: ScbConfig, method: 'GET' | 'POST', path: stri
   })
 }
 
-export async function scbJson<T>(config: ScbConfig, method: 'GET' | 'POST', path: string, jsonBody?: unknown): Promise<T> {
-  const res = await scbRequest(config, method, path, jsonBody)
+const RETRIABLE = new Set(['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EPIPE', 'EAI_AGAIN'])
+
+function isTransient(err: unknown): boolean {
+  const e = err as { code?: string; message?: string } | null
+  return Boolean(e && ((e.code && RETRIABLE.has(e.code)) || /svarade inte i tid|socket hang up/i.test(e.message ?? '')))
+}
+
+/**
+ * One JSON call with a single retry on a dropped connection: SCB resets
+ * the TLS session now and then (seen live 2026-09-03), and every request
+ * here is idempotent (counts, lists, lookups).
+ */
+export async function scbJson<T>(
+  config: ScbConfig,
+  method: 'GET' | 'POST',
+  path: string,
+  jsonBody?: unknown,
+  deps: { request?: typeof scbRequest; delayMs?: number } = {},
+): Promise<T> {
+  const request = deps.request ?? scbRequest
+  let res: ScbHttpResponse
+  try {
+    res = await request(config, method, path, jsonBody)
+  } catch (err) {
+    if (!isTransient(err)) throw err
+    await new Promise((r) => setTimeout(r, deps.delayMs ?? 400))
+    res = await request(config, method, path, jsonBody)
+  }
   if (res.status < 200 || res.status >= 300) {
     throw new ScbApiError(`SCB svarade ${res.status} på ${method} ${path}`, res.status, res.body.slice(0, 2000))
   }

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { PartyEnrichSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createScbClient } from '@/lib/parties/scb/client'
 import { isScbConfigured, scbConfigFromEnv } from '@/lib/parties/scb/config'
@@ -11,13 +12,33 @@ import { ScbApiError } from '@/lib/parties/scb/transport'
  * and record them with provenance (source registry_scb, fetched_at). Legal
  * persons only: a sole trader's org number is a personnummer and stays out
  * of registry lookups in this phase.
+ *
+ * Body { orgNumber } is the picker's answer for a party that had none: the
+ * choice is recorded as a fact with source 'user' and set on the party
+ * before the fetch, so every later fetch is by number. A number already
+ * held by another live party is refused (merge them instead).
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'parties.enrich',
-  async (_request, { supabase, companyId, user, log, requestId }, { params }) => {
+  async (request, { supabase, companyId, user, log, requestId }, { params }) => {
     const { id } = await params
     if (!/^[0-9a-f-]{36}$/i.test(id)) return errorResponseFromCode('NOT_FOUND', log, { requestId })
     if (!isScbConfigured()) return errorResponseFromCode('SCB_NOT_CONFIGURED', log, { requestId })
+    // A body is optional (the plain button sends none); when present it is
+    // the picker's answer. Read as text first: fetch sets no content-length.
+    let chosen: string | undefined
+    const raw = (await request.text()).trim()
+    if (raw) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(raw)
+      } catch {
+        return errorResponseFromCode('VALIDATION_ERROR', log, { requestId, details: { reason: 'invalid_json' } })
+      }
+      const validation = PartyEnrichSchema.safeParse(parsed)
+      if (!validation.success) return errorResponseFromCode('VALIDATION_ERROR', log, { requestId, details: validation.error.flatten() })
+      chosen = validation.data.orgNumber
+    }
 
     const { data: party, error } = await supabase
       .from('parties')
@@ -29,6 +50,35 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (error) throw new Error(`parties lookup failed: ${error.message}`)
     if (!party) return errorResponseFromCode('NOT_FOUND', log, { requestId })
     const p = party as { id: string; org_number: string | null; legal_name: string | null; vat_number: string | null }
+
+    if (chosen && chosen !== p.org_number) {
+      if (!isLegalPersonOrgNumber(chosen)) return errorResponseFromCode('SCB_NOT_A_LEGAL_PERSON', log, { requestId })
+      if (p.org_number) return errorResponseFromCode('CONFLICT', log, { requestId, details: { reason: 'party_has_org_number', orgNumber: p.org_number } })
+      const { data: holder } = await supabase
+        .from('parties')
+        .select('id, display_name')
+        .eq('company_id', companyId)
+        .eq('org_number', chosen)
+        .is('merged_into', null)
+        .limit(1)
+        .maybeSingle()
+      if (holder) {
+        return errorResponseFromCode('CONFLICT', log, { requestId, details: { reason: 'org_number_taken', partyId: (holder as { id: string }).id, displayName: (holder as { display_name: string }).display_name } })
+      }
+      const { error: setError } = await supabase.from('parties').update({ org_number: chosen }).eq('company_id', companyId).eq('id', id)
+      if (setError) throw new Error(`parties update failed: ${setError.message}`)
+      const { error: factError } = await supabase.rpc('record_party_facts', {
+        p_company_id: companyId,
+        p_user_id: user.id,
+        p_party_id: id,
+        p_source: 'user',
+        p_facts: [{ field: 'org_number', value: chosen, reference: { picked_from: 'scb_search' } }],
+        p_fetched_at: new Date().toISOString(),
+      })
+      if (factError) throw new Error(`record_party_facts failed: ${factError.message}`)
+      p.org_number = chosen
+    }
+
     if (!isLegalPersonOrgNumber(p.org_number)) return errorResponseFromCode('SCB_NOT_A_LEGAL_PERSON', log, { requestId })
 
     let lookup

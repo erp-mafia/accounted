@@ -98,6 +98,7 @@ export function PartyDossier({
   onDismiss,
   onMerge,
   onFetchRegistry,
+  onPickRegistry,
   fetching = false,
   reloadKey,
 }: {
@@ -109,8 +110,10 @@ export function PartyDossier({
   onPromote: (id: string, roles: PartyRole[]) => void
   onDismiss: (id: string) => void
   onMerge: (subject: MergeCandidate, suggested: MergeCandidate[]) => void
-  /** Fetch registry facts from SCB for this party; undefined hides the button. */
+  /** Fetch registry facts from SCB for this party; undefined hides the item. */
   onFetchRegistry?: (id: string) => void
+  /** Open the SCB picker for a party without an org number. */
+  onPickRegistry?: (id: string, name: string) => void
   fetching?: boolean
   reloadKey: number
 }) {
@@ -211,6 +214,10 @@ export function PartyDossier({
                       {onFetchRegistry && isLegalPersonOrgNumber(p.orgNumber) ? (
                         <DropdownMenuItem onSelect={() => onFetchRegistry(p.id)} disabled={fetching}>
                           {fetching ? t('fetching_registry') : t('fetch_registry')}
+                        </DropdownMenuItem>
+                      ) : onPickRegistry && !p.orgNumber && p.kind !== 'person' ? (
+                        <DropdownMenuItem onSelect={() => onPickRegistry(p.id, p.legalName ?? p.displayName)} disabled={fetching}>
+                          {t('pick_registry')}
                         </DropdownMenuItem>
                       ) : null}
                       <DropdownMenuItem

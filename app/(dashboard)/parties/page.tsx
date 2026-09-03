@@ -19,6 +19,8 @@ import { useToast } from '@/components/ui/use-toast'
 import { MergeDialog, type MergeCandidate } from '@/components/parties/MergeDialog'
 import { ObservedTable } from '@/components/parties/ObservedTable'
 import { PartyDossier } from '@/components/parties/PartyDossier'
+import { ScbPickerDialog } from '@/components/parties/ScbPickerDialog'
+import type { ScbCandidate } from '@/lib/parties/scb/client'
 import { SuggestionQueue } from '@/components/parties/SuggestionQueue'
 import { hasHardKey } from '@/components/parties/format'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -74,6 +76,7 @@ function SuggestionsPage() {
   const [busy, setBusy] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [fetchingRegistry, setFetchingRegistry] = useState(false)
+  const [picker, setPicker] = useState<{ partyId: string; name: string } | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [dossierId, setDossierId] = useState<string | null>(null)
   const [dossierReload, setDossierReload] = useState(0)
@@ -214,15 +217,25 @@ function SuggestionsPage() {
     }
   }
 
-  async function fetchRegistry(id: string) {
+  async function fetchRegistry(id: string, orgNumber?: string) {
     setFetchingRegistry(true)
     try {
-      const res = await fetch(`/api/parties/${id}/enrich`, { method: 'POST' })
+      const res = await fetch(`/api/parties/${id}/enrich`, {
+        method: 'POST',
+        headers: orgNumber ? { 'Content-Type': 'application/json' } : undefined,
+        body: orgNumber ? JSON.stringify({ orgNumber }) : undefined,
+      })
       const json = (await res.json()) as { data?: { found: boolean; orgNumber: string; inserted: number; superseded: number; refreshed: number }; error?: { code: string } }
       if (!res.ok || !json.data) {
+        const details = (json as { error?: { details?: { reason?: string; displayName?: string } } }).error?.details
+        if (details?.reason === 'org_number_taken') {
+          toast({ title: t('picker_taken_title', { name: details.displayName ?? '' }), description: t('picker_taken_description') })
+          return
+        }
         toast({ title: t('registry_unavailable_title'), variant: 'destructive' })
         return
       }
+      setPicker(null)
       if (!json.data.found) {
         toast({ title: t('registry_not_found_title'), description: t('registry_not_found_description', { org: json.data.orgNumber }) })
         return
@@ -412,8 +425,22 @@ function SuggestionsPage() {
         }}
         onMerge={(subject, suggested) => setMerge({ subject, suggested })}
         onFetchRegistry={scbEnabled ? (id) => void fetchRegistry(id) : undefined}
+        onPickRegistry={scbEnabled ? (id, name) => setPicker({ partyId: id, name }) : undefined}
         fetching={fetchingRegistry}
       />
+
+      {picker ? (
+        <ScbPickerDialog
+          open
+          onOpenChange={(open) => (!open ? setPicker(null) : undefined)}
+          partyId={picker.partyId}
+          partyName={picker.name}
+          busy={fetchingRegistry}
+          onPick={async (c: ScbCandidate) => {
+            await fetchRegistry(picker.partyId, c.orgNumber)
+          }}
+        />
+      ) : null}
 
       {merge ? (
         <MergeDialog

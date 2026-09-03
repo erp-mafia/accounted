@@ -8343,6 +8343,18 @@
     "fact_postal_code_city": "Postnummer och ort",
     "more_actions": "Fler åtgärder",
     "registry_group": "Från SCB · hämtat {date}",
+    "pick_registry": "Hitta i företagsregistret",
+    "picker_title": "Vilket företag menar du?",
+    "picker_body": "SCB söker på {name}. Välj rätt företag så sparas org.nr på kontakten och uppgifterna hämtas.",
+    "picker_found": "SCB hittar {count} företag som liknar {query}. Vilket menar du?",
+    "picker_none": "SCB hittar inget företag som liknar {query}. Prova ett annat namn.",
+    "picker_too_many": "SCB hittar {count} företag på {query}. Skriv mer av namnet.",
+    "picker_search_placeholder": "Sök på annat namn",
+    "picker_inactive": "Ej verksamt",
+    "picker_confirm": "Välj {name}",
+    "picker_confirm_empty": "Välj ett företag",
+    "picker_taken_title": "Org.nr finns redan på {name}",
+    "picker_taken_description": "Slå ihop de två i stället för att välja samma företag två gånger.",
     "fact_trade_name": "Firma",
     "open_dossier": "Öppna {name}"
   }

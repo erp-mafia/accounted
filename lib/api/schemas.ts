@@ -3949,6 +3949,19 @@ export const PartyMergeSchema = z.object({
   note: z.string().max(500).optional(),
 })
 
+export const PartyEnrichSchema = z.object({
+  /** Chosen from the SCB picker: sets the party's org number before the fetch. */
+  orgNumber: z
+    .string()
+    .transform((v) => v.replace(/[^0-9]/g, ''))
+    .pipe(z.string().regex(/^\d{10}$/))
+    .optional(),
+})
+
+export const PartySearchRegistryQuerySchema = z.object({
+  q: z.string().max(120).optional(),
+})
+
 export const PartyUndoMergeSchema = z.object({
   decisionId: uuid,
 })
