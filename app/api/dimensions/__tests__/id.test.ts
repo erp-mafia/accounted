@@ -1,5 +1,6 @@
 /**
- * Tests for PATCH /api/dimensions/[id] (update dimension).
+ * Tests for PATCH /api/dimensions/[id] (update dimension) and
+ * DELETE /api/dimensions/[id] (remove an unused custom dimension, #2219).
  *
  * Covers: 401, empty-body validation (400), 404, the is_system name-lock
  * ("Systemdimensioner kan inte döpas om", 400 DIMENSION_SYSTEM_RENAME),
@@ -34,7 +35,7 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
-import { PATCH } from '../[id]/route'
+import { PATCH, DELETE } from '../[id]/route'
 
 const params = () => createMockRouteParams({ id: 'dim-1' })
 
@@ -135,5 +136,62 @@ describe('PATCH /api/dimensions/[id]', () => {
     expect(status).toBe(200)
     expect(body.data.name).toBe('Avdelning')
     expect(body.data.sort_order).toBe(30)
+  })
+})
+
+describe('DELETE /api/dimensions/[id]', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  const del = () => DELETE(createMockRequest('/api/dimensions/dim-1', { method: 'DELETE' }), params())
+
+  it('returns 401 when not authenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    const response = await del()
+    expect(response.status).toBe(401)
+  })
+
+  it('returns 404 when the dimension does not belong to the company', async () => {
+    enqueue({ data: null })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await del())
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('DIMENSION_NOT_FOUND')
+  })
+
+  it('refuses a system dimension with 400 DIMENSION_SYSTEM_DELETE before touching the DB', async () => {
+    enqueue({ data: { id: 'dim-1', name: 'Kostnadsställe', is_system: true } })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(await del())
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('DIMENSION_SYSTEM_DELETE')
+    expect(body.error.message).toContain('avaktivera')
+  })
+
+  it('surfaces the DB guard verbatim as 409 DIMENSION_REFERENCED when posted lines carry the number', async () => {
+    enqueue({ data: { id: 'dim-1', name: 'Avdelning', is_system: false } })
+    enqueue({
+      data: null,
+      error: {
+        code: 'P0001',
+        message: 'Dimensionen 7 (Avdelning) används på bokförda verifikat och kan inte tas bort — avaktivera den istället.',
+      },
+    })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(await del())
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('DIMENSION_REFERENCED')
+    expect(body.error.message).toContain('Avdelning')
+  })
+
+  it('deletes an unused custom dimension (happy path)', async () => {
+    enqueue({ data: { id: 'dim-1', name: 'Avdelning', is_system: false } })
+    enqueue({ data: [{ id: 'dim-1' }] })
+    const { status, body } = await parseJsonResponse<{ success: boolean }>(await del())
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
   })
 })
