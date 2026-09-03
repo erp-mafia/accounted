@@ -25,16 +25,20 @@ export function rolesLabel(t: Translate, roles: PartyRole[]): string {
 }
 
 /** "Org.nr 556354-5185 i 3 underlag · 12 verifikat · varje månad": why a row is in the queue. */
-export function reasonText(t: Translate, reason: SuggestionReason | null, rhythm: LedgerStats['rhythm']): string {
+export function reasonText(t: Translate, reason: SuggestionReason | null, rhythm: LedgerStats['rhythm'], orgNumber: string | null = null): string {
   if (!reason) return ''
   const parts: string[] = []
   const docs = Math.max(0, (reason.docs ?? 0) - (reason.self_docs ?? 0))
+  // An org number the person picked from the register (no document carries
+  // it) is stated as such; the stored reason predates the pick.
+  const picked = Boolean(orgNumber) && !reason.org_number
   if (reason.org_number) parts.push(t('reason_org', { org: formatOrgNumber(reason.org_number), docs }))
+  else if (picked) parts.push(t('reason_org_picked', { org: formatOrgNumber(orgNumber!) }))
   else if (reason.ambiguous_orgs?.length) parts.push(t('reason_ambiguous'))
   else if (docs > 0) parts.push(t('reason_docs', { docs }))
   parts.push(t('reason_vouchers', { count: reason.occurrences ?? 0 }))
   if (rhythm && rhythm !== 'irregular') parts.push(rhythmLabel(t, rhythm))
-  if (!reason.org_number && !reason.ambiguous_orgs?.length && docs === 0) parts.push(t('reason_ledger_only'))
+  if (!reason.org_number && !picked && !reason.ambiguous_orgs?.length && docs === 0) parts.push(t('reason_ledger_only'))
   if (reason.similar_to?.length) parts.push(t('reason_similar', { name: reason.similar_to[0]!.display_name }))
   return parts.join(' · ')
 }
@@ -52,5 +56,5 @@ export function isDuplicateCandidate(row: RegisterRow): boolean {
 }
 
 export function hasHardKey(row: RegisterRow): boolean {
-  return Boolean(row.reason?.org_number)
+  return Boolean(row.reason?.org_number || row.orgNumber)
 }
