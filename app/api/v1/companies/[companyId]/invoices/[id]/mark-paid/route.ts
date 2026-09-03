@@ -37,6 +37,7 @@ import {
   createInvoiceCashEntry,
   createInvoicePaymentJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
+import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
@@ -58,7 +59,7 @@ import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
 // payment/cash JE generators, which re-propagate the bag onto every leg —
 // dropping the column here silently untags the payment voucher.
 const INVOICE_MARK_PAID_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, payment_cash_account_id, created_at, updated_at'
 
 const InvoiceMarkPaidResponse = z.object({
   id: z.string().uuid(),
@@ -490,6 +491,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           )
           journalEntryId = entry?.id ?? null
         } else if (useCashEntry) {
+          const settlementAccountNumber = await resolveInvoiceSettlementAccount(ctx.supabase, ctx.companyId!, typed)
           const entry = await createInvoiceCashEntry(
             ctx.supabase,
             ctx.companyId!,
@@ -498,9 +500,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             paymentDate,
             entityType,
             typed.customer?.name,
+            settlementAccountNumber,
           )
           journalEntryId = entry?.id ?? null
         } else {
+          const settlementAccountNumber = await resolveInvoiceSettlementAccount(ctx.supabase, ctx.companyId!, typed)
           const entry = await createInvoicePaymentJournalEntry(
             ctx.supabase,
             ctx.companyId!,
@@ -511,6 +515,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             typed.customer?.name,
             // Pass full or partial amount depending on path.
             customLines ? paymentAmount : undefined,
+            settlementAccountNumber,
           )
           journalEntryId = entry?.id ?? null
         }

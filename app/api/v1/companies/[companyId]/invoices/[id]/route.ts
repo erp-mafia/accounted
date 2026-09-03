@@ -38,6 +38,7 @@ import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
+import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
 import type { Currency, Customer, InvoiceDocumentType } from '@/types'
 
 // Allowed PATCH fields for a draft invoice. Excludes customer_id / currency /
@@ -58,6 +59,10 @@ const V1PatchDraftInvoiceSchema = z.object({
   // Send {} to clear all tags. Codes are validated against the dimension
   // registry when the invoice posts at :send, not here.
   default_dimensions: DimensionsBagSchema.optional(),
+  // Which of the company's bank accounts the invoice asks the customer to
+  // pay to. null = back to the per-currency default. Must be one of the
+  // company's payee accounts, usable for the invoice currency.
+  payment_cash_account_id: z.union([z.string().uuid(), z.null()]).optional(),
   // FULL REPLACE when present. Same item shape as POST /invoices (article
   // linkage, ROT/RUT lines, accrual periods, per-line dimensions included).
   items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required').optional(),
@@ -291,7 +296,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       if (body[key] !== undefined) updateData[key] = body[key]
     }
 
-    if (Object.keys(updateData).length === 0 && !body.items) {
+    if (Object.keys(updateData).length === 0 && body.payment_cash_account_id === undefined && !body.items) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: { field: 'body', message: 'At least one field must be supplied for update.' },
@@ -318,6 +323,25 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         details: { resource: 'invoice' },
       })
     }
+    // Payee choice (null = back to the per-currency default): validated
+    // against the company's payee accounts for the invoice's own currency.
+    if (body.payment_cash_account_id !== undefined) {
+      const payeeChoice = await resolveInvoicePayeeChoice(
+        ctx.supabase,
+        ctx.companyId!,
+        (current as { currency: Currency }).currency,
+        body.payment_cash_account_id,
+      )
+      if (!payeeChoice.ok) {
+        return v1ErrorResponseFromCode(payeeChoice.code, ctx.log, {
+          requestId: ctx.requestId,
+          details: payeeChoice.details,
+        })
+      }
+      updateData.payment_cash_account_id = payeeChoice.fields.payment_cash_account_id
+      updateData.payment_details = payeeChoice.fields.payment_details
+    }
+
     // Shared predicate with the dashboard PATCH: draft, no verifikat, not a
     // received self-billing document, not a credit-note draft, and for a
     // quote not accepted or declined (a recorded decision must be reopened

@@ -222,7 +222,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       undefined,
       expect.anything(),
       undefined, // paymentAmount: full settle
-      undefined // settlementAccountNumber: default 1930
+      '1930' // settlementAccountNumber: no chosen payee account, so the default
     )
   })
 
@@ -291,7 +291,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       expect.any(String),
       'enskild_firma',
       expect.anything(),
-      undefined // settlementAccountNumber: default 1930
+      '1930' // settlementAccountNumber: no chosen payee account, so the default
     )
   })
 

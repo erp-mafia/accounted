@@ -1151,6 +1151,27 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Företagsinställningar saknas.',
     message_en: 'Company settings are missing.',
   },
+  INVOICE_SEND_PAYMENT_ACCOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Bankkontot som fakturan ska betalas till kan inte längre användas: det är avstängt, borttaget från kundfakturor eller saknar uppgifter för fakturans valuta. Välj ett annat konto på fakturan eller uppdatera kontot under Inställningar → Fakturering.',
+    message_en: 'The bank account this invoice is to be paid to can no longer be used: it is disabled, no longer shown on customer invoices, or lacks details for the invoice currency. Pick another account on the invoice or update the account under Inställningar → Fakturering (Settings → Invoicing).',
+    remediation: {
+      description: 'Välj ett annat bankkonto på fakturan, eller återaktivera kontot och fyll i dess betaluppgifter under Inställningar → Fakturering.',
+    },
+  },
+  INVOICE_PAYEE_SNAPSHOT_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Betaluppgifterna kunde inte sparas på fakturan. Fakturan skickades inte; försök igen.',
+    message_en: 'The payment details could not be saved on the invoice. The invoice was not sent; try again.',
+  },
+  INVOICE_PAYEE_ACCOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Bankkontot kan inte användas som betalningsmottagare på fakturan: det tillhör inte företaget, visas inte på kundfakturor eller saknar uppgifter för fakturans valuta.',
+    message_en: 'The bank account cannot be the payee on this invoice: it does not belong to the company, is not shown on customer invoices, or lacks details for the invoice currency.',
+    remediation: {
+      description: 'Välj ett av företagets bankkonton som är markerat "Visas på fakturor" och har betaluppgifter för fakturans valuta.',
+    },
+  },
   INVOICE_SEND_PAYMENT_ACCOUNT_MISSING: {
     httpStatus: 400,
     // Currency-neutral by necessity (the registry has no details). Surfaces

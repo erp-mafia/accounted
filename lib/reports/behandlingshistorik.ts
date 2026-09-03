@@ -213,6 +213,9 @@ export const AUDITED_TABLES = [
   // the per-account override outranks the per-source-type map above, so it is
   // a behandlingsregel in the same sense.
   'cash_accounts',
+  // Which bank account customer invoices pay to, per currency (migration
+  // 20260903150000).
+  'invoice_payee_defaults',
 ] as const
 
 /**
@@ -236,7 +239,7 @@ export const GLOBAL_ACTIONS = [
  * names statically; a unit test pins it to AUDITED_TABLES / GLOBAL_ACTIONS.
  */
 export const AUDIT_ROW_FILTER =
-  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,bank_file_imports,cash_accounts),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)'
+  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,bank_file_imports,cash_accounts,invoice_payee_defaults),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)'
 
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   manual: 'Manuell',
@@ -422,6 +425,22 @@ const MAPPING_RULE_FIELDS: Record<string, string> = {
  */
 const CASH_ACCOUNT_FIELDS: Record<string, string> = {
   voucher_series: 'Verifikationsserie',
+  // Payee fields (migration 20260903150000): what customer invoices print.
+  bank_name: 'Bank',
+  clearing_number: 'Clearingnummer',
+  account_number: 'Kontonummer',
+  bankgiro: 'Bankgiro',
+  plusgiro: 'Plusgiro',
+  swish: 'Swish',
+  iban: 'IBAN',
+  bic: 'BIC/SWIFT',
+  bank_code: 'Bankkod',
+  foreign_account_number: 'Kontonummer (utländskt)',
+  invoice_payee: 'Visas på kundfakturor',
+}
+
+const INVOICE_PAYEE_DEFAULT_FIELDS: Record<string, string> = {
+  cash_account_id: 'Bankkonto',
 }
 
 const CATEGORIZATION_TEMPLATE_FIELDS: Record<string, string> = {
@@ -1149,6 +1168,16 @@ export function auditRowToEvent(
         fields: CASH_ACCOUNT_FIELDS,
         objectKeys: ['name', 'ledger_account'],
       })
+    case 'invoice_payee_defaults':
+      return genericAuditEvent(row, {
+        category: 'installningar',
+        codePrefix: 'invoice_payee_default',
+        noun: 'Standardkonto för kundfakturor',
+        fields: INVOICE_PAYEE_DEFAULT_FIELDS,
+        // Both keys on every action: a created or deleted default must name
+        // the account, not just the currency.
+        objectKeys: ['currency', 'cash_account_id'],
+      })
     case 'salary_payroll_config':
       return payrollConfigAuditEvent(row)
     // The import tables emit their own events from the rows themselves; the
@@ -1605,7 +1634,7 @@ async function fetchAuditRows(
       // Literal on purpose (not AUDIT_ROW_FILTER): the schema guard only
       // resolves string literals here. A test pins the two to each other.
       .or(
-        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,bank_file_imports,cash_accounts),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)',
+        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,bank_file_imports,cash_accounts,invoice_payee_defaults),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)',
       )
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })

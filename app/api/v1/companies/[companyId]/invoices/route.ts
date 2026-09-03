@@ -30,6 +30,7 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import {
   resolveSelfBilledSaleDraft,
@@ -626,6 +627,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
     const { invoiceFields, items: itemRows } = build
 
+    const payeeChoice = await resolveInvoicePayeeChoice(
+      ctx.supabase,
+      ctx.companyId!,
+      input.currency,
+      input.payment_cash_account_id,
+    )
+    if (!payeeChoice.ok) {
+      return v1ErrorResponseFromCode(payeeChoice.code, ctx.log, {
+        requestId: ctx.requestId,
+        details: payeeChoice.details,
+      })
+    }
+
     // Dry-run: validation-only preview. Drafts have no journal-entry side
     // effects yet, so no pending_operations staging needed; a staged
     // preview variant belongs to :send.
@@ -639,6 +653,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           invoice_number: null,
           status: 'draft' as const,
           ...previewFields,
+          payment_cash_account_id: payeeChoice.fields.payment_cash_account_id,
+          payment_details: payeeChoice.fields.payment_details,
           items: itemRows,
         },
         { requestId: ctx.requestId, log: ctx.log },
@@ -677,6 +693,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         company_id: ctx.companyId!,
         invoice_number: invoiceNumber,
         ...invoiceFields,
+        payment_cash_account_id: payeeChoice.fields.payment_cash_account_id,
+        payment_details: payeeChoice.fields.payment_details,
       })
       .select(INVOICE_RESPONSE_COLUMNS)
       .single()

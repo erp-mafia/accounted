@@ -11,6 +11,7 @@ import { validateBody } from '@/lib/api/validate'
 import { UpdateSettingsSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
 
 export const GET = withRouteContext(
   'settings.get',
@@ -252,6 +253,20 @@ export const PUT = withRouteContext(
       )
     }
 
+    // Payment instructions live on cash_accounts since migration
+    // 20260903150000; the bank columns below are a mirror of the default
+    // payee account per currency. Write the change through to the account
+    // FIRST: if that fails nothing has been written and the caller gets an
+    // error, instead of a settings row that the next mirror would undo.
+    if (changesInvoicePaymentInstructions) {
+      try {
+        await propagateLegacyPayeeWrite(supabase, companyId, body)
+      } catch (err) {
+        log.error('failed to write payment instructions through to cash accounts', err as Error)
+        return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
+      }
+    }
+
     const { data, error } = await supabase
       .from('company_settings')
       .update(body)
@@ -265,6 +280,7 @@ export const PUT = withRouteContext(
       }
       return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
+
 
     // Regenerate when the save touches tax-relevant fields: the statutory
     // dates are derived from them, and re-running also repairs rows created

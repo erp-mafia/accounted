@@ -73,17 +73,84 @@ export interface SessionResponse {
   status?: string
 }
 
+/**
+ * Enable Banking GenericIdentification (OpenAPI 1.0.0). `scheme_name` is the
+ * SchemeName enum: BBAN, IBAN, BGNR (Swedish Bankgiro), PGNR (Swedish
+ * Plusgiro), CPAN, MIBN, ... For Swedish ASPSPs a BBAN is the bank clearing
+ * number followed by the account number, no separator.
+ */
+export interface GenericIdentification {
+  identification: string
+  scheme_name: string
+  issuer?: string
+}
+
+/**
+ * Enable Banking AccountIdentification. There is NO top-level `bban` key in
+ * the API: a BBAN arrives as `other.identification` with
+ * `other.scheme_name = 'BBAN'`. Earlier versions of this client typed
+ * `bban?: string` here and therefore never captured the Swedish clearing +
+ * account number for any connected account.
+ */
+export interface AccountIdentification {
+  iban?: string
+  other?: GenericIdentification
+}
+
 export interface AccountInfo {
   uid: string
-  account_id?: {
-    iban?: string
-    bban?: string
-    other?: string
-  }
+  account_id?: AccountIdentification
+  /** Every identifier the ASPSP provided, including the primary one. */
+  all_account_ids?: GenericIdentification[]
   name?: string
   product?: string
   currency: string
   identification_hash?: string
+}
+
+const BBAN_SCHEMES = new Set(['BBAN'])
+const DOMESTIC_ACCOUNT_SCHEMES = new Set(['BBAN', 'BGNR', 'PGNR'])
+
+/**
+ * The account's BBAN (Swedish clearing + account number) if the ASPSP sent
+ * one, from the primary identifier or the full identifier list.
+ */
+export function extractBban(
+  account: Pick<AccountInfo, 'account_id' | 'all_account_ids'>,
+): string | undefined {
+  const primary = account.account_id?.other
+  if (primary && BBAN_SCHEMES.has(primary.scheme_name?.toUpperCase()) && primary.identification) {
+    return primary.identification.replace(/\s+/g, '')
+  }
+  const listed = account.all_account_ids?.find(
+    (id) => BBAN_SCHEMES.has(id.scheme_name?.toUpperCase()) && Boolean(id.identification),
+  )
+  return listed ? listed.identification.replace(/\s+/g, '') : undefined
+}
+
+/**
+ * Best single identifier for a counterparty account: IBAN first, then a
+ * domestic scheme (BBAN, Bankgiro, Plusgiro) from the primary identifier or
+ * the additional list, then whatever else the bank sent.
+ */
+export function pickAccountIdentifier(
+  account: AccountIdentification | undefined,
+  additional?: GenericIdentification[],
+): string | undefined {
+  if (account?.iban) return account.iban
+  const candidates: GenericIdentification[] = []
+  if (account?.other) candidates.push(account.other)
+  if (additional) candidates.push(...additional)
+  const iban = candidates.find(
+    (id) => id.scheme_name?.toUpperCase() === 'IBAN' && Boolean(id.identification),
+  )
+  if (iban) return iban.identification
+  const domestic = candidates.find(
+    (id) => DOMESTIC_ACCOUNT_SCHEMES.has(id.scheme_name?.toUpperCase()) && Boolean(id.identification),
+  )
+  // Anything else (card PANs, customer numbers, ...) is not an account and
+  // must not land in transactions.counterparty_account.
+  return domestic?.identification
 }
 
 export interface Balance {
@@ -111,18 +178,16 @@ export interface Transaction {
   }
   credit_debit_indicator?: 'CRDT' | 'DBIT'  // CRDT = credit (income), DBIT = debit (expense)
   creditor_name?: string
-  creditor_account?: {
-    iban?: string
-    bban?: string
-  }
+  creditor_account?: AccountIdentification
+  /** All other creditor account identifiers provided by the ASPSP. */
+  creditor_account_additional_identification?: GenericIdentification[]
   creditor?: {
     name?: string
   }
   debtor_name?: string
-  debtor_account?: {
-    iban?: string
-    bban?: string
-  }
+  debtor_account?: AccountIdentification
+  /** All other debtor account identifiers provided by the ASPSP. */
+  debtor_account_additional_identification?: GenericIdentification[]
   debtor?: {
     name?: string
   }
@@ -1267,8 +1332,8 @@ export function convertTransaction(tx: Transaction, accountCurrency: string): Ba
                  FALLBACK_DESCRIPTION,
     counterparty_name: isCredit ? debtorName : creditorName,
     counterparty_account: isCredit
-      ? tx.debtor_account?.iban || tx.debtor_account?.bban
-      : tx.creditor_account?.iban || tx.creditor_account?.bban,
+      ? pickAccountIdentifier(tx.debtor_account, tx.debtor_account_additional_identification)
+      : pickAccountIdentifier(tx.creditor_account, tx.creditor_account_additional_identification),
     merchant_category_code: tx.merchant_category_code,
     bank_transaction_code: tx.bank_transaction_code,
     proprietary_bank_transaction_code: tx.proprietary_bank_transaction_code,

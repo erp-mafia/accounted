@@ -3,10 +3,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Mock dependencies: factory must not reference outer variables
 const mockCreateSession = vi.fn()
 const mockGetAccountBalance = vi.fn()
-vi.mock('@/extensions/general/enable-banking/lib/api-client', () => ({
-  createSession: (...args: unknown[]) => mockCreateSession(...args),
-  getAccountBalance: (...args: unknown[]) => mockGetAccountBalance(...args),
-}))
+vi.mock('@/extensions/general/enable-banking/lib/api-client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/extensions/general/enable-banking/lib/api-client')>()
+  return {
+    // Pure identifier extraction: keep the real implementation so the stored
+    // accounts carry what the bank actually sent.
+    extractBban: actual.extractBban,
+    createSession: (...args: unknown[]) => mockCreateSession(...args),
+    getAccountBalance: (...args: unknown[]) => mockGetAccountBalance(...args),
+  }
+})
 
 // Use hoisted to safely create mock objects referenced in vi.mock factories
 const {
@@ -363,7 +369,18 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     mockCreateSession.mockResolvedValue({
       session_id: 'sess-1',
       accounts: [
-        { uid: 'acc-1', account_id: { iban: 'SE1234' }, name: 'Företagskonto', currency: 'SEK' },
+        {
+          uid: 'acc-1',
+          account_id: { iban: 'SE1234' },
+          // Swedish ASPSPs list the BBAN (clearing + account) alongside the
+          // IBAN; it must land on the stored account for payee prefill.
+          all_account_ids: [
+            { identification: 'SE1234', scheme_name: 'IBAN' },
+            { identification: '5000 1234567', scheme_name: 'BBAN' },
+          ],
+          name: 'Företagskonto',
+          currency: 'SEK',
+        },
         { uid: 'acc-2', account_id: { iban: 'SE5678' }, name: 'Privatkonto', currency: 'SEK' },
       ],
       access: { valid_until: '2024-12-31T00:00:00Z' },
@@ -404,9 +421,11 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     const payload = capturedUpdates[0]
     expect(payload.status).toBe('pending_selection')
     expect(payload).not.toHaveProperty('last_synced_at')
-    const accountsData = payload.accounts_data as Array<{ uid: string; enabled: boolean }>
+    const accountsData = payload.accounts_data as Array<{ uid: string; enabled: boolean; bban?: string }>
     expect(accountsData).toHaveLength(2)
     expect(accountsData.every(a => a.enabled === true)).toBe(true)
+    expect(accountsData.find(a => a.uid === 'acc-1')?.bban).toBe('50001234567')
+    expect(accountsData.find(a => a.uid === 'acc-2')?.bban).toBeUndefined()
 
     // Two same-currency accounts must NOT collide on the same BAS slot — the
     // second SEK account gets the next free 19xx sub-account, and the

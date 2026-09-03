@@ -53,6 +53,7 @@ import {
 import {
   hasRequiredInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
+import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { createLogger } from '@/lib/logger'
 import type {
@@ -575,6 +576,15 @@ async function sendInvoiceFromSchedule(
   if (!company) {
     throw new Error('company settings missing: cannot send invoice')
   }
+  const payeeSnapshot = await snapshotInvoicePayee(supabase, companyId, invoice)
+  if (!payeeSnapshot.ok) {
+    log.warn('chosen payee account is no longer usable; recurring schedule cannot auto-send', {
+      invoiceId: invoice.id,
+      ...payeeSnapshot.details,
+    })
+    return false
+  }
+  invoice.payment_details = payeeSnapshot.payee
   if (!hasRequiredInvoicePaymentAccount(company, invoice)) {
     log.warn('invoice currency has no usable payment account; recurring schedule cannot auto-send', {
       invoiceId: invoice.id,
@@ -647,6 +657,7 @@ async function sendInvoiceFromSchedule(
   const { branding, company: renderCompany } = await prepareInvoicePdfRender(
     company,
     renderableInvoice.currency,
+    { payee: renderableInvoice.payment_details ?? null },
   )
   const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
   const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)

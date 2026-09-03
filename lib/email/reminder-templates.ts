@@ -288,7 +288,7 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
   } = data
   // Payment details follow the invoice currency, same as the invoice email
   // and PDF: a EUR reminder must never print the SEK account's IBAN.
-  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency)
+  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency, invoice.payment_details ?? null)
   const config = REMINDER_CONFIG[reminderLevel]
   const interestRatePercent = (interestRate * 100).toLocaleString('sv-SE', {
     minimumFractionDigits: 0,
@@ -492,7 +492,7 @@ export function generateReminderEmailText(data: ReminderEmailData): string {
   } = data
   // Payment details follow the invoice currency, same as the invoice email
   // and PDF: a EUR reminder must never print the SEK account's IBAN.
-  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency)
+  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency, invoice.payment_details ?? null)
   const config = REMINDER_CONFIG[reminderLevel]
   const interestRatePercent = (interestRate * 100).toLocaleString('sv-SE', {
     minimumFractionDigits: 0,

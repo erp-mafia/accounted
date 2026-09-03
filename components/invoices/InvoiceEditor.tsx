@@ -84,6 +84,7 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
+import { isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee'
 import type { InvoiceCopyInitial } from '@/lib/invoices/copy-invoice'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import {
@@ -91,7 +92,17 @@ import {
   buildSelfBilledPayload,
   hasDimensionValues,
 } from '@/lib/invoices/editor-payload'
-import type { Customer, Currency, CreateCustomerInput, InvoiceDocumentType, Article, Invoice, InvoiceItem } from '@/types'
+import type {
+  Article,
+  CashAccount,
+  CreateCustomerInput,
+  Currency,
+  Customer,
+  Invoice,
+  InvoiceDocumentType,
+  InvoiceItem,
+  InvoicePayeeDefault,
+} from '@/types'
 
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
 const units = ['st', 'tim', 'dag', 'månad', 'km', 'kg']
@@ -155,6 +166,16 @@ const CELL_SELECT_TRIGGER_CLASS =
 // Förval settings row: flat hairline rows, label left, control right.
 const SETTINGS_ROW_CLASS =
   'flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]'
+
+// Sentinel for "the company default" in the payee select: an empty option
+// value renders as the placeholder in Radix Select.
+const PAYEE_DEFAULT = '__default__'
+
+/** "Företagskonto (1930)" or the bare ledger account when the row has no name. */
+function payeeAccountLabel(account: CashAccount): string {
+  const name = account.name?.trim()
+  return name ? `${name} (${account.ledger_account})` : account.ledger_account
+}
 
 // Compact display of a dimensions bag, e.g. "KS01 · P001" (dim-number order).
 function compactDims(dims: Record<string, string>): string {
@@ -363,6 +384,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       valid_until: z.string().optional(),
       delivery_date: z.string().optional(),
       currency: z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']),
+      // Bank account the customer pays to; '' = the company default per currency.
+      payment_cash_account_id: z.string().optional(),
       document_type: z.enum(['invoice', 'proforma', 'delivery_note', 'quote']),
       your_reference: z.string().optional(),
       our_reference: z.string().optional(),
@@ -563,6 +586,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             initial.document_type === 'quote' ? initial.valid_until ?? initial.due_date : '',
           delivery_date: initial.delivery_date ?? '',
           currency: initial.currency,
+          payment_cash_account_id: initial.payment_cash_account_id ?? '',
           document_type: (initial.document_type ?? 'invoice') as InvoiceDocumentType,
           your_reference: initial.your_reference ?? '',
           our_reference: initial.our_reference ?? '',
@@ -606,6 +630,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             valid_until: '',
             delivery_date: '',
             currency: copyInitial.currency,
+            payment_cash_account_id: copyInitial.payment_cash_account_id ?? '',
             document_type: 'invoice' as InvoiceDocumentType,
             your_reference: '',
             our_reference: copyInitial.our_reference,
@@ -626,6 +651,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           due_date: '',
           valid_until: '',
           currency: 'SEK',
+          payment_cash_account_id: '',
           document_type: createDocumentType,
           payment_link_url: '',
           payment_link_auto: true,
@@ -670,6 +696,41 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
   const watchItems = watch('items')
   const watchCurrency = watch('currency')
+  const watchPayeeAccount = watch('payment_cash_account_id')
+  // The company's bank accounts that may be printed as payee, and the default
+  // per currency. Loaded once; the select only renders when there is a real
+  // choice (two or more usable accounts for the invoice currency).
+  const [payeeState, setPayeeState] = useState<{ accounts: CashAccount[]; defaults: InvoicePayeeDefault[] } | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/cash-accounts/payee-defaults')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (!cancelled && json?.data) setPayeeState(json.data)
+      })
+      .catch(() => {
+        // Best-effort: without the list the invoice simply uses the default.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const payeeOptions = useMemo(
+    () => (payeeState ? payeeState.accounts.filter((a) => isUsableInvoicePayee(a, watchCurrency as Currency)) : []),
+    [payeeState, watchCurrency],
+  )
+  const defaultPayee = useMemo(() => {
+    const id = payeeState?.defaults.find((d) => d.currency === watchCurrency)?.cash_account_id
+    return id ? payeeState?.accounts.find((a) => a.id === id) ?? null : null
+  }, [payeeState, watchCurrency])
+  // A currency change can make the chosen account unusable (no IBAN for
+  // EUR): fall back to the default rather than submit an invalid choice.
+  useEffect(() => {
+    if (!payeeState || !watchPayeeAccount) return
+    if (!payeeOptions.some((a) => a.id === watchPayeeAccount)) {
+      setValue('payment_cash_account_id', '', { shouldDirty: true })
+    }
+  }, [payeeState, payeeOptions, watchPayeeAccount, setValue])
   const watchCustomerId = watch('customer_id')
   const watchDocumentType = watch('document_type') as InvoiceDocumentType
   // Subscribed at render level so the Förval chip line and the next-step line
@@ -1842,6 +1903,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           invoice_marking: data.invoice_marking,
           notes: data.notes,
           payment_link_url: data.payment_link_url,
+          payment_cash_account_id: data.payment_cash_account_id || null,
           invoice_number: numberPreview,
           // ROT/RUT claim card: the preview shows the same masked personnummer
           // and fastighetsbeteckning in its deduction box as the created
@@ -3019,6 +3081,41 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       )}
                     />
                   </div>
+
+                  {!isSelfBilled
+                    && (watchDocumentType === 'invoice' || watchDocumentType === 'proforma')
+                    && payeeState
+                    && (payeeOptions.length > 1 || (payeeOptions.length === 1 && !defaultPayee) || (watchPayeeAccount && payeeOptions.length > 0)) && (
+                    <div className={SETTINGS_ROW_CLASS}>
+                      <Label className="text-[13px] font-normal">{t('payee_account_label')}</Label>
+                      <Controller
+                        name="payment_cash_account_id"
+                        control={control}
+                        render={({ field }) => (
+                          <Select
+                            value={field.value || PAYEE_DEFAULT}
+                            onValueChange={(value) => field.onChange(value === PAYEE_DEFAULT ? '' : value)}
+                          >
+                            <SelectTrigger className="h-8 w-64 text-[13px]">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={PAYEE_DEFAULT}>
+                                {defaultPayee
+                                  ? t('payee_account_default', { account: payeeAccountLabel(defaultPayee) })
+                                  : t('payee_account_default_none')}
+                              </SelectItem>
+                              {payeeOptions.map((account) => (
+                                <SelectItem key={account.id} value={account.id}>
+                                  {payeeAccountLabel(account)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      />
+                    </div>
+                  )}
 
                   {/* Self-billed mode renders fakturadatum and mottagningsdatum
                       uncollapsed next to the external number instead: they are

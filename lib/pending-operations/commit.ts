@@ -59,6 +59,7 @@ import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-paym
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { booksInvoicesOnIssue, cashPartialBlockReason, supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
+import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
 import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import {
   canApproveSupplierInvoice,
@@ -135,6 +136,7 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { resolveInvoicePayeeChoice, resolveInvoiceSettlementAccount, snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import {
   describeMissingInvoicePaymentAccount,
   hasRequiredInvoicePaymentAccount,
@@ -703,7 +705,17 @@ async function commitUpdateCompanySettings(
     throw err
   }
 
-  const { data, error } = await supabase
+  // The bank columns mirror the default SEK payee account (migration
+  // 20260903150000): write the change through FIRST so a failure leaves
+  // nothing half-written, and the invoice PDF prints what the agent set.
+  try {
+    await propagateLegacyPayeeWrite(supabase, companyId, validated.changes)
+  } catch (err) {
+    log.error('update_company_settings: payee write-through failed', err as Error)
+    return { error: err instanceof Error ? err.message : 'Payee write-through failed', status: 500 }
+  }
+
+  const { data: row, error } = await supabase
     .from('company_settings')
     .update(validated.changes)
     .eq('company_id', companyId)
@@ -717,22 +729,23 @@ async function commitUpdateCompanySettings(
     return { error: error.message, status: 500 }
   }
 
+
   return {
     data: {
       company_id: companyId,
-      bank_name: data.bank_name ?? null,
-      clearing_number: data.clearing_number ?? null,
-      account_number: data.account_number ?? null,
-      bankgiro: data.bankgiro ?? null,
-      plusgiro: data.plusgiro ?? null,
-      swish: data.swish ?? null,
-      iban: data.iban ?? null,
-      bic: data.bic ?? null,
-      contact_person: data.default_our_reference ?? null,
-      email: data.email ?? null,
-      phone: data.phone ?? null,
-      website: data.website ?? null,
-      invoice_email_texts: data.invoice_email_texts ?? null,
+      bank_name: row.bank_name ?? null,
+      clearing_number: row.clearing_number ?? null,
+      account_number: row.account_number ?? null,
+      bankgiro: row.bankgiro ?? null,
+      plusgiro: row.plusgiro ?? null,
+      swish: row.swish ?? null,
+      iban: row.iban ?? null,
+      bic: row.bic ?? null,
+      contact_person: row.default_our_reference ?? null,
+      email: row.email ?? null,
+      phone: row.phone ?? null,
+      website: row.website ?? null,
+      invoice_email_texts: row.invoice_email_texts ?? null,
     },
   }
 }
@@ -2123,6 +2136,19 @@ async function commitCreateInvoice(
     quoteNumber = allocated as string
   }
 
+  // Which bank account the customer pays to; validated against the
+  // company's payee accounts (same rule as the web and v1 routes).
+  const payeeChoice = await resolveInvoicePayeeChoice(
+    supabase,
+    companyId,
+    currency as Currency,
+    typeof params.payment_cash_account_id === 'string' ? params.payment_cash_account_id : null,
+  )
+  if (!payeeChoice.ok) {
+    const entry = getErrorEntry(payeeChoice.code)
+    return { error: entry?.message_sv ?? payeeChoice.code, status: 400, data: payeeChoice.details }
+  }
+
   const { data: invoice, error: invoiceError } = await supabase
     .from('invoices')
     .insert({
@@ -2165,6 +2191,8 @@ async function commitCreateInvoice(
       notes: (params.notes as string) || null,
       payment_link_url: paymentLinkUrl,
       default_dimensions: defaultDimensions ?? {},
+      payment_cash_account_id: payeeChoice.fields.payment_cash_account_id,
+      payment_details: payeeChoice.fields.payment_details,
     })
     .select()
     .single()
@@ -2637,14 +2665,19 @@ async function commitMarkInvoicePaid(
   }
 
   if (isRealInvoice) {
+    // Debit the bank account the invoice asked to be paid to (1930 when none
+    // was chosen): an agent marking a 1931-invoice paid must not land it on 1930.
+    const settlementAccountNumber = await resolveInvoiceSettlementAccount(supabase, companyId, invoice as Invoice)
     if (useCashEntry) {
       const je = await createInvoiceCashEntry(
-        supabase, companyId, userId, invoice as Invoice, paymentDate, entityType, invoice.customer?.name
+        supabase, companyId, userId, invoice as Invoice, paymentDate, entityType, invoice.customer?.name,
+        settlementAccountNumber,
       )
       journalEntryId = je?.id ?? null
     } else {
       const je = await createInvoicePaymentJournalEntry(
-        supabase, companyId, userId, invoice as Invoice, paymentDate, undefined, invoice.customer?.name
+        supabase, companyId, userId, invoice as Invoice, paymentDate, undefined, invoice.customer?.name,
+        undefined, settlementAccountNumber,
       )
       journalEntryId = je?.id ?? null
     }
@@ -2841,6 +2874,15 @@ async function commitSendInvoice(
   if (companyError || !company) return { error: 'Company settings missing', status: 500 }
 
   const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
+  // Freeze the chosen bank account's payee at issue (no-op without a choice).
+  const payeeSnapshot = await snapshotInvoicePayee(supabase, companyId, invoice as Invoice)
+  if (!payeeSnapshot.ok) {
+    return {
+      error: getErrorEntry(payeeSnapshot.code)?.message_sv ?? 'Bankkontot på fakturan kan inte längre användas.',
+      status: 400,
+    }
+  }
+  ;(invoice as Invoice).payment_details = payeeSnapshot.payee
   if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
     return {
       error: describeMissingInvoicePaymentAccount((invoice as Invoice).currency).sv,
@@ -2897,7 +2939,7 @@ async function commitSendInvoice(
       const preflight = await prepareInvoicePdfRender(
         company as CompanySettings,
         (invoice as Invoice).currency,
-        { paymentAccountRequired },
+        { paymentAccountRequired, payee: (invoice as Invoice).payment_details ?? null },
       )
       await renderToBuffer(
         InvoicePDF({
@@ -2954,7 +2996,7 @@ async function commitSendInvoice(
   const { branding, company: renderCompany } = await prepareInvoicePdfRender(
     company as CompanySettings,
     renderableInvoice.currency,
-    { paymentAccountRequired },
+    { paymentAccountRequired, payee: (invoice as Invoice).payment_details ?? null },
   )
   const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
   const pdfBuffer = await renderToBuffer(
@@ -3096,6 +3138,14 @@ async function commitMarkInvoiceSent(
 
   if (settingsError || !settings) return { error: 'Company settings missing', status: 500 }
 
+  const payeeSnapshot = await snapshotInvoicePayee(supabase, companyId, invoice as Invoice)
+  if (!payeeSnapshot.ok) {
+    return {
+      error: getErrorEntry(payeeSnapshot.code)?.message_sv ?? 'Bankkontot på fakturan kan inte längre användas.',
+      status: 400,
+    }
+  }
+  ;(invoice as Invoice).payment_details = payeeSnapshot.payee
   if (!hasRequiredInvoicePaymentAccount(settings as CompanySettings, invoice as Invoice)) {
     return {
       error: describeMissingInvoicePaymentAccount((invoice as Invoice).currency).sv,

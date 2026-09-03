@@ -30,6 +30,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { InvoiceEmailTextsSchema, UpdateSettingsSchema } from '@/lib/api/schemas'
 import { UpdateCompanySettingsParamsSchema } from '@/lib/pending-operations/schemas/company-settings'
+import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
 
 // Flat body keys copied into the update payload verbatim. Mirrors the MCP
 // tool gnubok_update_company_settings field for field; contact_person is
@@ -285,6 +286,16 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // statically verify every column name. Fields the caller did not supply
     // are `undefined` here and are dropped by supabase-js JSON serialization,
     // so only supplied fields are written; explicit null still clears.
+    // The bank columns mirror the default SEK payee account (migration
+    // 20260903150000): write the change through to it FIRST so a failure
+    // leaves nothing half-written, and the PDF prints what this call set.
+    try {
+      await propagateLegacyPayeeWrite(ctx.supabase, ctx.companyId!, changes)
+    } catch (err) {
+      ctx.log.error('companies.settings.update: payee write-through failed', err as Error)
+      return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
+    }
+
     const { data, error } = await ctx.supabase
       .from('company_settings')
       .update({
@@ -309,6 +320,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (error) {
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     }
+
     if (!data) {
       ctx.log.warn('companies.settings.update: settings row not found', {
         companyId: ctx.companyId,

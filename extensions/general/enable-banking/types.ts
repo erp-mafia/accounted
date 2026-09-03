@@ -3,6 +3,10 @@
 export interface StoredAccount {
   uid: string
   iban?: string
+  // Swedish BBAN (clearing number + account number, no separator) when the
+  // ASPSP provided one. Display and invoice-payee prefill only: dedup keys
+  // stay IBAN-then-uid (see dedup_scope).
+  bban?: string
   name?: string
   currency: string
   balance?: number
