@@ -83,6 +83,7 @@ describe('POST /api/cash-accounts (manual bank account)', () => {
   })
 
   it('creates the account on the next free 19xx slot with the payee fields (happy path)', async () => {
+    enqueue({ data: [{ ledger_account: '1930' }] }) // rows the company already holds
     enqueue({ data: { id: 'ca-new', ledger_account: '1931', name: 'Sparkonto', bankgiro: '5050-1234' } })
 
     const response = await POST(postReq({
@@ -94,7 +95,7 @@ describe('POST /api/cash-accounts (manual bank account)', () => {
 
     expect(status).toBe(201)
     expect(body.data.ledger_account).toBe('1931')
-    expect(findFreeLedgerAccountMock).toHaveBeenCalledWith(expect.anything(), 'company-1', 'SEK')
+    expect(findFreeLedgerAccountMock).toHaveBeenCalledWith(expect.anything(), 'company-1', 'SEK', new Set(['1930']))
     const [insert] = findCalls('cash_accounts', 'insert')
     expect(insert[0]).toMatchObject({
       company_id: 'company-1',

@@ -140,12 +140,16 @@ export function pickAccountIdentifier(
   const candidates: GenericIdentification[] = []
   if (account?.other) candidates.push(account.other)
   if (additional) candidates.push(...additional)
+  const iban = candidates.find(
+    (id) => id.scheme_name?.toUpperCase() === 'IBAN' && Boolean(id.identification),
+  )
+  if (iban) return iban.identification
   const domestic = candidates.find(
     (id) => DOMESTIC_ACCOUNT_SCHEMES.has(id.scheme_name?.toUpperCase()) && Boolean(id.identification),
   )
-  if (domestic) return domestic.identification
-  const any = candidates.find((id) => Boolean(id.identification))
-  return any?.identification
+  // Anything else (card PANs, customer numbers, ...) is not an account and
+  // must not land in transactions.counterparty_account.
+  return domestic?.identification
 }
 
 export interface Balance {

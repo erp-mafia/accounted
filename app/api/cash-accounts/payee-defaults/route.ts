@@ -3,7 +3,13 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { SetInvoicePayeeDefaultSchema } from '@/lib/api/schemas'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { loadInvoicePayeeState, setInvoicePayeeDefault } from '@/lib/cash-accounts/invoice-payee'
+import {
+  isBankCashAccount,
+  isUsableInvoicePayee,
+  loadInvoicePayeeState,
+  setInvoicePayeeDefault,
+} from '@/lib/cash-accounts/invoice-payee'
+import type { CashAccount } from '@/types'
 import { getCompanyRole } from '@/lib/auth/require-write'
 
 /**
@@ -52,7 +58,7 @@ export const PUT = withRouteContext(
     if (cash_account_id) {
       const { data: account, error } = await supabase
         .from('cash_accounts')
-        .select('id, invoice_payee, enabled')
+        .select('*')
         .eq('company_id', companyId)
         .eq('id', cash_account_id)
         .maybeSingle()
@@ -71,6 +77,19 @@ export const PUT = withRouteContext(
           },
           { status: 404 },
         )
+      }
+      // A default must be printable for the currency: a bank-type account,
+      // enabled, flagged as payee, with the identifiers the currency needs.
+      const typed = account as CashAccount
+      if (!isBankCashAccount(typed) || !isUsableInvoicePayee(typed, currency)) {
+        return errorResponseFromCode('INVOICE_PAYEE_ACCOUNT_INVALID', log, {
+          requestId,
+          details: {
+            cash_account_id,
+            currency,
+            reason: !isBankCashAccount(typed) ? 'not_bank_account' : !typed.enabled ? 'disabled' : !typed.invoice_payee ? 'not_payee' : 'unusable_for_currency',
+          },
+        })
       }
     }
 

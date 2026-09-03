@@ -670,6 +670,10 @@ export interface CashAccount extends CashAccountPayeeFields {
   // Raw BBAN from the bank connection (Swedish: clearing + account number,
   // no separator). Prefill only; clearing_number/account_number print.
   bban: string | null
+  // The IBAN printed on customer invoices. Separate from `iban` (the bank's
+  // identity of the account, written by every sync and used to re-pair on
+  // reconnect) so a sync never rewrites an invoice instruction.
+  payee_iban: string | null
   // True when the account may be printed as the payee on customer invoices.
   invoice_payee: boolean
   name: string | null

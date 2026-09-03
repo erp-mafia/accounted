@@ -31,8 +31,14 @@ export const PAYEE_FIELDS: readonly (keyof CashAccountPayeeFields)[] = [
   'foreign_account_number',
 ]
 
-/** The payee fields of a cash account in the shape the invoice renderers read. */
-export function cashAccountPayee(account: CashAccountPayeeFields): InvoicePaymentAccount {
+/** A cash account's payee columns: the InvoicePaymentAccount keys, with the printed IBAN in payee_iban. */
+export type CashAccountPayeeSource = Omit<CashAccountPayeeFields, 'iban'> & { payee_iban: string | null }
+
+/**
+ * The payee fields of a cash account in the shape the invoice renderers read.
+ * The printed IBAN is payee_iban, never the bank-identity iban column.
+ */
+export function cashAccountPayee(account: CashAccountPayeeSource): InvoicePaymentAccount {
   return normalizeInvoicePaymentAccount({
     bank_name: account.bank_name,
     clearing_number: account.clearing_number,
@@ -40,7 +46,7 @@ export function cashAccountPayee(account: CashAccountPayeeFields): InvoicePaymen
     bankgiro: account.bankgiro,
     plusgiro: account.plusgiro,
     swish: account.swish,
-    iban: account.iban,
+    iban: account.payee_iban,
     bic: account.bic,
     bank_code: account.bank_code,
     foreign_account_number: account.foreign_account_number,
@@ -159,7 +165,7 @@ export async function updateCashAccountPayee(
       bankgiro: has('bankgiro') ? clean(update.bankgiro) : undefined,
       plusgiro: has('plusgiro') ? clean(update.plusgiro) : undefined,
       swish: has('swish') ? clean(update.swish) : undefined,
-      iban: has('iban') ? compact(clean(update.iban), true) : undefined,
+      payee_iban: has('iban') ? compact(clean(update.iban), true) : undefined,
       bic: has('bic') ? compact(clean(update.bic), true) : undefined,
       bank_code: has('bank_code') ? clean(update.bank_code) : undefined,
       foreign_account_number: has('foreign_account_number') ? clean(update.foreign_account_number) : undefined,
@@ -223,8 +229,20 @@ export async function createManualBankAccount(
   input: CreateManualBankAccountInput,
 ): Promise<CashAccount> {
   const currency = input.currency.toUpperCase()
-  const ledger = input.ledger_account?.trim()
-    || (await findFreeLedgerAccount(supabase, companyId, currency))
+  // findFreeLedgerAccount treats a slot held by a manual row as free (the
+  // PSD2 path promotes that row in place); this path INSERTS, so every slot
+  // any row holds is taken.
+  const { data: existing, error: existingError } = await supabase
+    .from('cash_accounts')
+    .select('ledger_account')
+    .eq('company_id', companyId)
+  if (existingError) throw new Error(`cash_accounts lookup failed: ${existingError.message}`)
+  const taken = new Set(((existing ?? []) as { ledger_account: string }[]).map((r) => r.ledger_account))
+  const requested = input.ledger_account?.trim()
+  if (requested && taken.has(requested)) {
+    throw new Error(`Ledger account ${requested} is already a cash account of this company`)
+  }
+  const ledger = requested || (await findFreeLedgerAccount(supabase, companyId, currency, taken))
   if (!ledger) {
     throw new Error('No free 19xx ledger account for a new bank account')
   }
@@ -266,7 +284,10 @@ export async function createManualBankAccount(
       bankgiro: clean(payee.bankgiro),
       plusgiro: clean(payee.plusgiro),
       swish: clean(payee.swish),
+      // A typed account: the printed IBAN is also the account's identity, so
+      // a later bank connection with the same IBAN promotes this row in place.
       iban: compact(clean(payee.iban), true),
+      payee_iban: compact(clean(payee.iban), true),
       bic: compact(clean(payee.bic), true),
       bank_code: clean(payee.bank_code),
       foreign_account_number: clean(payee.foreign_account_number),
@@ -331,21 +352,22 @@ export async function propagateLegacyPayeeWrite(
   const written: Currency[] = []
   for (const [currency, account] of entries) {
     let target = defaults.get(currency) ?? null
+    let adopt = false
     if (!target && currency === 'SEK') {
       // Every company is seeded with a primary SEK account: adopt it as the
       // SEK payee so a first-time bank-details save lands on an account.
       const { data: primary } = await supabase
         .from('cash_accounts')
-        .select('id')
+        .select('id, ledger_account')
         .eq('company_id', companyId)
         .eq('currency', 'SEK')
         .eq('enabled', true)
         .eq('is_primary', true)
         .maybeSingle()
-      const primaryId = (primary as { id: string } | null)?.id ?? null
-      if (primaryId) {
-        await setInvoicePayeeDefault(supabase, companyId, 'SEK', primaryId)
-        target = primaryId
+      const row = primary as { id: string; ledger_account: string } | null
+      if (row && isBankCashAccount(row)) {
+        target = row.id
+        adopt = true
       }
     }
     if (!target) continue
@@ -356,7 +378,10 @@ export async function propagateLegacyPayeeWrite(
     for (const field of PAYEE_FIELDS) {
       if (full || field in account) update[field] = account[field] ?? null
     }
+    // Fields first, default second: the default insert fires the mirror, and
+    // it must see the filled account, never an empty one.
     await updateCashAccountPayee(supabase, companyId, target, update)
+    if (adopt) await setInvoicePayeeDefault(supabase, companyId, 'SEK', target)
     written.push(currency)
   }
   return written

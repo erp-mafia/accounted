@@ -10,6 +10,7 @@ function makeCashAccount(overrides: Partial<CashAccount> = {}): CashAccount {
     external_uid: null,
     iban: null,
     bban: null,
+    payee_iban: null,
     bank_name: null,
     clearing_number: null,
     account_number: null,

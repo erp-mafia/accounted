@@ -89,6 +89,23 @@ describe('/api/cash-accounts/payee-defaults', () => {
     expect(findCalls('invoice_payee_defaults', 'upsert')).toHaveLength(0)
   })
 
+  it('PUT returns 400 when the account is disabled, not a payee, a PSP row, or unusable for the currency', async () => {
+    for (const row of [
+      { id: CA_1, ledger_account: '1930', currency: 'SEK', enabled: false, invoice_payee: true, bankgiro: '5050-1055' },
+      { id: CA_1, ledger_account: '1930', currency: 'SEK', enabled: true, invoice_payee: false, bankgiro: '5050-1055' },
+      { id: CA_1, ledger_account: '1686', currency: 'SEK', enabled: true, invoice_payee: true, bankgiro: '5050-1055' },
+      { id: CA_1, ledger_account: '1930', currency: 'SEK', enabled: true, invoice_payee: true, bankgiro: '5050-1055', payee_iban: null },
+    ]) {
+      enqueue({ data: row })
+      const currency = row.payee_iban === null ? 'EUR' : 'SEK'
+      const response = await PUT(putReq({ currency, cash_account_id: CA_1 }), createMockRouteParams({}))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('INVOICE_PAYEE_ACCOUNT_INVALID')
+    }
+    expect(findCalls('invoice_payee_defaults', 'upsert')).toHaveLength(0)
+  })
+
   it('PUT returns 404 when the account is not one of the company\'s', async () => {
     enqueue({ data: null })
     const response = await PUT(putReq({ currency: 'SEK', cash_account_id: CA_1 }), createMockRouteParams({}))
@@ -98,7 +115,7 @@ describe('/api/cash-accounts/payee-defaults', () => {
   })
 
   it('PUT upserts the default and returns the refreshed state (happy path)', async () => {
-    enqueue({ data: { id: CA_1, invoice_payee: true, enabled: true } }) // account lookup
+    enqueue({ data: { id: CA_1, ledger_account: '1930', currency: 'SEK', invoice_payee: true, enabled: true, bankgiro: '5050-1055' } }) // account lookup
     enqueue({ data: null })                                              // upsert
     enqueue({ data: [{ id: CA_1, ledger_account: '1930', currency: 'SEK' }] })
     enqueue({ data: [{ id: 'd1', currency: 'SEK', cash_account_id: CA_1 }] })

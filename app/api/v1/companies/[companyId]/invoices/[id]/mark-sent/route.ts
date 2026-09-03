@@ -61,7 +61,7 @@ import type { CompanySettings, EntityType, Invoice } from '@/types'
 // createInvoiceJournalEntry, which reads the bag off the row: dropping the
 // column here silently untags the revenue JE lines.
 const INVOICE_MARK_SENT_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, payment_cash_account_id, payment_details, created_at, updated_at'
 
 const InvoiceMarkSentResponse = z.object({
   id: z.string().uuid(),
@@ -235,7 +235,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     const companySettings = settings as CompanySettings
     // Freeze the chosen bank account's payee at issue (no-op without a choice).
-    const payeeSnapshot = await snapshotInvoicePayee(ctx.supabase, ctx.companyId!, typed)
+    const payeeSnapshot = await snapshotInvoicePayee(ctx.supabase, ctx.companyId!, typed, { persist: !ctx.dryRun })
     if (!payeeSnapshot.ok) {
       return v1ErrorResponseFromCode(payeeSnapshot.code, ctx.log, {
         requestId: ctx.requestId,

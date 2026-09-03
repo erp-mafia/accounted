@@ -657,7 +657,17 @@ async function commitUpdateCompanySettings(
     throw err
   }
 
-  const { data, error } = await supabase
+  // The bank columns mirror the default SEK payee account (migration
+  // 20260903150000): write the change through FIRST so a failure leaves
+  // nothing half-written, and the invoice PDF prints what the agent set.
+  try {
+    await propagateLegacyPayeeWrite(supabase, companyId, validated.changes)
+  } catch (err) {
+    log.error('update_company_settings: payee write-through failed', err as Error)
+    return { error: err instanceof Error ? err.message : 'Payee write-through failed', status: 500 }
+  }
+
+  const { data: row, error } = await supabase
     .from('company_settings')
     .update(validated.changes)
     .eq('company_id', companyId)
@@ -670,24 +680,7 @@ async function commitUpdateCompanySettings(
     }
     return { error: error.message, status: 500 }
   }
-  let row = data
 
-  // The bank columns mirror the default SEK payee account (migration
-  // 20260903150000): write the change through so the invoice PDF prints what
-  // the agent set, then read the row back as the mirror left it.
-  try {
-    const written = await propagateLegacyPayeeWrite(supabase, companyId, validated.changes)
-    if (written.length > 0) {
-      const reread = await supabase
-        .from('company_settings')
-        .select('bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference, email, phone, website, invoice_email_texts')
-        .eq('company_id', companyId)
-        .single()
-      if (!reread.error && reread.data) row = reread.data
-    }
-  } catch (err) {
-    log.error('update_company_settings: payee write-through failed', err as Error)
-  }
 
   return {
     data: {

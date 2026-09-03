@@ -59,4 +59,15 @@ describe('invoice payee columns (20260903160000)', () => {
       insertInvoice(companyId, userId, customerId, { payment_cash_account_id: randomUUID() }),
     ).rejects.toThrow(/foreign key/)
   })
+
+  it('rejects another company\'s cash account (composite same-company FK)', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    const otherCompanyId = await insertCompany({ createdBy: userId, name: 'Annat AB' })
+    const customerId = await insertCustomer(companyId, userId)
+    const foreign = await insertCashAccount({ companyId: otherCompanyId, ledgerAccount: '1930' })
+    await expect(
+      insertInvoice(companyId, userId, customerId, { payment_cash_account_id: foreign }),
+    ).rejects.toThrow(/invoices_payment_cash_account_same_company/)
+  })
 })

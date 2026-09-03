@@ -631,6 +631,20 @@ describe('convertTransaction', () => {
     })
     expect(convertTransaction(bgOnly, 'SEK').counterparty_account).toBe('5050-1234')
   })
+
+  it('takes a supplementary IBAN over a primary BBAN, and never persists a card PAN or other non-account scheme', () => {
+    const bbanWithIban = makeTx({
+      creditor_account: { other: { identification: '50001234567', scheme_name: 'BBAN' } },
+      creditor_account_additional_identification: [{ identification: 'SE4550000000058398257466', scheme_name: 'IBAN' }],
+    })
+    expect(convertTransaction(bbanWithIban, 'SEK').counterparty_account).toBe('SE4550000000058398257466')
+
+    const cardOnly = makeTx({
+      creditor_account: { other: { identification: '4571********1234', scheme_name: 'CPAN' } },
+      creditor_account_additional_identification: [{ identification: '12345', scheme_name: 'CUST' }],
+    })
+    expect(convertTransaction(cardOnly, 'SEK').counterparty_account).toBeUndefined()
+  })
 })
 
 describe('extractBban', () => {

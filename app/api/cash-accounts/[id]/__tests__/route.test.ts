@@ -74,7 +74,17 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
     expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
   })
 
+  it('payee fields: 400 on a PSP clearing account (1686): only 19xx bank accounts print as payee', async () => {
+    enqueue({ data: { id: CA_1, ledger_account: '1686' } })
+    const response = await PATCH(patchReq({ bankgiro: '5050-1055', invoice_payee: true }), createMockRouteParams({ id: CA_1 }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAYEE_ACCOUNT_INVALID')
+    expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
+  })
+
   it('payee fields: owner writes bankgiro, clears plusgiro with "", and flags the account as payee', async () => {
+    enqueue({ data: { id: CA_1, ledger_account: '1930' } })
     enqueue({ data: { id: CA_1, bankgiro: '5050-1055', plusgiro: null, invoice_payee: true } })
     const response = await PATCH(
       patchReq({ bankgiro: '5050-1055', plusgiro: '', invoice_payee: true }),
@@ -83,7 +93,7 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
     const { status, body } = await parseJsonResponse<{ data: { bankgiro: string } }>(response)
     expect(status).toBe(200)
     expect(body.data.bankgiro).toBe('5050-1055')
-    expect(findCalls('cash_accounts', 'update')).toEqual([[{ bankgiro: '5050-1055', plusgiro: null, invoice_payee: true }]])
+    expect((findCalls('cash_accounts', 'update')[0][0] as Record<string, unknown>)).toMatchObject({ bankgiro: '5050-1055', plusgiro: null, invoice_payee: true })
   })
 
   it('returns 401 when not authenticated', async () => {

@@ -2329,7 +2329,8 @@
     "saved_account": "Payment details for {account} are saved.",
     "saved_default": "Invoices in {currency} now show {account}.",
     "cleared_default": "Invoices in {currency} no longer have a default account.",
-    "save_failed_title": "Could not save"
+    "save_failed_title": "Could not save",
+    "iban_prefill": "Use the IBAN from your bank connection: {value}"
   },
   "settings_period_locking": {
     "heading": "Period locking",

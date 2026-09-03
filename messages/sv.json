@@ -2329,7 +2329,8 @@
     "saved_account": "Betaluppgifterna för {account} är sparade.",
     "saved_default": "Fakturor i {currency} visar nu {account}.",
     "cleared_default": "Fakturor i {currency} har inget standardkonto längre.",
-    "save_failed_title": "Kunde inte spara"
+    "save_failed_title": "Kunde inte spara",
+    "iban_prefill": "Hämta från bankkopplingen: {value}"
   },
   "settings_period_locking": {
     "heading": "Periodlåsning",

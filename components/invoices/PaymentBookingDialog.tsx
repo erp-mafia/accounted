@@ -97,7 +97,7 @@ export default function PaymentBookingDialog({
     companySettings?.accounting_method === 'cash' ? 'cash' : 'accrual'
   // The bank account the invoice asked to be paid to (1930 when none was
   // chosen): the proposed debit lands there, same as the route's default.
-  const { cashAccounts } = useCashAccounts()
+  const { cashAccounts, isLoading: cashAccountsLoading } = useCashAccounts()
   const chosenPaymentAccount = useMemo(() => {
     const id = (invoice as { payment_cash_account_id?: string | null }).payment_cash_account_id
     return id ? cashAccounts.find((a) => a.id === id)?.ledger_account ?? undefined : undefined
@@ -121,7 +121,7 @@ export default function PaymentBookingDialog({
 
     // Reference data still loading (no seed, first mount of the session):
     // the effect re-runs once it lands.
-    if (accountsLoading || settingsLoading) return
+    if (accountsLoading || settingsLoading || cashAccountsLoading) return
 
     let cancelled = false
 
@@ -199,7 +199,7 @@ export default function PaymentBookingDialog({
   // background revalidation of the settings row must not re-run init()
   // (and reset the user's lines) mid-dialog.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, invoice.id, company?.id, accountsLoading, settingsLoading, accountsError, settingsError])
+  }, [open, invoice.id, company?.id, accountsLoading, settingsLoading, cashAccountsLoading, chosenPaymentAccount, accountsError, settingsError])
 
   // Voucher-series preview: resolve the upcoming serie + nummer the same way the
   // booking engine will, so a misconfigured series is visible before confirming.

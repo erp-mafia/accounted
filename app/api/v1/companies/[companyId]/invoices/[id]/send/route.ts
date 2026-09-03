@@ -343,7 +343,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const settings = company as CompanySettings & { accounting_method?: string }
     const paymentAccountRequired = invoiceRequiresPaymentAccount(typed)
     // Freeze the chosen bank account's payee at issue (no-op without a choice).
-    const payeeSnapshot = await snapshotInvoicePayee(ctx.supabase, ctx.companyId!, typed)
+    const payeeSnapshot = await snapshotInvoicePayee(ctx.supabase, ctx.companyId!, typed, { persist: !ctx.dryRun })
     if (!payeeSnapshot.ok) {
       return v1ErrorResponseFromCode(payeeSnapshot.code, ctx.log, {
         requestId: ctx.requestId,

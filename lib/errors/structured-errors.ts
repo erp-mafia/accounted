@@ -1159,6 +1159,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       description: 'Välj ett annat bankkonto på fakturan, eller återaktivera kontot och fyll i dess betaluppgifter under Inställningar → Fakturering.',
     },
   },
+  INVOICE_PAYEE_SNAPSHOT_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Betaluppgifterna kunde inte sparas på fakturan. Fakturan skickades inte; försök igen.',
+    message_en: 'The payment details could not be saved on the invoice. The invoice was not sent; try again.',
+  },
   INVOICE_PAYEE_ACCOUNT_INVALID: {
     httpStatus: 400,
     message_sv: 'Bankkontot kan inte användas som betalningsmottagare på fakturan: det tillhör inte företaget, visas inte på kundfakturor eller saknar uppgifter för fakturans valuta.',

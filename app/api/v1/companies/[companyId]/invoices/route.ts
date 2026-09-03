@@ -627,6 +627,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
     const { invoiceFields, items: itemRows } = build
 
+    const payeeChoice = await resolveInvoicePayeeChoice(
+      ctx.supabase,
+      ctx.companyId!,
+      input.currency,
+      input.payment_cash_account_id,
+    )
+    if (!payeeChoice.ok) {
+      return v1ErrorResponseFromCode(payeeChoice.code, ctx.log, {
+        requestId: ctx.requestId,
+        details: payeeChoice.details,
+      })
+    }
+
     // Dry-run: validation-only preview. Drafts have no journal-entry side
     // effects yet, so no pending_operations staging needed; a staged
     // preview variant belongs to :send.
@@ -640,6 +653,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           invoice_number: null,
           status: 'draft' as const,
           ...previewFields,
+          payment_cash_account_id: payeeChoice.fields.payment_cash_account_id,
+          payment_details: payeeChoice.fields.payment_details,
           items: itemRows,
         },
         { requestId: ctx.requestId, log: ctx.log },
@@ -669,19 +684,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         })
       }
       invoiceNumber = quoteNumber as string
-    }
-
-    const payeeChoice = await resolveInvoicePayeeChoice(
-      ctx.supabase,
-      ctx.companyId!,
-      input.currency,
-      input.payment_cash_account_id,
-    )
-    if (!payeeChoice.ok) {
-      return v1ErrorResponseFromCode(payeeChoice.code, ctx.log, {
-        requestId: ctx.requestId,
-        details: payeeChoice.details,
-      })
     }
 
     const { data: invoice, error: invoiceErr } = await ctx.supabase

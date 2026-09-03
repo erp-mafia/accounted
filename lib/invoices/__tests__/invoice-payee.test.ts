@@ -15,6 +15,7 @@ function account(overrides: Partial<CashAccount> = {}): CashAccount {
     external_uid: null,
     iban: null,
     bban: null,
+    payee_iban: null,
     bank_name: 'Testbanken',
     clearing_number: null,
     account_number: null,
@@ -66,6 +67,11 @@ describe('resolveInvoicePayeeChoice', () => {
     expect(await resolveInvoicePayeeChoice(supabase as never, 'company-1', 'SEK', CA_1)).toMatchObject({
       ok: false, details: { reason: 'not_payee' },
     })
+    // A PSP clearing row (Stripe 1686) is never a payee, whatever its flags say.
+    enqueue({ data: account({ ledger_account: '1686' }) })
+    expect(await resolveInvoicePayeeChoice(supabase as never, 'company-1', 'SEK', CA_1)).toMatchObject({
+      ok: false, details: { reason: 'not_bank_account' },
+    })
     // Bankgiro only: fine for SEK, not for EUR (needs an IBAN).
     enqueue({ data: account() })
     expect(await resolveInvoicePayeeChoice(supabase as never, 'company-1', 'EUR', CA_1)).toMatchObject({
@@ -74,7 +80,7 @@ describe('resolveInvoicePayeeChoice', () => {
   })
 
   it('freezes the account payee fields on a valid choice', async () => {
-    enqueue({ data: account({ iban: 'se45 5000 0000 0583 9825 7466' }) })
+    enqueue({ data: account({ payee_iban: 'se45 5000 0000 0583 9825 7466' }) })
     const result = await resolveInvoicePayeeChoice(supabase as never, 'company-1', 'SEK', CA_1)
     expect(result.ok).toBe(true)
     if (!result.ok) return
@@ -153,11 +159,16 @@ describe('resolveInvoiceSettlementAccount', () => {
     expect(findCalls('cash_accounts', 'select')).toHaveLength(0)
   })
 
-  it('debits the chosen account\'s ledger account, and falls back to 1930 when the row is gone', async () => {
-    enqueue({ data: { ledger_account: '1931' } })
+  it('debits the chosen account\'s ledger account, and falls back to 1930 when the row is gone, disabled, or not a bank account', async () => {
+    enqueue({ data: { ledger_account: '1931', enabled: true } })
     expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1931')
     expect(findCalls('cash_accounts', 'eq')).toContainEqual(['company_id', 'company-1'])
     enqueue({ data: null })
+    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1930')
+    enqueue({ data: { ledger_account: '1931', enabled: false } })
+    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1930')
+    // Stripe clearing (1686) is cleared by the payout, never by a bank transfer.
+    enqueue({ data: { ledger_account: '1686', enabled: true } })
     expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1930')
   })
 })

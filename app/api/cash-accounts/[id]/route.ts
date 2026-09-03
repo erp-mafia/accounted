@@ -4,7 +4,7 @@ import { validateBody } from '@/lib/api/validate'
 import { UpdateCashAccountSchema } from '@/lib/api/schemas'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { setVoucherSeries } from '@/lib/cash-accounts/service'
-import { updateCashAccountPayee, type PayeeUpdate } from '@/lib/cash-accounts/invoice-payee'
+import { isBankCashAccount, updateCashAccountPayee, type PayeeUpdate } from '@/lib/cash-accounts/invoice-payee'
 import { getCompanyRole } from '@/lib/auth/require-write'
 import { UUID_RE } from '@/lib/invariants/uuid'
 
@@ -74,6 +74,22 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
         return errorResponseFromCode('FORBIDDEN', log, {
           requestId,
           details: { required_roles: ['owner', 'admin'] },
+        })
+      }
+      // Only bank accounts (19xx) can be printed as payee. Stripe, Woo and
+      // Shopify clearing rows live in the same table and must stay out.
+      const { data: existing, error: existingError } = await supabase
+        .from('cash_accounts')
+        .select('id, ledger_account')
+        .eq('company_id', companyId)
+        .eq('id', id)
+        .maybeSingle()
+      if (existingError) return errorResponse(existingError, log, { requestId })
+      if (!existing) return notFound()
+      if (!isBankCashAccount(existing as { ledger_account: string })) {
+        return errorResponseFromCode('INVOICE_PAYEE_ACCOUNT_INVALID', log, {
+          requestId,
+          details: { cash_account_id: id, reason: 'not_bank_account' },
         })
       }
     }

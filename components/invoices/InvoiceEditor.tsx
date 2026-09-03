@@ -3085,7 +3085,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   {!isSelfBilled
                     && (watchDocumentType === 'invoice' || watchDocumentType === 'proforma')
                     && payeeState
-                    && (payeeOptions.length > 1 || (watchPayeeAccount && payeeOptions.length > 0)) && (
+                    && (payeeOptions.length > 1 || (payeeOptions.length === 1 && !defaultPayee) || (watchPayeeAccount && payeeOptions.length > 0)) && (
                     <div className={SETTINGS_ROW_CLASS}>
                       <Label className="text-[13px] font-normal">{t('payee_account_label')}</Label>
                       <Controller

@@ -1174,7 +1174,9 @@ export function auditRowToEvent(
         codePrefix: 'invoice_payee_default',
         noun: 'Standardkonto för kundfakturor',
         fields: INVOICE_PAYEE_DEFAULT_FIELDS,
-        objectKeys: ['currency'],
+        // Both keys on every action: a created or deleted default must name
+        // the account, not just the currency.
+        objectKeys: ['currency', 'cash_account_id'],
       })
     case 'salary_payroll_config':
       return payrollConfigAuditEvent(row)

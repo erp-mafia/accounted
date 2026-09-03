@@ -59,7 +59,7 @@ function formFromAccount(account: CashAccount): PayeeForm {
     bankgiro: account.bankgiro ?? '',
     plusgiro: account.plusgiro ?? '',
     swish: account.swish ?? '',
-    iban: account.iban ?? '',
+    iban: account.payee_iban ?? '',
     bic: account.bic ?? '',
     bank_code: account.bank_code ?? '',
     foreign_account_number: account.foreign_account_number ?? '',
@@ -339,7 +339,13 @@ export function InvoicePaymentAccountsSettings({
       // First usable account for its currency becomes the default so the
       // user does not have to find the selector below.
       if (!defaultByCurrency.has(newCurrency) && isUsableInvoicePayee(created, newCurrency)) {
-        await setDefault(newCurrency, created.id, { silent: true })
+        try {
+          await setDefault(newCurrency, created.id, { silent: true })
+        } catch (err) {
+          // The account exists; only the default failed. Report that alone
+          // so the list still refreshes and the user does not create a twin.
+          toast({ title: t('save_failed_title'), description: getUserErrorMessage(err), variant: 'destructive' })
+        }
       }
       cancelEdit()
       await afterWrite(t('saved_account', { account: accountLabel(created) }))
@@ -407,7 +413,7 @@ export function InvoicePaymentAccountsSettings({
     }
   }
 
-  function renderPayeeFields(currency: string, idPrefix: string) {
+  function renderPayeeFields(currency: string, idPrefix: string, bankIban: string | null = null) {
     const showBankgiroPrefill = currency === 'SEK' && !form.bankgiro && !!snapshotBankgiro
     return (
       <>
@@ -507,6 +513,15 @@ export function InvoicePaymentAccountsSettings({
             placeholder="SE00 0000 0000 0000 0000 0000"
             className="tabular-nums"
           />
+          {!form.iban && bankIban && (
+            <button
+              type="button"
+              onClick={() => updateField('iban', bankIban)}
+              className="text-xs text-muted-foreground underline underline-offset-2 transition-colors duration-150 hover:text-foreground"
+            >
+              {t('iban_prefill', { value: formatIbanGroups(bankIban) })}
+            </button>
+          )}
         </SettingsRow>
         <SettingsRow label={t('bic_label')} htmlFor={`${idPrefix}-bic`} align="baseline" borderless>
           <SettingsInput
@@ -571,7 +586,7 @@ export function InvoicePaymentAccountsSettings({
                         />
                         <SettingsRowNote>{account.currency} · {account.ledger_account}</SettingsRowNote>
                       </SettingsRow>
-                      {renderPayeeFields(account.currency, `payee-${account.id}`)}
+                      {renderPayeeFields(account.currency, `payee-${account.id}`, account.iban ? account.iban.replace(/\s/g, '').toUpperCase() : null)}
                       <div className="flex justify-end gap-2 px-1 py-3">
                         <Button type="button" variant="outline" size="sm" onClick={cancelEdit} disabled={isSaving}>
                           {t('cancel')}
