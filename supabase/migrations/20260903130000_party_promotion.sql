@@ -69,9 +69,13 @@ BEGIN
     WHERE c.company_id = p_company_id AND c.party_id = v_party.id AND c.archived_at IS NULL
     ORDER BY c.created_at LIMIT 1;
 
-    SELECT i.value INTO v_bankgiro FROM public.party_identities i
+    -- Identities are stored as digits; the supplier form writes them the way
+    -- they are printed (5317-0900, 12 34 56-7 style plusgiro as 123456-7).
+    SELECT CASE WHEN length(i.value) IN (7, 8) THEN left(i.value, length(i.value) - 4) || '-' || right(i.value, 4) ELSE i.value END
+      INTO v_bankgiro FROM public.party_identities i
     WHERE i.party_id = v_party.id AND i.scheme = 'bankgiro' ORDER BY i.seen_count DESC, i.last_seen DESC NULLS LAST LIMIT 1;
-    SELECT i.value INTO v_plusgiro FROM public.party_identities i
+    SELECT CASE WHEN length(i.value) >= 2 THEN left(i.value, length(i.value) - 1) || '-' || right(i.value, 1) ELSE i.value END
+      INTO v_plusgiro FROM public.party_identities i
     WHERE i.party_id = v_party.id AND i.scheme = 'plusgiro' ORDER BY i.seen_count DESC, i.last_seen DESC NULLS LAST LIMIT 1;
 
     -- Type from the numbers we hold: a Swedish org number means a Swedish

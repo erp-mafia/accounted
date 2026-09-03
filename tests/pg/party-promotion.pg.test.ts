@@ -38,7 +38,7 @@ describe('promote_parties / undo_party_promotions (pg)', () => {
       `SELECT name, supplier_type, org_number, vat_number, bankgiro, party_id FROM public.suppliers WHERE company_id = $1`,
       [c.companyId],
     )
-    expect(s.rows).toEqual([{ name: 'Beijer Byggmaterial AB', supplier_type: 'swedish_business', org_number: ORG, vat_number: 'SE556430014201', bankgiro: '53170900', party_id: id }])
+    expect(s.rows).toEqual([{ name: 'Beijer Byggmaterial AB', supplier_type: 'swedish_business', org_number: ORG, vat_number: 'SE556430014201', bankgiro: '5317-0900', party_id: id }])
     const p = await getPool().query<{ status: string; reason: unknown }>(`SELECT status, suggested_reason AS reason FROM public.parties WHERE id = $1`, [id])
     expect(p.rows[0]).toEqual({ status: 'confirmed', reason: null })
     const d = await getPool().query<{ kind: string; created: string[] }>(
