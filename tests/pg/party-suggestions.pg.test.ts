@@ -88,6 +88,20 @@ describe('get_ledger_key_evidence (pg)', () => {
     expect(loopia!.plusgiro).toEqual([])
   })
 
+  it('keeps hard keys for a company that has no org number of its own', async () => {
+    const c = await seedCompany()
+    await getPool().query(`UPDATE public.companies SET org_number = NULL WHERE id = $1`, [c.companyId])
+    const e = await insertPostedJournalEntry({ userId: c.userId, companyId: c.companyId, fiscalPeriodId: c.fiscalPeriodId, sourceType: 'import', description: 'Levfakt Loopia AB', lines: expense('6540', 100) })
+    await linkDocument({ ...c, journalEntryId: e, supplier: { name: 'Loopia AB', orgNumber: '556666-1012', vatNumber: null, bankgiro: '5317-0900', plusgiro: null } })
+    const rows = await evidence(c.companyId, c.userId)
+    const loopia = rows.find((r) => r.key === 'loopia')
+    expect(loopia).toBeDefined()
+    expect(loopia!.self_docs).toBe(0)
+    expect(loopia!.orgs).toEqual([{ org: LOOPIA_ORG, n: 1 }])
+    expect(loopia!.names).toEqual([{ name: 'Loopia AB', n: 1 }])
+    expect(loopia!.bankgiro.map((b) => b.value)).toEqual(['53170900'])
+  })
+
   it('is invisible across companies', async () => {
     const mine = await seedCompany()
     const theirs = await seedCompany()
@@ -250,5 +264,63 @@ describe('decide_parties (pg)', () => {
     expect(n).toBe(0)
     const still = await getPool().query<{ status: string }>(`SELECT status FROM public.parties WHERE id = $1`, [rows[0]!.id])
     expect(still.rows[0]!.status).toBe('suggested')
+  })
+})
+
+describe('undo_party_decisions (pg)', () => {
+  async function undoDecisions(companyId: string, userId: string, ids: string[]): Promise<number> {
+    const { rows } = await getPool().query<{ n: number }>(`SELECT public.undo_party_decisions($1, $2, $3::uuid[]) AS n`, [companyId, userId, ids])
+    return rows[0]!.n
+  }
+
+  it('reverses a confirm (reason restored) and a dismiss, logs undo, and refuses a second undo', async () => {
+    const c = await seedCompany()
+    await apply(c.companyId, c.userId, [
+      { key: 'loopia', display_name: 'Loopia AB', reason: { attach: 'new', occurrences: 3 } },
+      { key: 'noise', display_name: 'Noise', reason: { attach: 'new', occurrences: 1 } },
+    ])
+    const ids = await getPool().query<{ id: string; display_name: string }>(`SELECT id, display_name FROM public.parties WHERE company_id = $1`, [c.companyId])
+    const byName = Object.fromEntries(ids.rows.map((r) => [r.display_name, r.id]))
+    expect(await decide(c.companyId, c.userId, [byName['Loopia AB']!], 'confirm')).toBe(1)
+    expect(await decide(c.companyId, c.userId, [byName['Noise']!], 'dismiss')).toBe(1)
+    const snap = await getPool().query<{ before: { suggested_reason: { occurrences: number } } }>(
+      `SELECT before FROM public.party_decisions WHERE party_id = $1 AND kind = 'confirm'`,
+      [byName['Loopia AB']],
+    )
+    expect(snap.rows[0]!.before.suggested_reason.occurrences).toBe(3)
+
+    expect(await undoDecisions(c.companyId, c.userId, [byName['Loopia AB']!, byName['Noise']!])).toBe(2)
+    const state = await getPool().query<{ display_name: string; status: string; archived: boolean; reason: { occurrences: number } | null }>(
+      `SELECT display_name, status, archived_at IS NOT NULL AS archived, suggested_reason AS reason FROM public.parties WHERE company_id = $1 ORDER BY display_name`,
+      [c.companyId],
+    )
+    expect(state.rows).toEqual([
+      { display_name: 'Loopia AB', status: 'suggested', archived: false, reason: { attach: 'new', occurrences: 3 } },
+      { display_name: 'Noise', status: 'suggested', archived: false, reason: { attach: 'new', occurrences: 1 } },
+    ])
+    const kinds = await getPool().query<{ kind: string; n: string }>(
+      `SELECT kind, count(*)::text AS n FROM public.party_decisions WHERE company_id = $1 GROUP BY kind ORDER BY kind`,
+      [c.companyId],
+    )
+    expect(kinds.rows).toEqual([
+      { kind: 'confirm', n: '1' },
+      { kind: 'dismiss', n: '1' },
+      { kind: 'undo', n: '2' },
+    ])
+    // The latest decision is now the undo itself: nothing left to reverse.
+    expect(await undoDecisions(c.companyId, c.userId, [byName['Loopia AB']!])).toBe(0)
+  })
+
+  it('refuses after 30 days and ignores other companies', async () => {
+    const c = await seedCompany()
+    const other = await seedCompany()
+    await apply(c.companyId, c.userId, [{ key: 'loopia', display_name: 'Loopia AB', reason: { attach: 'new' } }])
+    const { rows } = await getPool().query<{ id: string }>(`SELECT id FROM public.parties WHERE company_id = $1`, [c.companyId])
+    await decide(c.companyId, c.userId, [rows[0]!.id], 'confirm')
+    expect(await undoDecisions(other.companyId, other.userId, [rows[0]!.id])).toBe(0)
+    await getPool().query(`UPDATE public.party_decisions SET created_at = now() - interval '31 days' WHERE party_id = $1`, [rows[0]!.id])
+    expect(await undoDecisions(c.companyId, c.userId, [rows[0]!.id])).toBe(0)
+    const still = await getPool().query<{ status: string }>(`SELECT status FROM public.parties WHERE id = $1`, [rows[0]!.id])
+    expect(still.rows[0]!.status).toBe('confirmed')
   })
 })
