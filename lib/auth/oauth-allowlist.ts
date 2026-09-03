@@ -16,7 +16,7 @@ import { scopeKind, type ApiKeyScope } from './scope-catalog'
  * matched. Rendered on the consent page so the user can tell a real Claude /
  * ChatGPT / Grok / Cursor connector from a look-alike registration.
  */
-export type BuiltInProvider = 'claude' | 'chatgpt' | 'grok' | 'cursor' | 'local'
+export type BuiltInProvider = 'claude' | 'chatgpt' | 'grok' | 'cursor' | 'cursor_deeplink' | 'local'
 
 /**
  * Built-in redirect URI patterns. These bypass the DB lookup entirely so
@@ -48,7 +48,11 @@ export type BuiltInProvider = 'claude' | 'chatgpt' | 'grok' | 'cursor' | 'local'
  * matches; the loopback already passes through the local rule. The custom
  * scheme is accepted despite RFC 8252 section 8.4 (any local app can claim a
  * scheme) because the code is PKCE-bound to the client that started the flow
- * and the loopback form carries the same local-machine trust.
+ * (S256 only, verifier required at /token, a code minted without a challenge
+ * can never be exchanged) and the loopback form carries the same
+ * local-machine trust. It is its own provider, `cursor_deeplink`, so the
+ * consent page can show it unverified like localhost: a scheme proves
+ * nothing about who receives the code, an https host does.
  */
 const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }[] = [
   { pattern: /^https:\/\/claude\.ai\/api\//, provider: 'claude' },
@@ -56,7 +60,7 @@ const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }
   { pattern: /^https:\/\/chatgpt\.com\/connector\/oauth\//, provider: 'chatgpt' },
   { pattern: /^https:\/\/chatgpt\.com\/connector_platform_oauth_redirect$/, provider: 'chatgpt' },
   { pattern: /^https:\/\/grok\.com\/connectors-oauth-exchange-code\/?$/, provider: 'grok' },
-  { pattern: /^cursor:\/\/anysphere\.cursor-mcp\/oauth\/callback$/, provider: 'cursor' },
+  { pattern: /^cursor:\/\/anysphere\.cursor-mcp\/oauth\/callback$/, provider: 'cursor_deeplink' },
   { pattern: /^https:\/\/www\.cursor\.com\/agents\/mcp\/oauth\/callback$/, provider: 'cursor' },
   { pattern: /^http:\/\/localhost(:\d+)?(\/|$)/, provider: 'local' },
   { pattern: /^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/, provider: 'local' },

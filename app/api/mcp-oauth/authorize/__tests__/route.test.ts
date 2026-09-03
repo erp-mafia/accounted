@@ -42,6 +42,7 @@ const CLAUDE: RedirectUriResolution = { allowed: true, kind: 'built_in', provide
 const CHATGPT: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'chatgpt' }
 const GROK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'grok' }
 const CURSOR: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor' }
+const CURSOR_DEEPLINK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor_deeplink' }
 const REGISTERED: RedirectUriResolution = {
   allowed: true,
   kind: 'registered',
@@ -402,6 +403,46 @@ describe('client identity on the consent page', () => {
     expect(html).toContain('Verifierad')
     expect(html).toContain('www.cursor.com')
     expect(html).not.toContain('En extern applikation')
+  })
+
+  it('shows the cursor:// deeplink as Cursor but unverified, like localhost', async () => {
+    // Any local app can claim a custom scheme (RFC 8252 section 8.4), so the
+    // page must not present it as a vendor-verified callback.
+    mocks.resolveRedirectUri.mockResolvedValue(CURSOR_DEEPLINK)
+    const html = await (
+      await GET(
+        new Request(
+          buildAuthorizeUrl({
+            ...params,
+            redirect_uri: 'cursor://anysphere.cursor-mcp/oauth/callback',
+          }),
+        ),
+      )
+    ).text()
+
+    expect(html).toContain('Cursor (Anysphere)')
+    expect(html).toContain('Din egen dator')
+    expect(html).not.toContain('Verifierad')
+    expect(html).not.toContain('En extern applikation')
+  })
+
+  it('form-action uses a scheme-source for a custom-scheme redirect_uri', async () => {
+    // new URL('cursor://...').origin is the string "null", which CSP reads as
+    // a host named "null": with that the post-consent 303 to the deeplink is
+    // blocked in Chromium. The scheme-source form (cursor:) lets it through.
+    mocks.resolveRedirectUri.mockResolvedValue(CURSOR_DEEPLINK)
+    const response = await GET(
+      new Request(
+        buildAuthorizeUrl({
+          ...params,
+          redirect_uri: 'cursor://anysphere.cursor-mcp/oauth/callback',
+        }),
+      ),
+    )
+    expect(response.status).toBe(200)
+    const csp = response.headers.get('Content-Security-Policy')
+    expect(csp).toMatch(/form-action 'self' cursor:(;|$)/)
+    expect(csp).not.toContain('null')
   })
 
   it('shows client_name and redirect host for a DB-registered client, never marked verified', async () => {

@@ -58,7 +58,7 @@ describe('builtInRedirectProvider', () => {
     ['https://chatgpt.com/connector_platform_oauth_redirect', 'chatgpt'],
     ['https://grok.com/connectors-oauth-exchange-code/', 'grok'],
     ['https://grok.com/connectors-oauth-exchange-code/extra', null],
-    ['cursor://anysphere.cursor-mcp/oauth/callback', 'cursor'],
+    ['cursor://anysphere.cursor-mcp/oauth/callback', 'cursor_deeplink'],
     ['https://www.cursor.com/agents/mcp/oauth/callback', 'cursor'],
     ['http://localhost:8787/callback', 'local'],
     ['http://localhost:3000/cb', 'local'],
