@@ -1,6 +1,6 @@
 /**
  * The wire contract between a self-hosted Accounted instance and the hosted
- * connector service (app.gnubok.se/api/connect/*). The definitions live in
+ * connector service (connect.accounted.se/api/connect/*). The definitions live in
  * the MIT package packages/connect-contract (published as
  * @accounted/connect-contract) so that either side can be implemented outside
  * this repository; this module re-exports them for in-repo callers.
