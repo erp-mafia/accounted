@@ -14,13 +14,13 @@ import { scopeKind, type ApiKeyScope } from './scope-catalog'
 /**
  * Identity of a built-in client, derived from the redirect URI pattern that
  * matched. Rendered on the consent page so the user can tell a real Claude /
- * ChatGPT / Grok connector from a look-alike registration.
+ * ChatGPT / Grok / Cursor connector from a look-alike registration.
  */
-export type BuiltInProvider = 'claude' | 'chatgpt' | 'grok' | 'local'
+export type BuiltInProvider = 'claude' | 'chatgpt' | 'grok' | 'cursor' | 'local'
 
 /**
  * Built-in redirect URI patterns. These bypass the DB lookup entirely so
- * the Claude, ChatGPT and Grok connectors keep working without seeded rows, and so
+ * the Claude, ChatGPT, Grok and Cursor connectors keep working without seeded rows, and so
  * local development never depends on having a registration.
  *
  * ChatGPT uses a per-connector-instance callback path
@@ -36,6 +36,19 @@ export type BuiltInProvider = 'claude' | 'chatgpt' | 'grok' | 'local'
  * itself: the slash form 308s to the no-slash form on the same origin, so
  * both are accepted. Matched as an exact path, never a prefix, so a future
  * grok.com path cannot ride on this entry.
+ *
+ * Cursor (IDE and CLI) registers through /register with three redirect URIs
+ * in one request: the legacy custom-scheme deeplink
+ * cursor://anysphere.cursor-mcp/oauth/callback, the web fallback used by
+ * Cloud Agents and Automations https://www.cursor.com/agents/mcp/oauth/callback,
+ * and the RFC 8252 loopback http://localhost:8787/callback that current
+ * builds actually redirect to (Cursor staff statement, forum.cursor.com
+ * thread 165019). /register rejects the whole set when any one URI is
+ * unknown, so the two non-loopback callbacks are allowlisted here as exact
+ * matches; the loopback already passes through the local rule. The custom
+ * scheme is accepted despite RFC 8252 section 8.4 (any local app can claim a
+ * scheme) because the code is PKCE-bound to the client that started the flow
+ * and the loopback form carries the same local-machine trust.
  */
 const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }[] = [
   { pattern: /^https:\/\/claude\.ai\/api\//, provider: 'claude' },
@@ -43,6 +56,8 @@ const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }
   { pattern: /^https:\/\/chatgpt\.com\/connector\/oauth\//, provider: 'chatgpt' },
   { pattern: /^https:\/\/chatgpt\.com\/connector_platform_oauth_redirect$/, provider: 'chatgpt' },
   { pattern: /^https:\/\/grok\.com\/connectors-oauth-exchange-code\/?$/, provider: 'grok' },
+  { pattern: /^cursor:\/\/anysphere\.cursor-mcp\/oauth\/callback$/, provider: 'cursor' },
+  { pattern: /^https:\/\/www\.cursor\.com\/agents\/mcp\/oauth\/callback$/, provider: 'cursor' },
   { pattern: /^http:\/\/localhost(:\d+)?(\/|$)/, provider: 'local' },
   { pattern: /^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/, provider: 'local' },
 ]

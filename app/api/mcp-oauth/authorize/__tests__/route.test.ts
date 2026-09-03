@@ -41,6 +41,7 @@ import { GET, POST } from '../route'
 const CLAUDE: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'claude' }
 const CHATGPT: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'chatgpt' }
 const GROK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'grok' }
+const CURSOR: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor' }
 const REGISTERED: RedirectUriResolution = {
   allowed: true,
   kind: 'registered',
@@ -381,6 +382,25 @@ describe('client identity on the consent page', () => {
     expect(html).toContain('Grok (xAI)')
     expect(html).toContain('Verifierad')
     expect(html).toContain('grok.com')
+    expect(html).not.toContain('En extern applikation')
+  })
+
+  it('names Cursor as a verified client for the cursor.com callback', async () => {
+    mocks.resolveRedirectUri.mockResolvedValue(CURSOR)
+    const html = await (
+      await GET(
+        new Request(
+          buildAuthorizeUrl({
+            ...params,
+            redirect_uri: 'https://www.cursor.com/agents/mcp/oauth/callback',
+          }),
+        ),
+      )
+    ).text()
+
+    expect(html).toContain('Cursor (Anysphere)')
+    expect(html).toContain('Verifierad')
+    expect(html).toContain('www.cursor.com')
     expect(html).not.toContain('En extern applikation')
   })
 

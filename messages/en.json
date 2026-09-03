@@ -2695,7 +2695,7 @@
   },
   "settings_oauth_clients": {
     "title": "OAuth clients",
-    "description": "Register redirect URIs for self-built MCP clients. Claude.ai and localhost are already allowed by default: only register here if you're building your own app.",
+    "description": "Register redirect URIs for self-built MCP clients. Claude, ChatGPT, Grok, Cursor and localhost are already allowed by default: only register here if you're building your own app.",
     "register_uri": "Register URI",
     "default_client_name": "OAuth client",
     "toast_fetch_failed": "Could not load OAuth clients",
@@ -2710,7 +2710,7 @@
     "registered_on": "Registered",
     "revoke_aria": "Revoke {name}",
     "register_dialog_title": "Register redirect URI",
-    "register_dialog_description": "Only for self-built MCP clients with a public HTTPS callback. Do <bold>not</bold> add <code>localhost</code> or <code>claude.ai</code>: they already work without registration. The URI is compared verbatim against the redirect_uri parameter in the OAuth flow.",
+    "register_dialog_description": "Only for self-built MCP clients with a public HTTPS callback. Do <bold>not</bold> add <code>localhost</code> or the Claude, ChatGPT, Grok or Cursor callbacks: they already work without registration. The URI is compared verbatim against the redirect_uri parameter in the OAuth flow.",
     "client_name_label": "Client name",
     "client_name_placeholder": "e.g. My bookkeeping agent",
     "redirect_uri_label": "Redirect URI",

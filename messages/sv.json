@@ -2695,7 +2695,7 @@
   },
   "settings_oauth_clients": {
     "title": "OAuth-klienter",
-    "description": "Registrera redirect-URI:er för egenutvecklade MCP-klienter. Claude.ai och localhost är redan godkända som standard: registrera bara här om du bygger en egen app.",
+    "description": "Registrera redirect-URI:er för egenutvecklade MCP-klienter. Claude, ChatGPT, Grok, Cursor och localhost är redan godkända som standard: registrera bara här om du bygger en egen app.",
     "register_uri": "Registrera URI",
     "default_client_name": "OAuth-klient",
     "toast_fetch_failed": "Kunde inte hämta OAuth-klienter",
@@ -2710,7 +2710,7 @@
     "registered_on": "Registrerad",
     "revoke_aria": "Återkalla {name}",
     "register_dialog_title": "Registrera redirect URI",
-    "register_dialog_description": "Bara för egenbyggda MCP-klienter med en publik HTTPS-callback. Lägg <bold>inte</bold> till <code>localhost</code> eller <code>claude.ai</code>: de fungerar redan utan registrering. URI:n jämförs ord-för-ord mot redirect_uri-parametern i OAuth-flödet.",
+    "register_dialog_description": "Bara för egenbyggda MCP-klienter med en publik HTTPS-callback. Lägg <bold>inte</bold> till <code>localhost</code> eller callbacks för Claude, ChatGPT, Grok eller Cursor: de fungerar redan utan registrering. URI:n jämförs ord-för-ord mot redirect_uri-parametern i OAuth-flödet.",
     "client_name_label": "Klientnamn",
     "client_name_placeholder": "t.ex. Min bokföringsagent",
     "redirect_uri_label": "Redirect URI",

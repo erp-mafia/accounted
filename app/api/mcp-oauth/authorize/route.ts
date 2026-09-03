@@ -1094,6 +1094,8 @@ function describeClient(
         return { name: 'ChatGPT (OpenAI)', tag: 'Verifierad', verified: true }
       case 'grok':
         return { name: 'Grok (xAI)', tag: 'Verifierad', verified: true }
+      case 'cursor':
+        return { name: 'Cursor (Anysphere)', tag: 'Verifierad', verified: true }
       case 'local':
         return { name: 'Lokal utveckling (localhost)', tag: 'Din egen dator', verified: false }
     }
