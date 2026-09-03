@@ -19935,6 +19935,14 @@ export const tools: McpTool[] = [
       const versions = await listAnnualReportVersions(supabase, companyId, fiscalPeriodId)
       return { fiscal_period_id: fiscalPeriodId, versions }
     },
+    // Search-only (2026-09-03): versions exist only once an annual report is
+    // rendered for signing or filing, and iXBRL filing is switched off until
+    // the Bolagsverket avtal and certificate exist (same reason its sibling
+    // gnubok_get_arsredovisning_filing_status below is search-only). Demoted
+    // to keep tools/list under the context budget after #2254 added the
+    // proforma fields and #2240 the jamkning field notes (see
+    // payload-size.bench.test.ts). Reachable via gnubok_call_tool.
+    catalogVisibility: 'search',
   },
 
   {
