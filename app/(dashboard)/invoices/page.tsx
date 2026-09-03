@@ -47,6 +47,7 @@ import {
   FileInput,
   FileDown,
   FileText,
+  FileClock,
 } from 'lucide-react'
 import { StartCard } from '@/components/dashboard/StartCard'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -246,8 +247,12 @@ export default function InvoicesPage() {
   const copyFromId = searchParams.get('copy')
   const showNewInvoice = searchParams.has('new') || copyFromId !== null
   const openSelfBilled = searchParams.has('self')
-  // ?quote=1 preselects the offert document type ("Ny offert" split entry).
+  // ?quote=1 preselects the offert document type ("Ny offert" split entry);
+  // ?proforma=1 the proforma type ("Ny proformafaktura" split entry, #2217:
+  // proforma existed but only behind the collapsed Förval panel inside the
+  // editor, so a user coming from Fortnox concluded it did not exist).
   const openQuote = searchParams.has('quote')
+  const openProforma = searchParams.has('proforma')
   const showRotRutPayout = searchParams.has('rot-rut')
   // Open/close handlers rewrite only their own keys: a hardcoded '/invoices'
   // would destroy the ?status= view write-back (and any other params) every
@@ -264,6 +269,7 @@ export default function InvoicesPage() {
         p.delete('new')
         p.delete('self')
         p.delete('quote')
+        p.delete('proforma')
         p.delete('copy')
       }),
       { scroll: false },
@@ -283,6 +289,14 @@ export default function InvoicesPage() {
       invoicesUrl((p) => {
         p.set('new', '1')
         p.set('quote', '1')
+      }),
+      { scroll: false },
+    )
+  const openNewProforma = () =>
+    router.push(
+      invoicesUrl((p) => {
+        p.set('new', '1')
+        p.set('proforma', '1')
       }),
       { scroll: false },
     )
@@ -526,6 +540,15 @@ export default function InvoicesPage() {
       disabled: !canWrite,
       disabledTitle: t('viewer_disabled_tooltip'),
       onSelect: () => openNewQuote(),
+    },
+    {
+      key: 'proforma',
+      label: t('create_proforma'),
+      icon: FileClock,
+      description: t('create_proforma_desc'),
+      disabled: !canWrite,
+      disabledTitle: t('viewer_disabled_tooltip'),
+      onSelect: () => openNewProforma(),
     },
     {
       key: 'aterkommande',
@@ -929,7 +952,7 @@ export default function InvoicesPage() {
           open
           copyFromId={copyFromId}
           selfBilled={openSelfBilled}
-          documentType={openQuote ? 'quote' : undefined}
+          documentType={openQuote ? 'quote' : openProforma ? 'proforma' : undefined}
           onOpenChange={(open) => {
             if (!open) closeNewInvoice()
           }}

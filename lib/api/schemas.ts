@@ -1012,7 +1012,8 @@ export const CreateCustomerSchema = z.object({
     .optional()
     .nullable(),
   language: z.enum(['sv', 'en']).optional(),
-  default_payment_terms: z.number().int().positive().optional(),
+  // Whole days 0-365; 0 = betalning direkt / vid mottagande (issue #2070).
+  default_payment_terms: z.number().int().min(0).max(365).optional(),
   notes: z.string().optional(),
 }).superRefine((customer, ctx) => {
   if (customer.personal_number && customer.customer_type !== 'individual') {
@@ -1154,7 +1155,8 @@ export const UpdateCustomerSchema = z.object({
     .nullable()
     .optional(),
   language: z.enum(['sv', 'en']).optional(),
-  default_payment_terms: z.number().int().positive().optional(),
+  // Whole days 0-365; 0 = betalning direkt / vid mottagande (issue #2070).
+  default_payment_terms: z.number().int().min(0).max(365).optional(),
   notes: z.string().optional(),
 }).superRefine((customer, ctx) => {
   if (
@@ -1209,7 +1211,8 @@ export const CreateSupplierSchema = z.object({
   clearing_number: z.string().optional(),
   account_number: z.string().optional(),
   default_expense_account: emptyStringAsUndefined(accountNumber),
-  default_payment_terms: z.number().int().positive().optional(),
+  // Whole days 0-365; 0 = betalning direkt / vid mottagande (issue #2070).
+  default_payment_terms: z.number().int().min(0).max(365).optional(),
   default_currency: CurrencySchema.nullable().optional(),
   notes: z.string().optional(),
 })
