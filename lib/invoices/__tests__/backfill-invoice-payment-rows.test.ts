@@ -170,6 +170,21 @@ describe('planInvoicePaymentBackfill', () => {
     expect(settlementSekFromLines([])).toBeNull()
   })
 
+  it('reports a row that would land in a closed or locked period instead of writing it', () => {
+    const closedBefore2026 = (date: string) => date < '2026-01-01'
+    expect(
+      planInvoicePaymentBackfill(
+        invoice(),
+        [voucher({ entry_date: '2025-12-30' })],
+        NONE,
+        { isPeriodClosed: closedBefore2026 },
+      ),
+    ).toEqual({ kind: 'skip', reason: 'period_closed', voucherIds: ['je-1'] })
+    expect(
+      planInvoicePaymentBackfill(invoice(), [voucher()], NONE, { isPeriodClosed: closedBefore2026 }),
+    ).toMatchObject({ kind: 'insert', row: { payment_date: '2026-08-28' } })
+  })
+
   it('never guesses the voucher: zero or several posted payment vouchers are skipped', () => {
     expect(planInvoicePaymentBackfill(invoice(), [], NONE)).toEqual({
       kind: 'skip',

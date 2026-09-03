@@ -89,6 +89,7 @@ export type BackfillSkipReason =
   | 'multiple_payment_vouchers'
   | 'voucher_amount_mismatch'
   | 'voucher_amount_unverifiable'
+  | 'period_closed'
 
 export type BackfillPlan =
   | { kind: 'insert'; row: BackfillPaymentRow }
@@ -109,10 +110,20 @@ export interface ExistingPaymentRows {
  * `rows_short`: reported for a human, never patched, because the difference
  * cannot be attributed to a voucher without guessing.
  */
+export interface BackfillPlanOptions {
+  /**
+   * Whether the fiscal period covering `date` (YYYY-MM-DD) for this invoice's
+   * company is closed or locked. A row dated into such a period changes facts
+   * a filed bokslut or deklaration relied on, so it is reported, not written.
+   */
+  isPeriodClosed?: (date: string) => boolean
+}
+
 export function planInvoicePaymentBackfill(
   invoice: BackfillInvoice,
   vouchers: BackfillVoucher[],
   existing: ExistingPaymentRows,
+  options: BackfillPlanOptions = {},
 ): BackfillPlan {
   const paidAmountRaw = Number(invoice.paid_amount ?? 0)
   if (existing.count > 0) {
@@ -176,6 +187,10 @@ export function planInvoicePaymentBackfill(
   // time, so a payment booked in January for a December date would land in
   // the wrong year. The two agree for every row written since.
   const paymentDate = voucher.entry_date
+
+  if (options.isPeriodClosed?.(paymentDate)) {
+    return { kind: 'skip', reason: 'period_closed', voucherIds: [voucher.id] }
+  }
 
   return {
     kind: 'insert',

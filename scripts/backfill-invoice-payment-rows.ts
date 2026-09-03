@@ -18,12 +18,20 @@
  *
  *   DELETE FROM invoice_payments WHERE notes LIKE 'backfill:#2019%';
  *
+ * That revert is an emergency path for the window in which nothing has
+ * relied on the rows yet (BFL 5 kap 5 §). Rows are never written into a
+ * closed or locked fiscal period (see period_closed below), and once a
+ * bokslut cut-off has been posted from them the correction path is a storno
+ * of that cut-off verifikat, not a DELETE of the sub-ledger rows.
+ *
  * Never guesses (lib/invoices/backfill-invoice-payment-rows.ts): an invoice
  * with zero or several posted payment vouchers is listed, not written, and
  * so is one whose existing rows sum to less than paid_amount (a pre-fix
  * manual partial next to a bank-matched one) or whose voucher booked a
- * different amount than the header says. Idempotent: invoices whose rows
- * cover paid_amount are excluded.
+ * different amount than the header says, or whose payment date falls in a
+ * closed or locked fiscal period (a filed bokslut or deklaration may rely on
+ * that year's cut-off). Idempotent: invoices whose rows cover paid_amount
+ * are excluded.
  *
  * Every executed run is recorded in behandlingshistorik (one
  * InvoicePaymentRowBackfilled event per company, BFL 5 kap 11 §): the rows
@@ -171,7 +179,36 @@ async function main() {
     }
   }
 
-  // 3. Plan.
+  // 3. Closed / locked fiscal periods per company: a row dated into one is
+  // reported, never written.
+  const companyIds = Array.from(new Set(invoices.map((i) => i.company_id)))
+  const closedRanges = new Map<string, Array<{ start: string; end: string }>>()
+  for (const ids of chunk(companyIds, CHUNK)) {
+    const periods = await fetchAllRows<{
+      company_id: string
+      period_start: string
+      period_end: string
+      is_closed: boolean
+      locked_at: string | null
+    }>(({ from, to }) =>
+      supabase
+        .from('fiscal_periods')
+        .select('company_id, period_start, period_end, is_closed, locked_at')
+        .in('company_id', ids)
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    for (const fp of periods) {
+      if (!fp.is_closed && !fp.locked_at) continue
+      const list = closedRanges.get(fp.company_id) ?? []
+      list.push({ start: fp.period_start, end: fp.period_end })
+      closedRanges.set(fp.company_id, list)
+    }
+  }
+  const isPeriodClosedFor = (companyId: string) => (date: string) =>
+    (closedRanges.get(companyId) ?? []).some((r) => date >= r.start && date <= r.end)
+
+  // 4. Plan.
   const toInsert: Array<{ invoice: BackfillInvoice; row: BackfillPaymentRow }> = []
   const skipped = new Map<BackfillSkipReason, BackfillInvoice[]>()
   for (const invoice of invoices) {
@@ -179,6 +216,7 @@ async function main() {
       invoice,
       vouchersByInvoice.get(invoice.id) ?? [],
       existingRows.get(invoice.id) ?? { count: 0, sum: 0 },
+      { isPeriodClosed: isPeriodClosedFor(invoice.company_id) },
     )
     if (plan.kind === 'insert') {
       toInsert.push({ invoice, row: plan.row })
@@ -216,7 +254,8 @@ async function main() {
       reason === 'multiple_payment_vouchers' ||
       reason === 'rows_short' ||
       reason === 'voucher_amount_mismatch' ||
-      reason === 'voucher_amount_unverifiable'
+      reason === 'voucher_amount_unverifiable' ||
+      reason === 'period_closed'
     ) {
       if (VERBOSE) {
         for (const inv of list) {
@@ -236,7 +275,7 @@ async function main() {
     return
   }
 
-  // 4. Write in batches. A unique-index collision (a row written between the
+  // 5. Write in batches. A unique-index collision (a row written between the
   // read and this insert) fails the batch loudly rather than being skipped.
   let inserted = 0
   for (const batch of chunk(toInsert, INSERT_BATCH)) {
@@ -252,7 +291,7 @@ async function main() {
   console.log(`Inserted ${inserted} row(s) tagged "${BACKFILL_NOTES_TAG}".`)
   console.log(`Rollback: DELETE FROM invoice_payments WHERE notes LIKE '${BACKFILL_NOTES_TAG}%';`)
 
-  // 5. Behandlingshistorik: one event per company naming every row written.
+  // 6. Behandlingshistorik: one event per company naming every row written.
   // The rows feed the bokslut cut-off, so the run is a change to processing
   // (BFL 5 kap 11 §, BFNAR 2013:2 p. 9.16). Rows without their change-log
   // entry must not stay: if the append fails, that company's rows from this
