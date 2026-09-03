@@ -8226,17 +8226,17 @@
   },
   "parties": {
     "title": "Suggestions from the books",
-    "help": "Counterparts your vouchers and documents point to that are not among your suppliers and customers yet. Confirm and they are added, with the details from the documents. Nothing is posted, and it can be undone for 30 days.",
+    "help": "Counterparts your vouchers and documents point to that are not among your suppliers and customers yet. Suggestions are built from the books; Update suggestions picks up what arrived since last time. Add and they are created with the details from the documents. Nothing is posted, and it can be undone for 30 days.",
     "summary": "{suggested} suggestions · {observed} only in the books",
-    "refresh": "Fetch suggestions",
-    "refreshing": "Fetching…",
+    "refresh": "Update suggestions",
+    "refreshing": "Updating…",
     "refreshed_title": "Suggestions updated",
     "refreshed_description": "{created} new suggestions, {attached} attached to existing ones.",
     "attn_suppliers": "{count} supplier suggestions are waiting from the books.",
     "attn_customers": "{count} customer suggestions are waiting from the books.",
     "attn_review": "Review",
     "attn_fetch": "Show",
-    "attn_observed": "The books know {count} counterparts that are not in the register.",
+    "attn_observed": "The books know {count} counterparts that are not among your suppliers and customers.",
     "view_suggested": "Suggestions",
     "view_observed": "Only in the books",
     "search_placeholder": "Search name or org number",
@@ -8392,7 +8392,13 @@
     "picker_taken_title": "Org number already on {name}",
     "picker_taken_description": "Merge the two instead of choosing the same company twice.",
     "reason_org_picked": "Org number {org} chosen in the business register",
+    "promoted_enriching": "Fetching details from SCB for {count} contacts…",
+    "promoted_enriched_title": "Details fetched from SCB for {done} of {total}",
+    "promote_dialog_missing_org": "{missing} of {count} have no org number and get nothing from SCB; find them in the business register first if you want them complete.",
     "fact_trade_name": "Trade name",
-    "open_dossier": "Open {name}"
-  }
+    "open_dossier": "Open {name}",
+    "attn_create": "Create suggestions",
+    "auto_created_title": "{count} suggestions created from the books",
+    "auto_created_description": "Counterparts your vouchers name that are not in the register. Add them, or hide the ones that do not belong here."
+}
 }

@@ -30,6 +30,7 @@ export function SuggestionQueue({
   onConfirmSelected,
   onDismiss,
   onOpen,
+  onFind,
 }: {
   rows: RegisterRow[]
   selected: Set<string>
@@ -43,6 +44,8 @@ export function SuggestionQueue({
   onConfirmSelected: () => void
   onDismiss: (row: RegisterRow) => void
   onOpen: (id: string) => void
+  /** Open the SCB picker for a row without an org number; undefined hides the link. */
+  onFind?: (row: RegisterRow) => void
 }) {
   const t = useTranslations('parties')
   const count = selected.size
@@ -92,12 +95,13 @@ export function SuggestionQueue({
                   <td className={`${TD_CLASS} w-8`}>
                     <Checkbox checked={checked} onCheckedChange={() => onToggle(row.id)} aria-label={row.displayName} disabled={!canWrite} />
                   </td>
-                  <td className={`${TD_CLASS} whitespace-nowrap`}>
+                  <td className={`${TD_CLASS} max-w-[22rem]`}>
                     <button
                       type="button"
-                      className="text-left font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="block max-w-full truncate text-left font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       onClick={() => onOpen(row.id)}
                       aria-label={t('open_dossier', { name: row.displayName })}
+                      title={row.displayName}
                     >
                       {row.displayName}
                     </button>
@@ -107,7 +111,22 @@ export function SuggestionQueue({
                       </Badge>
                     ) : null}
                   </td>
-                  <td className={`${TD_CLASS} text-muted-foreground`}>{reasonText(t, row.reason, row.stats?.rhythm ?? null, row.orgNumber)}</td>
+                  <td className={`${TD_CLASS} min-w-[16rem] max-w-[28rem] text-muted-foreground`}>
+                    {reasonText(t, row.reason, row.stats?.rhythm ?? null, row.orgNumber)}
+                    {onFind && !row.orgNumber && row.kind !== 'person' ? (
+                      <>
+                        {' · '}
+                        <button
+                          type="button"
+                          className="text-foreground underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          onClick={() => onFind(row)}
+                          disabled={!canWrite}
+                        >
+                          {t('pick_registry')}
+                        </button>
+                      </>
+                    ) : null}
+                  </td>
                   <td className={`${TD_CLASS} whitespace-nowrap`}>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>

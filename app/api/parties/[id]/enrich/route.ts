@@ -121,10 +121,13 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       }
     }
 
-    // The VAT number has one valid form, so it fills an empty field outright.
+    // The VAT number has one valid form, so it fills an empty field outright,
+    // on the party and on the supplier and customer rows that point at it.
     const vat = lookup.facts.find((f) => f.field === 'vat_number')?.value
-    if (!p.vat_number && typeof vat === 'string' && vat) {
-      await supabase.from('parties').update({ vat_number: vat }).eq('company_id', companyId).eq('id', id)
+    if (typeof vat === 'string' && vat) {
+      if (!p.vat_number) await supabase.from('parties').update({ vat_number: vat }).eq('company_id', companyId).eq('id', id)
+      await supabase.from('suppliers').update({ vat_number: vat }).eq('company_id', companyId).eq('party_id', id).is('vat_number', null)
+      await supabase.from('customers').update({ vat_number: vat }).eq('company_id', companyId).eq('party_id', id).is('vat_number', null)
     }
 
     const r = (summary ?? {}) as Partial<Record<'inserted' | 'superseded' | 'refreshed', number>>

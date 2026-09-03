@@ -23,6 +23,7 @@ import { ScbPickerDialog } from '@/components/parties/ScbPickerDialog'
 import type { ScbCandidate } from '@/lib/parties/scb/client'
 import { SuggestionQueue } from '@/components/parties/SuggestionQueue'
 import { hasHardKey } from '@/components/parties/format'
+import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { PartyRole, Register, RegisterPeriod, RegisterRow, RegisterView } from '@/lib/parties/register'
 
@@ -82,6 +83,7 @@ function SuggestionsPage() {
   const [dossierReload, setDossierReload] = useState(0)
   const [merge, setMerge] = useState<{ subject: MergeCandidate; suggested: MergeCandidate[] } | null>(null)
   const preselected = useRef<string | null>(null)
+  const autoRan = useRef(false)
 
   useEffect(() => {
     const id = setTimeout(() => setDebounced(query.trim()), 250)
@@ -122,6 +124,18 @@ function SuggestionsPage() {
     setDossierReload((k) => k + 1)
   }, [])
 
+  // First visit for a company whose books name counterparts nobody has
+  // registered: build the queue right away instead of asking for a click
+  // whose effect nobody could guess. Suggestions only, reversible.
+  useEffect(() => {
+    if (!register || autoRan.current || !canWrite || debounced) return
+    if (register.counts.suggested === 0 && register.counts.observed > 0) {
+      autoRan.current = true
+      void refreshSuggestions(true)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs at most once per mount, guarded by autoRan
+  }, [register, canWrite, debounced])
+
   const counts = register?.counts
   const scbEnabled = Boolean(register?.scbConfigured)
   const viewOptions = useMemo(
@@ -144,12 +158,13 @@ function SuggestionsPage() {
   const fail = useCallback(() => toast({ title: t('action_failed'), variant: 'destructive' }), [toast, t])
   const rolesFor = useCallback((row: RegisterRow): PartyRole[] => roleOverrides[row.id] ?? row.defaultRoles, [roleOverrides])
 
-  async function refreshSuggestions() {
+  async function refreshSuggestions(auto = false) {
     if (refreshing) return
     setRefreshing(true)
     try {
       const summary = await post<{ created: number; attached: number }>('/api/parties/suggest')
-      toast({ title: t('refreshed_title'), description: t('refreshed_description', { created: summary.created, attached: summary.attached }) })
+      if (auto) toast({ title: t('auto_created_title', { count: summary.created }), description: t('auto_created_description') })
+      else toast({ title: t('refreshed_title'), description: t('refreshed_description', { created: summary.created, attached: summary.attached }) })
       reload()
     } catch {
       fail()
@@ -179,6 +194,35 @@ function SuggestionsPage() {
     })
   }
 
+  /**
+   * After Lägg upp: fetch the registry facts for every new supplier or
+   * customer that carries a legal person's org number, one call at a time
+   * (SCB allows ten per ten seconds). Best effort: a failed fetch leaves the
+   * row as it was and the dossier still offers Hämta uppgifter.
+   */
+  async function enrichAfterPromotion(partyIds: string[]) {
+    const targets = rows.filter((r) => partyIds.includes(r.id) && isLegalPersonOrgNumber(r.orgNumber)).map((r) => r.id)
+    if (targets.length === 0) return
+    setFetchingRegistry(true)
+    toast({ title: t('promoted_enriching', { count: targets.length }) })
+    let done = 0
+    try {
+      for (const [i, id] of targets.entries()) {
+        try {
+          const res = await fetch(`/api/parties/${id}/enrich`, { method: 'POST' })
+          if (res.ok) done += 1
+        } catch {
+          // counted as not fetched
+        }
+        if (i < targets.length - 1) await new Promise((r) => setTimeout(r, 1100))
+      }
+    } finally {
+      setFetchingRegistry(false)
+      toast({ title: t('promoted_enriched_title', { done, total: targets.length }) })
+      reload()
+    }
+  }
+
   async function promote(items: Array<{ partyId: string; roles: PartyRole[] }>) {
     if (items.length === 0) return
     setBusy(true)
@@ -191,6 +235,7 @@ function SuggestionsPage() {
         return next
       })
       reload()
+      if (scbEnabled) void enrichAfterPromotion(items.map((i) => i.partyId))
     } catch {
       fail()
     } finally {
@@ -284,10 +329,11 @@ function SuggestionsPage() {
   const rows = register?.rows ?? []
   const searching = debounced.length > 0
   const selectedItems = rows.filter((r) => selected.has(r.id)).map((r) => ({ partyId: r.id, roles: rolesFor(r) }))
+  const missingOrg = rows.filter((r) => selected.has(r.id) && !r.orgNumber && r.kind !== 'person').length
 
   let attn: React.ReactNode = null
-  if (counts && counts.suggested === 0 && counts.observed > 0 && canWrite && view === 'suggested') {
-    attn = <AttnLine action={{ label: t('refresh'), onClick: () => void refreshSuggestions() }}>{t('attn_observed', { count: counts.observed })}</AttnLine>
+  if (counts && counts.suggested === 0 && counts.observed > 0 && canWrite && view === 'observed') {
+    attn = <AttnLine action={{ label: t('attn_create'), onClick: () => void refreshSuggestions() }}>{t('attn_observed', { count: counts.observed })}</AttnLine>
   }
 
   function empty() {
@@ -342,6 +388,7 @@ function SuggestionsPage() {
         onConfirmSelected={() => setConfirmOpen(true)}
         onDismiss={(row) => void dismiss([row.id])}
         onOpen={setDossierId}
+        onFind={scbEnabled ? (row) => setPicker({ partyId: row.id, name: row.displayName }) : undefined}
       />
     )
   }
@@ -403,7 +450,11 @@ function SuggestionsPage() {
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title={t('promote_dialog_title', { count: selectedItems.length })}
-        description={t('promote_dialog_body', { detail: roleSummary(t, selectedItems) })}
+        description={
+          missingOrg > 0
+            ? `${t('promote_dialog_body', { detail: roleSummary(t, selectedItems) })} ${t('promote_dialog_missing_org', { missing: missingOrg, count: selectedItems.length })}`
+            : t('promote_dialog_body', { detail: roleSummary(t, selectedItems) })
+        }
         confirmLabel={t('promote_n', { count: selectedItems.length })}
         onConfirm={async () => {
           setConfirmOpen(false)

@@ -161,6 +161,19 @@ describe('apply_party_suggestions (pg)', () => {
     expect(facts.rowCount).toBe(1)
   })
 
+  it('attaches by VAT number when there is no org number (foreign suppliers)', async () => {
+    const c = await seedCompany()
+    await apply(c.companyId, c.userId, [{ key: 'utlägg framer', display_name: 'Framer B.V.', vat_number: 'NL853695386B01', origin: 'document' }])
+    const second = await apply(c.companyId, c.userId, [{ key: 'framer utlägg', display_name: 'Framer B.V.', vat_number: 'nl 853695386 b01', origin: 'document' }])
+    expect(second).toMatchObject({ created: 0, attached: 1 })
+    const rows = await getPool().query<{ n: string; alias_keys: string[] }>(
+      `SELECT (SELECT count(*) FROM public.parties WHERE company_id = $1)::text AS n, alias_keys FROM public.parties WHERE company_id = $1`,
+      [c.companyId],
+    )
+    expect(rows.rows[0]!.n).toBe('1')
+    expect([...rows.rows[0]!.alias_keys].sort()).toEqual(['framer utlägg', 'utlägg framer'])
+  })
+
   it('never merges on name: same core text becomes a second suggested party', async () => {
     const c = await seedCompany()
     await apply(c.companyId, c.userId, [{ key: 'fortnox', display_name: 'Fortnox AB', org_number: ORG }])

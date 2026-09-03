@@ -8226,17 +8226,17 @@
   },
   "parties": {
     "title": "Förslag från bokföringen",
-    "help": "Motparter som dina verifikat och underlag pekar ut men som inte finns bland dina leverantörer och kunder. Bekräfta så läggs de upp, med uppgifterna från underlagen. Ingenting bokförs, och det går att ångra i 30 dagar.",
+    "help": "Motparter som dina verifikat och underlag pekar ut men som inte finns bland dina leverantörer och kunder. Förslagen skapas från bokföringen; Uppdatera förslag hämtar det som tillkommit sedan sist. Lägg upp så läggs de upp med uppgifterna från underlagen. Ingenting bokförs, och det går att ångra i 30 dagar.",
     "summary": "{suggested} förslag · {observed} bara i bokföringen",
-    "refresh": "Hämta förslag",
-    "refreshing": "Hämtar…",
+    "refresh": "Uppdatera förslag",
+    "refreshing": "Uppdaterar…",
     "refreshed_title": "Förslag uppdaterade",
     "refreshed_description": "{created} nya förslag, {attached} kopplade till befintliga.",
     "attn_suppliers": "{count} förslag på leverantörer väntar från bokföringen.",
     "attn_customers": "{count} förslag på kunder väntar från bokföringen.",
     "attn_review": "Granska",
     "attn_fetch": "Visa",
-    "attn_observed": "Bokföringen känner {count} motparter som inte finns i registret.",
+    "attn_observed": "Bokföringen känner {count} motparter som inte finns bland dina leverantörer och kunder.",
     "view_suggested": "Förslag",
     "view_observed": "Bara i bokföringen",
     "search_placeholder": "Sök namn eller org.nr",
@@ -8392,7 +8392,13 @@
     "picker_taken_title": "Org.nr finns redan på {name}",
     "picker_taken_description": "Slå ihop de två i stället för att välja samma företag två gånger.",
     "reason_org_picked": "Org.nr {org} valt i företagsregistret",
+    "promoted_enriching": "Hämtar uppgifter från SCB för {count} kontakter…",
+    "promoted_enriched_title": "Uppgifter hämtade från SCB för {done} av {total}",
+    "promote_dialog_missing_org": "{missing} av {count} saknar org.nr och får inga uppgifter från SCB; leta upp dem i företagsregistret först om du vill ha dem kompletta.",
     "fact_trade_name": "Firma",
-    "open_dossier": "Öppna {name}"
-  }
+    "open_dossier": "Öppna {name}",
+    "attn_create": "Skapa förslag",
+    "auto_created_title": "{count} förslag skapade från bokföringen",
+    "auto_created_description": "Motparter som dina verifikat namnger men som inte finns i registret. Lägg upp dem, eller dölj de som inte hör hemma här."
+}
 }
