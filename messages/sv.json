@@ -1760,6 +1760,7 @@
     "reset_archive_too_large_with_size": "Det bevarade arkivet är cirka {size} MB. Stäng av dokument för en ZIP med strukturerade uppgifter och kontakta sedan support för hela dokumentpaketet.",
     "reset_archive_too_large": "Stäng av dokument för en ZIP med strukturerade uppgifter och kontakta sedan support för hela dokumentpaketet.",
     "danger_button": "Radera företag",
+    "danger_confirm_hint": "Inget händer direkt: du bekräftar i nästa steg genom att skriva företagets namn.",
     "danger_dialog_title": "Radera {companyName}",
     "danger_dialog_description": "Företaget döljs från {appName}. Bokföringen behålls säkert i 7 år enligt BFL. Skriv företagets namn exakt för att bekräfta.",
     "danger_confirm_label": "Skriv <strong>{companyName}</strong> för att bekräfta",
@@ -1971,6 +1972,7 @@
     "fab_load_retry": "Försök igen"
   },
   "settings_account_danger": {
+    "confirm_hint": "Inget händer direkt: du bekräftar i nästa steg genom att skriva din e-postadress.",
     "heading": "Radera konto",
     "blockers_title": "Företag du äger",
     "blockers_description": "Kontot kan raderas först när du har raderat eller överlåtit alla företag du äger.",

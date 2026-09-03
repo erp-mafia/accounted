@@ -181,7 +181,12 @@ export function AccountDangerZone() {
           // lives behind the "?": the visible row stays one quiet line.
           help={<RetentionNotice variant="account" className="border-0 bg-transparent p-0" />}
         >
-          <SettingsRowNote>{tRetention('account_title')}</SettingsRowNote>
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <SettingsRowNote>{tRetention('account_title')}</SettingsRowNote>
+            {/* Says up front that a typed confirmation follows (issue #2214,
+                same as CompanyDangerZone). */}
+            <SettingsRowNote>{t('confirm_hint')}</SettingsRowNote>
+          </div>
           {/* Live region always mounted so the failure is announced when it
               appears, not merely inserted. */}
           <div id={errorId} role="status" aria-live="polite" className="min-w-0">
