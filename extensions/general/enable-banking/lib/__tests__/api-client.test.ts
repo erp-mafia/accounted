@@ -19,6 +19,7 @@ import {
   getAllTransactions,
   getAllTransactionsWithRaw,
   convertTransaction,
+  extractBban,
   deleteSession,
   probeSessionHealth,
   startAuthorization,
@@ -606,6 +607,51 @@ describe('convertTransaction', () => {
     const out = convertTransaction(tx, 'SEK')
     expect(out.bank_transaction_code).toBe('PMNT/RCDT')
     expect(out.proprietary_bank_transaction_code).toBe('XB')
+  })
+
+  // Enable Banking has no `bban` key on AccountIdentification: a Swedish
+  // BBAN arrives as other.identification with scheme_name BBAN. The earlier
+  // `.bban` read was always undefined, so domestic counterparties were lost.
+  it('reads a Swedish BBAN counterparty from other.identification', () => {
+    const tx = makeTx({
+      credit_debit_indicator: 'CRDT',
+      debtor_account: { other: { identification: '50001234567', scheme_name: 'BBAN' } },
+    })
+    expect(convertTransaction(tx, 'SEK').counterparty_account).toBe('50001234567')
+  })
+
+  it('prefers IBAN over a domestic identifier, and a Bankgiro from the additional list over nothing', () => {
+    const withIban = makeTx({
+      creditor_account: { iban: 'SE4550000000058398257466', other: { identification: '1234567', scheme_name: 'BGNR' } },
+    })
+    expect(convertTransaction(withIban, 'SEK').counterparty_account).toBe('SE4550000000058398257466')
+
+    const bgOnly = makeTx({
+      creditor_account_additional_identification: [{ identification: '5050-1234', scheme_name: 'BGNR' }],
+    })
+    expect(convertTransaction(bgOnly, 'SEK').counterparty_account).toBe('5050-1234')
+  })
+})
+
+describe('extractBban', () => {
+  it('returns the primary BBAN without whitespace', () => {
+    expect(extractBban({ account_id: { other: { identification: '5000 1234567', scheme_name: 'BBAN' } } }))
+      .toBe('50001234567')
+  })
+
+  it('falls back to all_account_ids when the primary identifier is an IBAN', () => {
+    expect(extractBban({
+      account_id: { iban: 'SE4550000000058398257466' },
+      all_account_ids: [
+        { identification: 'SE4550000000058398257466', scheme_name: 'IBAN' },
+        { identification: '50001234567', scheme_name: 'BBAN' },
+      ],
+    })).toBe('50001234567')
+  })
+
+  it('is undefined when the ASPSP sent no BBAN', () => {
+    expect(extractBban({ account_id: { iban: 'SE4550000000058398257466' } })).toBeUndefined()
+    expect(extractBban({ account_id: { other: { identification: '1234567', scheme_name: 'BGNR' } } })).toBeUndefined()
   })
 })
 
