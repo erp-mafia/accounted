@@ -8,6 +8,7 @@ import { buildInvoiceWriteData, type InvoiceWriteInput } from '@/lib/invoices/bu
 import { roundOre } from '@/lib/money'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { EU_COUNTRIES } from '@/lib/vat/eu-countries'
+import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import type { Currency, Customer, CustomerType, Invoice, WebshopOrder } from '@/types'
 
 const EU_COUNTRY_CODES = new Set(EU_COUNTRIES.map((c) => c.code))
@@ -158,6 +159,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
             user_id: user.id,
             name,
             customer_type: customerTypeFromOrder(order),
+            // The billing country the type above was classified from; without
+            // it the column default SE would contradict an EU or non-EU type
+            // and the customer card could not be saved without a country pick.
+            country: normalizeCountryCode(order.customer_country)
+              ?? (order.customer_country ? order.customer_country.toUpperCase() : 'SE'),
             contact_person: order.customer_company ? order.customer_name : null,
             email: order.customer_email,
           })
