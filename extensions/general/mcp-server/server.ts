@@ -63,7 +63,7 @@ import { eventBus } from '@/lib/events/bus'
 import { getVatRules, getPermittedVatRates, getArticleVatRateAdoptionSet } from '@/lib/invoices/vat-rules'
 import { validateDeductionLines } from '@/lib/invoices/rot-rut-rules'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
-import { fetchExchangeRate } from '@/lib/currency/riksbanken'
+import { resolveSupplierInvoiceExchangeRate } from '@/lib/currency/supplier-invoice-rate'
 import { getBranding } from '@/lib/branding/service'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import {
@@ -13190,6 +13190,7 @@ export const tools: McpTool[] = [
         vat_treatment_override: { type: 'string', enum: ['standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt'], description: 'Override extracted VAT treatment' },
         invoice_date_override: { type: 'string', description: 'Override extracted invoice date (YYYY-MM-DD). Use when OCR misses the date.' },
         due_date_override: { type: 'string', description: 'Override extracted due date (YYYY-MM-DD)' },
+        exchange_rate_override: { type: 'number', description: 'SEK per 1 unit of invoice currency; skips the Riksbanken lookup.' },
         line_overrides: {
           type: 'array',
           description: 'Per-line overrides (1-based line_number): account_number wins over accountSuggestion and supplier default; dimensions tags that line; apply_slp books särskild löneskatt on a 741x pension line.',
@@ -13386,14 +13387,40 @@ export const tools: McpTool[] = [
         ?? (invoiceExt?.vatTreatment as string | undefined)
         ?? 'standard_25'
 
-      // FX: if non-SEK, fetch rate at fakturadatum (best-effort; agent can re-stage on failure)
+      // FX: a non-SEK invoice needs a rate before approve can post it (the
+      // executor refuses with SI_FX_RATE_MISSING otherwise). Resolved through
+      // the same resolver the commit path uses, WITH the supabase client: the
+      // shared exchange_rates cache is consulted and warmed, and Riksbanken's
+      // rate limiter (429, no Retry-After header) falls back to the most
+      // recent cached observation instead of surfacing as lookup_failed. The
+      // old call omitted the client, so five of eight USD invoices in one
+      // batch staged with exchange_rate: null for no reason but request
+      // ordering, and none of them could be approved (feedback seq 299742).
+      // A caller-supplied exchange_rate_override is trusted verbatim, same as
+      // the v1 route and the web form.
       let exchangeRate: number | null = null
+      let exchangeRateSource: 'riksbanken' | 'supplied' | 'not_applicable' | 'lookup_failed' =
+        currency === 'SEK' ? 'not_applicable' : 'lookup_failed'
+      const rateOverride = args.exchange_rate_override
+      if (rateOverride !== undefined && rateOverride !== null) {
+        if (typeof rateOverride !== 'number' || !Number.isFinite(rateOverride) || rateOverride <= 0) {
+          throw new Error(`exchange_rate_override must be a positive number (SEK per 1 ${currency}); got ${JSON.stringify(rateOverride)}`)
+        }
+        if (currency === 'SEK') {
+          throw new Error('exchange_rate_override only applies to a non-SEK invoice')
+        }
+      }
       if (currency !== 'SEK' && invoiceDate) {
-        try {
-          const result = await fetchExchangeRate(currency as Currency, new Date(invoiceDate))
-          exchangeRate = result?.rate ?? null
-        } catch {
-          exchangeRate = null  // Agent will be informed via preview; can override later
+        const fx = await resolveSupplierInvoiceExchangeRate(supabase, {
+          currency,
+          invoiceDate,
+          suppliedRate: typeof rateOverride === 'number' ? rateOverride : null,
+        })
+        if (fx.ok && fx.rate.exchangeRate !== null) {
+          exchangeRate = fx.rate.exchangeRate
+          exchangeRateSource = fx.rate.source === 'supplied' ? 'supplied' : 'riksbanken'
+        } else if (typeof rateOverride === 'number') {
+          throw new Error(`exchange_rate_override ${rateOverride} was refused as implausible; check the rate on the invoice`)
         }
       }
 
@@ -13516,7 +13543,16 @@ export const tools: McpTool[] = [
         due_date: dueDate,
         currency,
         exchange_rate: exchangeRate,
-        exchange_rate_source: exchangeRate !== null ? 'riksbanken' : currency === 'SEK' ? 'not_applicable' : 'lookup_failed',
+        exchange_rate_source: exchangeRateSource,
+        // Without a rate the staged op cannot be approved (SI_FX_RATE_MISSING),
+        // so say what unblocks it here rather than at commit time.
+        ...(exchangeRateSource === 'lookup_failed'
+          ? {
+              exchange_rate_hint:
+                `No ${currency}/SEK rate for ${invoiceDate ?? 'the invoice date'} (Riksbanken unreachable or no observation). ` +
+                'Approval will refuse; re-stage with exchange_rate_override (SEK per 1 ' + currency + ') taken from the invoice.',
+            }
+          : {}),
         vat_treatment: vatTreatment,
         subtotal: params.subtotal,
         vat_amount: params.vat_amount,

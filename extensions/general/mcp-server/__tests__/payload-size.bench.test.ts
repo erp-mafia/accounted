@@ -382,6 +382,14 @@ describe('tools/list payload size guard', () => {
     //     pair's examples ARE the two-step flow, and
     //     list_uncategorized_transactions is the highest-traffic read.
     //
+    //   * +1 property, ~25 tokens (2026-09-02, MCP feedback seq 299742):
+    //     exchange_rate_override on create_supplier_invoice_from_inbox. A
+    //     foreign supplier invoice whose Riksbanken lookup fails stages with
+    //     exchange_rate: null and can never be approved (SI_FX_RATE_MISSING);
+    //     the property is the only way to unblock it from an agent. One short
+    //     description, no example; the lookup itself now goes through the
+    //     shared resolver with the cache, so the case is also rarer.
+    //
     // Long-term answer to growth is no longer a ceiling bump. gnubok_call_tool
     // makes `catalogVisibility: 'search'` usable for READ tools on hosts that
     // can only invoke what tools/list showed them, which is the constraint that
