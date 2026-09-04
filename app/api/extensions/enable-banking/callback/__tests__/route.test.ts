@@ -559,6 +559,94 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(mockUpsertFromPsd2).toHaveBeenCalledTimes(1)
   })
 
+  it('re-stamps the sibling claim on a disabled account across an in-place renewal', async () => {
+    // accountsMetadata is rebuilt from the bank's list on every callback, so a
+    // claim label stored on the previous consent would be lost on renewal and
+    // the sibling's account would come back as a plain unchecked own account.
+    const capturedUpdates = mockConnectionFlow({
+      id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'SEB', status: 'expired',
+      accounts_data: [
+        { uid: 'acc-own-old', iban: 'SE1234', name: 'Företagskonto', currency: 'SEK', enabled: true },
+        {
+          uid: 'acc-foreign-old', iban: 'SE9999', name: 'Annat bolags konto', currency: 'SEK',
+          enabled: false, claimed_by_company_id: 'company-2', claimed_by_company_name: 'Other AB',
+        },
+      ],
+    })
+    mockCrossCompanyContext.mockResolvedValue({
+      claims: new Map([['SE9999', { companyId: 'company-2', companyName: 'Other AB' }]]),
+      deselectedIbans: new Set(),
+      activeCompanyIbans: new Set(['SE1234']),
+    })
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-2',
+      accounts: [
+        { uid: 'acc-own-new', account_id: { iban: 'SE1234' }, name: 'Företagskonto', currency: 'SEK' },
+        { uid: 'acc-foreign-new', account_id: { iban: 'SE9999' }, name: 'Annat bolags konto', currency: 'SEK' },
+      ],
+      access: { valid_until: '2027-12-31T00:00:00Z' },
+      aspsp: { name: 'SEB', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+    await response.text()
+
+    const accountsData = capturedUpdates[0].accounts_data as Array<{
+      uid: string
+      enabled: boolean
+      claimed_by_company_id?: string
+      claimed_by_company_name?: string
+    }>
+    const own = accountsData.find(a => a.uid === 'acc-own-new')
+    const foreign = accountsData.find(a => a.uid === 'acc-foreign-new')
+    expect(own?.enabled).toBe(true)
+    expect(own?.claimed_by_company_id).toBeUndefined()
+    expect(foreign?.enabled).toBe(false)
+    expect(foreign?.claimed_by_company_id).toBe('company-2')
+    expect(foreign?.claimed_by_company_name).toBe('Other AB')
+    // The re-stamped claim stays out of the mirror exactly like a fresh one:
+    // only the own account gets a cash_accounts row.
+    expect(mockUpsertFromPsd2).toHaveBeenCalledTimes(1)
+    expect((mockUpsertFromPsd2.mock.calls[0][2] as { external_uid: string }).external_uid).toBe('acc-own-new')
+  })
+
+  it('drops a stale claim on renewal when the sibling no longer books the account', async () => {
+    // The label is re-derived from a fresh lookup, never copied from the prior
+    // row: once company B has released the IBAN, company A's picker must show
+    // it as a plain unchecked account again, not as "synkas i B".
+    const capturedUpdates = mockConnectionFlow({
+      id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'SEB', status: 'expired',
+      accounts_data: [
+        {
+          uid: 'acc-old', iban: 'SE9999', name: 'Konto', currency: 'SEK',
+          enabled: false, claimed_by_company_id: 'company-2', claimed_by_company_name: 'Other AB',
+        },
+      ],
+    })
+    mockCrossCompanyContext.mockResolvedValue({
+      claims: new Map(),
+      deselectedIbans: new Set(),
+      activeCompanyIbans: new Set(),
+    })
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-2',
+      accounts: [{ uid: 'acc-new', account_id: { iban: 'SE9999' }, name: 'Konto', currency: 'SEK' }],
+      access: { valid_until: '2027-12-31T00:00:00Z' },
+      aspsp: { name: 'SEB', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+    await response.text()
+
+    const accountsData = capturedUpdates[0].accounts_data as Array<{
+      uid: string
+      enabled: boolean
+      claimed_by_company_id?: string
+    }>
+    expect(accountsData[0].enabled).toBe(false)
+    expect(accountsData[0].claimed_by_company_id).toBeUndefined()
+  })
+
   it('carries a deselection made on another connection row onto a fresh connect', async () => {
     // C2: "Synkas ej" chosen under one company must not come back pre-checked
     // when a new connection row (any company) sees the same IBAN.
