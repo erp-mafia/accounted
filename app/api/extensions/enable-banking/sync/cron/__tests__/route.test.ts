@@ -86,6 +86,8 @@ vi.mock('@/extensions/general/enable-banking/lib/api-client', async () => {
 import {
   REAUTH_REQUIRED_MESSAGE,
   SessionExpiredError,
+  AspspUnavailableError,
+  ConnectorSyncError,
 } from '@/extensions/general/enable-banking/lib/api-client'
 import { GET } from '../route'
 
@@ -455,6 +457,60 @@ describe('GET /api/extensions/enable-banking/sync/cron: failure log level', () =
     const lines = consoleError.mock.calls.map(call => String(call[0]))
     expect(lines.some(line => line.includes('sync failed for connection'))).toBe(true)
     consoleError.mockRestore()
+  })
+})
+
+describe('GET /api/extensions/enable-banking/sync/cron: transient failures leave the row alone', () => {
+  // 2026-09-04: a connector contract mismatch parked four canary companies in
+  // 'error' with "förnya anslutningen", and users re-authorized consents that
+  // were fine. Neither a connector-hop failure nor a bank refusing right now
+  // says anything about the PSD2 session, so the row keeps its status and the
+  // health probe still checks the session.
+  it('does not park a connection in error when the connector hop fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    state.active = [connection()]
+    mocks.syncAccountTransactions.mockRejectedValue(
+      new ConnectorSyncError(200, 'CONNECTOR_BAD_SHAPE', '{"transactions":[]}', ['transactions.0.amount: Invalid input']),
+    )
+
+    const response = await GET(cronRequest())
+
+    expect(state.updates).toEqual([])
+    await expect(response.json()).resolves.toMatchObject({ processed: 1 })
+    const errorLines = consoleError.mock.calls.map(call => String(call[0]))
+    expect(errorLines.some(line => line.includes('sync failed for connection'))).toBe(false)
+    consoleError.mockRestore()
+    consoleWarn.mockRestore()
+  })
+
+  it('does not park a connection in error when the bank is refusing right now', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    state.active = [connection()]
+    mocks.syncAccountTransactions.mockRejectedValue(
+      new AspspUnavailableError(400, '{"error":"ASPSP_ERROR"}', 'window-already-accepted', '2026-08-28'),
+    )
+
+    await GET(cronRequest())
+
+    expect(state.updates).toEqual([])
+    const errorLines = consoleError.mock.calls.map(call => String(call[0]))
+    expect(errorLines.some(line => line.includes('sync failed for connection'))).toBe(false)
+    consoleError.mockRestore()
+    consoleWarn.mockRestore()
+  })
+
+  it('still probes the session of a connection whose sync failed transiently', async () => {
+    state.active = [connection()]
+    state.probeCandidates = [connection()]
+    mocks.syncAccountTransactions.mockRejectedValue(new ConnectorSyncError(null, 'CONNECTOR_TIMEOUT', 'aborted'))
+    mocks.probeSessionHealth.mockResolvedValue('dead')
+
+    await GET(cronRequest())
+
+    expect(mocks.probeSessionHealth).toHaveBeenCalledTimes(1)
+    expect(state.updates.at(-1)?.payload).toMatchObject({ status: 'expired' })
   })
 })
 

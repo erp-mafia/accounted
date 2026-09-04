@@ -27,6 +27,7 @@ import { syncAccountTransactions, type SyncOptions } from './sync'
 import {
   SessionExpiredError,
   AspspUnavailableError,
+  ConnectorSyncError,
   REAUTH_REQUIRED_MESSAGE,
   SYNC_FAILED_MESSAGE,
 } from './api-client'
@@ -286,6 +287,23 @@ export async function triggerConnectionSync(
         reason: error.reason,
         dateFrom: error.dateFrom,
         status: error.status,
+      })
+      return {
+        ok: false,
+        code: 'BANK_SYNC_FAILED',
+        connection_id: connectionId,
+        status: connection.status as string,
+      }
+    }
+
+    if (error instanceof ConnectorSyncError) {
+      // The connector hop failed: same treatment as the bank being
+      // unavailable. The session is fine and the row is left alone.
+      log.warn('agent-triggered bank sync: connector hop failed', {
+        connectionId,
+        code: error.code,
+        status: error.status,
+        issues: error.issues,
       })
       return {
         ok: false,

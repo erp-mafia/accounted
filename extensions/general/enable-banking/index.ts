@@ -8,6 +8,8 @@ import {
   isSandboxMode,
   SessionExpiredError,
   AspspUnavailableError,
+  ConnectorSyncError,
+  CONNECTOR_UNAVAILABLE_MESSAGE,
   REAUTH_REQUIRED_MESSAGE,
   SYNC_FAILED_MESSAGE,
   BANK_UNAVAILABLE_MESSAGE,
@@ -950,6 +952,30 @@ export const enableBankingExtension: Extension = {
               {
                 error: BANK_UNAVAILABLE_MESSAGE,
                 code: 'BANK_UNAVAILABLE',
+                retryable: true,
+                connection_id: connection.id,
+              },
+              { status: 503 }
+            )
+          }
+
+          // The connector hop failed (timeout, error envelope, contract
+          // mismatch): same treatment, the PSD2 session is not the problem
+          // and the row keeps whatever status it has.
+          if (error instanceof ConnectorSyncError) {
+            log.warn('[enable-banking] Sync: connector hop failed', {
+              code: error.code,
+              status: error.status,
+              issues: error.issues,
+              body: error.body,
+              user_id: user.id,
+              connection_id,
+              bankName: connection.bank_name,
+            })
+            return NextResponse.json(
+              {
+                error: CONNECTOR_UNAVAILABLE_MESSAGE,
+                code: 'CONNECTOR_UNAVAILABLE',
                 retryable: true,
                 connection_id: connection.id,
               },

@@ -350,6 +350,40 @@ export class AspspUnavailableError extends Error {
   }
 }
 
+/**
+ * Thrown when the connector hop itself failed: the Accounted Connect service
+ * answered with an error envelope other than a dead session, timed out, could
+ * not be reached, or answered 200 with a body that fails the wire contract.
+ * None of these say anything about the PSD2 session, so callers treat it like
+ * AspspUnavailableError: retryable, no status flip, no renewal advice. On
+ * 2026-09-04 a contract mismatch parked four canary companies in 'error' with
+ * "förnya anslutningen" and cost them BankID round trips that fixed nothing.
+ * `issues` carries the failing field paths so the service side can be fixed
+ * from the server log instead of guessed at.
+ */
+export class ConnectorSyncError extends Error {
+  constructor(
+    readonly status: number | null,
+    readonly code: string,
+    readonly body: string,
+    readonly issues?: string[]
+  ) {
+    super(
+      code === 'CONNECTOR_BAD_SHAPE'
+        ? `Connector bank sync answered with an unexpected shape: ${(issues ?? []).join('; ') || body}`
+        : `Connector bank sync failed (${status ?? 'no response'} ${code})`
+    )
+    this.name = 'ConnectorSyncError'
+  }
+}
+
+/**
+ * User-facing message for a ConnectorSyncError. Says explicitly that the
+ * connection does NOT need renewing: the bank session is not the problem.
+ */
+export const CONNECTOR_UNAVAILABLE_MESSAGE =
+  'Synkningen via Accounted Connect misslyckades tillfälligt. Försök igen om en stund. Anslutningen behöver inte förnyas.'
+
 // API Helper
 
 async function authenticatedFetch(
