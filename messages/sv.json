@@ -1854,6 +1854,7 @@
     "fy_reset_summary_vouchers": "Verifikat som raderas",
     "fy_reset_summary_documents": "Dokumentkopplingar som tas bort",
     "fy_reset_documents_note": "Dokumenten och underlagen ligger kvar i arkivet (7 års arkiveringsplikt), de kopplas bara loss från verifikaten.",
+    "fy_reset_next_year_ib_note": "Ingående balanser i {name} ligger kvar oförändrade. Stäm av dem mot det här året när det är bokfört igen.",
     "fy_reset_confirm_name": "Skriv <strong>{name}</strong> för att bekräfta",
     "fy_reset_submit": "Nollställ räkenskapsåret",
     "fy_reset_resetting": "Nollställer...",

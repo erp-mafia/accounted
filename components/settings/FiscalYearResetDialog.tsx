@@ -242,6 +242,11 @@ export function FiscalYearResetDialog({
               <p className="mt-2 text-xs text-muted-foreground">
                 {t('fy_reset_documents_note')}
               </p>
+              {eligibility.next_period?.has_opening_balances ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {t('fy_reset_next_year_ib_note', { name: eligibility.next_period.name })}
+                </p>
+              ) : null}
             </div>
 
             {eligibility.eligible ? (

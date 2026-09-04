@@ -1854,6 +1854,7 @@
     "fy_reset_summary_vouchers": "Vouchers to delete",
     "fy_reset_summary_documents": "Document links to remove",
     "fy_reset_documents_note": "Documents stay in the archive (7-year retention); they are only detached from the vouchers.",
+    "fy_reset_next_year_ib_note": "Opening balances in {name} stay as they are. Reconcile them against this year once it has been booked again.",
     "fy_reset_confirm_name": "Type <strong>{name}</strong> to confirm",
     "fy_reset_submit": "Reset fiscal year",
     "fy_reset_resetting": "Resetting...",

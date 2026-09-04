@@ -56,6 +56,7 @@ export async function getFiscalYearResetEligibility(
       blockers: result.blockers ?? [],
       period: result.period!,
       counts: result.counts ?? { vouchers: 0, documents_to_detach: 0 },
+      next_period: result.next_period ?? null,
     },
   }
 }
