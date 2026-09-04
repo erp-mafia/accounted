@@ -17,7 +17,8 @@ vi.mock('@/lib/parties/scb/client', async (importOriginal) => ({
   createScbClient: () => ({ lookupByOrgNumber, searchByName }),
 }))
 const readCounterpartName = vi.fn()
-const ai = { available: false }
+const ai = { available: false, capability: true }
+vi.mock('@/lib/entitlements/has-capability', () => ({ hasCapability: () => Promise.resolve(ai.capability) }))
 vi.mock('@/lib/parties/ai-name', () => ({
   readCounterpartName: (texts: string[]) => readCounterpartName(texts),
   aiNameAvailable: () => ai.available,
@@ -47,6 +48,7 @@ beforeEach(() => {
   eventBus.clear()
   configured.value = true
   ai.available = false
+  ai.capability = true
   mockSupabase.auth.getUser.mockResolvedValue({ data: { user } })
 })
 
@@ -209,13 +211,19 @@ describe('GET /api/parties/[id]/enrich/candidates', () => {
     expect(second.body.data.aiRead).toEqual({ name: 'Uber Sweden AB', country: 'SE' })
   })
 
-  it('does not call the model when the rules already anchored a name, or when no model is configured', async () => {
+  it('does not call the model when the rules already anchored a name, when the company lacks the AI capability, or when no model is configured', async () => {
     ai.available = true
     enqueue({ data: { id: PARTY, display_name: 'Visma Spcs AB', legal_name: null } })
     enqueue({ data: [] })
     searchByName.mockResolvedValue({ query: 'Visma Spcs', mode: 'starts_with', total: 1, truncated: false, candidates: [] })
     await candidates()
     expect(readCounterpartName).not.toHaveBeenCalled()
+    ai.capability = false
+    enqueue({ data: { id: PARTY, display_name: 'Hotel at Booking.com', legal_name: null } })
+    enqueue({ data: [] })
+    await candidates()
+    expect(readCounterpartName).not.toHaveBeenCalled()
+    ai.capability = true
     ai.available = false
     enqueue({ data: { id: PARTY, display_name: 'Hotel at Booking.com', legal_name: null } })
     enqueue({ data: [] })
