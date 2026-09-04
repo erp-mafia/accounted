@@ -40,7 +40,7 @@ const EXPECTED_NAMES = [
 ];
 
 export const suggestionsFromBooks = env.test(
-  "the register reads its counterparts out of assistant-written vouchers",
+  "parties suggestions from books",
   { dependsOn: enrolMfa },
   async (ctx) => {
     const db = ctx.svc.supabase;
@@ -110,7 +110,7 @@ export const suggestionsFromBooks = env.test(
 );
 
 export const pickInScb = env.test(
-  "pick the company in SCB for a suggestion without an org number",
+  "parties pick in scb",
   { dependsOn: suggestionsFromBooks },
   async (ctx) => {
     const b = await ctx.browser();
@@ -160,7 +160,7 @@ export const pickInScb = env.test(
 );
 
 export const foreignIsNotSearched = env.test(
-  "a foreign company is named, not searched for in SCB",
+  "parties foreign not searched",
   { dependsOn: suggestionsFromBooks },
   async (ctx) => {
     const b = await ctx.browser();
@@ -183,7 +183,7 @@ export const foreignIsNotSearched = env.test(
 );
 
 export const promoteToSuppliers = env.test(
-  "lägg upp turns the suggestions into suppliers and fetches SCB for the ones with an org number",
+  "parties promote to suppliers",
   { dependsOn: pickInScb },
   async (ctx) => {
     const b = await ctx.browser();
