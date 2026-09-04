@@ -122,8 +122,9 @@ function matchesListTab(invoice: Invoice, tab: ListTab): boolean {
   )
 }
 
-// Row grouping: sections in the table body. 'status' is the default and
-// mirrors the supplier-invoices layout (payment queue as its own section).
+// Row grouping: sections in the table body. 'none' (the flat list) is the
+// default; the other modes are opt-in via ?group= and mirror the
+// supplier-invoices layout (payment queue as its own section).
 const GROUP_MODES = ['status', 'customer', 'month', 'none'] as const
 type GroupMode = (typeof GROUP_MODES)[number]
 const STATUS_SECTION_ORDER = ['drafts', 'awaiting', 'settled'] as const
@@ -465,13 +466,12 @@ export default function InvoicesPage() {
 
   const resetPaging = () => setVisibleCount(INITIAL_VISIBLE_ROWS)
 
-  // Tri-state cycle: asc → desc → back to the default order (invoice date
-  // desc), so an applied sort can always be released, also inside groups.
   const updateSort = (column: InvoiceListSortColumn) => {
-    setSort((current) => {
-      if (current?.column !== column) return { column, direction: 'asc' }
-      return current.direction === 'asc' ? { column, direction: 'desc' } : null
-    })
+    setSort((current) => ({
+      column,
+      direction:
+        current?.column === column && current.direction === 'asc' ? 'desc' : 'asc',
+    }))
     resetPaging()
   }
 
@@ -493,7 +493,9 @@ export default function InvoicesPage() {
     setGroupMode(mode)
     resetPaging()
     const params = new URLSearchParams(searchParams.toString())
-    if (mode === 'status') params.delete('group')
+    // Flat is the default, so it owns the URL-less state; every other mode
+    // is written out so it round-trips through reload and back-navigation.
+    if (mode === 'none') params.delete('group')
     else params.set('group', mode)
     const qs = params.toString()
     router.replace(qs ? `/invoices?${qs}` : '/invoices', { scroll: false })
