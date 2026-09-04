@@ -1869,19 +1869,29 @@ function ResultStep({
     }
     if (results.registrationLinks && results.registrationLinks.scanned > 0) {
       const links = results.registrationLinks
-      const unlinked = links.scanned - links.linked - links.alreadyLinked
+      // An invoice that already carried its link (a rerun over invoices an
+      // earlier run linked) is done, not failed: it counts towards the
+      // displayed total and gets its own detail line, so the value and the
+      // details agree. Without this a rerun read "0 av 2" with no explanation.
+      const done = links.linked + links.alreadyLinked
+      const unlinked = links.scanned - done
+      const details: string[] = []
+      if (links.alreadyLinked > 0) {
+        details.push(t('ext_arcim_registration_links_already_linked', { count: links.alreadyLinked }))
+      }
+      if (unlinked > 0) {
+        details.push(t('ext_arcim_registration_links_detail', {
+          unlinked,
+          noRef: links.noRef,
+          refNotFetched: links.refNotFetched ?? 0,
+          unresolved: links.unresolved + links.ambiguous,
+          amountMismatch: links.amountMismatch,
+        }))
+      }
       entityLines.push({
         label: t('ext_arcim_registration_links_label'),
-        value: t('ext_arcim_registration_links_value', { linked: links.linked, scanned: links.scanned }),
-        detail: unlinked > 0
-          ? t('ext_arcim_registration_links_detail', {
-              unlinked,
-              noRef: links.noRef,
-              refNotFetched: links.refNotFetched ?? 0,
-              unresolved: links.unresolved + links.ambiguous,
-              amountMismatch: links.amountMismatch,
-            })
-          : undefined,
+        value: t('ext_arcim_registration_links_value', { linked: done, scanned: links.scanned }),
+        detail: details.length > 0 ? details.join('. ') : undefined,
         failed: false,
       })
     }

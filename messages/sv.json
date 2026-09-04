@@ -5553,6 +5553,7 @@
     "ext_arcim_registration_links_label": "Verifikatkoppling",
     "ext_arcim_registration_links_value": "{linked} av {scanned} fakturor kopplade till bokföringsverifikat",
     "ext_arcim_registration_links_detail": "{unlinked} utan koppling: {noRef} saknar verifikatnummer hos leverantören, {refNotFetched} vars detaljer inte hann hämtas från leverantören, {unresolved} utan entydigt bokföringsverifikat, {amountMismatch} med avvikande belopp",
+    "ext_arcim_registration_links_already_linked": "{count, plural, one {# var redan länkad sedan tidigare} other {# var redan länkade sedan tidigare}}",
     "ext_arcim_credit_notes_label": "Kreditfakturor",
     "ext_arcim_credit_notes_unlinked_detail": "{count, plural, one {# kreditfaktura importerades utan koppling till fakturan den krediterar: ditt gamla system skickar ingen referens till ursprungsfakturan. Beloppen är omvända och posten är komplett, men kopplingen till ursprungsfakturan saknas.} other {# kreditfakturor importerades utan koppling till fakturorna de krediterar: ditt gamla system skickar ingen referens till ursprungsfakturan. Beloppen är omvända och posterna är kompletta, men kopplingen till ursprungsfakturan saknas.}}",
     "ext_arcim_migration_description": "Migrera bokföring från Fortnox, Visma, Bokio, Björn Lundén eller Briox",
