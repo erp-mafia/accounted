@@ -1461,6 +1461,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
       data: { id: 'doc-1', file_name: 'kvitto.pdf', journal_entry_id: 'je-1', journal_entry_line_id: null },
       error: null,
     })                                                                           // linkToJournalEntry: doc update
+    enqueue({ data: null, error: null })                                         // inbox stamp (best-effort)
     enqueue({ data: null, error: null })                                         // dispatcher commit update
 
     const result = await commitPendingOperation(
@@ -1470,7 +1471,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
   })
 
   it('happy path: links doc to verifikation with no prior journal_entry_id', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, calls, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
     enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null })     // doc fetch
     enqueue({ data: { id: 'je-1' }, error: null })                              // linkToJournalEntry: JE ownership
@@ -1478,6 +1479,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
       data: { id: 'doc-1', file_name: 'faktura.pdf', journal_entry_id: 'je-1', journal_entry_line_id: null },
       error: null,
     })                                                                           // linkToJournalEntry: doc update
+    enqueue({ data: null, error: null })                                         // inbox stamp (best-effort)
     enqueue({ data: null, error: null })                                         // dispatcher commit update
 
     const result = await commitPendingOperation(
@@ -1488,6 +1490,39 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
       document_id: 'doc-1',
       journal_entry_id: 'je-1',
     })
+    // The inbox item the document came from is stamped as handled, keyed on
+    // document_id and CAS-guarded on both link columns: otherwise
+    // list_inbox_items / list_unmatched_documents keep listing an attached
+    // document as unprocessed forever.
+    expect(findCall('invoice_inbox_items', 'update')).toEqual([{ created_journal_entry_id: 'je-1' }])
+    const inboxFilters = calls
+      .filter((c) => c.table === 'invoice_inbox_items' && (c.method === 'eq' || c.method === 'is'))
+      .map((c) => c.args)
+    expect(inboxFilters).toEqual([
+      ['document_id', 'doc-1'],
+      ['company_id', 'company-1'],
+      ['created_journal_entry_id', null],
+      ['created_supplier_invoice_id', null],
+    ])
+  })
+
+  it('inbox stamp is best-effort: a failed stamp never fails the committed link', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
+    enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null })     // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // linkToJournalEntry: JE ownership
+    enqueue({
+      data: { id: 'doc-1', file_name: 'faktura.pdf', journal_entry_id: 'je-1', journal_entry_line_id: null },
+      error: null,
+    })                                                                           // linkToJournalEntry: doc update
+    enqueue({ data: null, error: { code: '23505', message: 'duplicate key value' } }) // inbox stamp: samlingsverifikat already claimed
+    enqueue({ data: null, error: null })                                         // dispatcher commit update
+
+    const result = await commitPendingOperation(
+      supabase as never, 'user-1', 'company-1', makePendingOp(baseOp),
+    )
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ document_id: 'doc-1', journal_entry_id: 'je-1' })
   })
 
   it('auto-rejects 409 when linkToJournalEntry throws a period-lock error', async () => {
@@ -1532,6 +1567,7 @@ describe('commitPendingOperation: link_documents_to_vouchers', () => {
       data: { id: 'doc-1', file_name: 'kvitto1.pdf', journal_entry_id: 'je-1', journal_entry_line_id: null },
       error: null,
     })                                                                       // linkToJournalEntry: doc update
+    enqueue({ data: null, error: null })                                   // inbox stamp (best-effort)
     // row 2: doc-2 -> je-2
     enqueue({ data: { id: 'doc-2', journal_entry_id: null }, error: null })  // doc fetch
     enqueue({ data: { id: 'je-2' }, error: null })                          // linkToJournalEntry: JE ownership
@@ -1539,6 +1575,7 @@ describe('commitPendingOperation: link_documents_to_vouchers', () => {
       data: { id: 'doc-2', file_name: 'kvitto2.pdf', journal_entry_id: 'je-2', journal_entry_line_id: null },
       error: null,
     })                                                                       // linkToJournalEntry: doc update
+    enqueue({ data: null, error: null })                                   // inbox stamp (best-effort)
     enqueue({ data: null, error: null })                                    // dispatcher commit update
 
     const result = await commitPendingOperation(
@@ -1563,6 +1600,7 @@ describe('commitPendingOperation: link_documents_to_vouchers', () => {
       data: { id: 'doc-2', file_name: 'kvitto2.pdf', journal_entry_id: 'je-2', journal_entry_line_id: null },
       error: null,
     })                                                                      // linkToJournalEntry: doc update
+    enqueue({ data: null, error: null })                                  // inbox stamp (best-effort)
     enqueue({ data: null, error: null })                                   // dispatcher commit update
 
     const result = await commitPendingOperation(
@@ -1592,6 +1630,7 @@ describe('commitPendingOperation: link_documents_to_vouchers', () => {
       data: { id: 'doc-2', file_name: 'kvitto2.pdf', journal_entry_id: 'je-2', journal_entry_line_id: null },
       error: null,
     })                                                                              // linkToJournalEntry: doc update
+    enqueue({ data: null, error: null })                                          // inbox stamp (best-effort)
     enqueue({ data: null, error: null })                                           // dispatcher commit update
 
     const result = await commitPendingOperation(
