@@ -4,7 +4,7 @@ import { insertAuthUser, insertCashAccount, insertCompany, insertCompanyMember }
 import { getPool, withUserContext } from './setup'
 
 /**
- * Migration 20260903150000: payee fields on cash_accounts, invoice_payee_defaults,
+ * Migration 20260904010000: payee fields on cash_accounts, invoice_payee_defaults,
  * and the mirror that keeps company_settings.invoice_payment_accounts plus the
  * legacy SEK columns equal to the default account per currency.
  */
@@ -49,7 +49,7 @@ async function setDefault(companyId: string, currency: string, cashAccountId: st
   )
 }
 
-describe('invoice payee accounts (20260903150000)', () => {
+describe('invoice payee accounts (20260904010000)', () => {
   it('mirrors the default SEK account into the map and the legacy columns, and drops both when the default goes', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })

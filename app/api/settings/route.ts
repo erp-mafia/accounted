@@ -254,7 +254,7 @@ export const PUT = withRouteContext(
     }
 
     // Payment instructions live on cash_accounts since migration
-    // 20260903150000; the bank columns below are a mirror of the default
+    // 20260904010000; the bank columns below are a mirror of the default
     // payee account per currency. Write the change through to the account
     // FIRST: if that fails nothing has been written and the caller gets an
     // error, instead of a settings row that the next mirror would undo.
