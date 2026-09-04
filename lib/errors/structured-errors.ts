@@ -959,6 +959,28 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Utbetalningen kan bara bokföras för en inskickad begäran som inte redan är bokförd.',
     message_en: 'The payout can only be booked for a submitted request that is not already settled.',
   },
+  ROT_RUT_MATCH_NOT_INCOME: {
+    httpStatus: 400,
+    message_sv: 'Endast inbetalningar kan matchas mot en ROT/RUT-utbetalning från Skatteverket.',
+    message_en: 'Only income transactions can be matched to a ROT/RUT payout from Skatteverket.',
+  },
+  ROT_RUT_MATCH_TX_ALREADY_LINKED: {
+    httpStatus: 400,
+    message_sv: 'Transaktionen är redan bokförd eller kopplad till en verifikation.',
+    message_en: 'The transaction is already booked or linked to a journal entry.',
+  },
+  ROT_RUT_MATCH_CURRENCY: {
+    httpStatus: 400,
+    message_sv: 'Transaktionen kan inte matchas: Skatteverket betalar ut i SEK och transaktionen har en annan valuta.',
+    message_en: 'Skatteverket pays out in SEK; the transaction is in another currency.',
+  },
+  ROT_RUT_MATCH_TX_LINK_FAILED: {
+    httpStatus: 409,
+    message_sv:
+      'Utbetalningen bokfördes men transaktionen kunde inte kopplas till verifikationen. Koppla den via "Matcha mot befintlig verifikation".',
+    message_en:
+      'The payout was booked but the transaction could not be linked to the voucher. Link it via "Match against existing voucher".',
+  },
   ROT_RUT_FILE_CREATE_FAILED: {
     httpStatus: 500,
     message_sv: 'Filen kunde inte skapas.',

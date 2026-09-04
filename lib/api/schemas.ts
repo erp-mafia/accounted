@@ -2129,6 +2129,15 @@ export const CreateTransactionFromDocumentSchema = z.object({
   description: z.string().min(1).max(500),
 })
 
+/**
+ * POST /api/transactions/[id]/match-rot-rut-payout: settle a ROT/RUT begäran
+ * with the bank row that carried Skatteverkets utbetalning. Amount, date and
+ * bank account all come from the transaction, so the body is just the target.
+ */
+export const MatchRotRutPayoutSchema = z.object({
+  request_id: uuid,
+})
+
 export const MatchSupplierInvoiceSchema = z.object({
   supplier_invoice_id: uuid,
   // Same purpose as MatchInvoiceSchema.lines: user-edited rows override

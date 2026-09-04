@@ -189,6 +189,7 @@ export default function QuickReviewDialog({
           setEnrichedTx({ ...json.data, ...{
             potential_invoice: transaction.potential_invoice,
             potential_supplier_invoice: transaction.potential_supplier_invoice,
+            potential_rot_rut_payout: transaction.potential_rot_rut_payout,
           } })
         }
       } catch {

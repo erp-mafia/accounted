@@ -1,11 +1,16 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getBestInvoiceMatch } from '@/lib/invoices/invoice-matching'
+import { findRotRutPayoutMatch } from '@/lib/invoices/rot-rut-payout-matching'
+import { loadOpenRotRutPayoutRequests } from '@/lib/invoices/rot-rut-payout-candidates'
 import type { Transaction } from '@/types'
 
 /**
  * POST /api/transactions/batch-match-invoices
- * Run invoice matching for all uncategorized income transactions without potential_invoice_id
+ * Run invoice matching for all uncategorized income transactions without potential_invoice_id.
+ * Rows that match no invoice are then tried against open ROT/RUT payout
+ * requests (Skatteverkets utbetalning), so bank rows imported before that
+ * hint existed still get a suggestion on the next run.
  */
 export const POST = withRouteContext(
   'transaction.batch_match_invoices',
@@ -25,6 +30,9 @@ export const POST = withRouteContext(
     if (txError || !transactions) {
       return NextResponse.json({ error: 'Failed to fetch transactions' }, { status: 500 })
     }
+
+    // Open begäran, loaded once: the matcher is pure and the table is tiny.
+    let openRotRutRequests = await loadOpenRotRutPayoutRequests(supabase, companyId!)
 
     let matched = 0
     const matchedInvoiceIds = new Set<string>()
@@ -46,6 +54,23 @@ export const POST = withRouteContext(
 
           matchedInvoiceIds.add(bestMatch.invoice.id)
           matched++
+          continue
+        }
+
+        if (
+          openRotRutRequests.length > 0 &&
+          !(tx as Transaction).potential_rot_rut_payout_request_id
+        ) {
+          const payoutMatch = findRotRutPayoutMatch(tx as Transaction, openRotRutRequests)
+          if (payoutMatch) {
+            await supabase
+              .from('transactions')
+              .update({ potential_rot_rut_payout_request_id: payoutMatch.request.id })
+              .eq('id', tx.id)
+            // One payout per begäran: drain so a same-amount sibling can't claim it.
+            openRotRutRequests = openRotRutRequests.filter((r) => r.id !== payoutMatch.request.id)
+            matched++
+          }
         }
       } catch {
         // Continue with other transactions
