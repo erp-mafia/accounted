@@ -167,17 +167,22 @@ export const foreignIsNotSearched = env.test(
     const scb = ctx.fakes.scb;
     await b.goto(`${APP_URL}/parties`);
 
-    await b.getByRole("row", { name: /Framer B\.V\./ }).getByRole("button", { name: "Hitta i företagsregistret" }).click();
-    const dialog = b.getByRole("dialog");
+    // The queue says so on the row itself; no search is offered there.
+    const framerRow = b.getByRole("row", { name: /Framer B\.V\./ });
+    await expect(framerRow).toContainText("Utländskt bolag (Nederländerna), finns inte i SCB");
+    await expect(framerRow.getByRole("button", { name: "Hitta i företagsregistret" })).toHaveCount(0);
+    // The Irish one has no legal form in the text; the country word is enough.
+    await expect(b.getByRole("row", { name: /Anthropic Ireland/ })).toContainText("Utländskt bolag (Irland), finns inte i SCB");
+
+    // From the dossier the search is still reachable, and it explains instead of searching.
+    await b.getByRole("button", { name: "Öppna Framer B.V.", exact: true }).click();
+    await expect(b.getByText("Nederländerna", { exact: true })).toBeVisible();
+    await b.getByRole("button", { name: "Fler åtgärder", exact: true }).click();
+    await b.getByRole("menuitem", { name: "Hitta i företagsregistret" }).click();
+    const dialog = b.getByRole("dialog").last();
     await expect(dialog).toContainText("Framer B.V. ser ut att vara ett utländskt bolag (Nederländerna)");
     await expect(dialog).toContainText("SCB:s register täcker bara svenska företag");
     expect(scb.calls(), "no SCB query for a company the register cannot hold").toHaveLength(0);
-    await b.keyboard.press("Escape");
-
-    // The Irish one has no legal form in the text; the country word is enough.
-    await b.getByRole("row", { name: /Anthropic Ireland/ }).getByRole("button", { name: "Hitta i företagsregistret" }).click();
-    await expect(b.getByRole("dialog")).toContainText("Anthropic Ireland ser ut att vara ett utländskt bolag (Irland)");
-    expect(scb.calls()).toHaveLength(0);
     await b.keyboard.press("Escape");
   },
 );
@@ -196,7 +201,10 @@ export const promoteToSuppliers = env.test(
     // The dialog says what will happen, and which rows SCB cannot complete.
     const dialog = b.getByRole("dialog");
     await expect(dialog).toContainText("Lägg upp 5 i registret?");
-    await expect(dialog).toContainText("4 av 5 saknar org.nr");
+    // Hotel at Booking.com and The Intelligence Company could be completed
+    // from SCB but lack an org number; Framer and Anthropic never can.
+    await expect(dialog).toContainText("2 av 5 saknar org.nr");
+    await expect(dialog).toContainText("2 av 5 är utländska bolag");
     await dialog.getByRole("button", { name: /^Lägg upp/ }).click();
 
     const suppliers = await ctx.poll("five suppliers exist, one per suggestion", async () => {
