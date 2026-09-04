@@ -12,7 +12,10 @@ vi.mock('@/lib/company/context', () => ({
 vi.mock('@/lib/auth/require-write', () => ({ requireWritePermission: vi.fn().mockResolvedValue({ ok: true }) }))
 const lookupByOrgNumber = vi.fn()
 const searchByName = vi.fn()
-vi.mock('@/lib/parties/scb/client', () => ({ createScbClient: () => ({ lookupByOrgNumber, searchByName }) }))
+vi.mock('@/lib/parties/scb/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/parties/scb/client')>()),
+  createScbClient: () => ({ lookupByOrgNumber, searchByName }),
+}))
 const configured = { value: true }
 vi.mock('@/lib/parties/scb/config', () => ({
   isScbConfigured: () => configured.value,
@@ -146,18 +149,46 @@ describe('GET /api/parties/[id]/enrich/candidates', () => {
   it('searches on the party name by default and on q when given', async () => {
     const result = { query: 'Adobe Systems Software', mode: 'starts_with', total: 2, truncated: false, candidates: [] }
     enqueue({ data: { id: PARTY, display_name: 'Adobe Systems Software', legal_name: null } })
+    enqueue({ data: [] })
     searchByName.mockResolvedValue(result)
     const a = await parseJsonResponse<{ data: typeof result }>(await candidates())
     expect(a.status).toBe(200)
-    expect(a.body.data).toEqual(result)
+    expect(a.body.data).toEqual({ ...result, queries: ['Adobe Systems Software'], foreign: null })
     expect(searchByName).toHaveBeenLastCalledWith('Adobe Systems Software')
     enqueue({ data: { id: PARTY, display_name: 'Adobe Systems Software', legal_name: null } })
     await candidates('Adobe Nordic')
     expect(searchByName).toHaveBeenLastCalledWith('Adobe Nordic')
   })
 
+  it('reads the legal person out of the voucher text and stops at the first query with a hit', async () => {
+    const miss = { query: 'The Intelligence Company', mode: 'contains', total: 0, truncated: false, candidates: [] }
+    const hit = { query: 'TIC identity', mode: 'starts_with', total: 1, truncated: false, candidates: [{ orgNumber: '5567890123', name: 'TIC Identity AB', active: true }] }
+    enqueue({ data: { id: PARTY, display_name: 'TIC identity', legal_name: null } })
+    enqueue({
+      data: [{ value: ['TIC identity     BG 0000005786439 Bg-bet. via internet · Faktura 20250746, The Intelligence Company AB (publ). TIC Identity-abonnemang.'] }],
+    })
+    searchByName.mockResolvedValueOnce(miss).mockResolvedValueOnce(hit)
+    const { status, body } = await parseJsonResponse<{ data: { query: string; queries: string[]; candidates: unknown[] } }>(await candidates())
+    expect(status).toBe(200)
+    expect(searchByName.mock.calls.map((c) => c[0])).toEqual(['The Intelligence Company', 'TIC identity'])
+    expect(body.data.queries).toEqual(['The Intelligence Company', 'TIC identity'])
+    expect(body.data.candidates).toHaveLength(1)
+  })
+
+  it('never asks SCB about a foreign company, and says which one it read', async () => {
+    enqueue({ data: { id: PARTY, display_name: 'Framer B.V.', legal_name: null } })
+    enqueue({ data: [{ value: ['Utlägg Framer · Framer B.V. (NL), webbdesignverktyg.'] }] })
+    const { status, body } = await parseJsonResponse<{ data: { queries: string[]; candidates: unknown[]; foreign: unknown } }>(await candidates())
+    expect(status).toBe(200)
+    expect(searchByName).not.toHaveBeenCalled()
+    expect(body.data.queries).toEqual([])
+    expect(body.data.candidates).toEqual([])
+    expect(body.data.foreign).toEqual({ name: 'Framer B.V.', legalForm: 'B.V.', country: 'NL' })
+  })
+
   it('maps an SCB failure to 502', async () => {
     enqueue({ data: { id: PARTY, display_name: 'Adobe', legal_name: null } })
+    enqueue({ data: [] })
     searchByName.mockRejectedValue(new Error('boom'))
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await candidates())
     expect(status).toBe(502)

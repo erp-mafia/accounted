@@ -74,7 +74,7 @@ describe('buildSuggestions', () => {
     expect(item.alias_keys).toEqual(['beijer byggmaterial'])
     expect(item.reason.attach).toBe('new')
     expect(item.reason.occurrences).toBe(3)
-    expect(item.facts.map((f) => f.field)).toEqual(['dominant_account', 'cadence_days'])
+    expect(item.facts.map((f) => f.field)).toEqual(['dominant_account', 'cadence_days', 'voucher_text'])
     expect(item.identities).toEqual([])
   })
 
@@ -102,7 +102,7 @@ describe('buildSuggestions', () => {
     expect(item.identities).toEqual([
       { scheme: 'bankgiro', value: '53170900', first_seen: '2026-01-10', last_seen: '2026-03-10', seen_count: 3 },
     ])
-    expect(item.facts.map((f) => f.field)).toEqual(['dominant_account', 'cadence_days', 'org_number', 'legal_name'])
+    expect(item.facts.map((f) => f.field)).toEqual(['dominant_account', 'cadence_days', 'org_number', 'legal_name', 'voucher_text'])
     expect(item.reason.org_number).toBe(ORG)
   })
 
