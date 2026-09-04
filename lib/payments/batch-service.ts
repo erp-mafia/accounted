@@ -21,6 +21,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { redactString } from '@/lib/observability/redact'
 import { getBranding } from '@/lib/branding/service'
 import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { ORE_TOLERANCE, roundOre, sumOre } from '@/lib/money'
@@ -41,6 +42,31 @@ import { generateSupplierPain001, type SupplierPain001Payment } from './pain001-
 import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
 
 const log = createLogger('payments/batch-service')
+
+const RPC_ERROR_TEXT_MAX = 500
+const TRUNCATED = '[TRUNCATED]'
+// Postgres quotes the entire failing row in `details` on CHECK and NOT NULL
+// violations ("Failing row contains (..., SE45..., Anna Andersson, ...)").
+// No pattern-based redactor catches a payee name, so the payload is dropped
+// whole; the constraint name in `message` is the diagnostic anyway.
+const FAILING_ROW_PATTERN = /Failing row contains \(.*\)/s
+
+/**
+ * Postgres/PostgREST error text (message, details, hint) can carry payment
+ * data: a quoted failing row, an IBAN in a constraint message. Before any of
+ * it reaches a log line it is (1) stripped of any failing-row payload,
+ * (2) run through the repository's redactor (SE IBANs, personnummer, emails,
+ * API keys) and (3) bounded, in that order: bounding first could cut an IBAN
+ * into a fragment the pattern no longer recognises. The logger redacts again
+ * on its own path; this keeps the guarantee local to the call site that knows
+ * the text is payment-shaped (#2282 review). Non-strings become null.
+ */
+function boundedRedactedText(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0) return null
+  const redacted = redactString(value.replace(FAILING_ROW_PATTERN, 'Failing row contains ([ROW_OMITTED])'))
+  if (redacted.length <= RPC_ERROR_TEXT_MAX) return redacted
+  return `${redacted.slice(0, RPC_ERROR_TEXT_MAX - TRUNCATED.length)}${TRUNCATED}`
+}
 
 type InvoiceRow = BatchInvoiceFacts & {
   supplier: (SupplierPayeeSource & { id: string; name: string; city: string | null }) | null
@@ -371,7 +397,9 @@ export async function createSupplierPaymentBatch(
   // violation inside the SECURITY DEFINER body and a PostgREST schema-cache
   // miss right after a deploy (PGRST202) apart, so it goes to the log (#2060).
   // Deliberately NOT logged: debtor_snapshot and the item rows (IBAN and payee
-  // data); companyId, batchId and the item count make the line greppable.
+  // data); companyId, batchId and the item count make the line greppable. The
+  // three text fields go through boundedRedactedText first, since Postgres
+  // quotes the failing row in details; only the SQLSTATE is verbatim.
   if (error) {
     log.error('create_supplier_payment_batch RPC failed', {
       companyId,
@@ -379,9 +407,9 @@ export async function createSupplierPaymentBatch(
       itemCount: itemRows.length,
       rpcError: {
         code: error.code,
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
+        message: boundedRedactedText(error.message),
+        details: boundedRedactedText(error.details),
+        hint: boundedRedactedText(error.hint),
       },
     })
     return { ok: false, code: 'create_failed' }
