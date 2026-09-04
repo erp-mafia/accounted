@@ -70,7 +70,9 @@ function SortTh({
   return (
     <th
       className={cn(TH_CLASS, className)}
-      aria-sort={active ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+      // Only the active header carries aria-sort. "none" is the default, so
+      // stating it on every other column adds noise without adding meaning.
+      aria-sort={active ? (sort.direction === 'asc' ? 'ascending' : 'descending') : undefined}
     >
       <button
         type="button"
