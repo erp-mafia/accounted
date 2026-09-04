@@ -24,8 +24,9 @@ UPDATE public.supplier_invoices
 SET status = 'credited'
 WHERE is_credit_note
   AND status IN ('registered', 'approved', 'overdue')
-  AND company_id NOT IN (
-    SELECT source_company_id FROM public.company_migration_resets
+  AND NOT EXISTS (
+    SELECT 1 FROM public.company_migration_resets r
+    WHERE r.source_company_id = supplier_invoices.company_id
   );
 
 ALTER TABLE public.supplier_invoices
