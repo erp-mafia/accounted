@@ -3327,6 +3327,83 @@ export const UpdateEmployeeBenefitSchema = z.object({
   }
 })
 
+export const RecurringLineItemTypeSchema = z.enum([
+  'gross_deduction_pension',
+  'gross_deduction_other',
+  'net_deduction_union',
+  'net_deduction_benefit_payment',
+  'net_deduction_other',
+])
+
+/** Same inclusive-bound semantics as BENEFIT_PERIOD_ORDER_MESSAGE, for
+ * employee_recurring_lines (migration 20260902140000). */
+export const RECURRING_LINE_PERIOD_ORDER_MESSAGE =
+  '"Gäller till" måste vara samma dag som eller efter "Gäller från". Lämna fältet tomt för en löpande rad.'
+
+const recurringLineAmountIssue = (
+  data: { item_type?: string; amount?: number },
+  ctx: z.RefinementCtx,
+) => {
+  // Mirrors the employee_recurring_lines_amount_sign CHECK: every supported
+  // type is a deduction and must be negative. Kept in the schema so the
+  // violation is a field-level 400 instead of a Postgres 23514.
+  if (data.amount === undefined || data.item_type === undefined) return
+  const bad = data.amount >= 0
+  if (bad) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Avdragsrader måste ha negativt belopp och tilläggsrader positivt belopp.',
+      path: ['amount'],
+    })
+  }
+}
+
+export const CreateEmployeeRecurringLineSchema = z.object({
+  item_type: RecurringLineItemTypeSchema,
+  description: z.string().min(1).max(200),
+  amount: z.number(),
+  account_number: accountNumberSchema.optional(),
+  valid_from: isoDate,
+  valid_to: isoDate.optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  is_active: z.boolean().optional(),
+}).superRefine((data, ctx) => {
+  recurringLineAmountIssue(data, ctx)
+  if (data.valid_to !== undefined && data.valid_to < data.valid_from) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: RECURRING_LINE_PERIOD_ORDER_MESSAGE,
+      path: ['valid_to'],
+    })
+  }
+})
+
+/** item_type is not patchable (like benefit_type): the sign rule and derived
+ * flags key off it, so changing kind means delete + recreate. The route
+ * re-checks the amount sign and merged date pair against the stored row. */
+export const UpdateEmployeeRecurringLineSchema = z.object({
+  description: z.string().min(1).max(200).optional(),
+  amount: z.number().optional(),
+  account_number: accountNumberSchema.nullable().optional(),
+  valid_from: isoDate.optional(),
+  valid_to: isoDate.nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  is_active: z.boolean().optional(),
+}).superRefine((data, ctx) => {
+  if (
+    data.valid_from !== undefined &&
+    data.valid_to !== undefined &&
+    data.valid_to !== null &&
+    data.valid_to < data.valid_from
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: RECURRING_LINE_PERIOD_ORDER_MESSAGE,
+      path: ['valid_to'],
+    })
+  }
+})
+
 export const CreateSalaryRunSchema = z.object({
   period_year: z.number().int().min(2020).max(2100),
   period_month: z.number().int().min(1).max(12),
