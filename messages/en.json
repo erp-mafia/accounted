@@ -8448,7 +8448,7 @@
     "review_col_match": "Match in SCB",
     "review_others": "Needs a choice or cannot be found",
     "review_choose": "Choose",
-    "review_choose_n": "{count} matches",
+    "review_choose_n": "{count, plural, one {1 match} other {# matches}}",
     "review_none": "No match",
     "review_foreign": "Foreign company{place}",
     "review_ai_read": "Read from the voucher: {name}",

@@ -8448,7 +8448,7 @@
     "review_col_match": "Träff i SCB",
     "review_others": "Behöver ett val eller går inte att hitta",
     "review_choose": "Välj",
-    "review_choose_n": "{count} träffar",
+    "review_choose_n": "{count, plural, one {1 träff} other {# träffar}}",
     "review_none": "Ingen träff",
     "review_foreign": "Utländskt bolag{place}",
     "review_ai_read": "Läst ur verifikatet: {name}",

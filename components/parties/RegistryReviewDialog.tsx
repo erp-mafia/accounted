@@ -189,7 +189,7 @@ export function RegistryReviewDialog({
                             {[formatOrgNumber(o.candidate.orgNumber), o.candidate.city, o.candidate.industry].filter(Boolean).join(' · ')}
                           </span>
                         </td>
-                        <td className={`${TD_CLASS} whitespace-nowrap text-right`}>
+                        <td className={`${TD_CLASS} text-right`}>
                           {s.saved === 'done' ? <Badge variant="success">{t('review_saved')}</Badge> : s.saved === 'failed' ? <Badge variant="warning">{t('review_failed')}</Badge> : null}
                         </td>
                       </tr>
