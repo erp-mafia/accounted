@@ -56,6 +56,7 @@ SET pays_salaries = true,
 FROM (SELECT DISTINCT company_id FROM public.salary_runs WHERE status = 'booked') sr
 WHERE sr.company_id = cs.company_id
   AND (cs.pays_salaries = false OR cs.employer_registered IS NULL)
-  AND cs.company_id NOT IN (
-    SELECT source_company_id FROM public.company_migration_resets
+  AND NOT EXISTS (
+    SELECT 1 FROM public.company_migration_resets r
+    WHERE r.source_company_id = cs.company_id
   );
