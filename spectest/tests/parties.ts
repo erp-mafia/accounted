@@ -11,7 +11,7 @@
  * branch is what the register makes of the books, not how the books were
  * written, and the manual voucher form has its own tests.
  */
-import { expect } from "@specific.dev/spectest";
+import { expect, expectRaw } from "@specific.dev/spectest";
 import { env, APP_URL } from "../index";
 import { enrolMfa } from "./mfa";
 import { ACCOUNT } from "./signup";
@@ -191,6 +191,56 @@ export const foreignIsNotSearched = env.test(
     await expect(dialog).toContainText("SCB:s register täcker bara svenska företag");
     expect(scb.calls(), "no SCB query for a company the register cannot hold").toHaveLength(0);
     await b.keyboard.press("Escape");
+  },
+);
+
+export const reviewList = env.test(
+  "parties review list",
+  { dependsOn: suggestionsFromBooks },
+  async (ctx) => {
+    const b = await ctx.browser();
+    const scb = ctx.fakes.scb;
+    await b.goto(`${APP_URL}/parties`);
+
+    // Three rows SCB could hold lack an org number: Visma, TIC and the hotel.
+    // The two foreign ones are not offered.
+    await b.getByRole("button", { name: "Hitta org.nr (3)", exact: true }).click();
+    const dialog = b.getByRole("dialog");
+    await expect(dialog).toContainText("Hitta org.nr i företagsregistret");
+
+    // Rows are asked one at a time; wait for the last to land.
+    await expect(dialog.getByRole("button", { name: /^Godkänn \d+$/ })).toBeEnabled({ timeout: 30000 });
+    await expect(dialog).toContainText("SCB frågades med namnet i verifikatet");
+
+    // Exactly one match each: shown ticked, not yet saved.
+    await expect(dialog.getByRole("row", { name: /Visma Spcs AB/ })).toContainText("556252-9155");
+    await expect(dialog.getByRole("row", { name: /The Intelligence Company AB \(publ\)/ })).toContainText("559487-1682");
+    // No match: listed underneath with the per-row picker still reachable.
+    await expect(dialog).toContainText("Hotel at Booking.com");
+    await expect(dialog).toContainText("Ingen träff");
+
+    // Nothing has been written yet.
+    const before = await ctx.svc.supabase.sql<{ n: string }>`
+      select count(*)::text as n from public.parties where company_id = ${ctx.parent.companyId} and org_number is not null`;
+    expect(before[0]?.n).toBe("0");
+
+    await dialog.getByRole("button", { name: "Godkänn 2", exact: true }).click();
+
+    const saved = await ctx.poll("both org numbers land on the parties", async () => {
+      const rows = await ctx.svc.supabase.sql<{ display_name: string; org_number: string | null }>`
+        select display_name, org_number from public.parties
+        where company_id = ${ctx.parent.companyId} and org_number is not null
+        order by display_name`;
+      return rows.unwrap().length === 2 ? rows : null;
+    });
+    expect(saved[0]?.display_name).toBe("The Intelligence Company AB (publ)");
+    expect(saved[0]?.org_number).toBe("5594871682");
+    expect(saved[1]?.display_name).toBe("Visma Spcs AB");
+    expect(saved[1]?.org_number).toBe("5562529155");
+
+    // Each approval was one lookup by org number after the name searches.
+    const byOrg = scb.calls().unwrap().filter((c) => c.variable.startsWith("OrgNr"));
+    expectRaw(byOrg.length, "one org-number lookup per approved row").toBe(2);
   },
 );
 
