@@ -1018,6 +1018,7 @@ export default function ExpenseClaimsPage() {
           onAction={canWrite ? () => setCreating(true) : undefined}
         />
       ) : (
+        <div className="overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -1034,8 +1035,8 @@ export default function ExpenseClaimsPage() {
               </th>
               <th className={TH_CLASS}>{t('th_date')}</th>
               <th className={TH_CLASS}>{t('th_description')}</th>
-              <th className={TH_CLASS}>{t('th_claimant')}</th>
-              <th className={TH_CLASS}>{t('th_receipt')}</th>
+              <th className={`${TH_CLASS} hidden md:table-cell`}>{t('th_claimant')}</th>
+              <th className={`${TH_CLASS} hidden lg:table-cell`}>{t('th_receipt')}</th>
               <th className={TH_CLASS}>{t('th_status')}</th>
               <th className={`${TH_CLASS} text-right`}>{t('th_amount')}</th>
               <th className={TH_CLASS} />
@@ -1077,8 +1078,8 @@ export default function ExpenseClaimsPage() {
                   )}
                   <span className="ml-2 text-muted-foreground">{c.expense_account}</span>
                 </td>
-                <td className={TD_CLASS}>{c.claimant_name}</td>
-                <td className={TD_CLASS}>
+                <td className={`${TD_CLASS} hidden md:table-cell`}>{c.claimant_name}</td>
+                <td className={`${TD_CLASS} hidden lg:table-cell`}>
                   {c.document ? (
                     <span className="text-muted-foreground">
                       {c.document.file_name ?? t('receipt_attached')}
@@ -1120,6 +1121,7 @@ export default function ExpenseClaimsPage() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       {/* Booked payouts: each row is one bank transfer (skuld -> likvidkonto),
@@ -1127,12 +1129,13 @@ export default function ExpenseClaimsPage() {
       {payoutBatches.length > 0 && (
         <div className="space-y-2 pt-4">
           <h2 className="text-sm font-medium text-muted-foreground">{t('payouts_heading')}</h2>
+          <div className="overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
                 <th className={TH_CLASS}>{t('th_date')}</th>
                 <th className={TH_CLASS}>{t('th_claimant')}</th>
-                <th className={TH_CLASS}>{t('payout_cash_account')}</th>
+                <th className={`${TH_CLASS} hidden sm:table-cell`}>{t('payout_cash_account')}</th>
                 <th className={`${TH_CLASS} text-right`}>{t('th_amount')}</th>
                 <th className={TH_CLASS} />
               </tr>
@@ -1142,7 +1145,7 @@ export default function ExpenseClaimsPage() {
                 <tr key={b.id}>
                   <td className={`${TD_CLASS} tabular-nums`}>{formatDate(b.payout_date)}</td>
                   <td className={TD_CLASS}>{b.claimant_name}</td>
-                  <td className={`${TD_CLASS} tabular-nums`}>{b.cash_account}</td>
+                  <td className={`${TD_CLASS} hidden tabular-nums sm:table-cell`}>{b.cash_account}</td>
                   <td className={`${TD_CLASS} text-right font-medium tabular-nums`}>
                     {formatCurrency(b.total_sek)}
                   </td>
@@ -1160,6 +1163,7 @@ export default function ExpenseClaimsPage() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -1626,7 +1630,8 @@ export default function ExpenseClaimsPage() {
                       {showRowEditor ? t('hide_row_editor') : t('edit_rows')}
                     </Button>
                   </div>
-              <table className="w-full border-collapse text-[13px]">
+              <div className="overflow-x-auto">
+              <table className="w-full min-w-[420px] border-collapse text-[13px]">
                 <thead>
                   <tr>
                     <th className={TH_CLASS}>{t('preview_account')}</th>
@@ -1740,6 +1745,7 @@ export default function ExpenseClaimsPage() {
                   </tr>
                 </tbody>
               </table>
+              </div>
               <p className="text-xs text-muted-foreground">
                 {t('preview_summary', {
                   name: claimantDisplay,
