@@ -5348,7 +5348,6 @@
     "system_badge": "System",
     "activated": "Aktiverat",
     "add": "Lägg till",
-    "active_count_label": "{active}/{total} aktiva",
     "no_matches": "Inga konton matchar sökningen",
     "no_accounts": "Inga konton i kontoplanen",
     "delete_confirm_title": "Ta bort konto?",
