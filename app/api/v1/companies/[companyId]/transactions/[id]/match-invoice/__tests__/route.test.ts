@@ -154,6 +154,12 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
             data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
             error: null,
           },
+          // First read is the hard-duplicate guard (no prior voucher); the
+          // writer then selects the inserted row's id back.
+          invoice_payments: [
+            { data: [], error: null },
+            { data: { id: 'ip-1' }, error: null },
+          ],
         },
         calls,
       ),
@@ -226,6 +232,12 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
             data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
             error: null,
           },
+          // First read is the hard-duplicate guard (no prior voucher); the
+          // writer then selects the inserted row's id back.
+          invoice_payments: [
+            { data: [], error: null },
+            { data: { id: 'ip-1' }, error: null },
+          ],
         },
         calls,
       ),

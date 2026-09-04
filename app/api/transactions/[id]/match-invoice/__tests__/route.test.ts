@@ -304,7 +304,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-fx' })
 
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
-    enqueue({ data: null, error: null }) // insert invoice_payments
+    enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null }) // update transaction
     enqueue({ data: null, error: null }) // logMatchEvent
 
@@ -404,7 +404,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-fx-manual' })
 
     enqueue({ data: [{ id: VALID_UUID }], error: null })
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
 
@@ -465,7 +465,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // Update invoice (optimistic lock returns updated row)
     enqueue({ data: [{ id: VALID_UUID }], error: null })
     // Insert invoice_payments
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'ip-1' }, error: null })
     // Update transaction
     enqueue({ data: null, error: null })
     // logMatchEvent insert (fire-and-forget)
@@ -568,7 +568,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
-    enqueue({ data: null, error: null }) // insert invoice_payments
+    enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null }) // update transaction
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
@@ -650,7 +650,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // Update invoice (optimistic lock)
     enqueue({ data: [{ id: VALID_UUID }], error: null })
     // Insert invoice_payments
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'ip-1' }, error: null })
     // Update transaction
     enqueue({ data: null, error: null })
     // logMatchEvent for match
@@ -721,7 +721,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // Update invoice (optimistic lock)
     enqueue({ data: [{ id: VALID_UUID }], error: null })
     // Insert invoice_payments
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'ip-1' }, error: null })
     // Update transaction
     enqueue({ data: null, error: null })
     // logMatchEvent
@@ -767,7 +767,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
-    enqueue({ data: null, error: null }) // insert invoice_payments
+    enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null }) // update transaction
     enqueue({ data: null, error: null }) // logMatchEvent
 
@@ -891,7 +891,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // invoice_payments → update transaction → logMatchEvent.
     enqueue({ data: null, error: null }) // document_attachments lookup
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
-    enqueue({ data: null, error: null }) // insert invoice_payments
+    enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null }) // update transaction
     enqueue({ data: null, error: null }) // logMatchEvent
 
@@ -943,7 +943,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       mockCreateJournalEntry.mockResolvedValue({ id: 'je-1940' })
 
       enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
-      enqueue({ data: null, error: null }) // insert invoice_payments
+      enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
       enqueue({ data: null, error: null }) // update transaction
       enqueue({ data: null, error: null }) // logMatchEvent
 
@@ -997,7 +997,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       mockCreateInvoiceCashEntry.mockResolvedValue({ id: 'je-cash-1940' })
 
       enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
-      enqueue({ data: null, error: null }) // insert invoice_payments
+      enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
       enqueue({ data: null, error: null }) // update transaction
       enqueue({ data: null, error: null }) // logMatchEvent
 
@@ -1049,7 +1049,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       mockCreateJournalEntry.mockResolvedValue({ id: 'je-default' })
 
       enqueue({ data: [{ id: VALID_UUID }], error: null })
-      enqueue({ data: null, error: null })
+      enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
       enqueue({ data: null, error: null })
       enqueue({ data: null, error: null })
 
@@ -1175,7 +1175,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // Update invoice
     enqueue({ data: [{ id: VALID_UUID }], error: null })
     // Insert invoice_payments
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'ip-1' }, error: null })
     // Update transaction
     enqueue({ data: null, error: null })
     // logMatchEvent
@@ -1370,7 +1370,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-partial-extra' })
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
-    enqueue({ data: null, error: null }) // insert invoice_payments
+    enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null }) // update tx
     enqueue({ data: null, error: null }) // logMatchEvent
 
@@ -1450,7 +1450,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-forced' })
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
-    enqueue({ data: null, error: null }) // insert invoice_payments
+    enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null }) // update tx
     enqueue({ data: null, error: null }) // logMatchEvent
 

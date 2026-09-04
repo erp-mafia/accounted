@@ -15,7 +15,7 @@ import { validateBody } from '@/lib/api/validate'
 import { MatchInvoiceSchema } from '@/lib/api/schemas'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
-import { appliedPaymentAmount } from '@/lib/invoices/invoice-payment-row'
+import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
@@ -701,37 +701,37 @@ export const POST = withRouteContext(
 
     const paymentNotes = manualRateNote
 
-    // Payment row stores the amount APPLIED to the invoice (new paid_amount
-    // minus the prior one), in INVOICE currency (the column unit): the
-    // definition the manual, MCP and Stripe paths adopted in #2236. Never the
-    // cash received: when a whole-krona bank line settles an öre-carrying
-    // remaining, 3740 carries the öre and paid_amount advances by the
-    // remaining only, so a row holding the cash would exceed the receivable
-    // by the absorbed öre (#2250). exchange_rate records the rate ACTUALLY USED for
-    // this payment: Riksbanken (or manual override) on tx.date: per
-    // ML 8 kap 21-23§. Falling back to invoice.exchange_rate would record
-    // the invoice-date rate, which is what the round-7/8 bot reviews
-    // explicitly flagged as wrong.
-    const { error: paymentInsertError } = await supabase
-      .from('invoice_payments')
-      .insert({
-        user_id: user.id,
-        company_id: companyId,
-        invoice_id,
-        payment_date: transaction.date,
-        amount: appliedPaymentAmount(invoice, newPaidAmount),
+    // The AR sub-ledger row goes through the single writer
+    // (lib/invoices/invoice-payment-row.ts): amount = the amount APPLIED to
+    // the invoice (new paid_amount minus the prior one), never the cash
+    // received, so a whole-krona overshoot absorbed on 3740 stays in the
+    // voucher and out of the receivable (#2250). exchange_rate is the rate
+    // ACTUALLY USED for this payment: Riksbanken (or manual override) on
+    // tx.date, per ML 8 kap 21-23§. Falling back to invoice.exchange_rate
+    // would record the invoice-date rate, which is what the round-7/8 bot
+    // reviews explicitly flagged as wrong.
+    const recorded = await recordInvoicePaymentRow(supabase, {
+      userId: user.id,
+      companyId,
+      invoice: {
+        id: invoice_id,
         currency: invoice.currency,
-        exchange_rate: fx.required ? fx.rate : invoice.exchange_rate,
-        journal_entry_id: journalEntryId,
-        transaction_id: transactionId,
-        notes: paymentNotes,
-      })
+        exchange_rate: invoice.exchange_rate,
+        paid_amount: invoice.paid_amount,
+      },
+      paymentDate: transaction.date,
+      newPaidAmount,
+      journalEntryId,
+      transactionId,
+      exchangeRate: fx.required ? fx.rate : invoice.exchange_rate,
+      notes: paymentNotes,
+    })
 
-    if (paymentInsertError) {
-      if (paymentInsertError.code === '23505') {
+    if (!recorded.ok) {
+      if (recorded.code === '23505') {
         return errorResponseFromCode('MATCH_INVOICE_DUPLICATE_PAYMENT', txLog, { requestId })
       }
-      txLog.error('failed to record invoice payment', paymentInsertError)
+      txLog.error('failed to record invoice payment', undefined, { error: recorded.error })
       return errorResponseFromCode('MATCH_INVOICE_RECORD_PAYMENT_FAILED', txLog, { requestId })
     }
 

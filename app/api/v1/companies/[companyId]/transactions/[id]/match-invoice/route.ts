@@ -41,7 +41,7 @@ import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
-import { appliedPaymentAmount } from '@/lib/invoices/invoice-payment-row'
+import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
@@ -710,37 +710,38 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const paymentNotes = [cashMethodNote, manualRateNote].filter(Boolean).join(' · ') || null
 
-    // amount and currency must agree: the row stores the amount APPLIED to
-    // the invoice (new paid_amount minus the prior one, the #2236 definition
-    // shared with the manual, MCP and Stripe paths) in INVOICE currency (the
-    // column's unit), never a SEK magnitude wearing the invoice's foreign
-    // currency code and never the cash received: a whole-krona overshoot
-    // absorbed on 3740 is part of the voucher, not of the receivable (#2250).
-    // exchange_rate is the rate ACTUALLY USED for this
-    // payment (Riksbanken or the caller's override on the payment date, per
-    // ML 8 kap 21-23§), falling back to the invoice's booking rate only when no
-    // conversion was needed.
-    const { error: paymentInsertErr } = await ctx.supabase
-      .from('invoice_payments')
-      .insert({
-        user_id: ctx.userId,
-        company_id: ctx.companyId!,
-        invoice_id,
-        payment_date: transaction.date,
-        amount: appliedPaymentAmount(invoice, newPaidAmount),
+    // The AR sub-ledger row goes through the single writer
+    // (lib/invoices/invoice-payment-row.ts): amount = the amount APPLIED to
+    // the invoice (new paid_amount minus the prior one) in INVOICE currency,
+    // never a SEK magnitude wearing the invoice's foreign currency code and
+    // never the cash received (a whole-krona overshoot absorbed on 3740 is
+    // part of the voucher, not of the receivable, #2250). exchange_rate is
+    // the rate ACTUALLY USED for this payment (Riksbanken or the caller's
+    // override on the payment date, per ML 8 kap 21-23§), falling back to the
+    // invoice's booking rate only when no conversion was needed.
+    const recorded = await recordInvoicePaymentRow(ctx.supabase, {
+      userId: ctx.userId,
+      companyId: ctx.companyId!,
+      invoice: {
+        id: invoice_id,
         currency: invoice.currency,
-        exchange_rate: fx.required ? fx.rate : invoice.exchange_rate,
-        journal_entry_id: journalEntryId,
-        transaction_id: txId,
-        notes: paymentNotes,
-      })
-    if (paymentInsertErr) {
-      if (paymentInsertErr.code === '23505') {
+        exchange_rate: invoice.exchange_rate,
+        paid_amount: invoice.paid_amount,
+      },
+      paymentDate: transaction.date,
+      newPaidAmount,
+      journalEntryId,
+      transactionId: txId,
+      exchangeRate: fx.required ? fx.rate : invoice.exchange_rate,
+      notes: paymentNotes,
+    })
+    if (!recorded.ok) {
+      if (recorded.code === '23505') {
         return v1ErrorResponseFromCode('MATCH_INVOICE_DUPLICATE_PAYMENT', txLog, {
           requestId: ctx.requestId,
         })
       }
-      txLog.error('failed to record payment', paymentInsertErr)
+      txLog.error('failed to record payment', undefined, { error: recorded.error })
       return v1ErrorResponseFromCode('MATCH_INVOICE_RECORD_PAYMENT_FAILED', txLog, {
         requestId: ctx.requestId,
       })
