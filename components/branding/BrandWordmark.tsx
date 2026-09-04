@@ -49,6 +49,10 @@ export function BrandWordmark({
           height={size === 'hero' ? 64 : 22}
           className={cn('w-auto', size === 'hero' ? 'h-16' : 'h-[22px]')}
           priority={size === 'hero'}
+          // Bypass the image optimizer: its remote-host allowlist is fixed at
+          // build time, which the runtime-configured Docker image cannot
+          // satisfy (issue #2203, same reasoning as BrandHomeLink).
+          unoptimized
         />
       </span>
     )

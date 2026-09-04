@@ -19,9 +19,30 @@ import { normalizeCounterpartyName } from '@/lib/bookkeeping/counterparty-templa
 const AP_PREFIX = /^(levfakt|levfkt|leverantörsfaktura från|leverantörsfaktura|levbet|faktura|kvitto|utgift)\s+/
 const LEADING_SUPPLIER_NUMBER = /^\d{1,5}\s+/
 const TRAILING_SHORT_DIGITS = /(\s+\d{1,3})+$/
+const BANK_METHOD = /(kortköp\/uttag|kortkp\/uttag|överföring via internet|bg-bet\.? via internet|pg-bet\.? via internet|bg-bet\.?|autogiro)/gi
+const GIRO_REFERENCE = /\b(bg|pg)\s*\d{5,}\b/gi
+const CARD_REFERENCE = /\bk\d{3,6}\b/gi
+const LONG_DIGITS = /\b\d{6,}\b/g
+
+/**
+ * What our own booking flows write: "<counterpart> · <note>", bank method
+ * tokens and long references. Keep the head before " · " (or, when the head
+ * has no letters, the text after it up to the first comma), drop the tokens.
+ * Mirrors the pre-clean in the SQL ledger_key (20260904002000).
+ */
+export function preClean(raw: string): string {
+  let pre = raw
+  const sep = pre.indexOf(' · ')
+  if (sep >= 0) {
+    let head = pre.slice(0, sep)
+    if (!/\p{L}/u.test(head)) head = pre.slice(sep + 3).split(',')[0] ?? ''
+    pre = head
+  }
+  return pre.replace(BANK_METHOD, ' ').replace(GIRO_REFERENCE, ' ').replace(CARD_REFERENCE, ' ').replace(LONG_DIGITS, ' ')
+}
 
 export function ledgerKey(raw: string | null | undefined): string {
-  const k = normalizeCounterpartyName(raw ?? '')
+  const k = normalizeCounterpartyName(preClean(raw ?? ''))
   if (!k) return ''
   const stripped = k
     .replace(AP_PREFIX, '')
@@ -53,4 +74,27 @@ export function coreKey(key: string): string {
     .split(/\s+/)
     .filter(Boolean)
     .join(' ')
+}
+
+const DISPLAY_PREFIX =
+  /^(levfakt|levfkt|lev\.?fakt\.?|leverantörsfaktura från\s+\d*|leverantörsfaktura|levbet\.?|kundbet\.?|kundfaktura|kundfakt|inbetalning från|inbetalning|utbetalning till|utbetalning|betalning till|betalning|faktura från|faktura|kvitto|utgift)\s+/i
+const DISPLAY_SUFFIX = /(\s*[,(]\s*\d{1,6}\s*\)?|\s+\d{1,4})+$/
+
+/**
+ * A display name from raw voucher text: the AP/AR prefix and the supplier
+ * number go, the casing and the legal form stay. "Levfakt BEIJER
+ * BYGGMATERIAL AB (2089)" reads "BEIJER BYGGMATERIAL AB"; "Kundbet Acme
+ * Konsult AB" reads "Acme Konsult AB". Used only when no document carries
+ * a printed name; nothing here is generated, only removed.
+ */
+export function displayNameFromVoucherText(raw: string): string {
+  const cleaned = preClean(raw)
+    .trim()
+    .replace(DISPLAY_PREFIX, '')
+    .replace(/^\d{6,10}[,\s]+/, '')
+    .replace(DISPLAY_SUFFIX, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[,\s]+|[,\s]+$/g, '')
+    .trim()
+  return cleaned.length >= 2 ? cleaned : raw.trim()
 }

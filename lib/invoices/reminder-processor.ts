@@ -129,7 +129,7 @@ export async function sendReminder(
   // with no payment account for the invoice currency would print nothing to
   // pay to, or (before this gate) the SEK account's IBAN on a EUR invoice.
   const currency = invoice.currency
-  if (!hasUsableInvoicePaymentAccount(resolveInvoicePaymentAccount(company, currency), currency)) {
+  if (!hasUsableInvoicePaymentAccount(resolveInvoicePaymentAccount(company, currency, invoice.payment_details ?? null), currency)) {
     log.warn('Skipping reminder: no payment account configured for invoice currency', {
       invoiceId: invoice.id,
       invoiceNumber: invoice.invoice_number,
@@ -198,6 +198,10 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
       credit_notes:invoices!credited_invoice_id(id, status, creation_complete)
     `)
     .in('status', ['sent', 'overdue'])
+    // Only fakturor are payment requests. A sent proforma or quote past its
+    // date is not overdue and must never receive a betalningspåminnelse or
+    // be flipped to 'overdue' below.
+    .eq('document_type', 'invoice')
     .is('credited_invoice_id', null)
     .lte('due_date', cutoffDate.toISOString().split('T')[0])
     .order('due_date', { ascending: true })
@@ -302,7 +306,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
     const invoiceCurrency = invoice.currency
     if (
       !hasUsableInvoicePaymentAccount(
-        resolveInvoicePaymentAccount(company as CompanySettings, invoiceCurrency),
+        resolveInvoicePaymentAccount(company as CompanySettings, invoiceCurrency, invoice.payment_details ?? null),
         invoiceCurrency,
       )
     ) {

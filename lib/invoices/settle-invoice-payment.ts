@@ -10,6 +10,7 @@ import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { planInvoicePaymentForLines } from '@/lib/invoices/apply-invoice-payment'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { recordInvoicePaymentRow, removeInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events'
 import type { CreateJournalEntryInput, Customer, EntityType, Invoice } from '@/types'
@@ -23,9 +24,13 @@ import type { CreateJournalEntryInput, Customer, EntityType, Invoice } from '@/t
  *   1. planInvoicePayment: ledger math + overpayment guard
  *   2. journal entry: custom lines | cash entry (kontantmetoden, unbooked) |
  *      payment entry (clears 1510), fail-closed for real invoices
- *   3. CAS-guarded invoice status update; a lost race or failed update cancels
- *      the just-posted voucher so GL and sub-ledger never diverge
- *   4. invoice.paid event (best-effort)
+ *   3. invoice_payments row (the AR sub-ledger): the only source of the
+ *      payment DATE, which the kontantmetod bokslut cut-off, the voucher ->
+ *      invoice reference map and the "Betalningar" view all read (#2019)
+ *   4. CAS-guarded invoice status update; a lost race or failed update cancels
+ *      the just-posted voucher and removes the payment row so GL and
+ *      sub-ledger never diverge
+ *   5. invoice.paid event (best-effort)
  *
  * `settlementAccountNumber` routes the debit side: default 1930 (bank), 1686
  * for PSP-balance settlements (Stripe) where the money reaches the bank only
@@ -272,6 +277,39 @@ export async function settleInvoicePayment(
     }
   }
 
+  // Sub-ledger row (see lib/invoices/invoice-payment-row.ts for why and for
+  // the shape). Written BEFORE the CAS update so the failure branches below
+  // can undo it together with the voucher; a real invoice never reaches paid
+  // through this service without it.
+  let paymentRowId: string | null = null
+  if (isRealInvoice) {
+    const recorded = await recordInvoicePaymentRow(supabase, {
+      userId,
+      companyId,
+      invoice,
+      paymentDate,
+      newPaidAmount,
+      journalEntryId,
+    })
+    if (!recorded.ok) {
+      if (journalEntryId) {
+        await cancelOrphanedPaymentEntry(
+          supabase,
+          companyId,
+          userId,
+          journalEntryId,
+          'Automatiskt makulerad: betalningsraden kunde inte sparas efter bokförd betalning',
+        )
+      }
+      return {
+        ok: false,
+        code: 'INVOICE_PAID_BOOK_FAILED',
+        details: { reason: 'payment_row_insert_failed', error: recorded.error },
+      }
+    }
+    paymentRowId = recorded.id
+  }
+
   // CAS guard: only update if status is still in a payable state.
   const { data: updateResult, error: updateError } = await supabase
     .from('invoices')
@@ -289,6 +327,7 @@ export async function settleInvoicePayment(
   if (updateError) {
     // The payment voucher already posted but the invoice row did not flip to
     // paid; cancel the orphan so the GL doesn't diverge from the sub-ledger.
+    await removeInvoicePaymentRow(supabase, companyId, paymentRowId)
     if (journalEntryId) {
       await cancelOrphanedPaymentEntry(
         supabase,
@@ -304,6 +343,7 @@ export async function settleInvoicePayment(
   if (!updateResult || updateResult.length === 0) {
     // Status changed between read and write (concurrent settle): cancel the
     // orphaned payment voucher; the trigger documents the voucher gap.
+    await removeInvoicePaymentRow(supabase, companyId, paymentRowId)
     if (journalEntryId) {
       await cancelOrphanedPaymentEntry(
         supabase,

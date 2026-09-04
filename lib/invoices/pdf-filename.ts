@@ -30,6 +30,7 @@ function safeFilenamePart(value: string | null | undefined, fallback: string, ma
 function documentLabel(documentType: InvoiceDocumentType, isCreditNote: boolean): string {
   if (isCreditNote) return 'Kreditfaktura'
   if (documentType === 'proforma') return 'Proformafaktura'
+  if (documentType === 'quote') return 'Offert'
   if (documentType === 'delivery_note') return 'Följesedel'
   return 'Faktura'
 }

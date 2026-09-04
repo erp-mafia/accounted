@@ -39,4 +39,10 @@ describe('isEditableInvoiceDraft', () => {
       }),
     ).toBe(false)
   })
+
+  it('allows an open quote draft but blocks one that was accepted or declined', () => {
+    expect(isEditableInvoiceDraft({ status: 'draft', quote_status: 'open' })).toBe(true)
+    expect(isEditableInvoiceDraft({ status: 'draft', quote_status: 'accepted' })).toBe(false)
+    expect(isEditableInvoiceDraft({ status: 'draft', quote_status: 'declined' })).toBe(false)
+  })
 })

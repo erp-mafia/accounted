@@ -137,6 +137,9 @@ export async function sendInvoiceNotifications(
   const { data: invoices } = await supabase
     .from('invoices')
     .select('id, user_id, invoice_number, total, currency, due_date, customer:customers(name)')
+    // Proformas, delivery notes and quotes are never receivables: nothing is
+    // due on them, so they get no förfallo push.
+    .eq('document_type', 'invoice')
     .in('status', ['sent', 'overdue'])
     .in('due_date', [in3DaysStr, todayStr, daysAgo3Str, daysAgo7Str])
 

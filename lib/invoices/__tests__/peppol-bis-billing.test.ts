@@ -71,6 +71,38 @@ function makeValidInput() {
 }
 
 describe('generatePeppolBisBillingInvoice', () => {
+  it('prints the same payee as the PDF: the resolved SEK payment account, not the raw legacy column', () => {
+    const input = makeValidInput()
+    // Legacy column says one bankgiro, the resolver's SEK entry another (the
+    // state a v1/MCP settings write used to leave behind). The XML must
+    // follow the resolver, like the PDF and the email do.
+    input.company = makeCompanySettings({
+      ...input.company,
+      bankgiro: '991-2346',
+      invoice_payment_accounts: {
+        SEK: {
+          bank_name: null,
+          clearing_number: null,
+          account_number: null,
+          bankgiro: '5050-1055',
+          plusgiro: null,
+          swish: null,
+          iban: null,
+          bic: null,
+          bank_code: null,
+          foreign_account_number: null,
+        },
+      },
+    })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<cbc:ID>50501055</cbc:ID>')
+    expect(result.xml).not.toContain('9912346')
+  })
+
   it('generates a Swedish Peppol BIS Billing 3 invoice with reconciled VAT groups', () => {
     const result = generatePeppolBisBillingInvoice(makeValidInput())
 

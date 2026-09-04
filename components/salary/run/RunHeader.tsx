@@ -3,6 +3,11 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
+import {
+  agiPeriodDiffersFromRunPeriod,
+  agiReportingPeriod,
+  formatAgiPeriodDashed,
+} from '@/lib/salary/agi/reporting-period'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -163,12 +168,12 @@ export function RunHeader({
     if (!saved) setPaymentDateDraft(run.payment_date)
   }
 
-  // The payment date must stay within the run's period month: the AGI is
-  // declared per payment month (kontantprincipen), so the API refuses dates
-  // outside it. min/max keeps the native picker inside the month; typed
-  // values outside it still get the server's 400 toast.
-  const periodMonthPrefix = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
-  const periodMonthLastDay = new Date(run.period_year, run.period_month, 0).getDate()
+  // The AGI is declared for the PAYOUT month (kontantprincipen), so a run
+  // paid the month after its period (lön i efterskott) files under that
+  // later month. Say so in the meta line whenever the two differ: nothing
+  // else on the page explains why "augusti" is declared in September.
+  const agiPeriod = agiReportingPeriod(run)
+  const agiPeriodDiffers = agiPeriodDiffersFromRunPeriod(run)
 
   const metaParts: React.ReactNode[] = [
     <span key="payment" className="inline-flex items-center gap-2">
@@ -177,8 +182,6 @@ export function RunHeader({
         <Input
           type="date"
           value={paymentDateDraft}
-          min={`${periodMonthPrefix}-01`}
-          max={`${periodMonthPrefix}-${String(periodMonthLastDay).padStart(2, '0')}`}
           onChange={(e) => setPaymentDateDraft(e.target.value)}
           onBlur={commitPaymentDate}
           onKeyDown={(e) => {
@@ -194,6 +197,13 @@ export function RunHeader({
     </span>,
     <span key="count">{t('header_employees', { count: employeeCount })}</span>,
   ]
+  if (agiPeriodDiffers) {
+    metaParts.push(
+      <span key="agi-period">
+        {t('agi_period_note', { period: formatAgiPeriodDashed(agiPeriod) })}
+      </span>,
+    )
+  }
   if (run.is_correction && run.corrects_run_id) {
     metaParts.push(
       <Link

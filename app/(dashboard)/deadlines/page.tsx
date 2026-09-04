@@ -106,6 +106,9 @@ export default function DeadlinesPage() {
             // received as still owed, and the action link lands on the
             // invoices tab that lists exactly sent + overdue.
             .in('status', ['sent', 'overdue'])
+            // Only fakturor are owed: proformas, delivery notes and quotes
+            // carry a date but no receivable.
+            .eq('document_type', 'invoice')
             .lt('due_date', today)
             .order('id', { ascending: true })
             .range(from, to),

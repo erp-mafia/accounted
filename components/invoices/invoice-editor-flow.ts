@@ -113,11 +113,12 @@ export function deriveNextStep(input: NextStepInput): NextStep {
 }
 
 export type ForvalChip =
-  | { kind: 'doc_type'; documentType: 'proforma' | 'delivery_note' }
+  | { kind: 'doc_type'; documentType: 'proforma' | 'delivery_note' | 'quote' }
   | { kind: 'currency'; currency: string }
   | { kind: 'invoice_date'; date: string }
   | { kind: 'due_days'; days: number; date: string }
   | { kind: 'due_date'; date: string }
+  | { kind: 'valid_until'; date: string }
   | { kind: 'received'; date: string }
   | { kind: 'delivery'; date: string }
   | { kind: 'your_reference'; reference: string }
@@ -128,10 +129,12 @@ export type ForvalChip =
 
 export interface ForvalChipsInput {
   isSelfBilled: boolean
-  documentType: 'invoice' | 'proforma' | 'delivery_note'
+  documentType: 'invoice' | 'proforma' | 'delivery_note' | 'quote'
   currency: string
   invoiceDate: string
   dueDate: string
+  /** Quotes only: the expiry date ("Giltig till"). Replaces the due chips. */
+  validUntil?: string
   receivedDate: string
   deliveryDate: string
   yourReference: string
@@ -162,7 +165,11 @@ export function deriveForvalChips(input: ForvalChipsInput): ForvalChip[] {
   if (input.invoiceDate) {
     chips.push({ kind: 'invoice_date', date: input.invoiceDate })
   }
-  if (input.dueDate) {
+  if (input.documentType === 'quote' && !input.isSelfBilled) {
+    // A quote has no due date, only an expiry: the due chips would describe
+    // a payment term the document does not carry.
+    if (input.validUntil) chips.push({ kind: 'valid_until', date: input.validUntil })
+  } else if (input.dueDate) {
     const days = dueDays(input.invoiceDate, input.dueDate)
     if (days !== null && days >= 0) chips.push({ kind: 'due_days', days, date: input.dueDate })
     else chips.push({ kind: 'due_date', date: input.dueDate })

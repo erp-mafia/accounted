@@ -39,7 +39,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -106,7 +107,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -229,7 +231,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -311,7 +314,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -327,7 +331,7 @@ Example response `200`:
     "org_number": "556677-8899",
     "vat_number": "SE556677889901",
     "vat_number_validated": true,
-    "country": "Sweden",
+    "country": "SE",
     "default_payment_terms": 30,
     "archived_at": null,
     "created_at": "2025-04-12T08:30:00Z",
@@ -430,7 +434,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -535,7 +540,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```

@@ -5,6 +5,12 @@ import { createMockRequest, parseJsonResponse, createQueuedMockSupabase } from '
 const { supabase, enqueue, enqueueMany, reset } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
+// The payee write-through is its own unit (lib/cash-accounts/__tests__/invoice-payee.test.ts);
+// here it must not consume the queued company_settings results.
+vi.mock('@/lib/cash-accounts/invoice-payee', () => ({
+  propagateLegacyPayeeWrite: vi.fn().mockResolvedValue(['SEK']),
+}))
+
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))

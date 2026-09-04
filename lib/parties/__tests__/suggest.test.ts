@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { coreKey } from '../ledger-key'
+import { coreKey, displayNameFromVoucherText } from '../ledger-key'
 import type { ObservedParty } from '../observed'
 import { buildSuggestions, suggestPartiesForCompany, type ExistingParty, type LedgerKeyEvidence } from '../suggest'
 
@@ -35,6 +35,17 @@ describe('coreKey', () => {
     expect(coreKey('levfakt beijer byggmaterial ab 2089')).toBe('beijer byggmaterial')
     expect(coreKey('Fortnox Finans AB')).toBe('fortnox finans')
     expect(coreKey('inköp av varor')).toBe('av varor')
+  })
+})
+
+describe('displayNameFromVoucherText', () => {
+  it('drops AP/AR prefixes and supplier numbers but keeps casing and legal form', () => {
+    expect(displayNameFromVoucherText('Levfakt BEIJER BYGGMATERIAL AB (2089)')).toBe('BEIJER BYGGMATERIAL AB')
+    expect(displayNameFromVoucherText('Levfakt Beijer Byggmaterial AB, 097')).toBe('Beijer Byggmaterial AB')
+    expect(displayNameFromVoucherText('Kundbet Acme Konsult AB')).toBe('Acme Konsult AB')
+    expect(displayNameFromVoucherText('Leverantörsfaktura från 18 Loopia')).toBe('Loopia')
+    expect(displayNameFromVoucherText('UBER *TRIP HELP.UBER.COM')).toBe('UBER *TRIP HELP.UBER.COM')
+    expect(displayNameFromVoucherText('Inköp av varor')).toBe('Inköp av varor')
   })
 })
 
@@ -190,5 +201,25 @@ describe('suggestPartiesForCompany', () => {
   it('surfaces RPC errors', async () => {
     const rpc = vi.fn(async () => ({ data: null, error: { message: 'boom' } }))
     await expect(suggestPartiesForCompany({ rpc } as never, 'co', 'user')).rejects.toThrow(/get_observed_parties failed: boom/)
+  })
+})
+
+describe('similarAmong', () => {
+  it('pairs same-core and whole-word-extended names, never unrelated ones', async () => {
+    const { similarAmong } = await import('../register')
+    const m = similarAmong([
+      { id: 'a', display_name: 'Fortnox AB', alias_keys: ['fortnox'] },
+      { id: 'b', display_name: 'Fortnox Finans AB', alias_keys: ['fortnox finans'] },
+      { id: 'c', display_name: 'Rikshem Uppsala KB', alias_keys: [] },
+      { id: 'd', display_name: 'Rikshem', alias_keys: [] },
+      { id: 'e', display_name: 'Fortum Markets AB', alias_keys: [] },
+      { id: 'f', display_name: 'Levfakt Beijer Byggmaterial AB 2089', alias_keys: ['beijer byggmaterial'] },
+      { id: 'g', display_name: 'BEIJER BYGGMATERIAL', alias_keys: [] },
+    ])
+    expect(m.get('a')!.map((s) => s.id)).toEqual(['b'])
+    expect(m.get('b')!.map((s) => s.id)).toEqual(['a'])
+    expect(m.get('c')!.map((s) => s.id)).toEqual(['d'])
+    expect(m.get('e')).toEqual([])
+    expect(m.get('f')!.map((s) => s.id)).toEqual(['g'])
   })
 })

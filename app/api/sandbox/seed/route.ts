@@ -167,6 +167,7 @@ export async function POST(request: Request) {
         invoice_prefix: 'F',
         next_invoice_number: 5,
         next_delivery_note_number: 1,
+        next_quote_number: 1,
         invoice_default_days: 30,
         // Sender bank details: the pain.001 debtor for the betalfil demo.
         // Example IBAN from the Swedish IBAN documentation range; BIC derives

@@ -86,6 +86,9 @@ export const attentionResource: McpResource = {
         .from('invoices')
         .select('id, invoice_number, customer_id, due_date, total, currency, status')
         .eq('company_id', companyId)
+        // Proformas, delivery notes and quotes are never receivables: a sent
+        // quote past its valid_until is expired, not overdue.
+        .eq('document_type', 'invoice')
         .in('status', ['sent', 'overdue'])
         .lt('due_date', today)
         .order('due_date', { ascending: true })

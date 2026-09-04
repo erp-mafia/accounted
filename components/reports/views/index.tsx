@@ -3107,6 +3107,10 @@ interface ARLedgerData {
     total_overdue: number
     unpaid_count: number
     unconverted_fx_count: number
+    register_coverage?: {
+      covers_from: string | null
+      has_pre_register_invoices: boolean
+    }
   }
   reconciliation: {
     ar_ledger_total: number
@@ -3114,6 +3118,7 @@ interface ARLedgerData {
     difference: number
     is_reconciled: boolean
     unconverted_fx_count: number
+    pre_register_ar_in_period?: boolean
   } | null
 }
 
@@ -3297,6 +3302,11 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
                 {ledger.unconverted_fx_count} faktura i utländsk valuta utan växelkurs är inte med i totalen.
               </p>
             )}
+            {ledger.register_coverage?.has_pre_register_invoices && ledger.register_coverage.covers_from && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Fakturor före {formatDate(ledger.register_coverage.covers_from)} kan ligga som bokförda verifikat och ingår inte i reskontran.
+              </p>
+            )}
           </CardContent>
         </Card>
         <Card>
@@ -3421,6 +3431,17 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
                     {reconciliation.unconverted_fx_count} kundfaktura i utländsk valuta saknar växelkurs: differensen kan bero på saknade kursuppgifter snarare än felbokning.
                   </p>
                 )}
+                {/* Only when pre-register AR debits exist IN the reconciled
+                    period: prior-period migration history contributes nothing
+                    to this period's balance, and offering it as an explanation
+                    there would cushion a genuine felbokning. */}
+                {!reconciliation.is_reconciled &&
+                  reconciliation.pre_register_ar_in_period &&
+                  ledger.register_coverage?.covers_from && (
+                    <p className="text-xs text-muted-foreground">
+                      Perioden innehåller verifikat med kundfordringar före {formatDate(ledger.register_coverage.covers_from)} som inte ligger i fakturaregistret (t.ex. efter en migrering): differensen kan bero på det. Kontrollera huvudboken på <AccountNumber number="1510" /> och <AccountNumber number="1513" /> innan du letar felbokning.
+                    </p>
+                  )}
               </div>
             </div>
           </CardContent>

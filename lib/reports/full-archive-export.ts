@@ -1079,6 +1079,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'transaction_voucher_links', file: 'transaction_voucher_links.json' },
   { name: 'bank_file_imports', file: 'bank_file_imports.json', orderBy: 'created_at' },
   { name: 'cash_accounts', file: 'cash_accounts.json' },
+  // Which bank account customer invoices pay to, per currency; the payee
+  // fields themselves are columns on cash_accounts one file up.
+  { name: 'invoice_payee_defaults', file: 'invoice_payee_defaults.json' },
   { name: 'mapping_rules', file: 'mapping_rules.json' },
   { name: 'categorization_templates', file: 'categorization_templates.json' },
   { name: 'booking_template_library', file: 'booking_template_library.json' },
@@ -1210,6 +1213,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   // document_attachments when the underlying data is legally removed.
   document_integrity_checks:
     'WORM verification log (SHA-256 recompute outcomes); failures reach the archive via audit_log in revision/behandlingshistorik.json',
+  email_change_requests:
+    'per-user in-flight login-email change claim (migration 20260903083000); gates token re-issue, not räkenskapsinformation',
   event_log: '30-day TTL event bus log',
   extension_data: 'extension runtime state (includes this backup\'s own state)',
   idempotency_keys: 'infrastructure',

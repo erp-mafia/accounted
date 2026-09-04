@@ -7,8 +7,10 @@ import {
   deleteSession,
   isSandboxMode,
   SessionExpiredError,
+  AspspUnavailableError,
   REAUTH_REQUIRED_MESSAGE,
   SYNC_FAILED_MESSAGE,
+  BANK_UNAVAILABLE_MESSAGE,
   type ASPSP,
 } from './lib/api-client'
 import { syncAccountTransactions } from './lib/sync'
@@ -910,12 +912,51 @@ export const enableBankingExtension: Extension = {
             }
           }
 
+          // A bank that refused the requested window answered a narrower one;
+          // say so instead of reporting a truncated sync as complete (#2202).
+          // history_from is the LATEST effective date across the accounts:
+          // the date from which every account is complete.
+          const narrowedFrom = results
+            .filter((r) => r.historyNarrowed && r.effectiveFromDate)
+            .map((r) => r.effectiveFromDate as string)
+          const historyFrom = narrowedFrom.length > 0
+            ? narrowedFrom.reduce((a, b) => (a > b ? a : b))
+            : null
+
           return NextResponse.json({
             imported: totalImported,
             duplicates: totalDuplicates,
             last_synced_at: syncedAt,
+            requested_from: fromDate,
+            history_narrowed: historyFrom !== null,
+            history_from: historyFrom,
           })
         } catch (error) {
+          // The bank refused a window it has answered before, or every
+          // narrower one: not a dead session and not a broken connection, so
+          // the row is left alone (no 'error', no renewal advice) and the
+          // client is told to try again later (#2202).
+          if (error instanceof AspspUnavailableError) {
+            log.warn('[enable-banking] Sync: bank unavailable, narrowing cannot help', {
+              reason: error.reason,
+              dateFrom: error.dateFrom,
+              status: error.status,
+              body: error.body,
+              user_id: user.id,
+              connection_id,
+              bankName: connection.bank_name,
+            })
+            return NextResponse.json(
+              {
+                error: BANK_UNAVAILABLE_MESSAGE,
+                code: 'BANK_UNAVAILABLE',
+                retryable: true,
+                connection_id: connection.id,
+              },
+              { status: 503 }
+            )
+          }
+
           log.error('[enable-banking] Sync handler error', {
             message: error instanceof Error ? error.message : String(error),
             stack: error instanceof Error ? error.stack : undefined,
@@ -1402,6 +1443,7 @@ export const enableBankingExtension: Extension = {
                 currency: a.currency,
                 ledger_account: ledgerAccount,
                 iban: a.iban ?? null,
+                bban: a.bban ?? null,
                 name: a.name ?? null,
                 balance: a.balance ?? null,
                 available_balance: a.available_balance ?? null,

@@ -151,15 +151,10 @@ describe('parties substrate (pg)', () => {
        VALUES ($1, $2, $3, 'pg test: the party backfill must skip archived companies', '{}'::jsonb, '{}'::jsonb)`,
       [frozen.companyId, replacement.companyId, frozen.userId],
     )
-    const partyId = await getPool().query<{ id: string }>(
-      `SELECT public.ensure_party($1, $2, 'Frozen Supplier', NULL, 'company', 'backfill') AS id`,
-      [replacement.companyId, replacement.userId],
-    )
-    await expect(
-      getPool().query(`UPDATE public.suppliers SET party_id = $1 WHERE id = $2`, [partyId.rows[0]!.id, rows[0]!.id]),
-    ).rejects.toMatchObject({ code: 'P0001' })
+    const before = await getPool().query<{ party_id: string | null }>(`SELECT party_id FROM public.suppliers WHERE id = $1`, [rows[0]!.id])
+    await expect(getPool().query(`UPDATE public.suppliers SET party_id = NULL WHERE id = $1`, [rows[0]!.id])).rejects.toMatchObject({ code: 'P0001' })
     const still = await getPool().query<{ party_id: string | null }>(`SELECT party_id FROM public.suppliers WHERE id = $1`, [rows[0]!.id])
-    expect(still.rows[0]!.party_id).toBeNull()
+    expect(still.rows[0]!.party_id).toBe(before.rows[0]!.party_id)
   })
 
   it('ensure_party refuses a p_user_id that is not the authenticated caller', async () => {

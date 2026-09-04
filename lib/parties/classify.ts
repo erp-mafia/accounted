@@ -32,6 +32,7 @@ const STOP = new Set([
 const GENERIC = [
   'inköp', 'inkp', 'kvitto', 'kvitton', 'fika', 'diesel', 'bensin', 'bränsle', 'försäkring', 'telefon', 'mobil', 'hyra',
   'lokalhyra', 'frakt', 'hosting', 'julklapp', 'frimärken', 'utlägg', 'hotell', 'resa', 'resor', 'resekostnader',
+  'registreringsavgift', 'registeringsavgift', 'tillsynsavgift', 'årsavgift', 'medlemsavgift', 'serviceavgift', 'anmälningsavgift', 'expeditionsavgift',
   'biljett', 'biljetter', 'biljettkostnad', 'taxi', 'taxiresor', 'parkering', 'parkeringsavgifter', 'representation',
   'måltidsrepresentation', 'kollektivtrafik', 'kollektivtra', 'kontorsmaterial', 'förbrukning', 'förbrukningsmateriel',
   'frbrukningsmateriel', 'programvara', 'mjukvara', 'licens', 'avgift', 'avgifter', 'traktamente', 'traktamenten',
@@ -66,7 +67,7 @@ const PAYROLL = /\b(lön|löner|löne\w*|lneutbetalning|lönebesked|salary|semes
 const ADJUSTMENT =
   /(periodisering|omföring|omforing|lagerförändring|lagerforandring|nedskrivning|rättelse|rattelse|kostnadsföring|avskrivning|bokslut|kursdiff|valutakurs|eur till sek|omvänd betalningsskyldighet)/
 const BANK = /(bankkostnad|bankavgift|banktjänst|baspaket bank|bank årsavg|årsavg|avi överdrag|företagspaket)/
-const AUTHORITY = /\b(skatteverket|bolagsverket|transportstyrelsen|försäkringskassan|kronofogden|tullverket|skattekonto)\b/
+const AUTHORITY = /\b(skatteverket|bolagsverket|transportstyrelsen|försäkringskassan|kronofogden|tullverket|skattekonto|finansinspektionen|arbetsförmedlingen|pensionsmyndigheten|migrationsverket|lantmäteriet|csn|polisen|domstol|tingsrätt|förvaltningsrätt)\b/
 const INTERMEDIARY = /\b(klarna|paypal|zettle|izettle|swish|payex|bankgirot|adyen|nets)\b/
 
 function acctNum(a: string | null | undefined): number {

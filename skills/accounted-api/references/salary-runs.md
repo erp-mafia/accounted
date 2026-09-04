@@ -35,7 +35,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -140,7 +141,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -220,7 +222,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -262,7 +265,7 @@ Updates payment_date, voucher_series, or notes on a draft salary run. ONLY allow
 **Pitfalls:**
 - Returns 400 SALARY_RUN_PATCH_NOT_DRAFT if status !== "draft".
 - period_year + period_month are immutable post-create.
-- payment_date must stay within the run's period month (400 SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD otherwise): the AGI is declared per payment month. A run whose current payment date already sits outside the period month may still be day-adjusted within that same month.
+- payment_date may fall outside the run's period month (lön i efterskott): the AGI redovisningsperiod follows the payment month (kontantprincipen), so a run for August paid on 25 September is declared for September.
 - Supplying payment_date clears every roster row's calculation_breakdown, so an already-calculated run must be recalculated before :approve/:book.
 
 | Parameter | In | Type | Required | Notes |
@@ -318,7 +321,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -391,7 +395,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -458,7 +463,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -537,7 +543,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -597,7 +604,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -680,7 +688,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -776,7 +785,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -861,7 +871,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -983,7 +994,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1047,7 +1059,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1155,7 +1168,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1228,7 +1242,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```

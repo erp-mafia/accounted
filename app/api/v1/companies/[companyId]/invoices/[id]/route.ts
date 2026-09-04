@@ -34,8 +34,11 @@ import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/in
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { CreateInvoiceItemSchema } from '@/lib/api/schemas'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
+import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
+import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
 import type { Currency, Customer, InvoiceDocumentType } from '@/types'
 
 // Allowed PATCH fields for a draft invoice. Excludes customer_id / currency /
@@ -56,6 +59,10 @@ const V1PatchDraftInvoiceSchema = z.object({
   // Send {} to clear all tags. Codes are validated against the dimension
   // registry when the invoice posts at :send, not here.
   default_dimensions: DimensionsBagSchema.optional(),
+  // Which of the company's bank accounts the invoice asks the customer to
+  // pay to. null = back to the per-currency default. Must be one of the
+  // company's payee accounts, usable for the invoice currency.
+  payment_cash_account_id: z.union([z.string().uuid(), z.null()]).optional(),
   // FULL REPLACE when present. Same item shape as POST /invoices (article
   // linkage, ROT/RUT lines, accrual periods, per-line dimensions included).
   items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required').optional(),
@@ -72,6 +79,12 @@ const InvoiceDetail = z.object({
   due_date: z.string(),
   status: z.string(),
   document_type: z.string(),
+  // Quotes only (null otherwise). quote_status is the EFFECTIVE decision:
+  // open | accepted | declined | expired, where expired is derived from
+  // valid_until and never stored.
+  valid_until: z.string().nullable().optional(),
+  quote_status: z.string().nullable().optional(),
+  quote_decided_at: z.string().nullable().optional(),
   currency: z.string(),
   total: z.number(),
   remaining_amount: z.number(),
@@ -193,7 +206,13 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       })
     }
 
-    return ok(data, { requestId: ctx.requestId })
+    // Quotes: report the effective decision (expired is derived from
+    // valid_until, never stored). Null for every other document type.
+    const row = data as unknown as Record<string, unknown> & {
+      quote_status?: string | null
+      valid_until?: string | null
+    }
+    return ok({ ...row, quote_status: effectiveQuoteStatus(row) }, { requestId: ctx.requestId })
   },
 )
 
@@ -277,7 +296,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       if (body[key] !== undefined) updateData[key] = body[key]
     }
 
-    if (Object.keys(updateData).length === 0 && !body.items) {
+    if (Object.keys(updateData).length === 0 && body.payment_cash_account_id === undefined && !body.items) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: { field: 'body', message: 'At least one field must be supplied for update.' },
@@ -304,10 +323,36 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         details: { resource: 'invoice' },
       })
     }
-    if ((current as { status: string }).status !== 'draft') {
+    // Payee choice (null = back to the per-currency default): validated
+    // against the company's payee accounts for the invoice's own currency.
+    if (body.payment_cash_account_id !== undefined) {
+      const payeeChoice = await resolveInvoicePayeeChoice(
+        ctx.supabase,
+        ctx.companyId!,
+        (current as { currency: Currency }).currency,
+        body.payment_cash_account_id,
+      )
+      if (!payeeChoice.ok) {
+        return v1ErrorResponseFromCode(payeeChoice.code, ctx.log, {
+          requestId: ctx.requestId,
+          details: payeeChoice.details,
+        })
+      }
+      updateData.payment_cash_account_id = payeeChoice.fields.payment_cash_account_id
+      updateData.payment_details = payeeChoice.fields.payment_details
+    }
+
+    // Shared predicate with the dashboard PATCH: draft, no verifikat, not a
+    // received self-billing document, not a credit-note draft, and for a
+    // quote not accepted or declined (a recorded decision must be reopened
+    // before the offer itself is edited).
+    if (!isEditableInvoiceDraft(current as Parameters<typeof isEditableInvoiceDraft>[0])) {
       return v1ErrorResponseFromCode('INVOICE_UPDATE_NOT_DRAFT', ctx.log, {
         requestId: ctx.requestId,
-        details: { current_status: (current as { status: string }).status },
+        details: {
+          current_status: (current as { status: string }).status,
+          quote_status: (current as { quote_status?: string | null }).quote_status ?? null,
+        },
       })
     }
 
