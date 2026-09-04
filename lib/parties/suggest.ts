@@ -43,6 +43,7 @@ export interface LedgerKeyEvidence {
 export interface ExistingParty {
   id: string
   display_name: string
+  legal_name?: string | null
   org_number: string | null
   alias_keys: string[]
   status: 'suggested' | 'confirmed'
@@ -382,7 +383,7 @@ export async function suggestPartiesForCompany(
   const existing = await fetchAllRows<ExistingParty>(({ from, to }) =>
     supabase
       .from('parties')
-      .select('id, display_name, org_number, alias_keys, status')
+      .select('id, display_name, legal_name, org_number, alias_keys, status')
       .eq('company_id', companyId)
       .is('merged_into', null)
       .is('archived_at', null)
