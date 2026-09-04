@@ -832,7 +832,16 @@
     "bulk_clear": "Clear",
     "bulk_select_row": "Select invoice for payment file",
     "in_batch_chip": "In payment file",
-    "payment_files_link": "Payment files"
+    "payment_files_link": "Payment files",
+    "section_awaiting": "Awaiting payment ({count})",
+    "section_settled": "Paid and settled ({count})",
+    "group_picker_aria": "Group supplier invoices",
+    "group_by": "Group",
+    "group_status": "Status",
+    "group_supplier": "Supplier",
+    "group_month": "Month",
+    "group_none": "No grouping",
+    "group_unknown": "Missing"
   },
   "supplier_payment_files": {
     "dialog_title": "Create payment file",

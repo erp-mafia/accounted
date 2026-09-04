@@ -832,7 +832,16 @@
     "bulk_clear": "Rensa",
     "bulk_select_row": "Välj faktura för betalfil",
     "in_batch_chip": "I betalfil",
-    "payment_files_link": "Betalfiler"
+    "payment_files_link": "Betalfiler",
+    "section_awaiting": "Väntar på betalning ({count})",
+    "section_settled": "Betalda och avslutade ({count})",
+    "group_picker_aria": "Gruppera leverantörsfakturor",
+    "group_by": "Gruppera",
+    "group_status": "Status",
+    "group_supplier": "Leverantör",
+    "group_month": "Månad",
+    "group_none": "Ingen gruppering",
+    "group_unknown": "Saknas"
   },
   "supplier_payment_files": {
     "dialog_title": "Skapa betalfil",
