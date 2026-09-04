@@ -45,6 +45,7 @@ import {
   resolveReverseChargeRate,
 } from '@/lib/bookkeeping/vat-entries'
 import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
+import { invoiceCustomerOutstanding, invoiceCustomerShare } from '@/lib/invoices/customer-share'
 import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -807,28 +808,24 @@ export async function collectKontantmetodCutoff(
     // ROT/RUT (fakturamodellen): the customer owes the total minus the
     // skattereduktion. The deduction is a fordran on Skatteverket carried on
     // 1513, booked by the same voucher that recognises the sale (the payment
-    // voucher under kontantmetoden, the invoice voucher under
-    // faktureringsmetoden), and every settlement path records the customer
-    // share as the payment row amount. Measuring the outstanding against the
-    // gross total therefore left exactly deduction_total "open" on a fully
+    // voucher under kontantmetoden), and every settlement path records the
+    // customer share as the payment row amount. Measuring the outstanding
+    // against the gross total left exactly deduction_total "open" on a fully
     // paid invoice and booked it as a phantom 1510 fordran with phantom
-    // vilande moms (#2248). deduction_total is stored as a positive magnitude
-    // even on a credit note (CHECK >= 0), so it follows the sign of the total.
-    const deductionOwn = Math.abs(Number(row.deduction_total ?? 0))
-    const customerShareOwn = deductionOwn > 0
-      ? roundOre(totalOwn - Math.sign(totalOwn) * deductionOwn)
-      : totalOwn
-    // A plain invoice keeps the gross computation untouched. On a ROT/RUT
-    // invoice the residual is floored at zero on the invoice's own side, the
-    // same GREATEST(0, ...) the invoices_remaining_amount_guard trigger
-    // applies: an öre of over-collection against a derived customer share is
-    // noise, not a fordran the company owes back.
-    let outstandingOwn: number
-    if (deductionOwn > 0) {
-      const residualOwn = roundOre(customerShareOwn - paid)
-      outstandingOwn = totalOwn < 0 ? Math.min(0, residualOwn) : Math.max(0, residualOwn)
-    } else {
-      outstandingOwn = roundOre(totalOwn - paid)
+    // vilande moms (#2248). The share has ONE definition
+    // (lib/invoices/customer-share.ts, twin of the DB guard); only the as-of
+    // payment sum and the floor below belong to the cut-off.
+    const shareInput = { total: totalOwn, deduction_total: Number(row.deduction_total ?? 0) }
+    const hasDeduction = Math.abs(shareInput.deduction_total) > 0
+    const customerShareOwn = invoiceCustomerShare(shareInput)
+    let outstandingOwn = invoiceCustomerOutstanding(shareInput, paid)
+    if (hasDeduction) {
+      // Floored at zero on the invoice's own side, the guard's GREATEST(0, ...)
+      // made sign-aware so a credit note keeps its sign: an öre of
+      // over-collection against a derived customer share is noise, not a
+      // fordran the company owes back. A plain invoice keeps the unfloored
+      // gross computation it always had.
+      outstandingOwn = totalOwn < 0 ? Math.min(0, outstandingOwn) : Math.max(0, outstandingOwn)
     }
     const outstanding = totalOwn === 0 ? 0 : roundOre(total * (outstandingOwn / totalOwn))
     if (Math.abs(outstanding) < ORE_TOLERANCE) continue
