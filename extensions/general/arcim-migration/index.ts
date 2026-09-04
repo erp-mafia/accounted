@@ -34,7 +34,7 @@ import { mergeParsedSIEFiles } from '@/lib/import/sie-merge'
 import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from '@/lib/import/sie-artifact-scan'
 import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
 import { loadMappings, generateImportPreview, executeSIEImport, findOverlappingPeriodImports } from '@/lib/import/sie-import'
-import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
+import { buildMappingTargets } from './lib/mapping-targets'
 import type { ProviderName } from '@/lib/providers/types'
 import { FORTNOX_DOCUMENT_SCOPES_APPROVED } from '@/lib/providers/fortnox/oauth'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -1023,12 +1023,13 @@ export const arcimMigrationExtension: Extension = {
             updated_at: '',
           }))
 
-          // Suggest mappings
-          const basAccounts = BAS_REFERENCE.map(b => ({
-            account_number: b.account_number,
-            account_name: b.account_name,
-          }))
-          const mappings = suggestMappings(allAccounts, basAccounts, existingRecords)
+          // Mapping targets are the company's OWN chart of accounts first,
+          // then BAS for anything it does not have yet. BAS alone cannot
+          // express an account the company added outside the standard, so
+          // such an account was impossible to map onto. See
+          // ./lib/mapping-targets.
+          const mappingTargets = await buildMappingTargets(supabase, companyId)
+          const mappings = suggestMappings(allAccounts, mappingTargets, existingRecords)
           const mappingStats = getMappingStats(mappings)
 
           log.info(`Account mapping: ${allAccounts.length} unique accounts across ${sieFiles.length} files, ${mappingStats.unmapped} unmapped`)
@@ -1111,7 +1112,7 @@ export const arcimMigrationExtension: Extension = {
             // Allowed years whose provider export failed: the wizard warns
             // the user before proceeding so an IB/UB gap cannot slip through.
             failedYears,
-            basAccounts: BAS_REFERENCE,
+            basAccounts: mappingTargets,
           })
         } catch (error) {
           log.error('arcim sie-data fetch failed', error as Error)
