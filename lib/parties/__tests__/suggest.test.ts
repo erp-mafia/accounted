@@ -106,6 +106,18 @@ describe('buildSuggestions', () => {
     expect(item.reason.org_number).toBe(ORG)
   })
 
+  it('names the legal person in an assistant-written text and takes a foreign VAT number only on the expense side', () => {
+    const text = 'Utlägg Framer · Framer B.V. (NL), webbdesignverktyg. Säljaren debiterat svensk moms via OSS (NL VAT NL853695386B01 på fakturan).'
+    const expense = buildSuggestions({ observed: [observed({ key: 'utlägg framer', name: text, expense_sek: 500, revenue_sek: 0 })], evidence: [], existing: [] }).items[0]!
+    expect(expense.display_name).toBe('Framer B.V.')
+    expect(expense.vat_number).toBe('NL853695386B01')
+    expect(expense.facts.find((f) => f.field === 'country')).toMatchObject({ value: 'NL', source: 'ledger' })
+    expect(expense.facts.find((f) => f.field === 'voucher_text')).toMatchObject({ value: [text], source: 'ledger' })
+    const revenue = buildSuggestions({ observed: [observed({ key: 'framer intäkt', name: text, expense_sek: 0, revenue_sek: 500 })], evidence: [], existing: [] }).items[0]!
+    expect(revenue.vat_number).toBeUndefined()
+    expect(revenue.facts.some((f) => f.field === 'vat_number')).toBe(false)
+  })
+
   it('withholds the hard key and identities when a key mixes two org numbers', () => {
     const r = buildSuggestions({
       observed: [observed({ key: 'vattenfall' })],

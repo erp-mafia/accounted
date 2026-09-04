@@ -241,9 +241,12 @@ export function buildSuggestions(input: {
       facts.push({ field: 'country', value: name.country, source: 'ledger', reference: { occurrences: o.occurrences } })
     }
     // A single foreign VAT number written in the text is the counterpart's
-    // (the company's own SE number is what people note next to it).
+    // (the company's own SE number is what people note next to it). Only on
+    // the expense side: a supplier's VAT number is informational, while a
+    // customer's steers reverse charge on outgoing invoices and must come
+    // from a document or the person, never from a text heuristic.
     const textVats = [...new Set(texts.flatMap(extractVatNumbers).filter((v) => v.country !== 'SE').map((v) => v.vat))]
-    const textVat = textVats.length === 1 ? textVats[0] : undefined
+    const textVat = textVats.length === 1 && o.expense_sek >= o.revenue_sek && o.expense_sek > 0 ? textVats[0] : undefined
     if (textVat && !ev?.vat_numbers[0]?.vat) {
       facts.push({ field: 'vat_number', value: textVat, source: 'ledger', reference: { occurrences: o.occurrences } })
     }
