@@ -1942,6 +1942,21 @@ function ResultStep({
         failed: entityRowStatus(results.salesInvoices.imported, results.salesInvoices.skipReasons) === 'error',
       })
     }
+    const lineHydration = results.salesInvoices?.hydration
+    const linesMissing = lineHydration ? lineHydration.needed - lineHydration.hydrated : 0
+    if (lineHydration && linesMissing > 0) {
+      // The detail fetch that carries the rows and the VAT split runs inside
+      // a fixed budget, open invoices first. Whatever it did not reach was
+      // imported as a header with a total and no rows; an hourly pass fills
+      // those in afterwards. Say so here, or the user finds out on the
+      // invoice page ("fakturorna finns med en total men utan rader").
+      entityLines.push({
+        label: t('ext_arcim_invoice_lines_label'),
+        value: t('ext_arcim_invoice_lines_value', { hydrated: lineHydration.hydrated, needed: lineHydration.needed }),
+        detail: t('ext_arcim_invoice_lines_pending_detail', { count: linesMissing }),
+        failed: false,
+      })
+    }
     if (results.salesInvoices?.creditNotesUnlinked) {
       // Credit notes land as ordinary invoice rows with reversed amounts. The
       // pairing to the invoice they credit cannot be resolved at import time:
