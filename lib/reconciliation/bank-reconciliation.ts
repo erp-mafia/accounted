@@ -1852,13 +1852,18 @@ export async function autoReconcileTransactionForLinkedVoucher(
   // Tag the transaction with the (supplier) invoice for traceability + parity
   // with the transactions-side match. is_business is already set by manualLink,
   // so the row has already dropped out of the inbox regardless of this update.
-  const tag: Record<string, unknown> = { potential_invoice_id: null }
+  const tag: Record<string, unknown> = {
+    potential_invoice_id: null,
+    potential_rot_rut_payout_request_id: null,
+  }
   if (options.invoiceId) tag.invoice_id = options.invoiceId
   if (options.supplierInvoiceId) {
     tag.supplier_invoice_id = options.supplierInvoiceId
     tag.potential_supplier_invoice_id = null
   }
-  if (Object.keys(tag).length > 1) {
+  // Two hint clears are always present; only an actual invoice tag warrants
+  // the extra write (the row already left the inbox via is_business).
+  if (Object.keys(tag).length > 2) {
     await supabase
       .from('transactions')
       .update(tag)
