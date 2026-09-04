@@ -47,7 +47,12 @@
  *   where c.contype = 'f'
  *   group by 1, 2 having count(*) > 1 order by 1, 2;
  *
- * On 2026-09-01 that returned the same 15 pairs the parser derives.
+ * On 2026-09-03 that returned the same 17 pairs the parser derives. Composite
+ * foreign keys count: until 2026-09-03 the parser only read single-column
+ * `FOREIGN KEY (col)`, so the composite (sales_order_id, company_id) guard in
+ * 20260902180000_sales_orders_hardening.sql was invisible to it and the
+ * un-hinted `items:sales_order_items(*)` embeds shipped, taking every
+ * kundorder list and detail load down with PGRST201 (fixed 2026-09-03).
  *
  * No baseline: the count is 0, any new un-hinted ambiguous embed is a hard
  * failure.
@@ -92,10 +97,16 @@ export function deriveForeignKeys(migrationsDir) {
   // Unnamed foreign keys get Postgres's default `<table>_<column>_fkey`.
   const byConstraint = new Map()
 
+  // `column` is one column or a composite list ("sales_order_id, company_id").
+  // A composite foreign key is its own edge, distinct from a single-column one
+  // on its leading column: PostgREST counts both, which is what made
+  // sales_order_items -> sales_orders ambiguous (migration 20260902180000)
+  // while this parser, then single-column only, still derived one edge.
   const addEdge = (table, column, target, constraintName) => {
-    const key = `${table}.${column}`
+    const columns = column.split(',').map((c) => normIdent(c.trim())).filter(Boolean)
+    const key = `${table}.${columns.join(',')}`
     edges.set(key, target)
-    byConstraint.set(constraintName ?? `${table}_${column}_fkey`, key)
+    byConstraint.set(constraintName ?? `${table}_${columns.join('_')}_fkey`, key)
   }
 
   let files
@@ -121,11 +132,12 @@ export function deriveForeignKeys(migrationsDir) {
         for (const m of stmt.matchAll(/(?:^|,)\s*([\w"]+)\s+[^,()]*?references\s+([\w".]+)/gis)) {
           addEdge(table, normIdent(m[1]), normIdent(m[2]))
         }
-        // `foreign key (col) references public.other(id)` as a table constraint.
+        // `foreign key (col[, col]) references public.other(id[, id])` as a
+        // table constraint, named or not.
         for (const m of stmt.matchAll(
-          /foreign\s+key\s*\(\s*([\w"]+)\s*\)\s*references\s+([\w".]+)/gi,
+          /(?:constraint\s+([\w"]+)\s+)?foreign\s+key\s*\(\s*([\w",\s]+?)\s*\)\s*references\s+([\w".]+)/gi,
         )) {
-          addEdge(table, normIdent(m[1]), normIdent(m[2]))
+          addEdge(table, m[2], normIdent(m[3]), m[1] && normIdent(m[1]))
         }
         continue
       }
@@ -133,9 +145,9 @@ export function deriveForeignKeys(migrationsDir) {
       if (altered) {
         const table = normIdent(altered[1])
         for (const m of stmt.matchAll(
-          /(?:add\s+constraint\s+([\w"]+)\s+)?foreign\s+key\s*\(\s*([\w"]+)\s*\)\s*references\s+([\w".]+)/gi,
+          /(?:add\s+constraint\s+([\w"]+)\s+)?foreign\s+key\s*\(\s*([\w",\s]+?)\s*\)\s*references\s+([\w".]+)/gi,
         )) {
-          addEdge(table, normIdent(m[2]), normIdent(m[3]), m[1] && normIdent(m[1]))
+          addEdge(table, m[2], normIdent(m[3]), m[1] && normIdent(m[1]))
         }
         for (const m of stmt.matchAll(
           /add\s+column\s+(?:if\s+not\s+exists\s+)?([\w"]+)\s+[^,;]*?references\s+([\w".]+)/gi,
@@ -143,7 +155,17 @@ export function deriveForeignKeys(migrationsDir) {
           addEdge(table, normIdent(m[1]), normIdent(m[2]))
         }
         for (const m of stmt.matchAll(/drop\s+column\s+(?:if\s+exists\s+)?([\w"]+)/gi)) {
-          edges.delete(`${table}.${normIdent(m[1])}`)
+          // Postgres drops every foreign key the column takes part in, so a
+          // composite edge listing it goes too, not only the single-column key.
+          const column = normIdent(m[1])
+          for (const key of [...edges.keys()]) {
+            if (!key.startsWith(`${table}.`)) continue
+            if (!key.slice(table.length + 1).split(',').includes(column)) continue
+            edges.delete(key)
+            for (const [name, edge] of [...byConstraint]) {
+              if (edge === key) byConstraint.delete(name)
+            }
+          }
         }
         for (const m of stmt.matchAll(/drop\s+constraint\s+(?:if\s+exists\s+)?([\w"]+)/gi)) {
           const edge = byConstraint.get(normIdent(m[1]))

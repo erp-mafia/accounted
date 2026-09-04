@@ -41,8 +41,10 @@ export const GET = withRouteContext<{ params: Promise<{ accountKey: string }> }>
  * POST /api/reconciliation/accounts/{accountKey}/signoff
  *
  * "Markera som avstämd t.o.m. <datum>". Body { through_date, note?, force?,
- * dry_run? }. Refused (400 + code) unless the account is reconciled through
- * the date, or force + note is given.
+ * dry_run? }. Refused (400 + code, plus details.unexplained_difference on
+ * NOT_RECONCILED) unless the account is reconciled through the date, or
+ * force + note is given. The dialog sends dry_run first so what it shows is
+ * exactly what the real call will judge.
  */
 export const POST = withRouteContext<{ params: Promise<{ accountKey: string }> }>(
   'reconciliation.accounts.signoff.create',
@@ -82,7 +84,15 @@ export const POST = withRouteContext<{ params: Promise<{ accountKey: string }> }
     } catch (err) {
       if (err instanceof ReconciliationSignoffError) {
         const status = err.code === 'SIGNOFF_NOT_FOUND' ? 404 : err.code === 'SIGNOFF_RACE' ? 409 : 400
-        return NextResponse.json({ error: getErrorMessage(err), code: err.code }, { status })
+        // The refusal text reaches the user as written (the codes are
+        // registered with thrown_message_sv; before that the mapper fell
+        // through to "Något gick fel. Försök igen."). details (the unexplained
+        // amount on NOT_RECONCILED) lets the dialog name the difference when
+        // it previews the sign-off with dry_run.
+        return NextResponse.json(
+          { error: getErrorMessage(err), code: err.code, ...(err.details ? { details: err.details } : {}) },
+          { status },
+        )
       }
       throw err
     }

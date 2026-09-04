@@ -44,6 +44,8 @@ export interface UpsertFromPsd2Input {
   currency: string
   ledger_account: string
   iban?: string | null
+  /** Raw BBAN from the ASPSP (Swedish: clearing + account number). */
+  bban?: string | null
   name?: string | null
   balance?: number | null
   available_balance?: number | null
@@ -1172,6 +1174,9 @@ export async function upsertFromPsd2(
     bank_connection_id: input.bank_connection_id,
     external_uid: input.external_uid,
     iban: input.iban ?? null,
+    // Only overwrite when the bank sent one: a typed BBAN must survive a
+    // sync from an ASPSP that reports IBAN only.
+    ...(input.bban ? { bban: input.bban } : {}),
     name: input.name ?? null,
     currency: input.currency.toUpperCase(),
     ledger_account: input.ledger_account,

@@ -130,17 +130,22 @@ Accounted sends Peppol BIS Billing 3 e-invoices from the invoice page in the das
 - **Sent before approval**: not possible: \`gnubok_send_invoice\` stages too. The user must approve.
 - **Edit instead of credit**: blocked by DB triggers. Use \`gnubok_credit_invoice\`.
 
+## Offert (quotes)
+
+An offert is \`document_type: 'quote'\` on \`gnubok_create_invoice\`: it is numbered in its own OF-series (OF-001, OF-002, ...) at approval, never touches the F-series and never books anything; \`valid_until\` is required and the quote reads as expired once that date has passed (derived, nothing is stored). Record the customer's decision with \`gnubok_set_quote_status\` (open, accepted, declined); \`gnubok_convert_invoice\` creates the faktura from an open or accepted quote and leaves the quote in place as accepted, so a declined quote must be re-accepted first and a quote can be invoiced only once.
+
 ## Tools
 
 - \`gnubok_list_customers\` / \`gnubok_create_customer\`: customer setup
-- \`gnubok_create_invoice\`: stage new invoice
+- \`gnubok_create_invoice\`: stage new invoice, or a quote with \`document_type: 'quote'\` + \`valid_until\`
+- \`gnubok_set_quote_status\`: record the customer decision on a quote (direct write)
 - \`gnubok_send_invoice\`: email PDF
 - \`gnubok_mark_invoice_as_sent\`: manual delivery (also the recovery when a dashboard Peppol send could not mark the invoice as sent)
 - \`gnubok_mark_invoice_as_paid\`: manual payment
 - \`gnubok_match_transaction_to_invoice\`: link bank payment
 - \`gnubok_credit_invoice\`: kreditfaktura (legal undo)
-- \`gnubok_convert_invoice\`: proforma → real invoice
-- \`gnubok_list_invoices\`: find existing invoices
+- \`gnubok_convert_invoice\`: proforma or quote → real invoice
+- \`gnubok_list_invoices\`: find existing invoices and quotes (\`document_type\`, \`quote_status\` incl. \`expired\`)
 - \`gnubok_get_invoice\`: one invoice with its lines (article_id, revenue_account, vat_rate); read it before editing
 - \`gnubok_update_invoice\`: edit a draft; \`items\` is a FULL REPLACE, so pass every line back (with \`article_id\`) from \`gnubok_get_invoice\`
 `

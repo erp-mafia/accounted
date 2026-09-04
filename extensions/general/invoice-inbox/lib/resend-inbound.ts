@@ -86,29 +86,62 @@ export interface SharedInboxRecipient {
   tag: string | null
 }
 
-// Parses the first recipient whose domain matches our configured inbound
-// domain, returning its local_part split at the first `+` (RFC 5233
-// sub-addressing): `acme-x7f2+lev@inbox` matches the inbox row for
-// `acme-x7f2` and carries tag `lev`. Before this split a +tagged mail 404ed,
-// because the whole `acme-x7f2+lev` was looked up as the local_part.
-// Returns null if no recipient is on the domain.
-export function extractLocalPartForDomain(
+// Parses every recipient whose domain matches our configured inbound domain,
+// in original order, each split at the first `+` (RFC 5233 sub-addressing):
+// `acme-x7f2+lev@inbox` matches the inbox row for `acme-x7f2` and carries
+// tag `lev`. Duplicate addresses collapse to one entry. Returns all of them
+// because one mail can name the same inbox twice with different tags, or two
+// inboxes at once (#2181): reading only the first silently lost the rest.
+export function extractSharedRecipientsForDomain(
   recipients: string[],
   domain: string,
-): SharedInboxRecipient | null {
+): SharedInboxRecipient[] {
   const normalized = domain.toLowerCase()
+  const seen = new Set<string>()
+  const out: SharedInboxRecipient[] = []
   for (const addr of recipients) {
     const match = addr.match(/^\s*([^@\s]+)@([^@\s]+?)\s*$/)
     if (!match) continue
     const [, rawLocal, addrDomain] = match
     if (addrDomain.toLowerCase() !== normalized) continue
     const lower = rawLocal.toLowerCase()
+    if (seen.has(lower)) continue
+    seen.add(lower)
     const plus = lower.indexOf('+')
-    if (plus === -1) return { localPart: lower, tag: null }
+    if (plus === -1) {
+      out.push({ localPart: lower, tag: null })
+      continue
+    }
     const tag = lower.slice(plus + 1)
-    return { localPart: lower.slice(0, plus), tag: tag.length > 0 ? tag : null }
+    out.push({ localPart: lower.slice(0, plus), tag: tag.length > 0 ? tag : null })
   }
-  return null
+  return out
+}
+
+// The first shared-domain recipient, or null if no recipient is on the
+// domain. Kept for callers that only need to know whether the mail is on
+// the shared domain at all; the webhook reads every recipient.
+export function extractLocalPartForDomain(
+  recipients: string[],
+  domain: string,
+): SharedInboxRecipient | null {
+  return extractSharedRecipientsForDomain(recipients, domain)[0] ?? null
+}
+
+/** Recipients grouped by inbox local part, tags in first-seen order. */
+export interface SharedInboxTarget {
+  localPart: string
+  tags: string[]
+}
+
+export function groupSharedRecipientsByInbox(recipients: SharedInboxRecipient[]): SharedInboxTarget[] {
+  const byLocalPart = new Map<string, string[]>()
+  for (const r of recipients) {
+    const tags = byLocalPart.get(r.localPart) ?? []
+    if (r.tag !== null && !tags.includes(r.tag)) tags.push(r.tag)
+    byLocalPart.set(r.localPart, tags)
+  }
+  return Array.from(byLocalPart, ([localPart, tags]) => ({ localPart, tags }))
 }
 
 /** Sender-declared document kind, stored on invoice_inbox_items.kind_hint. */
@@ -121,6 +154,45 @@ export function kindHintFromTag(tag: string | null | undefined): InboxKindHint |
   if (tag === 'lev') return 'supplier_invoice'
   if (tag === 'ver') return 'receipt'
   return null
+}
+
+/** The documented plus-address tags. Anything else is sender-typed free text. */
+export const KNOWN_INBOX_TAGS: readonly string[] = ['lev', 'ver']
+
+/**
+ * Splits a mail's tags into the documented ones (safe to store: a closed
+ * vocabulary) and a count of the rest. The rest is never stored: the part
+ * after `+` is whatever the sender typed, and processing_history is
+ * append-only and outside the erasure path (#2181 skeptic finding).
+ */
+export function splitKnownInboxTags(tags: readonly string[]): { known: string[]; unknownCount: number } {
+  const known: string[] = []
+  let unknownCount = 0
+  for (const tag of tags) {
+    if (KNOWN_INBOX_TAGS.includes(tag)) known.push(tag)
+    else unknownCount += 1
+  }
+  return { known, unknownCount }
+}
+
+/**
+ * The one kind hint for a mail that reached the same inbox under several
+ * tags. Distinct documented tags contradict each other (+lev and +ver on one
+ * mail, #2181): then the sender has said nothing usable, the hint is null so
+ * extraction classifies, and `conflict` is recorded on the mail's history
+ * event. Unknown tags never count.
+ */
+export function resolveKindHintForTags(tags: readonly string[]): {
+  kindHint: InboxKindHint | null
+  conflict: boolean
+} {
+  const hints = new Set<InboxKindHint>()
+  for (const tag of tags) {
+    const hint = kindHintFromTag(tag)
+    if (hint) hints.add(hint)
+  }
+  if (hints.size > 1) return { kindHint: null, conflict: true }
+  return { kindHint: hints.values().next().value ?? null, conflict: false }
 }
 
 // Splits every parseable recipient into { localPart, domain }, lowercased and

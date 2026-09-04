@@ -37,6 +37,23 @@ Label vocabulary for the pre-classifier, one per key:
 A key whose text names a vendor but is booked as a category still gets
 `party`: the resolver decides identity, the account comes from the ledger.
 
+Edge rules settled with the founder on 2026-09-02, after the first labelling
+round:
+
+- State fees and taxes where the counterpart is fixed (Bolagsverket
+  registration fees, Skatteverket, Transportstyrelsen vehicle tax) are
+  `authority`. A kommun or a state company that invoices for a service is a
+  `party` like any supplier.
+- A marketplace or payment processor that the company actually pays (Amazon
+  Marketplace purchases, Stripe or Amex fees) is a `party`. `intermediary` is
+  reserved for a rail that only carries someone else's money: Klarna, Swish
+  and Zettle payouts, "försäljning via" lines.
+- A card-platform line that carries an employee's name (Pleo, Google Ads with
+  the cardholder appended) is a `party`; the name is the cardholder, not the
+  counterpart.
+- Insurance and pension premiums are `party`: the insurer is the counterpart,
+  whatever the 74xx account says.
+
 ## Measured on prod, 2026-09-02
 
 - 113,032 imported expense vouchers across 385 real companies; 99.5% yield a
@@ -49,10 +66,72 @@ A key whose text names a vendor but is booked as a category still gets
   warrant a "verify" sentence, never a block, and a value must be seen on two
   documents before it counts as known.
 
+## Pre-classifier shadow evaluation, 2026-09-02
+
+`eval-preclassifier.ts` scores three routers on the same 180 held-out keys
+(20 rows, chosen by md5 of the key, serve as few-shot examples and are never
+scored). Rows the founder marked `unsure` always receive a label, so the
+honest number is the one that excludes them.
+
+| Router | Strict agreement | Excluding founder-unsure | Party TPR | Party TNR |
+|---|---|---|---|---|
+| Rules v0, lexicon from BAS account names | 0.917 | 0.965 | 0.992 | 0.930 |
+| Rules v0, lexicon incl. BAS descriptions | 0.911 | 0.959 | 0.984 | 0.930 |
+| Sonnet 5 on Bedrock EU, zero-shot | 0.861 | 0.906 | 0.906 | 0.977 |
+| Sonnet 5 on Bedrock EU, 20 founder examples | 0.878 | 0.924 | 0.930 | 0.977 |
+
+Read with two caveats. The rules were written after the labels were seen,
+so their score is optimistic; the model scores are honest. And most of the
+remaining disagreements are definitions, not errors: whether a Bolagsverket
+fee is `authority` or `intermediary`, whether a marketplace or payment
+processor (Amazon Marketplace, Stripe, Amex fees) is `party` or
+`intermediary`, whether a card-platform line with a person's name (Pleo,
+Google Ads) is `party` or `payroll`, and whether a pension insurance premium
+is `party` or `payroll`. Settle those in the vocabulary above, relabel the
+handful of rows, and re-run.
+
+BAS description tokens in the lexicon make Google and Facebook look generic
+because the descriptions name them as examples; the account-name lexicon is
+the default for that reason. The model's remaining party misses are text
+with a person's name or a card descriptor, exactly where a hard key from a
+document would decide instead.
+
+## Selection-step evaluation against document-anchored truth, 2026-09-02
+
+`eval-selection.ts` scores the selection step (which similar keys in the same
+company are the same party) without human labels: every key in the set has an
+org number read by OCR from an invoice linked to its voucher, so two keys are
+the same party exactly when the org numbers agree. Keys mapping to several
+org numbers are excluded. 225 anchors, 1,038 candidate pairs (747 same, 291
+different), 44 anchors with no true match. Draw: `draw-selection-gold.sql`.
+The model selector is opt-in (`--llm`): it sends the same voucher text the
+production categorizer already sends to the configured AI provider (Bedrock EU
+on hosted), so run it only with an env file whose AI settings you have checked.
+
+| Selector | Pair precision | Pair recall | Non-match recall | Anchors fully right | "None" precision / recall |
+|---|---|---|---|---|---|
+| Rules (same core name) | 0.909 | 0.776 | 0.801 | 0.547 | 0.40 / 0.86 |
+| Sonnet 5 on Bedrock EU, zero-shot | 0.910 | 0.904 | 0.770 | 0.756 | 0.68 / 0.77 |
+
+What the false merges are: both selectors merge "Levfakt Fortnox (325)" with
+"Levfakt Fortnox (154)", "Vattenfall Kundservice" with "Vattenfall
+Eldistribution", "Jämtkraft" with "Jämtkraft" under another org number. Those
+are different legal entities sharing a trade name, or OCR variance in the org
+number. Text cannot separate them and should not try: the hard key from the
+document is the referee, which is exactly the resolver's precedence order.
+What the model catches that the rules miss: "lån themax" versus "lån från
+themax", and paraphrases with a changed word order.
+
+Read with one caveat: sales-side vouchers ("kundbet ...") contribute noisy
+truth because the org number on the linked document can be the customer's;
+the next draw restricts to expense-side vouchers.
+
+Cost: about 1,300 input tokens per anchor, 298k tokens for the run.
+
 ## Still to confirm in this phase
 
-- Which registration flags the free SCB Företagsregistret API exposes
-  (moms, arbetsgivare, F-skatt). This decides how much of rung three can skip
-  TIC.
+- SCB access: the free Företagsregistret API carries F-skattstatus,
+  Momsstatus and Arbetsgivarstatus (verified on scb.se 2026-09-02); access
+  requested by email, credentials pending.
 - The pre-classifier and selection agreement bars (0.85 on the labelled set)
   are enforced by the shadow harness in phase 1, not here.

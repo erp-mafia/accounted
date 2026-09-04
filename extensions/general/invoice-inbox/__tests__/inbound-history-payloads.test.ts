@@ -37,6 +37,7 @@ vi.mock('@/extensions/general/invoice-inbox/lib/upload-and-extract', async () =>
   )
   return { ...actual, uploadAndExtract: vi.fn() }
 })
+import { uploadAndExtract } from '@/extensions/general/invoice-inbox/lib/upload-and-extract'
 
 vi.mock('@/lib/rate-limits/inbox', () => ({
   checkInboxUploadRateLimit: vi.fn(),
@@ -179,6 +180,49 @@ describe('POST /inbound behandlingshistorik payloads', () => {
     expect(payload).toEqual({ total: 21, processed: 20, dropped: 1 })
     expect(JSON.stringify(payload)).not.toContain(SENDER)
     expect(JSON.stringify(payload)).not.toContain(SUBJECT)
+  })
+
+  it('records InboundMailReceived with ids and a closed vocabulary only: no sender, subject, address or sender-typed tag', async () => {
+    const to = [
+      'Anna-Andersson-x7f2+lev@arcim.io',
+      'anna-andersson-x7f2+ref-19850101-1234@arcim.io',
+    ]
+    vi.mocked(verifyInboundWebhook).mockReturnValue({
+      ...mockReceivedEvent(0),
+      data: { ...mockReceivedEvent(0).data, to },
+    } as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({ ...mockFullEmail(0), to, html: '<p>Faktura</p>' } as never)
+    vi.mocked(checkInboxUploadRateLimit).mockResolvedValue({ ok: true } as never)
+    vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-body-1' } as never)
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: null }) // body-document dedupe check
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+
+    const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+    expect(res.status).toBe(200)
+
+    const payload = historyPayload('InboundMailReceived')
+    expect(payload).toEqual({
+      inbox_id: 'inbox-1',
+      custom_domain: false,
+      tags: ['lev'],
+      unknown_tag_count: 1,
+      kind_hint: 'supplier_invoice',
+      tag_conflict: false,
+      outcome: 'email_body',
+      attachment_count: 0,
+      inbox_item_id: 'item-body-1',
+      attachments: [],
+    })
+    const json = JSON.stringify(payload)
+    expect(json).not.toContain(SENDER)
+    expect(json).not.toContain(SUBJECT)
+    expect(json).not.toContain('@')
+    expect(json).not.toContain('anna')
+    expect(json).not.toContain('19850101')
   })
 
   it('keeps the mail traceable through the Resend email id', async () => {

@@ -96,7 +96,14 @@ export function CompanyDangerZone() {
 
       <SettingsDangerZone label={t('danger_heading')}>
         <SettingsRow label={t('reset_row_label')}>
-          <SettingsRowNote>{t('reset_row_note')}</SettingsRowNote>
+          {/* Both destructive rows say up front that a typed confirmation
+              follows. A reader who does not dare press the link cannot find
+              that out any other way, and on a phone the link sits where a
+              stray tap while scrolling lands (issue #2214). */}
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <SettingsRowNote>{t('reset_row_note')}</SettingsRowNote>
+            <SettingsRowNote>{t('danger_confirm_hint')}</SettingsRowNote>
+          </div>
           <SettingsRowEnd>
             <button
               type="button"
@@ -114,7 +121,10 @@ export function CompanyDangerZone() {
           // the "?": the visible row stays one quiet line.
           help={<RetentionNotice variant="company" className="border-0 bg-transparent p-0" />}
         >
-          <SettingsRowNote>{tRetention('company_title')}</SettingsRowNote>
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <SettingsRowNote>{tRetention('company_title')}</SettingsRowNote>
+            <SettingsRowNote>{t('danger_confirm_hint')}</SettingsRowNote>
+          </div>
           <SettingsRowEnd>
             <button
               type="button"

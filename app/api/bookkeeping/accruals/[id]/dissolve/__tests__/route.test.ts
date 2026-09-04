@@ -97,8 +97,22 @@ describe('POST /api/bookkeeping/accruals/[id]/dissolve', () => {
     expect(body.error.code).toBe('ACCRUAL_NOTHING_TO_DISSOLVE')
   })
 
-  it('falls back to ACCRUAL_DISSOLVE_FAILED for untyped errors', async () => {
+  it('falls back to ACCRUAL_DISSOLVE_FAILED for untyped errors, carrying a Swedish reason as-is', async () => {
     mockDissolveScheduleNow.mockRejectedValue(new Error('Ingen öppen räkenskapsperiod för 2026-01-01'))
+
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { reason: string } }
+    }>(await dissolveRequest())
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('ACCRUAL_DISSOLVE_FAILED')
+    // The engine's own Swedish sentence reaches the user (issue #2086); it
+    // used to be dropped for lacking a getErrorMessage keyword.
+    expect(body.error.details.reason).toBe('Ingen öppen räkenskapsperiod för 2026-01-01')
+  })
+
+  it('falls back to ACCRUAL_DISSOLVE_FAILED with the generic reason for untyped technical errors', async () => {
+    mockDissolveScheduleNow.mockRejectedValue(new Error('boom'))
 
     const { status, body } = await parseJsonResponse<{
       error: { code: string; details: { reason: string } }

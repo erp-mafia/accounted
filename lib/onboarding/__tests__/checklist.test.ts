@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   checklistNumbers,
   claudeConnectorLink,
+  mcpServerUrl,
+  sideDoorServerUrl,
+  SIDE_DOORS,
   claudeStepDone,
   completionPatchBody,
   vatDeadlineLine,
@@ -102,6 +105,39 @@ describe('claudeStepDone', () => {
     expect(claudeStepDone({ oauthKeyCount: 0 })).toBe(false)
     expect(claudeStepDone({ oauthKeyCount: null })).toBe(false)
     expect(claudeStepDone({ oauthKeyCount: undefined })).toBe(false)
+  })
+})
+
+describe('mcpServerUrl', () => {
+  it('builds the namespaced URL with the client marker and no auth flag by default', () => {
+    expect(mcpServerUrl({ origin: 'https://app.testbrand.example', client: 'cursor' })).toBe(
+      'https://app.testbrand.example/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=cursor',
+    )
+  })
+
+  it('appends auth=required when eagerAuth is set', () => {
+    const url = new URL(mcpServerUrl({ origin: 'http://localhost:3000', client: 'grok', eagerAuth: true }))
+    expect(url.searchParams.get('tool_namespace')).toBe('accounted')
+    expect(url.searchParams.get('client')).toBe('grok')
+    expect(url.searchParams.get('auth')).toBe('required')
+  })
+})
+
+describe('sideDoorServerUrl', () => {
+  it('lists chatgpt then grok', () => {
+    expect(SIDE_DOORS).toEqual(['chatgpt', 'grok'])
+  })
+
+  it('gives Grok the eager-auth flag: its dialog reads a 200 probe as "no auth" and never starts OAuth', () => {
+    const url = new URL(sideDoorServerUrl({ origin: 'https://app.testbrand.example', door: 'grok' }))
+    expect(url.searchParams.get('client')).toBe('grok')
+    expect(url.searchParams.get('auth')).toBe('required')
+  })
+
+  it('keeps ChatGPT on the lazy URL', () => {
+    const url = new URL(sideDoorServerUrl({ origin: 'https://app.testbrand.example', door: 'chatgpt' }))
+    expect(url.searchParams.get('client')).toBe('chatgpt')
+    expect(url.searchParams.get('auth')).toBeNull()
   })
 })
 

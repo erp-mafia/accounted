@@ -33,6 +33,8 @@ import type { CustomerType } from '@/types'
 export interface VatRateCustomer {
   customer_type: CustomerType
   vat_number_validated?: boolean | null
+  /** ISO 3166-1 alpha-2; gates reverse charge together with the two above. */
+  country?: string | null
 }
 
 /** One invoice line as the editor's form holds it. */
@@ -73,8 +75,8 @@ export function resolveLineVatRates(
     }
   }
   const validated = customer.vat_number_validated ?? false
-  const defaultRates = getAvailableVatRates(customer.customer_type, validated)
-  const options = getPermittedVatRates(customer.customer_type, validated)
+  const defaultRates = getAvailableVatRates(customer.customer_type, validated, customer.country)
+  const options = getPermittedVatRates(customer.customer_type, validated, customer.country)
   return {
     options,
     defaultRates,

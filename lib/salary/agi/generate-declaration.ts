@@ -30,6 +30,7 @@ import {
   AGIPayloadTooLargeError,
 } from './xml-generator'
 import type { AGIEmployeeData, AGICompanyData, AGITotals } from './xml-generator'
+import { agiReportingPeriod, formatAgiPeriodDashed } from './reporting-period'
 import { eventBus } from '@/lib/events'
 import { truncateToWholeKronor } from '@/lib/money'
 import {
@@ -169,6 +170,10 @@ export async function generateAgiDeclaration(
     }
   }
 
+  // The redovisningsperiod is the PAYOUT month (kontantprincipen), which for
+  // lön i efterskott is the month after run.period_*; see reporting-period.ts.
+  const agiPeriod = agiReportingPeriod(run)
+
   // 2. Company + settings + profile (for contact info).
   const { data: company } = await supabase
     .from('companies')
@@ -214,8 +219,8 @@ export async function generateAgiDeclaration(
   const companyData: AGICompanyData = {
     orgNumber: (settings?.org_number || company.org_number || '').trim(),
     companyName,
-    periodYear: run.period_year,
-    periodMonth: run.period_month,
+    periodYear: agiPeriod.periodYear,
+    periodMonth: agiPeriod.periodMonth,
     contactName: (profile?.full_name || companyName || '').trim(),
     contactPhone: (settings?.phone || '').trim(),
     contactEmail: (settings?.email || profile?.email || userEmail || '').trim(),
@@ -504,18 +509,18 @@ export async function generateAgiDeclaration(
   {
     const now = new Date()
     const currentYM = now.getUTCFullYear() * 100 + (now.getUTCMonth() + 1)
-    const periodYM = run.period_year * 100 + run.period_month
+    const periodYM = agiPeriod.periodYear * 100 + agiPeriod.periodMonth
     if (periodYM > currentYM) {
       opLog.warn('AGI generated for future period', {
         companyId,
-        periodYear: run.period_year,
-        periodMonth: run.period_month,
+        periodYear: agiPeriod.periodYear,
+        periodMonth: agiPeriod.periodMonth,
       })
     } else if (currentYM - periodYM > 13) {
       opLog.warn('AGI generated for period > 13 months past', {
         companyId,
-        periodYear: run.period_year,
-        periodMonth: run.period_month,
+        periodYear: agiPeriod.periodYear,
+        periodMonth: agiPeriod.periodMonth,
       })
     }
   }
@@ -526,11 +531,42 @@ export async function generateAgiDeclaration(
   // PGRST116 row-not-found error and abort what should be a clean insert.
   const { data: existingAgi } = await supabase
     .from('agi_declarations')
-    .select('id')
+    .select('id, salary_run_id')
     .eq('company_id', companyId)
-    .eq('period_year', run.period_year)
-    .eq('period_month', run.period_month)
+    .eq('period_year', agiPeriod.periodYear)
+    .eq('period_month', agiPeriod.periodMonth)
     .maybeSingle()
+
+  // Two runs may share a redovisningsperiod only when one corrects the
+  // other (a correction replaces the month's declaration wholesale). Any
+  // other run paid out in the same calendar month would have to be MERGED
+  // into one declaration, which this generator cannot do: overwriting the
+  // existing XML would file the wrong amounts, so refuse instead. Reachable
+  // now that the period follows payment_date (#2191): an August run paid
+  // 25 Sept and a September run paid 30 Sept both land in 202609.
+  if (
+    existingAgi?.salary_run_id &&
+    existingAgi.salary_run_id !== run.id &&
+    existingAgi.salary_run_id !== run.corrects_run_id
+  ) {
+    const { data: otherRun } = await supabase
+      .from('salary_runs')
+      .select('id, status, period_year, period_month')
+      .eq('id', existingAgi.salary_run_id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (otherRun && otherRun.status !== 'corrected') {
+      return {
+        ok: false,
+        code: 'AGI_PERIOD_CONFLICT',
+        details: {
+          period: formatAgiPeriodDashed(agiPeriod),
+          other_salary_run_id: otherRun.id,
+          other_run_period: `${otherRun.period_year}-${String(otherRun.period_month).padStart(2, '0')}`,
+        },
+      }
+    }
+  }
 
   const isCorrection = !!existingAgi
 
@@ -596,8 +632,8 @@ export async function generateAgiDeclaration(
         company_id: companyId,
         user_id: userId,
         salary_run_id: run.id,
-        period_year: run.period_year,
-        period_month: run.period_month,
+        period_year: agiPeriod.periodYear,
+        period_month: agiPeriod.periodMonth,
         xml_content: xml,
         individuppgifter,
         total_gross: run.total_gross,
@@ -623,8 +659,8 @@ export async function generateAgiDeclaration(
           .from('agi_declarations')
           .select('id')
           .eq('company_id', companyId)
-          .eq('period_year', run.period_year)
-          .eq('period_month', run.period_month)
+          .eq('period_year', agiPeriod.periodYear)
+          .eq('period_month', agiPeriod.periodMonth)
           .maybeSingle()
         if (refetchErr || !nowExisting) {
           return { ok: false, code: 'DATABASE_ERROR', details: refetchErr || insErr }
@@ -650,8 +686,8 @@ export async function generateAgiDeclaration(
         agiDeclarationId = nowExisting.id as string
         opLog.warn('agi_declarations insert raced; recovered via update', {
           companyId,
-          periodYear: run.period_year,
-          periodMonth: run.period_month,
+          periodYear: agiPeriod.periodYear,
+          periodMonth: agiPeriod.periodMonth,
         })
         // Note: the caller-facing `isCorrection` flag (set above based on
         // the pre-INSERT existingAgi lookup) reports `false` even though
@@ -681,8 +717,8 @@ export async function generateAgiDeclaration(
       type: 'agi.generated',
       payload: {
         agiId: agiDeclarationId,
-        periodYear: run.period_year,
-        periodMonth: run.period_month,
+        periodYear: agiPeriod.periodYear,
+        periodMonth: agiPeriod.periodMonth,
         userId,
         companyId,
       },
@@ -711,8 +747,8 @@ export async function generateAgiDeclaration(
     ok: true,
     xml,
     agiDeclarationId,
-    periodYear: run.period_year,
-    periodMonth: run.period_month,
+    periodYear: agiPeriod.periodYear,
+    periodMonth: agiPeriod.periodMonth,
     employeeCount: employeeData.length,
     isCorrection,
     totals,

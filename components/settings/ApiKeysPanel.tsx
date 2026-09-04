@@ -320,6 +320,9 @@ export function ApiKeysPanel() {
   // (extensions/general/mcp-server/auth-mode.ts). Claude Code, Cursor and the
   // stdio bridge keep the lazy URL.
   const claudeConnectorUrl = `${mcpUrl('claude-connector')}&auth=required`
+  // Grok's custom-connector dialog does the same probe: on the lazy URL it
+  // lists every tool and never opens the sign-in (observed 2026-09-02).
+  const grokConnectorUrl = `${mcpUrl('grok')}&auth=required`
 
   // claude.ai install link: opens Add-custom-connector with name and URL
   // prefilled. It only prefills the dialog, so the user still reviews and
@@ -436,7 +439,7 @@ export function ApiKeysPanel() {
                   path: (chunks) => <strong>{chunks}</strong>,
                 })}
               </p>
-              <CopyBlock text={mcpUrl('grok')} copyAriaLabel={t('copy_aria')} />
+              <CopyBlock text={grokConnectorUrl} copyAriaLabel={t('copy_aria')} />
             </div>
 
             <div>

@@ -73,11 +73,13 @@ export const companyCurrentResource: McpResource = {
         .select('id', { count: 'exact', head: true })
         .eq('company_id', companyId),
 
-      // Open AR: anything not paid/credited/cancelled.
+      // Open AR: anything not paid/credited/cancelled. Proformas, delivery
+      // notes and quotes are never receivables, so only fakturor count.
       supabase
         .from('invoices')
         .select('id', { count: 'exact', head: true })
         .eq('company_id', companyId)
+        .eq('document_type', 'invoice')
         .in('status', ['draft', 'sent', 'overdue']),
 
       // Open AP: anything still pending payment.

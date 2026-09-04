@@ -33,6 +33,11 @@ export function hasOwnSkatteverketCredentials(): boolean {
   return !!(process.env.SKATTEVERKET_OAUTH2_CLIENT_ID || process.env.SKATTEVERKET_APIGW_CLIENT_ID)
 }
 
+/** True when the instance would use its own Peppol access point (Qvalia partner keys). */
+export function hasOwnPeppolCredentials(): boolean {
+  return !!(process.env.QVALIA_API_KEY || process.env.QVALIA_PARTNER_REG_NO)
+}
+
 /**
  * Whether this instance provides the given connector capability from its own
  * credentials. org_lookup and migration have no own-credentials form: they
@@ -41,5 +46,6 @@ export function hasOwnSkatteverketCredentials(): boolean {
 export function hasOwnCredentialsFor(key: CapabilityKey): boolean {
   if (key === CAPABILITY.bank_sync) return hasOwnEnableBankingCredentials()
   if (key === CAPABILITY.skatteverket) return hasOwnSkatteverketCredentials()
+  if (key === CAPABILITY.peppol) return hasOwnPeppolCredentials()
   return false
 }

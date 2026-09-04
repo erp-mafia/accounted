@@ -179,6 +179,7 @@ function fxInvoice(overrides: Row = {}): Row {
   return {
     id: `inv-${Math.random().toString(36).slice(2, 10)}`,
     company_id: 'company-1',
+    document_type: 'invoice',
     status: 'sent',
     currency: 'EUR',
     exchange_rate: 11.2,
@@ -906,6 +907,21 @@ describe('validateYearEndReadiness: open FX items at balansdagen (ÅRL 4 kap. 13
     const supabase = makeFilteringClient(
       fxBaseTables({
         invoices: [fxInvoice({ id: 'inv-next-year', invoice_date: '2025-02-01' })],
+      })
+    )
+
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.warnings.filter((w: string) => w.includes('valuta'))).toHaveLength(0)
+  })
+
+  it('ignores sent EUR quotes and proformas: they are not receivables and sit on no 1510 balance', async () => {
+    const supabase = makeFilteringClient(
+      fxBaseTables({
+        invoices: [
+          fxInvoice({ id: 'quote-1', document_type: 'quote' }),
+          fxInvoice({ id: 'proforma-1', document_type: 'proforma', exchange_rate: null }),
+        ],
       })
     )
 

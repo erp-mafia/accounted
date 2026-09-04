@@ -149,6 +149,49 @@ describe('POST /api/invoices/preview-pdf', () => {
     expect(mockSupabase.from).not.toHaveBeenCalledWith('customers')
   })
 
+  it('passes valid_until through for a quote and names the file Offert', async () => {
+    enqueue({ data: { ...company, bankgiro: null }, error: null })
+    enqueue({ data: customer, error: null })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/preview-pdf', {
+        method: 'POST',
+        body: {
+          ...validBody,
+          invoice_number: 'OF-001',
+          document_type: 'quote',
+          due_date: '2026-08-20',
+          valid_until: '2026-08-20',
+        },
+      }),
+      createMockRouteParams({}),
+    )
+
+    // No payment account is needed for a quote: it is never a payment request.
+    expect(response.status).toBe(200)
+    expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
+      .toBe('Oppy Sverige x Kund ÅÄÖ AB Offert nr OF-001 20260721.pdf')
+    const { invoice } = lastRenderProps()
+    expect(invoice.document_type).toBe('quote')
+    expect(invoice.valid_until).toBe('2026-08-20')
+  })
+
+  it('leaves valid_until null on non-quote documents', async () => {
+    enqueue({ data: company, error: null })
+    enqueue({ data: customer, error: null })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/preview-pdf', {
+        method: 'POST',
+        body: { ...validBody, valid_until: '2026-08-20' },
+      }),
+      createMockRouteParams({}),
+    )
+
+    expect(response.status).toBe(200)
+    expect(lastRenderProps().invoice.valid_until).toBeNull()
+  })
+
   // ROT/RUT (issue #1686): the preview must state the same avdrag row, info
   // box and "Att betala" as the invoice the write path creates. The PDF
   // template reads invoice.deduction_total / deduction_personnummer_masked
