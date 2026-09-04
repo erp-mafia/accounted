@@ -18,6 +18,7 @@
  * which loosens the Zod schema to prove the defence lives in the route.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { JAMKNING_ROW_INCOMPLETE } from '@/lib/salary/jamkning-rules'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
@@ -358,23 +359,51 @@ describe('jämkning on PATCH /api/salary/employees/[id]', () => {
     expect(captured.updates).toEqual({ first_name: 'Ny' })
   })
 
-  it('400 with the validator sentence when the database trigger catches the race (#2256)', async () => {
-    // The snapshot this handler validated against was complete, so nulling
-    // only the end date is a plain "clear" to the merged check... except the
-    // row was cleared and re-set by another request in between. The trigger
-    // (SQLSTATE 23514, JAMKNING_INCOMPLETE prefix) is the only thing that
-    // sees the real row: it must come back as the same 400, not a 500.
+  // The PostgREST error for employees_jamkning_dates_check (#2256), as
+  // observed against a real PostgREST: the constraint name is in `message`,
+  // `details` carries the failing row and must never reach the response.
+  const CHECK_CONSTRAINT_ERROR = {
+    code: '23514',
+    message: 'new row for relation "employees" violates check constraint "employees_jamkning_dates_check"',
+    details: 'Failing row contains (...).',
+    hint: null,
+  }
+
+  it('400 with the umbrella sentence when the CHECK constraint catches the race (#2256)', async () => {
+    // The snapshot this handler validated against was empty, so nulling only
+    // the end date is a no-op to the merged check... except another request
+    // stored a complete beslut in between. The constraint is the only thing
+    // that sees the real row: it must come back as a 400, not a 500, and the
+    // merged row cannot explain it, so the umbrella sentence is used.
     const captured = useRow(
       { ...EXISTING_ROW, jamkning_percentage: null, jamkning_valid_from: null, jamkning_valid_to: null },
-      { code: '23514', message: `JAMKNING_INCOMPLETE: ${JAMKNING_END_REQUIRED}` },
+      CHECK_CONSTRAINT_ERROR,
     )
 
     const response = await PATCH(patchRequest({ jamkning_valid_to: null }), params)
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toBe(JAMKNING_END_REQUIRED)
+    expect(body.error).toBe(JAMKNING_ROW_INCOMPLETE)
+    expect(JSON.stringify(body)).not.toContain('Failing row')
     expect(captured.updates).toEqual({ jamkning_valid_to: null })
+  })
+
+  it('400 naming the missing date when a legacy incomplete row is edited in an unrelated column (NOT VALID trade-off)', async () => {
+    // The route lets the unrelated edit through (touched gate), the
+    // constraint refuses the row on its next UPDATE: the user is told exactly
+    // what to complete, with the validator's own sentence.
+    const captured = useRow(
+      { ...EXISTING_ROW, jamkning_percentage: 15, jamkning_valid_from: '2026-01-01', jamkning_valid_to: null },
+      CHECK_CONSTRAINT_ERROR,
+    )
+
+    const response = await PATCH(patchRequest({ first_name: 'Ny' }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toBe(JAMKNING_END_REQUIRED)
+    expect(captured.updates).toEqual({ first_name: 'Ny' })
   })
 
   it('500 through the generic mapper for any other database error on the update', async () => {

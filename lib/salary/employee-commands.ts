@@ -19,7 +19,7 @@ import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer
 import { getCompanyEntityType } from '@/lib/company/context'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
-import { jamkningIssueFromDbError, touchesJamkning, validateJamkning } from '@/lib/salary/jamkning-rules'
+import { jamkningIssueFromDbError, touchesJamkning, validateJamkning, type JamkningFields } from '@/lib/salary/jamkning-rules'
 
 export type EmployeeCommandResult<T> =
   | { ok: true; data: T }
@@ -288,10 +288,12 @@ export async function updateEmployee(
     .single()
 
   if (error) {
-    // The database backstop caught the concurrent-update race (#2256): the
-    // merged-state check above passed against a snapshot another request has
-    // since changed. Same VALIDATION_ERROR and sentence as that check.
-    const jamkningIssue = jamkningIssueFromDbError(error)
+    // The CHECK constraint refused the row (#2256): either the merged-state
+    // check above passed against a snapshot another request has since
+    // changed, or this is a legacy incomplete row (stored before #2240) whose
+    // next edit must complete or clear the beslut. Same VALIDATION_ERROR and
+    // sentence as that check, derived from the merged row.
+    const jamkningIssue = jamkningIssueFromDbError(error, merged as JamkningFields)
     if (jamkningIssue) {
       return {
         ok: false,

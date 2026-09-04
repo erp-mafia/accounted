@@ -8,6 +8,7 @@
  */
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { JAMKNING_END_REQUIRED, JAMKNING_ROW_INCOMPLETE } from '@/lib/salary/jamkning-rules'
 
 beforeAll(() => {
   if (process.env.NODE_ENV !== 'test') {
@@ -907,24 +908,27 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id', () => {
     expect(body.error.details.field).toBe('jamkning_valid_to')
   })
 
-  it('answers the database trigger (concurrent-PATCH race, #2256) as the same VALIDATION_ERROR', async () => {
+  // The PostgREST error for employees_jamkning_dates_check (#2256), as
+  // observed against a real PostgREST: the constraint name is in `message`,
+  // `details` carries the failing row and must never reach the response.
+  const CHECK_CONSTRAINT_ERROR = {
+    code: '23514',
+    message: 'new row for relation "employees" violates check constraint "employees_jamkning_dates_check"',
+    details: 'Failing row contains (...).',
+    hint: null,
+  }
+
+  it('answers the CHECK constraint (concurrent-PATCH race, #2256) as the same VALIDATION_ERROR', async () => {
     // The snapshot was empty, so a percentage with both dates passes the
     // merged check; another request changed the row in between and the
-    // trigger refused the write with SQLSTATE 23514 and the stable prefix.
+    // constraint refused the write. The merged row cannot explain it, so the
+    // umbrella sentence is used.
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: [
           { data: SAMPLE_EMPLOYEE, error: null },
-          {
-            data: null,
-            error: {
-              code: '23514',
-              message: 'JAMKNING_INCOMPLETE: Jämkningens slutdatum måste anges när jämkningsprocent sätts',
-              details: 'employees.jamkning_percentage is set but jamkning_valid_to is null (#2256)',
-              hint: null,
-            },
-          },
+          { data: null, error: CHECK_CONSTRAINT_ERROR },
         ],
         idempotency_keys: { data: null, error: null },
       }),
@@ -946,9 +950,45 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id', () => {
     const body = await res.json()
     expect(body.error.code).toBe('VALIDATION_ERROR')
     expect(body.error.details.field).toBe('jamkning_valid_to')
-    expect(body.error.details.message).toContain('Jämkningens slutdatum måste anges när jämkningsprocent sätts')
-    expect(body.error.details.message).toContain('`jamkning_valid_to`')
-    expect(JSON.stringify(body)).not.toContain('JAMKNING_INCOMPLETE')
+    expect(body.error.details.message).toBe(`${JAMKNING_ROW_INCOMPLETE}.`)
+    expect(JSON.stringify(body)).not.toContain('violates check constraint')
+    expect(JSON.stringify(body)).not.toContain('Failing row')
+  })
+
+  it('names the missing date when a legacy incomplete row is edited in an unrelated column (NOT VALID trade-off)', async () => {
+    // The route lets the unrelated edit through (touched gate); the
+    // constraint refuses the row on its next UPDATE, and the merged row
+    // explains exactly what to complete.
+    const legacy = {
+      ...SAMPLE_EMPLOYEE,
+      jamkning_percentage: 15,
+      jamkning_valid_from: '2026-01-01',
+      jamkning_valid_to: null,
+    }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: [
+          { data: legacy, error: null },
+          { data: null, error: CHECK_CONSTRAINT_ERROR },
+        ],
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ monthly_salary: 38000 }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('jamkning_valid_to')
+    expect(body.error.details.message).toBe(`${JAMKNING_END_REQUIRED}. Skicka även \`jamkning_valid_to\` i samma PATCH.`)
   })
 
   it('leaves a legacy row without valid_to editable in unrelated ways (touched gate)', async () => {

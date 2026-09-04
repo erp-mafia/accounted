@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
-  JAMKNING_DB_ERROR_PREFIX,
+  JAMKNING_CHECK_CONSTRAINT,
   JAMKNING_END_REQUIRED,
   JAMKNING_ORDER,
+  JAMKNING_ROW_INCOMPLETE,
   JAMKNING_START_REQUIRED,
   jamkningIssueFromDbError,
   touchesJamkning,
@@ -108,41 +109,66 @@ describe('touchesJamkning', () => {
   })
 })
 
-describe('jamkningIssueFromDbError (#2256: the trigger backstop)', () => {
-  it('recovers the issue from a 23514 trigger rejection, prefix stripped', () => {
+// The PostgREST error for a violated CHECK constraint, as observed against a
+// real PostgREST (tests/tool-pg): the constraint name is in `message` only,
+// and `details` carries the failing row, which no caller may echo.
+const CHECK_ERROR = {
+  code: '23514',
+  details: 'Failing row contains (...).',
+  hint: null,
+  message: `new row for relation "employees" violates check constraint "${JAMKNING_CHECK_CONSTRAINT}"`,
+}
+
+describe('jamkningIssueFromDbError (#2256: the CHECK constraint backstop)', () => {
+  it('recovers the validator sentence from the merged row (a legacy incomplete row on its next edit)', () => {
     expect(
-      jamkningIssueFromDbError({ code: '23514', message: `${JAMKNING_DB_ERROR_PREFIX}${JAMKNING_END_REQUIRED}` }),
+      jamkningIssueFromDbError(CHECK_ERROR, {
+        jamkning_percentage: 15,
+        jamkning_valid_from: '2026-01-01',
+        jamkning_valid_to: null,
+      }),
     ).toEqual({ field: 'jamkning_valid_to', message: JAMKNING_END_REQUIRED })
     expect(
-      jamkningIssueFromDbError({ code: '23514', message: `${JAMKNING_DB_ERROR_PREFIX}${JAMKNING_START_REQUIRED}` }),
+      jamkningIssueFromDbError(CHECK_ERROR, { jamkning_percentage: 15, jamkning_valid_from: null, jamkning_valid_to: null }),
     ).toEqual({ field: 'jamkning_valid_from', message: JAMKNING_START_REQUIRED })
     expect(
-      jamkningIssueFromDbError({ code: '23514', message: `${JAMKNING_DB_ERROR_PREFIX}${JAMKNING_ORDER}` }),
+      jamkningIssueFromDbError(CHECK_ERROR, {
+        jamkning_percentage: 15,
+        jamkning_valid_from: '2026-06-01',
+        jamkning_valid_to: '2026-01-31',
+      }),
     ).toEqual({ field: 'jamkning_valid_to', message: JAMKNING_ORDER })
   })
 
-  it('carries the PostgrestError extras without reading them', () => {
+  it('falls back to the umbrella sentence when the merged row is valid (a concurrent change)', () => {
     expect(
-      jamkningIssueFromDbError({
-        code: '23514',
-        message: `${JAMKNING_DB_ERROR_PREFIX}${JAMKNING_END_REQUIRED}`,
-        details: 'employees.jamkning_percentage is set but jamkning_valid_to is null (#2256)',
-        hint: null,
+      jamkningIssueFromDbError(CHECK_ERROR, {
+        jamkning_percentage: 15,
+        jamkning_valid_from: '2026-01-01',
+        jamkning_valid_to: '2026-12-31',
       }),
-    ).toEqual({ field: 'jamkning_valid_to', message: JAMKNING_END_REQUIRED })
+    ).toEqual({ field: 'jamkning_valid_to', message: JAMKNING_ROW_INCOMPLETE })
+    expect(jamkningIssueFromDbError(CHECK_ERROR)).toEqual({ field: 'jamkning_valid_to', message: JAMKNING_ROW_INCOMPLETE })
+  })
+
+  it('accepts the node-postgres shape, which names the constraint in its own field', () => {
+    expect(
+      jamkningIssueFromDbError({ code: '23514', message: 'anything', constraint: JAMKNING_CHECK_CONSTRAINT }),
+    ).toEqual({ field: 'jamkning_valid_to', message: JAMKNING_ROW_INCOMPLETE })
   })
 
   it('ignores every other error', () => {
     expect(jamkningIssueFromDbError(null)).toBeNull()
-    expect(jamkningIssueFromDbError('JAMKNING_INCOMPLETE: x')).toBeNull()
-    expect(jamkningIssueFromDbError(new Error(`${JAMKNING_DB_ERROR_PREFIX}${JAMKNING_END_REQUIRED}`))).toBeNull()
-    // Another check constraint on the same table.
+    expect(jamkningIssueFromDbError(CHECK_ERROR.message)).toBeNull()
+    // Another CHECK constraint on the same table.
     expect(
-      jamkningIssueFromDbError({ code: '23514', message: 'new row for relation "employees" violates check constraint' }),
+      jamkningIssueFromDbError({
+        code: '23514',
+        message: 'new row for relation "employees" violates check constraint "employees_tax_column_check"',
+      }),
     ).toBeNull()
-    // The prefix on a different SQLSTATE is not the trigger.
-    expect(jamkningIssueFromDbError({ code: 'P0001', message: `${JAMKNING_DB_ERROR_PREFIX}${JAMKNING_END_REQUIRED}` })).toBeNull()
-    expect(jamkningIssueFromDbError({ code: '23514', message: JAMKNING_DB_ERROR_PREFIX })).toBeNull()
+    // The constraint name under a different SQLSTATE is not the constraint.
+    expect(jamkningIssueFromDbError({ code: 'P0001', message: CHECK_ERROR.message })).toBeNull()
     expect(jamkningIssueFromDbError({ code: '23514' })).toBeNull()
   })
 })

@@ -8,6 +8,7 @@
  * extensions/general/mcp-server/__tests__/payroll-staged-tools.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { JAMKNING_ROW_INCOMPLETE } from '@/lib/salary/jamkning-rules'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 import type { PendingOperation } from '@/types'
@@ -946,7 +947,7 @@ describe('commitPendingOperation: update_employee', () => {
     expect(result.error).toMatch(/Månadslön/)
   })
 
-  it('answers the database trigger (concurrent-update race, #2256) as a validation failure, not INTERNAL_ERROR', async () => {
+  it('answers the CHECK constraint (concurrent-update race, #2256) as a validation failure, not INTERNAL_ERROR', async () => {
     const { encryptPersonnummer } = await import('@/lib/salary/personnummer')
     const encrypted = encryptPersonnummer('190001010000')
 
@@ -974,11 +975,11 @@ describe('commitPendingOperation: update_employee', () => {
       data: null,
       error: {
         code: '23514',
-        message: 'JAMKNING_INCOMPLETE: Jämkningens slutdatum måste anges när jämkningsprocent sätts',
-        details: 'employees.jamkning_percentage is set but jamkning_valid_to is null (#2256)',
+        message: 'new row for relation "employees" violates check constraint "employees_jamkning_dates_check"',
+        details: 'Failing row contains (...).',
         hint: null,
       },
-    }) // update: the trigger saw the row another request changed in between
+    }) // update: the constraint checked the row another request changed in between
     enqueue({ data: null, error: null }) // finalize
 
     const op = makePendingOp({
@@ -991,6 +992,6 @@ describe('commitPendingOperation: update_employee', () => {
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
     expect(result.status).not.toBe('committed')
-    expect(result.error).toBe('Jämkningens slutdatum måste anges när jämkningsprocent sätts')
+    expect(result.error).toBe(JAMKNING_ROW_INCOMPLETE)
   })
 })

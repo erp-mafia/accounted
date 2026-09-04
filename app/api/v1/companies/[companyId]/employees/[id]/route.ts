@@ -28,7 +28,8 @@ import { UpdateEmployeeSchema } from '@/lib/api/schemas'
 import { maskPersonnummer } from '@/lib/api/v1/mask-personnummer'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import {
-  JAMKNING_ORDER,
+  JAMKNING_END_REQUIRED,
+  JAMKNING_START_REQUIRED,
   jamkningIssueFromDbError,
   touchesJamkning,
   validateJamkning,
@@ -359,12 +360,12 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     const jamkningIssueDetails = (issue: JamkningIssue) => ({
       field: issue.field,
       message:
-        issue.message === JAMKNING_ORDER
-          ? `${issue.message}.`
-          : `${issue.message}. Skicka även \`${issue.field}\` i samma PATCH.`,
+        issue.message === JAMKNING_START_REQUIRED || issue.message === JAMKNING_END_REQUIRED
+          ? `${issue.message}. Skicka även \`${issue.field}\` i samma PATCH.`
+          : `${issue.message}.`,
     })
+    const mergedJamkning = { ...(existing as Record<string, unknown>), ...updates } as JamkningFields
     if (touchesJamkning(updates)) {
-      const mergedJamkning = { ...(existing as Record<string, unknown>), ...updates } as JamkningFields
       const [issue] = validateJamkning(mergedJamkning)
       if (issue) {
         return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
@@ -403,10 +404,12 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       .single()
 
     if (error) {
-      // The database backstop caught the concurrent-PATCH race (#2256): the
-      // merged-state check above passed against a snapshot another request
-      // has since changed. Same VALIDATION_ERROR and details as that check.
-      const jamkningIssue = jamkningIssueFromDbError(error)
+      // The CHECK constraint refused the row (#2256): either the merged-state
+      // check above passed against a snapshot another request has since
+      // changed, or this is a legacy incomplete row (stored before #2240)
+      // whose next edit must complete or clear the beslut. Same
+      // VALIDATION_ERROR and details as that check, derived from the merged row.
+      const jamkningIssue = jamkningIssueFromDbError(error, mergedJamkning)
       if (jamkningIssue) {
         return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
           requestId: ctx.requestId,

@@ -180,10 +180,12 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       if (error.code === '23505') {
         return NextResponse.json({ error: 'En anställd med detta personnummer finns redan' }, { status: 409 })
       }
-      // The database backstop caught the concurrent-PATCH race (#2256): the
-      // merged-state check above passed against a snapshot another request
-      // has since changed. Same 400 and sentence as that check.
-      const jamkningIssue = jamkningIssueFromDbError(error)
+      // The CHECK constraint refused the row (#2256): either the merged-state
+      // check above passed against a snapshot another request has since
+      // changed, or this is a legacy incomplete row (stored before #2240)
+      // whose next edit must complete or clear the beslut. Same 400 and
+      // sentence as that check, derived from the merged row.
+      const jamkningIssue = jamkningIssueFromDbError(error, merged)
       if (jamkningIssue) {
         return NextResponse.json({ error: jamkningIssue.message }, { status: 400 })
       }
