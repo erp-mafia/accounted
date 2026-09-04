@@ -368,40 +368,33 @@ describe('createSupplierPaymentBatch', () => {
     // The client contract is unchanged: a generic create_failed, nothing else.
     expect(result).toEqual({ ok: false, code: 'create_failed' })
 
-    // The diagnosis lives in the log (#2060): SQLSTATE verbatim, the text
-    // fields redacted and bounded (the failing-row payload is dropped), keyed
-    // by company, batch and item count. Exact match on purpose: the debtor
-    // snapshot and the item rows (IBAN, payee data) must never ride along.
+    // The diagnosis lives in the log (#2060): SQLSTATE and message only, keyed
+    // by company, batch and item count. Exact match on purpose: details and
+    // hint (where Postgres quotes row data), the debtor snapshot and the item
+    // rows must never ride along.
     expect(logError).toHaveBeenCalledTimes(1)
     expect(logError).toHaveBeenCalledWith('create_supplier_payment_batch RPC failed', {
       companyId: COMPANY_ID,
       batchId: expect.stringMatching(UUID_RE),
       itemCount: 1,
-      rpcError: {
-        code: '23514',
-        message: rpcError.message,
-        details: 'Failing row contains ([ROW_OMITTED]).',
-        hint: null,
-      },
+      rpcError: { code: '23514', message: rpcError.message },
     })
     const [, ctx] = logError.mock.calls[0] as [string, Record<string, unknown>]
     expect(ctx.batchId).toBe((mock.supabase.rpc.mock.calls[0][1] as { p_batch_id: string }).p_batch_id)
   })
 
-  it('redacts and bounds Postgres error text before logging: IBAN, failing row and oversized hint never reach the log', async () => {
+  it('never logs details or hint: an IBAN and a payee name there cannot reach the log, code and message do', async () => {
     const mock = createQueuedMockSupabase()
     const IBAN = 'SE4550000000058398257466'
     const rpcError = {
       code: '23514',
-      // An IBAN inside the message itself.
-      message: `payee account ${IBAN} does not satisfy supplier_payment_batch_items_payee_fields_match`,
-      // The notorious one: Postgres quotes the entire row (payee name, account).
+      message:
+        'new row for relation "supplier_payment_batch_items" violates check constraint "supplier_payment_batch_items_payee_fields_match"',
+      // Where Postgres quotes the entire failing row (payee name, account).
       details:
         'Failing row contains (b0000000-0000-0000-0000-000000000001, c0000000-0000-0000-0000-000000000001, ' +
         `737.50, 2099-08-15, bank_account, null, null, 5000, ${IBAN}, Anna Andersson, invoice_number, CD3014794407).`,
-      // Oversized, with the IBAN straddling the 500-char bound: bounding
-      // before redacting would leave a digit fragment behind.
-      hint: `${'x'.repeat(490)}${IBAN}${'y'.repeat(400)}`,
+      hint: `Check the payee fields for Anna Andersson (${IBAN}).`,
     }
     mock.enqueueMany([
       { data: companyRow },
@@ -420,26 +413,17 @@ describe('createSupplierPaymentBatch', () => {
     expect(result).toEqual({ ok: false, code: 'create_failed' })
 
     expect(logError).toHaveBeenCalledTimes(1)
-    const [, ctx] = logError.mock.calls[0] as [
-      string,
-      { rpcError: { code: string; message: string; details: string; hint: string } },
-    ]
-    // The whole logged context, not just the three fields, is free of the
-    // payment data: raw IBAN, any IBAN digit fragment, payee name.
+    const [, ctx] = logError.mock.calls[0] as [string, Record<string, unknown>]
+    // Nothing from details or hint, in any shape, anywhere in the context.
     const serialized = JSON.stringify(ctx)
     expect(serialized).not.toContain(IBAN)
-    expect(serialized).not.toContain('SE45')
     expect(serialized).not.toContain('Anna Andersson')
-    expect(serialized).not.toContain('5000')
-
-    expect(ctx.rpcError.code).toBe('23514')
-    expect(ctx.rpcError.message).toBe(
-      'payee account [REDACTED_IBAN] does not satisfy supplier_payment_batch_items_payee_fields_match',
-    )
-    expect(ctx.rpcError.details).toBe('Failing row contains ([ROW_OMITTED]).')
-    expect(ctx.rpcError.hint.length).toBeLessThanOrEqual(500)
-    expect(ctx.rpcError.hint.endsWith('[TRUNCATED]')).toBe(true)
-    expect(ctx.rpcError.hint.startsWith('x'.repeat(489))).toBe(true)
+    expect(serialized).not.toContain('Failing row')
+    expect(serialized).not.toContain(rpcError.hint)
+    expect(ctx).not.toHaveProperty(['rpcError', 'details'])
+    expect(ctx).not.toHaveProperty(['rpcError', 'hint'])
+    // Only the two fields with diagnostic value, verbatim.
+    expect(ctx.rpcError).toEqual({ code: '23514', message: rpcError.message })
   })
 
   it('logs a PostgREST schema-cache miss (PGRST202) the same way, still as create_failed', async () => {
@@ -469,7 +453,11 @@ describe('createSupplierPaymentBatch', () => {
     expect(result).toEqual({ ok: false, code: 'create_failed' })
     expect(logError).toHaveBeenCalledWith(
       'create_supplier_payment_batch RPC failed',
-      expect.objectContaining({ companyId: COMPANY_ID, itemCount: 1, rpcError }),
+      expect.objectContaining({
+        companyId: COMPANY_ID,
+        itemCount: 1,
+        rpcError: { code: 'PGRST202', message: rpcError.message },
+      }),
     )
   })
 

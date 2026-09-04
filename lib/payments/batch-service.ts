@@ -21,7 +21,6 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
-import { redactString } from '@/lib/observability/redact'
 import { getBranding } from '@/lib/branding/service'
 import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { ORE_TOLERANCE, roundOre, sumOre } from '@/lib/money'
@@ -42,31 +41,6 @@ import { generateSupplierPain001, type SupplierPain001Payment } from './pain001-
 import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
 
 const log = createLogger('payments/batch-service')
-
-const RPC_ERROR_TEXT_MAX = 500
-const TRUNCATED = '[TRUNCATED]'
-// Postgres quotes the entire failing row in `details` on CHECK and NOT NULL
-// violations ("Failing row contains (..., SE45..., Anna Andersson, ...)").
-// No pattern-based redactor catches a payee name, so the payload is dropped
-// whole; the constraint name in `message` is the diagnostic anyway.
-const FAILING_ROW_PATTERN = /Failing row contains \([\s\S]*\)/
-
-/**
- * Postgres/PostgREST error text (message, details, hint) can carry payment
- * data: a quoted failing row, an IBAN in a constraint message. Before any of
- * it reaches a log line it is (1) stripped of any failing-row payload,
- * (2) run through the repository's redactor (SE IBANs, personnummer, emails,
- * API keys) and (3) bounded, in that order: bounding first could cut an IBAN
- * into a fragment the pattern no longer recognises. The logger redacts again
- * on its own path; this keeps the guarantee local to the call site that knows
- * the text is payment-shaped (#2282 review). Non-strings become null.
- */
-function boundedRedactedText(value: unknown): string | null {
-  if (typeof value !== 'string' || value.length === 0) return null
-  const redacted = redactString(value.replace(FAILING_ROW_PATTERN, 'Failing row contains ([ROW_OMITTED])'))
-  if (redacted.length <= RPC_ERROR_TEXT_MAX) return redacted
-  return `${redacted.slice(0, RPC_ERROR_TEXT_MAX - TRUNCATED.length)}${TRUNCATED}`
-}
 
 type InvoiceRow = BatchInvoiceFacts & {
   supplier: (SupplierPayeeSource & { id: string; name: string; city: string | null }) | null
@@ -392,25 +366,23 @@ export async function createSupplierPaymentBatch(
     p_confirm_already_batched: input.confirm_already_batched ?? false,
     p_user_id: userId,
   })
-  // The client only ever sees create_failed. The raw error (SQLSTATE, message,
-  // details, hint) is what tells the RPC's tenant guard (42501), a constraint
-  // violation inside the SECURITY DEFINER body and a PostgREST schema-cache
-  // miss right after a deploy (PGRST202) apart, so it goes to the log (#2060).
-  // Deliberately NOT logged: debtor_snapshot and the item rows (IBAN and payee
-  // data); companyId, batchId and the item count make the line greppable. The
-  // three text fields go through boundedRedactedText first, since Postgres
-  // quotes the failing row in details; only the SQLSTATE is verbatim.
+  // The client only ever sees create_failed. What tells the RPC's tenant
+  // guard (42501), a constraint violation inside the SECURITY DEFINER body
+  // and a PostgREST schema-cache miss right after a deploy (PGRST202) apart
+  // is the SQLSTATE plus the message (the RPC's own RAISE text, "violates
+  // check constraint <name>", "duplicate key value violates unique
+  // constraint <name>"), so those two go to the log (#2060). `details` is
+  // where Postgres quotes row data ("Failing row contains (...)",
+  // "Key (...)=(...)") and `hint` adds nothing operational: neither is
+  // logged, so payee and account data cannot reach a log line through them.
+  // debtor_snapshot and the item rows are not logged either; companyId,
+  // batchId and the item count make the line greppable.
   if (error) {
     log.error('create_supplier_payment_batch RPC failed', {
       companyId,
       batchId,
       itemCount: itemRows.length,
-      rpcError: {
-        code: error.code,
-        message: boundedRedactedText(error.message),
-        details: boundedRedactedText(error.details),
-        hint: boundedRedactedText(error.hint),
-      },
+      rpcError: { code: error.code, message: error.message },
     })
     return { ok: false, code: 'create_failed' }
   }
