@@ -20,6 +20,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createLogger } from '@/lib/logger'
 import { getBranding } from '@/lib/branding/service'
 import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { ORE_TOLERANCE, roundOre, sumOre } from '@/lib/money'
@@ -38,6 +39,8 @@ import {
 import { formatPayeeLabel, type SupplierPayeeSource } from './supplier-payee'
 import { generateSupplierPain001, type SupplierPain001Payment } from './pain001-supplier'
 import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
+
+const log = createLogger('payments/batch-service')
 
 type InvoiceRow = BatchInvoiceFacts & {
   supplier: (SupplierPayeeSource & { id: string; name: string; city: string | null }) | null
@@ -363,10 +366,36 @@ export async function createSupplierPaymentBatch(
     p_confirm_already_batched: input.confirm_already_batched ?? false,
     p_user_id: userId,
   })
-  if (error) return { ok: false, code: 'create_failed' }
+  // The client only ever sees create_failed. What tells the RPC's tenant
+  // guard (42501), a constraint violation inside the SECURITY DEFINER body
+  // and a PostgREST schema-cache miss right after a deploy (PGRST202) apart
+  // is the SQLSTATE plus the message (the RPC's own RAISE text, "violates
+  // check constraint <name>", "duplicate key value violates unique
+  // constraint <name>"), so those two go to the log (#2060). `details` is
+  // where Postgres quotes row data ("Failing row contains (...)",
+  // "Key (...)=(...)") and `hint` adds nothing operational: neither is
+  // logged, so payee and account data cannot reach a log line through them.
+  // debtor_snapshot and the item rows are not logged either; companyId,
+  // batchId and the item count make the line greppable.
+  if (error) {
+    log.error('create_supplier_payment_batch RPC failed', {
+      companyId,
+      batchId,
+      itemCount: itemRows.length,
+      rpcError: { code: error.code, message: error.message },
+    })
+    return { ok: false, code: 'create_failed' }
+  }
 
   const result = data as CreateBatchRpcResult | null
-  if (!result) return { ok: false, code: 'create_failed' }
+  if (!result) {
+    log.error('create_supplier_payment_batch RPC returned no payload', {
+      companyId,
+      batchId,
+      itemCount: itemRows.length,
+    })
+    return { ok: false, code: 'create_failed' }
+  }
   if (!result.ok) {
     switch (result.code) {
       case 'already_batched':
@@ -388,6 +417,16 @@ export async function createSupplierPaymentBatch(
           details: result.details as Array<{ id: string; reason: string }>,
         }
       default:
+        // An RPC refusal code with no client mapping (a code added in SQL
+        // without this switch learning it, or the RPC's own payload-shape
+        // refusals) must stay visible rather than vanish behind create_failed.
+        log.error('create_supplier_payment_batch RPC refused with an unmapped code', {
+          companyId,
+          batchId,
+          itemCount: itemRows.length,
+          rpcCode: result.code,
+          rpcDetails: result.details,
+        })
         return { ok: false, code: 'create_failed' }
     }
   }
