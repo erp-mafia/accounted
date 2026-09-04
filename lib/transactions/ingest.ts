@@ -1099,10 +1099,13 @@ export async function ingestTransactions(
       try {
         const match = findRotRutPayoutMatch(newTransaction as Transaction, openRotRutPayoutRequests)
         if (match && !matchedRotRutRequestIds.has(match.request.id)) {
-          await supabase
+          // supabase-js resolves a failed update with { error }: a hint that
+          // never persisted must not drain the pool or count as a match.
+          const { error: hintError } = await supabase
             .from('transactions')
             .update({ potential_rot_rut_payout_request_id: match.request.id })
             .eq('id', newTransaction.id)
+          if (hintError) throw hintError
 
           logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
             matchConfidence: match.confidence,

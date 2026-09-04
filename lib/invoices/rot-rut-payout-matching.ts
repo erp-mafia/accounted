@@ -23,7 +23,18 @@
 
 import { roundOre } from '@/lib/money'
 
-export const OPEN_ROT_RUT_PAYOUT_STATUSES = ['generated', 'submitted', 'partially_paid'] as const
+/**
+ * Statuses that can still absorb a payout. `paid` is included on purpose: the
+ * PATCH lifecycle records Skatteverkets beslut as `paid` BEFORE the money is
+ * booked, so a voucher-less `paid` request is exactly the one waiting for its
+ * bank row. Settled means "has a settlement voucher", never a status alone.
+ */
+export const OPEN_ROT_RUT_PAYOUT_STATUSES = [
+  'generated',
+  'submitted',
+  'paid',
+  'partially_paid',
+] as const
 
 /**
  * The columns the matcher and the match dialog need from
@@ -57,18 +68,15 @@ export function expectedRotRutPayoutAmount(request: RotRutPayoutRequestCandidate
 }
 
 /**
- * Can this request still absorb a payout? Mirrors the settle route's guard:
- * no settlement voucher yet and not cancelled/rejected. `paid` counts as
- * settled even without a voucher id (a beslut import can flip status to paid
- * before the money is booked, but then the settle route is still the path and
- * the amount check below protects against a second payout).
+ * Can this request still absorb a payout? Mirrors the settle service's guard:
+ * no settlement voucher yet and not cancelled/rejected. A voucher-less `paid`
+ * (beslut recorded via PATCH, money not yet booked) is matchable.
  */
 export function getRotRutPayoutMatchTargetState(
   request: RotRutPayoutRequestCandidate | null | undefined,
 ): RotRutPayoutMatchTargetState {
   if (!request) return 'not_open'
   if (request.settlement_journal_entry_id) return 'settled'
-  if (request.status === 'paid') return 'settled'
   if (!(OPEN_ROT_RUT_PAYOUT_STATUSES as readonly string[]).includes(request.status)) return 'not_open'
   return 'matchable'
 }

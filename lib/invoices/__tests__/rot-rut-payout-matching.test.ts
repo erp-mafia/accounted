@@ -37,17 +37,27 @@ describe('expectedRotRutPayoutAmount', () => {
 })
 
 describe('getRotRutPayoutMatchTargetState', () => {
-  it('is matchable for open, unsettled requests', () => {
-    for (const status of ['generated', 'submitted', 'partially_paid']) {
+  it('is matchable for open, unsettled requests, including a voucher-less paid beslut', () => {
+    for (const status of ['generated', 'submitted', 'partially_paid', 'paid']) {
       expect(getRotRutPayoutMatchTargetState(makeRequest({ status }))).toBe('matchable')
     }
   })
 
-  it('is settled once a settlement voucher exists or the request is paid', () => {
+  it('is settled only once a settlement voucher exists', () => {
     expect(
       getRotRutPayoutMatchTargetState(makeRequest({ settlement_journal_entry_id: 'je-1' })),
     ).toBe('settled')
-    expect(getRotRutPayoutMatchTargetState(makeRequest({ status: 'paid' }))).toBe('settled')
+    expect(
+      getRotRutPayoutMatchTargetState(
+        makeRequest({ status: 'paid', settlement_journal_entry_id: 'je-1' }),
+      ),
+    ).toBe('settled')
+  })
+
+  it('suggests a voucher-less paid request for its payout (beslut recorded via PATCH)', () => {
+    const tx = makeTransaction({ amount: 2500, description: 'Skatteverket' })
+    const request = makeRequest({ status: 'paid', decided_total: 2500 })
+    expect(findRotRutPayoutMatch(tx, [request])?.request.id).toBe('rr-1')
   })
 
   it('is not_open for cancelled, rejected or missing requests', () => {

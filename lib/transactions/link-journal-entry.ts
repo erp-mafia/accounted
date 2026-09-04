@@ -465,6 +465,7 @@ export async function linkTransactionToJournalEntry(
             ...transaction,
             journal_entry_id: journalEntryId,
             invoice_id: invoiceId,
+            potential_rot_rut_payout_request_id: null,
             potential_invoice_id: null,
             potential_supplier_invoice_id: null,
             is_business: true,

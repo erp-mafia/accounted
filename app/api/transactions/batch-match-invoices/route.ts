@@ -63,10 +63,12 @@ export const POST = withRouteContext(
         ) {
           const payoutMatch = findRotRutPayoutMatch(tx as Transaction, openRotRutRequests)
           if (payoutMatch) {
-            await supabase
+            const { error: hintError } = await supabase
               .from('transactions')
               .update({ potential_rot_rut_payout_request_id: payoutMatch.request.id })
               .eq('id', tx.id)
+            // A hint that never persisted must not drain the pool or count.
+            if (hintError) throw hintError
             // One payout per begäran: drain so a same-amount sibling can't claim it.
             openRotRutRequests = openRotRutRequests.filter((r) => r.id !== payoutMatch.request.id)
             matched++

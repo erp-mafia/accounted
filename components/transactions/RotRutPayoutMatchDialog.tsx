@@ -63,6 +63,8 @@ export default function RotRutPayoutMatchDialog({
   // The service refuses more than Skatteverket can owe on this begäran: a
   // larger row would drive 1513 negative. Block here too, with the reason.
   const overBlocked = request ? txAmount > expected + 0.005 : false
+  // Skatteverket pays out in SEK only; the route refuses anything else.
+  const currencyBlocked = (transaction?.currency || 'SEK').toUpperCase() !== 'SEK'
   const currency = transaction?.currency || 'SEK'
 
   const typeLabel = request?.deduction_type === 'rut' ? 'RUT' : 'ROT'
@@ -197,7 +199,9 @@ export default function RotRutPayoutMatchDialog({
           </Button>
           <Button
             onClick={onConfirm}
-            disabled={isConfirming || !request || targetBlocked || partialBlocked || overBlocked}
+            disabled={
+              isConfirming || !request || targetBlocked || partialBlocked || overBlocked || currencyBlocked
+            }
           >
             {isConfirming ? t('confirming') : t('confirm')}
           </Button>

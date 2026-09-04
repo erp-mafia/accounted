@@ -180,8 +180,11 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
   }
 
   const txAmount = roundOre(transaction.amount)
+  // Skatteverket pays out in kronor only; the match route refuses other
+  // currencies, so a foreign-currency row must not be offered a begäran.
+  const txIsSek = (transaction.currency || 'SEK').toUpperCase() === 'SEK'
   const rotRutSection =
-    onSelectRotRutPayout && rotRutRequests.length > 0 ? (
+    onSelectRotRutPayout && txIsSek && rotRutRequests.length > 0 ? (
       <div className="space-y-1.5">
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           {t('rot_rut_section_title')}
