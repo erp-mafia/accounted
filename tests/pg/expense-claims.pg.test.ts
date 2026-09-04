@@ -116,6 +116,43 @@ describe('expense_claims constraints', () => {
     ).rejects.toThrow(/check/i)
   })
 
+  it('refuses an employee_id from another company', async () => {
+    const a = await seedCompany()
+    const b = await seedCompany()
+    const foreignEmployee = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.employees (id, company_id, user_id, first_name, last_name, personnummer, personnummer_last4, employment_start)
+       VALUES ($1, $2, $3, 'Test', 'Testsson', 'enc', '0000', '2026-01-01')`,
+      [foreignEmployee, b.companyId, b.userId],
+    )
+
+    // A claim in company A pointing at company B's employee: the composite FK
+    // must refuse it even though company_id is A's own.
+    await expect(
+      getPool().query(
+        `INSERT INTO public.expense_claims
+           (company_id, user_id, employee_id, claimant_name, description, expense_date, amount_sek, expense_account)
+         VALUES ($1, $2, $3, 'Test Testsson', 'USB-hubb', '2026-08-25', 500, '5410')`,
+        [a.companyId, a.userId, foreignEmployee],
+      ),
+    ).rejects.toThrow(/foreign key/)
+
+    // Same claim shape but referencing an employee in A's own company is fine.
+    const ownEmployee = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.employees (id, company_id, user_id, first_name, last_name, personnummer, personnummer_last4, employment_start)
+       VALUES ($1, $2, $3, 'Egen', 'Anställd', 'enc', '0001', '2026-01-01')`,
+      [ownEmployee, a.companyId, a.userId],
+    )
+    const ok = await getPool().query(
+      `INSERT INTO public.expense_claims
+         (company_id, user_id, employee_id, claimant_name, description, expense_date, amount_sek, expense_account)
+       VALUES ($1, $2, $3, 'Egen Anställd', 'USB-hubb', '2026-08-25', 500, '5410')`,
+      [a.companyId, a.userId, ownEmployee],
+    )
+    expect(ok.rowCount).toBe(1)
+  })
+
   it('refuses a payout batch from another company', async () => {
     const a = await seedCompany()
     const b = await seedCompany()

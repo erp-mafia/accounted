@@ -11,6 +11,21 @@
 -- there is no draft state here, unbooked receipts live in the document inbox
 -- until they are registered.
 
+-- Tenant-scoped uniqueness on employees so the expense tables can bind
+-- employee_id to the row's company (parties_substrate uses the same shape
+-- for parties). Added idempotently: it does not exist on main, and #2044
+-- adds the same key, so whichever merges second must not collide.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'employees_id_company_id_key'
+      AND conrelid = 'public.employees'::regclass
+  ) THEN
+    ALTER TABLE public.employees ADD CONSTRAINT employees_id_company_id_key UNIQUE (id, company_id);
+  END IF;
+END $$;
+
 CREATE TABLE public.expense_payout_batches (
   id          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   company_id  uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
@@ -18,7 +33,9 @@ CREATE TABLE public.expense_payout_batches (
 
   -- Who is reimbursed. employee_id may be null for the owner; claimant_name
   -- is denormalized so history stays readable if the employee row goes away.
-  employee_id   uuid REFERENCES public.employees(id) ON DELETE SET NULL,
+  -- The composite FK below binds it to this row's company (SET NULL on the
+  -- employee column only: company_id is NOT NULL and must survive a delete).
+  employee_id   uuid,
   claimant_name text NOT NULL,
 
   payout_date       date NOT NULL,
@@ -29,7 +46,10 @@ CREATE TABLE public.expense_payout_batches (
   notes             text,
 
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+
+  FOREIGN KEY (employee_id, company_id)
+    REFERENCES public.employees(id, company_id) ON DELETE SET NULL (employee_id)
 );
 
 -- Target for the tenant-scoped FK from expense_claims.payout_batch_id.
@@ -44,7 +64,8 @@ CREATE TABLE public.expense_claims (
   company_id  uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
   user_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE RESTRICT,
 
-  employee_id   uuid REFERENCES public.employees(id) ON DELETE SET NULL,
+  -- employee_id is company-scoped via the composite FK below.
+  employee_id   uuid,
   claimant_name text NOT NULL,
 
   description  text NOT NULL,
@@ -79,7 +100,10 @@ CREATE TABLE public.expense_claims (
   CHECK (status <> 'paid' OR payout_batch_id IS NOT NULL),
 
   FOREIGN KEY (payout_batch_id, company_id)
-    REFERENCES public.expense_payout_batches(id, company_id) ON DELETE SET NULL
+    REFERENCES public.expense_payout_batches(id, company_id) ON DELETE SET NULL,
+
+  FOREIGN KEY (employee_id, company_id)
+    REFERENCES public.employees(id, company_id) ON DELETE SET NULL (employee_id)
 );
 
 COMMENT ON TABLE public.expense_claims IS
