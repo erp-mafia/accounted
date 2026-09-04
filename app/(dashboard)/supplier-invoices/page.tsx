@@ -147,8 +147,9 @@ function SortableHeader({
 }
 
 
-// Row grouping (same pattern as the customer invoice list): 'status' is the
-// default and reproduces the payment-queue sections.
+// Row grouping (same pattern as the customer invoice list): 'none' (the flat
+// list) is the default; the other modes are opt-in via ?group=, and 'status'
+// reproduces the payment-queue sections.
 /** Mirrors PAYABLE_STATUSES in lib/invoices/bulk-reconcile-supplier-vouchers.ts:
  *  a partially paid invoice still belongs in the payment queue. */
 const AWAITING_PAYMENT_STATUSES = ['registered', 'approved', 'overdue', 'partially_paid']
@@ -380,7 +381,9 @@ export default function SupplierInvoicesPage() {
   const updateGroup = (mode: GroupMode) => {
     setGroupMode(mode)
     const params = new URLSearchParams(searchParams.toString())
-    if (mode === 'status') params.delete('group')
+    // Flat is the default, so it owns the URL-less state; every other mode
+    // is written out so it round-trips through reload and back-navigation.
+    if (mode === 'none') params.delete('group')
     else params.set('group', mode)
     const qs = params.toString()
     router.replace(qs ? `/supplier-invoices?${qs}` : '/supplier-invoices', { scroll: false })
@@ -403,9 +406,10 @@ export default function SupplierInvoicesPage() {
   const allSelectableSelected =
     selectableInvoices.length > 0 && selectableInvoices.every((inv) => selectedIds.has(inv.id))
 
-  // Ranges walk the selectable rows in rendered (sorted) order.
+  // Ranges walk the selectable rows in rendered order: sorted, then sectioned
+  // by the active grouping, which is what the user sees on screen.
   const range = useRangeSelect({
-    visibleIds: sortedInvoices.filter(isBatchSelectable).map((inv) => inv.id),
+    visibleIds: orderedInvoices.filter(isBatchSelectable).map((inv) => inv.id),
     selectedIds,
     setSelectedIds,
   })
