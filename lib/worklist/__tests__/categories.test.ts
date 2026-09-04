@@ -212,6 +212,45 @@ describe('countSuggestedMatches', () => {
 })
 
 describe('listSuggestedMatches', () => {
+  it('maps a ROT/RUT payout hint to a confirmable row pointing at the begäran', async () => {
+    enqueue({
+      data: [
+        {
+          id: 'tx-skv',
+          date: '2026-07-10',
+          description: 'Skatteverket',
+          amount: 3000,
+          currency: 'SEK',
+          potential_invoice_id: null,
+          potential_supplier_invoice_id: null,
+          potential_rot_rut_payout_request_id: 'rr-1',
+        },
+      ],
+    })
+    // Only the payout lookup runs: the invoice / supplier id lists are empty.
+    enqueue({
+      data: [{ id: 'rr-1', name: 'ROT 2026-07', requested_total: '3000.00', decided_total: null }],
+    })
+
+    const matches = await listSuggestedMatches(supabase, COMPANY)
+    expect(matches).toEqual([
+      {
+        transaction_id: 'tx-skv',
+        transaction_date: '2026-07-10',
+        transaction_description: 'Skatteverket',
+        transaction_amount: 3000,
+        transaction_currency: 'SEK',
+        kind: 'rot_rut_payout',
+        candidate_id: 'rr-1',
+        candidate_number: 'ROT 2026-07',
+        counterparty_name: 'Skatteverket',
+        candidate_total: 3000,
+      },
+    ])
+    const lookup = findCall('rot_rut_payout_requests', 'is')
+    expect(lookup).toEqual(['settlement_journal_entry_id', null])
+  })
+
   it('maps invoice and supplier-invoice hints to confirmable rows', async () => {
     enqueue({
       data: [
