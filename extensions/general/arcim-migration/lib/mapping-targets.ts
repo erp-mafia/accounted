@@ -40,6 +40,7 @@ function classOf(accountNumber: string): number | undefined {
 export async function buildMappingTargets(
   supabase: SupabaseClient,
   companyId: string,
+  log?: { warn: (message: string, meta?: Record<string, unknown>) => void },
 ): Promise<MappingTarget[]> {
   let own: MappingTarget[] = []
   try {
@@ -57,8 +58,17 @@ export async function buildMappingTargets(
       account_class:
         typeof r.account_class === 'number' ? r.account_class : classOf(String(r.account_number)),
     }))
-  } catch {
+  } catch (error) {
+    // Degrading to BAS keeps the migration moving, but it silently reproduces
+    // the very problem this function exists to fix: the company's own accounts
+    // missing from the list. Leave a trace, so a mapping made against an
+    // incomplete list can be explained afterwards rather than looking like a
+    // deliberate choice.
     own = []
+    log?.warn('chart_of_accounts read failed; mapping targets fall back to BAS only', {
+      companyId,
+      reason: error instanceof Error ? error.message : 'unknown',
+    })
   }
 
   const seen = new Set(own.map((a) => a.account_number))

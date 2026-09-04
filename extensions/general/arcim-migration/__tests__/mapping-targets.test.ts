@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 import { buildMappingTargets } from '../lib/mapping-targets'
@@ -74,6 +74,21 @@ describe('buildMappingTargets', () => {
   })
 
   // An incomplete list still lets the migration run; an exception stops it.
+  // The fallback silently reproduces the problem this function fixes, so a
+  // mapping made against an incomplete list has to be explainable afterwards.
+  it('warns when it falls back, so an incomplete list leaves a trace', async () => {
+    const warn = vi.fn()
+    await buildMappingTargets(supabaseWith(new Error('boom')), 'company-1', { warn })
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][1]).toMatchObject({ companyId: 'company-1' })
+  })
+
+  it('does not warn on the ordinary path', async () => {
+    const warn = vi.fn()
+    await buildMappingTargets(supabaseWith([]), 'company-1', { warn })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
   it('falls back to BAS when the chart cannot be read', async () => {
     const targets = await buildMappingTargets(supabaseWith(new Error('boom')), 'company-1')
     expect(targets.length).toBeGreaterThan(1000)

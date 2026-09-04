@@ -1028,7 +1028,7 @@ export const arcimMigrationExtension: Extension = {
           // express an account the company added outside the standard, so
           // such an account was impossible to map onto. See
           // ./lib/mapping-targets.
-          const mappingTargets = await buildMappingTargets(supabase, companyId)
+          const mappingTargets = await buildMappingTargets(supabase, companyId, moduleLog)
           const mappings = suggestMappings(allAccounts, mappingTargets, existingRecords)
           const mappingStats = getMappingStats(mappings)
 
