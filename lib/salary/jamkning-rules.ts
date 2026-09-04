@@ -65,3 +65,34 @@ export function validateJamkning(fields: JamkningFields): JamkningIssue[] {
 export function touchesJamkning(patch: Record<string, unknown>): boolean {
   return JAMKNING_FIELDS.some((key) => key in patch)
 }
+
+/**
+ * The database backstop for the same invariant: the trigger
+ * trg_enforce_employee_jamkning_dates (migration 20260904120000, #2256)
+ * raises SQLSTATE 23514 with this prefix followed by the exact sentence
+ * validateJamkning produces for the field. It is what an update sees when
+ * its merged-state check passed against a snapshot another request has
+ * since changed (the concurrent-PATCH race), and what a direct write sees.
+ */
+export const JAMKNING_DB_ERROR_PREFIX = 'JAMKNING_INCOMPLETE: '
+
+/**
+ * The issue carried by a trigger rejection, or null when the error is
+ * anything else (a PostgrestError-shaped object: `code` is the SQLSTATE).
+ * Update paths use it to answer the race with the same 400 / VALIDATION_ERROR
+ * and sentence the merged-state check gives, instead of a generic database
+ * error. The field is recovered from the sentence: the start-date sentence
+ * names jamkning_valid_from, every other one names jamkning_valid_to.
+ */
+export function jamkningIssueFromDbError(error: unknown): JamkningIssue | null {
+  if (typeof error !== 'object' || error === null) return null
+  const { code, message } = error as { code?: unknown; message?: unknown }
+  if (code !== '23514' || typeof message !== 'string') return null
+  if (!message.startsWith(JAMKNING_DB_ERROR_PREFIX)) return null
+  const sentence = message.slice(JAMKNING_DB_ERROR_PREFIX.length).trim()
+  if (!sentence) return null
+  return {
+    field: sentence === JAMKNING_START_REQUIRED ? 'jamkning_valid_from' : 'jamkning_valid_to',
+    message: sentence,
+  }
+}

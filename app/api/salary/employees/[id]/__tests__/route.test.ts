@@ -73,13 +73,19 @@ const EXISTING_ROW = {
  * to `.update()`, and resolves the update chain with the merged row. `captured.updates`
  * staying null is the assertion that no write was attempted at all.
  */
-function employeeSupabase(existing: Record<string, unknown> = { ...EXISTING_ROW }) {
+function employeeSupabase(
+  existing: Record<string, unknown> = { ...EXISTING_ROW },
+  updateError: { code: string; message: string } | null = null,
+) {
   const captured: { updates: Record<string, unknown> | null } = { updates: null }
 
   function chainFor(state: { isUpdate: boolean }): unknown {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
         if (prop === 'then') {
+          if (state.isUpdate && updateError) {
+            return (resolve: (v: unknown) => void) => resolve({ data: null, error: updateError })
+          }
           const data = state.isUpdate ? { ...existing, ...(captured.updates ?? {}) } : existing
           return (resolve: (v: unknown) => void) => resolve({ data, error: null })
         }
@@ -223,8 +229,8 @@ describe('jämkning on PATCH /api/salary/employees/[id]', () => {
   const JAMKNING_END_REQUIRED = 'Jämkningens slutdatum måste anges när jämkningsprocent sätts'
   const JAMKNING_ORDER = 'Jämkningens slutdatum måste vara efter startdatumet'
 
-  function useRow(existing: Record<string, unknown>) {
-    const mock = employeeSupabase(existing)
+  function useRow(existing: Record<string, unknown>, updateError: { code: string; message: string } | null = null) {
+    const mock = employeeSupabase(existing, updateError)
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: mock.supabase })
     return mock.captured
   }
@@ -350,5 +356,37 @@ describe('jämkning on PATCH /api/salary/employees/[id]', () => {
 
     expect(response.status).toBe(200)
     expect(captured.updates).toEqual({ first_name: 'Ny' })
+  })
+
+  it('400 with the validator sentence when the database trigger catches the race (#2256)', async () => {
+    // The snapshot this handler validated against was complete, so nulling
+    // only the end date is a plain "clear" to the merged check... except the
+    // row was cleared and re-set by another request in between. The trigger
+    // (SQLSTATE 23514, JAMKNING_INCOMPLETE prefix) is the only thing that
+    // sees the real row: it must come back as the same 400, not a 500.
+    const captured = useRow(
+      { ...EXISTING_ROW, jamkning_percentage: null, jamkning_valid_from: null, jamkning_valid_to: null },
+      { code: '23514', message: `JAMKNING_INCOMPLETE: ${JAMKNING_END_REQUIRED}` },
+    )
+
+    const response = await PATCH(patchRequest({ jamkning_valid_to: null }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toBe(JAMKNING_END_REQUIRED)
+    expect(captured.updates).toEqual({ jamkning_valid_to: null })
+  })
+
+  it('500 through the generic mapper for any other database error on the update', async () => {
+    useRow(
+      { ...EXISTING_ROW, jamkning_percentage: null, jamkning_valid_from: null, jamkning_valid_to: null },
+      { code: '23514', message: 'new row for relation "employees" violates check constraint "employees_tax_column_check"' },
+    )
+
+    const response = await PATCH(patchRequest({ first_name: 'Ny' }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(500)
+    expect(body.error).not.toContain('JAMKNING')
   })
 })

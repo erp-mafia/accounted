@@ -7,7 +7,7 @@ import { getCompanyEntityType } from '@/lib/company/context'
 import { encryptPersonnummer, extractLast4, maskEmployeeForResponse, validatePersonnummer } from '@/lib/salary/personnummer'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
-import { touchesJamkning, validateJamkning } from '@/lib/salary/jamkning-rules'
+import { jamkningIssueFromDbError, touchesJamkning, validateJamkning } from '@/lib/salary/jamkning-rules'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
@@ -179,6 +179,13 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (error) {
       if (error.code === '23505') {
         return NextResponse.json({ error: 'En anställd med detta personnummer finns redan' }, { status: 409 })
+      }
+      // The database backstop caught the concurrent-PATCH race (#2256): the
+      // merged-state check above passed against a snapshot another request
+      // has since changed. Same 400 and sentence as that check.
+      const jamkningIssue = jamkningIssueFromDbError(error)
+      if (jamkningIssue) {
+        return NextResponse.json({ error: jamkningIssue.message }, { status: 400 })
       }
       return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }

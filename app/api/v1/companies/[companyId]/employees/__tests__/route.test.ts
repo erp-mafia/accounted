@@ -907,6 +907,50 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id', () => {
     expect(body.error.details.field).toBe('jamkning_valid_to')
   })
 
+  it('answers the database trigger (concurrent-PATCH race, #2256) as the same VALIDATION_ERROR', async () => {
+    // The snapshot was empty, so a percentage with both dates passes the
+    // merged check; another request changed the row in between and the
+    // trigger refused the write with SQLSTATE 23514 and the stable prefix.
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: [
+          { data: SAMPLE_EMPLOYEE, error: null },
+          {
+            data: null,
+            error: {
+              code: '23514',
+              message: 'JAMKNING_INCOMPLETE: Jämkningens slutdatum måste anges när jämkningsprocent sätts',
+              details: 'employees.jamkning_percentage is set but jamkning_valid_to is null (#2256)',
+              hint: null,
+            },
+          },
+        ],
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          jamkning_percentage: 15,
+          jamkning_valid_from: '2026-01-01',
+          jamkning_valid_to: '2026-12-31',
+        }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('jamkning_valid_to')
+    expect(body.error.details.message).toContain('Jämkningens slutdatum måste anges när jämkningsprocent sätts')
+    expect(body.error.details.message).toContain('`jamkning_valid_to`')
+    expect(JSON.stringify(body)).not.toContain('JAMKNING_INCOMPLETE')
+  })
+
   it('leaves a legacy row without valid_to editable in unrelated ways (touched gate)', async () => {
     const legacy = {
       ...SAMPLE_EMPLOYEE,

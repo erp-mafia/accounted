@@ -19,7 +19,7 @@ import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer
 import { getCompanyEntityType } from '@/lib/company/context'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
-import { touchesJamkning, validateJamkning } from '@/lib/salary/jamkning-rules'
+import { jamkningIssueFromDbError, touchesJamkning, validateJamkning } from '@/lib/salary/jamkning-rules'
 
 export type EmployeeCommandResult<T> =
   | { ok: true; data: T }
@@ -288,6 +288,17 @@ export async function updateEmployee(
     .single()
 
   if (error) {
+    // The database backstop caught the concurrent-update race (#2256): the
+    // merged-state check above passed against a snapshot another request has
+    // since changed. Same VALIDATION_ERROR and sentence as that check.
+    const jamkningIssue = jamkningIssueFromDbError(error)
+    if (jamkningIssue) {
+      return {
+        ok: false,
+        code: 'VALIDATION_ERROR',
+        details: { field: jamkningIssue.field, message: jamkningIssue.message },
+      }
+    }
     return { ok: false, code: 'INTERNAL_ERROR', details: { message: error.message } }
   }
 

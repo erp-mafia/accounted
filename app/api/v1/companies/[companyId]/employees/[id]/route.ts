@@ -27,7 +27,14 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { UpdateEmployeeSchema } from '@/lib/api/schemas'
 import { maskPersonnummer } from '@/lib/api/v1/mask-personnummer'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
-import { JAMKNING_ORDER, touchesJamkning, validateJamkning, type JamkningFields } from '@/lib/salary/jamkning-rules'
+import {
+  JAMKNING_ORDER,
+  jamkningIssueFromDbError,
+  touchesJamkning,
+  validateJamkning,
+  type JamkningFields,
+  type JamkningIssue,
+} from '@/lib/salary/jamkning-rules'
 
 const EmploymentType = z.enum(['employee', 'company_owner', 'board_member'])
 const SalaryType = z.enum(['monthly', 'hourly'])
@@ -349,19 +356,20 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     // jamkning field: a legacy row with inconsistent jamkning_* state must
     // not block unrelated updates (fixing it requires touching those very
     // fields). #2058
+    const jamkningIssueDetails = (issue: JamkningIssue) => ({
+      field: issue.field,
+      message:
+        issue.message === JAMKNING_ORDER
+          ? `${issue.message}.`
+          : `${issue.message}. Skicka även \`${issue.field}\` i samma PATCH.`,
+    })
     if (touchesJamkning(updates)) {
       const mergedJamkning = { ...(existing as Record<string, unknown>), ...updates } as JamkningFields
       const [issue] = validateJamkning(mergedJamkning)
       if (issue) {
         return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
           requestId: ctx.requestId,
-          details: {
-            field: issue.field,
-            message:
-              issue.message === JAMKNING_ORDER
-                ? `${issue.message}.`
-                : `${issue.message}. Skicka även \`${issue.field}\` i samma PATCH.`,
-          },
+          details: jamkningIssueDetails(issue),
         })
       }
     }
@@ -395,6 +403,16 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       .single()
 
     if (error) {
+      // The database backstop caught the concurrent-PATCH race (#2256): the
+      // merged-state check above passed against a snapshot another request
+      // has since changed. Same VALIDATION_ERROR and details as that check.
+      const jamkningIssue = jamkningIssueFromDbError(error)
+      if (jamkningIssue) {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: jamkningIssueDetails(jamkningIssue),
+        })
+      }
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     }
 

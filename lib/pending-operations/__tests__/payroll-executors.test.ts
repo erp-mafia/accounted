@@ -945,4 +945,52 @@ describe('commitPendingOperation: update_employee', () => {
     expect(result.status).not.toBe('committed')
     expect(result.error).toMatch(/Månadslön/)
   })
+
+  it('answers the database trigger (concurrent-update race, #2256) as a validation failure, not INTERNAL_ERROR', async () => {
+    const { encryptPersonnummer } = await import('@/lib/salary/personnummer')
+    const encrypted = encryptPersonnummer('190001010000')
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'emp-1',
+        first_name: 'Anna',
+        last_name: 'Andersson',
+        personnummer: encrypted,
+        salary_type: 'monthly',
+        monthly_salary: 35000,
+        tax_table_number: 33,
+        is_sidoinkomst: false,
+        f_skatt_status: 'a_skatt',
+        vaxa_stod_eligible: false,
+        jamkning_percentage: null,
+        jamkning_valid_from: null,
+        jamkning_valid_to: null,
+        is_active: true,
+      },
+    }) // fetch existing: the snapshot the merged check passes against
+    enqueue({
+      data: null,
+      error: {
+        code: '23514',
+        message: 'JAMKNING_INCOMPLETE: Jämkningens slutdatum måste anges när jämkningsprocent sätts',
+        details: 'employees.jamkning_percentage is set but jamkning_valid_to is null (#2256)',
+        hint: null,
+      },
+    }) // update: the trigger saw the row another request changed in between
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'update_employee',
+      params: {
+        employee_id: 'emp-1',
+        patch: { jamkning_percentage: 15, jamkning_valid_from: '2026-01-01', jamkning_valid_to: '2026-12-31' },
+      },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).not.toBe('committed')
+    expect(result.error).toBe('Jämkningens slutdatum måste anges när jämkningsprocent sätts')
+  })
 })
