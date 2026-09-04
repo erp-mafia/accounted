@@ -21,6 +21,7 @@ import { createAsset } from '@/lib/bokslut/assets/asset-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { roundOre } from '@/lib/money'
 import { isAccountNumber, isIsoDateShaped } from '@/lib/invariants'
+import { countCalendarMonths, dayAfter, firstOfMonth } from '@/lib/bookkeeping/accruals/compute'
 import { createLogger } from '@/lib/logger'
 import type { AssetCategory } from '@/types'
 import type { AssetSkipReasons } from '../types'
@@ -101,14 +102,19 @@ function isoDateOrNull(value: string | null | undefined): string | null {
 }
 
 /** Whole months between two ISO dates, rounded to nearest, minimum 1. */
+/**
+ * Useful life in whole months, from the month the plan starts through the
+ * month it ends.
+ *
+ * On the month grid rather than by counting days. The previous form added
+ * (toDay - fromDay) / 30, which turned a plan running 2026-05-28 to
+ * 2031-04-30 into 59 months instead of 60 and left every asset acquired
+ * mid-month a month short. Measuring to the day AFTER the final date also
+ * makes the answer the same whether the source reports the last day of the
+ * final month or the first day after it, which Fortnox does not document.
+ */
 export function monthsBetween(fromIso: string, toIso: string): number {
-  const from = new Date(`${fromIso}T00:00:00Z`)
-  const to = new Date(`${toIso}T00:00:00Z`)
-  const months =
-    (to.getUTCFullYear() - from.getUTCFullYear()) * 12 +
-    (to.getUTCMonth() - from.getUTCMonth()) +
-    (to.getUTCDate() - from.getUTCDate()) / 30
-  return Math.max(1, Math.round(months))
+  return Math.max(1, countCalendarMonths(firstOfMonth(fromIso), firstOfMonth(dayAfter(toIso))) - 1)
 }
 
 /** K2 standard useful life (schablon, 5 years) when the source gives no usable depreciation window. */
@@ -149,6 +155,42 @@ function accountString(value: number | string | null | undefined): string | null
   if (value === null || value === undefined) return null
   const text = String(value)
   return isAccountNumber(text) ? text : null
+}
+
+/**
+ * Find the asset's type, which is what carries the BAS account triple.
+ *
+ * By TypeId when the payload has one, and by the `Type` label when it does
+ * not. The list endpoint reports the type as text ("1300 - Utveckling") and
+ * does not always carry TypeId, so an id-only lookup silently found nothing
+ * and every asset fell back to its category default: assets whose ledger sits
+ * on 1010 arriving on 1290, and so on for any company whose types are not the
+ * standard ones.
+ */
+export function resolveAssetType(
+  asset: FortnoxAsset,
+  typeById: Map<number, FortnoxAssetType>,
+  types: readonly FortnoxAssetType[],
+): FortnoxAssetType | undefined {
+  if (typeof asset.TypeId === 'number') {
+    const byId = typeById.get(asset.TypeId)
+    if (byId) return byId
+  }
+  const label = asset.Type?.trim()
+  if (!label) return undefined
+
+  const normalize = (value: string) => value.trim().toLowerCase()
+  const target = normalize(label)
+  return types.find((type) => {
+    const number = type.Number?.trim() ?? ''
+    const description = type.Description?.trim() ?? ''
+    return (
+      (number !== '' && description !== '' &&
+        normalize(`${number} - ${description}`) === target) ||
+      (number !== '' && normalize(number) === target) ||
+      (description !== '' && normalize(description) === target)
+    )
+  })
 }
 
 /**
@@ -348,10 +390,7 @@ export async function importProviderAssets(
       continue
     }
 
-    const mapped = mapFortnoxAsset(
-      asset,
-      typeof asset.TypeId === 'number' ? typeById.get(asset.TypeId) : undefined,
-    )
+    const mapped = mapFortnoxAsset(asset, resolveAssetType(asset, typeById, types))
     if ('reason' in mapped) {
       skipReasons.unsupported = (skipReasons.unsupported ?? 0) + 1
       skipped++
