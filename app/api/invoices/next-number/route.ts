@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
+import { formatQuoteNumber } from '@/lib/invoices/quote-status'
 
 export const GET = withRouteContext(
   'invoice.peek_next_number',
@@ -21,6 +22,22 @@ export const GET = withRouteContext(
     // delivery notes we return null and let the form skip the preview.
     if (documentType === 'delivery_note') {
       return NextResponse.json({ data: { preview: null } })
+    }
+
+    // Quotes are numbered at insert from company_settings.next_quote_number;
+    // preview it directly (same format as generate_quote_number).
+    if (documentType === 'quote') {
+      const { data: settings, error: settingsError } = await supabase
+        .from('company_settings')
+        .select('next_quote_number')
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (settingsError) {
+        log.error('next_quote_number read failed', settingsError)
+        return errorResponse(settingsError, log, { requestId })
+      }
+      const next = (settings as { next_quote_number?: number | null } | null)?.next_quote_number
+      return NextResponse.json({ data: { preview: next ? formatQuoteNumber(next) : null } })
     }
 
     const { data, error } = await supabase.rpc('peek_next_invoice_number', {

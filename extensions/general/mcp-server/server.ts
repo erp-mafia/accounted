@@ -140,6 +140,12 @@ import {
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { normalizeVatRateToDecimal } from '@/lib/vat/supplier-invoice-line-checks'
 import {
+  COUNTRY_CONSISTENCY_MESSAGES,
+  checkCountryConsistency,
+  defaultCountryForParty,
+  normalizeCountryCode,
+} from '@/lib/vat/country-codes'
+import {
   ACCOUNT_VAT_TREATMENTS,
   defaultRateForVatTreatment,
   isAccountVatTreatment,
@@ -159,6 +165,7 @@ import {
 import { computeInitialRunDate } from '@/lib/invoices/recurring-schedule-service'
 import { UpdateInvoiceParamsSchema } from '@/lib/pending-operations/schemas/update-invoice'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
+import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import {
   ensureCompanyDimensions,
   fetchDimensionRegistry,
@@ -535,6 +542,15 @@ const ANNOTATIONS_WRITE_OPEN_WORLD = {
   idempotentHint: false,
   openWorldHint: true,
 } as const satisfies McpToolAnnotations
+
+/**
+ * A domain failure carrying a structured-errors registry code, so the dispatch
+ * envelope (toToolError → getStructuredError) resolves the registry entry
+ * instead of UNKNOWN_ERROR. The Swedish registry message is the thrown text.
+ */
+function registryError(code: string): Error {
+  return Object.assign(new Error(getErrorEntry(code)?.message_sv ?? code), { code })
+}
 
 interface McpTool {
   name: string
@@ -5939,7 +5955,7 @@ export const tools: McpTool[] = [
         address: { type: 'string', description: 'Street address' },
         postal_code: { type: 'string' },
         city: { type: 'string' },
-        country: { type: 'string', description: 'Country (default Sweden)' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 (default SE; a name is normalised). Must agree with customer_type and the VAT prefix.' },
         dry_run: {
           type: 'boolean',
           description: 'If true, validate inputs and return the would-be preview without staging or creating. No DB writes, no side-effects.',
@@ -6013,6 +6029,35 @@ export const tools: McpTool[] = [
         throw new Error('personal_number must be a Swedish personnummer: YYYYMMDD-XXXX, YYMMDD-XXXX or the digits alone.')
       }
 
+      // Country: stored as ISO 3166-1 alpha-2 (a name is accepted and
+      // normalised), and it must agree with the customer type and the VAT
+      // prefix. An EU customer saved with country SE used to get reverse
+      // charge with nothing objecting until the periodisk sammanställning
+      // (#2025). Checked at staging so the user never approves an operation
+      // that then fails at commit.
+      const countryArg = typeof args.country === 'string' ? args.country.trim() : ''
+      const vatNumberArg = typeof args.vat_number === 'string' ? args.vat_number : null
+      const country = countryArg
+        ? normalizeCountryCode(countryArg)
+        : defaultCountryForParty(customerType, vatNumberArg)
+      if (!country) {
+        throw new Error(
+          countryArg
+            ? `country "${countryArg}" is not an ISO 3166-1 alpha-2 code or a known country name. Use a code such as SE, DE or NO.`
+            : customerType === 'eu_business'
+              ? 'country is required for an EU business unless vat_number carries an EU country prefix (e.g. DE811234567).'
+              : 'country is required for a non-EU business.',
+        )
+      }
+      const countryIssue = checkCountryConsistency({
+        partyType: customerType,
+        country,
+        vatNumber: vatNumberArg,
+      })
+      if (countryIssue) {
+        throw new Error(`country: ${COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en}`)
+      }
+
       // Resolved at staging, not at commit, so the approval preview shows the
       // terms the row will actually get: the caller's value, else the
       // company's invoice_default_days, else 30. (Staging `|| 30` here is why
@@ -6035,7 +6080,7 @@ export const tools: McpTool[] = [
         address: (args.address as string) || null,
         postal_code: (args.postal_code as string) || null,
         city: (args.city as string) || null,
-        country: (args.country as string) || 'Sweden',
+        country,
         // The preview (and the approval UI that renders it) only ever sees
         // the masked form.
         personal_number_masked: personalNumber ? maskCustomerPersonalNumber(personalNumber) : null,
@@ -6093,7 +6138,7 @@ export const tools: McpTool[] = [
         address_line2: { type: 'string' },
         postal_code: { type: 'string' },
         city: { type: 'string' },
-        country: { type: 'string' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 (a name is normalised). Must agree with customer_type and the VAT prefix.' },
         org_number: { type: 'string' },
         personal_number: {
           type: ['string', 'null'],
@@ -6187,6 +6232,24 @@ export const tools: McpTool[] = [
       const effectiveCustomerType = (parsed.data.changes.customer_type ?? current.customer_type) as string
       if (personalNumber && effectiveCustomerType !== 'individual') {
         throw new Error('personal_number is only allowed for customer_type "individual".')
+      }
+
+      // Country vs type vs VAT prefix, judged on the row as it will END UP:
+      // a type change alone can make a stored country wrong, and a country
+      // change alone can contradict the stored VAT number (#2025). Judged
+      // only when one of the three is in the update: a legacy row that is
+      // already contradictory must still be able to change its email.
+      const { customer_type: newType, country: newCountry, vat_number: newVat } = parsed.data.changes
+      const countryIssue =
+        newType !== undefined || newCountry !== undefined || newVat !== undefined
+          ? checkCountryConsistency({
+              partyType: effectiveCustomerType,
+              country: newCountry ?? current.country,
+              vatNumber: newVat ?? current.vat_number,
+            })
+          : null
+      if (countryIssue) {
+        throw new Error(`country: ${COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en}`)
       }
 
       const currentPreview = {
@@ -6437,9 +6500,9 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_invoices',
-    keywords: ['faktura', 'kundfaktura', 'fakturor', 'obetalda', 'förfallna', 'påminnelse'],
+    keywords: ['faktura', 'kundfaktura', 'fakturor', 'obetalda', 'förfallna', 'påminnelse', 'offert', 'offerter'],
     title: 'List Customer Invoices',
-    description: 'List invoices for the active company, newest first. Optional status filter.',
+    description: 'List invoices and quotes (offerter) for the active company, newest first. Optional status, document_type and quote_status filters.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -6448,6 +6511,15 @@ export const tools: McpTool[] = [
           type: 'string',
           enum: ['draft', 'sent', 'paid', 'overdue', 'cancelled', 'credited'],
           description: 'Filter by invoice status',
+        },
+        document_type: {
+          type: 'string',
+          enum: ['invoice', 'proforma', 'delivery_note', 'quote'],
+        },
+        quote_status: {
+          type: 'string',
+          enum: ['open', 'accepted', 'declined', 'expired'],
+          description: 'Quotes only',
         },
         limit: { type: 'number', description: 'Max results (default 50, max 100)' },
         offset: { type: 'integer', minimum: 0, description: 'Number of results to skip for pagination (default 0)' },
@@ -6459,14 +6531,34 @@ export const tools: McpTool[] = [
       const limit = Math.min(Math.max(1, Number(args.limit) || 50), 100)
       const offset = Math.max(0, Math.floor(Number(args.offset) || 0))
       const status = args.status as string | undefined
+      const documentType = args.document_type as string | undefined
+      const quoteStatus = args.quote_status as string | undefined
 
       let query = supabase
         .from('invoices')
-        .select('id, invoice_number, status, customer_id, total, currency, invoice_date, due_date, document_type, default_dimensions, customers(name)', { count: 'exact' })
+        .select('id, invoice_number, status, customer_id, total, currency, invoice_date, due_date, document_type, valid_until, quote_status, default_dimensions, customers(name)', { count: 'exact' })
         .eq('company_id', companyId)
 
       if (status) {
         query = query.eq('status', status)
+      }
+      if (documentType) {
+        query = query.eq('document_type', documentType)
+      }
+      if (quoteStatus) {
+        // quote_status only exists on quotes: combining it with another
+        // document_type can never match, so say so instead of returning [].
+        if (documentType && documentType !== 'quote') {
+          throw registryError('VALIDATION_ERROR')
+        }
+        // "expired" is derived (lib/invoices/quote-status): an open quote whose
+        // valid_until has passed. Never stored, so it is a predicate here.
+        query = query.eq('document_type', 'quote')
+        if (quoteStatus === 'expired') {
+          query = query.eq('quote_status', 'open').lt('valid_until', new Date().toISOString().split('T')[0])
+        } else {
+          query = query.eq('quote_status', quoteStatus)
+        }
       }
 
       const { data, error, count } = await query
@@ -6487,6 +6579,9 @@ export const tools: McpTool[] = [
         invoice_date: inv.invoice_date,
         due_date: inv.due_date,
         document_type: inv.document_type,
+        valid_until: inv.valid_until ?? null,
+        // Effective status: open/accepted/declined/expired for quotes, null otherwise.
+        quote_status: effectiveQuoteStatus(inv as { quote_status?: string | null; valid_until?: string | null }),
         default_dimensions: inv.default_dimensions ?? {},
       }))
 
@@ -6525,7 +6620,9 @@ export const tools: McpTool[] = [
         invoice_id: { type: 'string' },
         invoice_number: { type: ['string', 'null'], description: 'null until sent' },
         status: { type: 'string' },
-        document_type: { type: 'string', description: 'invoice, proforma or delivery_note' },
+        document_type: { type: 'string' },
+        valid_until: { type: ['string', 'null'] },
+        quote_status: { type: ['string', 'null'], description: 'Quotes only; expired is derived' },
         customer_id: { type: 'string' },
         customer_name: { type: ['string', 'null'] },
         invoice_date: { type: 'string' },
@@ -6594,7 +6691,7 @@ export const tools: McpTool[] = [
       const { data: invoice, error } = await supabase
         .from('invoices')
         .select(
-          'id, invoice_number, status, document_type, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, invoice_marking, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, sales_order_item_id, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
+          'id, invoice_number, status, document_type, valid_until, quote_status, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, invoice_marking, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, sales_order_item_id, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
         )
         .eq('id', invoiceId)
         .eq('company_id', companyId)
@@ -6665,6 +6762,8 @@ export const tools: McpTool[] = [
         invoice_number: invoice.invoice_number ?? null,
         status: invoice.status,
         document_type: invoice.document_type ?? 'invoice',
+        valid_until: invoice.valid_until ?? null,
+        quote_status: effectiveQuoteStatus(invoice),
         customer_id: invoice.customer_id,
         customer_name: (invoice.customer as { name?: string } | null)?.name ?? null,
         invoice_date: invoice.invoice_date,
@@ -6692,13 +6791,19 @@ export const tools: McpTool[] = [
     name: 'gnubok_create_invoice',
     keywords: ['faktura', 'kundfaktura', 'fakturera', 'ny faktura'],
     title: 'Create Customer Invoice',
-    description: 'Stage a new invoice. Validates inputs, calculates VAT preview. Items accept dims bags. Approval creates a draft; the invoice number is assigned on send or mark-as-sent.',
+    description: 'Stage a new invoice or quote (offert). Validates inputs, calculates VAT preview. Items accept dims bags. Approval creates a draft (F-number assigned on send) or an open quote numbered OF-nnn at once; quotes require valid_until and never book.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         customer_id: { type: 'string', description: 'Customer UUID' },
+        document_type: {
+          type: 'string',
+          enum: ['invoice', 'quote'],
+          description: 'quote = offert (own OF-series, needs valid_until). Default invoice.',
+        },
+        valid_until: { type: 'string', description: 'YYYY-MM-DD, quotes only' },
         items: {
           type: 'array',
           items: {
@@ -6757,6 +6862,27 @@ export const tools: McpTool[] = [
       const currency = ((args.currency as string) || 'SEK') as Currency
       const invoiceDate = (args.invoice_date as string) || today
 
+      // Offert: own OF-series allocated at approval, never books, and the
+      // expiry date is the one header field the type adds (CreateInvoiceSchema
+      // parity: valid_until is required exactly when document_type is quote).
+      const documentType = (args.document_type as string | undefined) ?? 'invoice'
+      if (documentType !== 'invoice' && documentType !== 'quote') {
+        throw codedError('VALIDATION_ERROR', 'document_type must be "invoice" or "quote".')
+      }
+      const isQuote = documentType === 'quote'
+      const validUntil = args.valid_until as string | undefined
+      if (isQuote) {
+        if (
+          typeof validUntil !== 'string' ||
+          !ISO_DATE_RE.test(validUntil) ||
+          Number.isNaN(new Date(`${validUntil}T00:00:00Z`).getTime())
+        ) {
+          throw codedError('VALIDATION_ERROR', 'valid_until (YYYY-MM-DD) is required for a quote (offert).')
+        }
+      } else if (validUntil !== undefined) {
+        throw codedError('VALIDATION_ERROR', 'valid_until applies to quotes only: set document_type "quote".')
+      }
+
       // Fetch customer (full row for VAT rules) BEFORE the article prefill:
       // an article's stored rate may only be adopted against this customer's
       // default rate set (see resolveInvoiceLineFromArticle).
@@ -6772,13 +6898,13 @@ export const tools: McpTool[] = [
       }
 
       // VAT rules from customer type (same logic as web UI)
-      const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
+      const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
       // The DEFAULT set governs article-rate adoption (web parity: the picker
       // only adopts a rate the customer could have picked themselves); a
       // customer locked to a single rate (foreign business 0%) adopts nothing.
       // Gating below stays on the PERMITTED set: adoption and validation are
       // deliberately different sets.
-      const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated)
+      const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated, customer.country)
 
       // Article prefill (web line picker parity): the line's own values win,
       // the referenced article fills whatever the agent left out.
@@ -6849,7 +6975,7 @@ export const tools: McpTool[] = [
       // The default is still 0% (vatRules.rate is the fallback below), so a
       // Swedish rate only reaches the staged operation when the agent set it on
       // that line explicitly.
-      const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated)
+      const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country)
       const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
       // Calculate per-item VAT (line totals net of any per-line discount)
@@ -6871,9 +6997,12 @@ export const tools: McpTool[] = [
       }
       const total = subtotal + vatAmount
 
-      // Due date from payment terms if not provided
+      // Due date from payment terms if not provided. A quote has no payment
+      // due date: due_date mirrors valid_until (build-invoice-write parity).
       let dueDate = args.due_date as string | undefined
-      if (!dueDate) {
+      if (isQuote) {
+        dueDate = validUntil
+      } else if (!dueDate) {
         const d = new Date(invoiceDate)
         d.setDate(d.getDate() + (customer.default_payment_terms || 30))
         dueDate = d.toISOString().split('T')[0]
@@ -6881,9 +7010,11 @@ export const tools: McpTool[] = [
 
       // Stage for user approval instead of creating directly
       return stagePendingOperation(supabase, companyId, userId, 'create_invoice',
-        `Ny faktura: ${customer.name} ${Math.round(total * 100) / 100} ${currency}`,
+        `${isQuote ? 'Ny offert' : 'Ny faktura'}: ${customer.name} ${roundOre(total)} ${currency}`,
         {
           customer_id: customerId,
+          document_type: documentType,
+          ...(isQuote ? { valid_until: validUntil } : {}),
           items: stagedItems,
           ...(resolvedDefaultDimensions && Object.keys(resolvedDefaultDimensions).length > 0
             ? { default_dimensions: resolvedDefaultDimensions }
@@ -6912,15 +7043,30 @@ export const tools: McpTool[] = [
           vat_treatment: vatRules.treatment,
           invoice_date: invoiceDate,
           due_date: dueDate,
+          document_type: documentType,
+          ...(isQuote
+            ? {
+                valid_until: validUntil,
+                // The OF-number is allocated by generate_quote_number at
+                // approval; the preview must not show an F-series marker.
+                invoice_number: 'Offert OF-preview',
+                will: 'allocate OF-series number at approval; never books',
+              }
+            : {}),
           // Echoed for every non-exact dimension resolution (resolve-don't-
           // select) so the agent can verify what a name attached to.
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
         },
         actor,
-        {
-          description: 'Once approved, the invoice is created as a draft. Send it with gnubok_send_invoice or use gnubok_mark_invoice_as_sent if delivered outside the system.',
-          tool: 'gnubok_send_invoice',
-        }
+        isQuote
+          ? {
+              description: 'Once approved, the quote exists as an open offert with its OF-number. Record the customer decision with gnubok_set_quote_status; gnubok_convert_invoice creates the faktura from it.',
+              tool: 'gnubok_convert_invoice',
+            }
+          : {
+              description: 'Once approved, the invoice is created as a draft. Send it with gnubok_send_invoice or use gnubok_mark_invoice_as_sent if delivered outside the system.',
+              tool: 'gnubok_send_invoice',
+            }
       )
     },
   },
@@ -6967,7 +7113,7 @@ export const tools: McpTool[] = [
       let query = supabase
         .from('sales_orders')
         .select(
-          'id, order_number, status, customer_id, order_date, requested_delivery_date, last_delivery_date, currency, subtotal, vat_amount, total, customer:customers(name), items:sales_order_items(id, line_type, quantity, delivered_qty, sort_order)',
+          'id, order_number, status, customer_id, order_date, requested_delivery_date, last_delivery_date, currency, subtotal, vat_amount, total, customer:customers(name), items:sales_order_items!sales_order_items_sales_order_id_fkey(id, line_type, quantity, delivered_qty, sort_order)',
           { count: 'exact' },
         )
         .eq('company_id', companyId)
@@ -7147,7 +7293,7 @@ export const tools: McpTool[] = [
       // Article prefill with the same rules as gnubok_create_invoice: the
       // line's own values win, the article fills the rest, and its VAT rate
       // is adopted only inside the customer's default rate set.
-      const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated)
+      const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated, customer.country)
       const articleIds = Array.from(new Set(rawItems.map((i) => i.article_id).filter((a): a is string => !!a)))
       const articlesById = new Map<string, InvoiceLineArticle>()
       if (articleIds.length > 0) {
@@ -7932,6 +8078,12 @@ export const tools: McpTool[] = [
       if (!invoiceId) throw new Error('invoice_id is required')
 
       const invoice = await fetchInvoiceWithCustomer(supabase, companyId, invoiceId)
+      // A quote is an offer, not a claim (parity with the dashboard mark-paid
+      // route, which likewise refuses only quotes: marking a sent proforma paid
+      // is a supported prepayment record with no verifikat).
+      if (invoice.document_type === 'quote') {
+        throw registryError('INVOICE_QUOTE_NOT_PAYABLE')
+      }
       if (invoice.status !== 'sent' && invoice.status !== 'overdue') {
         throw new Error('Invoice can only be marked as paid when status is "sent" or "overdue"')
       }
@@ -10450,6 +10602,11 @@ export const tools: McpTool[] = [
         .single()
 
       if (invError || !invoice) throw new Error('Invoice not found')
+      // Parity with the dashboard match route: proformas, delivery notes and
+      // quotes carry no receivable to settle.
+      if (invoice.document_type && invoice.document_type !== 'invoice') {
+        throw registryError('MATCH_INVOICE_NOT_INVOICE_TYPE')
+      }
       if (invoice.status !== 'sent' && invoice.status !== 'overdue' && invoice.status !== 'partially_paid') {
         throw new Error('Invoice is not in a matchable state (must be sent, overdue, or partially_paid)')
       }
@@ -10594,7 +10751,7 @@ export const tools: McpTool[] = [
         const uniqueIds = Array.from(new Set(invoiceIds))
         const { data: found } = await supabase
           .from('invoices')
-          .select('id')
+          .select('id, document_type')
           .in('id', uniqueIds)
           .eq('company_id', companyId)
         const foundRows = found ?? []
@@ -10602,6 +10759,12 @@ export const tools: McpTool[] = [
         const missing = uniqueIds.filter((id) => !foundSet.has(id))
         if (missing.length > 0 || foundRows.length !== uniqueIds.length) {
           throw new Error(`Invoices not found for this company: ${missing.join(', ') || '(count mismatch)'}`)
+        }
+        // Only fakturor carry a receivable: the RPC gates on status alone, so
+        // a sent proforma or quote must be refused here (parity with the
+        // single-invoice match tool).
+        if (foundRows.some((r) => r.document_type && r.document_type !== 'invoice')) {
+          throw registryError('MATCH_INVOICE_NOT_INVOICE_TYPE')
         }
       }
       if (supplierInvoiceIds.length > 0) {
@@ -11295,12 +11458,17 @@ export const tools: McpTool[] = [
       const { data: invoice, error } = await supabase
         .from('invoices')
         .select(
-          'id, invoice_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, customer_id, customer:customers(id, name)'
+          'id, invoice_number, status, document_type, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, customer_id, customer:customers(id, name)'
         )
         .eq('id', invoiceId)
         .eq('company_id', companyId)
         .single()
       if (error || !invoice) throw new Error('Invoice not found')
+      // Same gate as gnubok_link_invoice_to_voucher: proformas, delivery
+      // notes and quotes carry no receivable, so there is nothing to match.
+      if (invoice.document_type && invoice.document_type !== 'invoice') {
+        throw registryError('MATCH_INVOICE_NOT_INVOICE_TYPE')
+      }
 
       if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
         return {
@@ -11352,12 +11520,17 @@ export const tools: McpTool[] = [
       const { data: invoice, error: invErr } = await supabase
         .from('invoices')
         .select(
-          'id, invoice_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, customer_id, customer:customers(id, name)'
+          'id, invoice_number, status, document_type, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, customer_id, customer:customers(id, name)'
         )
         .eq('id', invoiceId)
         .eq('company_id', companyId)
         .single()
       if (invErr || !invoice) throw new Error('Invoice not found')
+      // Parity with the dashboard match route: proformas, delivery notes and
+      // quotes carry no receivable to link a payment voucher to.
+      if (invoice.document_type && invoice.document_type !== 'invoice') {
+        throw registryError('MATCH_INVOICE_NOT_INVOICE_TYPE')
+      }
       if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
         throw new Error('Invoice is not in a matchable state (must be sent, overdue, or partially_paid)')
       }
@@ -15318,7 +15491,7 @@ export const tools: McpTool[] = [
       additionalProperties: false,
       properties: {
         salary_run_id: { type: 'string', description: 'UUID of the salary run (must be draft)' },
-        payment_date: { type: 'string', description: 'New payment date (YYYY-MM-DD); the date the salary verifikat will be booked on. Must stay within the run\'s period month (AGI is declared per payment month); supplying it clears the run\'s calculation.' },
+        payment_date: { type: 'string', description: 'New payment date (YYYY-MM-DD); the date the salary verifikat will be booked on. May fall outside the run\'s period month (lön i efterskott): the AGI is declared for the payment month. Supplying it clears the run\'s calculation.' },
         voucher_series: { type: 'string', description: 'Voucher series letter (single A-Z)' },
         notes: { type: ['string', 'null'], description: 'Free-text note on the run (max 2000 chars); null clears it' },
       },
@@ -15601,7 +15774,7 @@ export const tools: McpTool[] = [
         vaxa_stod_eligible: { type: 'boolean' },
         vaxa_stod_start: { type: 'string' },
         vaxa_stod_end: { type: 'string' },
-        jamkning_percentage: { type: 'number' },
+        jamkning_percentage: { type: 'number', description: 'Requires both dates, else rejected' },
         jamkning_valid_from: { type: 'string' },
         jamkning_valid_to: { type: 'string' },
         default_dimensions: {
@@ -15715,7 +15888,7 @@ export const tools: McpTool[] = [
         vaxa_stod_eligible: { type: 'boolean' },
         vaxa_stod_start: { type: 'string' },
         vaxa_stod_end: { type: 'string' },
-        jamkning_percentage: { type: ['number', 'null'], description: 'null clears the beslut' },
+        jamkning_percentage: { type: ['number', 'null'], description: 'null clears; else requires both dates' },
         jamkning_valid_from: { type: ['string', 'null'] },
         jamkning_valid_to: { type: ['string', 'null'] },
         default_dimensions: {
@@ -15762,6 +15935,15 @@ export const tools: McpTool[] = [
         .maybeSingle()
       if (error) throw dbError(error)
       if (!existing) throw new Error('Employee not found')
+
+      // Preflight the jämkning contract on the merged row so the agent gets
+      // the error at staging time instead of at approval (#2058). The
+      // executor (updateEmployee) runs the same shared validator again.
+      const { touchesJamkning, validateJamkning } = await import('@/lib/salary/jamkning-rules')
+      if (touchesJamkning(patch)) {
+        const [issue] = validateJamkning({ ...(existing as Record<string, unknown>), ...patch })
+        if (issue) throw new Error(`${issue.field}: ${issue.message}`)
+      }
 
       const changes = Object.entries(patch).map(([field, to]) => ({
         field,
@@ -17530,13 +17712,13 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_convert_invoice',
-    keywords: ['proforma', 'kundfaktura', 'omvandla'],
-    title: 'Convert Proforma to Invoice',
-    description: 'Stage conversion of a proforma invoice to a real invoice. Allocates F-series number, copies items, marks proforma cancelled.',
+    keywords: ['proforma', 'offert', 'quote', 'kundfaktura', 'omvandla'],
+    title: 'Convert Proforma or Quote to Invoice',
+    description: 'Stage conversion of a proforma or quote (offert) to a real invoice (F-number, items copied). Proforma is cancelled; the quote stays as accepted.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      properties: { invoice_id: { type: 'string' } },
+      properties: { invoice_id: { type: 'string', description: 'Proforma or quote UUID' } },
       required: ['invoice_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -17547,21 +17729,44 @@ export const tools: McpTool[] = [
 
       const { data: inv } = await supabase
         .from('invoices')
-        .select('id, document_type, status, total, currency, customer:customers(name)')
+        .select('id, invoice_number, document_type, status, quote_status, total, currency, customer:customers(name)')
         .eq('id', id).eq('company_id', companyId).single()
-      if (!inv) throw new Error('Invoice not found')
-      if (inv.document_type !== 'proforma') throw new Error('Endast proformafakturor kan konverteras')
-      if (inv.status === 'cancelled') throw new Error('Denna proformafaktura har redan makulerats')
+      if (!inv) throw registryError('INVOICE_NOT_FOUND')
+      const isQuote = inv.document_type === 'quote'
+      // Same pre-checks as convertToInvoice (the commit path), so the agent
+      // gets the registry code at staging time instead of a failed approval.
+      if (inv.document_type !== 'proforma' && !isQuote) throw registryError('INVOICE_CONVERT_NOT_CONVERTIBLE')
+      if (inv.status === 'cancelled') throw registryError('INVOICE_CONVERT_SOURCE_CANCELLED')
+      if (isQuote) {
+        if (inv.quote_status === 'declined') throw registryError('INVOICE_CONVERT_QUOTE_DECLINED')
+        const { data: converted, error: convertedError } = await supabase
+          .from('invoices')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('converted_from_id', id)
+          .neq('status', 'cancelled')
+          .limit(1)
+          .maybeSingle()
+        if (convertedError) throw dbError(convertedError)
+        if (converted) throw registryError('INVOICE_QUOTE_ALREADY_INVOICED')
+      }
 
       const customerName = (inv.customer as { name?: string } | null)?.name ?? 'okänd kund'
+      const amount = `${roundOre(Number(inv.total))} ${inv.currency}`
       return stagePendingOperation(supabase, companyId, userId, 'convert_invoice',
-        `Konvertera proforma → faktura: ${customerName} ${Math.round(Number(inv.total) * 100) / 100} ${inv.currency}`,
+        isQuote
+          ? `Konvertera offert → faktura: ${inv.invoice_number ?? ''} ${customerName} ${amount}`.replace(/\s+/g, ' ')
+          : `Konvertera proforma → faktura: ${customerName} ${amount}`,
         { invoice_id: id },
         {
           customer_name: (inv.customer as { name?: string } | null)?.name,
+          source_document_type: inv.document_type,
+          source_invoice_number: inv.invoice_number ?? null,
           total: inv.total,
           currency: inv.currency,
-          will: 'allocate F-series number, copy items, cancel proforma',
+          will: isQuote
+            ? 'allocate F-series number, copy items, mark the quote accepted (the quote stays)'
+            : 'allocate F-series number, copy items, cancel proforma',
         },
         actor,
         {
@@ -17569,6 +17774,109 @@ export const tools: McpTool[] = [
           tool: 'gnubok_send_invoice',
         }
       )
+    },
+  },
+
+  {
+    name: 'gnubok_set_quote_status',
+    keywords: ['offert', 'quote', 'accepterad', 'avböjd', 'godkänn offert'],
+    title: 'Set Quote Status',
+    description: 'Record the customer decision on a quote (offert): open, accepted or declined. Locked once invoiced; expired is derived from valid_until.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        invoice_id: { type: 'string', description: 'Quote UUID' },
+        status: { type: 'string', enum: ['open', 'accepted', 'declined'] },
+        valid_until: { type: 'string', description: 'YYYY-MM-DD; new expiry (reopens an expired quote)' },
+      },
+      required: ['invoice_id', 'status'],
+    },
+    // Kept shallow on purpose: tools/list has a hard token budget
+    // (payload-size.bench.test.ts) and the row shape is documented on
+    // gnubok_get_invoice.
+    outputSchema: { type: 'object' },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
+    async execute(args, companyId, userId, supabase) {
+      const id = args.invoice_id as string
+      if (!id) throw codedError('VALIDATION_ERROR', 'invoice_id is required')
+      const nextStatus = args.status as string
+      if (nextStatus !== 'open' && nextStatus !== 'accepted' && nextStatus !== 'declined') {
+        throw codedError('VALIDATION_ERROR', 'status must be open, accepted or declined')
+      }
+
+      // Mirrors POST /api/invoices/[id]/quote-status: any transition between
+      // the three decisions until the quote has been converted; cancelled
+      // quotes are not decidable; accepting past valid_until is allowed.
+      const { data: quote, error: fetchError } = await supabase
+        .from('invoices')
+        .select('id, document_type, status, quote_status, quote_decided_at')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (fetchError) throw dbError(fetchError)
+      if (!quote) throw registryError('INVOICE_NOT_FOUND')
+      if (quote.document_type !== 'quote') throw registryError('INVOICE_NOT_A_QUOTE')
+      if (quote.status === 'cancelled') throw registryError('INVOICE_QUOTE_NOT_DECIDABLE')
+
+      const { data: converted, error: convertedError } = await supabase
+        .from('invoices')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('converted_from_id', id)
+        .neq('status', 'cancelled')
+        .limit(1)
+        .maybeSingle()
+      if (convertedError) throw dbError(convertedError)
+      if (converted) throw registryError('INVOICE_QUOTE_ALREADY_INVOICED')
+
+      const nextValidUntil = typeof args.valid_until === 'string' ? args.valid_until : undefined
+      if (nextValidUntil !== undefined && !ISO_DATE_RE.test(nextValidUntil)) {
+        throw codedError('VALIDATION_ERROR', 'valid_until must be YYYY-MM-DD')
+      }
+      // Compare-and-set on the state read above (same as the HTTP routes): a
+      // conversion or cancel that lands in between makes this a 0-row update
+      // instead of overwriting newer state.
+      const { data: updated, error: updateError } = await supabase
+        .from('invoices')
+        .update({
+          quote_status: nextStatus,
+          // Re-sending the same decision keeps its original timestamp
+          // (idempotentHint on this tool is honest).
+          quote_decided_at:
+            nextStatus === 'open'
+              ? null
+              : nextStatus === quote.quote_status
+                ? (quote.quote_decided_at ?? new Date().toISOString())
+                : new Date().toISOString(),
+          valid_until: nextValidUntil,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .eq('quote_status', quote.quote_status)
+        .neq('status', 'cancelled')
+        .select('id, invoice_number, document_type, status, quote_status, quote_decided_at, valid_until')
+        .maybeSingle()
+      if (updateError) {
+        // trg_invoices_quote_decision_guard: a conversion landed in between.
+        if (updateError.message?.includes('INVOICE_QUOTE_ALREADY_INVOICED')) {
+          throw registryError('INVOICE_QUOTE_ALREADY_INVOICED')
+        }
+        throw dbError(updateError)
+      }
+      if (!updated) throw registryError('INVOICE_QUOTE_CHANGED_CONCURRENTLY')
+
+      return {
+        invoice_id: updated.id,
+        invoice_number: updated.invoice_number ?? null,
+        document_type: updated.document_type,
+        status: updated.status,
+        quote_status: updated.quote_status,
+        effective_quote_status: effectiveQuoteStatus(updated) ?? updated.quote_status,
+        quote_decided_at: updated.quote_decided_at ?? null,
+        valid_until: updated.valid_until ?? null,
+      }
     },
   },
 
@@ -17791,7 +18099,7 @@ export const tools: McpTool[] = [
       // previewed, or returned.
       const { data: invoice, error } = await supabase
         .from('invoices')
-        .select('id, invoice_number, status, document_type, journal_entry_id, is_self_billed, credited_invoice_id, total, currency, customer_id, deduction_personnummer_encrypted, customer:customers(name)')
+        .select('id, invoice_number, status, document_type, quote_status, journal_entry_id, is_self_billed, credited_invoice_id, total, currency, customer_id, deduction_personnummer_encrypted, customer:customers(name)')
         .eq('id', invoiceId)
         .eq('company_id', companyId)
         .maybeSingle()
@@ -17830,7 +18138,7 @@ export const tools: McpTool[] = [
         // for individuals); never decrypted, staged, or returned here.
         const { data: customer, error: custError } = await supabase
           .from('customers')
-          .select('customer_type, vat_number_validated, personal_number')
+          .select('customer_type, vat_number_validated, country, personal_number')
           .eq('id', invoice.customer_id)
           .eq('company_id', companyId)
           .single()
@@ -17838,9 +18146,9 @@ export const tools: McpTool[] = [
           throw new Error('Customer not found: they may have been deleted. The draft cannot be edited without its customer.')
         }
 
-        const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
+        const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
         defaultVatRate = vatRules.rate
-        const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated)
+        const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated, customer.country)
 
         const articleIds = Array.from(new Set(rawItems.map((i) => i.article_id).filter((a): a is string => !!a)))
         const articlesById = new Map<string, InvoiceLineArticle>()
@@ -17868,7 +18176,7 @@ export const tools: McpTool[] = [
         // carry Swedish VAT even to a foreign business); the default stays
         // vatRules.rate, so a Swedish rate only lands here when set on the
         // line or adopted from an article within the default set.
-        const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated)
+        const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country)
         const allowedRates = new Set(permittedRates.map((r) => r.rate))
         for (const item of items) {
           // Text rows carry no amounts and never book: exclude them from the
@@ -19627,6 +19935,14 @@ export const tools: McpTool[] = [
       const versions = await listAnnualReportVersions(supabase, companyId, fiscalPeriodId)
       return { fiscal_period_id: fiscalPeriodId, versions }
     },
+    // Search-only (2026-09-03): versions exist only once an annual report is
+    // rendered for signing or filing, and iXBRL filing is switched off until
+    // the Bolagsverket avtal and certificate exist (same reason its sibling
+    // gnubok_get_arsredovisning_filing_status below is search-only). Demoted
+    // to keep tools/list under the context budget after #2254 added the
+    // proforma fields and #2240 the jamkning field notes (see
+    // payload-size.bench.test.ts). Reachable via gnubok_call_tool.
+    catalogVisibility: 'search',
   },
 
   {
@@ -19645,6 +19961,11 @@ export const tools: McpTool[] = [
     },
     outputSchema: { type: 'object', additionalProperties: true },
     annotations: ANNOTATIONS_READ_ONLY,
+    // Search-only (2026-09-02): iXBRL filing is switched off until the
+    // Bolagsverket avtal and certificate exist, so nothing polls this status
+    // yet; demoted to make room in tools/list for gnubok_set_quote_status
+    // (see payload-size.bench.test.ts). Reachable via gnubok_call_tool.
+    catalogVisibility: 'search',
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')

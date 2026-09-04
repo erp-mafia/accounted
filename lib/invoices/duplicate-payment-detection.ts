@@ -204,13 +204,16 @@ export async function detectDuplicatePaymentVoucher(
 
   if (candidates.length === 0) return null
 
-  // Exclude entries already linked from invoice_payments or any transaction.
+  // Exclude entries already linked to a bank transaction, directly or through
+  // an invoice_payments row that carries one. A payment row with
+  // transaction_id NULL is a manual / Stripe settlement (#2019): its bank line
+  // has not been matched yet, so the voucher stays a duplicate candidate.
   const entryIds = candidates.map((l) => l.journal_entry.id)
 
   const [{ data: paymentLinks }, { data: txLinks }] = await Promise.all([
     supabase
       .from('invoice_payments')
-      .select('journal_entry_id')
+      .select('journal_entry_id, transaction_id')
       .eq('company_id', companyId)
       .in('journal_entry_id', entryIds),
     supabase
@@ -221,8 +224,11 @@ export async function detectDuplicatePaymentVoucher(
   ])
 
   const linkedIds = new Set<string>()
-  for (const row of (paymentLinks ?? []) as { journal_entry_id: string | null }[]) {
-    if (row.journal_entry_id) linkedIds.add(row.journal_entry_id)
+  for (const row of (paymentLinks ?? []) as {
+    journal_entry_id: string | null
+    transaction_id: string | null
+  }[]) {
+    if (row.journal_entry_id && row.transaction_id) linkedIds.add(row.journal_entry_id)
   }
   for (const row of (txLinks ?? []) as { id: string; journal_entry_id: string | null }[]) {
     // A transaction can link to its own JE via the current match flow: but

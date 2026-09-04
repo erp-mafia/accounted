@@ -83,6 +83,9 @@ const PGRST116 = {
   message: 'JSON object requested, multiple (or no) rows returned',
 }
 
+/** Every eq/in filter the stub saw, so tests can assert on query scope. */
+let recordedFilters: Array<{ table: string; method: string; args: unknown[] }> = []
+
 function makeSupabaseStub(config: StubConfig): SupabaseClient {
   const rowsResult = (
     rows: Record<string, unknown>[] | 'unreadable' | undefined,
@@ -134,8 +137,14 @@ function makeSupabaseStub(config: StubConfig): SupabaseClient {
         isWrite = true
         return chain
       },
-      eq: () => chain,
-      in: () => chain,
+      eq: (...args: unknown[]) => {
+        recordedFilters.push({ table, method: 'eq', args })
+        return chain
+      },
+      in: (...args: unknown[]) => {
+        recordedFilters.push({ table, method: 'in', args })
+        return chain
+      },
       not: () => chain,
       order: () => chain,
       range: () => chain,
@@ -170,6 +179,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  recordedFilters = []
 })
 
 const oneDeadline = () => [
@@ -269,6 +279,18 @@ describe('invoice gate polarity', () => {
     expect(webpushSend).not.toHaveBeenCalled()
     expect(result.sent).toBe(0)
     expect(result.skipped).toBe(1)
+  })
+
+  it('only notifies on fakturor: proformas, delivery notes and quotes are never due', async () => {
+    const supabase = makeSupabaseStub({ settings: [settingsRow()], invoices: [] })
+
+    await sendInvoiceNotifications(supabase)
+
+    expect(recordedFilters).toContainEqual({
+      table: 'invoices',
+      method: 'eq',
+      args: ['document_type', 'invoice'],
+    })
   })
 })
 

@@ -22,7 +22,6 @@ import {
   Menu,
   X,
   HelpCircle,
-  Building2,
   Wallet,
   TrendingUp,
   ClipboardCheck,
@@ -51,6 +50,7 @@ import {
   ShoppingCart,
   Car,
   ClipboardList,
+  Truck,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { BrandHomeLink } from '@/components/branding/BrandHomeLink'
@@ -256,7 +256,7 @@ const navItems: NavItem[] = [
   // row. Anställda is a register (you edit an employee rarely, you run
   // payroll monthly), so it lives here while Löner stays in Arbeta.
   { href: '/customers', labelKey: 'customers', icon: Users, group: 'data', fold: 'register' },
-  { href: '/suppliers', labelKey: 'suppliers', icon: Building2, group: 'data', fold: 'register' },
+  { href: '/suppliers', labelKey: 'suppliers', icon: Truck, group: 'data', fold: 'register' },
   { href: '/articles', labelKey: 'articles', icon: Tag, group: 'data', fold: 'register' },
   { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'data', fold: 'register', employerOnly: true },
   { href: '/assets', labelKey: 'assets', icon: Package, group: 'data', fold: 'register' },
@@ -509,9 +509,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   useEffect(() => {
     if (!company?.id) return
 
-    // Realtime keeps the badges live; a trailing debounce collapses event
-    // bursts (bulk booking / bulk approvals emit one event per row) into a
-    // single SWR revalidation instead of a request stampede.
+    // Realtime keeps the badges live (bank rows, skattekonto rows, staged
+    // operations); a trailing debounce collapses event bursts (bulk booking
+    // / bulk approvals emit one event per row) into a single SWR
+    // revalidation instead of a request stampede.
     let debounce: ReturnType<typeof setTimeout> | null = null
     const queueRefresh = () => {
       if (debounce) clearTimeout(debounce)
@@ -526,6 +527,16 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           event: '*',
           schema: 'public',
           table: 'transactions',
+          filter: `company_id=eq.${company.id}`,
+        },
+        queueRefresh,
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'skattekonto_transactions',
           filter: `company_id=eq.${company.id}`,
         },
         queueRefresh,

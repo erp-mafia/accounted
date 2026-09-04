@@ -35,7 +35,7 @@ export async function loadSalesOrder(
 ): Promise<ServiceResult<{ order: SalesOrder }>> {
   const { data, error } = await supabase
     .from('sales_orders')
-    .select('*, customer:customers(*), items:sales_order_items(*)')
+    .select('*, customer:customers(*), items:sales_order_items!sales_order_items_sales_order_id_fkey(*)')
     .eq('id', orderId)
     .eq('company_id', companyId)
     .maybeSingle()

@@ -6,11 +6,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let resultIdx: number
 let results: Array<{ data?: unknown; error?: unknown }>
+let calls: Array<{ method: string; args: unknown[] }>
 
 function makeBuilder() {
   const b: Record<string, unknown> = {}
   for (const m of ['select', 'eq', 'in', 'lte', 'order', 'range']) {
-    b[m] = vi.fn().mockReturnValue(b)
+    b[m] = vi.fn().mockImplementation((...args: unknown[]) => {
+      calls.push({ method: m, args })
+      return b
+    })
   }
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
   b.then = (resolve: (v: unknown) => void) => resolve(results[resultIdx++] ?? { data: null, error: null })
@@ -32,10 +36,19 @@ beforeEach(() => {
   vi.clearAllMocks()
   resultIdx = 0
   results = []
+  calls = []
   supabase = makeClient()
 })
 
 describe('generateARLedger', () => {
+  it('only reads fakturor: proformas, delivery notes and quotes are not receivables', async () => {
+    results = [{ data: [], error: null }]
+
+    await generateARLedger(supabase, 'company-1')
+
+    expect(calls).toContainEqual({ method: 'eq', args: ['document_type', 'invoice'] })
+  })
+
   it('returns empty report when no invoices found', async () => {
     results = [
       { data: [], error: null },

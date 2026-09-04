@@ -18,7 +18,9 @@ import {
   getAccountTransactions,
   getAllTransactions,
   getAllTransactionsWithRaw,
+  AspspUnavailableError,
   convertTransaction,
+  extractBban,
   deleteSession,
   probeSessionHealth,
   startAuthorization,
@@ -443,15 +445,141 @@ describe('api-client', () => {
       // Fresh Response per call: a body can only be read once.
       fetchSpy.mockImplementation(() => Promise.resolve(new Response(ASPSP_ERROR_BODY, { status: 400 })))
 
-      await expect(
-        getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07')
-      ).rejects.toThrow('Failed to get transactions (400)')
+      const failure = await getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07').catch((e) => e)
+      expect(failure).toBeInstanceOf(AspspUnavailableError)
+      expect(failure.message).toContain('Failed to get transactions (400)')
+      // Every narrower window refused too: the bank is refusing, not the width.
+      expect(failure.reason).toBe('ladder-exhausted')
 
       // full window + 90 + 60 + 30 = 4 attempts, then give up
       expect(fetchSpy).toHaveBeenCalledTimes(4)
 
       warnSpy.mockRestore()
       errorSpy.mockRestore()
+    })
+
+    it('reports the requested and the effective date_from, and whether the window was narrowed', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      fetchSpy
+        .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 })) // full window
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ transactions: [] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        ) // 90 days → success
+
+      const result = await getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07')
+      expect(result).toMatchObject({
+        requestedDateFrom: '2026-02-07',
+        effectiveDateFrom: '2026-03-09',
+        narrowed: true,
+      })
+      warnSpy.mockRestore()
+    })
+
+    it('reports narrowed: false when the first call succeeds', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify({ transactions: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )
+      const result = await getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07')
+      expect(result).toMatchObject({
+        requestedDateFrom: '2026-02-07',
+        effectiveDateFrom: '2026-02-07',
+        narrowed: false,
+      })
+    })
+
+    // Issue #2202: Länsförsäkringar answered a 4-month window at 23:07 (after
+    // narrowing to 06-26) and refused every rung of the same request at
+    // 23:14. ASPSP_ERROR is the same string for "too wide" and "the bank is
+    // refusing right now"; what the account has accepted before is the
+    // signal that tells them apart.
+    describe('accepted history width', () => {
+      it('a rejected window no wider than the accepted width stops after ONE call, as the bank being unavailable', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        fetchSpy.mockImplementation(() => Promise.resolve(new Response(ASPSP_ERROR_BODY, { status: 400 })))
+
+        // 2026-02-07 .. 2026-06-07 is 120 days; the bank has answered 120 before.
+        const failure = await getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07', undefined, {
+          acceptedHistoryDays: 120,
+        }).catch((e) => e)
+
+        expect(failure).toBeInstanceOf(AspspUnavailableError)
+        expect(failure.reason).toBe('window-already-accepted')
+        expect(failure.dateFrom).toBe('2026-02-07')
+        expect(fetchSpy).toHaveBeenCalledTimes(1)
+        warnSpy.mockRestore()
+      })
+
+      it('a rejected wider window jumps straight to the accepted width, then stops', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        fetchSpy.mockImplementation(() => Promise.resolve(new Response(ASPSP_ERROR_BODY, { status: 400 })))
+
+        // Accepted 54 days before; asking for 120. No 90/60/30 ladder walk.
+        const failure = await getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07', undefined, {
+          acceptedHistoryDays: 54,
+        }).catch((e) => e)
+
+        expect(failure).toBeInstanceOf(AspspUnavailableError)
+        expect(failure.reason).toBe('window-already-accepted')
+        expect(fetchSpy).toHaveBeenCalledTimes(2)
+        const urls = fetchSpy.mock.calls.map((c: unknown[]) => c[0] as string)
+        expect(urls[0]).toContain('date_from=2026-02-07')
+        expect(urls[1]).toContain('date_from=2026-04-14') // 54 days before 2026-06-07
+        warnSpy.mockRestore()
+      })
+
+      it('a rejected wider window that succeeds at the accepted width is reported as narrowed to it', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        fetchSpy
+          .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 }))
+          .mockResolvedValueOnce(
+            new Response(JSON.stringify({ transactions: [] }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          )
+
+        const result = await getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07', undefined, {
+          acceptedHistoryDays: 54,
+        })
+        expect(result).toMatchObject({ effectiveDateFrom: '2026-04-14', narrowed: true })
+        expect(fetchSpy).toHaveBeenCalledTimes(2)
+        warnSpy.mockRestore()
+      })
+
+      it('still drops an unsupported strategy before judging the window', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        fetchSpy.mockImplementation(() => Promise.resolve(new Response(ASPSP_ERROR_BODY, { status: 400 })))
+
+        const failure = await getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07', 'longest', {
+          acceptedHistoryDays: 120,
+        }).catch((e) => e)
+
+        expect(failure).toBeInstanceOf(AspspUnavailableError)
+        // strategy=longest, then the same window without strategy, then stop.
+        expect(fetchSpy).toHaveBeenCalledTimes(2)
+        warnSpy.mockRestore()
+      })
+
+      it('getAllTransactions applies the same policy', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+        fetchSpy.mockImplementation(() => Promise.resolve(new Response(ASPSP_ERROR_BODY, { status: 400 })))
+
+        const failure = await getAllTransactions('acc-1', '2026-02-07', '2026-06-07', undefined, {
+          acceptedHistoryDays: 120,
+        }).catch((e) => e)
+
+        expect(failure).toBeInstanceOf(AspspUnavailableError)
+        expect(fetchSpy).toHaveBeenCalledTimes(1)
+        warnSpy.mockRestore()
+        errorSpy.mockRestore()
+      })
     })
   })
 
@@ -606,6 +734,65 @@ describe('convertTransaction', () => {
     const out = convertTransaction(tx, 'SEK')
     expect(out.bank_transaction_code).toBe('PMNT/RCDT')
     expect(out.proprietary_bank_transaction_code).toBe('XB')
+  })
+
+  // Enable Banking has no `bban` key on AccountIdentification: a Swedish
+  // BBAN arrives as other.identification with scheme_name BBAN. The earlier
+  // `.bban` read was always undefined, so domestic counterparties were lost.
+  it('reads a Swedish BBAN counterparty from other.identification', () => {
+    const tx = makeTx({
+      credit_debit_indicator: 'CRDT',
+      debtor_account: { other: { identification: '50001234567', scheme_name: 'BBAN' } },
+    })
+    expect(convertTransaction(tx, 'SEK').counterparty_account).toBe('50001234567')
+  })
+
+  it('prefers IBAN over a domestic identifier, and a Bankgiro from the additional list over nothing', () => {
+    const withIban = makeTx({
+      creditor_account: { iban: 'SE4550000000058398257466', other: { identification: '1234567', scheme_name: 'BGNR' } },
+    })
+    expect(convertTransaction(withIban, 'SEK').counterparty_account).toBe('SE4550000000058398257466')
+
+    const bgOnly = makeTx({
+      creditor_account_additional_identification: [{ identification: '5050-1234', scheme_name: 'BGNR' }],
+    })
+    expect(convertTransaction(bgOnly, 'SEK').counterparty_account).toBe('5050-1234')
+  })
+
+  it('takes a supplementary IBAN over a primary BBAN, and never persists a card PAN or other non-account scheme', () => {
+    const bbanWithIban = makeTx({
+      creditor_account: { other: { identification: '50001234567', scheme_name: 'BBAN' } },
+      creditor_account_additional_identification: [{ identification: 'SE4550000000058398257466', scheme_name: 'IBAN' }],
+    })
+    expect(convertTransaction(bbanWithIban, 'SEK').counterparty_account).toBe('SE4550000000058398257466')
+
+    const cardOnly = makeTx({
+      creditor_account: { other: { identification: '4571********1234', scheme_name: 'CPAN' } },
+      creditor_account_additional_identification: [{ identification: '12345', scheme_name: 'CUST' }],
+    })
+    expect(convertTransaction(cardOnly, 'SEK').counterparty_account).toBeUndefined()
+  })
+})
+
+describe('extractBban', () => {
+  it('returns the primary BBAN without whitespace', () => {
+    expect(extractBban({ account_id: { other: { identification: '5000 1234567', scheme_name: 'BBAN' } } }))
+      .toBe('50001234567')
+  })
+
+  it('falls back to all_account_ids when the primary identifier is an IBAN', () => {
+    expect(extractBban({
+      account_id: { iban: 'SE4550000000058398257466' },
+      all_account_ids: [
+        { identification: 'SE4550000000058398257466', scheme_name: 'IBAN' },
+        { identification: '50001234567', scheme_name: 'BBAN' },
+      ],
+    })).toBe('50001234567')
+  })
+
+  it('is undefined when the ASPSP sent no BBAN', () => {
+    expect(extractBban({ account_id: { iban: 'SE4550000000058398257466' } })).toBeUndefined()
+    expect(extractBban({ account_id: { other: { identification: '1234567', scheme_name: 'BGNR' } } })).toBeUndefined()
   })
 })
 

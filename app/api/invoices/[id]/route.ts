@@ -5,6 +5,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateInvoiceSchema } from '@/lib/api/schemas'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { resolveInvoicePayeeChoice, type InvoicePayeeFields } from '@/lib/invoices/invoice-payee'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
@@ -87,13 +88,12 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
     if (!validation.success) return validation.response
     const input = validation.data
-    const documentType: InvoiceDocumentType = input.document_type || 'invoice'
 
     // Fetch the target. Only drafts (not sent, no committed verifikat, not a
     // received self-billing document) may be edited.
     const { data: existing, error: fetchError } = await supabase
       .from('invoices')
-      .select('id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, deduction_personnummer_encrypted, deduction_personnummer_last4')
+      .select('id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, document_type, quote_status, deduction_personnummer_encrypted, deduction_personnummer_last4')
       .eq('id', id)
       .eq('company_id', companyId!)
       .single()
@@ -108,6 +108,23 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     // truth the detail and edit pages also gate on, so the rule can't drift.
     if (!isEditableInvoiceDraft(existing)) {
       return errorResponseFromCode('INVOICE_UPDATE_NOT_DRAFT', ctxLog, { requestId })
+    }
+
+    // An omitted document_type means "unchanged", never "invoice": a client
+    // that only edits lines on a delivery-note or quote draft must not trip
+    // the series lock below.
+    const existingType: InvoiceDocumentType = existing.document_type ?? 'invoice'
+    const documentType: InvoiceDocumentType = input.document_type ?? existingType
+
+    // Quotes and delivery notes are numbered at insert from their own series,
+    // so their type is fixed: turning OF-007 into a faktura would carry a
+    // quote number into the F-series (and vice versa).
+    const seriesLocked = (t: InvoiceDocumentType) => t === 'quote' || t === 'delivery_note'
+    if (existingType !== documentType && (seriesLocked(existingType) || seriesLocked(documentType))) {
+      return errorResponseFromCode('INVOICE_UPDATE_DOCUMENT_TYPE_LOCKED', ctxLog, {
+        requestId,
+        details: { from: existingType, to: documentType },
+      })
     }
 
     // Resolve the (possibly changed) customer.
@@ -149,6 +166,22 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       return errorResponseFromCode(build.code, ctxLog, { requestId, details: build.details })
     }
 
+    // Payee choice: omitted = unchanged (a partial update must not clear a
+    // draft's chosen account); null = back to the per-currency default.
+    let payeeFields: Partial<InvoicePayeeFields> = {}
+    if (input.payment_cash_account_id !== undefined) {
+      const payeeChoice = await resolveInvoicePayeeChoice(
+        supabase,
+        companyId!,
+        input.currency,
+        input.payment_cash_account_id,
+      )
+      if (!payeeChoice.ok) {
+        return errorResponseFromCode(payeeChoice.code, ctxLog, { requestId, details: payeeChoice.details })
+      }
+      payeeFields = payeeChoice.fields
+    }
+
     // Update the draft row. invoice_number + status are intentionally NOT in
     // build.invoiceFields, so they are preserved. The .eq('status','draft')
     // guard turns a concurrent send/finalize into a 0-row update (race), rather
@@ -165,7 +198,12 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
         : build.invoiceFields
     const { data: updated, error: updateError } = await supabase
       .from('invoices')
-      .update({ ...updateFields, updated_at: new Date().toISOString() })
+      .update({
+        ...updateFields,
+        payment_cash_account_id: payeeFields.payment_cash_account_id,
+        payment_details: payeeFields.payment_details,
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', id)
       .eq('company_id', companyId!)
       .eq('status', 'draft')

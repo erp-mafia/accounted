@@ -447,7 +447,7 @@ function makeLedgerSupabase(opts: {
   ledgerAccount?: string | null
   lines?: Jel[]
   txLinks?: LedgerTxLink[]
-  payLinks?: { journal_entry_id: string }[]
+  payLinks?: { journal_entry_id: string; transaction_id?: string | null }[]
   transactionRows?: TxRow[] // siblings for the orchestrator fall-through
 }) {
   // Fixtures stay embed-shaped for readability; the two-step fetch reads the
@@ -598,11 +598,29 @@ describe('detectLedgerDuplicateVoucher', () => {
   })
 
   it('excludes a voucher already linked to an invoice payment', async () => {
-    const supabase = makeLedgerSupabase({ lines: [jel()], payLinks: [{ journal_entry_id: 'je-2' }] })
+    const supabase = makeLedgerSupabase({
+      lines: [jel()],
+      payLinks: [{ journal_entry_id: 'je-2', transaction_id: 'tx-bank' }],
+    })
     const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
       id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null,
     })
     expect(result).toBeNull()
+  })
+
+  // #2019: a manual / Stripe settlement writes a payment row with no bank
+  // transaction. The bank line for that money arrives later; the voucher must
+  // stay a twin so the user is offered a link instead of a blind re-booking.
+  it('keeps a voucher whose payment row has no bank transaction as a twin', async () => {
+    const supabase = makeLedgerSupabase({
+      lines: [jel()],
+      payLinks: [{ journal_entry_id: 'je-2', transaction_id: null }],
+    })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null,
+    })
+    expect(result?.journal_entry_id).toBe('je-2')
+    expect(result?.transaction_id).toBeNull()
   })
 
   // ── De-exclusion (gap G3): the linking transaction is itself the twin ─────

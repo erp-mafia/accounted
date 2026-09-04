@@ -1273,3 +1273,189 @@ describe('personnummer submitted as org_number on an individual (v1)', () => {
     expect(supabaseMock.captured.update).toHaveLength(0)
   })
 })
+
+// ------------------------------------------------------------------
+// country: ISO 3166-1 alpha-2, consistent with customer_type (#2025, #2028)
+// ------------------------------------------------------------------
+
+describe('country on POST /api/v1/companies/:companyId/customers', () => {
+  it('stores a country name as its ISO code (#2028)', async () => {
+    withWriteScope()
+    const client = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: { ...SAMPLE_CUSTOMER, customer_type: 'eu_business', country: 'DE' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+
+    const res = await createCustomer(
+      makePostRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`, {
+        name: 'Muster Handels GmbH',
+        customer_type: 'eu_business',
+        country: 'Germany',
+        vat_number: 'DE811234567',
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect((client.captured.insert[0] as { country: string }).country).toBe('DE')
+  })
+
+  it('derives the EU country from the VAT prefix when none is given', async () => {
+    withWriteScope()
+    const client = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: { ...SAMPLE_CUSTOMER, customer_type: 'eu_business', country: 'DE' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+
+    const res = await createCustomer(
+      makePostRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`, {
+        name: 'Muster Handels GmbH',
+        customer_type: 'eu_business',
+        vat_number: 'DE811234567',
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect((client.captured.insert[0] as { country: string }).country).toBe('DE')
+  })
+
+  it('previews SE for a Swedish business in dry-run, never the name Sweden', async () => {
+    withWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await createCustomer(
+      makePostRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers?dry_run=true`, {
+        name: 'Acme AB',
+        customer_type: 'swedish_business',
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.dry_run).toBe(true)
+    expect(body.data.preview.country).toBe('SE')
+  })
+
+  it('rejects an EU business with land Sverige (#2025)', async () => {
+    withWriteScope()
+    const client = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+
+    const res = await createCustomer(
+      makePostRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`, {
+        name: 'Muster Handels GmbH',
+        customer_type: 'eu_business',
+        country: 'SE',
+        vat_number: 'DE811234567',
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(JSON.stringify(body.error)).toMatch(/country/)
+    // Only the idempotency-key row may have been written, never the customer.
+    expect(client.captured.insert.filter((row) => 'customer_type' in (row as object))).toHaveLength(0)
+  })
+
+  it('rejects a country it cannot read as a code', async () => {
+    withWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await createCustomer(
+      makePostRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`, {
+        name: 'Acme AB',
+        customer_type: 'swedish_business',
+        country: 'Atlantis',
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+})
+
+describe('country on PATCH /api/v1/companies/:companyId/customers/:id', () => {
+  it('normalises a country name before writing it', async () => {
+    withWriteScope()
+    const client = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: { ...SAMPLE_CUSTOMER, country: 'SE' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+
+    const res = await updateCustomer(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`, {
+        country: 'Sverige',
+      }),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect((client.captured.update[0] as { country: string }).country).toBe('SE')
+  })
+
+  it('refuses a type change that contradicts the stored country', async () => {
+    withWriteScope()
+    const client = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: { ...SAMPLE_CUSTOMER, country: 'SE' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+
+    const res = await updateCustomer(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`, {
+        customer_type: 'eu_business',
+      }),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('CUSTOMER_COUNTRY_MISMATCH')
+    expect(body.error.details.issue).toBe('EU_BUSINESS_COUNTRY_IS_SE')
+    expect(client.captured.update).toHaveLength(0)
+  })
+
+  it('refuses a country change that contradicts the stored VAT prefix', async () => {
+    withWriteScope()
+    const client = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: {
+        data: { ...SAMPLE_CUSTOMER, customer_type: 'eu_business', country: 'DE', vat_number: 'DE811234567' },
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(client)
+
+    const res = await updateCustomer(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`, {
+        country: 'FR',
+      }),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('CUSTOMER_COUNTRY_MISMATCH')
+    expect(body.error.details.issue).toBe('VAT_PREFIX_COUNTRY_MISMATCH')
+    expect(client.captured.update).toHaveLength(0)
+  })
+})

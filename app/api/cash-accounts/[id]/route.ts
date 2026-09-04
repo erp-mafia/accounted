@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
-import { UpdateCashAccountVoucherSeriesSchema } from '@/lib/api/schemas'
-import { errorResponse } from '@/lib/errors/get-structured-error'
+import { UpdateCashAccountSchema } from '@/lib/api/schemas'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { setVoucherSeries } from '@/lib/cash-accounts/service'
+import { isBankCashAccount, updateCashAccountPayee, type PayeeUpdate } from '@/lib/cash-accounts/invoice-payee'
+import { getCompanyRole } from '@/lib/auth/require-write'
 import { UUID_RE } from '@/lib/invariants/uuid'
 
 /** Canonical 404 for an id that is not one of the company's bank accounts. */
@@ -20,28 +22,89 @@ function notFound(): NextResponse {
   )
 }
 
+const PAYEE_KEYS = [
+  'name',
+  'bank_name',
+  'clearing_number',
+  'account_number',
+  'bankgiro',
+  'plusgiro',
+  'swish',
+  'iban',
+  'bic',
+  'bank_code',
+  'foreign_account_number',
+  'invoice_payee',
+] as const
+
 /**
  * PATCH /api/cash-accounts/[id]
  *
- * Sets or clears the verifikationsserie override on one of the company's
- * bank accounts. Only this one field is editable here: ledger account and
- * primary flag have their own guarded flows (unique constraint, atomic RPC).
+ * Two independent concerns on one of the company's bank accounts:
+ *   - voucher_series: the verifikationsserie override (any writer role).
+ *   - payee fields + invoice_payee + name: what customer invoices print
+ *     (owner/admin only, same gate as the payment instructions on
+ *     /api/settings; members never control where customers pay).
+ * Ledger account and primary flag have their own guarded flows.
  */
 export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
   'cash_accounts.update',
-  async (request, { supabase, companyId, log, requestId }, { params }) => {
+  async (request, { supabase, companyId, log, requestId, user }, { params }) => {
     const { id } = await params
     // A non-UUID id can never match a row; answer 404 instead of letting the
     // uuid cast surface as a 500 from Postgres.
     if (!UUID_RE.test(id)) return notFound()
-    const validation = await validateBody(request, UpdateCashAccountVoucherSeriesSchema)
+    const validation = await validateBody(request, UpdateCashAccountSchema)
     if (!validation.success) return validation.response
+    const body = validation.data
 
-    let updated
+    const payeeUpdate: PayeeUpdate = {}
+    for (const key of PAYEE_KEYS) {
+      if (body[key] !== undefined) {
+        // '' from a cleared form field clears the column.
+        ;(payeeUpdate as Record<string, unknown>)[key] = body[key] === '' ? null : body[key]
+      }
+    }
+    const touchesPayee = Object.keys(payeeUpdate).length > 0
+
+    if (touchesPayee) {
+      const roleResult = await getCompanyRole(supabase, user.id, { companyId })
+      if (!roleResult.ok) return roleResult.response
+      if (!['owner', 'admin'].includes(roleResult.role)) {
+        return errorResponseFromCode('FORBIDDEN', log, {
+          requestId,
+          details: { required_roles: ['owner', 'admin'] },
+        })
+      }
+      // Only giro/bank accounts (1920-1999) can be printed as payee. Stripe, Woo and
+      // Shopify clearing rows live in the same table and must stay out.
+      const { data: existing, error: existingError } = await supabase
+        .from('cash_accounts')
+        .select('id, ledger_account')
+        .eq('company_id', companyId)
+        .eq('id', id)
+        .maybeSingle()
+      if (existingError) return errorResponse(existingError, log, { requestId })
+      if (!existing) return notFound()
+      if (!isBankCashAccount(existing as { ledger_account: string })) {
+        return errorResponseFromCode('INVOICE_PAYEE_ACCOUNT_INVALID', log, {
+          requestId,
+          details: { cash_account_id: id, reason: 'not_bank_account' },
+        })
+      }
+    }
+
+    let updated = null
     try {
-      updated = await setVoucherSeries(supabase, companyId, id, validation.data.voucher_series)
+      if (body.voucher_series !== undefined) {
+        updated = await setVoucherSeries(supabase, companyId, id, body.voucher_series)
+        if (!updated) return notFound()
+      }
+      if (touchesPayee) {
+        updated = await updateCashAccountPayee(supabase, companyId, id, payeeUpdate)
+      }
     } catch (err) {
-      log.error('cash_accounts voucher_series update failed', err as Error)
+      log.error('cash_accounts update failed', err as Error)
       return errorResponse(err, log, { requestId })
     }
 

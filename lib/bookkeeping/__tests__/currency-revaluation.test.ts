@@ -261,6 +261,30 @@ describe('currency-revaluation', () => {
       expect(result).toHaveLength(0)
     })
 
+    it('never revalues a quote or proforma: they sit on no 1510 balance', async () => {
+      const invoice = makeInvoice({ id: 'inv-1', status: 'sent', currency: 'EUR', exchange_rate: 11.5 })
+      const quote = makeInvoice({
+        id: 'quote-1',
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.5,
+        document_type: 'quote',
+      })
+      const proforma = makeInvoice({
+        id: 'proforma-1',
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.5,
+        document_type: 'proforma',
+      })
+
+      const supabase = createMockSupabase({ invoices: [invoice, quote, proforma] })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = await getOpenForeignCurrencyReceivables(supabase as any, 'company-1')
+
+      expect(result.map((i) => i.id)).toEqual(['inv-1'])
+    })
+
     it('includes partially_paid invoices: the unpaid remainder is still an open FX item', async () => {
       // payment-sync.ts moves a customer invoice to 'partially_paid' on a
       // partial settlement. Omitting the status made these receivables

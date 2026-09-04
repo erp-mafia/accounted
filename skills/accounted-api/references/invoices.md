@@ -23,6 +23,7 @@ Cursor-paginated invoice list ordered by created_at DESC, id ASC (newest-registe
 - Credit notes appear with status=credited and a credited_invoice_id field on the detail endpoint.
 - Ordering is by created_at (registration time), not invoice_date. Backdated invoices therefore appear where they were created, not where their date falls: filter on ?date_from / ?date_to when you care about the business date.
 - Cursor pagination: pass ?cursor=<next_cursor> from the previous response. A stale or tampered cursor is ignored and the first page is returned again.
+- Quotes (document_type=quote, offert) carry valid_until and quote_status (open | accepted | declined | expired). "expired" is derived: an open quote past valid_until; filter with ?quote_status=expired. Quotes never book and are never payable: convert an accepted quote to an invoice in the dashboard first.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -31,7 +32,7 @@ Cursor-paginated invoice list ordered by created_at DESC, id ASC (newest-registe
 Response `200`:
 ```ts
 {
-  data: { id: string, invoice_number: string, customer_id: string, customer_name: string, invoice_date: string, due_date: string, status: "draft" | "sent" | "paid" | "partially_paid" | "overdue" | "cancelled" | "credited", document_type: "invoice" | "proforma" | "delivery_note", currency: string, subtotal: number, vat_amount: number, total: number, remaining_amount: number, paid_at: string, created_at: string }[],
+  data: { id: string, invoice_number: string, customer_id: string, customer_name: string, invoice_date: string, due_date: string, status: "draft" | "sent" | "paid" | "partially_paid" | "overdue" | "cancelled" | "credited", document_type: "invoice" | "proforma" | "delivery_note" | "quote", valid_until: string, quote_status: "open" | "accepted" | "declined" | "expired", currency: string, subtotal: number, vat_amount: number, total: number, remaining_amount: number, paid_at: string, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -90,6 +91,7 @@ Creates an invoice in draft status. The F-series invoice_number is allocated ato
 - Non-SEK currencies require an active Riksbanken exchange-rate fetch. Failure is non-fatal: the invoice is created with null SEK fields and the agent can recompute later.
 - invoice_number is null on creation. The number is allocated atomically when the invoice transitions out of draft. Counting on a specific number at create time is a bug.
 - document_type='delivery_note' produces no VAT and a different number sequence (D-series). Most use cases want the default document_type='invoice'.
+- document_type='quote' (offert) requires valid_until (YYYY-MM-DD, the expiry; due_date mirrors it). A quote is numbered OF-nnn from its own series at create, starts as quote_status='open', never posts a journal entry, never emits invoice.created and cannot be sent-and-booked or paid: record the customer decision with POST /invoices/{id}/quote-status and convert an accepted quote to an invoice in the dashboard.
 - is_self_billed=true registers a self-billing invoice your CUSTOMER issued on your behalf (a sale for you). It is booked immediately (not a draft, no F-number), so external_invoice_number and received_date are required and it is NOT dry-run-free of side effects on the live call. Do NOT set it for a normal invoice you issue yourself.
 - Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). Tags are stored on the draft and applied to the journal entry lines when the invoice is sent. When the company has the dimension registry enabled, unknown or archived codes are rejected at :send with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.
 - ROT/RUT: set items[].deduction_type ("rot"|"rut") on labor lines plus labor_hours and work_type (Skatteverket arbetstypskod). The invoice must carry deduction_personnummer AND housing info: deduction_housing_designation (fastighetsbeteckning) for småhus, or deduction_apartment_number + deduction_brf_org_number for bostadsrätt. deduction_amount is computed server-side and cannot be set by the caller; the response exposes deduction_total and remaining_amount = total - deduction_total (Skatteverket pays the rest via 1513). Validation failures return 400 INVOICE_CREATE_ROT_RUT_VALIDATION.
@@ -107,7 +109,8 @@ Request body:
   due_date: string,
   delivery_date?: string | "",
   currency: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK",
-  document_type?: "invoice" | "proforma" | "delivery_note",
+  document_type?: "invoice" | "proforma" | "delivery_note" | "quote",
+  valid_until?: string | "",
   your_reference?: string,
   our_reference?: string,
   invoice_marking?: string,
@@ -125,6 +128,7 @@ Request body:
   external_invoice_number?: string | "",
   self_billing_agreement_ref?: string,
   received_date?: string | "",
+  payment_cash_account_id?: string | "",
   items: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number, vat_rate?: number, article_id?: string, revenue_account?: string, sales_order_item_id?: string, deduction_type?: "rot" | "rut", labor_hours?: number, work_type?: string, housing_designation?: string, apartment_number?: string, brf_org_number?: string | "", accrual_period_start?: string, accrual_period_end?: string, accrual_balance_account?: string, dimensions?: Record<string, string> }[]
 }
 ```
@@ -158,6 +162,8 @@ Response `200`:
     due_date: string,
     status: string,
     document_type: string,
+    valid_until?: string,
+    quote_status?: string,
     currency: string,
     subtotal: number,
     vat_amount: number,
@@ -230,6 +236,9 @@ Response `200`:
     due_date: string,
     status: string,
     document_type: string,
+    valid_until?: string,
+    quote_status?: string,
+    quote_decided_at?: string,
     currency: string,
     total: number,
     remaining_amount: number,
@@ -306,6 +315,7 @@ Request body:
   our_reference?: string | unknown,
   notes?: string | unknown,
   default_dimensions?: Record<string, string>,
+  payment_cash_account_id?: string | unknown,
   items?: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number, vat_rate?: number, article_id?: string, revenue_account?: string, sales_order_item_id?: string, deduction_type?: "rot" | "rut", labor_hours?: number, work_type?: string, housing_designation?: string, apartment_number?: string, brf_org_number?: string | "", accrual_period_start?: string, accrual_period_end?: string, accrual_balance_account?: string, dimensions?: Record<string, string> }[]
 }
 ```
@@ -329,6 +339,9 @@ Response `200`:
     due_date: string,
     status: string,
     document_type: string,
+    valid_until?: string,
+    quote_status?: string,
+    quote_decided_at?: string,
     currency: string,
     total: number,
     remaining_amount: number,
@@ -661,6 +674,85 @@ Response `200` (`application/pdf`).
 
 ---
 
+### `POST /api/v1/companies/{companyId}/invoices/{id}/quote-status`
+
+**Record the customer decision on a quote (offert).**
+`scope:invoices:write · risk:low · idempotent · dry-run · reversible`
+
+Sets quote_status on a quote (document_type=quote) to open, accepted or declined. Any transition between the three is allowed until the quote has been converted to an invoice; after that the decision is locked (409 INVOICE_QUOTE_ALREADY_INVOICED). "expired" is never written: it is derived from valid_until and reported as effective_quote_status. Accepting a quote past valid_until is allowed (pass valid_until here to extend an expired quote so it reads as open again). No journal entry, number allocation or event is involved. Idempotent and dry-runnable.
+
+**Use when:** The customer answered a quote and you want Accounted to reflect it (accepted / declined), or you want to reopen a decision that was recorded by mistake.
+**Do not use for:** Creating the invoice from an accepted quote (convert it in the dashboard; the conversion marks the quote accepted itself). Regular invoices, proformas or delivery notes: they return 400 INVOICE_NOT_A_QUOTE.
+
+**Pitfalls:**
+- Only document_type=quote rows are decidable; anything else returns 400 INVOICE_NOT_A_QUOTE.
+- A cancelled quote returns 400 INVOICE_QUOTE_NOT_DECIDABLE.
+- Once an active invoice exists with converted_from_id = this quote, the decision is locked: 409 INVOICE_QUOTE_ALREADY_INVOICED. Cancelling that invoice frees the quote again.
+- Setting status=open clears quote_decided_at; accepted/declined stamp it with the request time.
+- Idempotency-Key is mandatory. A retried call with the same key replays the cached response.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Request body:
+```ts
+{ status: "open" | "accepted" | "declined", valid_until?: string | "" }
+```
+
+Example request:
+```json
+{
+  "status": "accepted"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    invoice_number: string,
+    document_type: "quote",
+    status: string,
+    quote_status: "open" | "accepted" | "declined",
+    effective_quote_status: "open" | "accepted" | "declined" | "expired",
+    quote_decided_at: string,
+    valid_until: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "invoice_number": "OF-007",
+    "document_type": "quote",
+    "status": "sent",
+    "quote_status": "accepted",
+    "effective_quote_status": "accepted",
+    "quote_decided_at": "2026-09-02T09:14:33Z",
+    "valid_until": "2026-09-30"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/invoices/{id}/send`
 
 **Send a draft invoice to the customer by email.**
@@ -769,6 +861,7 @@ Bulk-creation endpoint. Each invoice in the request array is validated and inser
 - Passing all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist; omit the flag (or pass false).
 - Each per-item invoice still goes through the same VAT-rule validation as POST /invoices. A mismatched per-item vat_rate produces a per-item failure, not a whole-batch failure.
 - Currency conversion is best-effort PER ITEM. A failed Riksbanken fetch leaves that item's SEK columns null but does NOT fail the item.
+- Quotes (document_type: quote) are refused per item as VALIDATION_ERROR: a quote carries its own OF-number, valid_until and quote_status. Create quotes one at a time with POST /invoices.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -777,7 +870,7 @@ Bulk-creation endpoint. Each invoice in the request array is validated and inser
 Request body:
 ```ts
 {
-  invoices: { customer_id: string, invoice_date: string, due_date: string, delivery_date?: string | "", currency: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK", document_type?: "invoice" | "proforma" | "delivery_note", your_reference?: string, our_reference?: string, invoice_marking?: string, notes?: string, payment_link_url?: string | "", payment_link_auto?: boolean, deduction_personnummer?: string, deduction_housing_designation?: string, deduction_apartment_number?: string, deduction_brf_org_number?: string | "", save_as_draft?: boolean, ore_rounding?: boolean, default_dimensions?: Record<string, string>, is_self_billed?: boolean, external_invoice_number?: string | "", self_billing_agreement_ref?: string, received_date?: string | "", items: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number, vat_rate?: number, article_id?: string, revenue_account?: string, sales_order_item_id?: string, deduction_type?: "rot" | "rut", labor_hours?: number, work_type?: string, housing_designation?: string, apartment_number?: string, brf_org_number?: string | "", accrual_period_start?: string, accrual_period_end?: string, accrual_balance_account?: string, dimensions?: Record<string, string> }[] }[],
+  invoices: { customer_id: string, invoice_date: string, due_date: string, delivery_date?: string | "", currency: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK", document_type?: "invoice" | "proforma" | "delivery_note" | "quote", valid_until?: string | "", your_reference?: string, our_reference?: string, invoice_marking?: string, notes?: string, payment_link_url?: string | "", payment_link_auto?: boolean, deduction_personnummer?: string, deduction_housing_designation?: string, deduction_apartment_number?: string, deduction_brf_org_number?: string | "", save_as_draft?: boolean, ore_rounding?: boolean, default_dimensions?: Record<string, string>, is_self_billed?: boolean, external_invoice_number?: string | "", self_billing_agreement_ref?: string, received_date?: string | "", payment_cash_account_id?: string | "", items: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number, vat_rate?: number, article_id?: string, revenue_account?: string, sales_order_item_id?: string, deduction_type?: "rot" | "rut", labor_hours?: number, work_type?: string, housing_designation?: string, apartment_number?: string, brf_org_number?: string | "", accrual_period_start?: string, accrual_period_end?: string, accrual_balance_account?: string, dimensions?: Record<string, string> }[] }[],
   all_or_nothing?: boolean
 }
 ```
