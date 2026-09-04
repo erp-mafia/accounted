@@ -557,7 +557,10 @@ describe('POST :id/match-invoice', () => {
           { data: [{ id: INV_ID }], error: null }, // status update select
         ],
         company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
-        invoice_payments: { data: null, error: null },
+        invoice_payments: [
+            { data: [], error: null },
+            { data: { id: 'ip-1' }, error: null },
+          ],
       }),
     )
     const res = await matchInvoicePOST(
@@ -716,7 +719,10 @@ describe('POST :id/match-invoice', () => {
           ],
           company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
           cash_accounts: { data: { ledger_account: '1940' }, error: null },
-          invoice_payments: { data: null, error: null },
+          invoice_payments: [
+            { data: [], error: null },
+            { data: { id: 'ip-1' }, error: null },
+          ],
         }),
       )
       const res = await matchInvoicePOST(

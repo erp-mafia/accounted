@@ -231,7 +231,7 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
     })
     enqueue({ data: [{ id: TX_UUID }], error: null }) // tx UPDATE
     enqueue({ data: [{ id: INV_UUID }], error: null }) // optimistic-lock invoice UPDATE
-    enqueue({ data: null, error: null }) // invoice_payments INSERT
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments INSERT
     enqueue({ data: null, error: null }) // logMatchEvent insert
     enqueue({ data: null, error: null }) // dispatcher commit update
 

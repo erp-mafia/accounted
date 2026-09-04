@@ -17,6 +17,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events/bus'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
+import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
@@ -389,22 +390,30 @@ export async function linkTransactionToJournalEntry(
     // reporting.
     const paymentExchangeRate = transaction.exchange_rate ?? null
 
-    const { error: paymentInsertError } = await supabase
-      .from('invoice_payments')
-      .insert({
-        user_id: userId,
-        company_id: companyId,
-        invoice_id: invoiceId,
-        payment_date: transaction.date,
-        amount: transaction.amount,
+    // The AR sub-ledger row goes through the single writer
+    // (lib/invoices/invoice-payment-row.ts). This path plans strictly (no öre
+    // absorption, same currency only), so the applied amount IS the bank line
+    // to the öre: the writer is used for one set of row semantics, not for a
+    // different number. A unique violation (23505) means the row already
+    // exists for this voucher and is not an error here.
+    const recorded = await recordInvoicePaymentRow(supabase, {
+      userId,
+      companyId,
+      invoice: {
+        id: invoiceId,
         currency: invoice.currency,
-        exchange_rate: paymentExchangeRate,
-        journal_entry_id: journalEntryId,
-        transaction_id: transactionId,
-        notes: 'Kopplad till befintlig verifikation (ingen ny bokföring skapad)',
-      })
+        exchange_rate: invoice.exchange_rate,
+        paid_amount: invoice.paid_amount,
+      },
+      paymentDate: transaction.date,
+      newPaidAmount,
+      journalEntryId,
+      transactionId,
+      exchangeRate: paymentExchangeRate,
+      notes: 'Kopplad till befintlig verifikation (ingen ny bokföring skapad)',
+    })
 
-    if (paymentInsertError && paymentInsertError.code !== '23505') {
+    if (!recorded.ok && recorded.code !== '23505') {
       const { error: invRevertErr } = await supabase
         .from('invoices')
         .update({

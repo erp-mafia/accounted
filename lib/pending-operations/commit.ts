@@ -3504,18 +3504,35 @@ async function commitMatchTransactionInvoice(
   // No cash-method note here anymore: pure kontantmetoden partials are now
   // rejected above, and for an invoice booked at send the clearing entry
   // handles a partial correctly, so the note would be misleading.
-  await supabase.from('invoice_payments').insert({
-    user_id: userId,
-    company_id: companyId,
-    invoice_id: invoiceId,
-    payment_date: transaction.date,
-    amount: paidAmount,
-    currency: invoice.currency,
-    exchange_rate: fx.required ? fx.rate : invoice.exchange_rate,
-    journal_entry_id: journalEntryId,
-    transaction_id: transactionId,
-    notes: null,
+  // The AR sub-ledger row goes through the single writer
+  // (lib/invoices/invoice-payment-row.ts), which owns the amount definition:
+  // applied to the invoice, never the cash received (#2250). Not fatal here,
+  // exactly like the fire-and-forget insert it replaces: the voucher and the
+  // invoice update are already committed. The failure is logged now, so the
+  // row the kontantmetod cut-off would otherwise miss can be added.
+  const recorded = await recordInvoicePaymentRow(supabase, {
+    userId,
+    companyId,
+    invoice: {
+      id: invoiceId,
+      currency: invoice.currency,
+      exchange_rate: invoice.exchange_rate,
+      paid_amount: invoice.paid_amount,
+    },
+    paymentDate: transaction.date,
+    newPaidAmount,
+    journalEntryId,
+    transactionId,
+    exchangeRate: fx.required ? fx.rate : invoice.exchange_rate,
   })
+  if (!recorded.ok) {
+    log.error('match_transaction_invoice: invoice_payments insert failed', undefined, {
+      invoiceId,
+      transactionId,
+      companyId,
+      error: recorded.error,
+    })
+  }
 
   // The invoice is now settled, so every OTHER transaction still carrying a
   // suggestion pointer at it is dead: retire them (issue #1259). This

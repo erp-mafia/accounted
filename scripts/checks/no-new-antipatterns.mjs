@@ -37,6 +37,13 @@
  *      into a compile error; this guard keeps new reports on that path.
  *      Tracked as a file-set. Voucher/line LISTINGS are sanctioned in
  *      LEDGER_SCAN_SANCTIONED: they have no closingEntry decision to make.
+ *   3c. direct-invoice-payment-insert: a file that inserts into
+ *      `invoice_payments` outside lib/invoices/invoice-payment-row.ts. Five
+ *      hand-built inserts each computed their own `amount`, and the bank-match
+ *      ones stored the cash received instead of the amount applied to the
+ *      invoice, so a whole-krona overshoot absorbed on 3740 made the row
+ *      exceed the receivable (#2250). recordInvoicePaymentRow() is the one
+ *      writer. Tracked as a file-set, no baseline: the count is 0 today.
  *   4. pinned-dep    : a dependency pinned to an exact version (PINNED_DEPS)
  *      whose package.json spec or locked version drifted from the pin. Guards
  *      against a repeat of the @anthropic-ai/bedrock-sdk 0.32.0 prod outage
@@ -243,6 +250,30 @@ function findDirectJelInserts() {
       if (JEL_INSERT_SANCTIONED.has(r)) return false
       if (r.includes('__tests__/') || r.endsWith('.test.ts')) return false
       return JEL_INSERT_CHAIN_RE.test(fs.readFileSync(f, 'utf8'))
+    })
+    .map(rel)
+    .sort()
+}
+
+// The one writer of invoice_payments rows: recordInvoicePaymentRow() owns the
+// field semantics (amount = applied to the invoice, never the cash received).
+const INVOICE_PAYMENT_INSERT_SANCTIONED = new Set(['lib/invoices/invoice-payment-row.ts'])
+const INVOICE_PAYMENT_INSERT_CHAIN_RE =
+  /\.from\(\s*['"]invoice_payments['"]\s*\)\s*\.\s*(insert|upsert)\(/
+
+/** Files that insert into invoice_payments outside the sanctioned writer. */
+function findDirectInvoicePaymentInserts() {
+  const files = [
+    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+  ]
+  return files
+    .filter((f) => {
+      const r = rel(f)
+      if (INVOICE_PAYMENT_INSERT_SANCTIONED.has(r)) return false
+      if (r.includes('__tests__/') || r.endsWith('.test.ts')) return false
+      return INVOICE_PAYMENT_INSERT_CHAIN_RE.test(fs.readFileSync(f, 'utf8'))
     })
     .map(rel)
     .sort()
@@ -1056,6 +1087,7 @@ const current = {
   providerHosts: findProviderHostFiles(),
   ledgerScanningReports: findLedgerScanningReports(),
   directJelInsert: findDirectJelInserts(),
+  directInvoicePaymentInsert: findDirectInvoicePaymentInserts(),
   leakySupabaseClients: findLeakySupabaseClients(),
   pinnedDepViolations: findPinnedDepViolations(),
   rawUserErrors: findRawUserErrors(),
@@ -1140,6 +1172,22 @@ if (current.directJelInsert.length) {
     '  → route line writes through lib/bookkeeping/engine.ts, or derive cost_center/project via\n' +
       '    lineDimensionColumns() (lib/bookkeeping/dimension-resolver.ts) and add the file to\n' +
       '    JEL_INSERT_SANCTIONED in this script with a justification.',
+  )
+}
+
+// 1b1. direct-invoice-payment-insert: allowlist lives in this file
+// (INVOICE_PAYMENT_INSERT_SANCTIONED), no baseline: any unsanctioned insert
+// site is a hard failure.
+if (current.directInvoicePaymentInsert.length) {
+  failed = true
+  console.error(
+    `\n✗ direct-invoice-payment-insert: ${current.directInvoicePaymentInsert.length} file(s) insert into invoice_payments ` +
+      `outside lib/invoices/invoice-payment-row.ts:`,
+  )
+  current.directInvoicePaymentInsert.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → record the payment through recordInvoicePaymentRow() (lib/invoices/invoice-payment-row.ts):\n' +
+      '    it owns the row semantics (amount = applied to the invoice, never the cash received, #2250).',
   )
 }
 
@@ -1500,5 +1548,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
 )

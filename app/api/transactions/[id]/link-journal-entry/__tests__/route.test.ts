@@ -238,7 +238,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
     // Update invoice (optimistic lock returns updated row)
     enqueue({ data: [{ id: INV_UUID }], error: null })
     // Insert invoice_payments
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'ip-1' }, error: null })
     // logMatchEvent
     enqueue({ data: null, error: null })
 
@@ -317,7 +317,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
     })
     enqueue({ data: [{ id: TX_UUID }], error: null }) // update transaction
     enqueue({ data: [{ id: INV_UUID }], error: null }) // update invoice
-    enqueue({ data: null, error: null }) // insert invoice_payments
+    enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null }) // logMatchEvent
 
     const request = createMockRequest(`/api/transactions/${TX_UUID}/link-journal-entry`, {
