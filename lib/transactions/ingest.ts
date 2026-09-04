@@ -4,6 +4,11 @@ import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-ent
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { getBestInvoiceMatch } from '@/lib/invoices/invoice-matching'
 import { findSupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matching'
+import {
+  findRotRutPayoutMatch,
+  type RotRutPayoutRequestCandidate,
+} from '@/lib/invoices/rot-rut-payout-matching'
+import { loadOpenRotRutPayoutRequests } from '@/lib/invoices/rot-rut-payout-candidates'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -358,6 +363,7 @@ export async function ingestTransactions(
   // When rawInsertOnly is set (viewer imports), skip pre-fetching supplier
   // invoices and exchange rates: they are not used.
   let unpaidSupplierInvoices: SupplierInvoice[] = []
+  let openRotRutPayoutRequests: RotRutPayoutRequestCandidate[] = []
   // Keyed by `${currency}|${date}` so each non-SEK transaction gets the
   // rate that was valid on its own transaction date, not the import date.
   const exchangeRatesByDate = new Map<string, ExchangeRate>()
@@ -377,6 +383,11 @@ export async function ingestTransactions(
   } catch {
     // Non-critical: supplier invoice matching will be skipped
   }
+  // Pre-fetch open ROT/RUT payout requests for income matching (non-critical).
+  // Skatteverket's payout is the one income row a paid ROT/RUT invoice can no
+  // longer explain (remaining_amount is net of the deduction), so the begäran
+  // is the candidate. Small table: a company has a handful of open requests.
+  openRotRutPayoutRequests = await loadOpenRotRutPayoutRequests(supabase, companyId)
   }
 
   // Pre-fetch exchange rates for each unique (currency, date) pair in the
@@ -581,6 +592,7 @@ export async function ingestTransactions(
   // to prevent suggesting the same invoice for multiple transactions
   const matchedInvoiceIds = new Set<string>()
   const matchedSupplierInvoiceIds = new Set<string>()
+  const matchedRotRutRequestIds = new Set<string>()
 
   for (const raw of rawTransactions) {
     // Normalize the source title once. Guarantees a non-empty, Swedish-first
@@ -1073,6 +1085,44 @@ export async function ingestTransactions(
           }
           // Lower confidence (0.70-0.85) or ambiguous: tentative, do NOT
           // drain the pool.
+        }
+      } catch {
+        // Non-critical: continue processing
+      }
+    }
+
+    // 3c. For income transactions with no invoice hint, try ROT/RUT payout
+    // matching: Skatteverket's lump sum for an open begäran. Always a
+    // suggestion (potential_rot_rut_payout_request_id), never a hard link:
+    // the match route books the 19xx/1513 voucher when it confirms.
+    if (newTransaction.amount > 0 && openRotRutPayoutRequests.length > 0) {
+      try {
+        const match = findRotRutPayoutMatch(newTransaction as Transaction, openRotRutPayoutRequests)
+        if (match && !matchedRotRutRequestIds.has(match.request.id)) {
+          // supabase-js resolves a failed update with { error }: a hint that
+          // never persisted must not drain the pool or count as a match.
+          const { error: hintError } = await supabase
+            .from('transactions')
+            .update({ potential_rot_rut_payout_request_id: match.request.id })
+            .eq('id', newTransaction.id)
+          if (hintError) throw hintError
+
+          logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
+            matchConfidence: match.confidence,
+            matchMethod: match.matchMethod,
+            newState: { rot_rut_payout_request_id: match.request.id },
+          })
+
+          // One payout per begäran: drain the pool so a second row of the same
+          // amount can't claim it, and skip the mapping engine (an
+          // auto-categorised 19xx/3xxx voucher would collide with the 1513
+          // clearing the match books).
+          matchedRotRutRequestIds.add(match.request.id)
+          openRotRutPayoutRequests = openRotRutPayoutRequests.filter(
+            (req) => req.id !== match.request.id,
+          )
+          result.auto_matched_invoices++
+          continue
         }
       } catch {
         // Non-critical: continue processing
