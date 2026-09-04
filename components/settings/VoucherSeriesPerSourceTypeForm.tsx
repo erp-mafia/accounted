@@ -84,12 +84,19 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
   const [showAll, setShowAll] = useState(false)
 
   // Same closed list as the manual verifikat form and the per-bankkonto
-  // picker: the fixed Swedish presets, then any letter the company already
-  // uses that the presets do not cover, so no saved value falls out of the
-  // list. A free A-Z list would let a typo start an undocumented series.
+  // picker: the fixed Swedish presets, then any letter already configured in
+  // settings that the presets do not cover. The saved map is read alongside
+  // the draft so a non-preset letter stays selectable after the user changes
+  // that row away from it (otherwise a misclick could not be undone without
+  // a reload) and so a letter that lands in settings after mount is offered.
+  // A free A-Z list would let a typo start an undocumented series.
   const seriesOptions = useMemo(() => {
     const preset = new Set(VOUCHER_SERIES_PRESETS.map((p) => p.letter))
-    const extras = [settings.default_voucher_series, ...Object.values(draft)].filter(
+    const extras = [
+      settings.default_voucher_series,
+      ...Object.values(settings.default_voucher_series_per_source_type ?? {}),
+      ...Object.values(draft),
+    ].filter(
       (v): v is string => typeof v === 'string' && SERIES_LETTER_RE.test(v) && !preset.has(v),
     )
     const uniqueExtras = Array.from(new Set(extras)).sort()
@@ -97,7 +104,7 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
       ...VOUCHER_SERIES_PRESETS,
       ...uniqueExtras.map((letter) => ({ letter, label: '' })),
     ]
-  }, [settings.default_voucher_series, draft])
+  }, [settings.default_voucher_series, settings.default_voucher_series_per_source_type, draft])
 
   const handleChange = (sourceType: JournalEntrySourceType, value: string) => {
     setDraft((prev) => ({ ...prev, [sourceType]: value }))
@@ -174,7 +181,7 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
   return (
     <SettingsGroup
       label="Verifikationsserier per typ"
-      help="Tilldela en standardserie per typ av verifikat. Vanlig svensk praxis: kundfakturor på serie B, leverantörsfakturor på serie D, löner på serie K, övrigt på serie A. Kan alltid ändras per verifikat när du bokför."
+      help="Tilldela en standardserie per typ av verifikat. Namnen i listan följer Fortnox-konventionen: kundfakturor på serie B, leverantörsfakturor på serie D, löner på serie K, övrigt på serie A. Andra program använder andra bokstäver; bokstaven är ett fritt val. Kan alltid ändras per verifikat när du bokför."
     >
       {alwaysVisible.map((entry, i) =>
         // The last always-visible row sits right above the fold toggle:
