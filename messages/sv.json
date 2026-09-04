@@ -3650,7 +3650,7 @@
     "next_step_personnummer": "ange personnummer för skattereduktionen",
     "next_step_housing": "ange fastighetsbeteckning",
     "next_step_external_number": "ange kundens fakturanummer",
-    "next_step_received_date": "ange mottagningsdatum",
+    "next_step_received_date": "ange ankomstdatum",
     "ready_create": "Klar att granska: allt annat har smarta förval.",
     "ready_edit": "Klart att spara.",
     "ready_self_billed": "Klar att registrera.",
@@ -6391,13 +6391,14 @@
     "agreement_ref_label": "Avtalsreferens",
     "agreement_ref_placeholder": "Självfaktureringsavtal",
     "invoice_date_label": "Fakturadatum",
-    "received_date_label": "Mottaget datum",
+    "received_date_label": "Ankomstdatum",
+    "received_date_help": "Dagen självfakturan kom in. Betaldatum sätts när fakturan markeras som betald.",
     "register": "Registrera självfaktura",
     "created_title": "Självfaktura registrerad",
     "created_description": "Självfaktura {number} har bokförts som försäljning",
     "create_failed_title": "Kunde inte registrera självfakturan",
     "validation_external_number_required": "Fakturanummer krävs",
-    "validation_received_date_required": "Mottaget datum krävs"
+    "validation_received_date_required": "Ankomstdatum krävs"
   },
   "invoices": {
     "rot_rut_payout_action": "ROT/RUT-fil",

@@ -2239,6 +2239,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     aria-required="true"
                     className="tabular-nums"
                   />
+                  <p className="text-xs text-muted-foreground">{ts('received_date_help')}</p>
                   {errors.received_date && (
                     <p className="text-sm text-destructive">{errors.received_date.message}</p>
                   )}
