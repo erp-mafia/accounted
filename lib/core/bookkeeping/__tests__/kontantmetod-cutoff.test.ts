@@ -21,8 +21,10 @@ import {
   VILANDE_OUTPUT_VAT_ACCOUNTS,
 } from '../kontantmetod-cutoff'
 import type { CutoffPayable, CutoffReceivable } from '../kontantmetod-cutoff'
+import type { Invoice } from '@/types'
 import { roundOre } from '@/lib/money'
 import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
+import { makeInvoice } from '@/tests/helpers'
 
 const sum = (lines: Array<{ debit_amount: number; credit_amount: number }>) => ({
   debit: roundOre(lines.reduce((s, l) => s + l.debit_amount, 0)),
@@ -593,6 +595,118 @@ describe('collectKontantmetodCutoff', () => {
       supplier_invoice_payments: [],
     }) as never, 'co-1', '2026-01-01', '2026-12-31')
     expect(result.receivables).toEqual([])
+  })
+
+  // Issue #2248: ROT/RUT under fakturamodellen. The skattereduktion is a
+  // fordran on Skatteverket (1513) booked by the payment voucher itself, and
+  // every settlement path records the CUSTOMER share as the payment row
+  // amount, so the cut-off must measure the outstanding against
+  // total - deduction_total, never the gross total.
+  describe('ROT/RUT deduction (fakturamodellen, #2248)', () => {
+    // Arbetskostnad 20 000 + moms 5 000 = 25 000, ROT 30 % of labor incl.
+    // moms = 7 500, customer share 17 500.
+    const rotInvoice = (over: Partial<Invoice> = {}) => ({
+      ...makeInvoice({
+        id: 'inv-rot', invoice_number: 'F-ROT', invoice_date: '2026-08-01', status: 'paid',
+        subtotal: 20000, vat_amount: 5000, total: 25000, deduction_total: 7500,
+        remaining_amount: 0, vat_treatment: 'standard_25',
+        ...over,
+      }),
+    })
+    const paymentOf = (amount: number) => [{
+      id: 'ip-rot', invoice_id: 'inv-rot', amount, payment_date: '2026-08-28',
+    }]
+
+    it('books nothing for a ROT invoice the customer has settled in full', async () => {
+      // Before the fix this produced Dr 1510 7 500 / Cr 3001 6 000 / Cr 2618
+      // 1 500 while 1513 already carried the 7 500 and revenue + 2611 were
+      // fully booked by the August payment voucher.
+      const result = await collectKontantmetodCutoff(makePagedSupabase({
+        invoices: [rotInvoice()],
+        invoice_payments: paymentOf(17500),
+      }) as never, 'co-1', '2026-01-01', '2026-12-31')
+      expect(result.receivables).toEqual([])
+      expect(buildCutoffLines(result.receivables, []).receivableLines).toEqual([])
+    })
+
+    it('carries only the customer residual on a part-paid ROT invoice, moms scaled by the customer share', async () => {
+      const result = await collectKontantmetodCutoff(makePagedSupabase({
+        invoices: [rotInvoice({ status: 'partially_paid', remaining_amount: 7500 })],
+        invoice_payments: paymentOf(10000),
+      }) as never, 'co-1', '2026-01-01', '2026-12-31')
+      // 17 500 - 10 000 = 7 500 still owed by the customer, carrying
+      // 5 000 * (7 500 / 17 500) = 2 142,86 of the invoice moms.
+      expect(result.receivables).toEqual([
+        expect.objectContaining({ id: 'inv-rot', outstanding: 7500, vat: 2142.86 }),
+      ])
+      const { receivableLines } = buildCutoffLines(result.receivables, [])
+      expect(receivableLines.find((l) => l.account_number === '1510')?.debit_amount).toBe(7500)
+      expect(receivableLines.find((l) => l.account_number === '2618')?.credit_amount).toBe(2142.86)
+      expect(receivableLines.find((l) => l.account_number === '3001')?.credit_amount).toBe(5357.14)
+      expect(sum(receivableLines)).toEqual({ debit: 7500, credit: 7500 })
+    })
+
+    it('puts the whole invoice moms into the final period for an unpaid ROT invoice', async () => {
+      // Nothing has been booked yet, so all 5 000 of moms is unreported at
+      // year end; the fordran is the customer share only (1513 is not part
+      // of this cut-off).
+      const result = await collectKontantmetodCutoff(makePagedSupabase({
+        invoices: [rotInvoice({ status: 'sent', remaining_amount: 17500 })],
+      }) as never, 'co-1', '2026-01-01', '2026-12-31')
+      expect(result.receivables).toEqual([
+        expect.objectContaining({ outstanding: 17500, vat: 5000 }),
+      ])
+    })
+
+    it('floors an over-collected customer share at zero instead of booking a negative fordran', async () => {
+      // Bank-match paths store cash received; an öre of rounding above the
+      // derived share is noise (same GREATEST(0, ...) as the DB guard).
+      const result = await collectKontantmetodCutoff(makePagedSupabase({
+        invoices: [rotInvoice()],
+        invoice_payments: paymentOf(17500.4),
+      }) as never, 'co-1', '2026-01-01', '2026-12-31')
+      expect(result.receivables).toEqual([])
+    })
+
+    it('nets an unpaid ROT invoice and its credit note to zero as of period end', async () => {
+      // A credit note keeps deduction_total as a positive magnitude (CHECK
+      // >= 0) against a negative total, so the customer share must follow
+      // the sign of the total for the pair to cancel.
+      const result = await collectKontantmetodCutoff(makePagedSupabase({
+        invoices: [
+          rotInvoice({ status: 'credited', remaining_amount: 17500 }),
+          rotInvoice({
+            id: 'inv-rot-credit', invoice_number: 'K-ROT', invoice_date: '2026-12-01', status: 'sent',
+            subtotal: -20000, vat_amount: -5000, total: -25000, remaining_amount: -17500,
+            credited_invoice_id: 'inv-rot',
+          }),
+        ],
+      }) as never, 'co-1', '2026-01-01', '2026-12-31')
+      expect(result.receivables.map((r) => r.outstanding)).toEqual([17500, -17500])
+      expect(result.receivables.map((r) => r.vat)).toEqual([5000, -5000])
+      expect(buildCutoffLines(result.receivables, []).receivableLines).toEqual([])
+    })
+
+    it('leaves a plain invoice with the same figures exactly as before', async () => {
+      // Same 25 000 / 5 000 invoice without a deduction and 17 500 paid:
+      // 7 500 genuinely remains and carries 7 500 / 25 000 of the moms.
+      for (const deduction of [0, null, undefined]) {
+        const result = await collectKontantmetodCutoff(makePagedSupabase({
+          invoices: [{
+            ...rotInvoice({ status: 'partially_paid', remaining_amount: 7500 }),
+            deduction_total: deduction,
+          }],
+          invoice_payments: paymentOf(17500),
+        }) as never, 'co-1', '2026-01-01', '2026-12-31')
+        expect(result.receivables).toEqual([
+          expect.objectContaining({ id: 'inv-rot', outstanding: 7500, vat: 1500 }),
+        ])
+        const { receivableLines } = buildCutoffLines(result.receivables, [])
+        expect(receivableLines.find((l) => l.account_number === '1510')?.debit_amount).toBe(7500)
+        expect(receivableLines.find((l) => l.account_number === '3001')?.credit_amount).toBe(6000)
+        expect(receivableLines.find((l) => l.account_number === '2618')?.credit_amount).toBe(1500)
+      }
+    })
   })
 
   it('collects reverse-charge rate, supplier type, and scaled declaration basis', async () => {

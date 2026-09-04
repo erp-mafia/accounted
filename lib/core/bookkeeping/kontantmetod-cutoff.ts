@@ -717,7 +717,7 @@ export async function collectKontantmetodCutoff(
       fetchAllRows<Record<string, unknown>>(
         ({ from, to }) => supabase
           .from('invoices')
-          .select('id, invoice_number, invoice_date, status, total, total_sek, vat_amount, vat_amount_sek, vat_treatment, credited_invoice_id, document_type, currency, exchange_rate')
+          .select('id, invoice_number, invoice_date, status, total, total_sek, vat_amount, vat_amount_sek, vat_treatment, credited_invoice_id, document_type, currency, exchange_rate, deduction_total')
           .eq('company_id', companyId)
           .lte('invoice_date', periodEnd)
           .in('status', ['sent', 'overdue', 'partially_paid', 'paid', 'credited'])
@@ -803,7 +803,33 @@ export async function collectKontantmetodCutoff(
     const total = resolveHeaderSek(row, 'total', 'total_sek')
     const vat = resolveHeaderSek(row, 'vat_amount', 'vat_amount_sek')
     const paid = paidByInvoice.get(row.id as string) ?? 0
-    const outstandingOwn = roundOre(totalOwn - paid)
+
+    // ROT/RUT (fakturamodellen): the customer owes the total minus the
+    // skattereduktion. The deduction is a fordran on Skatteverket carried on
+    // 1513, booked by the same voucher that recognises the sale (the payment
+    // voucher under kontantmetoden, the invoice voucher under
+    // faktureringsmetoden), and every settlement path records the customer
+    // share as the payment row amount. Measuring the outstanding against the
+    // gross total therefore left exactly deduction_total "open" on a fully
+    // paid invoice and booked it as a phantom 1510 fordran with phantom
+    // vilande moms (#2248). deduction_total is stored as a positive magnitude
+    // even on a credit note (CHECK >= 0), so it follows the sign of the total.
+    const deductionOwn = Math.abs(Number(row.deduction_total ?? 0))
+    const customerShareOwn = deductionOwn > 0
+      ? roundOre(totalOwn - Math.sign(totalOwn) * deductionOwn)
+      : totalOwn
+    // A plain invoice keeps the gross computation untouched. On a ROT/RUT
+    // invoice the residual is floored at zero on the invoice's own side, the
+    // same GREATEST(0, ...) the invoices_remaining_amount_guard trigger
+    // applies: an öre of over-collection against a derived customer share is
+    // noise, not a fordran the company owes back.
+    let outstandingOwn: number
+    if (deductionOwn > 0) {
+      const residualOwn = roundOre(customerShareOwn - paid)
+      outstandingOwn = totalOwn < 0 ? Math.min(0, residualOwn) : Math.max(0, residualOwn)
+    } else {
+      outstandingOwn = roundOre(totalOwn - paid)
+    }
     const outstanding = totalOwn === 0 ? 0 : roundOre(total * (outstandingOwn / totalOwn))
     if (Math.abs(outstanding) < ORE_TOLERANCE) continue
 
@@ -819,8 +845,13 @@ export async function collectKontantmetodCutoff(
     }
 
     // Scale the moms share to the part still outstanding: a half-paid invoice
-    // carries half its moms into the cut-off.
-    const ratio = totalOwn === 0 ? 0 : outstandingOwn / totalOwn
+    // carries half its moms into the cut-off. The base is the CUSTOMER share:
+    // under bokslutsmetoden the payment voucher credits the full invoice moms
+    // when the customer pays their share (the 1513 leg carries no moms of its
+    // own), so the moms still unreported follows the customer residual, and
+    // an unpaid ROT/RUT invoice puts its whole moms into the final period.
+    // On a plain invoice the customer share IS the total, so nothing moves.
+    const ratio = customerShareOwn === 0 ? 0 : outstandingOwn / customerShareOwn
     const scaledVat = roundOre(vat * ratio)
 
     // Moms on a treatment that cannot carry Swedish output moms is a real
