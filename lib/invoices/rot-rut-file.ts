@@ -2,6 +2,7 @@ import { escapeXml } from '@/lib/xml/escape'
 import type { Invoice, InvoiceItem } from '@/types'
 import { truncateToWholeKronor } from '@/lib/money'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
+import { invoiceCustomerOutstanding } from './customer-share'
 import { deductionSekConverter, SCHABLON_WORK_TYPES, type DeductionType } from './rot-rut-rules'
 
 /**
@@ -229,20 +230,17 @@ export function evaluateInvoiceForFile(
 
   // "Paid" for a rot/rut claim means the BUYER has paid their share: the
   // deduction itself is Skatteverket's to pay (fakturamodellen). The customer
-  // share outstanding is DERIVED from the header fields here, with the same
-  // formula as buildInvoiceWriteData and migration 20260817191708
-  // (total - paid_amount - deduction_total), deliberately NOT read off
-  // remaining_amount: at least one writer (payment-sync's storno path)
-  // recomputes remaining_amount without subtracting the deduction, so the
-  // stored column is not a deterministic signal, while total, paid_amount and
-  // deduction_total are maintained by every settlement path. Invoices settled
-  // through older payment paths can sit at partially_paid although the
-  // customer share is fully paid; those are accepted here instead of being
-  // dropped as unpaid. Amounts are invoice currency throughout.
-  const customerShareOutstanding =
-    Math.round(
-      (invoice.total - (invoice.paid_amount ?? 0) - (invoice.deduction_total ?? 0)) * 100,
-    ) / 100
+  // share outstanding is DERIVED from the header fields through the one
+  // shared definition (lib/invoices/customer-share.ts, twin of migration
+  // 20260817191708), deliberately NOT read off remaining_amount: at least one
+  // writer (payment-sync's storno path) once recomputed remaining_amount
+  // without subtracting the deduction, so the stored column is not a
+  // deterministic signal, while total, paid_amount and deduction_total are
+  // maintained by every settlement path. Invoices settled through older
+  // payment paths can sit at partially_paid although the customer share is
+  // fully paid; those are accepted here instead of being dropped as unpaid.
+  // Amounts are invoice currency throughout.
+  const customerShareOutstanding = invoiceCustomerOutstanding(invoice, invoice.paid_amount ?? 0)
   const customerSharePaid =
     invoice.status === 'paid' ||
     (invoice.status === 'partially_paid' && customerShareOutstanding <= 0)
