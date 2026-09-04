@@ -803,7 +803,6 @@
     "th_arrival": "Arrival",
     "th_supplier": "Supplier",
     "th_invoice_number": "Invoice no.",
-    "th_invoice_date": "Invoice date",
     "th_due_date": "Due",
     "th_amount": "Amount",
     "th_remaining": "Remaining",
