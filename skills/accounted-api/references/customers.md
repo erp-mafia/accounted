@@ -331,7 +331,7 @@ Example response `200`:
     "org_number": "556677-8899",
     "vat_number": "SE556677889901",
     "vat_number_validated": true,
-    "country": "Sweden",
+    "country": "SE",
     "default_payment_terms": 30,
     "archived_at": null,
     "created_at": "2025-04-12T08:30:00Z",

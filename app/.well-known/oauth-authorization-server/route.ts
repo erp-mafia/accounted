@@ -28,7 +28,7 @@ export async function GET(request: Request) {
     // and Codex send an HTTPS URL as client_id, and the spec then expects the
     // authorization server to fetch that document and match redirect_uri
     // exactly against its redirect_uris. Our authorize endpoint validates
-    // redirect_uri against the global allowlist only (lib/auth/oauth-allowlist.ts)
+    // redirect_uri against the user-bound allowlist (lib/auth/oauth-allowlist.ts)
     // and never fetches client metadata, so advertising CIMD would claim a
     // check we do not perform. The stateless register endpoint makes DCR
     // free for us, so nothing is lost by waiting: add the flag together with

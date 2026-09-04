@@ -5,6 +5,8 @@ import {
   type ArchiveScope,
 } from '@/lib/reports/full-archive-export'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { PRIVATE_NO_STORE_HEADERS, privateNoStore } from '@/lib/api/private-no-store'
+import { utcDateStamp } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -13,12 +15,6 @@ export const runtime = 'nodejs'
 export const maxDuration = 300
 
 const SIZE_LIMIT_BYTES = 80 * 1024 * 1024
-const PRIVATE_NO_STORE_HEADERS = { 'Cache-Control': 'private, no-store' }
-
-function privateNoStore(response: NextResponse): NextResponse {
-  response.headers.set('Cache-Control', 'private, no-store')
-  return response
-}
 
 export const GET = withRouteContext('report.full_archive', async (request, ctx) => {
   const { supabase, companyId, user, log, requestId } = ctx
@@ -138,7 +134,7 @@ export const GET = withRouteContext('report.full_archive', async (request, ctx) 
     const filename =
       scope === 'period'
         ? `arkiv_${periodId}.zip`
-        : `arkiv_full_${companyId}_${formatDateStamp(new Date())}.zip`
+        : `arkiv_full_${companyId}_${utcDateStamp(new Date())}.zip`
 
     log.info('full archive generated', {
       userId: user.id,
@@ -172,10 +168,3 @@ export const GET = withRouteContext('report.full_archive', async (request, ctx) 
     )
   }
 })
-
-function formatDateStamp(d: Date): string {
-  const y = d.getUTCFullYear()
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0')
-  const day = String(d.getUTCDate()).padStart(2, '0')
-  return `${y}${m}${day}`
-}

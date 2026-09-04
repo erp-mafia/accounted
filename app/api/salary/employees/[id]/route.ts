@@ -7,6 +7,7 @@ import { getCompanyEntityType } from '@/lib/company/context'
 import { encryptPersonnummer, extractLast4, maskEmployeeForResponse, validatePersonnummer } from '@/lib/salary/personnummer'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
+import { touchesJamkning, validateJamkning } from '@/lib/salary/jamkning-rules'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
@@ -72,28 +73,15 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (merged.f_skatt_status === 'a_skatt' && !merged.is_sidoinkomst && !merged.tax_table_number) {
       mergedErrors.push('Skattetabell krävs för A-skatt anställda')
     }
-    // Merged-state jämkning check (same rule as the v1 route and
-    // employee-commands): a non-null percentage needs a start date, and the
-    // dates must be ordered, but the schema can only see the body. Only run
-    // when the PATCH touches a jamkning field: a legacy row with inconsistent
-    // jamkning_* state must not block unrelated updates (fixing it requires
-    // touching those very fields). `body` is the parsed patch: absent keys are
-    // absent, explicit nulls survive.
-    const jamkningTouched =
-      'jamkning_percentage' in body ||
-      'jamkning_valid_from' in body ||
-      'jamkning_valid_to' in body
-    if (jamkningTouched) {
-      if (merged.jamkning_percentage != null && !merged.jamkning_valid_from) {
-        mergedErrors.push('Jämkningens startdatum måste anges när jämkningsprocent sätts')
-      }
-      if (
-        merged.jamkning_valid_from &&
-        merged.jamkning_valid_to &&
-        merged.jamkning_valid_to < merged.jamkning_valid_from
-      ) {
-        mergedErrors.push('Jämkningens slutdatum måste vara efter startdatumet')
-      }
+    // Merged-state jämkning check through the shared validator (same rule as
+    // the v1 route and employee-commands): a non-null percentage needs both
+    // dates, and the dates must be ordered, but the schema can only see the
+    // body. Only run when the PATCH touches a jamkning field: a legacy row
+    // with inconsistent jamkning_* state must not block unrelated updates
+    // (fixing it requires touching those very fields). `body` is the parsed
+    // patch: absent keys are absent, explicit nulls survive. #2058
+    if (touchesJamkning(body)) {
+      for (const issue of validateJamkning(merged)) mergedErrors.push(issue.message)
     }
     if (mergedErrors.length > 0) {
       return NextResponse.json({ error: mergedErrors.join('. ') }, { status: 400 })

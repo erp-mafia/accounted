@@ -5,7 +5,8 @@
  * and result aggregation.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { ingestTransactions, type RawTransaction } from '../ingest'
+import { ingestTransactions } from '../ingest'
+import type { RawTransaction } from '@/types'
 import { makeJournalEntry, makeTransaction } from '@/tests/helpers'
 
 // ---------------------------------------------------------------------------

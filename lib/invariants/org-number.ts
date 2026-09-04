@@ -38,8 +38,6 @@ import { luhnValidate } from '@/lib/bankgiro/luhn'
  * with its own message. Tighten the intake, not the outflow.
  */
 
-/** Digits-only canonical storage length. */
-export const ORG_NUMBER_LENGTH = 10
 
 /**
  * Strip the separators Swedish users and provider APIs put in org numbers.

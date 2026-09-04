@@ -51,7 +51,9 @@ export interface BankIdResult {
   tokenHash?: string
   type?: string
   isNewUser?: boolean
-  error?: 'no_account' | 'already_linked' | 'session_invalid' | 'service_unavailable'
+  error?: 'no_account' | 'already_linked' | 'session_invalid' | 'service_unavailable' | 'email_unconfirmed'
+  /** Server-provided Swedish explanation for errors that carry one (e.g. email_unconfirmed). */
+  message?: string
   givenName?: string
   surname?: string
   /** Non-secret id that binds this tab to the shared server-held flow. */
@@ -304,6 +306,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
                 }
                 onCompleteRef.current({
                   error: errorCode,
+                  message: typeof completeJson.message === 'string' ? completeJson.message : undefined,
                   givenName: completeJson.givenName,
                   surname: completeJson.surname,
                 })

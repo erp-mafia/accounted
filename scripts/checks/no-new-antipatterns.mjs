@@ -391,6 +391,34 @@ function countNaiveRound() {
 }
 
 /**
+ * 9. provider-host: files that talk to an external provider API directly.
+ * Provider integration logic is moving behind the connector (hosted
+ * `app/api/connect/*` today, the Accounted Connect service later): the open
+ * repo keeps the ledger, the contract and the manual file paths, and a
+ * self-hosted instance reaches every provider through its connector key.
+ * Per-file ratchet: the grandfathered set may only shrink. A NEW file naming a
+ * provider API host is a boundary violation unless it is the connector's own
+ * hosted adapter side.
+ */
+const PROVIDER_HOST_RE =
+  /api\.enablebanking\.com|api\.tilisy\.com|api\.skatteverket\.se|peroauth2\.skatteverket\.se|sso\.skatteverket\.se|api\.qvalia\.com|api-test\.qvalia\.com|api\.fortnox\.se|apps\.fortnox\.se|vismaonline\.com|briox\.services|apigateway\.blinfo\.se|api\.bokio\.se|api\.bolagsverket\.se|api-accept2\.bolagsverket\.se|id\.tic\.io|graph\.facebook\.com|gmail\.googleapis\.com/i
+
+function findProviderHostFiles() {
+  const files = [
+    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+  ]
+  const found = []
+  for (const f of files) {
+    const r = rel(f)
+    if (r.includes('__tests__/') || r.endsWith('.test.ts') || r.endsWith('.test.tsx')) continue
+    if (PROVIDER_HOST_RE.test(fs.readFileSync(f, 'utf8'))) found.push(r)
+  }
+  return found.sort()
+}
+
+/**
  * Occurrences of a shared format rule written out by hand instead of imported
  * from lib/invariants/. Counted, not file-setted: the campaign lowers the
  * number file by file and the count may only go down.
@@ -547,8 +575,6 @@ function findFoldedPublicFlags() {
 // Files whose whitespace-nowrap cells are fixed-width numeric/tabular columns
 // living inside their OWN overflow-x-auto scroll container, so they cannot
 // widen the dialog itself:
-// - MockDataImportDialog: CSV preview built on the Table primitive, which
-//   self-wraps in overflow-auto (components/ui/table.tsx).
 // - PaymentFileDialog: payment-line table wrapped in an overflow-x-auto div.
 // 11. direct-ai-client. Every model call goes through the job-shaped service
 // in lib/ai (getAiService): that is what lets hosted stay on Bedrock while a
@@ -596,7 +622,6 @@ function findDirectAiClients() {
 }
 
 const DIALOG_NOWRAP_ALLOWED = new Set([
-  'components/extensions/shared/MockDataImportDialog.tsx',
   'components/supplier-invoices/PaymentFileDialog.tsx',
 ])
 
@@ -1028,6 +1053,7 @@ const current = {
   rawRouteAuth: findRawRouteAuth(),
   naiveOreRound: countNaiveRound(),
   handRolledInvariants: countHandRolledInvariants(),
+  providerHosts: findProviderHostFiles(),
   ledgerScanningReports: findLedgerScanningReports(),
   directJelInsert: findDirectJelInserts(),
   leakySupabaseClients: findLeakySupabaseClients(),
@@ -1066,6 +1092,10 @@ if (isUpdate) {
     rawReferenceFetch: {
       count: current.rawReferenceFetch.length,
       files: current.rawReferenceFetch,
+    },
+    providerHosts: {
+      count: current.providerHosts.length,
+      files: current.providerHosts,
     },
   }
   fs.writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2) + '\n')
@@ -1347,6 +1377,26 @@ if (newLedgerScans.length) {
   )
 }
 
+// 1c2. provider-host: a file naming a provider API host outside the
+// grandfathered set is a NEW direct integration in the open repo.
+const providerHostBaseline = new Set(baseline.providerHosts?.files ?? [])
+const newProviderHosts = current.providerHosts.filter((f) => !providerHostBaseline.has(f))
+const fixedProviderHosts = (baseline.providerHosts?.files ?? []).filter((f) => !current.providerHosts.includes(f))
+if (baseline.providerHosts && newProviderHosts.length) {
+  failed = true
+  console.error(
+    `\n✗ provider-host: ${newProviderHosts.length} new file(s) call a provider API host directly:`,
+  )
+  newProviderHosts.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → provider integration logic lives behind the connector, not in the open ledger:\n' +
+      '    route the call through the hosted connector (app/api/connect/*) and the\n' +
+      '    instance-side connector-mode seam (lib/connect/instance/upstreams.ts), or\n' +
+      '    keep the manual file path. If this file IS the connector\'s own hosted adapter\n' +
+      '    side, re-baseline with --update and say so in the PR.',
+  )
+}
+
 // 1d. raw-reference-fetch: per-file ratchet. A file outside the baseline set
 // that fetches reference data raw (see raw-reference-fetch.mjs) is a NEW
 // violation; grandfathered files stay until they move to the hooks. Once the
@@ -1413,6 +1463,7 @@ if (
   fixedLedgerScans.length ||
   fixedDialogOverflow.length ||
   fixedRawRefs.length ||
+  fixedProviderHosts.length ||
   current.naiveOreRound < baseline.naiveOreRound.count
 ) {
   console.log('\n✓ Progress since baseline:')
@@ -1425,6 +1476,8 @@ if (
     console.log(`    raw-reference-fetch: -${fixedRawRefs.length} file(s)`)
   if (current.naiveOreRound < baseline.naiveOreRound.count)
     console.log(`    naive-ore-round: -${baseline.naiveOreRound.count - current.naiveOreRound} occurrence(s)`)
+  if (fixedProviderHosts.length)
+    console.log(`    provider-host: -${fixedProviderHosts.length} file(s) no longer call a provider directly`)
   console.log('    Run with --update to ratchet the baseline down and lock in the gains.')
 }
 if (migratedDirectAi.length) {
@@ -1447,5 +1500,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
 )

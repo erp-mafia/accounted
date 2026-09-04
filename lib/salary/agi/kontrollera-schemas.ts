@@ -48,8 +48,6 @@ export const AGIKontrolleraHUSchema = z
   })
   .strict()
 
-export type AGIKontrolleraHU = z.infer<typeof AGIKontrolleraHUSchema>
-
 export const AGIKontrolleraIUSchema = z
   .object({
     agRegistreradId: IDENTITET,
@@ -94,8 +92,6 @@ export const AGIKontrolleraIUSchema = z
       path: ['vaxaStod'],
     },
   )
-
-export type AGIKontrolleraIU = z.infer<typeof AGIKontrolleraIUSchema>
 
 /**
  * Hard cap on the raw JSON body for kontrollera endpoints. Even a fully

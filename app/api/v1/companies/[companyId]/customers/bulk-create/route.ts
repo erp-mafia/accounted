@@ -19,7 +19,8 @@ import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
@@ -139,7 +140,7 @@ async function createOneCustomer(
           address_line2: input.address_line2 ?? null,
           postal_code: input.postal_code ?? null,
           city: input.city ?? null,
-          country: input.country ?? 'Sweden',
+          country: input.country ?? 'SE',
           org_number: input.org_number ?? null,
           vat_number: input.vat_number ?? null,
           vat_number_validated: false,
@@ -187,7 +188,7 @@ async function createOneCustomer(
       address_line2: input.address_line2 ?? null,
       postal_code: input.postal_code ?? null,
       city: input.city ?? null,
-      country: input.country ?? 'Sweden',
+      country: input.country ?? 'SE',
       org_number: input.org_number ?? null,
       vat_number: input.vat_number ?? null,
       vat_number_validated: vatValidated,
@@ -266,28 +267,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    let rawBody: unknown
-    try {
-      rawBody = await request.json()
-    } catch {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'body', message: 'Body is not valid JSON.' },
-      })
-    }
+    const rawBodyResult = await readV1JsonBody(request, ctx)
+    if (!rawBodyResult.ok) return rawBodyResult.response
+    const rawBody = rawBodyResult.body
 
     const parsed = BulkCreateRequest.safeParse(rawBody)
-    if (!parsed.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: parsed.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
-    }
+    if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const body = parsed.data
 
     // Reject all_or_nothing: true loudly. Same contract as invoices/bulk-create.

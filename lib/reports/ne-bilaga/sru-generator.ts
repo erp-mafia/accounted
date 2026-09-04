@@ -1,4 +1,5 @@
 import { getBranding } from '@/lib/branding/service'
+import { sruAmount as formatAmount, sruDate as formatDate, sruTime as formatTime } from '@/lib/reports/sru/format'
 import type { NEDeclaration, NEDeclarationRutor, SRUSubmission } from '@/lib/reports/ne-bilaga/types'
 
 /**
@@ -87,30 +88,9 @@ function formatIdentityNumber12(raw: string | null, incomeYear: number): string 
   return '000000000000'
 }
 
-/** Format a Date as YYYYMMDD. */
-function formatDate(date: Date): string {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}${m}${d}`
-}
-
-/** Format a Date as HHMMSS. */
-function formatTime(date: Date): string {
-  const h = String(date.getHours()).padStart(2, '0')
-  const m = String(date.getMinutes()).padStart(2, '0')
-  const s = String(date.getSeconds()).padStart(2, '0')
-  return `${h}${m}${s}`
-}
-
 /** Convert a YYYY-MM-DD string to SRU date format YYYYMMDD. */
 function dateStringToSRU(dateStr: string): string {
   return dateStr.replace(/-/g, '')
-}
-
-/** Format an integer amount: hela kronor, no decimals/thousands separators, öre truncated. */
-function formatAmount(amount: number): string {
-  return Math.trunc(amount).toString()
 }
 
 /** Sanitize string for SRU: '#' is reserved, strip newlines, cap at 250 chars (STR_250). */

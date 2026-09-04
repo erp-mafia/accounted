@@ -6,6 +6,7 @@ import { commitPendingOperation } from '../commit'
 
 const INVOICE_ID = '22222222-2222-4222-8222-222222222222'
 const CUSTOMER_ID = '11111111-1111-4111-8111-111111111111'
+const SALES_ORDER_ITEM_ID = 'd1000000-0000-4000-8000-000000000001'
 
 function makePendingOp(params: Record<string, unknown>): PendingOperation {
   return {
@@ -88,6 +89,7 @@ describe('commitPendingOperation: update_invoice', () => {
     enqueue({ data: makeCustomer({ id: CUSTOMER_ID }) }) // customers
     enqueue({ data: { vat_registered: true } }) // company_settings (builder VAT gate)
     enqueue({ data: [{ id: INVOICE_ID }] }) // invoices update (draft-guarded)
+    enqueue({ data: [] }) // invoice_items snapshot (replaceInvoiceItems, no prior rows)
     enqueue({ data: null }) // invoice_items delete
     enqueue({ data: null }) // invoice_items insert
     enqueue({ data: null }) // pending_operations final status update
@@ -110,8 +112,10 @@ describe('commitPendingOperation: update_invoice', () => {
       items_replaced: true,
     })
     expect(supabase.from).toHaveBeenNthCalledWith(2, 'invoices')
+    // snapshot, delete, insert
     expect(supabase.from).toHaveBeenNthCalledWith(6, 'invoice_items')
     expect(supabase.from).toHaveBeenNthCalledWith(7, 'invoice_items')
+    expect(supabase.from).toHaveBeenNthCalledWith(8, 'invoice_items')
   })
 
   it('keeps the existing lines on a header-only edit (no full replace staged)', async () => {
@@ -146,6 +150,7 @@ describe('commitPendingOperation: update_invoice', () => {
     })
     enqueue({ data: { vat_registered: true } }) // company_settings
     enqueue({ data: [{ id: INVOICE_ID }] }) // invoices update
+    enqueue({ data: [] }) // invoice_items snapshot (replaceInvoiceItems, no order links)
     enqueue({ data: null }) // invoice_items delete
     enqueue({ data: null }) // invoice_items insert
     enqueue({ data: null }) // final status update
@@ -304,6 +309,96 @@ describe('commitPendingOperation: update_invoice', () => {
     expect(result.error).toMatch(/finns inte i företaget/)
     expect(findCall('invoices', 'update')).toBeUndefined()
     expect(findCall('invoice_items', 'insert')).toBeUndefined()
+  })
+
+  it('auto-rejects with INVOICE_UPDATE_DROPS_ORDER_LINK when replaced lines drop a kundorder link', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-invoice-1' } }) // claim
+    enqueue({ data: existingDraft() }) // invoices: existing draft (created from an order)
+    enqueue({ data: makeCustomer({ id: CUSTOMER_ID }) }) // customers
+    enqueue({ data: { vat_registered: true } }) // company_settings
+    enqueue({ data: [{ id: INVOICE_ID }] }) // invoices update (header)
+    enqueue({
+      // invoice_items snapshot (replaceInvoiceItems): the stored row is linked
+      // to an order line; the staged items carry no sales_order_item_id.
+      data: [{ id: 'item-old-1', invoice_id: INVOICE_ID, sales_order_item_id: SALES_ORDER_ITEM_ID, description: 'Orderrad' }],
+    })
+    enqueue({ data: null }) // pending_operations final status update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ invoice_id: INVOICE_ID, changes: { items: NEW_ITEMS } }),
+    )
+
+    // 409 from the executor: auto-rejected with the structured code so the
+    // approver sees WHY, same as the cookie and v1 PATCH routes.
+    expect(result.status).toBe('rejected')
+    expect(result.auto_rejected).toBe(true)
+    expect(result.http_status).toBe(409)
+    expect(result.code).toBe('INVOICE_UPDATE_DROPS_ORDER_LINK')
+    expect(result.error).toMatch(/kundorder/)
+    // The guard fires before the delete: the lines are untouched.
+    expect(findCall('invoice_items', 'delete')).toBeUndefined()
+    expect(findCall('invoice_items', 'insert')).toBeUndefined()
+  })
+
+  it('keeps the kundorder link on a header-only edit (re-fetch carries sales_order_item_id)', async () => {
+    const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-invoice-1' } }) // claim
+    enqueue({ data: existingDraft() }) // invoices
+    enqueue({ data: makeCustomer({ id: CUSTOMER_ID }) }) // customers
+    enqueue({
+      // invoice_items re-fetch for the header-only edit
+      data: [
+        {
+          line_type: 'product',
+          description: 'Orderrad',
+          quantity: 4,
+          unit: 'h',
+          unit_price: 100,
+          discount_percent: null,
+          vat_rate: 25,
+          article_id: null,
+          revenue_account: null,
+          sales_order_item_id: SALES_ORDER_ITEM_ID,
+          deduction_type: null,
+          labor_hours: null,
+          work_type: null,
+          housing_designation: null,
+          apartment_number: null,
+          brf_org_number: null,
+          accrual_period_start: null,
+          accrual_period_end: null,
+          accrual_balance_account: null,
+          dimensions: {},
+        },
+      ],
+    })
+    enqueue({ data: { vat_registered: true } }) // company_settings
+    enqueue({ data: [{ id: INVOICE_ID }] }) // invoices update
+    enqueue({ data: [{ id: 'item-old-1', sales_order_item_id: SALES_ORDER_ITEM_ID }] }) // snapshot
+    enqueue({ data: null }) // invoice_items delete
+    enqueue({ data: null }) // invoice_items insert
+    enqueue({ data: null }) // final status update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ invoice_id: INVOICE_ID, changes: { notes: 'Ny anteckning' } }),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ items_replaced: false, item_count: 1 })
+    // The narrow re-fetch must include the link column, or the guard would
+    // refuse every header-only edit of an order-created draft.
+    const refetchColumns = findCalls('invoice_items', 'select')[0][0] as string
+    expect(refetchColumns.split(',').map((c) => c.trim())).toContain('sales_order_item_id')
+    const inserted = findCall('invoice_items', 'insert')![0] as Array<Record<string, unknown>>
+    expect(inserted).toHaveLength(1)
+    expect(inserted[0]).toMatchObject({ invoice_id: INVOICE_ID, sales_order_item_id: SALES_ORDER_ITEM_ID })
   })
 
   it('rejects tampered staged params before reading the invoice', async () => {

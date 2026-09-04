@@ -1,9 +1,11 @@
+import { escapeXml } from '@/lib/xml/escape'
 import {
   generateOcrReference,
   validateBankgiroNumber,
   validatePlusgiroNumber,
 } from '@/lib/bankgiro/luhn'
 import { isSaneDateString, normalizeOrgNumber } from '@/lib/invariants'
+import { resolveInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
 import { computeLineAmounts, hasLineDiscount } from '@/lib/invoices/line-amounts'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { equalOre, roundOre } from '@/lib/money'
@@ -109,15 +111,6 @@ function formatDecimal(value: number): string {
   const whole = Math.floor(absolute / precision)
   const fraction = String(absolute % precision).padStart(6, '0').replace(/0+$/, '')
   return fraction ? `${sign}${whole}.${fraction}` : `${sign}${whole}`
-}
-
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
 }
 
 function hasText(value: string | null | undefined): value is string {
@@ -334,16 +327,19 @@ function prepareInvoice(input: PeppolInvoiceInput):
     phone: customer.phone,
   }, false, issues)
 
+  // Same payee the PDF and the email print: the resolver, not the raw legacy
+  // columns. Peppol is SEK-only (validated above), so resolve for SEK.
+  const payee = resolveInvoicePaymentAccount(company, 'SEK', invoice.payment_details ?? null)
   let payment: PreparedInvoice['payment'] | null = null
-  if (hasText(company.bankgiro) && validateBankgiroNumber(company.bankgiro)) {
+  if (hasText(payee?.bankgiro) && validateBankgiroNumber(payee.bankgiro)) {
     payment = {
-      accountId: company.bankgiro.replace(/\D/g, ''),
+      accountId: payee.bankgiro.replace(/\D/g, ''),
       branchId: 'SE:BANKGIRO',
       paymentId: generateOcrReference(invoice.invoice_number ?? ''),
     }
-  } else if (hasText(company.plusgiro) && validatePlusgiroNumber(company.plusgiro)) {
+  } else if (hasText(payee?.plusgiro) && validatePlusgiroNumber(payee.plusgiro)) {
     payment = {
-      accountId: company.plusgiro.replace(/\D/g, ''),
+      accountId: payee.plusgiro.replace(/\D/g, ''),
       branchId: 'SE:PLUSGIRO',
       paymentId: generateOcrReference(invoice.invoice_number ?? ''),
     }

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { LinkInvoiceToVoucherSchema } from '@/lib/api/schemas'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { linkInvoiceToVoucher } from '@/lib/invoices/voucher-matching'
 import { ensureInitialized } from '@/lib/init'
 
@@ -31,6 +31,27 @@ export const POST = withRouteContext(
     })
     if (!validation.success) return validation.response
     const { journal_entry_id, notes } = validation.data
+
+    // Only a faktura carries a receivable to settle: proformas, delivery notes
+    // and quotes are refused before the RPC (which validates status, not
+    // document type). A missing row falls through to the RPC's own 404.
+    const { data: docRow, error: docError } = await supabase
+      .from('invoices')
+      .select('document_type')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (docError) {
+      opLog.error('link-to-voucher: document lookup failed', docError)
+      return errorResponse(docError, opLog, { requestId })
+    }
+    const docType = (docRow as { document_type?: string | null } | null)?.document_type
+    if (docType && docType !== 'invoice') {
+      return errorResponseFromCode('MATCH_INVOICE_NOT_INVOICE_TYPE', opLog, {
+        requestId,
+        details: { documentType: docType },
+      })
+    }
 
     const outcome = await linkInvoiceToVoucher(supabase, user.id, companyId, {
       invoiceId: id,

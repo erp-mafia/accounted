@@ -69,6 +69,72 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/bank-connections/{connectionId}/sync`
+
+**Sync one bank connection now instead of waiting for the nightly run.**
+`scope:transactions:write · risk:low`
+
+Fetches new transactions and balances for one PSD2 bank connection right away. The window is chosen server-side: the last 7 days, widened to cover any gap since last_synced_at, capped at 90 days. Returns how many transactions were imported and the new last_synced_at. A connection synced within the last 15 minutes is refused with 429 BANK_SYNC_COOLDOWN and next_allowed_at: the data is already fresh. Not dry-runnable: the bank call itself is the side effect.
+
+**Use when:** GET /bank-connections shows a stale last_synced_at on an active connection and you need current bank data before building on it (liquidity, reconciliation, a report), or the user asks for the latest transactions now.
+**Do not use for:** Polling. Connections sync every night on their own; call this once when freshness matters, then read /transactions. Fixing a dead connection: status=expired needs BankID in a browser, not a sync.
+
+**Pitfalls:**
+- Idempotency-Key is optional here. If you send one, use a fresh key per attempt: a cooldown answer is never cached, but a completed sync is, and replaying it fetches nothing new.
+- 429 BANK_SYNC_COOLDOWN follows a recent successful sync OR a recent attempt that failed (the 15-minute lease is taken before the bank is called, on every instance). Compare last_synced_at from GET /bank-connections: if it is fresh, use the data you have; if it is still stale, the previous attempt failed, so retry once after next_allowed_at (Retry-After is set).
+- 409 BANK_SESSION_EXPIRED means the bank reported the consent dead during the sync; the connection is now status=expired. Hand the user the connect link; no API call revives it.
+- imported: 0 is normal on a quiet account. Banks report with up to 48 hours of delay, so today's transactions often arrive tomorrow.
+- Costs one Enable Banking call per enabled account: 403 CAPABILITY_BLOCKED when the company has no bank_sync entitlement.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `connectionId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    connection_id: string,
+    bank: string,
+    imported: number,
+    duplicates: number,
+    from_date: string,
+    to_date: string,
+    last_synced_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "connection_id": "4f6c…",
+    "bank": "Swedbank",
+    "imported": 3,
+    "duplicates": 12,
+    "from_date": "2026-08-26",
+    "to_date": "2026-09-02",
+    "last_synced_at": "2026-09-02T09:14:03Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `GET /api/v1/companies/{companyId}/cash-accounts`
 
 **List bank/cash accounts with the bank-reported balance.**

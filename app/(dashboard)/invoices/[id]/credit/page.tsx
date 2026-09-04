@@ -22,14 +22,10 @@ import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
 import { creditConfirmNumber } from '@/lib/invoices/display'
-import type { Invoice, InvoiceItem, Customer } from '@/types'
+import type { InvoiceItem } from '@/types'
+import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { InvoiceEditorSkeleton } from '@/components/common/DetailPageSkeleton'
-
-interface InvoiceWithRelations extends Invoice {
-  customer: Customer
-  items: InvoiceItem[]
-}
 
 export default function CreateCreditNotePage({ params }: { params: Promise<{ id: string }> }) {
   const { canWrite } = useCanWrite()

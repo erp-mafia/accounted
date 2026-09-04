@@ -87,5 +87,3 @@ export const SETTINGS_SECTIONS: Record<string, ComponentType> = {
   whatsapp: WhatsAppSettingsContent,
   mail: MailSettingsContent,
 }
-
-export type SettingsSectionId = keyof typeof SETTINGS_SECTIONS

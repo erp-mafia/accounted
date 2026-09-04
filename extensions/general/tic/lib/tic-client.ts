@@ -8,7 +8,6 @@ import type {
   TICCompanyPurpose,
   TICDocument,
   TICFiscalYear,
-  TICAccountingPeriod,
   TICPayrollSummary,
   TICSignatory,
   TICRepresentatives,
@@ -249,17 +248,6 @@ export async function getCompanyDocuments(companyId: number): Promise<TICDocumen
  */
 export async function getFiscalYears(companyId: number): Promise<TICFiscalYear[] | null> {
   return ticApiFetch<TICFiscalYear[]>(`/companies/${companyId}/fiscal-years`)
-}
-
-/**
- * Get accounting-period change history for a company. v2 endpoint with
- * no v1 equivalent: surfaces "this company has shifted its year-end"
- * during onboarding/customer-setup.
- */
-export async function getAccountingPeriods(
-  companyId: number
-): Promise<TICAccountingPeriod[] | null> {
-  return ticApiFetch<TICAccountingPeriod[]>(`/companies/${companyId}/accounting-periods`)
 }
 
 /**

@@ -9,6 +9,8 @@
 /**
  * Extract the last 4 digits of a personnummer for display.
  */
+import { luhnValidate } from '@/lib/bankgiro/luhn'
+
 export function extractLast4(personnummer: string): string {
   const digits = personnummer.replace(/\D/g, '')
   return digits.slice(-4)
@@ -60,28 +62,11 @@ export function validatePersonnummer(personnummer: string): { valid: boolean; er
 
   // Luhn check on digits 3-12 (YYMMDDNNNN, 10 digits)
   const luhnDigits = digits.slice(2)
-  if (!luhnCheck(luhnDigits)) {
+  if (!luhnValidate(luhnDigits)) {
     return { valid: false, error: 'Ogiltigt kontrollnummer (Luhn)' }
   }
 
   return { valid: true }
-}
-
-/**
- * Luhn checksum validation for 10-digit string.
- */
-function luhnCheck(digits: string): boolean {
-  let sum = 0
-  for (let i = 0; i < digits.length; i++) {
-    let d = parseInt(digits[i])
-    // Multiply every other digit by 2, starting from the first
-    if (i % 2 === 0) {
-      d *= 2
-      if (d > 9) d -= 9
-    }
-    sum += d
-  }
-  return sum % 10 === 0
 }
 
 /**

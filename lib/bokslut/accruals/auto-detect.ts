@@ -1,13 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { EntityType } from '@/types'
 import { roundOre } from '@/lib/money'
 import { parseInvoiceDateRange } from './date-range-parser'
 
 export type PeriodiseringSource = 'invoice' | 'supplier_invoice'
 export type PeriodiseringConfidence = 'high' | 'medium' | 'low'
 
-/** The entity types the materiality wording distinguishes between. Mirrors
- *  `EntityType` in `@/types` without importing app types into lib/. */
-export type PeriodiseringEntityType = 'enskild_firma' | 'aktiebolag'
+/** The entity types the materiality wording distinguishes between. */
+export type PeriodiseringEntityType = EntityType
 
 /**
  * Materiality floor for auto-detected periodiseringar, in SEK.
@@ -276,11 +276,13 @@ export async function detectPeriodisering(
 
   // Customer invoices: only "real" ones (sent/paid). Drafts and overdue
   // get skipped: drafts haven't moved through the engine, overdue is just a
-  // status label that overlaps with sent here.
+  // status label that overlaps with sent here. Proformas, delivery notes and
+  // quotes are never booked, so there is no revenue to periodise.
   const { data: invoiceRows } = await supabase
     .from('invoices')
     .select('id, invoice_number, invoice_date, subtotal, currency, subtotal_sek, notes, customers(name), invoice_items(description)')
     .eq('company_id', companyId)
+    .eq('document_type', 'invoice')
     .gte('invoice_date', periodStart)
     .lte('invoice_date', periodEnd)
     .in('status', ['sent', 'partially_paid', 'paid', 'overdue'])

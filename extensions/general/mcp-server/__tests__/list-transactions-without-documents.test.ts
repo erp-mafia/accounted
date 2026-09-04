@@ -76,6 +76,26 @@ describe('gnubok_list_transactions_without_documents', () => {
     expect(result.transactions[0].journal_entry_id).toBe('je-1')
   })
 
+  it('never echoes the column default "uncategorized" on rows that are booked by construction', async () => {
+    // transactions.category keeps its default when a row is booked through a
+    // manual voucher + link (link-journal-entry.ts never writes category), and
+    // gnubok_list_uncategorized_transactions uses the same word to mean "no
+    // journal entry yet". Feedback seq 288574: an agent read the label and
+    // tried to book an already-booked share-capital deposit (A-2, 1930/2081).
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue(envelope([
+      { ...row('t1', 'je-1'), category: 'uncategorized' },
+      { ...row('t2', 'je-2'), category: 'office_supplies' },
+    ], 2))
+
+    const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      transactions: Array<{ transaction_id: string; category: string | null; journal_entry_id: string }>
+    }
+
+    expect(result.transactions[0]).toMatchObject({ transaction_id: 't1', category: null, journal_entry_id: 'je-1' })
+    expect(result.transactions[1]).toMatchObject({ transaction_id: 't2', category: 'office_supplies' })
+  })
+
   it('returns empty result when nothing matches', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue(envelope([], 0))

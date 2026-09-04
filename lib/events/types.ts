@@ -213,18 +213,6 @@ export type CoreEvent =
   | { type: 'skattekonto.balance.changed'; payload: { previousBalance: number; currentBalance: number; userId: string; companyId: string } }
   | { type: 'skattekonto.transaction.upcoming'; payload: { transaktionsdatum: string; forfallodatum: string; transaktionstext: string; beloppSkatteverket: number; userId: string; companyId: string } }
   | { type: 'skattekonto.connection.expired'; payload: { reason: 'REFRESH_EXHAUSTED' | 'SESSION_EXPIRED' | 'TOKEN_CORRUPTED'; userId: string; companyId: string } }
-  // Fired when the SKV saldo and GL 1630 sum diverge beyond the configured
-  // tolerance. The drift handler emails the company contact; UI surfaces a
-  // dashboard tile via /api/extensions/skatteverket/skattekonto/drift.
-  | { type: 'skattekonto.drift_detected'; payload: {
-      drift: number                       // SKV saldo - GL 1630 sum (signed)
-      saldoSkatteverket: number
-      glSum1630: number
-      fetchedAt: number                   // ms epoch from the snapshot
-      unbookedCount: number               // skattekonto rows without journal_entry_id ≤ fetchedAt
-      userId: string
-      companyId: string
-    } }
   // Company & account lifecycle
   | { type: 'company.deleted'; payload: { companyId: string; userId: string; archivedAt: string } }
   | { type: 'account.deleted'; payload: { userId: string; deletedAt: string } }
@@ -251,7 +239,8 @@ export type CoreEvent =
       errorMessage: string | null                   // human-readable error message (truncated to 500 chars), null on success.
                                                     // Raw material for clustering real agent failures into curated gotchas:
                                                     // errorCode alone can't distinguish "period locked" from "unbalanced".
-      errorDetail: string | null                    // The specific English diagnostic, when message_sv is a generic registry
+      errorDetail: string | null
+      errorCause: string | null  // errorCauseTag(err): SQLSTATE / coded-error code / error class name, <= 64 chars. The clustering key for rows whose errorMessage is the UNKNOWN_ERROR constant (#2051); never a raw driver message, which can quote row values.                    // The specific English diagnostic, when message_sv is a generic registry
                                                     // default that says nothing (VALIDATION_ERROR -> "Förfrågan innehåller
                                                     // ogiltiga uppgifter."). Null when it would only repeat errorMessage.
                                                     // Without it a 604-call outage looked identical to a typo in the logs:
@@ -379,8 +368,3 @@ export type EventPayload<T extends CoreEventType> = Extract<CoreEvent, { type: T
 /** Handler function for a specific event type */
 export type EventHandler<T extends CoreEventType> = (payload: EventPayload<T>) => Promise<void> | void
 
-/** Subscription: event type + handler */
-export interface EventSubscription<T extends CoreEventType = CoreEventType> {
-  eventType: T
-  handler: EventHandler<T>
-}

@@ -1,7 +1,8 @@
 import { ACCOUNT_CLASS_LABELS } from './bas-labels'
 import { getBasLoadedByNumber } from './bas-lazy'
+import type { AccountType } from '@/types'
 
-export type AccountType = 'asset' | 'liability' | 'equity' | 'revenue' | 'expense' | 'untaxed_reserves'
+export type { AccountType }
 
 export interface AccountDescription {
   name: string

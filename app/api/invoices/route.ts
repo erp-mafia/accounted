@@ -6,6 +6,7 @@ import { CreateInvoiceSchema, CreateCreditNoteSchema } from '@/lib/api/schemas'
 import type { Invoice, InvoiceDocumentType, InvoiceItem } from '@/types'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
 import { buildCreditNoteItem } from '@/lib/invoices/build-credit-note-item'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -38,6 +39,11 @@ export const GET = withRouteContext(
 
     if (status) {
       query = query.eq('status', status)
+    }
+    // Kundorder detail: the invoices created from one order.
+    const salesOrderId = searchParams.get('sales_order_id')
+    if (salesOrderId && /^[0-9a-f-]{36}$/i.test(salesOrderId)) {
+      query = query.eq('sales_order_id', salesOrderId)
     }
 
     const { data, error, count } = await query
@@ -131,6 +137,19 @@ export const POST = withRouteContext(
       })
     }
 
+    // Which bank account the customer pays to (null = the per-currency
+    // default). Validated against the company's payee accounts; the payee
+    // fields are frozen on the row and refreshed again at issue.
+    const payeeChoice = await resolveInvoicePayeeChoice(
+      supabase,
+      companyId!,
+      invoiceInput.currency,
+      invoiceInput.payment_cash_account_id,
+    )
+    if (!payeeChoice.ok) {
+      return errorResponseFromCode(payeeChoice.code, log, { requestId, details: payeeChoice.details })
+    }
+
     // Shared validation + computation (VAT rules, accrual guards, totals,
     // revenue-account override checks, server-side ROT/RUT, currency, item
     // rows). Identical to the PATCH (draft edit) path: see build-invoice-write.
@@ -149,14 +168,24 @@ export const POST = withRouteContext(
       return errorResponseFromCode(build.code, log, { requestId, details: build.details })
     }
 
-    // Delivery notes are always numbered at insert (ignores save_as_draft);
-    // invoices/proformas get their F-number below or at finalize.
+    // Delivery notes and quotes are always numbered at insert from their own
+    // series (ignores save_as_draft): neither is a faktura, so no F-number is
+    // at stake. Invoices/proformas get their F-number below or at finalize.
     let invoiceNumber: string | null = null
     if (documentType === 'delivery_note') {
       const { data: dnNumber } = await supabase.rpc('generate_delivery_note_number', {
         p_company_id: companyId,
       })
       invoiceNumber = dnNumber
+    } else if (documentType === 'quote') {
+      const { data: quoteNumber, error: quoteNumberError } = await supabase.rpc('generate_quote_number', {
+        p_company_id: companyId,
+      })
+      if (quoteNumberError || !quoteNumber) {
+        log.error('quote number allocation failed', quoteNumberError ?? new Error('no number'))
+        return errorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', log, { requestId })
+      }
+      invoiceNumber = quoteNumber
     }
 
     const { data: invoice, error: invoiceError } = await supabase
@@ -166,6 +195,8 @@ export const POST = withRouteContext(
         company_id: companyId,
         invoice_number: invoiceNumber,
         ...build.invoiceFields,
+        payment_cash_account_id: payeeChoice.fields.payment_cash_account_id,
+        payment_details: payeeChoice.fields.payment_details,
       })
       .select()
       .single()
@@ -413,6 +444,10 @@ async function createCreditNote(
       our_reference: originalInvoice.our_reference,
       // Same buyer routing on the kreditfaktura as the original.
       invoice_marking: originalInvoice.invoice_marking ?? null,
+      // Same payee as the original: the credit note refers to the account
+      // the customer paid (or was asked to pay) to.
+      payment_cash_account_id: originalInvoice.payment_cash_account_id ?? null,
+      payment_details: originalInvoice.payment_details ?? null,
       // Positive magnitude, unlike the negated amounts above: the DB has
       // CHECK (deduction_total >= 0), and every reader either recomputes the
       // ROT/RUT amount from the items or skips credit notes entirely.

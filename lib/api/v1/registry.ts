@@ -208,9 +208,6 @@ export function listEndpoints(): EndpointDefinition[] {
   return Array.from(ENDPOINTS.values())
 }
 
-export function getEndpoint(method: HttpMethod, path: string): EndpointDefinition | undefined {
-  return ENDPOINTS.get(`${method} ${path}`)
-}
 
 /**
  * Resolve the registered endpoint for a CONCRETE request path (e.g.
@@ -513,10 +510,3 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
   }
 }
 
-/**
- * Test-only escape hatch. Clears the registry: used in unit tests so a test
- * that registers a fake endpoint doesn't leak into the next test.
- */
-export function _resetRegistryForTests(): void {
-  ENDPOINTS.clear()
-}

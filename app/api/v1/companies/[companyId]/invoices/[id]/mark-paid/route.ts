@@ -31,14 +31,16 @@ import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { MarkInvoicePaidSchema } from '@/lib/api/schemas'
 import {
   createInvoiceCashEntry,
   createInvoicePaymentJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
+import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
+import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { eventBus } from '@/lib/events'
@@ -48,6 +50,7 @@ import {
   planInvoicePaymentForLines,
 } from '@/lib/invoices/apply-invoice-payment'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { recordInvoicePaymentRow, removeInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { roundOre } from '@/lib/money'
 import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
@@ -56,7 +59,7 @@ import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
 // payment/cash JE generators, which re-propagate the bag onto every leg —
 // dropping the column here silently untags the payment voucher.
 const INVOICE_MARK_PAID_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, payment_cash_account_id, created_at, updated_at'
 
 const InvoiceMarkPaidResponse = z.object({
   id: z.string().uuid(),
@@ -162,17 +165,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     let force = false
     if (rawBody) {
       const parsed = MarkInvoicePaidSchema.safeParse(rawBody)
-      if (!parsed.success) {
-        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-          requestId: ctx.requestId,
-          details: {
-            issues: parsed.error.issues.map((i) => ({
-              field: i.path.join('.'),
-              message: i.message,
-            })),
-          },
-        })
-      }
+      if (!parsed.success) return v1ValidationError(ctx, parsed.error)
       exchangeRateDifference = parsed.data.exchange_rate_difference
       bodyPaymentDate = parsed.data.payment_date
       customLines = parsed.data.lines
@@ -206,6 +199,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const typed = invoice as unknown as Invoice & { customer?: { name?: string } }
 
     // Document-shape guards before status check (consistent with mark-sent).
+    // A quote is an offer, not a claim: convert it to a faktura first.
+    if (typed.document_type === 'quote') {
+      return v1ErrorResponseFromCode('INVOICE_QUOTE_NOT_PAYABLE', ctx.log, {
+        requestId: ctx.requestId,
+      })
+    }
     if (typed.document_type === 'delivery_note') {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
@@ -492,6 +491,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           )
           journalEntryId = entry?.id ?? null
         } else if (useCashEntry) {
+          const settlementAccountNumber = await resolveInvoiceSettlementAccount(ctx.supabase, ctx.companyId!, typed)
           const entry = await createInvoiceCashEntry(
             ctx.supabase,
             ctx.companyId!,
@@ -500,9 +500,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             paymentDate,
             entityType,
             typed.customer?.name,
+            settlementAccountNumber,
           )
           journalEntryId = entry?.id ?? null
         } else {
+          const settlementAccountNumber = await resolveInvoiceSettlementAccount(ctx.supabase, ctx.companyId!, typed)
           const entry = await createInvoicePaymentJournalEntry(
             ctx.supabase,
             ctx.companyId!,
@@ -513,6 +515,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             typed.customer?.name,
             // Pass full or partial amount depending on path.
             customLines ? paymentAmount : undefined,
+            settlementAccountNumber,
           )
           journalEntryId = entry?.id ?? null
         }
@@ -547,7 +550,46 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
     }
 
-    // Step 2: update the invoice row.
+    // Step 2: AR sub-ledger row (#2019). The kontantmetod cut-off reads
+    // invoice_payments only, so a paid invoice without it is re-booked as a
+    // fordran at bokslut. Written before the CAS update so the failure
+    // branches undo it with the voucher. See lib/invoices/invoice-payment-row.ts.
+    let paymentRowId: string | null = null
+    if (isRealInvoice) {
+      const recorded = await recordInvoicePaymentRow(ctx.supabase, {
+        userId: ctx.userId,
+        companyId: ctx.companyId!,
+        invoice: typed,
+        paymentDate,
+        newPaidAmount,
+        journalEntryId,
+      })
+      if (!recorded.ok) {
+        ctx.log.error('mark-paid: invoice_payments insert failed: cancelling the payment voucher', undefined, {
+          invoiceId,
+          companyId: ctx.companyId,
+          error: recorded.error,
+        })
+        if (journalEntryId) {
+          await cancelOrphanedPaymentEntry(
+            ctx.supabase,
+            ctx.companyId!,
+            ctx.userId,
+            journalEntryId,
+            'Automatiskt makulerad: betalningsraden kunde inte sparas efter bokförd betalning',
+          )
+        }
+        // The raw driver text stays in the server log above; API callers get
+        // the reason code only.
+        return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', ctx.log, {
+          requestId: ctx.requestId,
+          details: { reason: 'payment_row_insert_failed' },
+        })
+      }
+      paymentRowId = recorded.id
+    }
+
+    // Step 3: update the invoice row.
     const updatePayload: Record<string, unknown> = {
       status: newStatus,
       remaining_amount: newRemaining,
@@ -575,6 +617,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .maybeSingle()
 
     if (updateErr) {
+      await removeInvoicePaymentRow(ctx.supabase, ctx.companyId!, paymentRowId)
       ctx.log.error('mark-paid: invoice update failed', updateErr as Error, {
         invoiceId,
         companyId: ctx.companyId,
@@ -587,6 +630,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (!updated) {
       // Race: status transitioned (concurrent mark-paid / credit) between
       // pre-flight and our update. Surface as 409.
+      await removeInvoicePaymentRow(ctx.supabase, ctx.companyId!, paymentRowId)
       ctx.log.warn('mark-paid: race: invoice status transitioned during request', {
         invoiceId,
         companyId: ctx.companyId,

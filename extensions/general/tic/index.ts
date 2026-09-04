@@ -35,6 +35,12 @@ import {
   setBankIdFlowCookies,
 } from './lib/bankid-flow-cookie'
 import { lookupCompanyByOrgNumber, registrationDateToMs } from './lib/lookup'
+import {
+  hasForeignCredential,
+  isUnadoptedPendingAccount,
+  revokePendingIdentity,
+} from './lib/bankid-pending'
+import { sendBankIdSignupConfirmation } from './lib/bankid-confirmation-mail'
 import { hashPersonalNumber, encryptPersonalNumberForStorage } from '@/lib/auth/bankid'
 import {
   evaluateBrandSignupGate,
@@ -43,10 +49,108 @@ import {
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createServiceClient } from '@/lib/supabase/server'
 import { createLogger } from '@/lib/logger'
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseClient, User } from '@supabase/supabase-js'
 import crypto from 'crypto'
 
 const log = createLogger('tic/bankid')
+
+const SIGNUP_FAILED = { error: 'internal_error', message: 'Kunde inte skapa kontot. Försök igen.' }
+
+/** Host the browser is on, as the proxy forwarded it. '' when unknown. */
+function forwardedHost(request: Request): string {
+  return request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? ''
+}
+
+/**
+ * Login attempt by a BankID identity whose address was never proven
+ * (`email_verified_at IS NULL`, see lib/bankid-pending.ts). Never mints a
+ * session. Two outcomes:
+ *
+ *  - The account has since been adopted through another credential (the real
+ *    owner of the address set a password or signed in with Google): the
+ *    pending link is revoked so it can never be promoted, and the BankID
+ *    holder is told there is no account, which for them is now true.
+ *  - Otherwise the account is still the unconfirmed shell the signup made:
+ *    the confirmation mail is re-sent (best effort; every attempt costs a
+ *    BankID identification, which bounds the volume) and the caller is asked
+ *    to confirm first. The message surfaces in the login page, so Swedish.
+ */
+async function refusePendingLogin(
+  supabase: SupabaseClient,
+  userId: string,
+  user: User | null | undefined,
+  names: { givenName?: string; surname?: string },
+  request: Request,
+): Promise<NextResponse> {
+  if (!user || hasForeignCredential(user)) {
+    if (user) {
+      log.warn('pending bankid identity revoked at login: account adopted by another credential', {
+        userId,
+      })
+    }
+    await revokePendingIdentity(supabase, userId, user?.app_metadata)
+    return NextResponse.json({ error: 'no_account', ...names }, { status: 404 })
+  }
+
+  if (user.email) {
+    // /auth/callback only looks for a pending identity when the flag is set.
+    // Rows created by the old flow (before the column existed) have the flag
+    // missing; heal it here so the re-sent mail can actually promote them.
+    if (user.app_metadata?.bankid_pending !== true) {
+      await supabase.auth.admin.updateUserById(userId, {
+        app_metadata: { ...(user.app_metadata ?? {}), bankid_pending: true },
+      })
+    }
+    const sent = await sendBankIdSignupConfirmation({
+      supabase,
+      email: user.email,
+      host: forwardedHost(request),
+      proto: request.headers.get('x-forwarded-proto'),
+    })
+    if (!sent.ok) {
+      log.warn('could not re-send bankid confirmation mail', { userId, step: sent.step })
+    }
+  }
+
+  return NextResponse.json(
+    {
+      error: 'email_unconfirmed',
+      message:
+        'Bekräfta din e-postadress först. Vi har skickat ett nytt bekräftelsemail till adressen du angav när kontot skapades.',
+    },
+    { status: 403 }
+  )
+}
+
+/**
+ * The same BankID signs up again while an earlier signup is still pending
+ * (typo'd address, lost mail). Clear the stale link so this attempt can start
+ * over with the address typed now. The stale account is deleted outright only
+ * while it is still the unconfirmed shell the signup made (bankid_identities
+ * cascades); if somebody else has adopted it in the meantime, only the BankID
+ * link is removed and their account is left alone. False = could not clear.
+ */
+async function clearStalePendingSignup(supabase: SupabaseClient, userId: string): Promise<boolean> {
+  const { data } = await supabase.auth.admin.getUserById(userId)
+  const user = data?.user
+
+  if (user && isUnadoptedPendingAccount(user)) {
+    const { error } = await supabase.auth.admin.deleteUser(userId)
+    if (error) {
+      log.error('could not delete stale pending bankid signup', { userId, message: error.message })
+      return false
+    }
+    log.info('stale pending bankid signup deleted for re-signup', { userId })
+    return true
+  }
+
+  if (user) {
+    log.warn('pending bankid identity revoked at re-signup: account adopted by another credential', {
+      userId,
+    })
+  }
+  return revokePendingIdentity(supabase, userId, user?.app_metadata)
+}
 
 /**
  * Claim a BankID session, atomically and exactly once.
@@ -1033,12 +1137,30 @@ export const ticExtension: Extension = {
           const pnrHash = hashPersonalNumber(personalNumber)
           const supabase = createServiceClient()
 
-          // Look up existing BankID identity
-          const { data: existing } = await supabase
+          // Look up existing BankID identity. email_verified_at NULL means the
+          // address on the account was never proven (pending signup): such an
+          // identity signs nobody in and is not "linked" for signup purposes.
+          const { data: existing, error: lookupError } = await supabase
             .from('bankid_identities')
-            .select('user_id')
+            .select('user_id, email_verified_at')
             .eq('personal_number_hash', pnrHash)
             .single()
+
+          // PGRST116 is .single() finding no row, which is the normal "not
+          // linked" answer. Anything else (schema behind the code, connection
+          // lost) must not read as "no account": that would send every
+          // returning BankID user to signup. Not settled, so the completed
+          // identification survives a retry.
+          if (lookupError && lookupError.code !== 'PGRST116') {
+            log.error('bankid_identities lookup failed', {
+              code: lookupError.code,
+              message: lookupError.message,
+            })
+            return NextResponse.json(
+              { error: 'service_unavailable', message: 'Tillfälligt fel. Försök igen om en stund.' },
+              { status: 503 }
+            )
+          }
 
           if (mode === 'login') {
             if (!existing) {
@@ -1051,8 +1173,23 @@ export const ticExtension: Extension = {
               }, { status: 404 }))
             }
 
-            // Returning user: generate magic link
+            // Returning user. Load the account before deciding anything: a
+            // pending identity is refused (never a magic link), see
+            // refusePendingLogin.
             const { data: userData } = await supabase.auth.admin.getUserById(existing.user_id)
+
+            if (existing.email_verified_at === null) {
+              return settle(
+                await refusePendingLogin(
+                  supabase,
+                  existing.user_id,
+                  userData?.user,
+                  { givenName, surname },
+                  request,
+                )
+              )
+            }
+
             if (!userData?.user?.email) {
               // Data problem, not a transient one: an identity with no user
               // email will never complete. settle() so it is not re-offered as
@@ -1105,7 +1242,7 @@ export const ticExtension: Extension = {
           }
 
           // mode === 'signup'
-          if (existing) {
+          if (existing && existing.email_verified_at !== null) {
             // Terminal: this BankID already has an account, so the answer is
             // to sign in, not to retry this session.
             return settle(NextResponse.json(
@@ -1114,6 +1251,17 @@ export const ticExtension: Extension = {
             ))
           }
 
+          if (existing) {
+            // Pending identity from an earlier signup by this same BankID.
+            // Not settled: the identification is still good, only the stale
+            // link is in the way. A failure here is transient by nature.
+            if (!await clearStalePendingSignup(supabase, existing.user_id)) {
+              return NextResponse.json(SIGNUP_FAILED, { status: 500 })
+            }
+          }
+
+          const host = forwardedHost(request)
+
           // Invite-only brand domain gate (founder decision 2026-08-27):
           // same rule POST /api/auth/signup enforces on the email path. Runs
           // AFTER the existing-identity check so a returning user's login is
@@ -1121,10 +1269,7 @@ export const ticExtension: Extension = {
           // deliberately NOT settled, so the visitor keeps the completed
           // BankID identification if the byrå allowlists them mid-flow.
           const gateResult = await evaluateBrandSignupGate({
-            host:
-              request.headers.get('x-forwarded-host') ??
-              request.headers.get('host') ??
-              '',
+            host,
             email: trimmedEmail!,
             inviteToken: readInviteTokenFromCookieHeader(request.headers.get('cookie')),
           })
@@ -1154,10 +1299,18 @@ export const ticExtension: Extension = {
           // The profile mirror can lack the address while the auth row still
           // holds it (anonymize_user_account scrubs profiles.email but keeps the
           // auth tombstone), which used to fall through to a dead-end 500 here.
+          //
+          // email_confirm: false. The address came from the request body and
+          // nothing has proven it belongs to the person holding the BankID.
+          // Confirming it here let anyone open an account on a stranger's
+          // address and keep a BankID login into it after the stranger adopted
+          // it (account pre-hijacking, security audit 2026-09). The address is
+          // confirmed by the mail sent below, and only then does the identity
+          // count (see lib/bankid-pending.ts).
           const randomPassword = crypto.randomBytes(32).toString('base64url')
           const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
             email: trimmedEmail!,
-            email_confirm: true,
+            email_confirm: false,
             password: randomPassword,
             user_metadata: { full_name: name },
           })
@@ -1192,10 +1345,7 @@ export const ticExtension: Extension = {
               code: createError?.code,
               message: createError?.message,
             })
-            return NextResponse.json(
-              { error: 'internal_error', message: 'Kunde inte skapa kontot. Försök igen.' },
-              { status: 500 }
-            )
+            return NextResponse.json(SIGNUP_FAILED, { status: 500 })
           }
 
           const userId = newUser.user.id
@@ -1216,24 +1366,22 @@ export const ticExtension: Extension = {
             }
           }
 
-          // Mark user as BankID-linked (skips TOTP MFA) and record that they
-          // do not have a password yet: the BankID signup gave them a random
-          // server-side password they will never see. This flag gates MFA
-          // enrollment (see lib/auth/has-password.ts).
+          // Mark the BankID link as PENDING, not linked: bankid_linked (which
+          // skips TOTP MFA, lib/auth/mfa.ts) is set by /auth/callback once the
+          // confirmation mail is clicked. has_password: false records that the
+          // BankID signup gave them a random server-side password they will
+          // never see; it gates MFA enrollment (see lib/auth/has-password.ts).
           const { error: metaError } = await supabase.auth.admin.updateUserById(userId, {
-            app_metadata: { bankid_linked: true, has_password: false },
+            app_metadata: { bankid_pending: true, has_password: false },
           })
 
           if (metaError) {
             log.error('signup app_metadata update failed', { message: metaError.message, code: metaError.code })
             await rollbackSignup('app_metadata update')
-            return NextResponse.json(
-              { error: 'internal_error', message: 'Kunde inte skapa kontot. Försök igen.' },
-              { status: 500 }
-            )
+            return NextResponse.json(SIGNUP_FAILED, { status: 500 })
           }
 
-          // Store BankID identity
+          // Store BankID identity, unverified until the mail is clicked.
           const { error: insertError } = await supabase
             .from('bankid_identities')
             .insert({
@@ -1242,20 +1390,18 @@ export const ticExtension: Extension = {
               personal_number_enc: encryptPersonalNumberForStorage(personalNumber),
               given_name: givenName,
               surname,
+              email_verified_at: null,
             })
 
           if (insertError) {
             log.error('insert bankid_identities failed', { message: insertError.message, code: insertError.code })
             await rollbackSignup('bankid_identities insert')
-            return NextResponse.json(
-              { error: 'internal_error', message: 'Kunde inte skapa kontot. Försök igen.' },
-              { status: 500 }
-            )
+            return NextResponse.json(SIGNUP_FAILED, { status: 500 })
           }
 
-          // Claim the session before minting. Placed after createUser so the
+          // Claim the session before mailing. Placed after createUser so the
           // recoverable account_exists path above leaves the flow reusable,
-          // and before generateLink so two tabs cannot both mint.
+          // and before the mail so two tabs cannot both send one.
           if (!await consumeBankIdSession(supabase, sessionId)) {
             await rollbackSignup('session already consumed')
             return settle(NextResponse.json(
@@ -1264,20 +1410,24 @@ export const ticExtension: Extension = {
             ))
           }
 
-          // Generate magic link for session
-          const { data: link, error: linkError } = await supabase.auth.admin.generateLink({
-            type: 'magiclink',
+          // Mail the confirmation link to the typed address. The token never
+          // reaches the browser: whoever reads that inbox proves the address,
+          // and /auth/callback promotes the identity when they click.
+          const sent = await sendBankIdSignupConfirmation({
+            supabase,
             email: trimmedEmail!,
+            host,
+            proto: request.headers.get('x-forwarded-proto'),
           })
 
-          if (linkError || !link?.properties?.hashed_token) {
-            log.error('generateLink failed for signup', { message: linkError?.message, code: linkError?.code })
-            await rollbackSignup('generateLink')
+          if (!sent.ok) {
+            log.error('bankid signup confirmation mail failed', { step: sent.step, message: sent.message })
+            await rollbackSignup(`confirmation mail (${sent.step})`)
             // The session was already consumed above, so this flow cannot be
             // retried; settle() clears it rather than leaving a spent,
             // rolled-back flow to be re-offered as resumable.
             return settle(NextResponse.json(
-              { error: 'internal_error', message: 'Kunde inte skapa kontot. Försök igen.' },
+              { error: 'internal_error', message: 'Kunde inte skicka bekräftelsemailet. Försök igen.' },
               { status: 500 }
             ))
           }
@@ -1285,12 +1435,13 @@ export const ticExtension: Extension = {
           // Enrichment (CompanyRoles): pre-fills /select-company picker.
           await fetchAndStoreEnrichment(sessionId, userId, supabase)
 
-          // settle(): account created and magic link minted. The flow is spent.
+          // settle(): account created and the mail is out. The flow is spent.
+          // Same shape as POST /api/auth/signup, so the register page can show
+          // its existing "check your inbox" screen. No session, no token.
           return settle(NextResponse.json({
             data: {
-              tokenHash: link.properties.hashed_token,
-              type: 'magiclink',
-              isNewUser: true,
+              status: 'confirmation_sent',
+              email: trimmedEmail!,
             },
           }))
         } catch (error) {
@@ -1444,7 +1595,10 @@ export const ticExtension: Extension = {
             ))
           }
 
-          // Link BankID to current user
+          // Link BankID to current user. The caller is authenticated, so the
+          // address on the account is already theirs: verified from the start
+          // (the column has no default; NULL would make this a pending link
+          // that refuses to sign in).
           const { error: insertError } = await supabase
             .from('bankid_identities')
             .insert({
@@ -1453,6 +1607,7 @@ export const ticExtension: Extension = {
               personal_number_enc: encryptPersonalNumberForStorage(personalNumber),
               given_name: givenName,
               surname,
+              email_verified_at: new Date().toISOString(),
             })
 
           if (insertError) {

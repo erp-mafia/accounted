@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { PayrollConfig } from './payroll-config'
+import { daysBetweenIso } from '@/lib/dates/iso'
 import {
   calculateVabDeduction,
   calculateParentalLeaveDeduction,
@@ -87,10 +88,6 @@ function dateOnly(s: string): Date {
   return new Date(`${s}T00:00:00Z`)
 }
 
-function daysBetween(a: string, b: string): number {
-  return Math.round((dateOnly(b).getTime() - dateOnly(a).getTime()) / ONE_DAY_MS)
-}
-
 function addDays(d: string, n: number): string {
   const t = new Date(dateOnly(d).getTime() + n * ONE_DAY_MS)
   return t.toISOString().slice(0, 10)
@@ -124,7 +121,7 @@ export function buildSjukloneperioder(sickDates: string[]): SjukloneperiodSegmen
 
   for (let i = 1; i < sorted.length; i++) {
     const date = sorted[i]
-    const gap = daysBetween(endDate, date)
+    const gap = daysBetweenIso(endDate, date)
     if (gap === 0) continue
     if (gap >= 1 && gap <= 5) {
       // Within 5 calendar days: same period (contiguous OR återinsjuknande)
@@ -269,7 +266,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
       // index (calendar days from segment start, 1-based).
       for (const d of periodSickDates) {
         if (d < seg.startDate || d > seg.endDate) continue
-        const segDayIndex = daysBetween(seg.startDate, d) + 1
+        const segDayIndex = daysBetweenIso(seg.startDate, d) + 1
         if (segDayIndex === 1 && segmentStartsInPeriod) {
           // already accounted for as karens (or suppressed); skip
           continue

@@ -1,3 +1,4 @@
+import { chunk } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { roundOre as round } from '@/lib/money'
@@ -84,12 +85,6 @@ type ExistingRow = Pick<
   | 'vat_breakdown'
   | 'line_items'
 >
-
-function chunk<T>(items: T[], size: number): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
-  return out
-}
 
 /**
  * Rows whose financials must not be silently refreshed. Booked/invoiced rows

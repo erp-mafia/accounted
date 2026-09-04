@@ -5,21 +5,10 @@ import { resolvePayslipToken, isValidPayslipTokenFormat } from '@/lib/salary/pay
 import { buildPayslipData, payslipFileName } from '@/lib/salary/payslips/build-payslip-data'
 import { PayslipPDF } from '@/lib/salary/pdf/payslip-template'
 import { contentDisposition } from '@/lib/api/content-disposition'
+import { createTokenRateLimiter } from '@/lib/api/token-rate-limit'
 
-// In-memory rate limiting per token (pattern from /api/calendar/feed).
-const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
-const RATE_LIMIT_WINDOW_MS = 60_000
-const RATE_LIMIT_MAX = 20
-
-let lastCleanup = Date.now()
-function cleanupRateLimitMap() {
-  const now = Date.now()
-  if (now - lastCleanup < 5 * 60_000) return
-  lastCleanup = now
-  for (const [key, value] of rateLimitMap) {
-    if (now > value.resetAt) rateLimitMap.delete(key)
-  }
-}
+// 20 requests per minute per token, process-local (same limiter as /api/calendar/feed).
+const rateLimiter = createTokenRateLimiter({ max: 20, windowMs: 60_000 })
 
 /**
  * GET /api/payslip/[token]/pdf
@@ -39,16 +28,8 @@ export async function GET(
     return new NextResponse('Invalid token', { status: 400 })
   }
 
-  cleanupRateLimitMap()
-  const nowMs = Date.now()
-  const rateEntry = rateLimitMap.get(token)
-  if (rateEntry && nowMs < rateEntry.resetAt) {
-    if (rateEntry.count >= RATE_LIMIT_MAX) {
-      return new NextResponse('Too many requests', { status: 429 })
-    }
-    rateEntry.count++
-  } else {
-    rateLimitMap.set(token, { count: 1, resetAt: nowMs + RATE_LIMIT_WINDOW_MS })
+  if (!rateLimiter.allow(token)) {
+    return new NextResponse('Too many requests', { status: 429 })
   }
 
   const serviceClient = createServiceClientNoCookies()

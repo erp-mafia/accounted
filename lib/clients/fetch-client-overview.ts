@@ -18,6 +18,7 @@
  * fetchAllRows guards every query that can exceed PostgREST's 1000-row cap.
  */
 
+import { chunk as chunked } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
@@ -37,12 +38,6 @@ export interface ClientOverview {
 
 /** Max ids per PostgREST .in() filter (mirrors lib/worklist IN_CLAUSE_CHUNK). */
 const IN_CLAUSE_CHUNK = 150
-
-function chunked<T>(items: T[], size: number): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
-  return out
-}
 
 interface ByraMembershipRow {
   team_id: string

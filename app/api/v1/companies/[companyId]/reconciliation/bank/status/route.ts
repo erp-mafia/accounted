@@ -9,7 +9,7 @@ import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 
 // Mirrors ReconciliationStatus from lib/reconciliation/bank-reconciliation.ts:
@@ -110,17 +110,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       date_to: url.searchParams.get('date_to') ?? undefined,
       account_number: url.searchParams.get('account_number') ?? undefined,
     })
-    if (!parsed.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: parsed.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
-    }
+    if (!parsed.success) return v1ValidationError(ctx, parsed.error)
 
     const accountNumber = parsed.data.account_number ?? '1930'
     const { data: cashAccount } = await ctx.supabase

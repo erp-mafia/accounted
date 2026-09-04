@@ -1,0 +1,529 @@
+import { NextResponse } from 'next/server'
+import type { z } from 'zod'
+import { CONNECTOR_HEADERS, PEPPOL_OPERATIONS, peppolParticipantSchema } from '@accounted/connect-contract'
+import { withConnectorAuth, type ConnectorContext } from '@/lib/connect/hosted/with-connector-auth'
+import { reserveUpstream } from '@/lib/connect/hosted/upstream-budget'
+import {
+  activateByPendingState,
+  countHeldConnections,
+  createPendingConnection,
+  deletePendingConnectionById,
+  findByAccountUid,
+  revokeByHandle,
+  touchConnection,
+} from '@/lib/connect/hosted/ledger'
+import {
+  countConnectorPeppolRegistrations,
+  describePeppolUpstreamFailure,
+  findOwnedPeppolSubmission,
+  getPeppolAllowedIdentifiers,
+  isHostedPeppolParticipantLive,
+  isPeppolParticipantHeld,
+  listActivePeppolParticipants,
+  peppolHandle,
+  recordPeppolSubmission,
+} from '@/lib/connect/hosted/peppol-ledger'
+import type { PeppolInboundMessage, PeppolTransport } from '@/lib/invoices/peppol-transport'
+import { countLivePeppolRegistrations, getPeppolReceivingCap } from '@/lib/invoices/peppol-registration'
+import { QVALIA_PROVIDER, createQvaliaTransport, readQvaliaConfigFromEnv } from '@/lib/invoices/transports/qvalia'
+
+/**
+ * Peppol proxy for self-hosted instances (WS3, Peppol upstream).
+ *
+ * Unlike the bank proxy this is not a path passthrough: the instance speaks
+ * the PeppolTransport operations and the hosted side talks to Qvalia with
+ * Arcim's partner keys. Reasons: Qvalia URLs embed Arcim's partner and
+ * account numbers, the account is shared by every hosted company and every
+ * instance (so reads must be scoped to what the caller owns), and the
+ * inbound "read" endpoint is destructive (it marks documents read for the
+ * whole account, which the hosted inbound cron already does).
+ *
+ * Ownership model:
+ *   - a participant may only be registered when its identifier is on the
+ *     key's allowlist (connector_keys.peppol_participants, recorded by Arcim
+ *     at issuance) or is the licensee's own org number: the hosted side has
+ *     no other way to know which organisations an instance legitimately
+ *     hosts, and X-Connector-Company is caller-supplied;
+ *   - a receiving registration is a ledger row (service 'peppol') whose
+ *     account_uids holds the participant id; one participant, one key;
+ *   - a document may only be SENT as a participant the key has registered
+ *     (the registration is the identity claim, the allowlist authorizes it);
+ *   - registrations, submissions, status polls, evidence reads and
+ *     deregistration are bound to the (key, company_ref) pair, so one company
+ *     on a multi-company instance cannot act on another company's
+ *     registration through the shared key; inbound listing is key-wide
+ *     because the instance's inbound sync routes documents to its own
+ *     companies by its own registrations;
+ *   - inbound documents are served from the hosted archive
+ *     (peppol_inbound_documents, filled by /api/peppol/inbound/cron) filtered
+ *     by the participants this key holds, never by calling Qvalia's read
+ *     endpoint on the instance's behalf.
+ *
+ * Switch-on for third-party instances is gated on the Qvalia brokering-terms
+ * check (see the migration note): without the `peppol` scope on the key every
+ * operation answers 403.
+ */
+
+const COMPANY_HEADER = CONNECTOR_HEADERS.company.toLowerCase()
+const PENDING_STATE_PREFIX = 'peppol:'
+
+// Request shapes come from the published contract so this route and the
+// instance transport (and any third-party implementation of either side)
+// validate with the same schemas.
+const participantSchema = peppolParticipantSchema
+const lookupSchema = PEPPOL_OPERATIONS.lookup.request
+const submissionSchema = PEPPOL_OPERATIONS.submit.request
+const submissionRefSchema = PEPPOL_OPERATIONS.status.request
+const registrationSchema = PEPPOL_OPERATIONS.register.request
+const inboundListSchema = PEPPOL_OPERATIONS.inboundList.request
+const inboundXmlSchema = PEPPOL_OPERATIONS.inboundXml.request
+
+function hostedTransport(): PeppolTransport | null {
+  const config = readQvaliaConfigFromEnv()
+  return config ? createQvaliaTransport(config) : null
+}
+
+function pathOf(request: Request): string {
+  const idx = request.url.indexOf('/api/connect/peppol')
+  const rest = idx === -1 ? '' : request.url.slice(idx + '/api/connect/peppol'.length)
+  return rest.split('?')[0].replace(/\/+$/, '') || '/'
+}
+
+function companyRef(request: Request): string | null {
+  return request.headers.get(COMPANY_HEADER)?.trim() || null
+}
+
+function requireScope(ctx: ConnectorContext): NextResponse | null {
+  if (ctx.key.scopes.includes('peppol')) return null
+  return NextResponse.json(
+    { error: 'This connector key does not include Peppol', code: 'CONNECTOR_SCOPE_MISSING' },
+    { status: 403 },
+  )
+}
+
+async function budgetOr429(ctx: ConnectorContext): Promise<NextResponse | null> {
+  const budget = await reserveUpstream(ctx.supabase, 'peppol')
+  if (budget.ok) return null
+  ctx.log.warn('peppol connector budget exhausted', { scope: budget.scope })
+  return NextResponse.json(
+    { error: 'Peppol connector is busy, try again shortly', code: 'CONNECTOR_RATE_LIMITED', scope: budget.scope },
+    { status: 429, headers: { 'Retry-After': String(budget.retryAfterSec) } },
+  )
+}
+
+async function parseBody<T>(request: Request, schema: z.ZodType<T>): Promise<{ ok: true; value: T } | { ok: false; response: NextResponse }> {
+  let raw: unknown
+  try {
+    raw = await request.json()
+  } catch {
+    return { ok: false, response: NextResponse.json({ error: 'Invalid JSON', code: 'BAD_REQUEST' }, { status: 400 }) }
+  }
+  const parsed = schema.safeParse(raw)
+  if (!parsed.success) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: 'Invalid request body', code: 'BAD_REQUEST', detail: parsed.error.issues.slice(0, 5).map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') },
+        { status: 400 },
+      ),
+    }
+  }
+  return { ok: true, value: parsed.data }
+}
+
+/**
+ * A provider failure is answered with the transport's retryable flag so the
+ * instance rethrows an equivalent PeppolTransportError. Anything else is a
+ * hosted bug and falls through to the wrapper's 500.
+ */
+function upstreamFailure(err: unknown, ctx: ConnectorContext, op: string): NextResponse {
+  const failure = describePeppolUpstreamFailure(err)
+  if (!failure) throw err
+  ctx.log.warn(`peppol upstream failed: ${op}`, { text: failure.text, retryable: failure.retryable })
+  return NextResponse.json(
+    { error: failure.text, code: 'CONNECTOR_UPSTREAM_ERROR', retryable: failure.retryable, detail: failure.hint },
+    { status: failure.retryable ? 502 : 422 },
+  )
+}
+
+function unconfigured(): NextResponse {
+  return NextResponse.json(
+    { error: 'Peppol access point is not configured on the hosted service', code: 'CONNECTOR_UPSTREAM_UNCONFIGURED', retryable: true },
+    { status: 503 },
+  )
+}
+function notAllowed(): NextResponse {
+  return NextResponse.json({ error: 'Not allowed', code: 'CONNECTOR_PATH_NOT_ALLOWED' }, { status: 403 })
+}
+function notOwned(): NextResponse {
+  return NextResponse.json({ error: 'Unknown registration or submission for this key', code: 'CONNECTOR_NOT_OWNED' }, { status: 404 })
+}
+function missingCompany(): NextResponse {
+  return NextResponse.json({ error: 'Missing X-Connector-Company header', code: 'CONNECTOR_COMPANY_MISSING' }, { status: 400 })
+}
+function participantTaken(): NextResponse {
+  return NextResponse.json(
+    { error: 'That Peppol participant is already registered through another account', code: 'CONNECTOR_PEPPOL_PARTICIPANT_TAKEN', retryable: false },
+    { status: 409 },
+  )
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err)
+  return /23505|idx_connector_connections_handle|duplicate key/i.test(message)
+}
+
+export const POST = withConnectorAuth('connect.peppol', async (request, ctx) => {
+  const scopeError = requireScope(ctx)
+  if (scopeError) return scopeError
+  const path = pathOf(request)
+  const transport = hostedTransport()
+  if (!transport) return unconfigured()
+
+  if (path === '/lookup') {
+    const body = await parseBody(request, lookupSchema)
+    if (!body.ok) return body.response
+    const blocked = await budgetOr429(ctx)
+    if (blocked) return blocked
+    try {
+      return NextResponse.json(await transport.lookupRecipient(body.value.participant))
+    } catch (err) {
+      return upstreamFailure(err, ctx, 'lookup')
+    }
+  }
+
+  if (path === '/submit') {
+    const cref = companyRef(request)
+    if (!cref) return missingCompany()
+    const body = await parseBody(request, submissionSchema)
+    if (!body.ok) return body.response
+    // Sending as a participant is an identity claim: only participants this
+    // key registered (which the allowlist authorized) may appear as sender.
+    const senderOwned = await findByAccountUid(ctx.supabase, { keyId: ctx.key.id, accountUid: peppolHandle(body.value.sender) })
+    if (!senderOwned || senderOwned.company_ref !== cref) {
+      return NextResponse.json(
+        { error: 'The sender participant is not registered through this connector key', code: 'CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED', retryable: false },
+        { status: 403 },
+      )
+    }
+    const blocked = await budgetOr429(ctx)
+    if (blocked) return blocked
+    // The tenant reference the instance signs its delivery with must be the
+    // company the request is scoped to; otherwise a key could stage under
+    // one company and record ownership under another.
+    const submission = { ...body.value, tenantReference: cref }
+    let receipt
+    try {
+      receipt = await transport.submit(submission)
+    } catch (err) {
+      return upstreamFailure(err, ctx, 'submit')
+    }
+    await recordPeppolSubmission(ctx.supabase, {
+      keyId: ctx.key.id,
+      companyRef: cref,
+      provider: QVALIA_PROVIDER,
+      providerSubmissionId: receipt.providerSubmissionId,
+      idempotencyKey: submission.idempotencyKey,
+    })
+    return NextResponse.json(receipt)
+  }
+
+  if (path === '/status' || path === '/evidence') {
+    const cref = companyRef(request)
+    if (!cref) return missingCompany()
+    const body = await parseBody(request, submissionRefSchema)
+    if (!body.ok) return body.response
+    const owned = await findOwnedPeppolSubmission(ctx.supabase, {
+      keyId: ctx.key.id,
+      companyRef: cref,
+      provider: QVALIA_PROVIDER,
+      providerSubmissionId: body.value.providerSubmissionId,
+    })
+    if (!owned) return notOwned()
+    const blocked = await budgetOr429(ctx)
+    if (blocked) return blocked
+    try {
+      if (path === '/status') {
+        const events = transport.pollDeliveryStatus
+          ? await transport.pollDeliveryStatus(body.value.providerSubmissionId)
+          : []
+        return NextResponse.json(events)
+      }
+      return NextResponse.json(await transport.retrieveEvidence(body.value.providerSubmissionId))
+    } catch (err) {
+      return upstreamFailure(err, ctx, path.slice(1))
+    }
+  }
+
+  if (path === '/inbound/list') {
+    const body = await parseBody(request, inboundListSchema)
+    if (!body.ok) return body.response
+    const participants = await listActivePeppolParticipants(ctx.supabase, ctx.key.id)
+    if (participants.length === 0) return NextResponse.json([])
+    const limit = Math.min(Math.max(body.value.limit ?? 25, 1), 100)
+    // Exact (scheme, identifier) pairs, one query per scheme: within a scheme
+    // the identifier list IS the pair set, so no foreign or cross-pair row can
+    // consume the limit. Schemes are one or two in practice (0007, 0088).
+    const identifiersByScheme = new Map<string, Set<string>>()
+    for (const p of participants) {
+      const set = identifiersByScheme.get(p.scheme) ?? new Set<string>()
+      set.add(p.identifier)
+      identifiersByScheme.set(p.scheme, set)
+    }
+    type ArchiveRow = {
+      provider_document_id: string
+      document_type: 'Invoice' | 'CreditNote'
+      ubl_json: Record<string, unknown>
+      received_at: string | null
+      recipient_scheme: string | null
+      recipient_identifier: string | null
+    }
+    const rows: ArchiveRow[] = []
+    for (const [scheme, identifiers] of identifiersByScheme) {
+      const { data, error } = await ctx.supabase
+        .from('peppol_inbound_documents')
+        .select('provider_document_id, document_type, ubl_json, received_at, recipient_scheme, recipient_identifier')
+        .eq('provider', QVALIA_PROVIDER)
+        .eq('document_type', body.value.documentType)
+        .eq('recipient_scheme', scheme)
+        .in('recipient_identifier', [...identifiers])
+        .order('received_at', { ascending: false })
+        .limit(limit)
+      if (error) throw new Error(`inbound archive read failed: ${error.message}`)
+      rows.push(...((data ?? []) as ArchiveRow[]))
+    }
+    rows.sort((a, b) => (b.received_at ?? '').localeCompare(a.received_at ?? ''))
+    const owned = new Set(participants.map(peppolHandle))
+    const messages: PeppolInboundMessage[] = []
+    for (const row of rows) {
+      if (!row.recipient_scheme || !row.recipient_identifier) continue
+      if (!owned.has(peppolHandle({ scheme: row.recipient_scheme, identifier: row.recipient_identifier }))) continue
+      messages.push({
+        provider: QVALIA_PROVIDER,
+        providerDocumentId: row.provider_document_id,
+        documentType: row.document_type,
+        payload: row.ubl_json ?? {},
+        receivedAt: row.received_at,
+      })
+      if (messages.length >= limit) break
+    }
+    return NextResponse.json(messages)
+  }
+
+  if (path === '/inbound/xml') {
+    const body = await parseBody(request, inboundXmlSchema)
+    if (!body.ok) return body.response
+    const participants = await listActivePeppolParticipants(ctx.supabase, ctx.key.id)
+    const owned = new Set(participants.map(peppolHandle))
+    const { data, error } = await ctx.supabase
+      .from('peppol_inbound_documents')
+      .select('xml_payload, recipient_scheme, recipient_identifier')
+      .eq('provider', QVALIA_PROVIDER)
+      .eq('provider_document_id', body.value.providerDocumentId)
+      .eq('document_type', body.value.documentType)
+      .maybeSingle()
+    if (error) throw new Error(`inbound archive read failed: ${error.message}`)
+    const row = data as { xml_payload: string | null; recipient_scheme: string | null; recipient_identifier: string | null } | null
+    if (!row || !row.recipient_scheme || !row.recipient_identifier) return notOwned()
+    if (!owned.has(peppolHandle({ scheme: row.recipient_scheme, identifier: row.recipient_identifier }))) return notOwned()
+    if (row.xml_payload) return NextResponse.json({ xml: row.xml_payload })
+    // The archive kept JSON but the XML fetch failed at cron time: retry live.
+    if (!transport.fetchInboundDocumentXml) return NextResponse.json({ xml: null })
+    const blocked = await budgetOr429(ctx)
+    if (blocked) return blocked
+    try {
+      return NextResponse.json({ xml: await transport.fetchInboundDocumentXml(body.value.providerDocumentId, body.value.documentType) })
+    } catch (err) {
+      return upstreamFailure(err, ctx, 'inbound.xml')
+    }
+  }
+
+  return notAllowed()
+})
+
+export const PUT = withConnectorAuth('connect.peppol', async (request, ctx) => {
+  const scopeError = requireScope(ctx)
+  if (scopeError) return scopeError
+  if (pathOf(request) !== '/recipient') return notAllowed()
+  const cref = companyRef(request)
+  if (!cref) return missingCompany()
+  const body = await parseBody(request, registrationSchema)
+  if (!body.ok) return body.response
+  const transport = hostedTransport()
+  if (!transport) return unconfigured()
+  // Both directions are required: a registration this route cannot undo
+  // (rollback on a lost race, DELETE later) must never be created.
+  if (!transport.registerRecipient || !transport.unregisterRecipient) {
+    return NextResponse.json({ error: 'Receiving is not supported by the hosted access point', code: 'PEPPOL_RECEIVING_UNSUPPORTED', retryable: false }, { status: 422 })
+  }
+  const unregisterUpstream = transport.unregisterRecipient
+
+  const participant = { scheme: body.value.participant.scheme, identifier: body.value.participant.identifier.replace(/\s/g, '') }
+  const handle = peppolHandle(participant)
+  const owned = await findByAccountUid(ctx.supabase, { keyId: ctx.key.id, accountUid: handle })
+  // Held by this key for ANOTHER company on the instance: not re-registrable
+  // from here, and not claimable either (it is not free).
+  if (owned && owned.company_ref !== cref) return participantTaken()
+
+  let pendingId: string | null = null
+  let pendingState: string | null = null
+  if (!owned) {
+    const allowed = await getPeppolAllowedIdentifiers(ctx.supabase, ctx.key.id)
+    if (!allowed.has(participant.identifier)) {
+      return NextResponse.json(
+        { error: 'This connector key is not authorized to publish that participant', code: 'CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED', retryable: false },
+        { status: 403 },
+      )
+    }
+    if (await isPeppolParticipantHeld(ctx.supabase, handle)) return participantTaken()
+    if (await isHostedPeppolParticipantLive(ctx.supabase, { provider: QVALIA_PROVIDER, participant })) return participantTaken()
+
+    const limit = ctx.key.limits.peppol_connections_per_company
+    const quotaExceeded = () =>
+      NextResponse.json(
+        { error: 'Peppol registration quota reached for this company', code: 'CONNECTOR_QUOTA_EXCEEDED', limit, retryable: false },
+        { status: 403 },
+      )
+    const held = await countHeldConnections(ctx.supabase, ctx.key.id, 'peppol', cref)
+    if (held >= limit) return quotaExceeded()
+
+    // The provider account is priced per registered tenant: hosted companies
+    // and connector instances share that cap. Fresh pending reservations
+    // count, and the cap is re-checked after this request's own reservation,
+    // so concurrent registrations cannot both squeeze past it.
+    const cap = getPeppolReceivingCap()
+    const capReached = () =>
+      NextResponse.json(
+        { error: 'The access point has no free receiving slot right now', code: 'PEPPOL_REGISTRATION_CAP_REACHED', retryable: false },
+        { status: 403 },
+      )
+    let hostedLive = 0
+    if (cap !== null) {
+      const [hosted, connector] = await Promise.all([
+        countLivePeppolRegistrations({ supabase: ctx.supabase, provider: QVALIA_PROVIDER }),
+        countConnectorPeppolRegistrations(ctx.supabase),
+      ])
+      hostedLive = hosted
+      if (hosted + connector >= cap) return capReached()
+    }
+
+    pendingState = `${PENDING_STATE_PREFIX}${crypto.randomUUID()}`
+    pendingId = await createPendingConnection(ctx.supabase, {
+      keyId: ctx.key.id,
+      service: 'peppol',
+      companyRef: cref,
+      provider: QVALIA_PROVIDER,
+      pendingState,
+    })
+    const heldAfter = await countHeldConnections(ctx.supabase, ctx.key.id, 'peppol', cref)
+    if (heldAfter > limit) {
+      await deletePendingConnectionById(ctx.supabase, pendingId)
+      return quotaExceeded()
+    }
+    if (cap !== null) {
+      const connectorAfter = await countConnectorPeppolRegistrations(ctx.supabase)
+      if (hostedLive + connectorAfter > cap) {
+        await deletePendingConnectionById(ctx.supabase, pendingId)
+        return capReached()
+      }
+    }
+  }
+
+  const blocked = await budgetOr429(ctx)
+  if (blocked) {
+    if (pendingId) await deletePendingConnectionById(ctx.supabase, pendingId)
+    return blocked
+  }
+
+  let result
+  try {
+    result = await transport.registerRecipient({
+      participant,
+      businessCard: body.value.businessCard,
+      documentTypes: body.value.documentTypes,
+      description: body.value.description ?? null,
+    })
+  } catch (err) {
+    if (pendingId) await deletePendingConnectionById(ctx.supabase, pendingId)
+    return upstreamFailure(err, ctx, 'register')
+  }
+
+  if (owned) {
+    await touchConnection(ctx.supabase, owned.id)
+  } else {
+    let activated = null
+    let activationError: unknown = null
+    try {
+      activated = await activateByPendingState(ctx.supabase, {
+        keyId: ctx.key.id,
+        pendingState: pendingState as string,
+        handle,
+        accountUids: [handle],
+      })
+    } catch (err) {
+      activationError = err
+    }
+    if (!activated) {
+      // Lost a race for the participant (or the row vanished): the upstream
+      // registration must not outlive its ledger row.
+      if (pendingId) await deletePendingConnectionById(ctx.supabase, pendingId)
+      try {
+        await unregisterUpstream(participant)
+      } catch (err) {
+        ctx.log.error('could not roll back upstream peppol registration; participant is registered upstream without a ledger row', err as Error, { handle })
+      }
+      if (activationError && !isUniqueViolation(activationError)) {
+        ctx.log.error('peppol ledger activation failed', activationError as Error)
+        return NextResponse.json({ error: 'Could not record the registration', code: 'CONNECTOR_LEDGER_FAILED', retryable: true }, { status: 502 })
+      }
+      return participantTaken()
+    }
+  }
+
+  return NextResponse.json({
+    status: result.status,
+    participant,
+    // Arcim's provider account reference stays hosted-side.
+    providerAccountReference: 'accounted-connector',
+    raw: {},
+  })
+})
+
+export const DELETE = withConnectorAuth('connect.peppol', async (request, ctx) => {
+  const scopeError = requireScope(ctx)
+  if (scopeError) return scopeError
+  if (pathOf(request) !== '/recipient') return notAllowed()
+  const url = new URL(request.url)
+  const parsed = participantSchema.safeParse({
+    scheme: url.searchParams.get('scheme') ?? '',
+    identifier: url.searchParams.get('identifier') ?? '',
+  })
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'scheme and identifier query parameters are required', code: 'BAD_REQUEST' }, { status: 400 })
+  }
+  const cref = companyRef(request)
+  if (!cref) return missingCompany()
+  const participant = { scheme: parsed.data.scheme, identifier: parsed.data.identifier.replace(/\s/g, '') }
+  const handle = peppolHandle(participant)
+  const owned = await findByAccountUid(ctx.supabase, { keyId: ctx.key.id, accountUid: handle })
+  if (!owned || owned.company_ref !== cref) return notOwned()
+  const transport = hostedTransport()
+  if (!transport) return unconfigured()
+  if (!transport.unregisterRecipient) {
+    return NextResponse.json(
+      { error: 'Deregistration is not supported by the hosted access point', code: 'PEPPOL_RECEIVING_UNSUPPORTED', retryable: false },
+      { status: 422 },
+    )
+  }
+  const blocked = await budgetOr429(ctx)
+  if (blocked) return blocked
+  try {
+    await transport.unregisterRecipient(participant)
+  } catch (err) {
+    return upstreamFailure(err, ctx, 'unregister')
+  }
+  // Only after the upstream deregistration took: revoking first would leave a
+  // participant receiving at the access point that no key owns.
+  await revokeByHandle(ctx.supabase, { keyId: ctx.key.id, service: 'peppol', handle })
+  return new NextResponse(null, { status: 204 })
+})

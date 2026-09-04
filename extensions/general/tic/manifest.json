@@ -10,7 +10,7 @@
   "definition": {
     "name": "Bolagsuppgifter",
     "category": "import",
-    "icon": "Building2",
+    "icon": "Briefcase",
     "dataPattern": "manual",
     "hasOwnData": true,
     "description": "Hämta företagsinformation automatiskt vid registrering",
@@ -18,7 +18,7 @@
     "quickAction": {
       "label": "Företagsprofil",
       "description": "Visa offentliga uppgifter",
-      "icon": "Building2",
+      "icon": "Briefcase",
       "href": "/e/general/tic",
       "order": 10
     }

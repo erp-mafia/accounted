@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { insertAuthUser, insertCompany, insertCompanyMember } from './fixtures'
+import { insertAuthUser, insertCashAccount, insertCompany, insertCompanyMember } from './fixtures'
 import { getPool, withUserContext } from './setup'
 
 /**
- * Behandlingshistorik, part 3 (migration 20260901103000): the behandlingsregler
+ * Behandlingshistorik, part 3 (migrations 20260901103000 + 20260901200000): the behandlingsregler
  * tables and the import logs write to the immutable audit_log, learning-only
  * updates on categorization_templates are filtered, the global payroll
  * constants are logged without a company, and app_releases is an append-only,
@@ -65,21 +65,36 @@ describe('behandlingshistorik audit triggers (BFNAR 2013:2 p. 9.16)', () => {
        VALUES ($1, $2, $3, 'Spotify AB', '6540', '1930')`,
       [templateId, userId, companyId],
     )
-    // Learning on every booking: occurrence_count / confidence / last_seen_date.
+    // Learning on every booking: occurrence_count / confidence / last_seen_date,
+    // and counterparty_aliases, which the learning path merges in the same
+    // write (20260901200000; prod showed 15 of the first 16 audit rows were
+    // alias+learning noise).
     await getPool().query(
       `UPDATE public.categorization_templates
-          SET occurrence_count = occurrence_count + 1, confidence = 0.9, last_seen_date = CURRENT_DATE
+          SET occurrence_count = occurrence_count + 1, confidence = 0.9, last_seen_date = CURRENT_DATE,
+              counterparty_aliases = ARRAY['SPOTIFY STOCKHOLM 4711']
         WHERE id = $1`,
       [templateId],
     )
     expect(await auditActions('categorization_templates', templateId)).toEqual(['INSERT'])
 
-    // A rule change (the account) is logged.
-    await getPool().query(`UPDATE public.categorization_templates SET debit_account = '6212' WHERE id = $1`, [templateId])
+    // But an account change arriving in the same write as learning columns is
+    // a behandlingsregel change and must still log (the automatkontering case).
+    await getPool().query(
+      `UPDATE public.categorization_templates
+          SET occurrence_count = occurrence_count + 1, credit_account = '1931',
+              counterparty_aliases = ARRAY['SPOTIFY STOCKHOLM 4711', 'SPOTIFY AB']
+        WHERE id = $1`,
+      [templateId],
+    )
     expect(await auditActions('categorization_templates', templateId)).toEqual(['INSERT', 'UPDATE'])
 
+    // A plain rule change (the account) is logged.
+    await getPool().query(`UPDATE public.categorization_templates SET debit_account = '6212' WHERE id = $1`, [templateId])
+    expect(await auditActions('categorization_templates', templateId)).toEqual(['INSERT', 'UPDATE', 'UPDATE'])
+
     await getPool().query(`DELETE FROM public.categorization_templates WHERE id = $1`, [templateId])
-    expect(await auditActions('categorization_templates', templateId)).toEqual(['INSERT', 'UPDATE', 'DELETE'])
+    expect(await auditActions('categorization_templates', templateId)).toEqual(['INSERT', 'UPDATE', 'UPDATE', 'DELETE'])
   })
 
   it('logs booking_template_library changes (no user_id column: actor falls back to auth.uid())', async () => {
@@ -111,6 +126,40 @@ describe('behandlingshistorik audit triggers (BFNAR 2013:2 p. 9.16)', () => {
     // booking_template_library has no user_id column, so write_audit_log()
     // falls back to auth.uid(): the actor is the authenticated writer.
     expect(rows).toEqual([{ action: 'INSERT', company_id: companyId, user_id: userId }])
+  })
+
+  it('logs a cash_accounts voucher_series change but not bank-sync churn (20260902124513)', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    const cashAccountId = await insertCashAccount({ companyId, ledgerAccount: '1931' })
+
+    // Bank sync touches balance and name all day: no behandlingsregel, no row.
+    await getPool().query(
+      `UPDATE public.cash_accounts SET balance = 250, name = 'Företagskort' WHERE id = $1`,
+      [cashAccountId],
+    )
+    expect(await auditActions('cash_accounts', cashAccountId)).toEqual([])
+
+    // Assigning the account its own verifikationsserie is a behandlingsregel.
+    await getPool().query(`UPDATE public.cash_accounts SET voucher_series = 'M' WHERE id = $1`, [cashAccountId])
+    // Clearing it back to "follow the per-type default" is one too.
+    await getPool().query(`UPDATE public.cash_accounts SET voucher_series = NULL WHERE id = $1`, [cashAccountId])
+
+    const rows = await getPool().query<{ action: string; company_id: string | null; old_series: string | null; new_series: string | null }>(
+      `SELECT action, company_id, old_state->>'voucher_series' AS old_series, new_state->>'voucher_series' AS new_series
+         FROM public.audit_log WHERE table_name = 'cash_accounts' AND record_id = $1
+        ORDER BY created_at, id`,
+      [cashAccountId],
+    )
+    expect(rows.rows).toEqual([
+      { action: 'UPDATE', company_id: companyId, old_series: null, new_series: 'M' },
+      { action: 'UPDATE', company_id: companyId, old_series: 'M', new_series: null },
+    ])
+
+    // The CHECK from 20260902121420 still guards the column.
+    await expect(
+      getPool().query(`UPDATE public.cash_accounts SET voucher_series = 'ab' WHERE id = $1`, [cashAccountId]),
+    ).rejects.toThrow(/check constraint/i)
   })
 
   it('logs the global payroll constants without a company (read via service role by the report)', async () => {

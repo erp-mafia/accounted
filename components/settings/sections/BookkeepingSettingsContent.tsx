@@ -10,9 +10,11 @@ import { PeriodLockingSettings } from '@/components/settings/PeriodLockingSettin
 import { FiscalYearsManager } from '@/components/settings/FiscalYearsManager'
 import { VoucherSeriesManager } from '@/components/settings/VoucherSeriesManager'
 import { VoucherSeriesPerSourceTypeForm } from '@/components/settings/VoucherSeriesPerSourceTypeForm'
+import { VoucherSeriesPerCashAccountForm } from '@/components/settings/VoucherSeriesPerCashAccountForm'
 import { applyDefaultSeriesToMap } from '@/lib/bookkeeping/voucher-series-resolver'
 import { DimensionsToggle } from '@/components/settings/DimensionsToggle'
 import { MileageToggle } from '@/components/settings/MileageToggle'
+import { SalesOrdersToggle } from '@/components/settings/SalesOrdersToggle'
 import { AccountingFrameworkForm } from '@/components/settings/AccountingFrameworkForm'
 import {
   SettingsGroup,
@@ -169,6 +171,8 @@ export function BookkeepingSettingsContent() {
         onSettingsUpdated={updateSettings}
       />
 
+      <VoucherSeriesPerCashAccountForm settings={settings} />
+
       <VoucherSeriesManager defaultSeries={settings.default_voucher_series || 'A'} />
 
       <SettingsGroup label={t('group_automation')}>
@@ -186,6 +190,7 @@ export function BookkeepingSettingsContent() {
         </SettingsRow>
         <DimensionsToggle />
         <MileageToggle />
+        <SalesOrdersToggle />
       </SettingsGroup>
 
       <SettingsGroup>

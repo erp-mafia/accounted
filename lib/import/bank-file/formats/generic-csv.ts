@@ -166,15 +166,6 @@ export function parseGenericCSV(
 }
 
 /**
- * Get column headers from a CSV file for the mapping UI
- */
-export function getCSVHeaders(content: string, delimiter: string = ','): string[] {
-  const prepared = prepareContent(content)
-  const firstLine = prepared.split('\n')[0] || ''
-  return parseCSVLine(firstLine, delimiter).map((h) => h.trim().replace(/^"|"$/g, ''))
-}
-
-/**
  * Get a preview of the first few rows of a CSV file
  */
 export function getCSVPreview(content: string, delimiter: string = ',', rows: number = 5): string[][] {

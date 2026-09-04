@@ -25,10 +25,13 @@ import {
 import { parseExpand } from '@/lib/api/v1/expand'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1, type ApiV1Context } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
+import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import {
   resolveSelfBilledSaleDraft,
   createSelfBilledSaleInvoice,
@@ -92,7 +95,7 @@ const InvoiceStatus = z.enum([
   'credited',
 ])
 
-const InvoiceDocumentType = z.enum(['invoice', 'proforma', 'delivery_note'])
+const InvoiceDocumentType = z.enum(['invoice', 'proforma', 'delivery_note', 'quote'])
 
 const InvoiceSummary = z.object({
   id: z.string().uuid(),
@@ -103,6 +106,10 @@ const InvoiceSummary = z.object({
   due_date: z.string(),
   status: InvoiceStatus,
   document_type: InvoiceDocumentType,
+  // Quotes only (null otherwise): expiry date and the effective decision.
+  // "expired" is derived from valid_until, never stored.
+  valid_until: z.string().nullable(),
+  quote_status: z.enum(['open', 'accepted', 'declined', 'expired']).nullable(),
   currency: z.string(),
   subtotal: z.number(),
   vat_amount: z.number(),
@@ -120,7 +127,7 @@ const ALLOWED_EXPAND = ['customer', 'items'] as const
 // fields not in the summary schema. Schema migrations adding columns must
 // update this list before the field becomes visible on the public API.
 const INVOICE_SUMMARY_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, status, document_type, currency, subtotal, vat_amount, total, remaining_amount, paid_at, created_at'
+  'id, invoice_number, customer_id, invoice_date, due_date, status, document_type, valid_until, quote_status, currency, subtotal, vat_amount, total, remaining_amount, paid_at, created_at'
 
 // Customer projections: three tiers for different contexts:
 //   - NAME_ONLY: default for the invoice list (inline customer_name only)
@@ -156,6 +163,7 @@ registerEndpoint({
     'Credit notes appear with status=credited and a credited_invoice_id field on the detail endpoint.',
     'Ordering is by created_at (registration time), not invoice_date. Backdated invoices therefore appear where they were created, not where their date falls: filter on ?date_from / ?date_to when you care about the business date.',
     'Cursor pagination: pass ?cursor=<next_cursor> from the previous response. A stale or tampered cursor is ignored and the first page is returned again.',
+    'Quotes (document_type=quote, offert) carry valid_until and quote_status (open | accepted | declined | expired). "expired" is derived: an open quote past valid_until; filter with ?quote_status=expired. Quotes never book and are never payable: convert an accepted quote to an invoice in the dashboard first.',
     'The register only contains invoices created in Accounted. A company migrated or backfilled mid-year has real customer invoices that exist only as journal entries and are NOT in this list. Check meta.coverage: when has_pre_register_invoices is true, treat periods before covers_from as not answered by this endpoint (query journal entries instead).',
   ],
   example: {
@@ -223,6 +231,9 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       status: InvoiceStatus.optional(),
       customer_id: z.string().uuid().optional(),
       document_type: InvoiceDocumentType.optional(),
+      // Quotes only. "expired" is derived (open AND valid_until < today),
+      // so it is a predicate here rather than a stored value.
+      quote_status: z.enum(['open', 'accepted', 'declined', 'expired']).optional(),
       currency: z.string().regex(/^[A-Z]{3}$/, 'currency must be a 3-letter ISO-4217 code').optional(),
       // invoice_date range. The sort key is created_at (see the ordering
       // rationale below), so these filters are how a caller narrows by the
@@ -234,20 +245,13 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       status: url.searchParams.get('status') ?? undefined,
       customer_id: url.searchParams.get('customer_id') ?? undefined,
       document_type: url.searchParams.get('document_type') ?? undefined,
+      quote_status: url.searchParams.get('quote_status') ?? undefined,
       currency: url.searchParams.get('currency') ?? undefined,
       date_from: url.searchParams.get('date_from') ?? undefined,
       date_to: url.searchParams.get('date_to') ?? undefined,
     })
     if (!filtersResult.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: filtersResult.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
+      return v1ValidationError(ctx, filtersResult.error)
     }
     const filters = filtersResult.data
 
@@ -280,6 +284,14 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (filters.status) query = query.eq('status', filters.status)
     if (filters.customer_id) query = query.eq('customer_id', filters.customer_id)
     if (filters.document_type) query = query.eq('document_type', filters.document_type)
+    if (filters.quote_status) {
+      query = query.eq('document_type', 'quote')
+      if (filters.quote_status === 'expired') {
+        query = query.eq('quote_status', 'open').lt('valid_until', new Date().toISOString().split('T')[0])
+      } else {
+        query = query.eq('quote_status', filters.quote_status)
+      }
+    }
     if (filters.currency) query = query.eq('currency', filters.currency)
     if (filters.date_from) query = query.gte('invoice_date', filters.date_from)
     if (filters.date_to) query = query.lte('invoice_date', filters.date_to)
@@ -309,6 +321,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       due_date: string
       status: string
       document_type: string
+      valid_until: string | null
+      quote_status: string | null
       currency: string
       subtotal: number
       vat_amount: number
@@ -340,6 +354,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
         due_date: r.due_date,
         status: r.status,
         document_type: r.document_type,
+        valid_until: r.valid_until ?? null,
+        quote_status: effectiveQuoteStatus(r),
         currency: r.currency,
         subtotal: r.subtotal,
         vat_amount: r.vat_amount,
@@ -397,6 +413,10 @@ const InvoiceCreated = z.object({
   due_date: z.string(),
   status: z.string(),
   document_type: z.string(),
+  // Quotes only (null otherwise): a fresh quote is numbered OF-nnn at
+  // create and starts as quote_status 'open'.
+  valid_until: z.string().nullable().optional(),
+  quote_status: z.string().nullable().optional(),
   currency: z.string(),
   subtotal: z.number(),
   vat_amount: z.number(),
@@ -422,6 +442,7 @@ registerEndpoint({
     'Non-SEK currencies require an active Riksbanken exchange-rate fetch. Failure is non-fatal: the invoice is created with null SEK fields and the agent can recompute later.',
     'invoice_number is null on creation. The number is allocated atomically when the invoice transitions out of draft. Counting on a specific number at create time is a bug.',
     'document_type=\'delivery_note\' produces no VAT and a different number sequence (D-series). Most use cases want the default document_type=\'invoice\'.',
+    'document_type=\'quote\' (offert) requires valid_until (YYYY-MM-DD, the expiry; due_date mirrors it). A quote is numbered OF-nnn from its own series at create, starts as quote_status=\'open\', never posts a journal entry, never emits invoice.created and cannot be sent-and-booked or paid: record the customer decision with POST /invoices/{id}/quote-status and convert an accepted quote to an invoice in the dashboard.',
     'is_self_billed=true registers a self-billing invoice your CUSTOMER issued on your behalf (a sale for you). It is booked immediately (not a draft, no F-number), so external_invoice_number and received_date are required and it is NOT dry-run-free of side effects on the live call. Do NOT set it for a normal invoice you issue yourself.',
     'Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). Tags are stored on the draft and applied to the journal entry lines when the invoice is sent. When the company has the dimension registry enabled, unknown or archived codes are rejected at :send with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.',
     'ROT/RUT: set items[].deduction_type ("rot"|"rut") on labor lines plus labor_hours and work_type (Skatteverket arbetstypskod). The invoice must carry deduction_personnummer AND housing info: deduction_housing_designation (fastighetsbeteckning) for småhus, or deduction_apartment_number + deduction_brf_org_number for bostadsrätt. deduction_amount is computed server-side and cannot be set by the caller; the response exposes deduction_total and remaining_amount = total - deduction_total (Skatteverket pays the rest via 1513). Validation failures return 400 INVOICE_CREATE_ROT_RUT_VALIDATION.',
@@ -476,27 +497,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    let rawBody: unknown
-    try {
-      rawBody = await request.json()
-    } catch {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'body', message: 'Body is not valid JSON.' },
-      })
-    }
+    const raw = await readV1JsonBody(request, ctx)
+    if (!raw.ok) return raw.response
 
-    const parsed = CreateInvoiceSchema.safeParse(rawBody)
+    const parsed = CreateInvoiceSchema.safeParse(raw.body)
     if (!parsed.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: parsed.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
+      return v1ValidationError(ctx, parsed.error)
     }
     const input = parsed.data
 
@@ -642,9 +648,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
     const { invoiceFields, items: itemRows } = build
 
+    const payeeChoice = await resolveInvoicePayeeChoice(
+      ctx.supabase,
+      ctx.companyId!,
+      input.currency,
+      input.payment_cash_account_id,
+    )
+    if (!payeeChoice.ok) {
+      return v1ErrorResponseFromCode(payeeChoice.code, ctx.log, {
+        requestId: ctx.requestId,
+        details: payeeChoice.details,
+      })
+    }
+
     // Dry-run: validation-only preview. Drafts have no journal-entry side
-    // effects yet, so no pending_operations staging needed; the
-    // dryRunStaged() variant lands in PR-B-2b for :send.
+    // effects yet, so no pending_operations staging needed; a staged
+    // preview variant belongs to :send.
     if (ctx.dryRun) {
       // Never echo the encrypted personnummer blob in a preview; last4 is
       // the display-safe representation the response columns expose too.
@@ -655,6 +674,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           invoice_number: null,
           status: 'draft' as const,
           ...previewFields,
+          payment_cash_account_id: payeeChoice.fields.payment_cash_account_id,
+          payment_details: payeeChoice.fields.payment_details,
           items: itemRows,
         },
         { requestId: ctx.requestId, log: ctx.log },
@@ -671,6 +692,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         p_company_id: ctx.companyId!,
       })
       invoiceNumber = dnNumber as string | null
+    } else if (documentType === 'quote') {
+      // Quotes are numbered at insert from their own OF-series (never the
+      // F-series): see generate_quote_number.
+      const { data: quoteNumber, error: quoteNumberError } = await ctx.supabase.rpc('generate_quote_number', {
+        p_company_id: ctx.companyId!,
+      })
+      if (quoteNumberError || !quoteNumber) {
+        ctx.log.error('quote number allocation failed', quoteNumberError ?? new Error('no number'))
+        return v1ErrorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', ctx.log, {
+          requestId: ctx.requestId,
+        })
+      }
+      invoiceNumber = quoteNumber as string
     }
 
     const { data: invoice, error: invoiceErr } = await ctx.supabase
@@ -680,6 +714,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         company_id: ctx.companyId!,
         invoice_number: invoiceNumber,
         ...invoiceFields,
+        payment_cash_account_id: payeeChoice.fields.payment_cash_account_id,
+        payment_details: payeeChoice.fields.payment_details,
       })
       .select(INVOICE_RESPONSE_COLUMNS)
       .single()

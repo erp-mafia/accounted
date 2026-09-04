@@ -47,32 +47,6 @@ export interface DryRunPreviewBase<T> {
   preview: T
 }
 
-export interface DryRunPreviewStaged<T> extends DryRunPreviewBase<T> {
-  /** `pending_operations.id`. Use with POST /v1/operations/{id}:commit. */
-  staged_operation_id: string
-  /**
-   * Journal lines this write WOULD produce on commit. Absent for
-   * non-financial writes. Each item: `{ account, debit, credit, description? }`.
-   */
-  journal_lines?: Array<{
-    account: string
-    debit: number
-    credit: number
-    description?: string
-  }>
-  /**
-   * The voucher number that WOULD be assigned on commit. Present only
-   * when the write produces a posted journal entry. Voucher numbers are
-   * sequential, so this is a *projection*: the actual number could differ
-   * by one or two if another committer beat the agent to the next number.
-   */
-  voucher_number_assigned_on_commit?: string
-  /** Effect on account balances. Absent for non-financial writes. */
-  account_deltas?: Array<{ account: string; delta: number }>
-}
-
-export type DryRunPreview<T> = DryRunPreviewBase<T> | DryRunPreviewStaged<T>
-
 interface DryRunResponseOptions {
   requestId: string
   log: Logger
@@ -88,39 +62,5 @@ interface DryRunResponseOptions {
 export function dryRunPreview<T>(preview: T, opts: DryRunResponseOptions): NextResponse {
   const body: DryRunPreviewBase<T> = { dry_run: true, preview }
   opts.log.info('dry-run preview returned', { stage: 'validation-only' })
-  return ok(body, { requestId: opts.requestId, dryRun: true })
-}
-
-/**
- * Return a 200 OK dry-run response for a staged preview (financial writes).
- *
- * Phase 2 PR-B-1 does not yet exercise this path; the helper is in place so
- * Phase 2 PR-B-2 (invoice writes) and later phases (journal entries,
- * year-end, etc.) reuse it without redefining the shape.
- */
-export function dryRunStaged<T>(
-  data: {
-    preview: T
-    stagedOperationId: string
-    journalLines?: DryRunPreviewStaged<T>['journal_lines']
-    voucherNumberAssignedOnCommit?: string
-    accountDeltas?: DryRunPreviewStaged<T>['account_deltas']
-  },
-  opts: DryRunResponseOptions,
-): NextResponse {
-  const body: DryRunPreviewStaged<T> = {
-    dry_run: true,
-    preview: data.preview,
-    staged_operation_id: data.stagedOperationId,
-    ...(data.journalLines ? { journal_lines: data.journalLines } : {}),
-    ...(data.voucherNumberAssignedOnCommit
-      ? { voucher_number_assigned_on_commit: data.voucherNumberAssignedOnCommit }
-      : {}),
-    ...(data.accountDeltas ? { account_deltas: data.accountDeltas } : {}),
-  }
-  opts.log.info('dry-run preview returned', {
-    stage: 'staged',
-    stagedOperationId: data.stagedOperationId,
-  })
   return ok(body, { requestId: opts.requestId, dryRun: true })
 }

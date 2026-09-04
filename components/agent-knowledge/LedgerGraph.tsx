@@ -6,7 +6,7 @@ import { RotateCw } from 'lucide-react'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import { useTranslations } from 'next-intl'
-import { formatCurrency } from '@/lib/utils'
+import { formatAmount, formatCurrency } from '@/lib/utils'
 import type { DeepEntity, DeepLedgerContext } from '@/lib/agent-context/ledger-deep'
 import { entityMagnitude, selectAccountRing, type RingBasis } from './ledger-graph-magnitude'
 
@@ -751,7 +751,7 @@ function DetailCard({ p, t }: { p: Payee; t: ReturnType<typeof useTranslations> 
         <div className="flex justify-between gap-3">
           <span>{t('card_amount')}</span>
           <span className="tabular-nums" style={{ color: PAPER }}>
-            {e.total_amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            {formatAmount(e.total_amount)}
           </span>
         </div>
         <div className="mt-2 border-t pt-2" style={{ borderColor: HAIR }}>

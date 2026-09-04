@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -26,6 +26,12 @@ import {
   isMaskedPersonalNumber,
 } from '@/lib/customers/mask-personal-number'
 import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
+import {
+  COUNTRY_CONSISTENCY_MESSAGES,
+  checkCountryConsistency,
+  getCountryOptions,
+  normalizeCountryCode,
+} from '@/lib/vat/country-codes'
 import type { CreateCustomerInput } from '@/types'
 
 interface CustomerFormProps {
@@ -42,6 +48,8 @@ export default function CustomerForm({
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
   const t = useTranslations('form_customer')
+  const locale = useLocale() === 'en' ? 'en' : 'sv'
+  const countryOptions = useMemo(() => getCountryOptions(locale), [locale])
   const [isValidatingVat, setIsValidatingVat] = useState(false)
   const [vatValidationResult, setVatValidationResult] = useState<{
     valid: boolean
@@ -61,7 +69,10 @@ export default function CustomerForm({
     address_line2: z.string().optional(),
     postal_code: z.string().optional(),
     city: z.string().optional(),
-    country: z.string().optional(),
+    // ISO 3166-1 alpha-2. A row from before 2026-09 can still carry a name
+    // the backfill could not map; it is shown as-is in the picker and has to
+    // be replaced before the form saves.
+    country: z.string().refine((v) => normalizeCountryCode(v) !== null, t('country_invalid')),
     org_number: z.string().optional(),
     vat_number: z.string().optional(),
     // Accepts a plaintext personnummer or either mask the API returns. The
@@ -75,9 +86,33 @@ export default function CustomerForm({
       .optional()
       .or(z.literal('')),
     language: z.enum(['sv', 'en']).optional(),
-    default_payment_terms: z.number().min(1).optional(),
+    // 0 is a real value (betalning direkt). The old min(1) made the form
+    // unsavable on "0" with no message at all (issue #2070); now the rule is
+    // whole days 0-365 and the field says so when it does not hold.
+    default_payment_terms: z
+      .number({ message: t('payment_terms_invalid') })
+      .int(t('payment_terms_invalid'))
+      .min(0, t('payment_terms_invalid'))
+      .max(365, t('payment_terms_invalid')),
     notes: z.string().optional(),
   }).superRefine((customer, ctx) => {
+    // Country vs customer type vs VAT prefix (#2025): an EU customer with
+    // land Sverige got reverse charge and nothing objected until the
+    // periodisk sammanställning, after the invoice was sent. The API refuses
+    // the same combinations with a 400; saying it here keeps the fix one
+    // click away instead of one failed save away.
+    const countryIssue = checkCountryConsistency({
+      partyType: customer.customer_type,
+      country: customer.country,
+      vatNumber: customer.vat_number,
+    })
+    if (countryIssue) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['country'],
+        message: COUNTRY_CONSISTENCY_MESSAGES[countryIssue][locale],
+      })
+    }
     // A personnummer entered as a business org number would be shown
     // unmasked in every list (only individual customers are masked).
     if (
@@ -113,7 +148,7 @@ export default function CustomerForm({
         message: t('invoice_email_too_many', { count: MAX_INVOICE_EMAIL_COPY_RECIPIENTS }),
       })
     }
-  }), [t])
+  }), [t, locale])
 
   type FormData = z.infer<typeof schema>
 
@@ -137,18 +172,25 @@ export default function CustomerForm({
       address_line1: initialData?.address_line1 || '',
       postal_code: initialData?.postal_code || '',
       city: initialData?.city || '',
-      country: initialData?.country || 'Sweden',
+      country: normalizeCountryCode(initialData?.country) ?? initialData?.country ?? 'SE',
       org_number: initialData?.org_number || '',
       vat_number: initialData?.vat_number || '',
       personal_number: initialData?.personal_number || '',
       language: initialData?.language || 'sv',
-      default_payment_terms: initialData?.default_payment_terms || 30,
+      // ?? not ||: a stored 0 (betalning direkt) must not reopen as 30.
+      default_payment_terms: initialData?.default_payment_terms ?? 30,
       notes: initialData?.notes || '',
     },
   })
 
   const customerType = watch('customer_type')
   const vatNumber = watch('vat_number')
+  const countryValue = watch('country')
+  // A stored value the picker does not list (an unmapped legacy name, or a
+  // code outside the curated list) still has to be visible, or the field
+  // would look empty while holding something.
+  const countryValueUnlisted =
+    countryValue && !countryOptions.some((option) => option.code === countryValue)
   // The stored value could not be decrypted. The field is editable (typing a
   // fresh personnummer replaces it); say so, because the placeholder on its own
   // reads like a rendering fault.
@@ -392,11 +434,34 @@ export default function CustomerForm({
           </div>
           <div className="space-y-2">
             <Label htmlFor="country">{t('country_label')}</Label>
-            <Input
-              id="country"
-              placeholder={t('country_placeholder')}
-              {...register('country')}
+            <Controller
+              name="country"
+              control={control}
+              render={({ field }) => (
+                <Select value={field.value} onValueChange={(v) => { if (v) field.onChange(v) }}>
+                  <SelectTrigger id="country">
+                    <SelectValue placeholder={t('country_placeholder')} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {countryValueUnlisted && (
+                      <SelectItem value={countryValue}>
+                        {normalizeCountryCode(countryValue)
+                          ? countryValue
+                          : t('country_unknown_option', { value: countryValue })}
+                      </SelectItem>
+                    )}
+                    {countryOptions.map((option) => (
+                      <SelectItem key={option.code} value={option.code}>
+                        {locale === 'en' ? option.nameEn : option.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             />
+            {errors.country && (
+              <p className="text-sm text-destructive">{errors.country.message}</p>
+            )}
           </div>
         </div>
       </div>
@@ -481,8 +546,15 @@ export default function CustomerForm({
         <Input
           id="payment_terms"
           type="number"
+          min={0}
+          max={365}
+          step={1}
           {...register('default_payment_terms', { valueAsNumber: true })}
         />
+        <p className="text-xs text-muted-foreground">{t('payment_terms_help')}</p>
+        {errors.default_payment_terms && (
+          <p className="text-sm text-destructive">{errors.default_payment_terms.message}</p>
+        )}
       </div>
 
       {/* Invoice language */}

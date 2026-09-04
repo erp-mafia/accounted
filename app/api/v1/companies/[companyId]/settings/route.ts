@@ -27,8 +27,10 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { readV1JsonBody } from '@/lib/api/v1/body'
 import { InvoiceEmailTextsSchema, UpdateSettingsSchema } from '@/lib/api/schemas'
 import { UpdateCompanySettingsParamsSchema } from '@/lib/pending-operations/schemas/company-settings'
+import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
 
 // Flat body keys copied into the update payload verbatim. Mirrors the MCP
 // tool gnubok_update_company_settings field for field; contact_person is
@@ -195,15 +197,9 @@ registerEndpoint({
 export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'companies.settings.update',
   async (request, ctx) => {
-    let rawBody: unknown
-    try {
-      rawBody = await request.json()
-    } catch {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'body', message: 'Body is not valid JSON.' },
-      })
-    }
+    const rawBodyResult = await readV1JsonBody(request, ctx)
+    if (!rawBodyResult.ok) return rawBodyResult.response
+    const rawBody = rawBodyResult.body
 
     if (rawBody === null || typeof rawBody !== 'object' || Array.isArray(rawBody)) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
@@ -290,6 +286,16 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // statically verify every column name. Fields the caller did not supply
     // are `undefined` here and are dropped by supabase-js JSON serialization,
     // so only supplied fields are written; explicit null still clears.
+    // The bank columns mirror the default SEK payee account (migration
+    // 20260904010000): write the change through to it FIRST so a failure
+    // leaves nothing half-written, and the PDF prints what this call set.
+    try {
+      await propagateLegacyPayeeWrite(ctx.supabase, ctx.companyId!, changes)
+    } catch (err) {
+      ctx.log.error('companies.settings.update: payee write-through failed', err as Error)
+      return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
+    }
+
     const { data, error } = await ctx.supabase
       .from('company_settings')
       .update({
@@ -314,6 +320,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (error) {
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     }
+
     if (!data) {
       ctx.log.warn('companies.settings.update: settings row not found', {
         companyId: ctx.companyId,

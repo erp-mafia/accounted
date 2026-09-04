@@ -3,21 +3,43 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Mock dependencies: factory must not reference outer variables
 const mockCreateSession = vi.fn()
 const mockGetAccountBalance = vi.fn()
-vi.mock('@/extensions/general/enable-banking/lib/api-client', () => ({
-  createSession: (...args: unknown[]) => mockCreateSession(...args),
-  getAccountBalance: (...args: unknown[]) => mockGetAccountBalance(...args),
-}))
+vi.mock('@/extensions/general/enable-banking/lib/api-client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/extensions/general/enable-banking/lib/api-client')>()
+  return {
+    // Pure identifier extraction: keep the real implementation so the stored
+    // accounts carry what the bank actually sent.
+    extractBban: actual.extractBban,
+    createSession: (...args: unknown[]) => mockCreateSession(...args),
+    getAccountBalance: (...args: unknown[]) => mockGetAccountBalance(...args),
+  }
+})
 
 // Use hoisted to safely create mock objects referenced in vi.mock factories
-const { mockFrom, mockUpsertFromPsd2, mockAllocate, mockSupersede, mockCrossCompanyContext } =
-  vi.hoisted(() => {
-    const mockFrom = vi.fn()
-    const mockUpsertFromPsd2 = vi.fn()
-    const mockAllocate = vi.fn()
-    const mockSupersede = vi.fn()
-    const mockCrossCompanyContext = vi.fn()
-    return { mockFrom, mockUpsertFromPsd2, mockAllocate, mockSupersede, mockCrossCompanyContext }
-  })
+const {
+  mockFrom,
+  mockUpsertFromPsd2,
+  mockAllocate,
+  mockSupersede,
+  mockCrossCompanyContext,
+  mockGetUser,
+} = vi.hoisted(() => {
+  const mockFrom = vi.fn()
+  const mockUpsertFromPsd2 = vi.fn()
+  const mockAllocate = vi.fn()
+  const mockSupersede = vi.fn()
+  const mockCrossCompanyContext = vi.fn()
+  // The cookie session the callback binds the completion to. Every pending
+  // row in this suite belongs to 'user-1', so that is the default session.
+  const mockGetUser = vi.fn()
+  return {
+    mockFrom,
+    mockUpsertFromPsd2,
+    mockAllocate,
+    mockSupersede,
+    mockCrossCompanyContext,
+    mockGetUser,
+  }
+})
 
 // The supersede pass has its own unit tests (extensions/general/enable-banking/
 // __tests__/supersede.test.ts); here it is mocked so these tests assert the
@@ -42,6 +64,9 @@ vi.mock('@/extensions/general/enable-banking/lib/session-sharing', async (import
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn().mockResolvedValue({
     from: mockFrom,
+  }),
+  createClient: vi.fn().mockResolvedValue({
+    auth: { getUser: mockGetUser },
   }),
 }))
 
@@ -104,6 +129,7 @@ function mockChain(result: { data?: unknown; error?: unknown }) {
 describe('GET /api/extensions/enable-banking/callback', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockGetUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
     mockUpsertFromPsd2.mockResolvedValue(undefined)
     mockSupersede.mockResolvedValue({ supersededIds: [], dedupScopeByIban: new Map() })
     // No sibling company claims anything by default; individual tests override.
@@ -147,6 +173,120 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     // The raw 'invalid_state' token used to be shown verbatim: the banner now
     // carries the Swedish explanation instead (issue #1716).
     expect(decodeURIComponent(location)).toContain('Starta bankkopplingen på nytt')
+  })
+
+  // The state token proves the callback belongs to a flow WE started, not that
+  // the browser completing it is the initiator's. A victim lured into
+  // approving a consent someone else started must not have their bank
+  // attached to that someone's company.
+  describe('initiator binding', () => {
+    const PENDING_ROW = {
+      id: 'conn-1',
+      user_id: 'user-1',
+      company_id: 'company-1',
+      bank_name: 'TestBank',
+      status: 'pending',
+      session_id: null,
+      accounts_data: null,
+    }
+
+    it('refuses a consent completed by a different user and leaves the row untouched', async () => {
+      const chain = mockChain({ data: PENDING_ROW, error: null })
+      mockFrom.mockReturnValue(chain)
+      mockGetUser.mockResolvedValue({ data: { user: { id: 'user-2' } }, error: null })
+
+      const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+
+      expect(response.status).toBe(307)
+      const location = new URL(response.headers.get('location') || '')
+      expect(location.pathname).toBe('/settings/banking')
+      expect(location.searchParams.get('bank_error')).toContain('annat användarkonto')
+      expect(location.searchParams.get('bank_name')).toBe('TestBank')
+      expect(location.searchParams.has('select_accounts')).toBe(false)
+
+      // The code was never exchanged and nothing was written: the row keeps
+      // waiting for its initiator (only the lookup touched the table).
+      expect(mockCreateSession).not.toHaveBeenCalled()
+      expect(mockFrom).toHaveBeenCalledTimes(1)
+      expect(chain.update).not.toHaveBeenCalled()
+      expect(chain.delete).not.toHaveBeenCalled()
+      expect(mockUpsertFromPsd2).not.toHaveBeenCalled()
+    })
+
+    it('sends an anonymous browser to /login with the callback URL preserved', async () => {
+      const chain = mockChain({ data: PENDING_ROW, error: null })
+      mockFrom.mockReturnValue(chain)
+      mockGetUser.mockResolvedValue({ data: { user: null }, error: null })
+
+      const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+
+      expect(response.status).toBe(307)
+      const location = new URL(response.headers.get('location') || '')
+      expect(location.origin).toBe('http://localhost:3000')
+      expect(location.pathname).toBe('/login')
+      expect(location.searchParams.get('next')).toBe(
+        '/api/extensions/enable-banking/callback?code=auth-code&state=valid-state',
+      )
+
+      expect(mockCreateSession).not.toHaveBeenCalled()
+      expect(chain.update).not.toHaveBeenCalled()
+      expect(chain.delete).not.toHaveBeenCalled()
+    })
+
+    it('finalizes as before when the session belongs to the initiator', async () => {
+      // mockConnectionFlow is the suite's standard script for the finalize
+      // path (function declaration below, hoisted into this scope).
+      mockConnectionFlow(PENDING_ROW)
+      mockGetUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
+      mockCreateSession.mockResolvedValue({
+        session_id: 'sess-1',
+        accounts: [],
+        access: { valid_until: '2027-12-31T00:00:00Z' },
+        aspsp: { name: 'TestBank', country: 'SE' },
+      })
+
+      const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+
+      expect(response.status).toBe(200)
+      expect(mockGetUser).toHaveBeenCalledTimes(1)
+      expect(mockCreateSession).toHaveBeenCalledWith('auth-code', undefined)
+      expect(await response.text()).toContain('select_accounts=conn-1')
+    })
+
+    it('does not consult the session for an unknown state (nothing to bind to)', async () => {
+      mockFrom.mockImplementation(() => mockChain({ data: null, error: { message: 'not found' } }))
+
+      await GET(makeRequest({ code: 'auth-code', state: 'unknown-state' }))
+
+      expect(mockGetUser).not.toHaveBeenCalled()
+    })
+
+    it('leaves the hosted connector bounce alone (server-to-server, HMAC-verified)', async () => {
+      // The hosted proxy callback never finalizes anything: it verifies the
+      // signed connector state and bounces the browser to the instance, whose
+      // own callback then runs the binding against ITS session.
+      vi.stubEnv('CONNECTOR_STATE_SECRET', 'test-connector-secret')
+      const { signConnectorState } = await import('@/lib/connect/hosted/state')
+      const connectorState = signConnectorState({
+        kid: 'key-1',
+        svc: 'bank',
+        ret: 'https://instance.example.se/api/extensions/enable-banking/callback',
+        st: 'instance-state',
+        cref: 'company-ref',
+      })
+
+      const response = await GET(makeRequest({ code: 'auth-code', state: connectorState }))
+
+      expect(response.status).toBe(307)
+      const location = new URL(response.headers.get('location') || '')
+      expect(location.origin).toBe('https://instance.example.se')
+      expect(location.searchParams.get('state')).toBe('instance-state')
+      expect(location.searchParams.get('code')).toBe('auth-code')
+      expect(mockGetUser).not.toHaveBeenCalled()
+      expect(mockFrom).not.toHaveBeenCalled()
+      vi.unstubAllEnvs()
+      vi.stubEnv('NEXT_PUBLIC_APP_URL', 'http://localhost:3000')
+    })
   })
 
   it('threads connector_state from the query into createSession (connector mode)', async () => {
@@ -229,7 +369,18 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     mockCreateSession.mockResolvedValue({
       session_id: 'sess-1',
       accounts: [
-        { uid: 'acc-1', account_id: { iban: 'SE1234' }, name: 'Företagskonto', currency: 'SEK' },
+        {
+          uid: 'acc-1',
+          account_id: { iban: 'SE1234' },
+          // Swedish ASPSPs list the BBAN (clearing + account) alongside the
+          // IBAN; it must land on the stored account for payee prefill.
+          all_account_ids: [
+            { identification: 'SE1234', scheme_name: 'IBAN' },
+            { identification: '5000 1234567', scheme_name: 'BBAN' },
+          ],
+          name: 'Företagskonto',
+          currency: 'SEK',
+        },
         { uid: 'acc-2', account_id: { iban: 'SE5678' }, name: 'Privatkonto', currency: 'SEK' },
       ],
       access: { valid_until: '2024-12-31T00:00:00Z' },
@@ -270,9 +421,11 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     const payload = capturedUpdates[0]
     expect(payload.status).toBe('pending_selection')
     expect(payload).not.toHaveProperty('last_synced_at')
-    const accountsData = payload.accounts_data as Array<{ uid: string; enabled: boolean }>
+    const accountsData = payload.accounts_data as Array<{ uid: string; enabled: boolean; bban?: string }>
     expect(accountsData).toHaveLength(2)
     expect(accountsData.every(a => a.enabled === true)).toBe(true)
+    expect(accountsData.find(a => a.uid === 'acc-1')?.bban).toBe('50001234567')
+    expect(accountsData.find(a => a.uid === 'acc-2')?.bban).toBeUndefined()
 
     // Two same-currency accounts must NOT collide on the same BAS slot — the
     // second SEK account gets the next free 19xx sub-account, and the
@@ -404,6 +557,94 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(accountsData[0].enabled).toBe(true)
     expect(accountsData[0].claimed_by_company_id).toBeUndefined()
     expect(mockUpsertFromPsd2).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-stamps the sibling claim on a disabled account across an in-place renewal', async () => {
+    // accountsMetadata is rebuilt from the bank's list on every callback, so a
+    // claim label stored on the previous consent would be lost on renewal and
+    // the sibling's account would come back as a plain unchecked own account.
+    const capturedUpdates = mockConnectionFlow({
+      id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'SEB', status: 'expired',
+      accounts_data: [
+        { uid: 'acc-own-old', iban: 'SE1234', name: 'Företagskonto', currency: 'SEK', enabled: true },
+        {
+          uid: 'acc-foreign-old', iban: 'SE9999', name: 'Annat bolags konto', currency: 'SEK',
+          enabled: false, claimed_by_company_id: 'company-2', claimed_by_company_name: 'Other AB',
+        },
+      ],
+    })
+    mockCrossCompanyContext.mockResolvedValue({
+      claims: new Map([['SE9999', { companyId: 'company-2', companyName: 'Other AB' }]]),
+      deselectedIbans: new Set(),
+      activeCompanyIbans: new Set(['SE1234']),
+    })
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-2',
+      accounts: [
+        { uid: 'acc-own-new', account_id: { iban: 'SE1234' }, name: 'Företagskonto', currency: 'SEK' },
+        { uid: 'acc-foreign-new', account_id: { iban: 'SE9999' }, name: 'Annat bolags konto', currency: 'SEK' },
+      ],
+      access: { valid_until: '2027-12-31T00:00:00Z' },
+      aspsp: { name: 'SEB', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+    await response.text()
+
+    const accountsData = capturedUpdates[0].accounts_data as Array<{
+      uid: string
+      enabled: boolean
+      claimed_by_company_id?: string
+      claimed_by_company_name?: string
+    }>
+    const own = accountsData.find(a => a.uid === 'acc-own-new')
+    const foreign = accountsData.find(a => a.uid === 'acc-foreign-new')
+    expect(own?.enabled).toBe(true)
+    expect(own?.claimed_by_company_id).toBeUndefined()
+    expect(foreign?.enabled).toBe(false)
+    expect(foreign?.claimed_by_company_id).toBe('company-2')
+    expect(foreign?.claimed_by_company_name).toBe('Other AB')
+    // The re-stamped claim stays out of the mirror exactly like a fresh one:
+    // only the own account gets a cash_accounts row.
+    expect(mockUpsertFromPsd2).toHaveBeenCalledTimes(1)
+    expect((mockUpsertFromPsd2.mock.calls[0][2] as { external_uid: string }).external_uid).toBe('acc-own-new')
+  })
+
+  it('drops a stale claim on renewal when the sibling no longer books the account', async () => {
+    // The label is re-derived from a fresh lookup, never copied from the prior
+    // row: once company B has released the IBAN, company A's picker must show
+    // it as a plain unchecked account again, not as "synkas i B".
+    const capturedUpdates = mockConnectionFlow({
+      id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'SEB', status: 'expired',
+      accounts_data: [
+        {
+          uid: 'acc-old', iban: 'SE9999', name: 'Konto', currency: 'SEK',
+          enabled: false, claimed_by_company_id: 'company-2', claimed_by_company_name: 'Other AB',
+        },
+      ],
+    })
+    mockCrossCompanyContext.mockResolvedValue({
+      claims: new Map(),
+      deselectedIbans: new Set(),
+      activeCompanyIbans: new Set(),
+    })
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-2',
+      accounts: [{ uid: 'acc-new', account_id: { iban: 'SE9999' }, name: 'Konto', currency: 'SEK' }],
+      access: { valid_until: '2027-12-31T00:00:00Z' },
+      aspsp: { name: 'SEB', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+    await response.text()
+
+    const accountsData = capturedUpdates[0].accounts_data as Array<{
+      uid: string
+      enabled: boolean
+      claimed_by_company_id?: string
+    }>
+    expect(accountsData[0].enabled).toBe(false)
+    expect(accountsData[0].claimed_by_company_id).toBeUndefined()
   })
 
   it('carries a deselection made on another connection row onto a fresh connect', async () => {

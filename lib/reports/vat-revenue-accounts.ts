@@ -176,17 +176,3 @@ export async function fetchDynamicVatAccounts(
   }
   return result
 }
-
-export async function fetchDynamicRuta05Accounts(
-  supabase: SupabaseClient,
-  companyId: string,
-): Promise<Pick<DynamicVatAccounts, 'accounts' | 'rateByAccount' | 'staticRateByAccount'>> {
-  const resolved = await fetchDynamicVatAccounts(supabase, companyId)
-  return {
-    accounts: [...resolved.mappingByAccount]
-      .filter(([account, mapping]) => mapping.box === 'ruta05' && !ACCOUNT_TO_BOX[account])
-      .map(([account]) => account),
-    rateByAccount: resolved.rateByAccount,
-    staticRateByAccount: resolved.staticRateByAccount,
-  }
-}

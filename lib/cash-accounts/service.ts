@@ -1,3 +1,4 @@
+import { chunk as chunkIds } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CashAccount, CashAccountSource, MappingResult } from '@/types'
 import { createLogger } from '@/lib/logger'
@@ -43,6 +44,8 @@ export interface UpsertFromPsd2Input {
   currency: string
   ledger_account: string
   iban?: string | null
+  /** Raw BBAN from the ASPSP (Swedish: clearing + account number). */
+  bban?: string | null
   name?: string | null
   balance?: number | null
   available_balance?: number | null
@@ -994,12 +997,6 @@ export async function resolvePsd2LedgerAccount(
 /** Max transaction ids per `.in()` filter when rebinding: keeps the request URL short. */
 const REBIND_ID_CHUNK_SIZE = 100
 
-function chunkIds(ids: readonly string[], size: number): string[][] {
-  const out: string[][] = []
-  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size))
-  return out
-}
-
 /**
  * Rebind the MOVABLE transactions of one cash_accounts row onto another.
  *
@@ -1177,6 +1174,9 @@ export async function upsertFromPsd2(
     bank_connection_id: input.bank_connection_id,
     external_uid: input.external_uid,
     iban: input.iban ?? null,
+    // Only overwrite when the bank sent one: a typed BBAN must survive a
+    // sync from an ASPSP that reports IBAN only.
+    ...(input.bban ? { bban: input.bban } : {}),
     name: input.name ?? null,
     currency: input.currency.toUpperCase(),
     ledger_account: input.ledger_account,
@@ -1526,6 +1526,28 @@ export async function setLedgerAccount(
     .eq('company_id', companyId)
     .eq('id', cashAccountId)
   if (error) throw new Error(`cash_accounts setLedgerAccount failed: ${error.message}`)
+}
+
+/**
+ * Set or clear the verifikationsserie override for a cash account. null means
+ * "follow the per-source-type default"; the engine reads this via
+ * resolveCashAccountVoucherSeries() when it books from the account.
+ */
+export async function setVoucherSeries(
+  supabase: SupabaseClient,
+  companyId: string,
+  cashAccountId: string,
+  voucherSeries: string | null,
+): Promise<CashAccount | null> {
+  const { data, error } = await supabase
+    .from('cash_accounts')
+    .update({ voucher_series: voucherSeries })
+    .eq('company_id', companyId)
+    .eq('id', cashAccountId)
+    .select('*')
+    .maybeSingle()
+  if (error) throw new Error(`cash_accounts setVoucherSeries failed: ${error.message}`)
+  return (data as CashAccount | null) ?? null
 }
 
 /**

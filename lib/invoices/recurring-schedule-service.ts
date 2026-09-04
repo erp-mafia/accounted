@@ -53,6 +53,7 @@ import {
 import {
   hasRequiredInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
+import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { createLogger } from '@/lib/logger'
 import type {
@@ -264,7 +265,7 @@ export async function executeRecurringSchedule(
     throw new Error(`customer not found for schedule ${schedule.id}`)
   }
 
-  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
+  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
   // Gate on the PERMITTED set, not the picker default, exactly like
   // buildInvoiceWriteData: the ML 6 kap. supplies taxed where they are performed
   // (hotel/restaurang 12%, persontransport and event admission 6%,
@@ -272,7 +273,7 @@ export async function executeRecurringSchedule(
   // foreign business customer. A monthly hotel or catering retainer to a German
   // company is such a schedule. The default is still 0% (vatRules.rate is the
   // fallback below), so a Swedish rate only lands here when the schedule set it.
-  const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated)
+  const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country)
   const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
   // 2. Compute amounts (mirrors POST /api/invoices).
@@ -575,6 +576,15 @@ async function sendInvoiceFromSchedule(
   if (!company) {
     throw new Error('company settings missing: cannot send invoice')
   }
+  const payeeSnapshot = await snapshotInvoicePayee(supabase, companyId, invoice)
+  if (!payeeSnapshot.ok) {
+    log.warn('chosen payee account is no longer usable; recurring schedule cannot auto-send', {
+      invoiceId: invoice.id,
+      ...payeeSnapshot.details,
+    })
+    return false
+  }
+  invoice.payment_details = payeeSnapshot.payee
   if (!hasRequiredInvoicePaymentAccount(company, invoice)) {
     log.warn('invoice currency has no usable payment account; recurring schedule cannot auto-send', {
       invoiceId: invoice.id,
@@ -647,6 +657,7 @@ async function sendInvoiceFromSchedule(
   const { branding, company: renderCompany } = await prepareInvoicePdfRender(
     company,
     renderableInvoice.currency,
+    { payee: renderableInvoice.payment_details ?? null },
   )
   const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
   const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)

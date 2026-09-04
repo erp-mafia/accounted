@@ -28,6 +28,10 @@ import {
 import { formatCurrency } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import type { Asset } from '@/types'
+import type {
+  TaxDepreciationMethod as TaxMethod,
+  TaxDepreciationRule as TaxRule,
+} from '@/lib/bokslut/assets/tax-depreciation'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface ProposalItem {
@@ -44,9 +48,6 @@ interface Proposal {
   items: ProposalItem[]
   totalAmount: number
 }
-
-type TaxMethod = 'rakenskapsenlig' | 'restvarde'
-type TaxRule = 'huvudregel_30' | 'kompletteringsregel_20'
 
 interface TaxAlternative {
   rule: TaxRule | 'restvarde_25'

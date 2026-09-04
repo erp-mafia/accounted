@@ -35,6 +35,7 @@ const ENV_VARS = [
   'SKATTEVERKET_AGD_PERIOD_API_BASE_URL',
   'GNUBOK_CONNECTOR_KEY',
   'GNUBOK_CONNECT_URL',
+  'CONNECT_SKV_CANARY_COMPANIES',
 ]
 
 /**
@@ -184,6 +185,10 @@ describe('skvRequestWithAuth: connector mode', () => {
       expect((e as SkatteverketAuthError).code).toBe('ACCESS_DENIED')
       const { message } = e as SkatteverketAuthError
       expect(message).toMatch(/connectorn/)
+      // Points at the connector's operator by host, not at an ambiguous
+      // "support": hosted is itself a Connect installation (#2226).
+      expect(message).toMatch(/operatör \(app\.hosted\.example\)/)
+      expect(message).not.toMatch(/supporten/)
       expect(message).not.toMatch(/SKATTEVERKET_APIGW_CLIENT_ID|Utvecklarportalen/)
     }
   })
@@ -197,6 +202,8 @@ describe('skvRequestWithAuth: connector mode', () => {
       expect((e as SkatteverketAuthError).code).toBe('ACCESS_DENIED')
       const { message } = e as SkatteverketAuthError
       expect(message).toMatch(/connectorn/)
+      expect(message).toMatch(/operatör \(app\.hosted\.example\)/)
+      expect(message).not.toMatch(/supporten/)
       expect(message).not.toMatch(/Utvecklarportalen/)
     }
   })
@@ -315,6 +322,32 @@ describe('skvRequestWithAuth: connector mode is OFF with own credentials (direct
     expect(headers['X-Connector-Upstream-Authorization']).toBeUndefined()
     expect(headers['X-Connector-Upstream-Content-Type']).toBeUndefined()
     expect(JSON.stringify(headers)).not.toContain('gnubok_ck_')
+  })
+
+  it('CONNECT_SKV_CANARY_COMPANIES reroutes only the listed company through the proxy', async () => {
+    // Hosted moving to Connect upstream by upstream: a listed company's data
+    // calls go through the proxy (no gateway credentials, user Bearer in the
+    // upstream-auth header); every other company stays on the direct path.
+    process.env.SKATTEVERKET_APIGW_CLIENT_ID = 'gw-id'
+    process.env.SKATTEVERKET_APIGW_CLIENT_SECRET = 'gw-secret'
+    process.env.SKATTEVERKET_API_BASE_URL = 'https://api.test.example/moms'
+    process.env.CONNECT_SKV_CANARY_COMPANIES = 'comp-1'
+    const fetchMock = mockFetchStatus(200, '{"ok":true}')
+
+    await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/deklarationer')
+    const [canaryUrl, canaryInit] = lastFetchCall(fetchMock)
+    expect(canaryUrl).toBe('https://app.hosted.example/api/connect/skv/api/moms/deklarationer')
+    const canaryHeaders = canaryInit.headers as Record<string, string>
+    expect(canaryHeaders['Authorization']).toBe('Bearer gnubok_ck_test')
+    expect(canaryHeaders['X-Connector-Upstream-Authorization']).toBe('Bearer user-skv-token')
+    expect(canaryHeaders['Client_Id']).toBeUndefined()
+    expect(canaryHeaders['Client_Secret']).toBeUndefined()
+
+    await skvRequest(fakeSupabase, 'user-1', 'comp-2', 'GET', '/deklarationer')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const [directUrl, directInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit]
+    expect(directUrl).toBe('https://api.test.example/moms/deklarationer')
+    expect((directInit.headers as Record<string, string>)['Client_Id']).toBe('gw-id')
   })
 })
 

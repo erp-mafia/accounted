@@ -20,6 +20,154 @@ function oauthResumePath(next: string): string | null {
   return safe.startsWith('/api/mcp-oauth/authorize?') ? safe : null
 }
 
+/**
+ * Mirror of hasForeignCredential in extensions/general/tic/lib/bankid-pending.ts
+ * (core cannot import from extensions). A non-email identity (Google) or a
+ * password the user set themselves (`has_password: true`, written only by
+ * POST /api/account/password) means somebody proved ownership of the address
+ * by other means than the BankID signup's confirmation mail.
+ */
+function hasForeignCredential(user: {
+  identities?: Array<{ provider: string }>
+  app_metadata?: Record<string, unknown>
+}): boolean {
+  if ((user.identities ?? []).some((identity) => identity.provider !== 'email')) return true
+  return user.app_metadata?.has_password === true
+}
+
+/**
+ * Pending BankID identities (security audit 2026-09, account pre-hijacking).
+ *
+ * A BankID signup (extensions/general/tic, POST /bankid/complete) creates the
+ * auth user with the typed address UNCONFIRMED, a bankid_identities row with
+ * email_verified_at NULL, and app_metadata.bankid_pending instead of
+ * bankid_linked. The confirmation mail it sends lands here, and this is the
+ * one place that promotes the identity: email_verified_at = now(),
+ * bankid_linked = true (the MFA exemption in lib/auth/mfa.ts), bankid_pending
+ * removed. Until then BankID login refuses the identity.
+ *
+ * Promotion is refused, and the pending link revoked instead, when the account
+ * was adopted through another credential in the meantime: this link is a
+ * password reset (type=recovery, "forgot password" on the address), or the
+ * user already carries a non-email identity (Google) or a password they set
+ * themselves. In each case the real owner of the address proved it by other
+ * means, and the BankID holder who typed that address must not end up with a
+ * login into their account.
+ *
+ * Gated on the bankid_pending flag so the ordinary confirmation and recovery
+ * paths cost nothing extra. Failures are logged and never block the redirect:
+ * a pending identity simply stays pending, which is the safe state.
+ */
+async function reconcilePendingBankIdIdentity(
+  user: { id: string; app_metadata?: Record<string, unknown> },
+  type: string,
+): Promise<void> {
+  if (user.app_metadata?.bankid_pending !== true) return
+
+  try {
+    const service = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { cookies: { getAll: () => [], setAll: () => {} } }
+    )
+
+    const { data: pending, error: lookupError } = await service
+      .from('bankid_identities')
+      .select('id')
+      .eq('user_id', user.id)
+      .is('email_verified_at', null)
+      .maybeSingle()
+    if (lookupError) {
+      console.error('[auth/callback] pending BankID lookup failed:', lookupError.message)
+      return
+    }
+
+    // Fresh, authoritative copy: identities and app_metadata as of now.
+    const { data: userData, error: userError } = await service.auth.admin.getUserById(user.id)
+    const current = userData?.user
+    if (userError || !current) {
+      console.error('[auth/callback] pending BankID user lookup failed:', userError?.message)
+      return
+    }
+    const prior = current.app_metadata ?? {}
+
+    if (!pending || type === 'recovery' || hasForeignCredential(current)) {
+      // Adopted, or nothing left to promote: drop the unverified link and the
+      // flag. bankid_linked is untouched (a pending signup never set it).
+      // null removes the key under GoTrue's merge semantics and is falsy if
+      // app_metadata is ever replaced wholesale instead.
+      if (pending) {
+        const { error: deleteError } = await service
+          .from('bankid_identities')
+          .delete()
+          .eq('user_id', user.id)
+          .is('email_verified_at', null)
+        if (deleteError) {
+          console.error('[auth/callback] pending BankID revoke failed:', deleteError.message)
+          return
+        }
+        console.warn(
+          '[auth/callback] pending BankID identity revoked: account adopted through another credential',
+          { userId: user.id, type },
+        )
+      }
+      await service.auth.admin.updateUserById(user.id, {
+        app_metadata: { ...prior, bankid_pending: null },
+      })
+      return
+    }
+
+    // The click proves the address for the BankID holder who typed it.
+    const { error: promoteError } = await service
+      .from('bankid_identities')
+      .update({ email_verified_at: new Date().toISOString() })
+      .eq('user_id', user.id)
+      .is('email_verified_at', null)
+    if (promoteError) {
+      console.error('[auth/callback] pending BankID promotion failed:', promoteError.message)
+      return
+    }
+    await service.auth.admin.updateUserById(user.id, {
+      app_metadata: { ...prior, bankid_linked: true, bankid_pending: null },
+    })
+  } catch (err) {
+    console.error('[auth/callback] pending BankID reconciliation failed:', err)
+  }
+}
+
+type EmailChangeStatus = 'partial' | 'done' | 'failed'
+
+/**
+ * Status of a stock (GoTrue-hosted) email-change link that came back through
+ * redirect_to. GoTrue puts the outcome in the query for PKCE links: a
+ * half-completed secure change carries ?message=, a dead link ?error= /
+ * ?error_code=, and the completing click ?code=. Implicit-flow links put the
+ * same outcome in the URL fragment, which never reaches the server; the
+ * fallback reads the user's pending state instead of guessing.
+ */
+async function resolveStockEmailChangeStatus(
+  supabase: ReturnType<typeof createServerClient>,
+  searchParams: URLSearchParams,
+  code: string | null,
+): Promise<EmailChangeStatus> {
+  if (searchParams.get('error') || searchParams.get('error_code')) return 'failed'
+  if (searchParams.get('message')) return 'partial'
+  if (code) {
+    // GoTrue mints the code only after the completing verify has flipped the
+    // address, so the change is done whatever happens to the exchange. It
+    // fails when the link is opened in a browser without the PKCE verifier
+    // cookie (a phone mail app); the status page then just has no session
+    // to land, which must not be reported as a failed change.
+    await supabase.auth.exchangeCodeForSession(code)
+    return 'done'
+  }
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return 'failed'
+  return user.new_email ? 'partial' : 'done'
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url)
   const code = searchParams.get('code')
@@ -54,6 +202,26 @@ export async function GET(request: NextRequest) {
     }
   )
 
+  // Stock GoTrue email-change links (no Send Email hook) verify on the GoTrue
+  // host and come back here through redirect_to instead of carrying a
+  // token_hash: with secure email change the first of the two confirmations
+  // arrives as ?message=..., a dead link as ?error=..., and the completing
+  // click as ?code= (PKCE). /api/account/email stamps flow=email_change on
+  // emailRedirectTo so all three land on the status page like the token_hash
+  // branch below. Before this they fell through to the login bounce with no
+  // message, which reads as "det funkar inte" and invites a retry that voids
+  // the mails just sent.
+  if (searchParams.get('flow') === 'email_change' && !token_hash) {
+    const status = await resolveStockEmailChangeStatus(supabase, searchParams, code)
+    const response = NextResponse.redirect(
+      new URL(`/auth/email-change?status=${status}`, origin),
+    )
+    for (const { name, value, options } of pendingCookies) {
+      response.cookies.set({ name, value, ...options })
+    }
+    return response
+  }
+
   let authenticated = false
 
   // Handle PKCE flow (code exchange)
@@ -86,6 +254,13 @@ export async function GET(request: NextRequest) {
         response.cookies.set({ name, value, ...options })
       }
       return response
+    }
+
+    // A BankID signup proves its address through this very link; a password
+    // reset on that address proves the opposite. Runs before the recovery
+    // early-return below so both outcomes are handled here.
+    if (!error && data?.user) {
+      await reconcilePendingBankIdIdentity(data.user, type)
     }
 
     authenticated = !error

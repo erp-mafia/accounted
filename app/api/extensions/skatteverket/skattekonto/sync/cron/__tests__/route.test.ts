@@ -7,8 +7,6 @@ const mocks = vi.hoisted(() => ({
   getCompanyIdsWithCapability: vi.fn(),
   createExtensionContext: vi.fn(),
   syncSkattekonto: vi.fn(),
-  computeSkattekontoDrift: vi.fn(),
-  maybeAlertDrift: vi.fn(),
 }))
 
 vi.mock('@supabase/supabase-js', () => ({
@@ -32,11 +30,6 @@ vi.mock('@/lib/extensions/context-factory', () => ({
 vi.mock('@/extensions/general/skatteverket/lib/skattekonto-sync', () => ({
   SKATTEKONTO_LAST_SYNCED_AT_KEY: 'skattekonto_last_synced_at',
   syncSkattekonto: (...args: unknown[]) => mocks.syncSkattekonto(...args),
-}))
-
-vi.mock('@/extensions/general/skatteverket/lib/skattekonto-drift', () => ({
-  computeSkattekontoDrift: (...args: unknown[]) => mocks.computeSkattekontoDrift(...args),
-  maybeAlertDrift: (...args: unknown[]) => mocks.maybeAlertDrift(...args),
 }))
 
 vi.mock('@/extensions/general/skatteverket/lib/api-client', () => {
@@ -120,7 +113,6 @@ describe('GET /api/extensions/skatteverket/skattekonto/sync/cron', () => {
       (supabase: unknown, userId: string, companyId: string) => ({ supabase, userId, companyId }),
     )
     mocks.syncSkattekonto.mockResolvedValue({ booked: 0, upcoming: 0 })
-    mocks.computeSkattekontoDrift.mockResolvedValue(null)
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})

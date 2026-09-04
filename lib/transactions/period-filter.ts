@@ -1,4 +1,5 @@
 import type { FiscalPeriod } from '@/types'
+import { addDaysIso as addDays } from '@/lib/dates/iso'
 
 /** Inclusive ISO date bounds (yyyy-MM-dd) for a period filter. */
 export interface PeriodBounds {
@@ -26,12 +27,6 @@ function addMonths(iso: string, months: number): string {
   const monthIndex = total - year * 12
   const lastDay = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate()
   return toIso(year, monthIndex + 1, Math.min(d, lastDay))
-}
-
-function addDays(iso: string, days: number): string {
-  const date = new Date(`${iso}T00:00:00Z`)
-  date.setUTCDate(date.getUTCDate() + days)
-  return date.toISOString().slice(0, 10)
 }
 
 /**

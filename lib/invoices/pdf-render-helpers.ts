@@ -20,11 +20,12 @@
  */
 
 import QRCode from 'qrcode'
-import type { CompanySettings, Currency, Invoice } from '@/types'
+import type { CompanySettings, Currency, Invoice, InvoicePaymentAccount } from '@/types'
 import { brandingFromCompanySettings, SHOW_SWISH_ON_INVOICE, type InvoiceBranding } from '@/lib/invoices/pdf-template'
 import { buildSwishQrPayload } from '@/lib/payments/swish'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { createLogger } from '@/lib/logger'
+import { isUnsafeUrlError, readBodyWithCap, safeFetch } from '@/lib/http/safe-fetch'
 import { LOGO_UPLOAD_MAX_BYTES } from '@/lib/invoices/branding-constants'
 import { prepareInvoiceFont } from '@/lib/invoices/pdf-fonts'
 import {
@@ -34,20 +35,29 @@ import {
 
 const log = createLogger('invoice.swish-qr')
 const paymentLinkLog = createLogger('invoice.payment-link-qr')
+const logoLog = createLogger('invoice.logo')
 
 export interface InvoicePdfRenderExtras {
   branding: InvoiceBranding
   /**
    * The company settings to pass to InvoicePDF. Identical to the input except
    * `logo_url` is replaced by an embedded PNG data URL when the stored logo
-   * could be fetched and re-encoded. Falls back to the original settings
-   * unchanged on any failure, so behaviour is never worse than before.
+   * could be fetched and re-encoded, or set to null when the stored URL was
+   * refused by the outbound URL guard (the invoice then renders without a
+   * logo). A transient failure keeps the original URL only when it points at
+   * the deployment's own storage origin; @react-pdf must never be handed an
+   * arbitrary remote URL to fetch unguarded.
    */
   company: CompanySettings
 }
 
 export interface InvoicePdfRenderOptions {
   paymentAccountRequired?: boolean
+  /**
+   * The invoice's own frozen payee (invoices.payment_details) when it chose
+   * a bank account. Null/undefined = the company's default for the currency.
+   */
+  payee?: Partial<InvoicePaymentAccount> | null
 }
 
 // A company's logo is reused across every invoice render, and twice per send
@@ -65,29 +75,67 @@ const logoDataUrlCache = new Map<string, { dataUrl: string; at: number }>()
 const LOGO_MAX_PX = 600
 
 // Bound the logo fetch so a slow or oversized response can't hang or balloon an
-// invoice render. logo_url is currently always a Supabase `logos`-bucket public
-// URL (set only by the upload route), so SSRF is not reachable today: these
-// caps are defense-in-depth for that invariant plus plain robustness.
+// invoice render. The upload route only ever writes Supabase `logos`-bucket
+// URLs, but company members can PATCH `company_settings.logo_url` directly
+// through PostgREST, so the stored value is tenant-controlled input that this
+// server fetches: it goes through `safeFetch` (public address only, no
+// redirects) unless it sits on the deployment's own storage origin.
 const LOGO_FETCH_TIMEOUT_MS = 5_000
+
+/**
+ * What became of a stored logo URL:
+ *   embedded: fetched, re-encoded, safe to hand to @react-pdf as a data URL
+ *   refused:  the outbound URL guard said no (private address, non-http(s),
+ *             redirect); the invoice renders without a logo
+ *   failed:   transient or decode failure after the guard passed
+ */
+type LogoResolution =
+  | { kind: 'embedded'; dataUrl: string }
+  | { kind: 'refused' }
+  | { kind: 'failed' }
 
 // Coalesce concurrent renders of the same logo (preflight + final on a send, and
 // every invoice in a recurring/batch loop) onto one in-flight fetch+encode
 // instead of each doing the full round-trip before the first result is cached.
-const logoInflight = new Map<string, Promise<string | null>>()
+const logoInflight = new Map<string, Promise<LogoResolution>>()
 
 /**
- * Fetch a stored logo and re-encode it to a PNG data URL. Returns null on any
- * failure (network error, timeout, oversized payload, unreadable image, sharp
- * unavailable): the caller then keeps the original URL, which @react-pdf can
- * still fetch directly for PNG/JPEG logos. Concurrent calls for the same URL
- * share a single in-flight request.
+ * The origin the app's own Supabase storage lives on. Logos uploaded through
+ * the app always resolve here, and on a self-hosted install this origin may
+ * legitimately be a private address (a NAS on the LAN), so it is exempt from
+ * the public-address check. Redirect refusal and the size cap still apply.
  */
-async function resolveLogoDataUrl(logoUrl: string): Promise<string | null> {
+function trustedLogoOrigins(): string[] {
+  const raw = process.env.NEXT_PUBLIC_SUPABASE_URL
+  if (!raw) return []
+  try {
+    return [new URL(raw).origin]
+  } catch {
+    return []
+  }
+}
+
+function isTrustedLogoOrigin(logoUrl: string): boolean {
+  try {
+    return trustedLogoOrigins().includes(new URL(logoUrl).origin)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Fetch a stored logo and re-encode it to a PNG data URL. Concurrent calls
+ * for the same URL share a single in-flight request; only successes are
+ * cached so a transient blip is retried on the next render.
+ */
+async function resolveLogoDataUrl(logoUrl: string): Promise<LogoResolution> {
   // Already embedded: nothing to fetch or convert.
-  if (logoUrl.startsWith('data:')) return logoUrl
+  if (logoUrl.startsWith('data:')) return { kind: 'embedded', dataUrl: logoUrl }
 
   const cached = logoDataUrlCache.get(logoUrl)
-  if (cached && Date.now() - cached.at < LOGO_CACHE_TTL_MS) return cached.dataUrl
+  if (cached && Date.now() - cached.at < LOGO_CACHE_TTL_MS) {
+    return { kind: 'embedded', dataUrl: cached.dataUrl }
+  }
 
   const inflight = logoInflight.get(logoUrl)
   if (inflight) return inflight
@@ -103,17 +151,32 @@ async function resolveLogoDataUrl(logoUrl: string): Promise<string | null> {
   }
 }
 
-async function encodeLogo(logoUrl: string): Promise<string | null> {
+async function encodeLogo(logoUrl: string): Promise<LogoResolution> {
+  let res: Response
   try {
-    const res = await fetch(logoUrl, { signal: AbortSignal.timeout(LOGO_FETCH_TIMEOUT_MS) })
-    if (!res.ok) return null
+    res = await safeFetch(
+      logoUrl,
+      { signal: AbortSignal.timeout(LOGO_FETCH_TIMEOUT_MS) },
+      { trustedOrigins: trustedLogoOrigins() },
+    )
+  } catch (err) {
+    if (isUnsafeUrlError(err)) {
+      logoLog.warn('logo URL refused by outbound URL guard; rendering without logo', {
+        reason: err.reason,
+        detail: err.detail,
+      })
+      return { kind: 'refused' }
+    }
+    return { kind: 'failed' }
+  }
 
-    // Reject oversized payloads up front when the server declares a length, and
-    // again after reading in case the header lied or was absent.
-    const declared = Number(res.headers.get('content-length') ?? '')
-    if (Number.isFinite(declared) && declared > LOGO_UPLOAD_MAX_BYTES) return null
-    const input = Buffer.from(await res.arrayBuffer())
-    if (input.byteLength > LOGO_UPLOAD_MAX_BYTES) return null
+  try {
+    if (!res.ok) return { kind: 'failed' }
+
+    // Declared Content-Length is checked before any byte is read, and the
+    // stream is cut off at the cap in case the header lied or was absent.
+    const input = await readBodyWithCap(res, LOGO_UPLOAD_MAX_BYTES)
+    if (!input) return { kind: 'failed' }
 
     // SVGs must be rasterized at a higher density or sharp renders them at
     // their intrinsic (often tiny) pixel size and the result looks blurry.
@@ -123,7 +186,7 @@ async function encodeLogo(logoUrl: string): Promise<string | null> {
       input.subarray(0, 256).toString('utf8').trimStart().startsWith('<')
 
     // Lazy, isolated import: if sharp ever fails to load in a given runtime we
-    // degrade to the original URL instead of breaking invoice sending entirely.
+    // degrade instead of breaking invoice sending entirely.
     const { default: sharp } = await import('sharp')
     const png = await sharp(input, isSvg ? { density: 288 } : {})
       .resize({
@@ -144,10 +207,32 @@ async function encodeLogo(logoUrl: string): Promise<string | null> {
       if (oldest !== undefined) logoDataUrlCache.delete(oldest)
     }
     logoDataUrlCache.set(logoUrl, { dataUrl, at: Date.now() })
-    return dataUrl
+    return { kind: 'embedded', dataUrl }
   } catch {
-    return null
+    return { kind: 'failed' }
   }
+}
+
+/**
+ * Apply the logo resolution to the company handed to the PDF template.
+ *
+ * On a transient failure the original URL is kept only when it points at our
+ * own storage origin (the pre-existing "never worse than before" fallback:
+ * @react-pdf can still draw a PNG/JPEG from there). For any other origin the
+ * logo is dropped instead: handing @react-pdf a remote URL means it fetches
+ * it with a plain, redirect-following fetch, which is exactly the unguarded
+ * request this module exists to prevent.
+ */
+function applyLogoResolution(company: CompanySettings, resolution: LogoResolution): CompanySettings {
+  if (resolution.kind === 'embedded') {
+    return resolution.dataUrl === company.logo_url
+      ? company
+      : { ...company, logo_url: resolution.dataUrl }
+  }
+  if (resolution.kind === 'refused') return { ...company, logo_url: null }
+  return company.logo_url && isTrustedLogoOrigin(company.logo_url)
+    ? company
+    : { ...company, logo_url: null }
 }
 
 export async function prepareInvoicePdfRender(
@@ -156,23 +241,19 @@ export async function prepareInvoicePdfRender(
   options: InvoicePdfRenderOptions = {},
 ): Promise<InvoicePdfRenderExtras> {
   if (currency && options.paymentAccountRequired !== false) {
-    assertInvoicePaymentAccountForRender(company, currency)
+    assertInvoicePaymentAccountForRender(company, currency, options.payee ?? null)
   }
   const branding = await prepareInvoiceFont(
     company,
     brandingFromCompanySettings(company),
   )
   const paymentCompany = currency
-    ? companyWithInvoicePaymentAccount(company, currency)
+    ? companyWithInvoicePaymentAccount(company, currency, options.payee ?? null)
     : company
   if (!paymentCompany.logo_url) return { branding, company: paymentCompany }
 
-  const dataUrl = await resolveLogoDataUrl(paymentCompany.logo_url)
-  const resolved =
-    dataUrl && dataUrl !== paymentCompany.logo_url
-      ? { ...paymentCompany, logo_url: dataUrl }
-      : paymentCompany
-  return { branding, company: resolved }
+  const resolution = await resolveLogoDataUrl(paymentCompany.logo_url)
+  return { branding, company: applyLogoResolution(paymentCompany, resolution) }
 }
 
 /**

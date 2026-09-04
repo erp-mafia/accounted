@@ -53,7 +53,6 @@ import {
 
 export const QVALIA_PROVIDER = 'qvalia'
 export const QVALIA_PRODUCTION_BASE_URL = 'https://api.qvalia.com'
-export const QVALIA_SANDBOX_BASE_URL = 'https://api-test.qvalia.com'
 export const QVALIA_DEFAULT_WEBHOOK_HEADER = 'x-accounted-webhook-key'
 
 export type QvaliaAuthScheme = 'apikey' | 'raw'
@@ -141,10 +140,6 @@ export class QvaliaApiError extends PeppolTransportError {
     this.kind = kind
     this.httpStatus = options.httpStatus ?? null
   }
-}
-
-export function isQvaliaApiError(error: unknown): error is QvaliaApiError {
-  return error instanceof QvaliaApiError
 }
 
 function authorizationHeader(config: QvaliaConfig): string {

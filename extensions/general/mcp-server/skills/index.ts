@@ -26,11 +26,6 @@ export const workflowSkills: Skill[] = [
   onboardingSkill,
 ]
 
-/** @deprecated Use `workflowSkills` for the static set, or `loadAllSkills(supabase)`
- *  for the unified list (workflows + atoms). Kept for backwards compatibility
- *  with prior imports. */
-export const skills = workflowSkills
-
 /**
  * Resolve a skill by slug. Checks the static workflow array first (synchronous,
  * always available), then falls back to the registry-backed atom set

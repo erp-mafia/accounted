@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { ALL_SCOPES } from '@/lib/auth/scope-catalog'
 import {
   addCompanyToNextHint,
   addCompanyToTopLevelNext,
   assertMcpCompanyWriteAccess,
   extractRequestedCompany,
   isCompanyDependentTool,
+  isTenantWriteScope,
   projectToolInputSchema,
   resolveMcpCompanyContext,
 } from '../company-routing'
@@ -248,6 +250,47 @@ describe('MCP company routing', () => {
     expect(() => assertMcpCompanyWriteAccess(context, 'webhooks:manage')).toThrow(
       expect.objectContaining({ code: 'FORBIDDEN' })
     )
+    expect(() => assertMcpCompanyWriteAccess(context, 'reconciliation:signoff')).toThrow(
+      expect.objectContaining({ code: 'FORBIDDEN' })
+    )
+  })
+
+  it('names the read-only role and the refused scope in the viewer refusal', () => {
+    const context = { companyId: OTHER_COMPANY_ID, role: 'viewer' as const, isDefault: false }
+
+    expect(() => assertMcpCompanyWriteAccess(context, 'bookkeeping:write')).toThrow(
+      expect.objectContaining({
+        code: 'FORBIDDEN',
+        message: expect.stringMatching(/read-only \(viewer\).*"bookkeeping:write"/),
+      })
+    )
+  })
+
+  it.each(['owner', 'admin', 'member'] as const)('lets a %s through on every scope', (role) => {
+    const context = { companyId: OTHER_COMPANY_ID, role, isDefault: false }
+    for (const scope of ALL_SCOPES) {
+      expect(() => assertMcpCompanyWriteAccess(context, scope)).not.toThrow()
+    }
+  })
+
+  it('classifies every non-:read scope in the catalogue as a tenant write', () => {
+    // Derived from scopeKind rather than an allowlist of suffixes, so a scope
+    // added with a new suffix is viewer-gated by default. Pin the split.
+    const writes = ALL_SCOPES.filter((scope) => isTenantWriteScope(scope))
+    const reads = ALL_SCOPES.filter((scope) => !isTenantWriteScope(scope))
+
+    expect(reads.length).toBeGreaterThan(0)
+    expect(reads.every((scope) => scope.endsWith(':read'))).toBe(true)
+    expect(writes.every((scope) => !scope.endsWith(':read'))).toBe(true)
+    expect(writes).toEqual(
+      expect.arrayContaining([
+        'invoices:write',
+        'pending_operations:approve',
+        'webhooks:manage',
+        'reconciliation:signoff',
+      ])
+    )
+    expect(isTenantWriteScope(undefined)).toBe(false)
   })
 
   it('keeps company context in follow-up tool hints', () => {

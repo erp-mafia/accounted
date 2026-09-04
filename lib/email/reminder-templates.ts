@@ -1,5 +1,5 @@
 import type { Invoice, Customer, CompanySettings, ReminderTextOverrides } from '@/types'
-import { formatCurrency, formatDate, getCompanyDisplayName, getCompanyPrimaryName } from '@/lib/utils'
+import { formatCurrency, formatDate, getCompanyDisplayName } from '@/lib/utils'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { companyWithInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
 import { applyPlaceholders, escapeHtml, sanitizeSubjectLine } from './user-text'
@@ -208,7 +208,7 @@ function buildReminderPlaceholderValues(data: ReminderEmailData): Record<string,
     fakturanummer: invoice.invoice_number ?? '',
     kundnamn: fullName,
     förnamn: fullName ? fullName.split(' ')[0] : '',
-    företag: getCompanyPrimaryName(company),
+    företag: getCompanyDisplayName(company),
     fakturadatum: formatDate(invoice.invoice_date),
     förfallodatum: formatDate(invoice.due_date),
     belopp: formatReminderTotalDue(amounts),
@@ -288,7 +288,7 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
   } = data
   // Payment details follow the invoice currency, same as the invoice email
   // and PDF: a EUR reminder must never print the SEK account's IBAN.
-  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency)
+  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency, invoice.payment_details ?? null)
   const config = REMINDER_CONFIG[reminderLevel]
   const interestRatePercent = (interestRate * 100).toLocaleString('sv-SE', {
     minimumFractionDigits: 0,
@@ -454,7 +454,7 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
         </p>
         <p style="margin: 0; color: #666; font-size: 14px;">
           Med vänliga hälsningar,<br>
-          <strong>${getCompanyPrimaryName(company)}</strong>
+          <strong>${getCompanyDisplayName(company)}</strong>
         </p>
         ${company.org_number ? `
         <p style="margin: 10px 0 0 0; color: #999; font-size: 12px;">
@@ -492,7 +492,7 @@ export function generateReminderEmailText(data: ReminderEmailData): string {
   } = data
   // Payment details follow the invoice currency, same as the invoice email
   // and PDF: a EUR reminder must never print the SEK account's IBAN.
-  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency)
+  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency, invoice.payment_details ?? null)
   const config = REMINDER_CONFIG[reminderLevel]
   const interestRatePercent = (interestRate * 100).toLocaleString('sv-SE', {
     minimumFractionDigits: 0,

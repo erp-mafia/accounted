@@ -6,8 +6,10 @@ import {
   textColumn,
   currencyColumn,
   dateColumn,
+  parseCellDate,
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
+
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface FlatRow {
@@ -22,11 +24,6 @@ interface FlatRow {
   credit: number
 }
 
-function toDate(s: string): Date | null {
-  if (!s) return null
-  const d = new Date(s)
-  return isNaN(d.getTime()) ? null : d
-}
 
 export const GET = withRouteContext('report.journal_register.xlsx', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
@@ -53,7 +50,8 @@ export const GET = withRouteContext('report.journal_register.xlsx', async (reque
       for (const line of entry.lines) {
         rows.push({
           voucher: voucherLabel,
-          date: toDate(entry.date),
+          date: parseCellDate(entry.date),
+
           description: entry.description,
           source_type: entry.source_type,
           status: entry.status,

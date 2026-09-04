@@ -150,7 +150,11 @@ describe('POST /api/extensions/woocommerce/callback', () => {
     const activation = updates[0][0] as Record<string, string | boolean | null>
     expect(activation.status).toBe('active')
     expect(activation.transaction_sync_enabled).toBe(true)
-    expect(activation.oauth_state).toBeNull()
+    // The state survives activation on purpose: this POST has no browser
+    // session, so the browser leg (../return) binds the completion to the
+    // initiator by looking the row up with this same state and consumes it
+    // there. Replay is blocked by the status 'pending' scope instead.
+    expect(activation).not.toHaveProperty('oauth_state')
     expect(activation.store_name).toBe('Testbutiken')
     // Secrets never stored in plaintext, and they decrypt back.
     expect(String(activation.consumer_key_encrypted)).not.toContain('ck_new')

@@ -4,6 +4,10 @@ import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events/bus'
 import { hashAuthCode } from '@/lib/auth/oauth-codes'
 import {
+  requireFlowInitiator,
+  FLOW_INITIATOR_MISMATCH_MESSAGE,
+} from '@/lib/auth/oauth-flow-binding'
+import {
   exchangeCodeForAccount,
   fetchAccountDisplayName,
 } from '@/extensions/general/stripe/lib/connect'
@@ -87,6 +91,29 @@ export async function GET(request: Request) {
       })
       return NextResponse.redirect(
         `${returnUrl}&stripe_error=${encodeURIComponent('invalid_state')}`,
+      )
+    }
+
+    // The state token proves this callback belongs to a flow we started; it
+    // says nothing about WHO is completing it. Bind the completion to the
+    // initiator's own cookie session BEFORE the code is burned below:
+    // otherwise a victim lured into approving a Stripe Connect someone else
+    // started would have their Stripe account attached to that someone's
+    // company. Stripe's redirect is a top-level navigation, so the
+    // initiator's cookies are present on the legitimate path.
+    const initiator = await requireFlowInitiator(request, pendingConnection.user_id, {
+      flow: 'stripe.callback',
+    })
+    if (!initiator.ok) {
+      if (initiator.reason === 'no_session') {
+        // Session expired mid-flow: sign in and the callback re-runs with
+        // the same (still unused) code + state. The row is untouched.
+        return initiator.response
+      }
+      // A different user completed it. Refuse without exchanging the code
+      // and without marking the row: it stays pending for its initiator.
+      return NextResponse.redirect(
+        `${returnUrl}&stripe_error=${encodeURIComponent(FLOW_INITIATOR_MISMATCH_MESSAGE)}`,
       )
     }
 

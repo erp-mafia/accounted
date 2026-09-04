@@ -20,6 +20,7 @@ import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { cn } from '@/lib/utils'
 import Link from 'next/link'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { SuggestionsAttn } from '@/components/parties/SuggestionsAttn'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
 import { customerListIdentifier } from '@/lib/customers/mask-personal-number'
 
@@ -287,6 +288,7 @@ function CustomersPageInner() {
           </Dialog>
         </div>
       </div>
+      <SuggestionsAttn side="customer" />
 
       {/* Toolbar: search (concept) */}
       <div className="flex flex-wrap items-center gap-2">

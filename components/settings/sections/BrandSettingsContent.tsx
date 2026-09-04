@@ -11,7 +11,7 @@ import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSk
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { LOGO_UPLOAD_MAX_BYTES } from '@/lib/invoices/branding-constants'
 
-const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/svg+xml', 'image/webp']
+const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 
 interface ByraBrand {
   hasBrand: boolean
@@ -272,7 +272,7 @@ export function BrandSettingsContent() {
       <input
         ref={inputRef}
         type="file"
-        accept="image/png,image/jpeg,image/svg+xml,image/webp"
+        accept="image/png,image/jpeg,image/webp"
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0]

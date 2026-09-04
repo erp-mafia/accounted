@@ -72,12 +72,6 @@ export interface ArticleImportParseResult {
   warnings: string[]
 }
 
-/** Input for executing the article import. */
-export interface ArticleImportExecuteInput {
-  rows: ParsedArticleRow[]
-  update_duplicates: boolean
-}
-
 /** Result of executing the article import. */
 export interface ArticleImportExecuteResult {
   success: boolean

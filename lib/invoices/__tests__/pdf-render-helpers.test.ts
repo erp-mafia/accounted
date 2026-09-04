@@ -28,6 +28,34 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }))
 
+// The logo fetch runs through the outbound URL guard, which resolves DNS.
+// Stub the validator (same seam the webhook dispatcher tests use): https hosts
+// resolve to a public address, plain http is refused like the real guard does.
+const guard = vi.hoisted(() => ({ validateUrl: vi.fn() }))
+vi.mock('@/lib/webhooks/url-guard', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/webhooks/url-guard')>()
+  return {
+    ...actual,
+    validateWebhookUrl: (...args: unknown[]) => guard.validateUrl(...args),
+  }
+})
+
+function guardPublicByDefault() {
+  guard.validateUrl.mockReset()
+  guard.validateUrl.mockImplementation(async (rawUrl: string) => {
+    const parsed = new URL(rawUrl)
+    if (parsed.protocol !== 'https:') {
+      return { ok: false, reason: 'non_https_scheme', detail: `${parsed.protocol} refused` }
+    }
+    return { ok: true, hostname: parsed.hostname, resolvedAddresses: ['203.0.113.10'] }
+  })
+}
+
+// The deployment's own storage origin: logos uploaded through the app live
+// here, and it is exempt from the public-address check (a self-hosted NAS
+// install may legitimately serve storage from a private address).
+const STORAGE_ORIGIN = 'https://example.test'
+
 const PNG_DATA_URL_PREFIX = 'data:image/png;base64,'
 
 const SVG_LOGO = Buffer.from(
@@ -60,6 +88,8 @@ describe('prepareInvoicePdfRender: logo resolution (issue #772)', () => {
   beforeEach(() => {
     vi.unstubAllGlobals()
     fontDownloadMock.mockReset()
+    guardPublicByDefault()
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', STORAGE_ORIGIN)
   })
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -124,12 +154,99 @@ describe('prepareInvoicePdfRender: logo resolution (issue #772)', () => {
 
     const { company: resolved } = await prepareInvoicePdfRender(company)
 
-    // Fetched with a timeout signal so a slow logo host can't hang the render.
+    // Fetched with a timeout signal so a slow logo host can't hang the render,
+    // and with redirects disabled so the host can't bounce us elsewhere.
     expect(fetchMock).toHaveBeenCalledWith(
       'https://example.test/svg-logo-1.svg',
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.objectContaining({ signal: expect.any(AbortSignal), redirect: 'manual' }),
     )
+    // Our own storage origin skips the DNS guard (it may be private on self-host).
+    expect(guard.validateUrl).not.toHaveBeenCalled()
     await expectValidEmbeddedPng(resolved.logo_url)
+  })
+
+  it('embeds a logo from a public https host once the DNS guard passes', async () => {
+    const fetchMock = mockFetchOnce(SVG_LOGO, 'image/svg+xml')
+    const url = 'https://cdn.example.org/public-logo-1.svg'
+    const company = makeCompanySettings({ logo_url: url })
+
+    const { company: resolved } = await prepareInvoicePdfRender(company)
+
+    expect(guard.validateUrl).toHaveBeenCalledWith(url, undefined)
+    expect(fetchMock).toHaveBeenCalledWith(url, expect.objectContaining({ redirect: 'manual' }))
+    await expectValidEmbeddedPng(resolved.logo_url)
+  })
+
+  it('renders without a logo when the logo host resolves to a private address (SSRF guard)', async () => {
+    guard.validateUrl.mockResolvedValue({
+      ok: false,
+      reason: 'private_address',
+      detail: 'Resolved address 10.0.0.9 for intranet.example.org is not publicly routable (private_address).',
+    })
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const company = makeCompanySettings({ logo_url: 'https://intranet.example.org/logo.png' })
+
+    const { company: resolved } = await prepareInvoicePdfRender(company)
+
+    // Refused means refused: no socket, and @react-pdf is not handed the URL either.
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(resolved.logo_url).toBeNull()
+  })
+
+  it('renders without a logo for a plain-http URL off the storage origin', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const company = makeCompanySettings({ logo_url: 'http://cdn.example.org/http-logo.png' })
+
+    const { company: resolved } = await prepareInvoicePdfRender(company)
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(resolved.logo_url).toBeNull()
+  })
+
+  it('renders without a logo for a non-http(s) scheme', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const company = makeCompanySettings({ logo_url: 'file:///etc/hostname' })
+
+    const { company: resolved } = await prepareInvoicePdfRender(company)
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(guard.validateUrl).not.toHaveBeenCalled()
+    expect(resolved.logo_url).toBeNull()
+  })
+
+  it('renders without a logo when the logo host answers with a redirect, even from the storage origin', async () => {
+    const cancel = vi.fn(async () => undefined)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 302,
+        type: 'basic',
+        headers: new Headers({ location: 'http://169.254.169.254/latest/meta-data/' }),
+        body: { cancel },
+      }),
+    )
+    const company = makeCompanySettings({ logo_url: 'https://example.test/redirecting-logo.png' })
+
+    const { company: resolved } = await prepareInvoicePdfRender(company)
+
+    expect(resolved.logo_url).toBeNull()
+    expect(cancel).toHaveBeenCalled()
+  })
+
+  it('drops the logo instead of handing @react-pdf a remote URL when a non-storage host fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network down')))
+    const url = 'https://cdn.example.org/flaky-logo.png'
+    const company = makeCompanySettings({ logo_url: url })
+
+    const { company: resolved } = await prepareInvoicePdfRender(company)
+
+    // @react-pdf's own fetch follows redirects with no guard; a tenant host
+    // that fails us and then redirects it would reopen the hole.
+    expect(resolved.logo_url).toBeNull()
   })
 
   it('embeds a WebP logo as a PNG data URL', async () => {

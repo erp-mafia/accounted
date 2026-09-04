@@ -35,7 +35,7 @@ Open-source Swedish accounting software for sole traders (enskild firma) and lim
 - **Skattekonto** -- Tax account transactions synced from Skatteverket or imported from statement files, linked to the booked 1630 movements for reconciliation
 - **Document archive** -- SHA-256 integrity, 7-year retention enforcement, full archive ZIP export
 - **SIE import/export** -- Standard Swedish accounting interchange format
-- **Agent access (MCP)** -- 150+ bookkeeping tools over the Model Context Protocol, with scoped API keys and staged approvals
+- **Agent access (MCP)** -- 150+ bookkeeping tools over the Model Context Protocol, with scoped API keys and staged approvals; connects to Claude, ChatGPT and Grok over OAuth 2.1
 - **Claude connector and plugin** -- Connect Claude.ai or Claude Code over OAuth 2.1 and install approval-gated workflow skills (`/accounted:bookkeep`, `/accounted:vat`, `/accounted:year-end`, ...) from [claude-plugin/](claude-plugin/README.md)
 - **Extension system** -- Opt-in plugins for AI categorization, receipt OCR, email, calendar, and more
 

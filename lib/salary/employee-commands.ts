@@ -19,6 +19,7 @@ import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer
 import { getCompanyEntityType } from '@/lib/company/context'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
+import { touchesJamkning, validateJamkning } from '@/lib/salary/jamkning-rules'
 
 export type EmployeeCommandResult<T> =
   | { ok: true; data: T }
@@ -131,6 +132,21 @@ export async function createEmployee(
     }
   }
 
+  // The staging tool already ran CreateEmployeeSchema, but the executor is the
+  // last gate before the row exists: an incomplete beslut must never be
+  // stored, since the engine silently ignores it (#2058).
+  const jamkningIssues = validateJamkning(fields)
+  if (jamkningIssues.length > 0) {
+    return {
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: {
+        field: jamkningIssues[0].field,
+        message: jamkningIssues.map((i) => i.message).join('. '),
+      },
+    }
+  }
+
   const { data, error } = await supabase
     .from('employees')
     .insert({
@@ -223,19 +239,11 @@ export async function updateEmployee(
   if (merged.vaxa_stod_eligible && !merged.vaxa_stod_start) {
     issues.push('Startdatum för Växa-stöd måste anges när Växa-stöd är aktiverat')
   }
-  if (
-    merged.jamkning_percentage !== null &&
-    merged.jamkning_percentage !== undefined &&
-    !merged.jamkning_valid_from
-  ) {
-    issues.push('Jämkningens startdatum måste anges när jämkningsprocent sätts')
-  }
-  if (
-    merged.jamkning_valid_from &&
-    merged.jamkning_valid_to &&
-    (merged.jamkning_valid_to as string) < (merged.jamkning_valid_from as string)
-  ) {
-    issues.push('Jämkningens slutdatum måste vara efter startdatumet')
+  // Jämkning is validated on the merged row through the shared validator,
+  // and only when the patch touches a jämkning key: a legacy row stored with
+  // an incomplete beslut must stay editable in unrelated ways. #2058
+  if (touchesJamkning(updates)) {
+    for (const issue of validateJamkning(merged)) issues.push(issue.message)
   }
   if (issues.length > 0) {
     return { ok: false, code: 'VALIDATION_ERROR', details: { message: issues.join('. ') } }

@@ -15,5 +15,3 @@ export const IgnoreTransactionParamsSchema = z.object({
   // true = ignore (default), false = restore a previously ignored row.
   ignored: z.boolean().default(true),
 })
-
-export type IgnoreTransactionParams = z.infer<typeof IgnoreTransactionParamsSchema>

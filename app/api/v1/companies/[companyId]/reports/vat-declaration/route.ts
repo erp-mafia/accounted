@@ -10,7 +10,7 @@ import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ValidationError } from '@/lib/api/v1/errors'
 import { safeGenerate } from '@/lib/api/v1/report-period'
 import { calculateVatDeclaration } from '@/lib/reports/vat-declaration'
 import type { VatPeriodType } from '@/types'
@@ -112,17 +112,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       period: url.searchParams.get('period'),
       accounting_method: url.searchParams.get('accounting_method') ?? undefined,
     })
-    if (!filters.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: filters.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
-    }
+    if (!filters.success) return v1ValidationError(ctx, filters.error)
     // accounting_method is still accepted (public API back-compat) but has no
     // effect: see the invariant note on calculateVatDeclaration.
     const { period_type, year, period } = filters.data

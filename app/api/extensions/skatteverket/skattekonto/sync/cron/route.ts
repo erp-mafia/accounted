@@ -7,7 +7,6 @@ import { orderByStalestSync } from '@/lib/skatteverket/sync-order'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { syncSkattekonto, SKATTEKONTO_LAST_SYNCED_AT_KEY } from '@/extensions/general/skatteverket/lib/skattekonto-sync'
-import { computeSkattekontoDrift, maybeAlertDrift } from '@/extensions/general/skatteverket/lib/skattekonto-drift'
 import { SkatteverketAuthError, type SkvAuth } from '@/extensions/general/skatteverket/lib/api-client'
 import { SkatteverketSkattekontoError } from '@/extensions/general/skatteverket/lib/skattekonto-client'
 import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
@@ -238,19 +237,6 @@ export async function GET(request: Request) {
       const auth: SkvAuth =
         source === 'system' ? { mode: 'system' } : { mode: 'user', supabase, userId, companyId }
       const syncResult = await syncSkattekonto(ctx, auth)
-
-      // Drift check: compare the fresh SKV saldo against GL 1630 sum. Emits
-      // `skattekonto.drift_detected` when |drift| > tolerance and not throttled.
-      try {
-        const drift = await computeSkattekontoDrift(ctx)
-        if (drift) await maybeAlertDrift(ctx, drift)
-      } catch (driftErr) {
-        console.error('[skattekonto-sync-cron] Drift check failed', {
-          userId,
-          companyId,
-          message: driftErr instanceof Error ? driftErr.message : String(driftErr),
-        })
-      }
 
       results.push({
         userId,

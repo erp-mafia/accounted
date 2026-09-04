@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { ACCOUNT_NUMBER_RE, ACCOUNT_NUMBER_MESSAGE } from './account-number'
 import { ISO_DATE_RE, ISO_DATE_MESSAGE, SANE_DATE_MESSAGE, isSaneDateString } from './iso-date'
 import { FISCAL_YEAR_RE, FISCAL_YEAR_MESSAGE } from './fiscal-year'
-import { isValidOrgNumber, normalizeOrgNumber } from './org-number'
+import { isValidOrgNumber } from './org-number'
 
 /**
  * Zod primitives built from the shared rules.
@@ -41,8 +41,3 @@ export const fiscalYearSchema = z.string().regex(FISCAL_YEAR_RE, FISCAL_YEAR_MES
 export const orgNumberSchema = z
   .string()
   .refine(isValidOrgNumber, 'Ogiltigt organisationsnummer (10 eller 12 siffror, giltig kontrollsiffra)')
-
-/** Org number that is normalized to the canonical 10-digit storage form on parse. */
-export const normalizedOrgNumberSchema = orgNumberSchema.transform(
-  (v) => normalizeOrgNumber(v) as string,
-)

@@ -3,6 +3,7 @@ import { ISO_DATE_RE } from '@/lib/invariants'
 import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { todayIsoUtc } from '@/lib/dates/iso'
 import { parseAccountKey, type ReconciliationSignoff, type ReconciliationStatus } from './schemas'
 import { getAccountStatus } from './service'
 import { getLatestSignoff, getSignoffById, insertSignoff, stampReopen } from './signoff-store'
@@ -34,12 +35,19 @@ export type SignoffErrorCode =
   | 'SIGNOFF_RACE'
   | 'EXTERNAL_BALANCE_NOT_ALLOWED'
 
+export interface SignoffErrorDetails {
+  /** NOT_RECONCILED: the unexplained difference the engine saw for the window, so a dialog can name the amount. */
+  unexplained_difference?: number | null
+}
+
 export class ReconciliationSignoffError extends Error {
   readonly code: SignoffErrorCode
-  constructor(message: string, code: SignoffErrorCode) {
+  readonly details: SignoffErrorDetails | null
+  constructor(message: string, code: SignoffErrorCode, details: SignoffErrorDetails | null = null) {
     super(message)
     this.name = 'ReconciliationSignoffError'
     this.code = code
+    this.details = details
   }
 }
 
@@ -81,8 +89,38 @@ export type SignoffResult =
   | { dry_run: true; would_sign: SignoffPreview }
   | { dry_run: false; signoff: ReconciliationSignoff }
 
-function isoToday(): string {
-  return new Date().toISOString().slice(0, 10)
+/**
+ * The start of the fiscal period that covers `throughDate`, or null when no
+ * period does (or the read fails). The bank bridge is a period movement, so
+ * its lower bound decides the verdict: without this the sign-off judged the
+ * calendar year from 1 January, while the page the signer looked at was
+ * scoped to the fiscal period. A company with a broken fiscal year (September
+ * to August) then saw the dialog allow a sign-off the server refused.
+ */
+async function fiscalPeriodStartFor(
+  supabase: SupabaseClient,
+  companyId: string,
+  throughDate: string,
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('fiscal_periods')
+    .select('period_start')
+    .eq('company_id', companyId)
+    .lte('period_start', throughDate)
+    .gte('period_end', throughDate)
+    .order('period_start', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) {
+    log.warn('fiscal period lookup failed for sign-off window', {
+      companyId,
+      throughDate,
+      error: error.message,
+    })
+    return null
+  }
+  const start = (data as { period_start?: string | null } | null)?.period_start
+  return typeof start === 'string' && ISO_DATE_RE.test(start) ? start : null
 }
 
 /**
@@ -100,7 +138,7 @@ export async function signOffAccount(
 ): Promise<SignoffResult | null> {
   const parsed = parseAccountKey(accountKey)
   if (!parsed) return null
-  const today = options.today ?? isoToday()
+  const today = options.today ?? todayIsoUtc()
   const throughDate = input.through_date
   if (!ISO_DATE_RE.test(throughDate) || Number.isNaN(Date.parse(throughDate))) {
     throw new ReconciliationSignoffError('Ogiltigt datum. Ange ÅÅÅÅ-MM-DD.', 'INVALID_DATE')
@@ -119,10 +157,14 @@ export async function signOffAccount(
 
   // The engine's view through the requested date. The skattekonto bridge is
   // anchored at the saldo snapshot, so the date cannot pass it; the bank
-  // bridge is a period movement, so the window simply ends on the date.
+  // bridge is a period movement, so the window runs from the start of the
+  // fiscal period that covers the date (the opening balance) to the date. A
+  // manual account is a balance and ignores the lower bound.
+  const windowFrom = parsed.kind === 'bank' ? await fiscalPeriodStartFor(supabase, companyId, throughDate) : null
   const status: ReconciliationStatus | null = await getAccountStatus(supabase, companyId, accountKey, {
     today,
     windowTo: throughDate,
+    ...(windowFrom ? { windowFrom } : {}),
   })
   if (!status) return null
   const asOfDate = status.as_of.slice(0, 10)
@@ -163,6 +205,7 @@ export async function signOffAccount(
     throw new ReconciliationSignoffError(
       'Kontot har en oförklarad differens. Koppla eller bokför raderna först, eller signera med en notering.',
       'NOT_RECONCILED',
+      { unexplained_difference: unexplained },
     )
   }
 

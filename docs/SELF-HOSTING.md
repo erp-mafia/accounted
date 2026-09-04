@@ -22,7 +22,7 @@ In the Supabase dashboard under **Authentication > URL Configuration**:
 1. Set **Site URL** to your deployment URL (e.g., `https://gnubok.example.com`).
 2. Add `https://gnubok.example.com/auth/callback` to the **Redirect URLs** allowlist.
 
-Accounted uses email + password authentication with magic link as a fallback. The default Supabase email auth settings work out of the box. For production, configure a custom SMTP provider under **Authentication > SMTP Settings** to avoid Supabase's built-in rate limits.
+Accounted uses email + password authentication with magic link as a fallback. The default Supabase email auth settings work out of the box. For production, configure a custom SMTP provider under **Authentication > SMTP Settings** to avoid Supabase's built-in rate limits. Keep **Secure email change** enabled (Authentication > Settings, on by default): a login-email change also removes social logins tied to the old address, so the old mailbox must confirm the change before it can lose its access.
 
 MFA (two-factor authentication via TOTP) is **not enforced** for self-hosted deployments: the Docker image sets `NEXT_PUBLIC_SELF_HOSTED=true` by default, which disables MFA enforcement. Users can still optionally enable 2FA in Settings > Säkerhet if they wish. Idle and absolute session timeouts are also off by default for self-hosted installs; operators can opt in with the variables below.
 
@@ -339,11 +339,11 @@ Set this when you have turned public signup off in GoTrue (`disable_signup`). Th
 
 ### Connector subscription (self-hosted instances)
 
-Everything a self-hosted instance runs itself is free (AGPL). Four capabilities depend on services only Accounted operates and are therefore gated on a self-host: bank sync (our PSD2/AISP credentials), Skatteverket API submission and skattekonto sync (our API client registration), company lookup (TIC) and migration from Fortnox/Visma/Bokio/Björn Lundén (the migration gateway). A **connector key** unlocks them for every company on the instance; it is priced per active company at parity with hosted and will be issued manually by Accounted (self-serve later); no keys are issued until the instance-side client wiring described below is complete.
+Everything a self-hosted instance runs itself is free (AGPL). Five capabilities depend on services only Accounted operates and are therefore gated on a self-host: bank sync (our PSD2/AISP credentials), Skatteverket API submission and skattekonto sync (our API client registration), Peppol e-invoicing (our contracted access point), company lookup (TIC) and migration from Fortnox/Visma/Bokio/Björn Lundén (the migration gateway). A **connector key** unlocks them for every company on the instance; it is priced per active company at parity with hosted and will be issued manually by Accounted (self-serve later); no keys are issued until the instance-side client wiring described below is complete.
 
 ```bash
 GNUBOK_CONNECTOR_KEY=gnubok_ck_...            # issued by Accounted, shown once
-# GNUBOK_CONNECT_URL=https://app.gnubok.se   # default: the hosted connector service
+# GNUBOK_CONNECT_URL=https://connect.accounted.se   # default: the connector service
 ```
 
 The cron sidecar calls `/api/connector/sync/cron` hourly (it is listed in `docker/crontab.self-hosted` only): the instance reports its active company count, the hosted service answers with the key's status and scopes, and the instance writes `capability_grants` rows with `source = 'connector'` that expire after **72 hours** (or three days past the paid period, whichever is sooner). Those rows are the offline cache: a hosted outage shorter than that changes nothing, a revoked or lapsed key freezes the connector capabilities within days, and nothing in the instance phones home for permission to run the bookkeeping. An instance without a key answers `not_configured` and stays unaffected. To run the sync once by hand after pasting the key:
@@ -352,9 +352,49 @@ The cron sidecar calls `/api/connector/sync/cron` hourly (it is listed in `docke
 curl -sf -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/connector/sync/cron
 ```
 
-The **bank** and **Skatteverket** connector proxies are live (`app.gnubok.se/api/connect/bank/*` and `/api/connect/skv/*`): with `bank_sync` / `skatteverket` in your key's scopes, the instance connects a bank through Arcim's PSD2 credentials and files VAT/AGI + syncs skattekonto through Arcim's registered Skatteverket client, while all tokens (the bank session id, the SKV BankID tokens) stay encrypted in the instance's own database. Company lookup and migration through the connector ship in following releases. The instance-side client wiring lands in halves: the bank client already routes through the hosted proxy in connector mode (key set, no own Enable Banking credentials), while the Skatteverket client wiring still ships in a following release; until it lands no keys are issued, so a key never yields a granted capability whose client cannot carry traffic. On the instance, Skatteverket still needs `SKATTEVERKET_ENABLED=true` and `SKATTEVERKET_TOKEN_ENCRYPTION_KEY` (the tokens are stored there, so the encryption key is the operator's).
+The **bank** and **Skatteverket** connector proxies are live on the connector service (`connect.accounted.se/api/connect/bank/*` and `/api/connect/skv/*`): with `bank_sync` / `skatteverket` in your key's scopes, the instance connects a bank through Arcim's PSD2 credentials and files VAT/AGI + syncs skattekonto through Arcim's registered Skatteverket client, while all tokens (the bank session id, the SKV BankID tokens) stay encrypted in the instance's own database. Company lookup and migration through the connector ship in following releases. The instance-side client wiring is merged for both upstreams: in connector mode (key set, no own credentials for that upstream) bank sync and Skatteverket carry traffic through the hosted proxy. Keys are not yet issued: Accounted issues none until a staging end-to-end run confirms the full flow, so a key never unlocks a granted capability whose client cannot carry traffic. On the instance, Skatteverket still needs `SKATTEVERKET_ENABLED=true` and `SKATTEVERKET_TOKEN_ENCRYPTION_KEY` (the tokens are stored there, so the encryption key is the operator's).
 
-With this release the self-host image also ships the `enable-banking` and `skatteverket` extensions in its preset: without a key (or own credentials) they show the connector upsell instead of being absent, and `GET /api/connector/status` shows the operator how each upstream would be routed. The bank client wiring is merged; the Skatteverket client wiring still ships in a following release, and keys are not issued until it lands.
+**Peppol** through the connector works the same way once your key carries the `peppol` scope: leave every `QVALIA_*` variable and `PEPPOL_TRANSPORT_PROVIDER` unset, and the instance sends and receives e-invoices through Arcim's contracted access point (`connect.accounted.se/api/connect/peppol/*`). The hosted side enforces one receiving registration per company (`peppol_connections_per_company` on the key), a shared cap on registrations at the access point, and ownership: an instance can only poll status, fetch evidence and receive documents for registrations and submissions made through its own key. Delivery status arrives by polling (`/api/peppol/outbound/status/cron`), not by webhook. Which participant identifiers (organisation numbers, GLNs) a key may register and send as is recorded on the key when Arcim issues it; the licensee's own organisation number is always allowed, anything else is refused with `CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED`. Setting `QVALIA_API_KEY` or `QVALIA_PARTNER_REG_NO` switches Peppol out of connector mode onto your own access-point account. Brokered Peppol registers your companies under Arcim's access point, so the `peppol` scope is issued only where Arcim's provider terms allow it.
+
+With this release the self-host image also ships the `enable-banking` and `skatteverket` extensions in its preset: without a key (or own credentials) they show the connector upsell instead of being absent, and `GET /api/connector/status` shows the operator how each upstream would be routed.
+
+#### Own credentials (no connector key)
+
+Both gated upstreams also run on credentials you register yourself. An instance with its own credentials for an upstream provides that service itself and is never connector-gated for it, with or without a key: the app routes that upstream directly and ignores the connector for it.
+
+**Enable Banking (bank sync).** Create an application in the Enable Banking control panel. Production access in restricted mode covers your own company's accounts and needs no AISP licence of your own. It does not cover other parties' accounts: an instance that hosts client companies (a byrå, a consultant team) is connecting accounts it does not own, which is licensed account-information service under PSD2 and lag (2010:751) om betaltjänster. For that instance, use the connector key (Arcim's AISP registration) or register as an AISP yourself. Register the redirect URL `${NEXT_PUBLIC_APP_URL}/api/extensions/enable-banking/callback` on the application, then set:
+
+```bash
+ENABLE_BANKING_APP_ID=...                              # application id from the control panel
+ENABLE_BANKING_PRIVATE_KEY=...                         # the application's private key as base64-encoded PEM (a bare base64 DER body also works; a raw PEM does not)
+# ENABLE_BANKING_API_URL=https://api.enablebanking.com # default; https://api.tilisy.com is the sandbox
+# ENABLE_BANKING_PSU_TYPE=business                     # default; enskild firma companies are sent as personal automatically
+```
+
+The `_PRODUCTION` variants (`ENABLE_BANKING_APP_ID_PRODUCTION`, `ENABLE_BANKING_PRIVATE_KEY_PRODUCTION`, `ENABLE_BANKING_API_URL_PRODUCTION`) win over the plain names when both are set. Setting any one of the four id/key variables switches the bank upstream out of connector mode, so always set the id and the key as a pair: a lone `ENABLE_BANKING_APP_ID` leaves you with neither the connector nor a working own client.
+
+**Skatteverket (VAT and AGI submission, skattekonto sync).** Apply for API access in Skatteverket's developer portal (Utvecklarportalen): a separate OAuth2 client and API gateway credentials, one integration agreement per API (momsdeklaration, the two arbetsgivardeklaration APIs, skattekonto), and Skatteverket's approval test before production access is granted. Request the scopes the app sends on every authorization: `momsdeklaration inkforetag skahmst skattekonto ska agd agdredovisningperiod` (the two AGI scopes are both required: `agd` for inlämning and `agdredovisningperiod` for kvittenser; a token missing the second one files fine and then fails on the receipt). Register the redirect URI `${NEXT_PUBLIC_APP_URL}/api/extensions/ext/skatteverket/callback` on the client, then set:
+
+```bash
+SKATTEVERKET_ENABLED=true
+SKATTEVERKET_OAUTH2_CLIENT_ID=...
+SKATTEVERKET_OAUTH2_CLIENT_SECRET=...
+SKATTEVERKET_APIGW_CLIENT_ID=...
+SKATTEVERKET_APIGW_CLIENT_SECRET=...
+SKATTEVERKET_TOKEN_ENCRYPTION_KEY=...                  # openssl rand -base64 32; encrypts the BankID tokens at rest (any string, hashed to the AES key)
+SKATTEVERKET_ENV=production                            # drives payload limits; defaults to test
+SKATTEVERKET_OAUTH_BASE_URL=https://peroauth2.skatteverket.se/oauth2/v1/per
+SKATTEVERKET_API_BASE_URL=https://api.skatteverket.se/momsdeklaration/v1
+SKATTEVERKET_AGD_INLAMNING_API_BASE_URL=https://api.skatteverket.se/arbetsgivardeklaration/inlamning/v1
+SKATTEVERKET_AGD_PERIOD_API_BASE_URL=https://api.skatteverket.se/arbetsgivardeklaration/hanteraredovisningsperiod/v1
+SKATTEVERKET_SKATTEKONTO_API_BASE_URL=https://api.skatteverket.se/beskattning/skattekonto/v2
+```
+
+Set all five base URLs: every default points at Skatteverket's test environment, which only accepts a test BankID, so a production client with a missing URL fails at login. `SKATTEVERKET_DISABLED=true` is the emergency kill switch: every Skatteverket API call fails closed until you remove it (the BankID login itself is not blocked, only what follows it). There is no dual-key rotation for the token encryption key: changing it makes every stored token undecryptable, and every user reconnects with BankID. The `SKATTEVERKET_SYSTEM_*` variables and `SKATTEVERKET_OMBUD_ORG_NUMBER` belong to Accounted's hosted ombud certificate and stay unset on a self-host. Setting either `SKATTEVERKET_OAUTH2_CLIENT_ID` or `SKATTEVERKET_APIGW_CLIENT_ID` switches the Skatteverket upstream out of connector mode.
+
+**Bank sync as a connector operation.** In connector mode the bank paging, the booked-only filter and the normalization run on the hosted service (`POST /api/connect/bank/sync`); the instance sends the session id it holds and receives the rows plus the raw provider pages it archives, and keeps computing its own stored transaction keys, so nothing about dedup changes. `CONNECT_BANK_CANARY_COMPANIES` (comma-separated company ids) routes only those companies through the connector while own credentials remain set, which is how an installation moves a few companies at a time. `CONNECT_SKV_CANARY_COMPANIES` does the same for Skatteverket: the listed companies' user-token data calls (skattekonto, moms, AGI) go through the connector's data proxy while the installation's own OAuth client still refreshes the tokens.
+
+**Connector mode, for comparison.** With a key you set `GNUBOK_CONNECTOR_KEY` and, if you are not on the default hosted origin, `GNUBOK_CONNECT_URL` (https only; plain http is accepted for loopback only, and an invalid URL disables the connector with a warning in the log). Skatteverket in connector mode still needs `SKATTEVERKET_ENABLED=true` and `SKATTEVERKET_TOKEN_ENCRYPTION_KEY`: the BankID tokens are stored in your database, so the encryption key stays operator-side. Leave every other Enable Banking and Skatteverket variable unset.
 
 ### Push Notifications
 

@@ -32,27 +32,13 @@ import {
   ExternalLink,
   RefreshCw,
 } from 'lucide-react'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatWholeKr } from '@/lib/utils'
 import type {
   PeriodiskSammanstallningReport,
   PsPeriodType,
   PsWarning,
 } from '@/lib/reports/periodisk-sammanstallning'
-
-function formatAmount(amount: number): string {
-  // Hela kronor: SKV 5740 har inga öre.
-  return amount.toLocaleString('sv-SE', { maximumFractionDigits: 0 })
-}
-
-/** API errors may be a plain string or the canonical { code, message } envelope. */
-function parseApiError(error: unknown, fallback: string): string {
-  if (typeof error === 'string') return error
-  if (error && typeof error === 'object') {
-    const message = (error as { message?: unknown }).message
-    if (typeof message === 'string') return message
-  }
-  return fallback
-}
+import { parseApiError } from './api-error'
 
 function typeBadge(row: { services: number; goods: number; triangulation: number }) {
   const types: string[] = []
@@ -275,19 +261,19 @@ export function PeriodiskSammanstallningView() {
                 <div>
                   <div className="text-xs text-muted-foreground uppercase tracking-wider">Tjänster (typ 3)</div>
                   <div className="font-display text-xl tabular-nums">
-                    {formatAmount(data.totals.services)} kr
+                    {formatWholeKr(data.totals.services)} kr
                   </div>
                 </div>
                 <div>
                   <div className="text-xs text-muted-foreground uppercase tracking-wider">Varor (typ 1)</div>
                   <div className="font-display text-xl tabular-nums">
-                    {formatAmount(data.totals.goods)} kr
+                    {formatWholeKr(data.totals.goods)} kr
                   </div>
                 </div>
                 <div>
                   <div className="text-xs text-muted-foreground uppercase tracking-wider">Trepart (typ 2)</div>
                   <div className="font-display text-xl tabular-nums">
-                    {formatAmount(data.totals.triangulation)} kr
+                    {formatWholeKr(data.totals.triangulation)} kr
                   </div>
                 </div>
               </div>
@@ -300,9 +286,9 @@ export function PeriodiskSammanstallningView() {
                       <CheckCircle2 className="h-4 w-4 mt-1 shrink-0 text-success" />
                       <span>
                         Stämmer mot momsdeklarationen
-                        {' '}(Ruta 39: {formatAmount(data.reconciliation.ruta39 ?? 0)} kr,
-                        {' '}Ruta 35: {formatAmount(data.reconciliation.ruta35 ?? 0)} kr,
-                        {' '}Ruta 38: {formatAmount(data.reconciliation.ruta38 ?? 0)} kr)
+                        {' '}(Ruta 39: {formatWholeKr(data.reconciliation.ruta39 ?? 0)} kr,
+                        {' '}Ruta 35: {formatWholeKr(data.reconciliation.ruta35 ?? 0)} kr,
+                        {' '}Ruta 38: {formatWholeKr(data.reconciliation.ruta38 ?? 0)} kr)
                       </span>
                     </span>
                   ) : (
@@ -310,9 +296,9 @@ export function PeriodiskSammanstallningView() {
                       <AlertTriangle className="h-4 w-4 mt-1 shrink-0" />
                       <span>
                         Avviker från momsdeklarationen: kontrollera bokföringen.
-                        {' '}Ruta 39: {formatAmount(data.reconciliation.ruta39 ?? 0)} kr,
-                        {' '}Ruta 35: {formatAmount(data.reconciliation.ruta35 ?? 0)} kr,
-                        {' '}Ruta 38: {formatAmount(data.reconciliation.ruta38 ?? 0)} kr.
+                        {' '}Ruta 39: {formatWholeKr(data.reconciliation.ruta39 ?? 0)} kr,
+                        {' '}Ruta 35: {formatWholeKr(data.reconciliation.ruta35 ?? 0)} kr,
+                        {' '}Ruta 38: {formatWholeKr(data.reconciliation.ruta38 ?? 0)} kr.
                       </span>
                     </span>
                   )}
@@ -407,13 +393,13 @@ export function PeriodiskSammanstallningView() {
                         <TableCell className="tabular-nums font-mono text-xs">{row.country}</TableCell>
                         <TableCell className="tabular-nums font-mono text-xs">{row.vatNumber}</TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {row.services !== 0 ? formatAmount(row.services) : '-'}
+                          {row.services !== 0 ? formatWholeKr(row.services) : '-'}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {row.goods !== 0 ? formatAmount(row.goods) : '-'}
+                          {row.goods !== 0 ? formatWholeKr(row.goods) : '-'}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {row.triangulation !== 0 ? formatAmount(row.triangulation) : '-'}
+                          {row.triangulation !== 0 ? formatWholeKr(row.triangulation) : '-'}
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">{typeBadge(row)}</TableCell>
                         <TableCell className="text-xs">
@@ -426,9 +412,9 @@ export function PeriodiskSammanstallningView() {
                     ))}
                     <TableRow className="bg-muted/30 font-medium">
                       <TableCell colSpan={2}>Totalt</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatAmount(data.totals.services)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatAmount(data.totals.goods)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatAmount(data.totals.triangulation)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatWholeKr(data.totals.services)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatWholeKr(data.totals.goods)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatWholeKr(data.totals.triangulation)}</TableCell>
                       <TableCell colSpan={2} />
                     </TableRow>
                   </TableBody>

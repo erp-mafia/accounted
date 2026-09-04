@@ -79,25 +79,6 @@ export interface BankFileFormat {
   parse: (content: string) => BankFileParseResult
 }
 
-/** Import tracking record stored in DB */
-export interface BankFileImport {
-  id: string
-  user_id: string
-  filename: string
-  file_hash: string
-  file_format: string
-  transaction_count: number
-  imported_count: number
-  duplicate_count: number
-  matched_count: number
-  date_from: string | null
-  date_to: string | null
-  status: 'pending' | 'processing' | 'completed' | 'failed'
-  error_message: string | null
-  created_at: string
-  updated_at: string
-}
-
 /** Column mapping for generic CSV format */
 export interface GenericCSVColumnMapping {
   date: number

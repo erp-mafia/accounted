@@ -21,7 +21,8 @@ import { FyPicker } from '@/components/common/FyPicker'
 import { mostRecentEndedVatPeriod } from '@/lib/vat/period-defaults'
 import { resolveInitialVatPeriodSelection } from '@/lib/vat/period-selection'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { cn, formatDate } from '@/lib/utils'
+import { cn, formatAmount, formatDate } from '@/lib/utils'
+import { formatDateISO } from '@/lib/calendar/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { roundOre } from '@/lib/money'
 import { formatLatestVouchers } from '@/lib/reports/latest-vouchers-format'
@@ -87,10 +88,6 @@ import type {
   VatDeclaration,
   VatPeriodType,
 } from '@/types'
-
-function formatAmount(amount: number): string {
-  return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
 
 // Shared shells for the report bodies, so all views read as the same
 // instrument: Skeleton while loading, EmptyState when the period has no data,
@@ -1281,7 +1278,6 @@ function VatBookingCard({
   )
 }
 
-
 /** The Stegen header (concept Moms C): the filing pipeline as a clickable
  *  horizontal stepper with honest per-step status subs. Statutory surface,
  *  Swedish in both locales like the rest of the declaration. */
@@ -2434,11 +2430,6 @@ interface SupplierLedgerData {
 
 // Local calendar date (YYYY-MM-DD) for the reskontra "per datum" default:
 // toISOString() is UTC and rolls the date over an hour early in Sweden.
-function localIsoDate(): string {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-}
-
 // Shared "Per datum" control + export menu header for the two reskontra views
 // (#1020/#1021): pick an arbitrary as-of date and export PDF/Excel for it.
 function ReskontraToolbar({
@@ -2482,7 +2473,7 @@ export function SupplierLedgerView({ periodId }: { periodId: string }) {
   const [data, setData] = useState<SupplierLedgerData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [asOfDate, setAsOfDate] = useState(localIsoDate)
+  const [asOfDate, setAsOfDate] = useState(() => formatDateISO(new Date()))
 
   const fetchData = async () => {
     setLoading(true)
@@ -3232,7 +3223,7 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [expandedCustomers, setExpandedCustomers] = useState<Set<string>>(new Set())
-  const [asOfDate, setAsOfDate] = useState(localIsoDate)
+  const [asOfDate, setAsOfDate] = useState(() => formatDateISO(new Date()))
 
   const fetchData = async () => {
     setLoading(true)

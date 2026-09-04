@@ -757,3 +757,201 @@ describe('truncateIp: privacy-preserving IP logging', () => {
 
 // Suppress unused-import warning: we re-export to keep the type chain visible.
 void mockStoreIdempotency
+
+describe('withApiV1: read-only role gate (viewer)', () => {
+  // The v1 surface runs as the service role, so RLS never sees the viewer.
+  // This wrapper is the only place the read-only role is enforced for API
+  // keys; the DB triggers that block viewer writes apply to cookie sessions.
+  function viewerKey(scopes: string[]) {
+    mockValidate.mockResolvedValue({
+      userId: 'user-viewer',
+      companyId: 'company-1',
+      scopes,
+      mode: 'live',
+    })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'viewer' }))
+  }
+
+  it('refuses a viewer key on POST journal-entries with 403 ROLE_READ_ONLY before the handler runs', async () => {
+    viewerKey(['bookkeeping:write'])
+    const handlerSpy = vi.fn(async (_req: Request, ctx: { requestId: string }) =>
+      ok({ id: 'je-1' }, { requestId: ctx.requestId }),
+    )
+    // No requireScope override: the real catalogue entry for the route is what
+    // classifies the request ('POST .../journal-entries' -> bookkeeping:write).
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'journal-entries.create',
+      handlerSpy,
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer gnubok_sk_x', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: 'x', lines: [] }),
+      }),
+      companyParams('company-1'),
+    )
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(body.error.details.code).toBe('ROLE_READ_ONLY')
+    expect(body.error.details.role).toBe('viewer')
+    expect(body.error.details.required_scope).toBe('bookkeeping:write')
+    // Swedish user-facing message from the registry entry.
+    expect(body.error.message).toBe('Du har inte behörighet att utföra denna åtgärd.')
+    expect(body.error.request_id).toMatch(/^req_/)
+    expect(handlerSpy).not.toHaveBeenCalled()
+    // Refused before the seat gate: no extra read for a refused write.
+    expect(getMultiUserStateMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses a viewer even when the write is a dry-run (nothing to simulate for a read-only role)', async () => {
+    viewerKey(['invoices:write'])
+    const handlerSpy = vi.fn(async (_req: Request, ctx: { requestId: string }) =>
+      ok({ ok: true }, { requestId: ctx.requestId }),
+    )
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'invoices.create',
+      handlerSpy,
+      { requireScope: 'invoices:write' },
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1/invoices?dry_run=true', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      companyParams('company-1'),
+    )
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.details.code).toBe('ROLE_READ_ONLY')
+    expect(handlerSpy).not.toHaveBeenCalled()
+  })
+
+  it('refuses a viewer on a GET whose scope is an elevated grant (webhooks:manage)', async () => {
+    viewerKey(['webhooks:manage'])
+    const handlerSpy = vi.fn(async (_req: Request, ctx: { requestId: string }) =>
+      ok({ webhooks: [] }, { requestId: ctx.requestId }),
+    )
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'webhooks.list',
+      handlerSpy,
+      { requireScope: 'webhooks:manage' },
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1/webhooks', {
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      companyParams('company-1'),
+    )
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.details.code).toBe('ROLE_READ_ONLY')
+    expect(body.error.details.required_scope).toBe('webhooks:manage')
+    expect(handlerSpy).not.toHaveBeenCalled()
+  })
+
+  it('leaves a viewer GET on a :read scope untouched (200, seat gate still consulted)', async () => {
+    viewerKey(['reports:read'])
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'journal-entries.list',
+      async (_req, ctx) => ok({ entries: [], companyId: ctx.companyId }, { requestId: ctx.requestId }),
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      companyParams('company-1'),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.companyId).toBe('company-1')
+    // A viewer is a non-owner: the dormant-seat logic still runs for reads.
+    expect(getMultiUserStateMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('still applies the seat gate to a viewer read in a frozen company', async () => {
+    viewerKey(['reports:read'])
+    getMultiUserStateMock.mockResolvedValue({ state: 'frozen', graceEndsAt: null })
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'journal-entries.list',
+      async (_req, ctx) => ok({ entries: [] }, { requestId: ctx.requestId }),
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      companyParams('company-1'),
+    )
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.details.capability).toBe('multi_user')
+    expect(body.error.details.code).toBeUndefined()
+  })
+
+  it.each(['member', 'admin', 'owner'])('lets a %s key through the role gate on POST journal-entries', async (role) => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: 'company-1',
+      scopes: ['bookkeeping:write'],
+      mode: 'live',
+    })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role }))
+    const handlerSpy = vi.fn(async (_req: Request, ctx: { requestId: string }) =>
+      NextResponse.json({ data: { id: 'je-1', requestId: ctx.requestId } }, { status: 201 }),
+    )
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'journal-entries.create',
+      handlerSpy,
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer gnubok_sk_x', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: 'x', lines: [] }),
+      }),
+      companyParams('company-1'),
+    )
+
+    expect(res.status).toBe(201)
+    expect(handlerSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the non-member answer unchanged: 404, no role information leaks', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-outsider',
+      companyId: 'company-2',
+      scopes: ['bookkeeping:write'],
+      mode: 'live',
+    })
+    mockServiceClient.mockReturnValue(makeSupabaseStub(null))
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'journal-entries.create',
+      async (_req, ctx) => ok({ ok: true }, { requestId: ctx.requestId }),
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      companyParams('company-1'),
+    )
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('NOT_FOUND')
+    expect(body.error.details.role).toBeUndefined()
+  })
+})

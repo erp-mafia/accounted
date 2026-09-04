@@ -413,6 +413,3 @@ export function anyAssetHasComponents(assets: AssetWithComponents[]): boolean {
   )
 }
 
-// Re-export so the type-guard signature can be reused by build-data and
-// tests without exposing the local AssetWithComponents structural type.
-export { isComponentArray as isK3ComponentArray }

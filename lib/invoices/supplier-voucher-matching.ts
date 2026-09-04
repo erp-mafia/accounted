@@ -29,6 +29,18 @@ import { clearSettledInvoiceSuggestions } from './clear-settled-invoice-suggesti
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
 import type { SupplierInvoice, Supplier } from '@/types'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import {
+  AMOUNT_TOLERANCE,
+  DATE_PROXIMITY_BUMP,
+  DEFAULT_DATE_WINDOW_DAYS,
+  EXCLUDED_SOURCE_TYPES,
+  isDateWithinDays,
+  round2,
+  type FiscalPeriodRow,
+  type VoucherMatchLineRow as JournalEntryLine,
+  type VoucherRow,
+} from './voucher-matching-shared'
+import { formatAmount as formatNumber } from '@/lib/utils'
 
 const log = createLogger('supplier-voucher-matching')
 
@@ -39,15 +51,6 @@ const log = createLogger('supplier-voucher-matching')
  *  suppliers will legitimately debit both 2440 and 2441: summing across
  *  the 244x range catches that. PR #602 Swedish-compliance fix. */
 const AP_ACCOUNT_PREFIX = '244'
-
-/** ±90 days from the invoice's due_date as the default search window. */
-const DEFAULT_DATE_WINDOW_DAYS = 90
-
-/** Tolerance for floating-point comparisons on monetary amounts (0.5 öre). */
-const AMOUNT_TOLERANCE = 0.005
-
-/** Date-proximity bump applied when entry_date is within ±7 days of due_date. */
-const DATE_PROXIMITY_BUMP = 0.05
 
 export interface SupplierVoucherCandidate {
   journal_entry_id: string
@@ -73,45 +76,10 @@ export interface SupplierVoucherCandidate {
   match_reason: string
 }
 
-interface JournalEntryLine {
-  id: string
-  journal_entry_id: string
-  account_number: string
-  debit_amount: number | null
-  credit_amount: number | null
-  /** Labels the DOCUMENT, NOT the unit of debit_amount/credit_amount. */
-  currency: string | null
-  /** The line's amount in `currency`: the only non-SEK figure on the row. */
-  amount_in_currency: number | string | null
-}
-
-interface VoucherRow {
-  id: string
-  voucher_series: string | null
-  voucher_number: number | null
-  entry_date: string
-  description: string
-  status: string
-  source_type: string | null
-  fiscal_period_id: string
-}
-
-/** fiscal_periods carries no `status` column: lock state is the (is_closed,
- *  locked_at) pair, which is exactly what enforce_period_lock() reads in
- *  migration 20240101000017 and what resolvePeriodStatusForDate() uses in
- *  lib/core/bookkeeping/period-service.ts. */
-interface FiscalPeriodRow {
-  id: string
-  is_closed: boolean | null
-  locked_at: string | null
-}
-
 interface CandidateContext {
   invoice: SupplierInvoice & { supplier?: Supplier }
   remainingAmount: number
 }
-
-const EXCLUDED_SOURCE_TYPES = ['opening_balance', 'storno']
 
 /**
  * Find posted journal entries whose lines debit 2440 and could plausibly be
@@ -797,28 +765,10 @@ function computeRemaining(invoice: SupplierInvoice): number {
   return Math.max(0, round2(invoice.total - paid))
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
-}
-
-function isDateWithinDays(a: string, b: string, days: number): boolean {
-  const ad = new Date(a).getTime()
-  const bd = new Date(b).getTime()
-  if (Number.isNaN(ad) || Number.isNaN(bd)) return false
-  return Math.abs(ad - bd) <= days * 24 * 3600 * 1000
-}
-
 function descriptionMentionsToken(description: string | null, token: string): boolean {
   if (!description || !token) return false
   const normalizedDesc = description.replace(/\s+/g, '').toLowerCase()
   const normalizedTok = token.replace(/\s+/g, '').toLowerCase()
   if (normalizedTok.length < 2) return false
   return normalizedDesc.includes(normalizedTok)
-}
-
-function formatNumber(n: number): string {
-  return new Intl.NumberFormat('sv-SE', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(n)
 }

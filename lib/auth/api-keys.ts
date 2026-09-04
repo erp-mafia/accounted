@@ -25,7 +25,7 @@ export {
   TOOL_SCOPE_MAP,
   TOOL_COUNT_BY_SCOPE,
 } from './scope-catalog'
-export type { ApiKeyScope, ScopeGroup } from './scope-catalog'
+export type { ApiKeyScope } from './scope-catalog'
 import { API_KEY_SCOPES, DEFAULT_SCOPES, type ApiKeyScope } from './scope-catalog'
 
 export function validateScopes(scopes: unknown): ApiKeyScope[] | null {
@@ -45,6 +45,17 @@ export function createServiceClientNoCookies() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 }
+
+/**
+ * Name of every api_keys row minted by the MCP OAuth token route
+ * (app/api/mcp-oauth/token). It is the only marker those rows carry (there
+ * is no source column), so the Hem checklist's "Anslut till Claude" step
+ * matches on it to know a client completed its first sign-in. Renaming it
+ * would untick the step for every existing connection. The manual create
+ * route (app/api/settings/api-keys) rejects this name so a hand-minted key
+ * cannot fake the connection.
+ */
+export const OAUTH_MCP_KEY_NAME = 'MCP-klient (OAuth)'
 
 export function generateApiKey(mode: ApiKeyMode = 'live'): { key: string; hash: string; prefix: string } {
   const random = crypto.randomBytes(32).toString('base64url')

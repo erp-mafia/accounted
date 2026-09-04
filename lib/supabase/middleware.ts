@@ -1,4 +1,5 @@
 import { createServerClient } from '@supabase/ssr'
+import type { User } from '@supabase/supabase-js'
 import { NextResponse, type NextRequest } from 'next/server'
 import { createLogger } from '@/lib/logger'
 import {
@@ -11,6 +12,7 @@ import {
   type ProxyTimings,
 } from '@/lib/supabase/proxy-timing'
 import { shouldEnforceMfa } from '@/lib/auth/mfa'
+import { claimsPinned } from '@/lib/auth/claims'
 import { isMultiUserEnforced } from '@/lib/entitlements/multi-user'
 import { MULTI_USER_GRACE_DAYS } from '@/lib/entitlements/multi-user-state'
 import { apiPathSkipsMfaGate } from '@/lib/auth/api-mfa-gate'
@@ -262,11 +264,22 @@ async function updateSessionInner(
       pathname,
       hasAuthorizationHeader,
     )
-    if (!skipMfaGate && user && shouldEnforceMfa(user)) {
-      const { data: aal } = await timed(timing, 'mfaMs', () =>
-        supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
+    // `user` is the getUser() result above: server-authenticated, so its
+    // factor list is trustworthy. Only a session with something to step up
+    // TO is gated here; forcing enrolment stays the page branch's job, as
+    // before. The assurance level itself comes from the signature-verified
+    // claims and fails CLOSED (see resolveVerifiedAal), never from the
+    // cookie's session object.
+    if (
+      !skipMfaGate &&
+      user &&
+      shouldEnforceMfa(user) &&
+      userHasVerifiedFactor(user)
+    ) {
+      const aal = await timed(timing, 'mfaMs', () =>
+        resolveVerifiedAal(supabase),
       )
-      if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
+      if (aal !== 'aal2') {
         const response = NextResponse.json(
           { error: 'MFA-verifiering krävs.' },
           { status: 403 },
@@ -312,10 +325,15 @@ async function updateSessionInner(
   // requests off these paths (a) dropped the confirmation click before
   // verifyOtp could consume the token, so the change never completed, and
   // (b) hid the /auth/email-change status page in exactly the success case.
+  // Hook-built links carry type=email_change; stock GoTrue links verify on
+  // the GoTrue host and return through redirect_to with only the
+  // flow=email_change marker that /api/account/email stamps on it, so both
+  // shapes must pass.
   if (
     pathname.startsWith('/auth/email-change') ||
     (pathname.startsWith('/auth/callback') &&
-      request.nextUrl.searchParams.get('type') === 'email_change')
+      (request.nextUrl.searchParams.get('type') === 'email_change' ||
+        request.nextUrl.searchParams.get('flow') === 'email_change'))
   ) {
     return supabaseResponse
   }
@@ -455,38 +473,31 @@ async function updateSessionInner(
 
   // MFA enforcement (application-side only, not RLS)
   if (shouldEnforceMfa(user)) {
-    const { data: aal } = await timed(timing, 'mfaMs', () =>
-      supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
-    )
+    const aal = await timed(timing, 'mfaMs', () => resolveVerifiedAal(supabase))
 
-    // User has MFA enrolled but hasn't verified this session → redirect to verify
-    if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
-      return bounceToAuth(request, supabaseResponse, '/mfa/verify')
-    }
+    // Nothing below applies at AAL2: reaching it requires having verified a
+    // challenge on a verified factor. Deliberately also skipped for a user
+    // who unenrols their last factor mid-session: the JWT keeps aal2 until
+    // the next token refresh, so the enrolment bounce lands on the refresh
+    // instead of the next click (unchanged from the listFactors-era gate,
+    // PR #1922).
+    if (aal !== 'aal2') {
+      // The factor list is read off the server-authenticated getUser()
+      // result above, never off the cookie session. A cookie edited to hide
+      // the factor used to sail past this bounce, and because the enrolment
+      // check below then found the factor server-side, straight onto the
+      // page at AAL1. Reading it here also drops the listFactors() round
+      // trip that check used to pay: auth-js implements listFactors() as
+      // that very getUser() call.
+      if (userHasVerifiedFactor(user)) {
+        return bounceToAuth(request, supabaseResponse, '/mfa/verify')
+      }
 
-    // MFA required but user has no factor enrolled yet → force enrollment
-    // Skip for users with no companies (still setting up).
-    //
-    // Only worth asking when the session is NOT at AAL2: reaching AAL2
-    // requires having verified a challenge on a verified factor, so the
-    // factor list cannot be empty there. auth-js implements listFactors()
-    // as a getUser() network round trip, and running it here on every
-    // page, RSC and prefetch request for every MFA-verified user was the
-    // second Supabase Auth call per request (measured via mw-mfa, PR #1922).
-    // The narrow case this defers is a user who unenrols their last factor
-    // mid-session: the JWT keeps aal2 until the next token refresh, so the
-    // enrolment bounce lands on the refresh instead of the next click.
-    if (aal?.currentLevel !== 'aal2') {
+      // MFA required but no factor enrolled yet: force enrolment. Skipped
+      // for users with no companies (still setting up).
       const { companyId: companyIdForMfa } = await resolveCompanyOnce()
       if (companyIdForMfa) {
-        const { data: factors } = await timed(timing, 'mfaMs', () =>
-          supabase.auth.mfa.listFactors(),
-        )
-        const hasVerifiedFactor = factors?.totp?.some(f => f.status === 'verified')
-
-        if (!hasVerifiedFactor) {
-          return bounceToAuth(request, supabaseResponse, '/mfa/enroll')
-        }
+        return bounceToAuth(request, supabaseResponse, '/mfa/enroll')
       }
     }
   }
@@ -637,6 +648,68 @@ async function getSupabaseSessionId(
       : null
   } catch (error) {
     console.warn('[middleware] could not resolve Supabase session id', error)
+    return null
+  }
+}
+
+/**
+ * Whether the SERVER-authenticated user carries a verified MFA factor.
+ *
+ * Only ever call this with the getUser() result: GoTrue returns `factors` on
+ * /user (auth-js's listFactors() is that same call, filtered), so reading it
+ * off the round trip the proxy has already paid costs nothing extra. The
+ * server omits an empty list, so a missing array means "no factor", exactly
+ * the reading listFactors() would give.
+ *
+ * Never call it with a user deserialised from the session cookie: the
+ * sb-*-auth-token cookie is unsigned base64 JSON, so whoever holds the
+ * password can strip `factors` from it and make an enrolled account look
+ * like one with nothing to step up to.
+ */
+function userHasVerifiedFactor(user: Pick<User, 'factors'>): boolean {
+  return user.factors?.some((factor) => factor.status === 'verified') ?? false
+}
+
+/**
+ * Assurance level of the current session, read from the signature-verified
+ * JWT claims: getClaims() checks the token locally against the cached JWKS
+ * (server-side for HS256 projects) and the iss/aud pinning is the same one
+ * require-auth applies. Returns null on ANY failure so both MFA gates fail
+ * closed; each failure is logged because a spike means MFA users are being
+ * refused, which must be visible in production.
+ *
+ * Deliberately not `mfa.getAuthenticatorAssuranceLevel()`: called without a
+ * JWT it computes `nextLevel` from `session.user.factors`, and that session
+ * is the editable cookie described on userHasVerifiedFactor. Its
+ * `currentLevel` happens to be sound (the JWT the preceding getUser() was
+ * accepted with), but the two halves come as one answer, so neither gate
+ * consumes it any more (security audit 2026-09).
+ */
+async function resolveVerifiedAal(
+  supabase: ReturnType<typeof createServerClient>,
+): Promise<string | null> {
+  if (typeof supabase.auth.getClaims !== 'function') {
+    console.error('[middleware] getClaims unavailable; treating session as not MFA-assured')
+    return null
+  }
+
+  try {
+    const { data, error } = await supabase.auth.getClaims()
+    const claims = data?.claims
+    if (error || !claims) {
+      console.error('[middleware] getClaims failed; treating session as not MFA-assured', error)
+      return null
+    }
+    if (!claimsPinned(claims)) {
+      console.error('[middleware] getClaims iss/aud pinning failed; treating session as not MFA-assured', {
+        iss: claims.iss,
+        aud: claims.aud,
+      })
+      return null
+    }
+    return typeof claims.aal === 'string' ? claims.aal : null
+  } catch (error) {
+    console.error('[middleware] getClaims threw; treating session as not MFA-assured', error)
     return null
   }
 }
