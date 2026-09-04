@@ -15,8 +15,18 @@
 -- composite FK below binds employee_id to the row's company_id, so an
 -- RLS-authorized member of one company can never point a recurring line at
 -- another company's employee (IDOR guard, CWE-639).
-ALTER TABLE public.employees
-  ADD CONSTRAINT employees_id_company_id_key UNIQUE (id, company_id);
+-- Idempotent: #2145 (expense claims) adds the same key, so whichever PR
+-- merges second must not collide.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'employees_id_company_id_key'
+      AND conrelid = 'public.employees'::regclass
+  ) THEN
+    ALTER TABLE public.employees ADD CONSTRAINT employees_id_company_id_key UNIQUE (id, company_id);
+  END IF;
+END $$;
 
 CREATE TABLE public.employee_recurring_lines (
   id          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
