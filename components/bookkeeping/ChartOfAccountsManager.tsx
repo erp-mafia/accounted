@@ -67,6 +67,16 @@ const USAGE_FILTER_KEY = {
   used: 'usage_filter_used',
 } as const
 
+/**
+ * Rows per BAS class in an unnarrowed list: the "total" a band row is
+ * measured against once search or the Verifikat filter narrows it (#2263).
+ */
+function countByClass(list: ReadonlyArray<{ account_class: number }>): Record<number, number> {
+  const counts: Record<number, number> = {}
+  for (const a of list) counts[a.account_class] = (counts[a.account_class] ?? 0) + 1
+  return counts
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -496,19 +506,21 @@ export default function ChartOfAccountsManager() {
     return grouped
   }, [filteredAccounts])
 
+  // The K2 toggle is scope, not a filter: it defaults from the company's
+  // regelverk (ensureReferenceLoaded), so a K2 company sees it on without
+  // touching anything. The band counters treat this scoped set as the whole.
+  const scopedReference = useMemo(
+    () => (hideK2Excluded ? referenceAccounts.filter((a) => !a.k2_excluded) : referenceAccounts),
+    [referenceAccounts, hideK2Excluded],
+  )
+
   const filteredReference = useMemo(() => {
-    let filtered = referenceAccounts
-    if (hideK2Excluded) {
-      filtered = filtered.filter((a) => !a.k2_excluded)
-    }
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase()
-      filtered = filtered.filter(
-        (a) => a.account_number.includes(q) || a.account_name.toLowerCase().includes(q)
-      )
-    }
-    return filtered
-  }, [referenceAccounts, searchQuery, hideK2Excluded])
+    if (!searchQuery) return scopedReference
+    const q = searchQuery.toLowerCase()
+    return scopedReference.filter(
+      (a) => a.account_number.includes(q) || a.account_name.toLowerCase().includes(q)
+    )
+  }, [scopedReference, searchQuery])
 
   const groupedReference = useMemo(() => {
     const grouped: Record<number, ReferenceAccount[]> = {}
@@ -519,6 +531,16 @@ export default function ChartOfAccountsManager() {
     }
     return grouped
   }, [filteredReference])
+
+  // Band-row counters (#2263). "{active}/{total} aktiva" is only honest when
+  // the band holds the whole class: once search or the Verifikat filter
+  // narrows the list, "43/43 aktiva" reads as full coverage of a class that
+  // is really a subset. A narrowed band counts what it shows against the
+  // unnarrowed class instead; an unnarrowed band keeps the active ratio.
+  const myListNarrowed = searchQuery !== '' || usageFilter !== 'all'
+  const catalogNarrowed = searchQuery !== ''
+  const myClassTotals = useMemo(() => countByClass(accounts), [accounts])
+  const catalogClassTotals = useMemo(() => countByClass(scopedReference), [scopedReference])
 
   // -------------------------------------------
   // Render
@@ -724,7 +746,12 @@ export default function ChartOfAccountsManager() {
                           classNum,
                           open,
                           () => toggleMyClass(classNum),
-                          t('active_count_label', { active: activeCount, total: classAccounts.length }),
+                          myListNarrowed
+                            ? t('shown_count_label', {
+                                shown: classAccounts.length,
+                                total: myClassTotals[classNum] ?? classAccounts.length,
+                              })
+                            : t('active_count_label', { active: activeCount, total: classAccounts.length }),
                           8,
                         )}
                         {open &&
@@ -877,7 +904,12 @@ export default function ChartOfAccountsManager() {
                             classNum,
                             open,
                             () => toggleCatalogClass(classNum),
-                            t('active_count_label', { active: activatedCount, total: classAccounts.length }),
+                            catalogNarrowed
+                              ? t('shown_count_label', {
+                                  shown: classAccounts.length,
+                                  total: catalogClassTotals[classNum] ?? classAccounts.length,
+                                })
+                              : t('active_count_label', { active: activatedCount, total: classAccounts.length }),
                             5,
                           )}
                           {open &&

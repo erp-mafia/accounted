@@ -5303,6 +5303,7 @@
     "activated": "Activated",
     "add": "Add",
     "active_count_label": "{active}/{total} active",
+    "shown_count_label": "{shown} of {total} shown",
     "no_matches": "No accounts match the search",
     "no_accounts": "No accounts in the chart",
     "delete_confirm_title": "Delete account?",

@@ -5303,6 +5303,7 @@
     "activated": "Aktiverat",
     "add": "Lägg till",
     "active_count_label": "{active}/{total} aktiva",
+    "shown_count_label": "{shown} av {total} visas",
     "no_matches": "Inga konton matchar sökningen",
     "no_accounts": "Inga konton i kontoplanen",
     "delete_confirm_title": "Ta bort konto?",
