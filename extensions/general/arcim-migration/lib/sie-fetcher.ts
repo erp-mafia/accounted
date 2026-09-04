@@ -29,7 +29,13 @@ import { createLogger } from '@/lib/logger'
 const log = createLogger('extensions/arcim-migration/sie-fetcher')
 
 /**
- * Fiscal years we support importing: the current year and the two before it.
+ * The DEFAULT selection of fiscal years: the current year and the two before
+ * it, keyed on each fiscal year's start year. A default, not a cap (issue
+ * #2211 / #2238): the wizard lets the user add older years, and
+ * fetchProviderSieFiles takes an explicit `years` selection. The default is
+ * the cost bound: every selected year is one SIE export fetched and parsed
+ * inside the single /sie-data invocation (hosted function limit 300 s), so
+ * an older history is the user's own wait, chosen in the preview step.
  * Derived at call time (not a module constant) so the window rolls forward
  * automatically at new year without a code change.
  */
@@ -46,11 +52,18 @@ export interface ProviderSieFile {
 export interface ProviderSieFetchResult {
   files: ProviderSieFile[]
   /**
-   * Every fiscal year available at the provider within the allowed window:
-   * also populated when latestOnly fetched just one file, so /preview can show
-   * the full year list without a second round-trip.
+   * Every fiscal year available at the provider within the selection (the
+   * default window, or the explicit `years`): also populated when latestOnly
+   * fetched just one file, so /preview can show the full year list without a
+   * second round-trip.
    */
   availableYears: number[]
+  /**
+   * Every fiscal year the source has, oldest first, with the provider's own
+   * bounds and whether it is in the default selection. The preview step
+   * renders these as the year picker, so no year can be left out silently.
+   */
+  sourceYears: SourceFiscalYear[]
   /**
    * Allowed years whose export failed (or came back empty). Callers MUST
    * surface these to the user: silently importing e.g. 2024+2026 without 2025
@@ -58,27 +71,26 @@ export interface ProviderSieFetchResult {
    */
   failedYears: { year: number; error: string }[]
   /**
-   * Fiscal years the source has that start BEFORE the allowed window, oldest
-   * first. They are never fetched, and until issue #2211 never mentioned
-   * either: the wizard must name them before the import runs and again in
-   * the result, with the SIE-file path (one file per year, oldest first) for
-   * exactly those years. Years starting after the window (a next year created
-   * early at the source) are not listed: nothing is booked there yet and the
-   * SIE path is not the answer for them.
+   * Source fiscal years that were NOT part of this fetch (outside the
+   * selection), oldest first. Until issue #2211 these were never mentioned:
+   * the result step names them so nobody believes the books are complete.
    */
-  omittedYears: OmittedFiscalYear[]
+  omittedYears: SourceFiscalYear[]
 }
 
 /**
- * A source fiscal year the direct connection leaves out. Bounds are the
- * provider's own (ISO yyyy-mm-dd) so a broken year can be named as
- * "2022-09-01 till 2023-12-31" rather than as a calendar year that is wrong
- * for it; null when the provider reported none.
+ * A fiscal year as the source reports it. Bounds are the provider's own
+ * (ISO yyyy-mm-dd) so a broken year can be named as "2022-09-01 till
+ * 2023-12-31" rather than as a calendar year that is wrong for it; null when
+ * the provider reported none. `year` (the start year) is the key the whole
+ * import uses for a fiscal year, and what `fetchProviderSieFiles` selects on.
  */
-export interface OmittedFiscalYear {
+export interface SourceFiscalYear {
   year: number
   fromDate: string | null
   toDate: string | null
+  /** True when the year falls in the default selection (getAllowedFiscalYears). */
+  inDefaultSelection: boolean
 }
 
 // Singleton clients (they hold rate limiters)
@@ -107,38 +119,45 @@ interface FiscalYearRef {
 }
 
 /**
- * Fetch SIE type-4 exports from the provider, one file per allowed fiscal
- * year (oldest first). Years whose export fails do not block the rest of the
- * migration, but they are reported in `failedYears` so the caller can warn
- * the user before importing a gap (IB/UB continuity).
+ * Fetch SIE type-4 exports from the provider, one file per selected fiscal
+ * year (oldest first). The selection is `opts.years` (start years, as the
+ * preview step's picker sends them) or, when absent, the default window.
+ * Years whose export fails do not block the rest of the migration, but they
+ * are reported in `failedYears` so the caller can warn the user before
+ * importing a gap (IB/UB continuity). Years at the source outside the
+ * selection are reported in `omittedYears`; the full list is `sourceYears`.
  */
 export async function fetchProviderSieFiles(
   provider: ProviderName,
   accessToken: string,
   providerCompanyId: string | undefined,
-  opts?: { latestOnly?: boolean },
+  opts?: { latestOnly?: boolean; years?: number[] },
 ): Promise<ProviderSieFetchResult> {
-  const fetcher = getSieFetcher(provider, providerCompanyId)
+  const fetcher = getSieFetcher(provider, providerCompanyId, opts?.years)
   if (!fetcher) {
     throw new Error(`Provider ${provider} does not support SIE over API`)
   }
 
-  const allowedFiscalYears = getAllowedFiscalYears()
-  const allYears = await fetcher.listYears(accessToken)
-  const allowedYears = allYears
-    .filter((fy) => allowedFiscalYears.has(fy.year))
-    .sort((a, b) => a.year - b.year)
+  const defaultFiscalYears = getAllowedFiscalYears()
+  const selectedFiscalYears = opts?.years ? new Set(opts.years) : defaultFiscalYears
+  const byYear = (a: FiscalYearRef, b: FiscalYearRef) =>
+    a.year - b.year || (a.fromDate ?? '').localeCompare(b.fromDate ?? '')
+  const allYears = (await fetcher.listYears(accessToken)).sort(byYear)
+  const allowedYears = allYears.filter((fy) => selectedFiscalYears.has(fy.year))
 
   const availableYears = allowedYears.map((fy) => fy.year)
   const toFetch = opts?.latestOnly ? allowedYears.slice(-1) : allowedYears
 
-  // Derived from the same year list, so naming the left-out years costs no
-  // extra provider call.
-  const earliestAllowed = Math.min(...Array.from(allowedFiscalYears))
-  const omittedYears: OmittedFiscalYear[] = allYears
-    .filter((fy) => fy.year < earliestAllowed)
-    .sort((a, b) => a.year - b.year || (a.fromDate ?? '').localeCompare(b.fromDate ?? ''))
-    .map((fy) => ({ year: fy.year, fromDate: fy.fromDate ?? null, toDate: fy.toDate ?? null }))
+  // Both derived from the year list already fetched: naming every source
+  // year, and the ones left out, costs no extra provider call.
+  const describe = (fy: FiscalYearRef): SourceFiscalYear => ({
+    year: fy.year,
+    fromDate: fy.fromDate ?? null,
+    toDate: fy.toDate ?? null,
+    inDefaultSelection: defaultFiscalYears.has(fy.year),
+  })
+  const sourceYears = allYears.map(describe)
+  const omittedYears = allYears.filter((fy) => !selectedFiscalYears.has(fy.year)).map(describe)
 
   const files: ProviderSieFile[] = []
   const failedYears: { year: number; error: string }[] = []
@@ -159,7 +178,7 @@ export async function fetchProviderSieFiles(
     }
   }
 
-  return { files, availableYears, failedYears, omittedYears }
+  return { files, availableYears, sourceYears, failedYears, omittedYears }
 }
 
 interface SieFetcher {
@@ -170,6 +189,7 @@ interface SieFetcher {
 function getSieFetcher(
   provider: ProviderName,
   providerCompanyId: string | undefined,
+  selectedYears?: number[],
 ): SieFetcher | null {
   if (provider === 'fortnox') {
     return {
@@ -242,7 +262,9 @@ function getSieFetcher(
       contextPromise ??= (async () => {
         const company = await wintClient.get<Record<string, unknown>>(accessToken, '/api/Auth')
         const rawYears = (company['FinancialYears'] as Record<string, unknown>[] | undefined) ?? []
-        const allowed = getAllowedFiscalYears()
+        // The same selection fetchProviderSieFiles applies: the explicit
+        // years when given, else the default window.
+        const allowed = selectedYears ? new Set(selectedYears) : getAllowedFiscalYears()
         const allYears = rawYears
           .map((fy) => ({
             id: Number(fy['Id']),

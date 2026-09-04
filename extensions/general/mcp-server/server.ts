@@ -4114,7 +4114,7 @@ export const tools: McpTool[] = [
     keywords: ['migrering', 'byta system', 'flytta bokföring'],
     title: 'Connect Previous System',
     description:
-      'Connect card into the migration wizard for a NAMED previous system. API systems (fortnox/bjornlunden/briox/wint) fetch the three latest fiscal years (older years: one SIE file per year) plus invoices, customers and documents; visma/bokio complement AFTER a SIE import.',
+      'Connect card into the migration wizard for a NAMED previous system. API systems (fortnox/bjornlunden/briox/wint) fetch the three latest fiscal years by default (older years selectable) plus invoices, customers and documents; visma/bokio complement AFTER a SIE import.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4165,7 +4165,7 @@ export const tools: McpTool[] = [
         api_connected: info.api,
         connect_url: connectUrl,
         instructions: info.api
-          ? `On claude.ai/Claude Desktop a connect card with an open-in-browser button renders with this result; elsewhere give the user the connect_url. The wizard connects to ${info.name} (login there), fetches the three latest fiscal years (older years go in as one SIE file per year via gnubok_create_sie_upload, oldest first) and imports bookkeeping PLUS invoices, customers, suppliers and documents. The user comes back here when the wizard reports done.`
+          ? `On claude.ai/Claude Desktop a connect card with an open-in-browser button renders with this result; elsewhere give the user the connect_url. The wizard connects to ${info.name} (login there), fetches the three latest fiscal years by default (older years can be ticked in the wizard; they take longer) and imports bookkeeping PLUS invoices, customers, suppliers and documents. The user comes back here when the wizard reports done.`
           : `${info.name} has no API export: run the SIE-file import FIRST (gnubok_create_sie_upload drop card). This wizard link then complements with invoices and customers. On claude.ai/Desktop a connect card renders; elsewhere give the user the connect_url.`,
       }
     },

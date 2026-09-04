@@ -3,15 +3,16 @@ import { createMockSupabase, createMockRequest, parseJsonResponse } from '@/test
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 /**
- * Issue #2211: the direct provider connection fetches three fiscal years
- * (getAllowedFiscalYears in lib/sie-fetcher) and the wizard used to say
- * nothing about it. A first, broken year 2022/2023 simply never arrived and
- * the user asked whether they had done something wrong.
+ * Issues #2211 / #2238: the direct provider connection used to fetch three
+ * fiscal years as a silent cap (getAllowedFiscalYears in lib/sie-fetcher).
+ * A first, broken year 2022/2023 simply never arrived and the user asked
+ * whether they had done something wrong. The cap is a default selection
+ * now: the preview step renders every source year as a picker, /sie-data
+ * fetches the ticked years, and the result step names the rest.
  *
- * The fetcher derives the left-out years from the year list it already
- * fetches; these tests lock that both routes the wizard reads carry them:
- * GET /preview (said before the import runs, with the window) and
- * GET /sie-data (the result step names them and points at the SIE path).
+ * These tests lock the plumbing the wizard reads: GET /preview carries
+ * `sourceYears` (with the default flag), GET /sie-data honours `years` and
+ * carries `omittedYears`.
  */
 
 vi.mock('../lib/migration-orchestrator', () => ({
@@ -80,7 +81,15 @@ const SIE_IN_WINDOW = [
   '',
 ].join('\n')
 
-const OMITTED = [{ year: CY - 4, fromDate: `${CY - 4}-09-01`, toDate: `${CY - 3}-12-31` }]
+const BROKEN_FIRST_YEAR = {
+  year: CY - 4,
+  fromDate: `${CY - 4}-09-01`,
+  toDate: `${CY - 3}-12-31`,
+  inDefaultSelection: false,
+}
+const CURRENT_YEAR = { year: CY, fromDate: `${CY}-01-01`, toDate: `${CY}-12-31`, inDefaultSelection: true }
+const SOURCE_YEARS = [BROKEN_FIRST_YEAR, CURRENT_YEAR]
+const OMITTED = [BROKEN_FIRST_YEAR]
 
 function buildCtx(): ExtensionContext {
   const { supabase, mockResult } = createMockSupabase()
@@ -111,12 +120,13 @@ beforeEach(() => {
   ;(fetchProviderSieFiles as Mock).mockResolvedValue({
     files: [{ fiscalYear: CY, rawContent: SIE_IN_WINDOW }],
     availableYears: [CY],
+    sourceYears: SOURCE_YEARS,
     failedYears: [],
     omittedYears: OMITTED,
   })
 })
 
-describe('GET /preview: what the direct connection fetches (#2211)', () => {
+describe('GET /preview: every source year, with the default selection marked (#2211)', () => {
   it('answers 401 without a user', async () => {
     const ctx = buildCtx()
     ;(ctx.supabase as unknown as { auth: { getUser: Mock } }).auth.getUser.mockResolvedValue({
@@ -128,42 +138,44 @@ describe('GET /preview: what the direct connection fetches (#2211)', () => {
     expect(res.status).toBe(401)
   })
 
-  it('carries the fetch window and the source years it leaves out', async () => {
+  it('carries every source year with its bounds and default flag, on the default selection', async () => {
     const res = await handler('/preview')(request('/preview'), buildCtx())
     const { status, body } = await parseJsonResponse<{
       sieAvailable: boolean
       sieStats: { fiscalYears: number[] }
-      fiscalYearWindow: { fromYear: number; toYear: number }
-      omittedYears: typeof OMITTED
+      sourceYears: typeof SOURCE_YEARS
     }>(res)
 
     expect(status).toBe(200)
     expect(body.sieAvailable).toBe(true)
     expect(body.sieStats.fiscalYears).toEqual([CY])
-    expect(body.fiscalYearWindow).toEqual({ fromYear: CY - 2, toYear: CY })
     // The bounds as the provider reports them: a broken year is named as
-    // "2022-09-01 till 2023-12-31", not as a wrong calendar year.
-    expect(body.omittedYears).toEqual(OMITTED)
+    // "2022-09-01 till 2023-12-31", not as a wrong calendar year, and it is
+    // unticked by default rather than absent.
+    expect(body.sourceYears).toEqual(SOURCE_YEARS)
+    // The preview never sends a selection: its stats are the default's.
+    expect((fetchProviderSieFiles as Mock).mock.calls[0][3]).toBeUndefined()
   })
 
-  it('still names the omitted years when nothing inside the window came back', async () => {
+  it('still lists the source years when nothing inside the default selection came back', async () => {
     ;(fetchProviderSieFiles as Mock).mockResolvedValue({
       files: [],
       availableYears: [],
+      sourceYears: [BROKEN_FIRST_YEAR],
       failedYears: [],
-      omittedYears: OMITTED,
+      omittedYears: [BROKEN_FIRST_YEAR],
     })
 
     const res = await handler('/preview')(request('/preview'), buildCtx())
-    const { status, body } = await parseJsonResponse<{ sieAvailable: boolean; omittedYears: typeof OMITTED }>(res)
+    const { status, body } = await parseJsonResponse<{ sieAvailable: boolean; sourceYears: unknown[] }>(res)
 
     expect(status).toBe(200)
     expect(body.sieAvailable).toBe(false)
-    expect(body.omittedYears).toEqual(OMITTED)
+    expect(body.sourceYears).toEqual([BROKEN_FIRST_YEAR])
   })
 })
 
-describe('GET /sie-data: the omitted years reach the result step (#2211)', () => {
+describe('GET /sie-data: the ticked years are fetched, the rest are named (#2211, #2238)', () => {
   it('answers 400 without a consentId', async () => {
     const res = await handler('/sie-data')(
       createMockRequest('http://localhost/api/extensions/ext/arcim-migration/sie-data'),
@@ -173,7 +185,21 @@ describe('GET /sie-data: the omitted years reach the result step (#2211)', () =>
     expect(res.status).toBe(400)
   })
 
-  it('returns omittedYears next to failedYears', async () => {
+  it('answers 400 VALIDATION_ERROR on a malformed years selection, before touching the provider', async () => {
+    const res = await handler('/sie-data')(
+      createMockRequest('http://localhost/api/extensions/ext/arcim-migration/sie-data', {
+        searchParams: { consentId: 'consent-1', years: `${CY},abc` },
+      }),
+      buildCtx(),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(fetchProviderSieFiles).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the default selection without a years param and returns omittedYears', async () => {
     const res = await handler('/sie-data')(request('/sie-data'), buildCtx())
     const { status, body } = await parseJsonResponse<{
       fileStatuses: { fiscalYear: number }[]
@@ -182,8 +208,60 @@ describe('GET /sie-data: the omitted years reach the result step (#2211)', () =>
     }>(res)
 
     expect(status).toBe(200)
+    expect((fetchProviderSieFiles as Mock).mock.calls[0][3]).toBeUndefined()
     expect(body.fileStatuses.map((f) => f.fiscalYear)).toEqual([CY])
     expect(body.failedYears).toEqual([])
     expect(body.omittedYears).toEqual(OMITTED)
+  })
+
+  it('passes the ticked years to the fetcher, deduplicated and oldest first', async () => {
+    ;(fetchProviderSieFiles as Mock).mockResolvedValue({
+      files: [
+        { fiscalYear: CY - 4, rawContent: SIE_IN_WINDOW.replace(`#RAR 0 ${CY}0101 ${CY}1231`, `#RAR 0 ${CY - 4}0901 ${CY - 3}1231`) },
+        { fiscalYear: CY, rawContent: SIE_IN_WINDOW },
+      ],
+      availableYears: [CY - 4, CY],
+      sourceYears: SOURCE_YEARS,
+      failedYears: [],
+      omittedYears: [],
+    })
+
+    const res = await handler('/sie-data')(
+      createMockRequest('http://localhost/api/extensions/ext/arcim-migration/sie-data', {
+        searchParams: { consentId: 'consent-1', years: `${CY},${CY - 4},${CY}` },
+      }),
+      buildCtx(),
+    )
+    const { status, body } = await parseJsonResponse<{
+      fileStatuses: { fiscalYear: number }[]
+      omittedYears: unknown[]
+    }>(res)
+
+    expect(status).toBe(200)
+    expect((fetchProviderSieFiles as Mock).mock.calls[0][3]).toEqual({ years: [CY - 4, CY] })
+    expect(body.fileStatuses.map((f) => f.fiscalYear)).toEqual([CY - 4, CY])
+    expect(body.omittedYears).toEqual([])
+  })
+
+  it('names the selection in PROVIDER_SIE_NO_YEARS when none of the ticked years exist at the source', async () => {
+    ;(fetchProviderSieFiles as Mock).mockResolvedValue({
+      files: [],
+      availableYears: [],
+      sourceYears: SOURCE_YEARS,
+      failedYears: [],
+      omittedYears: SOURCE_YEARS,
+    })
+
+    const res = await handler('/sie-data')(
+      createMockRequest('http://localhost/api/extensions/ext/arcim-migration/sie-data', {
+        searchParams: { consentId: 'consent-1', years: `${CY - 7}` },
+      }),
+      buildCtx(),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
+
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('PROVIDER_SIE_NO_YEARS')
+    expect(body.error.message).toContain(String(CY - 7))
   })
 })

@@ -9,6 +9,7 @@ import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { Checkbox } from '@/components/ui/checkbox'
 import { useToast } from '@/components/ui/use-toast'
 import { cn } from '@/lib/utils'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -304,11 +305,10 @@ interface PreviewData {
     transactionCount: number
     fiscalYears: number[]
   } | null
-  // What the direct connection fetches: fiscal years starting within this
-  // calendar-year window (three years, rolling), and the source years that
-  // start before it. Said up front so nobody believes the books are complete.
-  fiscalYearWindow?: { fromYear: number; toYear: number } | null
-  omittedYears?: OmittedFiscalYear[]
+  // Every fiscal year the source has, oldest first, with the default
+  // selection marked: rendered as the year picker so the user chooses
+  // before the import runs and no year is left out silently (#2211, #2238).
+  sourceYears?: SourceFiscalYear[]
   assetStats: {
     total: number
     importable: number
@@ -343,25 +343,26 @@ interface SIEData {
   // Fiscal years whose provider export failed. Importing the remaining years
   // anyway leaves an IB/UB gap: the options step warns before proceeding.
   failedYears?: { year: number; error: string }[]
-  // Source fiscal years that start before the fetch window: never fetched,
-  // named in the result with the SIE path for exactly those years (#2211).
-  omittedYears?: OmittedFiscalYear[]
+  // Source fiscal years outside the selection: not fetched, named in the
+  // result so nobody believes the books are complete (#2211).
+  omittedYears?: SourceFiscalYear[]
   basAccounts: BASAccount[]
 }
 
 /**
- * A source fiscal year the direct connection leaves out. Mirrors
- * OmittedFiscalYear in extensions/general/arcim-migration/lib/sie-fetcher.ts
- * (deliberate duplication: core must not import from @/extensions/).
+ * A fiscal year as the source reports it. Mirrors SourceFiscalYear in
+ * extensions/general/arcim-migration/lib/sie-fetcher.ts (deliberate
+ * duplication: core must not import from @/extensions/).
  */
-interface OmittedFiscalYear {
+interface SourceFiscalYear {
   year: number
   fromDate: string | null
   toDate: string | null
+  inDefaultSelection: boolean
 }
 
 /** "2022-09-01 till 2023-12-31" when the provider gave bounds, else the start year. */
-function useOmittedYearLabel(): (fy: OmittedFiscalYear) => string {
+function useFiscalYearSpanLabel(): (fy: SourceFiscalYear) => string {
   const t = useTranslations('extensions')
   return (fy) =>
     fy.fromDate && fy.toDate
@@ -903,6 +904,8 @@ function PreviewStep({
   error,
   authExpired,
   licenseMissing,
+  selectedYears,
+  onSelectedYearsChange,
   onReconnect,
   onContinue,
   onBack,
@@ -912,16 +915,28 @@ function PreviewStep({
   error: string | null
   authExpired: boolean
   licenseMissing: boolean
+  /** Fiscal years (start years) ticked in the picker; default = the three latest. */
+  selectedYears: number[]
+  onSelectedYearsChange: (years: number[]) => void
   onReconnect: () => void
   onContinue: () => void
   onBack: () => void
 }) {
   const t = useTranslations('extensions')
-  const omittedYearLabel = useOmittedYearLabel()
+  const fiscalYearSpanLabel = useFiscalYearSpanLabel()
   const providerName = preview
     ? ARCIM_PROVIDERS.find(p => p.id === preview.consent.provider)?.name ?? preview.consent.provider
     : ''
-  const omittedYears = preview?.sieAvailable ? preview.omittedYears ?? [] : []
+  const sourceYears = preview?.sieAvailable ? preview.sourceYears ?? [] : []
+  const showYearPicker = sourceYears.length > 0 && !isLoading
+  const noYearSelected = showYearPicker && selectedYears.length === 0
+  const toggleYear = (year: number) => {
+    onSelectedYearsChange(
+      selectedYears.includes(year)
+        ? selectedYears.filter((y) => y !== year)
+        : [...selectedYears, year].sort((a, b) => a - b),
+    )
+  }
 
   return (
     <div className="stagger-enter space-y-8">
@@ -964,31 +979,6 @@ function PreviewStep({
           )
         })()}
 
-        {/* What the direct connection fetches, said BEFORE the import runs,
-            and the source years it leaves out (issue #2211). The window is
-            three rolling calendar years keyed on each year's start date, so a
-            broken first year 2022/2023 falls outside it in 2026 and used to
-            vanish without a word. */}
-        {preview?.sieAvailable && preview.fiscalYearWindow && (
-          <div className="animate-fade-in mt-3 space-y-1 text-[13px] text-muted-foreground">
-            <p>{t('ext_arcim_year_window', { fromYear: preview.fiscalYearWindow.fromYear })}</p>
-            {omittedYears.length > 0 && (
-              <>
-                <p className="tabular-nums">
-                  {t('ext_arcim_omitted_years_preview', {
-                    count: omittedYears.length,
-                    years: omittedYears.map(omittedYearLabel).join(', '),
-                  })}
-                </p>
-                <SieFallbackLine
-                  message={t('ext_arcim_omitted_years_sie_hint', { count: omittedYears.length })}
-                  label={t('ext_arcim_omitted_years_sie_link')}
-                />
-              </>
-            )}
-          </div>
-        )}
-
         {preview && !preview.sieAvailable && !isLoading && preview.hasSieData && (
           <p className="animate-fade-in mt-3 text-[13px] text-muted-foreground">
             Bokföringsdatan är redan importerad via SIE-fil. Du kan fortsätta med att importera
@@ -996,6 +986,42 @@ function PreviewStep({
           </p>
         )}
       </div>
+
+      {/* ── The year picker (issues #2211, #2238) ──
+          Every fiscal year the source has, as hairline rows with a checkbox.
+          The three latest are ticked by default (the limit that used to be a
+          silent cap); older years are the user's own choice and their own
+          wait: each one is another SIE export fetched in the next step. */}
+      {showYearPicker && (
+        <section className="space-y-3">
+          <SectionKicker>{t('ext_arcim_year_select_kicker')}</SectionKicker>
+          <p className="text-[13px] text-muted-foreground">{t('ext_arcim_year_select_lede')}</p>
+          <div className="stagger-enter divide-y divide-border" data-no-stagger>
+            {sourceYears.map((fy) => {
+              const id = `arcim-year-${fy.year}-${fy.fromDate ?? ''}`
+              return (
+                <label
+                  key={id}
+                  htmlFor={id}
+                  className="flex min-h-10 cursor-pointer items-center gap-3 py-2 text-sm transition-colors duration-150 hover:bg-secondary/35"
+                >
+                  <Checkbox
+                    id={id}
+                    checked={selectedYears.includes(fy.year)}
+                    onCheckedChange={() => toggleYear(fy.year)}
+                    aria-label={fiscalYearSpanLabel(fy)}
+                  />
+                  <span className="tabular-nums">{fiscalYearSpanLabel(fy)}</span>
+                  {!fy.inDefaultSelection && (
+                    <span className="text-xs text-muted-foreground">{t('ext_arcim_year_select_older')}</span>
+                  )}
+                </label>
+              )
+            })}
+          </div>
+          {noYearSelected && <AttnLine>{t('ext_arcim_year_select_none')}</AttnLine>}
+        </section>
+      )}
 
       {error && (
         <div className="space-y-3">
@@ -1035,7 +1061,11 @@ function PreviewStep({
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
-        <Button className="min-h-11" onClick={onContinue} disabled={isLoading || (!!preview && !preview.sieAvailable && !preview.hasSieData)}>
+        <Button
+          className="min-h-11"
+          onClick={onContinue}
+          disabled={isLoading || noYearSelected || (!!preview && !preview.sieAvailable && !preview.hasSieData)}
+        >
           Fortsätt
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
@@ -1775,8 +1805,8 @@ function ResultStep({
 }: {
   results: MigrationResults | null
   sieResults: ImportResult[]
-  /** Source fiscal years the direct connection left out (before the window). */
-  omittedYears: OmittedFiscalYear[]
+  /** Source fiscal years outside the selection: not fetched in this run. */
+  omittedYears: SourceFiscalYear[]
   error: string | null
   documentImportState: ArcimDocumentImportState
   theaterModel: TheaterModel | null
@@ -1788,7 +1818,7 @@ function ResultStep({
   onReconnectDocuments: () => void
 }) {
   const t = useTranslations('extensions')
-  const omittedYearLabel = useOmittedYearLabel()
+  const fiscalYearSpanLabel = useFiscalYearSpanLabel()
   if (error) {
     return (
       <div className="stagger-enter space-y-8">
@@ -2014,16 +2044,17 @@ function ResultStep({
         </section>
       )}
 
-      {/* ── Source fiscal years the direct connection left out (#2211) ──
-          It fetches the three latest; the rest must be named here, with the
-          SIE path for exactly those years, or the books look complete. */}
+      {/* ── Source fiscal years outside the selection (#2211) ──
+          Named here so nobody believes the books are complete: a new run
+          with those years ticked fetches them (documents come along), or
+          the SIE path does. */}
       {sieResults.length > 0 && omittedYears.length > 0 && (
         <section className="space-y-3">
           <SectionKicker>{t('ext_arcim_omitted_years_kicker')}</SectionKicker>
           <div className="stagger-enter divide-y divide-border" data-no-stagger>
             {omittedYears.map((fy) => (
               <p key={`${fy.year}-${fy.fromDate ?? ''}`} className="py-3 text-sm tabular-nums">
-                {omittedYearLabel(fy)}
+                {fiscalYearSpanLabel(fy)}
               </p>
             ))}
           </div>
@@ -2202,6 +2233,9 @@ export default function ArcimMigrationWorkspace({
 
   // Preview state
   const [preview, setPreview] = useState<PreviewData | null>(null)
+  // Fiscal years (start years) ticked in the preview step's picker. Set from
+  // the preview's default selection on load; sent to /sie-data as `years`.
+  const [selectedYears, setSelectedYears] = useState<number[]>([])
   // Set when a preview/sync fails because the provider connection expired
   // (dead refresh token → PROVIDER_AUTH_EXPIRED). Drives the "Återanslut"
   // affordance so the user can re-authorize in place instead of disconnecting.
@@ -2303,8 +2337,11 @@ export default function ArcimMigrationWorkspace({
         throw new Error(apiErrorMessage(data, `HTTP ${res.status}`))
       }
 
-      const data = await res.json()
+      const data = await res.json() as PreviewData
       setPreview(data)
+      setSelectedYears(
+        (data.sourceYears ?? []).filter((fy) => fy.inDefaultSelection).map((fy) => fy.year),
+      )
       const previewProvider = data?.consent?.provider
       if (ARCIM_PROVIDERS.some((provider) => provider.id === previewProvider)) {
         setSelectedProvider(previewProvider as ArcimProvider)
@@ -2781,7 +2818,10 @@ export default function ArcimMigrationWorkspace({
     setErrorDetails(null)
 
     try {
-      const res = await fetch(`/api/extensions/ext/arcim-migration/sie-data?consentId=${consentId}`)
+      // The picker's selection travels as `years`; without a picker (no
+      // source years known) the route falls back to its default selection.
+      const yearsQuery = selectedYears.length > 0 ? `&years=${selectedYears.join(',')}` : ''
+      const res = await fetch(`/api/extensions/ext/arcim-migration/sie-data?consentId=${consentId}${yearsQuery}`)
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as {
           error?: unknown
@@ -2821,7 +2861,7 @@ export default function ArcimMigrationWorkspace({
     } finally {
       setIsLoading(false)
     }
-  }, [consentId, refreshCompanyAccounts])
+  }, [consentId, refreshCompanyAccounts, selectedYears])
 
   const handlePreviewContinue = useCallback(() => {
     if (preview?.sieAvailable) {
@@ -3130,6 +3170,8 @@ export default function ArcimMigrationWorkspace({
           error={error}
           authExpired={authExpired}
           licenseMissing={licenseMissing}
+          selectedYears={selectedYears}
+          onSelectedYearsChange={setSelectedYears}
           onReconnect={() => {
             if (selectedProvider && consentId) handleReconnect(selectedProvider, consentId)
           }}
