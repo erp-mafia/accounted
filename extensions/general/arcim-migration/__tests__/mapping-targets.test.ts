@@ -80,7 +80,10 @@ describe('buildMappingTargets', () => {
     const warn = vi.fn()
     await buildMappingTargets(supabaseWith(new Error('boom')), 'company-1', { warn })
     expect(warn).toHaveBeenCalledTimes(1)
-    expect(warn.mock.calls[0][1]).toMatchObject({ companyId: 'company-1' })
+    expect(warn.mock.calls[0][1]).toMatchObject({
+      companyId: 'company-1',
+      reason: 'boom',
+    })
   })
 
   it('does not warn on the ordinary path', async () => {
