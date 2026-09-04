@@ -22,7 +22,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2 } from 'lucide-react'
+import { ChevronRight, Loader2 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import {
@@ -34,6 +35,7 @@ import {
   resolveFiscalYearStart,
   resolveGapFillStart,
 } from '../lib/date-suggestions'
+import { describeClaimedElsewhere, partitionByClaim } from '../lib/claimed-accounts'
 import type { StoredAccount } from '../types'
 import {
   BankSyncProgressDialog,
@@ -90,6 +92,15 @@ export function AccountPickerDialog({
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [isSaving, setIsSaving] = useState(false)
+  // Accounts the callback found booked by another of the user's companies
+  // (one SEB consent covers every company the signer represents). They are
+  // kept out of the main list so the picker shows THIS company's accounts,
+  // and live behind a collapsed disclosure: still reachable, never pre-checked.
+  const { own: ownAccounts, claimedElsewhere } = useMemo(
+    () => partitionByClaim(accounts),
+    [accounts],
+  )
+  const [claimedOpen, setClaimedOpen] = useState(false)
   // Server-side save rejection (validation / ledger conflict). Shown inline in
   // the dialog: a rejected save persisted nothing and started no sync, so the
   // user must see why and be able to correct the picks.
@@ -166,6 +177,7 @@ export function AccountPickerDialog({
       )
       setSelected(initial)
       setSaveError(null)
+      setClaimedOpen(false)
       setLookbackMode('fast')
       setCustomSubMode('date')
       setCustomDate('')
@@ -300,13 +312,22 @@ export function AccountPickerDialog({
     return () => { cancelled = true }
   }, [open, isInitialSelection, company?.id, connectionId, supabase, accounts])
 
-  const allSelected = accounts.length > 0 && selected.size === accounts.length
+  // "Alla" means this company's accounts: a claimed account is only ever
+  // selected by an explicit tick inside the disclosure. Vacuously true when
+  // there are no own accounts, so "Markera alla" is disabled instead of
+  // being a live button that does nothing.
+  const allSelected = ownAccounts.every((a) => selected.has(a.uid))
   const noneSelected = selected.size === 0
+  // Claimed accounts the user deliberately ticked inside the disclosure. They
+  // count in "x av y valda" and are named on the disclosure line even while
+  // it is collapsed, so the counter never exceeds what the user can see.
+  const selectedClaimedCount = claimedElsewhere.filter((a) => selected.has(a.uid)).length
+  const selectableCount = ownAccounts.length + selectedClaimedCount
 
-  const sortedAccounts = useMemo(
-    () => [...accounts].sort((a, b) => (a.name || a.iban || '').localeCompare(b.name || b.iban || '')),
-    [accounts]
-  )
+  const byDisplayName = (a: StoredAccount, b: StoredAccount) =>
+    (a.name || a.iban || '').localeCompare(b.name || b.iban || '')
+  const sortedAccounts = useMemo(() => [...ownAccounts].sort(byDisplayName), [ownAccounts])
+  const sortedClaimed = useMemo(() => [...claimedElsewhere].sort(byDisplayName), [claimedElsewhere])
 
   // Detect cases where the user routed two enabled accounts with different
   // currencies to the same BAS account, usually a mistake, but allowed.
@@ -334,7 +355,12 @@ export function AccountPickerDialog({
   }
 
   function selectAll() {
-    setSelected(new Set(accounts.map(a => a.uid)))
+    // Own accounts only; a claimed account already ticked stays ticked.
+    setSelected(prev => {
+      const next = new Set(prev)
+      for (const a of ownAccounts) next.add(a.uid)
+      return next
+    })
   }
 
   function selectNone() {
@@ -538,6 +564,102 @@ export function AccountPickerDialog({
       ? lookback.fromDate < gapFill.latestImportedDate
       : lookback.days > daysBetween(gapFill.latestImportedDate)),
   )
+
+  // One account row; shared by the main list and the claimed-elsewhere
+  // disclosure so the two can never drift apart.
+  function renderAccountRow(account: StoredAccount) {
+    const isChecked = selected.has(account.uid)
+    const ledger = ledgerByUid[account.uid] || ''
+    const ledgerExistsInChart = chartAccounts.some(c => c.account_number === ledger)
+    return (
+      <div
+        key={account.uid}
+        className="flex items-center gap-3 p-3 hover:bg-muted/50"
+      >
+        {/* Toggle area: label + Checkbox (a Radix Checkbox renders as
+            its own <button role="checkbox">, so wrapping it in another
+            <button> would be nested interactive elements: invalid HTML
+            that browsers silently flatten and breaks event routing). */}
+        <label className="flex flex-1 min-w-0 cursor-pointer items-center gap-3">
+          <Checkbox
+            checked={isChecked}
+            onCheckedChange={() => toggle(account.uid)}
+            disabled={isSaving}
+          />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium truncate">
+              {account.name || account.iban || 'Okänt konto'}
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                {account.currency}
+              </span>
+            </p>
+            {account.iban && (
+              <p className="text-xs text-muted-foreground tabular-nums">
+                {account.iban.replace(/(.{4})/g, '$1 ').trim()}
+              </p>
+            )}
+            {/* The callback found this IBAN already booked by another
+                of the user's companies (one consent can cover several
+                companies' accounts at e.g. SEB). Unchecked by default;
+                naming the claimant is what stops a reflexive
+                select-all from booking it here too. */}
+            {account.claimed_by_company_id && (
+              <p className="text-xs text-muted-foreground">
+                Synkas redan i{' '}
+                <span data-ph-mask="">
+                  {account.claimed_by_company_name || 'ett annat bolag'}
+                </span>
+              </p>
+            )}
+            {/* Carried deselection: the user said "Synkas ej" to this
+                IBAN on another connection. An unexplained unchecked
+                box reads as a glitch; a silent one hides a sync gap. */}
+            {!account.claimed_by_company_id && account.deselected_elsewhere && (
+              <p className="text-xs text-muted-foreground">
+                Tidigare bortvald: markera för att synka i detta bolag
+              </p>
+            )}
+          </div>
+          {account.balance !== undefined && (
+            <p className="text-sm font-medium tabular-nums shrink-0">
+              {new Intl.NumberFormat('sv-SE', {
+                style: 'currency',
+                currency: account.currency,
+              }).format(account.balance)}
+            </p>
+          )}
+        </label>
+        {/* Ledger picker is a sibling of the label, not inside it:
+            otherwise clicking the Select would also toggle the checkbox. */}
+        <div className="w-44 shrink-0">
+          {isChecked && (
+            <Select
+              value={ledger}
+              onValueChange={(v) => setLedgerByUid(prev => ({ ...prev, [account.uid]: v }))}
+              disabled={isSaving}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Välj konto…" />
+              </SelectTrigger>
+              <SelectContent>
+                {/* Surface a non-existent default so the user can see/correct it. */}
+                {ledger && !ledgerExistsInChart && (
+                  <SelectItem value={ledger} disabled>
+                    {ledger}: finns ej i kontoplan
+                  </SelectItem>
+                )}
+                {chartAccounts.map(acc => (
+                  <SelectItem key={acc.account_number} value={acc.account_number}>
+                    <span className="tabular-nums">{acc.account_number}</span> {acc.account_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <>
@@ -821,7 +943,7 @@ export function AccountPickerDialog({
 
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
-            {selected.size} av {accounts.length} valda
+            {selected.size} av {selectableCount} valda
           </span>
           <div className="flex gap-2">
             <button
@@ -868,100 +990,49 @@ export function AccountPickerDialog({
         )}
 
         <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-border divide-y divide-border">
-          {sortedAccounts.map(account => {
-            const isChecked = selected.has(account.uid)
-            const ledger = ledgerByUid[account.uid] || ''
-            const ledgerExistsInChart = chartAccounts.some(c => c.account_number === ledger)
-            return (
-              <div
-                key={account.uid}
-                className="flex items-center gap-3 p-3 hover:bg-muted/50"
-              >
-                {/* Toggle area: label + Checkbox (a Radix Checkbox renders as
-                    its own <button role="checkbox">, so wrapping it in another
-                    <button> would be nested interactive elements: invalid HTML
-                    that browsers silently flatten and breaks event routing). */}
-                <label className="flex flex-1 min-w-0 cursor-pointer items-center gap-3">
-                  <Checkbox
-                    checked={isChecked}
-                    onCheckedChange={() => toggle(account.uid)}
-                    disabled={isSaving}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">
-                      {account.name || account.iban || 'Okänt konto'}
-                      <span className="ml-2 text-xs font-normal text-muted-foreground">
-                        {account.currency}
-                      </span>
-                    </p>
-                    {account.iban && (
-                      <p className="text-xs text-muted-foreground tabular-nums">
-                        {account.iban.replace(/(.{4})/g, '$1 ').trim()}
-                      </p>
-                    )}
-                    {/* The callback found this IBAN already booked by another
-                        of the user's companies (one consent can cover several
-                        companies' accounts at e.g. SEB). Unchecked by default;
-                        naming the claimant is what stops a reflexive
-                        select-all from booking it here too. */}
-                    {account.claimed_by_company_id && (
-                      <p className="text-xs text-muted-foreground">
-                        Synkas redan i{' '}
-                        <span data-ph-mask="">
-                          {account.claimed_by_company_name || 'ett annat bolag'}
-                        </span>
-                      </p>
-                    )}
-                    {/* Carried deselection: the user said "Synkas ej" to this
-                        IBAN on another connection. An unexplained unchecked
-                        box reads as a glitch; a silent one hides a sync gap. */}
-                    {!account.claimed_by_company_id && account.deselected_elsewhere && (
-                      <p className="text-xs text-muted-foreground">
-                        Tidigare bortvald: markera för att synka i detta bolag
-                      </p>
-                    )}
-                  </div>
-                  {account.balance !== undefined && (
-                    <p className="text-sm font-medium tabular-nums shrink-0">
-                      {new Intl.NumberFormat('sv-SE', {
-                        style: 'currency',
-                        currency: account.currency,
-                      }).format(account.balance)}
-                    </p>
-                  )}
-                </label>
-                {/* Ledger picker is a sibling of the label, not inside it:
-                    otherwise clicking the Select would also toggle the checkbox. */}
-                <div className="w-44 shrink-0">
-                  {isChecked && (
-                    <Select
-                      value={ledger}
-                      onValueChange={(v) => setLedgerByUid(prev => ({ ...prev, [account.uid]: v }))}
-                      disabled={isSaving}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="Välj konto…" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {/* Surface a non-existent default so the user can see/correct it. */}
-                        {ledger && !ledgerExistsInChart && (
-                          <SelectItem value={ledger} disabled>
-                            {ledger}: finns ej i kontoplan
-                          </SelectItem>
-                        )}
-                        {chartAccounts.map(acc => (
-                          <SelectItem key={acc.account_number} value={acc.account_number}>
-                            <span className="tabular-nums">{acc.account_number}</span> {acc.account_name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                </div>
-              </div>
-            )
-          })}
+          {sortedAccounts.map(renderAccountRow)}
+          {/* Two distinct empty states: every account in the consent belongs
+              to another company (the text below says so and points at the
+              disclosure), or the consent simply carries no accounts (a failed
+              connect, or nothing ticked at the bank), where a claim would be
+              a false statement. */}
+          {sortedAccounts.length === 0 && (
+            <p className="p-3 text-xs text-muted-foreground">
+              {claimedElsewhere.length > 0
+                ? 'Inga konton att välja: alla konton i den här bankkopplingen synkas redan i andra bolag.'
+                : 'Bankkopplingen innehåller inga konton. Förnya anslutningen och välj konton hos banken.'}
+            </p>
+          )}
         </div>
+
+        {/* Accounts another of the user's companies already books (one SEB
+            consent covers every company the signer represents). Collapsed by
+            default so this company's picker shows this company's accounts;
+            expandable because a claim is a strong hint, not proof, and an
+            account that belongs here must stay reachable. */}
+        {claimedElsewhere.length > 0 && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setClaimedOpen((v) => !v)}
+              aria-expanded={claimedOpen}
+              className="flex min-h-9 items-center gap-1 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
+            >
+              <ChevronRight
+                className={cn('h-3.5 w-3.5 transition-transform duration-150', claimedOpen && 'rotate-90')}
+              />
+              <span className="tabular-nums" data-ph-mask="">
+                {describeClaimedElsewhere(claimedElsewhere)}
+                {selectedClaimedCount > 0 && ` (${selectedClaimedCount} valt här)`}
+              </span>
+            </button>
+            {claimedOpen && (
+              <div className="max-h-[30vh] overflow-y-auto rounded-lg border border-border divide-y divide-border">
+                {sortedClaimed.map(renderAccountRow)}
+              </div>
+            )}
+          </div>
+        )}
 
         <DialogFooter>
           <Button
