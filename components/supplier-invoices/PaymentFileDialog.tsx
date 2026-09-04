@@ -268,8 +268,10 @@ export default function PaymentFileDialog({
                         <td className="whitespace-nowrap py-2 pr-3 tabular-nums">
                           {line.payee.label}
                         </td>
-                        <td className="max-w-[120px] truncate whitespace-nowrap py-2 pr-3 tabular-nums text-muted-foreground">
-                          {line.reference.value}
+                        {/* Cap on an inner block: Firefox ignores max-width on
+                            a td when sizing columns. 108 = 120 minus pr-3. */}
+                        <td className="py-2 pr-3 tabular-nums text-muted-foreground">
+                          <div className="max-w-[108px] truncate">{line.reference.value}</div>
                         </td>
                         <td className="whitespace-nowrap py-2 pr-3">
                           <Input

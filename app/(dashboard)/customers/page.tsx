@@ -374,8 +374,11 @@ function CustomersPageInner() {
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground lg:table-cell')}>
                         {identifier || ''}
                       </td>
-                      <td className={cn(TD_CLASS, 'hidden max-w-[220px] truncate text-muted-foreground md:table-cell')}>
-                        {customer.email || ''}
+                      {/* See the suppliers list: the cap must sit on an inner
+                          block because Firefox ignores max-width on a td, and
+                          188 = 220 minus the cell's px-4. */}
+                      <td className={cn(TD_CLASS, 'hidden text-muted-foreground md:table-cell')}>
+                        <div className="max-w-[188px] truncate">{customer.email || ''}</div>
                       </td>
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-muted-foreground sm:table-cell')}>
                         {customer.city || ''}

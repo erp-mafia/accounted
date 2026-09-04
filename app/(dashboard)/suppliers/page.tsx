@@ -244,8 +244,14 @@ export default function SuppliersPage() {
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground sm:table-cell')}>
                         {payment ? `${payment.label} ${payment.value}` : ''}
                       </td>
-                      <td className={cn(TD_CLASS, 'hidden max-w-[220px] truncate text-muted-foreground md:table-cell')}>
-                        {supplier.email || ''}
+                      {/* The cap sits on an inner block, not the td: max-width
+                          on a table cell is undefined per CSS 2.1 10.4 and
+                          Firefox ignores it when sizing columns, so a long
+                          address widened the table there. 188 = the old 220
+                          minus the cell's px-4, which the border-box cap on
+                          the td used to include, so the column is unchanged. */}
+                      <td className={cn(TD_CLASS, 'hidden text-muted-foreground md:table-cell')}>
+                        <div className="max-w-[188px] truncate">{supplier.email || ''}</div>
                       </td>
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground lg:table-cell')}>
                         {supplier.org_number || ''}

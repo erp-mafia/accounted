@@ -797,8 +797,10 @@ export default function BulkBookDialog({
                     {previewLines.slice(0, 30).map((line, i) => (
                       <tr key={i} className="border-b border-border/40 last:border-b-0">
                         <td className="px-3 py-1.5 font-mono">{line.account_number}</td>
-                        <td className="px-3 py-1.5 text-muted-foreground truncate max-w-[240px]">
-                          {line.line_description ?? '-'}
+                        {/* Cap on an inner block: Firefox ignores max-width on
+                            a td when sizing columns. 216 = 240 minus px-3. */}
+                        <td className="px-3 py-1.5 text-muted-foreground">
+                          <div className="max-w-[216px] truncate">{line.line_description ?? '-'}</div>
                         </td>
                         <td className="px-3 py-1.5 text-right">
                           {line.debit_amount > 0 ? formatCurrency(line.debit_amount) : ''}
