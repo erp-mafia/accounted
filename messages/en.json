@@ -3696,7 +3696,7 @@
     "next_step_personnummer": "enter the personal number for the deduction",
     "next_step_housing": "enter the property designation",
     "next_step_external_number": "enter the customer's invoice number",
-    "next_step_received_date": "set the received date",
+    "next_step_received_date": "set the date received",
     "ready_create": "Ready to review: everything else has sensible defaults.",
     "ready_edit": "Ready to save.",
     "ready_self_billed": "Ready to register.",
@@ -6440,13 +6440,14 @@
     "agreement_ref_label": "Agreement reference",
     "agreement_ref_placeholder": "Self-billing agreement",
     "invoice_date_label": "Invoice date",
-    "received_date_label": "Received date",
+    "received_date_label": "Date received",
+    "received_date_help": "The day the self-billing invoice arrived. The payment date is set when the invoice is marked as paid.",
     "register": "Register self-billing invoice",
     "created_title": "Self-billing invoice registered",
     "created_description": "Self-billing invoice {number} has been booked as a sale",
     "create_failed_title": "Could not register the self-billing invoice",
     "validation_external_number_required": "Invoice number is required",
-    "validation_received_date_required": "Received date is required"
+    "validation_received_date_required": "Date received is required"
   },
   "invoices": {
     "rot_rut_payout_action": "ROT/RUT file",
