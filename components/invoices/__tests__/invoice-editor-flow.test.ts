@@ -4,6 +4,7 @@ import {
   deriveForvalChips,
   deriveRequiresHousing,
   filterArticleSuggestions,
+  planDueDateSync,
   type NextStepInput,
   type ForvalChipsInput,
 } from '@/components/invoices/invoice-editor-flow'
@@ -280,6 +281,86 @@ describe('deriveForvalChips', () => {
       { kind: 'due_days', days: 30, date: '2026-09-16' },
       { kind: 'received', date: '2026-08-15' },
     ])
+  })
+})
+
+describe('planDueDateSync', () => {
+  // The form drives this by feeding back the previous result, so the tests do
+  // the same: one step per user action.
+  function sync(
+    state: { previousInvoiceDate: string | null; terms: number },
+    invoiceDate: string,
+    dueDate: string,
+  ) {
+    const plan = planDueDateSync({ invoiceDate, dueDate, ...state })
+    return {
+      plan,
+      state: { previousInvoiceDate: plan.previousInvoiceDate, terms: plan.terms },
+      dueDate: plan.dueDate ?? dueDate,
+    }
+  }
+
+  const fresh = { previousInvoiceDate: null as string | null, terms: 30 }
+
+  it('adopts the term of the pair it first sees without touching it', () => {
+    const first = sync(fresh, '2026-09-04', '2026-10-04')
+    expect(first.plan.dueDate).toBeNull()
+    expect(first.state).toEqual({ previousInvoiceDate: '2026-09-04', terms: 30 })
+  })
+
+  it('carries the term when the invoice date moves to month end', () => {
+    // The reported bug: fakturadatum 2026-09-04 -> 2026-09-30 left the due
+    // date on 2026-10-04, four days out, to be recounted by hand.
+    const first = sync(fresh, '2026-09-04', '2026-10-04')
+    const moved = sync(first.state, '2026-09-30', first.dueDate)
+    expect(moved.plan.dueDate).toBe('2026-10-30')
+    expect(moved.state).toEqual({ previousInvoiceDate: '2026-09-30', terms: 30 })
+  })
+
+  it('keeps a hand-picked term across a later invoice date change', () => {
+    const first = sync(fresh, '2026-09-04', '2026-10-04')
+    // User overrides förfallodatum to 10 dagar netto.
+    const manual = sync(first.state, '2026-09-04', '2026-09-14')
+    expect(manual.plan.dueDate).toBeNull()
+    expect(manual.state.terms).toBe(10)
+    const moved = sync(manual.state, '2026-09-30', manual.dueDate)
+    expect(moved.plan.dueDate).toBe('2026-10-10')
+  })
+
+  it('leaves a due date the user edits on its own alone', () => {
+    const first = sync(fresh, '2026-09-04', '2026-10-04')
+    const edited = sync(first.state, '2026-09-04', '2026-11-30')
+    expect(edited.plan.dueDate).toBeNull()
+    expect(edited.state.terms).toBe(87)
+  })
+
+  it('holds the baseline while the invoice date is empty or half-typed', () => {
+    const first = sync(fresh, '2026-09-04', '2026-10-04')
+    const cleared = sync(first.state, '', '2026-10-04')
+    expect(cleared.plan.dueDate).toBeNull()
+    expect(cleared.state).toEqual({ previousInvoiceDate: '2026-09-04', terms: 30 })
+    // Retyped to the same date: still no write.
+    expect(sync(cleared.state, '2026-09-04', '2026-10-04').plan.dueDate).toBeNull()
+  })
+
+  it('ignores a due date that precedes the invoice date instead of going negative', () => {
+    const first = sync(fresh, '2026-09-04', '2026-08-01')
+    expect(first.state.terms).toBe(30)
+    const moved = sync(first.state, '2026-09-30', '2026-08-01')
+    expect(moved.plan.dueDate).toBe('2026-10-30')
+  })
+
+  it('seeds from an edited draft, not from a hardcoded 30 days', () => {
+    // Edit mode mounts with the draft's own pair: 14 dagar netto stays 14.
+    const first = sync(fresh, '2026-09-04', '2026-09-18')
+    expect(first.state.terms).toBe(14)
+    expect(sync(first.state, '2026-10-01', '2026-09-18').plan.dueDate).toBe('2026-10-15')
+  })
+
+  it('crosses month and year boundaries on calendar days', () => {
+    const first = sync(fresh, '2026-12-15', '2027-01-14')
+    expect(first.state.terms).toBe(30)
+    expect(sync(first.state, '2026-12-31', '2027-01-14').plan.dueDate).toBe('2027-01-30')
   })
 })
 
