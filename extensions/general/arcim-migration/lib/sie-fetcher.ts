@@ -57,6 +57,28 @@ export interface ProviderSieFetchResult {
    * breaks IB/UB continuity between the years without anyone noticing.
    */
   failedYears: { year: number; error: string }[]
+  /**
+   * Fiscal years the source has that start BEFORE the allowed window, oldest
+   * first. They are never fetched, and until issue #2211 never mentioned
+   * either: the wizard must name them before the import runs and again in
+   * the result, with the SIE-file path (one file per year, oldest first) for
+   * exactly those years. Years starting after the window (a next year created
+   * early at the source) are not listed: nothing is booked there yet and the
+   * SIE path is not the answer for them.
+   */
+  omittedYears: OmittedFiscalYear[]
+}
+
+/**
+ * A source fiscal year the direct connection leaves out. Bounds are the
+ * provider's own (ISO yyyy-mm-dd) so a broken year can be named as
+ * "2022-09-01 till 2023-12-31" rather than as a calendar year that is wrong
+ * for it; null when the provider reported none.
+ */
+export interface OmittedFiscalYear {
+  year: number
+  fromDate: string | null
+  toDate: string | null
 }
 
 // Singleton clients (they hold rate limiters)
@@ -110,6 +132,14 @@ export async function fetchProviderSieFiles(
   const availableYears = allowedYears.map((fy) => fy.year)
   const toFetch = opts?.latestOnly ? allowedYears.slice(-1) : allowedYears
 
+  // Derived from the same year list, so naming the left-out years costs no
+  // extra provider call.
+  const earliestAllowed = Math.min(...Array.from(allowedFiscalYears))
+  const omittedYears: OmittedFiscalYear[] = allYears
+    .filter((fy) => fy.year < earliestAllowed)
+    .sort((a, b) => a.year - b.year || (a.fromDate ?? '').localeCompare(b.fromDate ?? ''))
+    .map((fy) => ({ year: fy.year, fromDate: fy.fromDate ?? null, toDate: fy.toDate ?? null }))
+
   const files: ProviderSieFile[] = []
   const failedYears: { year: number; error: string }[] = []
   for (const fy of toFetch) {
@@ -129,7 +159,7 @@ export async function fetchProviderSieFiles(
     }
   }
 
-  return { files, availableYears, failedYears }
+  return { files, availableYears, failedYears, omittedYears }
 }
 
 interface SieFetcher {
@@ -152,6 +182,8 @@ function getSieFetcher(
         return years.map((fy) => ({
           id: fy['Id'] as number,
           year: new Date(fy['FromDate'] as string).getFullYear(),
+          fromDate: typeof fy['FromDate'] === 'string' ? fy['FromDate'] : undefined,
+          toDate: typeof fy['ToDate'] === 'string' ? fy['ToDate'] : undefined,
         }))
       },
       async fetchSie(accessToken, fy) {
@@ -172,6 +204,8 @@ function getSieFetcher(
         return years.map((fy) => ({
           id: fy.id,
           year: new Date(fy.fromdate).getFullYear(),
+          fromDate: fy.fromdate,
+          toDate: fy.todate,
         }))
       },
       async fetchSie(accessToken, fy) {
@@ -194,6 +228,9 @@ function getSieFetcher(
       companyName: string
       orgNumber?: string
       accounts: ReturnType<typeof mapWintAccountForSie>[]
+      /** Every year the source has, unfiltered: what listYears reports. */
+      allYears: (WintSieYear & { id: number })[]
+      /** The allowed subset: the years that render as SIE. */
       years: (WintSieYear & { id: number })[]
       vouchersByYear: Map<number, WintSieVoucher[]>
       ibByYear: Map<number, Map<string, number>>
@@ -273,6 +310,7 @@ function getSieFetcher(
           companyName: (company['Name'] as string) ?? 'Okänt företag',
           orgNumber: (company['Org'] as string | undefined) || undefined,
           accounts,
+          allYears,
           years,
           vouchersByYear,
           ibByYear,
@@ -284,8 +322,10 @@ function getSieFetcher(
 
     return {
       async listYears(accessToken) {
+        // The unfiltered list: fetchProviderSieFiles applies the window
+        // itself and needs the years outside it to name what is left out.
         const context = await loadContext(accessToken)
-        return context.years.map((fy) => ({
+        return context.allYears.map((fy) => ({
           id: fy.id,
           year: fy.year,
           fromDate: fy.start,

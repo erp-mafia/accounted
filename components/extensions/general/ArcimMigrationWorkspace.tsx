@@ -304,6 +304,11 @@ interface PreviewData {
     transactionCount: number
     fiscalYears: number[]
   } | null
+  // What the direct connection fetches: fiscal years starting within this
+  // calendar-year window (three years, rolling), and the source years that
+  // start before it. Said up front so nobody believes the books are complete.
+  fiscalYearWindow?: { fromYear: number; toYear: number } | null
+  omittedYears?: OmittedFiscalYear[]
   assetStats: {
     total: number
     importable: number
@@ -338,7 +343,30 @@ interface SIEData {
   // Fiscal years whose provider export failed. Importing the remaining years
   // anyway leaves an IB/UB gap: the options step warns before proceeding.
   failedYears?: { year: number; error: string }[]
+  // Source fiscal years that start before the fetch window: never fetched,
+  // named in the result with the SIE path for exactly those years (#2211).
+  omittedYears?: OmittedFiscalYear[]
   basAccounts: BASAccount[]
+}
+
+/**
+ * A source fiscal year the direct connection leaves out. Mirrors
+ * OmittedFiscalYear in extensions/general/arcim-migration/lib/sie-fetcher.ts
+ * (deliberate duplication: core must not import from @/extensions/).
+ */
+interface OmittedFiscalYear {
+  year: number
+  fromDate: string | null
+  toDate: string | null
+}
+
+/** "2022-09-01 till 2023-12-31" when the provider gave bounds, else the start year. */
+function useOmittedYearLabel(): (fy: OmittedFiscalYear) => string {
+  const t = useTranslations('extensions')
+  return (fy) =>
+    fy.fromDate && fy.toDate
+      ? t('ext_arcim_fiscal_year_span', { from: fy.fromDate, to: fy.toDate })
+      : String(fy.year)
 }
 
 // ── Shared step chrome ───────────────────────────────────────────
@@ -888,9 +916,12 @@ function PreviewStep({
   onContinue: () => void
   onBack: () => void
 }) {
+  const t = useTranslations('extensions')
+  const omittedYearLabel = useOmittedYearLabel()
   const providerName = preview
     ? ARCIM_PROVIDERS.find(p => p.id === preview.consent.provider)?.name ?? preview.consent.provider
     : ''
+  const omittedYears = preview?.sieAvailable ? preview.omittedYears ?? [] : []
 
   return (
     <div className="stagger-enter space-y-8">
@@ -932,6 +963,31 @@ function PreviewStep({
             </p>
           )
         })()}
+
+        {/* What the direct connection fetches, said BEFORE the import runs,
+            and the source years it leaves out (issue #2211). The window is
+            three rolling calendar years keyed on each year's start date, so a
+            broken first year 2022/2023 falls outside it in 2026 and used to
+            vanish without a word. */}
+        {preview?.sieAvailable && preview.fiscalYearWindow && (
+          <div className="animate-fade-in mt-3 space-y-1 text-[13px] text-muted-foreground">
+            <p>{t('ext_arcim_year_window', { fromYear: preview.fiscalYearWindow.fromYear })}</p>
+            {omittedYears.length > 0 && (
+              <>
+                <p className="tabular-nums">
+                  {t('ext_arcim_omitted_years_preview', {
+                    count: omittedYears.length,
+                    years: omittedYears.map(omittedYearLabel).join(', '),
+                  })}
+                </p>
+                <SieFallbackLine
+                  message={t('ext_arcim_omitted_years_sie_hint', { count: omittedYears.length })}
+                  label={t('ext_arcim_omitted_years_sie_link')}
+                />
+              </>
+            )}
+          </div>
+        )}
 
         {preview && !preview.sieAvailable && !isLoading && preview.hasSieData && (
           <p className="animate-fade-in mt-3 text-[13px] text-muted-foreground">
@@ -1706,6 +1762,7 @@ const NEXT_STEPS: { title: string; sub: string }[] = [
 function ResultStep({
   results,
   sieResults,
+  omittedYears,
   error,
   documentImportState,
   theaterModel,
@@ -1718,6 +1775,8 @@ function ResultStep({
 }: {
   results: MigrationResults | null
   sieResults: ImportResult[]
+  /** Source fiscal years the direct connection left out (before the window). */
+  omittedYears: OmittedFiscalYear[]
   error: string | null
   documentImportState: ArcimDocumentImportState
   theaterModel: TheaterModel | null
@@ -1729,6 +1788,7 @@ function ResultStep({
   onReconnectDocuments: () => void
 }) {
   const t = useTranslations('extensions')
+  const omittedYearLabel = useOmittedYearLabel()
   if (error) {
     return (
       <div className="stagger-enter space-y-8">
@@ -1951,6 +2011,26 @@ function ResultStep({
               <FiscalYearLine key={i} result={r} index={i} />
             ))}
           </div>
+        </section>
+      )}
+
+      {/* ── Source fiscal years the direct connection left out (#2211) ──
+          It fetches the three latest; the rest must be named here, with the
+          SIE path for exactly those years, or the books look complete. */}
+      {sieResults.length > 0 && omittedYears.length > 0 && (
+        <section className="space-y-3">
+          <SectionKicker>{t('ext_arcim_omitted_years_kicker')}</SectionKicker>
+          <div className="stagger-enter divide-y divide-border" data-no-stagger>
+            {omittedYears.map((fy) => (
+              <p key={`${fy.year}-${fy.fromDate ?? ''}`} className="py-3 text-sm tabular-nums">
+                {omittedYearLabel(fy)}
+              </p>
+            ))}
+          </div>
+          <SieFallbackLine
+            message={t('ext_arcim_omitted_years_result', { count: omittedYears.length })}
+            label={t('ext_arcim_omitted_years_sie_link')}
+          />
         </section>
       )}
 
@@ -3101,6 +3181,7 @@ export default function ArcimMigrationWorkspace({
         <ResultStep
           results={migrationResults}
           sieResults={sieImportResults}
+          omittedYears={sieData?.omittedYears ?? []}
           error={error}
           documentImportState={documentImportState}
           theaterModel={theaterModel}

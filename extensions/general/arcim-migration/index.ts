@@ -17,7 +17,7 @@ import {
   ProviderCompanyMismatchError,
   ConsentNotFoundError,
 } from './lib/provider-client'
-import { providerSupportsSie, fetchProviderSieFiles, getAllowedFiscalYears } from './lib/sie-fetcher'
+import { providerSupportsSie, fetchProviderSieFiles, getAllowedFiscalYears, type OmittedFiscalYear } from './lib/sie-fetcher'
 import { mapCompanyInfo } from './lib/entity-mapper'
 import { executeMigration } from './lib/migration-orchestrator'
 import {
@@ -837,8 +837,18 @@ export const arcimMigrationExtension: Extension = {
           // Try to fetch SIE data (Fortnox and Briox serve SIE over the API)
           let sieAvailable = false
           let sieStats: { accountCount: number; transactionCount: number; fiscalYears: number[] } | null = null
+          // The fetch window and the source years that fall before it: the
+          // wizard says what the direct connection fetches BEFORE the import
+          // runs and names the years it leaves out (issue #2211), instead of
+          // letting a first broken year vanish without a word.
+          let fiscalYearWindow: { fromYear: number; toYear: number } | null = null
+          let omittedYears: OmittedFiscalYear[] = []
 
           if (providerSupportsSie(provider)) {
+            const allowedYears = [...getAllowedFiscalYears()].sort((a, b) => a - b)
+            if (allowedYears.length > 0) {
+              fiscalYearWindow = { fromYear: allowedYears[0], toYear: allowedYears[allowedYears.length - 1] }
+            }
             try {
               log.info(`Fetching SIE export from ${provider} for consent ${consentId}...`)
               // Fetch SIE type 4 for EVERY allowed year, not latestOnly: the
@@ -848,11 +858,12 @@ export const arcimMigrationExtension: Extension = {
               // "0 verifikationer" and then imported 4153). Costs one SIE
               // export per extra year, the same work /sie-data repeats right
               // after: honest numbers are worth it.
-              const { files, availableYears } = await fetchProviderSieFiles(
+              const { files, availableYears, omittedYears: omitted } = await fetchProviderSieFiles(
                 provider,
                 resolved.accessToken,
                 resolved.providerCompanyId,
               )
+              omittedYears = omitted
               if (files.length > 0) {
                 const merged = mergeParsedSIEFiles(files.map((f) => parseSIEFile(f.rawContent)))
                 sieAvailable = true
@@ -896,6 +907,8 @@ export const arcimMigrationExtension: Extension = {
             companyInfo: mapped,
             sieAvailable,
             sieStats,
+            fiscalYearWindow,
+            omittedYears,
             assetStats,
             hasSieData: (sieImportCount ?? 0) > 0,
           })
@@ -948,7 +961,7 @@ export const arcimMigrationExtension: Extension = {
           }
 
           // Fetch SIE type 4 for each allowed fiscal year
-          const { files: sieFiles, failedYears } = await fetchProviderSieFiles(
+          const { files: sieFiles, failedYears, omittedYears } = await fetchProviderSieFiles(
             provider,
             resolved.accessToken,
             resolved.providerCompanyId,
@@ -1112,6 +1125,9 @@ export const arcimMigrationExtension: Extension = {
             // Allowed years whose provider export failed: the wizard warns
             // the user before proceeding so an IB/UB gap cannot slip through.
             failedYears,
+            // Source years before the fetch window: the result step names
+            // them and points at the SIE path for exactly those years.
+            omittedYears,
             basAccounts: mappingTargets,
           })
         } catch (error) {
