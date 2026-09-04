@@ -54,6 +54,8 @@ interface InvoiceReviewContentProps {
   /** Payment-link förval on this invoice: Stripe auto-link on send, a manually
    *  pasted link, or none. Renders in the Förval summary line when set. */
   paymentLink?: 'auto' | 'manual' | null
+  /** Quotes show their expiry ("Giltig till") where an invoice shows its due date. */
+  dueDateLabelKey?: 'due_date' | 'valid_until'
 }
 
 export function InvoiceReviewContent({
@@ -68,6 +70,7 @@ export function InvoiceReviewContent({
   yourReference,
   ourReference,
   invoiceMarking,
+  dueDateLabelKey = 'due_date',
   notes,
   numberPreview,
   oreRounding,
@@ -122,7 +125,7 @@ export function InvoiceReviewContent({
           <p className="font-medium">{invoiceDate ? formatDate(invoiceDate) : ''}</p>
         </div>
         <div>
-          <span className="text-muted-foreground">{t('due_date')}</span>
+          <span className="text-muted-foreground">{t(dueDateLabelKey)}</span>
           <p className="font-medium">{dueDate ? formatDate(dueDate) : ''}</p>
         </div>
       </div>

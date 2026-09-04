@@ -231,7 +231,12 @@ export type CustomerType =
 export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'partially_paid' | 'overdue' | 'cancelled' | 'credited'
 
 // Invoice document type
-export type InvoiceDocumentType = 'invoice' | 'proforma' | 'delivery_note'
+export type InvoiceDocumentType = 'invoice' | 'proforma' | 'delivery_note' | 'quote'
+
+// Offert decision. Lives in invoices.quote_status for document_type 'quote'
+// only; the lifecycle column `status` keeps meaning draft / sent / cancelled.
+// "expired" is never stored: derive it with isQuoteExpired() (lib/invoices/quote-status.ts).
+export type QuoteStatus = 'open' | 'accepted' | 'declined'
 
 // Supplier types
 export type SupplierType = 'swedish_business' | 'eu_business' | 'non_eu_business'
@@ -453,6 +458,8 @@ export interface CompanySettings {
   // GREATEST(MAX(arrival_number)+1, next_arrival_number). Defaults to 1.
   next_arrival_number: number
   next_delivery_note_number: number
+  // Offert series (OF-nnn), allocated at insert by generate_quote_number.
+  next_quote_number: number
   invoice_default_days: number
   invoice_default_notes: string | null
   // Default "Vår referens": pre-fills the per-invoice our_reference field.
@@ -548,6 +555,12 @@ export interface CompanySettings {
   // for correctness. The nav row also shows when mileage_trips rows exist.
   mileage_enabled: boolean
 
+  // Kundorder (sales orders): UI-visibility toggle only, never load-bearing
+  // for correctness (the /sales-orders pages and APIs work regardless).
+  sales_orders_enabled: boolean
+  // Per-company counter behind generate_sales_order_number (OR-<n>).
+  next_sales_order_number?: number
+
   // Data analysis consent (migration 20260828120000): when true, the
   // company's bookkeeping outcomes may be read across companies to evaluate
   // and improve automatic booking. Default false, enforced server-side
@@ -630,13 +643,39 @@ export interface BankAccount {
 // drops it 30 days after this PR.
 export type CashAccountSource = 'enable_banking' | 'manual' | 'sie_import'
 
-export interface CashAccount {
+/**
+ * What a customer pays to. Lives on cash_accounts (migration 20260904010000)
+ * and is the single source for the payee printed on customer invoices; the
+ * per-currency map on company_settings is a trigger-maintained mirror of the
+ * default account per currency.
+ */
+export interface CashAccountPayeeFields {
+  bank_name: string | null
+  clearing_number: string | null
+  account_number: string | null
+  bankgiro: string | null
+  plusgiro: string | null
+  swish: string | null
+  iban: string | null
+  bic: string | null
+  bank_code: string | null
+  foreign_account_number: string | null
+}
+
+export interface CashAccount extends CashAccountPayeeFields {
   id: string
   company_id: string
   bank_connection_id: string | null
   external_uid: string | null    // PSD2 StoredAccount.uid
-  iban: string | null
-  bg_pg: string | null
+  // Raw BBAN from the bank connection (Swedish: clearing + account number,
+  // no separator). Prefill only; clearing_number/account_number print.
+  bban: string | null
+  // The IBAN printed on customer invoices. Separate from `iban` (the bank's
+  // identity of the account, written by every sync and used to re-pair on
+  // reconnect) so a sync never rewrites an invoice instruction.
+  payee_iban: string | null
+  // True when the account may be printed as the payee on customer invoices.
+  invoice_payee: boolean
   name: string | null
   currency: string                // 3-char ISO; broader than Currency union to
                                   // tolerate future currencies without DB-driven enum drift
@@ -651,6 +690,20 @@ export interface CashAccount {
   // account. null = follow company_settings.default_voucher_series_per_source_type.
   // See 20260902121420_cash_accounts_voucher_series.sql.
   voucher_series: string | null
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * Which cash account an invoice in `currency` prints as payee when the
+ * invoice does not choose one itself. One account may be the default for
+ * several currencies (a SEK account with an IBAN is the usual EUR payee).
+ */
+export interface InvoicePayeeDefault {
+  id: string
+  company_id: string
+  currency: Currency
+  cash_account_id: string
   created_at: string
   updated_at: string
 }
@@ -821,6 +874,7 @@ export interface Customer {
   address_line2: string | null
   postal_code: string | null
   city: string | null
+  /** ISO 3166-1 alpha-2 ('SE', 'DE'). Rows from before 2026-09 that the backfill could not map may still hold a name. */
   country: string
 
   // Tax info
@@ -859,6 +913,7 @@ export interface Supplier {
   address_line2: string | null
   postal_code: string | null
   city: string | null
+  /** ISO 3166-1 alpha-2 ('SE', 'DE'). Rows from before 2026-09 that the backfill could not map may still hold a name. */
   country: string
 
   org_number: string | null
@@ -940,6 +995,96 @@ export interface SupplierPaymentBatchItem {
   reference_type: SupplierPaymentBatchReferenceType
   reference: string
   created_at: string
+}
+
+// Kundorder (sales order): the non-ledger document between agreement and
+// invoice. Never books. Four-state header machine; delivery and invoicing
+// progress are derived per line (see SalesOrderItem.invoiced_qty).
+export type SalesOrderStatus = 'draft' | 'confirmed' | 'completed' | 'cancelled'
+
+/** Derived per-axis progress: none / partial / full. */
+export type SalesOrderProgress = 'none' | 'partial' | 'full'
+
+export interface SalesOrder {
+  id: string
+  company_id: string
+  user_id: string
+  customer_id: string | null
+  /** OR-<n>, allocated at creation by generate_sales_order_number. */
+  order_number: string | null
+  status: SalesOrderStatus
+  /** Proforma the order was converted from, if any. */
+  source_invoice_id: string | null
+  order_date: string
+  requested_delivery_date: string | null
+  /** Latest registered delivery date across all lines (display only; invoices use per-line dates). */
+  last_delivery_date: string | null
+  /** Customer facts the lines were VAT-validated under; invoicing refuses when they changed. */
+  customer_type_snapshot?: CustomerType | null
+  customer_vat_validated_snapshot?: boolean | null
+  currency: string
+  subtotal: number
+  vat_amount: number
+  total: number
+  your_reference: string | null
+  our_reference: string | null
+  notes: string | null
+  default_dimensions: Record<string, string>
+  confirmed_at: string | null
+  completed_at: string | null
+  cancelled_at: string | null
+  created_at: string
+  updated_at: string
+
+  // Embeds / derived (list + detail responses)
+  customer?: Customer | null
+  items?: SalesOrderItem[]
+  delivery_progress?: SalesOrderProgress
+  invoicing_progress?: SalesOrderProgress
+}
+
+export interface SalesOrderItem {
+  id: string
+  company_id: string
+  sales_order_id: string
+  sort_order: number
+  line_type: 'product' | 'text'
+  description: string
+  quantity: number
+  /** Stored: registered by the user via the deliver action. */
+  delivered_qty: number
+  /** Latest delivery date registered for this line (null until delivered). */
+  last_delivery_date?: string | null
+  unit: string
+  unit_price: number
+  discount_percent: number
+  vat_rate: number
+  /** NET of discount, order currency. */
+  line_total: number
+  article_id: string | null
+  revenue_account: string | null
+  dimensions: Record<string, string>
+  created_at: string
+  updated_at: string
+
+  /** Derived from linked invoice_items on non-cancelled, non-credited invoices. */
+  invoiced_qty?: number
+  /** quantity - invoiced_qty (never negative). */
+  remaining_qty?: number
+}
+
+export interface SalesOrderItemInput {
+  id?: string
+  line_type?: 'product' | 'text'
+  description: string
+  quantity: number
+  unit: string
+  unit_price: number
+  discount_percent?: number | null
+  vat_rate?: number
+  article_id?: string | null
+  revenue_account?: string | null
+  dimensions?: Record<string, string>
 }
 
 // Article (artikelregister): reusable invoice-line preset. NON-INVENTORY:
@@ -1218,6 +1363,13 @@ export interface Invoice {
   stripe_payment_link_id?: string | null
   // Per-invoice opt-out for automatic payment link creation on send.
   payment_link_auto?: boolean
+  // Per-invoice payee (migration 20260904011000): the bank account this
+  // invoice asks the customer to pay to (null = the per-currency default),
+  // and its payee fields frozen when chosen and refreshed at issue. Issued
+  // invoices print from payment_details; the resolver falls back to the
+  // company default when it is null.
+  payment_cash_account_id?: string | null
+  payment_details?: InvoicePaymentAccount | null
 
   // Notes
   notes: string | null
@@ -1231,8 +1383,20 @@ export interface Invoice {
   // Document type (invoice, proforma, delivery_note, quote)
   document_type: InvoiceDocumentType
 
-  // Conversion tracking (proforma -> invoice)
+  // Conversion tracking (proforma / quote -> invoice)
   converted_from_id: string | null
+
+  // Quotes (offert) only. valid_until is the authoritative expiry date
+  // (due_date mirrors it because the column is NOT NULL); quote_status is
+  // NULL on every other document type. Optional in TS for pre-migration
+  // fixtures.
+  valid_until?: string | null
+  quote_status?: QuoteStatus | null
+  quote_decided_at?: string | null
+
+  // Kundorder this invoice was created from (sales_orders.id). Header-level
+  // provenance only; the per-line link is invoice_items.sales_order_item_id.
+  sales_order_id?: string | null
 
   // Self-billing received (mottagen självfaktura, ML 17 kap 15§). When
   // `is_self_billed` is true the customer issued the invoice on our behalf;
@@ -1387,6 +1551,12 @@ export interface InvoiceItem {
   // booking in generatePerRateLines().
   article_id?: string | null
   revenue_account?: string | null
+
+  // Kundorder line this invoice line was created from. The order line's
+  // invoiced quantity is DERIVED from these links (never stored), so an
+  // edit that drops the link would free the quantity for double invoicing:
+  // every write path round-trips it.
+  sales_order_item_id?: string | null
 
   // Periodisering (förutbetald intäkt): when set, the revenue entry credits
   // accrual_balance_account (29xx) instead of the line's revenue account, and
@@ -2205,6 +2375,12 @@ export type PendingOperationType =
   | 'update_company_settings'
   | 'create_article'
   | 'update_article'
+  // Kundorder (gnubok_create_sales_order / _transition_sales_order /
+  // _register_sales_order_delivery / _create_invoice_from_sales_order)
+  | 'create_sales_order'
+  | 'transition_sales_order'
+  | 'register_sales_order_delivery'
+  | 'create_invoice_from_sales_order'
   // Kontoplan reference data (gnubok_create_account / gnubok_update_account)
   | 'create_account'
   | 'update_account'

@@ -167,6 +167,28 @@ describe('POST /api/salary/runs/[id]/agi/submit', () => {
     expect(body.error).toContain('redan skickats')
   })
 
+  it('reports the payout month as the AGI period for lön i efterskott (#2191)', async () => {
+    const { enqueueMany } = authed()
+    enqueueMany([
+      { data: makeSalaryRun({ period_month: 3, payment_date: '2026-04-25' }) }, // March work, paid in April
+      { data: makeAgiDeclaration() },
+      { data: null },
+    ])
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { inlamningId: 'inl-124', kontrollresultat: { kontroller: [] } } }),
+    })
+
+    const request = createMockRequest('/api/salary/runs/run-1/agi/submit', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.periodYear).toBe(2026)
+    expect(body.data.periodMonth).toBe(4)
+  })
+
   it('submits AGI draft and returns success', async () => {
     const { enqueueMany } = authed()
     enqueueMany([

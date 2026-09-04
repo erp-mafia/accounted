@@ -52,6 +52,9 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
     `)
     .eq('company_id', companyId)
     .eq('customer_id', customerId)
+    // Proformas, delivery notes and quotes are never receivables (parity
+    // with generateARLedger).
+    .eq('document_type', 'invoice')
     .in('status', ['sent', 'overdue', 'credited'])
     .order('invoice_date', { ascending: true })
     .limit(PAGE_LIMIT)

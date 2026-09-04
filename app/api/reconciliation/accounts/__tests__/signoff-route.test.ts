@@ -136,14 +136,26 @@ describe('dashboard sign-off routes', () => {
   })
 
   it('POST maps policy refusals to 400 + code, races to 409, and a null result to 404', async () => {
-    signMock.mockRejectedValueOnce(new ReconciliationSignoffError('oförklarat', 'NOT_RECONCILED'))
+    signMock.mockRejectedValueOnce(
+      new ReconciliationSignoffError('oförklarat', 'NOT_RECONCILED', { unexplained_difference: 53717 }),
+    )
     const refused = await signPOST(
       createMockRequest('http://localhost/api/reconciliation/accounts/skattekonto/signoff', { method: 'POST', body: { through_date: '2026-07-31' } }),
       p({ accountKey: 'skattekonto' }),
     )
     expect(refused.status).toBe(400)
-    const refusedBody = (await parseJsonResponse<{ code: string }>(refused)).body
+    const refusedBody = (await parseJsonResponse<{ code: string; error: string; details?: unknown }>(refused)).body
     expect(refusedBody.code).toBe('NOT_RECONCILED')
+    expect(refusedBody.error).toBe('oförklarat')
+    // The dialog previews with dry_run and reads the amount from here.
+    expect(refusedBody.details).toEqual({ unexplained_difference: 53717 })
+
+    signMock.mockRejectedValueOnce(new ReconciliationSignoffError('okänt', 'OUTSIDE_UNKNOWN'))
+    const unknown = await signPOST(
+      createMockRequest('http://localhost/api/reconciliation/accounts/skattekonto/signoff', { method: 'POST', body: { through_date: '2026-07-31' } }),
+      p({ accountKey: 'skattekonto' }),
+    )
+    expect((await parseJsonResponse<{ details?: unknown }>(unknown)).body.details).toBeUndefined()
 
     signMock.mockRejectedValueOnce(new ReconciliationSignoffError('race', 'SIGNOFF_RACE'))
     const raced = await signPOST(

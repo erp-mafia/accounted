@@ -252,7 +252,10 @@ describe('PATCH /api/v1/companies/:companyId/invoices/:id', () => {
             error: null,
           },
           company_settings: { data: { vat_registered: true }, error: null },
-          invoice_items: { data: null, error: null },
+          // replaceInvoiceItems snapshots the current rows before deleting and
+          // refuses (fails closed) when the snapshot is unreadable, so the
+          // mock must answer with a real (empty) row set.
+          invoice_items: { data: [], error: null },
         },
         captures,
       ),
@@ -576,5 +579,33 @@ describe('DELETE /api/v1/companies/:companyId/invoices/:id', () => {
     expect(body.data.dry_run).toBe(true)
     expect(body.data.preview).toEqual({ cancelled: true, invoice_number: '2026-0042' })
     expect(captures.filter((c) => c.table === 'invoices')).toEqual([])
+  })
+
+  it('returns 409 INVOICE_UPDATE_NOT_DRAFT for an accepted quote: a recorded decision is not editable', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: {
+          data: {
+            ...DRAFT_INVOICE,
+            invoice_number: 'OF-003',
+            document_type: 'quote',
+            valid_until: '2026-07-31',
+            quote_status: 'accepted',
+          },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await patchInvoice(
+      makePatchRequest({ items: NEW_ITEMS }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_UPDATE_NOT_DRAFT')
+    expect(body.error.details.quote_status).toBe('accepted')
   })
 })

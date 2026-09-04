@@ -28,12 +28,15 @@ export function isConnectorKeyFormat(key: string): boolean {
 export interface ConnectorKeyLimits {
   bank_connections_per_company: number
   skv_connections_per_company: number
+  /** Active Peppol receiving registrations per company ("one address"). */
+  peppol_connections_per_company: number
   sync_min_interval_s: number
 }
 
 export const DEFAULT_CONNECTOR_LIMITS: ConnectorKeyLimits = {
   bank_connections_per_company: 1,
   skv_connections_per_company: 1,
+  peppol_connections_per_company: 1,
   sync_min_interval_s: 0,
 }
 

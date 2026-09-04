@@ -39,6 +39,7 @@ import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { classifyAccount } from '@/lib/bookkeeping/account-classifier'
 import { computeSRUCode } from '@/lib/bookkeeping/bas-data/sru-mapping'
 import { populateTemplatesFromSieVouchers } from '@/lib/bookkeeping/counterparty-templates'
+import { suggestPartiesForCompany } from '@/lib/parties/suggest'
 import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
 import { monthsBetween, parseDateParts } from '@/lib/bookkeeping/validate-period-duration'
 import { findUntransferredResults } from '@/lib/reports/imbalance-diagnosis'
@@ -2989,6 +2990,17 @@ export async function executeSIEImport(
         }
       } catch (templateError) {
         console.error('[sie-import] Failed to populate counterparty templates:', templateError)
+      }
+    }
+
+    // Fill the Kontakter register from the imported vouchers (non-blocking):
+    // suggested parties only, nothing is confirmed on the user's behalf.
+    if (result.success && parsed.vouchers.length > 0) {
+      try {
+        const summary = await suggestPartiesForCompany(supabase, companyId, userId)
+        console.info(`[sie-import] party suggestions: ${summary.created} new, ${summary.attached} attached, ${summary.skipped} skipped`)
+      } catch (partyError) {
+        console.error('[sie-import] Failed to suggest parties:', partyError)
       }
     }
 

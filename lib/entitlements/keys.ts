@@ -51,6 +51,8 @@ export const CAPABILITY = {
    * mail keeps leaving from the platform sender.
    */
   custom_sender_domain: 'custom_sender_domain',
+  /** Peppol e-invoicing (send/receive via a Peppol Access Point). Free on hosted (Arcim's own AP); on self-host brokered through the connector: Arcim's Qvalia AP with a per-key one-address + volume quota. */
+  peppol: 'peppol',
 } as const
 
 export type CapabilityKey = (typeof CAPABILITY)[keyof typeof CAPABILITY]
@@ -105,6 +107,7 @@ export const CONNECTOR_CAPABILITIES: readonly CapabilityKey[] = [
   CAPABILITY.skatteverket,
   CAPABILITY.org_lookup,
   CAPABILITY.migration,
+  CAPABILITY.peppol,
 ] as const
 
 export function isConnectorCapability(key: CapabilityKey): boolean {

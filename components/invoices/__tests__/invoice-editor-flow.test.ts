@@ -205,6 +205,22 @@ describe('deriveForvalChips', () => {
     })
   })
 
+  it('replaces the due chips with a valid-until chip for a quote', () => {
+    const chips = deriveForvalChips(
+      chipsInput({ documentType: 'quote', validUntil: '2026-09-16' }),
+    )
+    expect(chips[0]).toEqual({ kind: 'doc_type', documentType: 'quote' })
+    expect(chips).toContainEqual({ kind: 'valid_until', date: '2026-09-16' })
+    expect(chips.find((c) => c.kind === 'due_days')).toBeUndefined()
+    expect(chips.find((c) => c.kind === 'due_date')).toBeUndefined()
+  })
+
+  it('skips the valid-until chip while a quote has no expiry yet', () => {
+    const chips = deriveForvalChips(chipsInput({ documentType: 'quote', validUntil: '' }))
+    expect(chips.find((c) => c.kind === 'valid_until')).toBeUndefined()
+    expect(chips.find((c) => c.kind === 'due_days')).toBeUndefined()
+  })
+
   it('falls back to a plain due date when the invoice date is missing or after', () => {
     expect(deriveForvalChips(chipsInput({ invoiceDate: '' }))).toContainEqual({
       kind: 'due_date',

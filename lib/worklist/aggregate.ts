@@ -9,6 +9,7 @@ import {
   countReconciliationDue,
   countSuggestedMatches,
   countSupplierInvoicesAwaitingApproval,
+  countUnbookedSkattekontoRows,
   countUnbookedTransactions,
   countVerifikatMissingDocument,
 } from './categories'
@@ -40,6 +41,7 @@ export async function getWorklistCounts(
 ): Promise<WorklistCounts> {
   const [
     bookTransaction,
+    bookSkattekonto,
     inboxDocument,
     suggestedMatch,
     supplierInvoiceApproval,
@@ -50,6 +52,7 @@ export async function getWorklistCounts(
     reconciliationDue,
   ] = await Promise.all([
     countUnbookedTransactions(supabase, companyId),
+    countUnbookedSkattekontoRows(supabase, companyId),
     countInboxDocuments(supabase, companyId),
     options.suggestedMatches
       ? Promise.resolve(options.suggestedMatches).then((m) => m.length)
@@ -65,6 +68,7 @@ export async function getWorklistCounts(
   return {
     counts: {
       book_transaction: bookTransaction,
+      book_skattekonto: bookSkattekonto,
       inbox_document: inboxDocument,
       suggested_match: suggestedMatch,
       supplier_invoice_approval: supplierInvoiceApproval,
@@ -76,6 +80,7 @@ export async function getWorklistCounts(
     },
     total:
       bookTransaction +
+      bookSkattekonto +
       inboxDocument +
       supplierInvoiceApproval +
       verifikatMissingDocument +

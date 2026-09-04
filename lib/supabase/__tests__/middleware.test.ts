@@ -640,6 +640,23 @@ describe('updateSession redirect destinations', () => {
       expect(locationOf(response)).toBeNull()
     })
 
+    // Stock GoTrue links (no Send Email hook) come back through redirect_to
+    // with only the flow=email_change marker: ?message= after the first of
+    // the two confirmations, ?code= after the completing one, ?error= for a
+    // dead link. None carries type=, and the change usually starts in a
+    // signed-in settings tab.
+    it('lets an authenticated stock email-change redirect reach the callback', async () => {
+      for (const query of [
+        'flow=email_change&message=Confirmation+link+accepted',
+        'flow=email_change&code=pkce',
+        'flow=email_change&error=access_denied&error_code=otp_expired',
+      ]) {
+        const response = await run(`/auth/callback?${query}`)
+        expect(response.status).not.toBe(307)
+        expect(locationOf(response)).toBeNull()
+      }
+    })
+
     it('lets an authenticated user see the email-change status page', async () => {
       const response = await run('/auth/email-change?status=done')
       expect(response.status).not.toBe(307)

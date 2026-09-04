@@ -78,6 +78,8 @@ describe('POST /api/transactions/[id]/match-batch', () => {
 
   it('returns 200 with the RPC result on the happy path', async () => {
     // RPC returns success envelope
+    // document_type pre-check for the customer allocations (before the RPC)
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }], error: null })
     enqueue({
       data: {
         ok: true,
@@ -199,6 +201,8 @@ describe('POST /api/transactions/[id]/match-batch', () => {
   })
 
   it('maps an RPC structured failure to errorResponseFromCode', async () => {
+    // document_type pre-check for the customer allocations (before the RPC)
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }], error: null })
     enqueue({
       data: {
         ok: false,
@@ -221,6 +225,8 @@ describe('POST /api/transactions/[id]/match-batch', () => {
   })
 
   it('maps a raw RPC error to BATCH_RPC_FAILED', async () => {
+    // document_type pre-check for the customer allocations (before the RPC)
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }], error: null })
     enqueue({ data: null, error: { message: 'connection dropped' } })
 
     const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
@@ -233,5 +239,21 @@ describe('POST /api/transactions/[id]/match-batch', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(status).toBe(500)
     expect(body.error.code).toBe('BATCH_RPC_FAILED')
+  })
+
+  it('refuses a quote in the allocation list before the RPC runs', async () => {
+    enqueue({ data: [{ id: INV_UUID, document_type: 'quote' }], error: null })
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: {
+        allocations: [{ kind: 'customer_invoice', invoice_id: INV_UUID, amount: 1000 }],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('MATCH_INVOICE_NOT_INVOICE_TYPE')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
   })
 })

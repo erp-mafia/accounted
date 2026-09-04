@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse, after } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { createLogger } from '@/lib/logger'
-import { createSession, type AccountInfo } from '@/extensions/general/enable-banking/lib/api-client'
+import { createSession, extractBban, type AccountInfo } from '@/extensions/general/enable-banking/lib/api-client'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
 import { eventBus } from '@/lib/events/bus'
 import {
@@ -470,6 +470,7 @@ async function finalizeConnection(
     return {
       uid: account.uid,
       iban: account.account_id?.iban,
+      bban: extractBban(account),
       name: account.name || account.product,
       currency: account.currency,
       // Carry the user's earlier choice for an account we have seen before;
@@ -827,6 +828,7 @@ async function finalizeConnection(
         currency: account.currency,
         ledger_account: targetLedger,
         iban: account.iban ?? null,
+        bban: account.bban ?? null,
         name: account.name ?? null,
         enabled: account.enabled ?? true,
         reuse_cash_account_id: reuseCashAccountId,

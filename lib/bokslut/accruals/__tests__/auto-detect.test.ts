@@ -66,6 +66,20 @@ describe('detectPeriodisering', () => {
     expect(result[0].suggested_deferred_account).toBeNull()
   })
 
+  it('only reads fakturor: proformas, delivery notes and quotes are never booked, so nothing to periodise', async () => {
+    mock.enqueue({
+      data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
+      error: null,
+    })
+    mock.enqueue({ data: [], error: null }) // accrual_schedules
+    mock.enqueue({ data: [], error: null }) // invoices
+    mock.enqueue({ data: [], error: null }) // supplier_invoices
+
+    await detectPeriodisering(mock.supabase as never, 'company-1', 'period-1')
+
+    expect(mock.findCalls('invoices', 'eq')).toContainEqual(['document_type', 'invoice'])
+  })
+
   it('detects a customer invoice with a service window in its notes', async () => {
     mock.enqueue({
       data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },

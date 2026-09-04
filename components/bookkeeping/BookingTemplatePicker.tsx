@@ -12,7 +12,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { BookOpen, Search, Building2, Users, Globe } from 'lucide-react'
+import { BookOpen, Search, Users, Globe, Briefcase } from 'lucide-react'
 import { TEMPLATE_CATEGORY_LABELS, SCOPE_LABELS, getTemplateScope, applyTemplate } from '@/lib/bookkeeping/template-library'
 import type { BookingTemplateCategory, EntityType } from '@/types'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -28,7 +28,7 @@ interface Props {
 const SCOPE_ICONS = {
   system: Globe,
   team: Users,
-  company: Building2,
+  company: Briefcase,
 } as const
 
 export default function BookingTemplatePicker({ onApply, entityType, defaultAmount }: Props) {

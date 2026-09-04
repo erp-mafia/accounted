@@ -129,7 +129,7 @@ describe('buildInvoiceWriteData', () => {
     enqueue({ data: { vat_registered: true }, error: null })
 
     // 10% is not a Swedish momssats (ML 9 kap: 25 / 12 / 6) for any customer.
-    const customer = makeCustomer({ customer_type: 'eu_business', vat_number_validated: true })
+    const customer = makeCustomer({ customer_type: 'eu_business', country: 'DE', vat_number: 'DE811234567', vat_number_validated: true })
     const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
       ...baseHeader,
       items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 10 }],
@@ -149,7 +149,7 @@ describe('buildInvoiceWriteData', () => {
     enqueue({ data: { vat_registered: true }, error: null })
 
     // Huvudregeln (ML 6 kap. 34 §): taxed where the buyer is established.
-    const customer = makeCustomer({ customer_type: 'eu_business', vat_number_validated: true })
+    const customer = makeCustomer({ customer_type: 'eu_business', country: 'DE', vat_number: 'DE811234567', vat_number_validated: true })
     const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
       ...baseHeader,
       items: [{ description: 'Konsult', quantity: 10, unit: 'tim', unit_price: 1000, vat_rate: 0 }],
@@ -170,7 +170,7 @@ describe('buildInvoiceWriteData', () => {
 
     // Widening the permitted set must not change the default: an omitted
     // vat_rate still falls back to getVatRules().rate === 0.
-    const customer = makeCustomer({ customer_type: 'eu_business', vat_number_validated: true })
+    const customer = makeCustomer({ customer_type: 'eu_business', country: 'DE', vat_number: 'DE811234567', vat_number_validated: true })
     const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
       ...baseHeader,
       items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000 }],
@@ -190,7 +190,7 @@ describe('buildInvoiceWriteData', () => {
     // Stockholm hotel night invoiced to a German company. Restaurang/hotell is
     // taxed where performed (ML 6 kap. exception), so Swedish 12% applies even
     // though the buyer is an EU business. This was refused outright before.
-    const customer = makeCustomer({ customer_type: 'eu_business', vat_number_validated: true })
+    const customer = makeCustomer({ customer_type: 'eu_business', country: 'DE', vat_number: 'DE811234567', vat_number_validated: true })
     const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
       ...baseHeader,
       items: [{ description: 'Hotellnatt Stockholm', quantity: 2, unit: 'natt', unit_price: 1000, vat_rate: 12 }],
@@ -254,7 +254,7 @@ describe('buildInvoiceWriteData', () => {
     // 0% consulting (huvudregeln, reverse charge) + 12% hotel (taxed where
     // performed) on one invoice. The buyer IS liable for the consulting line,
     // so the notation is required; the 12% line still carries Swedish VAT.
-    const customer = makeCustomer({ customer_type: 'eu_business', vat_number_validated: true })
+    const customer = makeCustomer({ customer_type: 'eu_business', country: 'DE', vat_number: 'DE811234567', vat_number_validated: true })
     const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
       ...baseHeader,
       items: [
@@ -525,5 +525,75 @@ describe('buildInvoiceWriteData kundkort fallback customer-type gate', () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect('code' in result && result.code).toBe('INVOICE_CREATE_ROT_RUT_VALIDATION')
+  })
+
+  it('writes valid_until + quote_status open for a quote, mirrors it into due_date and keeps nothing owed', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({ customer_type: 'swedish_business' })
+    const result = await call(
+      enqueue,
+      supabase as unknown as SupabaseClient,
+      customer,
+      {
+        ...baseHeader,
+        valid_until: '2026-08-01',
+        items: [{ description: 'Offererat arbete', quantity: 2, unit: 'tim', unit_price: 1000, vat_rate: 25 }],
+      },
+      'quote',
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.document_type).toBe('quote')
+    expect(result.invoiceFields.valid_until).toBe('2026-08-01')
+    expect(result.invoiceFields.due_date).toBe('2026-08-01')
+    // The decision column is never a builder output (a draft edit must not
+    // overwrite an accept/decline); the DB trigger opens a new quote.
+    expect(result.invoiceFields).not.toHaveProperty('quote_status')
+    expect(result.invoiceFields.total).toBe(2500)
+    expect(result.invoiceFields.remaining_amount).toBe(0)
+    expect(result.invoiceFields.deduction_total).toBe(0)
+  })
+
+  it('leaves the quote columns NULL on every other document type', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({ customer_type: 'swedish_business' })
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      valid_until: '2026-08-01',
+      items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25 }],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.valid_until).toBeNull()
+    expect(result.invoiceFields).not.toHaveProperty('quote_status')
+    expect(result.invoiceFields.due_date).toBe(baseHeader.due_date)
+  })
+
+  it('drops sales_order_item_id on quote lines so an offer never consumes kundorder quantity', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({ customer_type: 'swedish_business' })
+    const result = await call(
+      enqueue,
+      supabase as unknown as SupabaseClient,
+      customer,
+      {
+        ...baseHeader,
+        valid_until: '2026-08-01',
+        items: [{ description: 'Orderrad', quantity: 1, unit: 'st', unit_price: 1000, vat_rate: 25, sales_order_item_id: '33333333-3333-4333-8333-333333333333' }],
+      },
+      'quote',
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.items[0]).toMatchObject({ sales_order_item_id: null })
   })
 })

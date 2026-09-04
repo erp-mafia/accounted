@@ -141,28 +141,11 @@ export async function updateDraftSalaryRun(
     }
   }
 
-  // Kontantprincipen guard (SFL 26 kap): the AGI derives its
-  // redovisningsperiod from period_year/period_month while the verifikat
-  // books on payment_date. A payment date outside the run's period month
-  // would post the entries in one month and declare them in another, so it
-  // is refused; a payment truly landing in another month belongs to a run
-  // for that period. Grandfather clause: creation does not (yet) enforce
-  // this coupling, so a run whose CURRENT payment date already sits outside
-  // the period month may still be day-adjusted within that same month
-  // (otherwise a legal create state would be uncorrectable). No move can
-  // introduce a NEW wrong month.
-  if (changes.payment_date !== undefined) {
-    const periodPrefix = `${row.period_year}-${String(row.period_month).padStart(2, '0')}`
-    const newMonth = changes.payment_date.slice(0, 7)
-    const currentMonth = row.payment_date.slice(0, 7)
-    if (newMonth !== periodPrefix && newMonth !== currentMonth) {
-      return {
-        ok: false,
-        code: 'SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD',
-        details: { period: periodPrefix, payment_date: changes.payment_date },
-      }
-    }
-  }
+  // The payment date may leave the run's period month (lön i efterskott):
+  // the AGI redovisningsperiod follows payment_date (kontantprincipen,
+  // lib/salary/agi/reporting-period.ts), so the verifikat and the
+  // declaration always land in the same month. The former in-period guard
+  // (#2191) existed only because the AGI used to be keyed by period_*.
 
   const previous: SalaryRunHeaderValues = {
     payment_date: row.payment_date,
