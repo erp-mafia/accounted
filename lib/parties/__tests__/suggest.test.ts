@@ -118,6 +118,45 @@ describe('buildSuggestions', () => {
     expect(revenue.facts.some((f) => f.field === 'vat_number')).toBe(false)
   })
 
+  it('groups keys that name the same legal person into one suggestion, and attaches to an existing party by exact legal name', () => {
+    const tic1 = 'TIC identity     BG 0000005786439 Bg-bet. via internet · Faktura 20250746, The Intelligence Company AB (publ). TIC Identity-abonnemang.'
+    const tic2 = 'Utbetalning leverantörsfaktura 20250928, The Intelligence Company AB (publ)'
+    const r = buildSuggestions({
+      observed: [
+        observed({ key: 'tic identity', name: tic1, expense_sek: 2385, occurrences: 1, first_seen: '2026-02-01', last_seen: '2026-02-01' }),
+        observed({ key: 'utbetalning leverantörsfaktura the intelligence company publ', name: tic2, expense_sek: 2385, occurrences: 1, first_seen: '2026-03-01', last_seen: '2026-03-01' }),
+      ],
+      evidence: [],
+      existing: [],
+    })
+    expect(r.items).toHaveLength(1)
+    const item = r.items[0]!
+    expect(item.display_name).toBe('The Intelligence Company AB (publ)')
+    expect(item.name_anchored).toBe(true)
+    expect(item.alias_keys).toEqual(['tic identity', 'utbetalning leverantörsfaktura the intelligence company publ'])
+    expect(item.reason.occurrences).toBe(2)
+    expect(item.reason.expense_sek).toBe(4770)
+    expect(item.reason.first_seen).toBe('2026-02-01')
+    expect(item.reason.last_seen).toBe('2026-03-01')
+
+    const confirmed: ExistingParty = { id: 'p-tic', display_name: 'The Intelligence Company AB (publ)', org_number: '5594871682', alias_keys: [], status: 'confirmed' }
+    const attached = buildSuggestions({ observed: [observed({ key: 'tic identity', name: tic1 })], evidence: [], existing: [confirmed] }).items[0]!
+    expect(attached.party_id).toBe('p-tic')
+    expect(attached.reason.attach).toBe('legal_name')
+
+    // A different org number on the key side is a different company with a confusable name.
+    const other = buildSuggestions({
+      observed: [observed({ key: 'tic identity', name: tic1 })],
+      evidence: [{ key: 'tic identity', docs: 1, self_docs: 0, orgs: [{ org: '5560125790', n: 1 }], vat_numbers: [], names: [], bankgiro: [], plusgiro: [] }],
+      existing: [confirmed],
+    }).items[0]!
+    expect(other.party_id).toBeUndefined()
+    // A bank memo head never groups or attaches by name.
+    const memo = buildSuggestions({ observed: [observed({ key: 'beijer byggmaterial', name: 'BEIJER BYGGMATERIAL 2089' })], evidence: [], existing: [{ id: 'p-b', display_name: 'BEIJER BYGGMATERIAL', org_number: null, alias_keys: [], status: 'confirmed' }] }).items[0]!
+    expect(memo.party_id).toBeUndefined()
+    expect(memo.name_anchored).toBeUndefined()
+  })
+
   it('withholds the hard key and identities when a key mixes two org numbers', () => {
     const r = buildSuggestions({
       observed: [observed({ key: 'vattenfall' })],

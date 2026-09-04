@@ -127,7 +127,7 @@ describe('apply_party_suggestions (pg)', () => {
     })
 
     const first = await apply(c.companyId, c.userId, [item({ org_number: '556666-1012' })])
-    expect(first).toEqual({ created: 1, attached: 0, identities: 1, facts: 1 })
+    expect(first).toEqual({ created: 1, attached: 0, identities: 1, facts: 1, renamed: 0 })
     const party = await getPool().query<{ id: string; status: string; org_number: string; alias_keys: string[]; suggested_reason: { attach: string }; origin: string }>(
       `SELECT id, status, org_number, alias_keys, suggested_reason, origin FROM public.parties WHERE company_id = $1`,
       [c.companyId],
@@ -141,7 +141,7 @@ describe('apply_party_suggestions (pg)', () => {
     const second = await apply(c.companyId, c.userId, [
       item({ key: 'loopia webbhotell', alias_keys: ['loopia webbhotell'], org_number: LOOPIA_ORG, identities: [{ scheme: 'bankgiro', value: '53170900', first_seen: '2026-03-10', last_seen: '2026-03-10', seen_count: 2 }] }),
     ])
-    expect(second).toEqual({ created: 0, attached: 1, identities: 1, facts: 0 })
+    expect(second).toEqual({ created: 0, attached: 1, identities: 1, facts: 0, renamed: 0 })
     const after = await getPool().query<{ n: string; alias_keys: string[] }>(
       `SELECT (SELECT count(*) FROM public.parties WHERE company_id = $1)::text AS n, alias_keys FROM public.parties WHERE id = $2`,
       [c.companyId, partyId],
@@ -172,6 +172,31 @@ describe('apply_party_suggestions (pg)', () => {
     )
     expect(rows.rows[0]!.n).toBe('1')
     expect([...rows.rows[0]!.alias_keys].sort()).toEqual(['framer utlägg', 'utlägg framer'])
+  })
+
+  it('renames an untouched suggestion to a legal-form anchored name on a later run, never a decided one or a memo', async () => {
+    const c = await seedCompany()
+    await apply(c.companyId, c.userId, [{ key: 'tic identity', display_name: 'TIC identity' }])
+    const renamed = await apply(c.companyId, c.userId, [
+      { key: 'tic identity', display_name: 'The Intelligence Company AB (publ)', name_anchored: true },
+    ])
+    expect(renamed).toMatchObject({ created: 0, attached: 1, renamed: 1 })
+    const after = await getPool().query<{ id: string; display_name: string }>(
+      `SELECT id, display_name FROM public.parties WHERE company_id = $1`,
+      [c.companyId],
+    )
+    expect(after.rows).toHaveLength(1)
+    expect(after.rows[0]!.display_name).toBe('The Intelligence Company AB (publ)')
+
+    // A memo-shaped name (not anchored) never replaces anything.
+    const memo = await apply(c.companyId, c.userId, [{ key: 'tic identity', display_name: 'TIC IDENTITY BG 0000005786439' }])
+    expect(memo).toMatchObject({ renamed: 0 })
+    // Once a person has decided on the row, no later run touches its name.
+    await decide(c.companyId, c.userId, [after.rows[0]!.id], 'confirm')
+    const decided = await apply(c.companyId, c.userId, [{ key: 'tic identity', display_name: 'The Intelligence Company Nordic AB', name_anchored: true }])
+    expect(decided).toMatchObject({ renamed: 0 })
+    const final = await getPool().query<{ display_name: string }>(`SELECT display_name FROM public.parties WHERE company_id = $1`, [c.companyId])
+    expect(final.rows[0]!.display_name).toBe('The Intelligence Company AB (publ)')
   })
 
   it('never merges on name: same core text becomes a second suggested party', async () => {

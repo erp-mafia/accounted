@@ -6,7 +6,10 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createScbClient, type ScbSearchResult } from '@/lib/parties/scb/client'
 import { isScbConfigured, scbConfigFromEnv } from '@/lib/parties/scb/config'
 import { ScbApiError } from '@/lib/parties/scb/transport'
-import { planRegistryQueries, type RegistryCandidatesResult } from '@/lib/parties/registry-search'
+import { needsModelReading, planRegistryQueries, type RegistryCandidatesResult } from '@/lib/parties/registry-search'
+import { readCounterpartName, aiNameAvailable, type AiNameReading } from '@/lib/parties/ai-name'
+import { hasCapability } from '@/lib/entitlements/has-capability'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 
 /**
  * GET /api/parties/[id]/enrich/candidates?q=: SCB companies whose name
@@ -19,7 +22,7 @@ import { planRegistryQueries, type RegistryCandidatesResult } from '@/lib/partie
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'parties.enrich.candidates',
-  async (request, { supabase, companyId, log, requestId }, { params }) => {
+  async (request, { supabase, companyId, user, log, requestId }, { params }) => {
     const { id } = await params
     if (!/^[0-9a-f-]{36}$/i.test(id)) return errorResponseFromCode('NOT_FOUND', log, { requestId })
     const validated = validateQuery(request, PartySearchRegistryQuerySchema, { log, operation: 'parties.enrich.candidates' })
@@ -40,21 +43,58 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     const explicit = validated.data.q?.trim()
     let queries: string[]
     let foreign: RegistryCandidatesResult['foreign'] = null
+    let aiRead: RegistryCandidatesResult['aiRead'] = null
     if (explicit) {
       queries = [explicit]
     } else {
-      const { data: textFacts, error: factsError } = await supabase
+      const { data: facts, error: factsError } = await supabase
         .from('party_facts')
-        .select('value')
+        .select('field, value')
         .eq('company_id', companyId)
         .eq('party_id', id)
-        .eq('field', 'voucher_text')
+        .in('field', ['voucher_text', 'ai_name'])
         .is('superseded_at', null)
       if (factsError) throw new Error(`party_facts lookup failed: ${factsError.message}`)
-      const voucherTexts = ((textFacts ?? []) as Array<{ value: unknown }>).flatMap((f) =>
-        Array.isArray(f.value) ? f.value.filter((v): v is string => typeof v === 'string') : [],
-      )
-      const plan = planRegistryQueries({ legalName: p.legal_name, displayName: p.display_name, voucherTexts })
+      const rows = (facts ?? []) as Array<{ field: string; value: unknown }>
+      const voucherTexts = rows
+        .filter((f) => f.field === 'voucher_text')
+        .flatMap((f) => (Array.isArray(f.value) ? f.value.filter((v): v is string => typeof v === 'string') : []))
+      let plan = planRegistryQueries({ legalName: p.legal_name, displayName: p.display_name, voucherTexts })
+
+      // A bank memo the rules could not anchor: the model reads it once,
+      // the reading is kept as a fact with source 'model', and the search
+      // runs on the reading. A rebuilt queue does not repeat the call. Same
+      // gate as every other model call on the company's data: the AI
+      // capability, which the company holds by plan and can switch off.
+      if (needsModelReading(plan) && aiNameAvailable() && (await hasCapability(supabase, companyId, CAPABILITY.ai))) {
+        const cached = rows.find((f) => f.field === 'ai_name')?.value as Partial<AiNameReading> | undefined
+        let reading: AiNameReading | null =
+          cached && typeof cached === 'object' && 'name' in cached
+            ? { name: cached.name ?? null, country: cached.country ?? null, vatNumber: cached.vatNumber ?? null, confidence: cached.confidence ?? 'low', model: cached.model ?? '' }
+            : null
+        if (!reading) {
+          reading = await readCounterpartName([p.display_name, ...voucherTexts])
+          if (reading) {
+            const { error: recordError } = await supabase.rpc('record_party_facts', {
+              p_company_id: companyId,
+              p_user_id: user.id,
+              p_party_id: id,
+              p_source: 'model',
+              p_facts: [{ field: 'ai_name', value: reading, reference: { model: reading.model, texts: voucherTexts.length } }],
+              p_fetched_at: new Date().toISOString(),
+            })
+            if (recordError) log.warn('record_party_facts (model reading) failed', { partyId: id, message: recordError.message })
+          }
+        }
+        if (reading?.name) {
+          aiRead = { name: reading.name, country: reading.country }
+          const readPlan = planRegistryQueries({ legalName: reading.name, displayName: p.display_name, voucherTexts: [] })
+          plan =
+            reading.country && reading.country !== 'SE' && !readPlan.candidates.some((c) => c.source === 'legal_form' && !c.foreign)
+              ? { queries: [], foreign: { name: reading.name, country: reading.country }, candidates: readPlan.candidates }
+              : readPlan
+        }
+      }
       queries = plan.queries
       foreign = plan.foreign
     }
@@ -68,6 +108,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         candidates: [],
         queries: [],
         foreign,
+        aiRead,
       }
       return NextResponse.json({ data: empty })
     }
@@ -79,7 +120,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         last = await client.searchByName(q)
         if (last.candidates.length > 0 || last.truncated) break
       }
-      const result: RegistryCandidatesResult = { ...(last as ScbSearchResult), queries, foreign }
+      const result: RegistryCandidatesResult = { ...(last as ScbSearchResult), queries, foreign, aiRead }
       return NextResponse.json({ data: result })
     } catch (err) {
       log.warn('scb search failed', { partyId: id, status: err instanceof ScbApiError ? err.status : undefined, message: err instanceof Error ? err.message : String(err) })
