@@ -60,17 +60,23 @@ export const suggestionsFromBooks = env.test(
     expect(period, "onboarding opened a fiscal year for the current calendar year").toHaveLength(1);
     const periodId = period[0]!.id.unwrap();
 
+    // Entry and lines in one statement: the ledger's balance check is a
+    // deferred constraint, so an entry that commits without its lines is
+    // rejected as having zero total.
     let n = 0;
     for (const v of VOUCHERS) {
       n += 1;
-      const entry = await db.sql<{ id: string }>`
-        insert into public.journal_entries
-          (user_id, company_id, fiscal_period_id, voucher_number, voucher_series, entry_date, description, source_type, status)
-        values (${userId}, ${companyId}, ${periodId}, ${n}, 'A', ${v.date}::date, ${v.description}, 'manual', 'posted')
-        returning id`;
-      const id = entry[0]!.id.unwrap();
-      await db.sql`insert into public.journal_entry_lines (journal_entry_id, account_number, debit_amount, credit_amount) values (${id}, ${v.account}, ${v.amount}, 0)`;
-      await db.sql`insert into public.journal_entry_lines (journal_entry_id, account_number, debit_amount, credit_amount) values (${id}, '1930', 0, ${v.amount})`;
+      await db.sql`
+        with e as (
+          insert into public.journal_entries
+            (user_id, company_id, fiscal_period_id, voucher_number, voucher_series, entry_date, description, source_type, status)
+          values (${userId}, ${companyId}, ${periodId}, ${n}, 'A', ${v.date}::date, ${v.description}, 'manual', 'posted')
+          returning id
+        )
+        insert into public.journal_entry_lines (journal_entry_id, account_number, debit_amount, credit_amount)
+        select e.id, ${v.account}, ${v.amount}, 0 from e
+        union all
+        select e.id, '1930', 0, ${v.amount} from e`;
     }
 
     // First visit: the queue builds itself from the books, no button.
