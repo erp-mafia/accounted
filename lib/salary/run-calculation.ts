@@ -542,7 +542,7 @@ export async function runSalaryCalculation(
         item_type: itemType,
         description: r.description,
         quantity: 1,
-        amount: Math.round(r.amount * 100) / 100,
+        amount: roundOre(r.amount),
         is_taxable: flags.is_taxable,
         is_avgift_basis: flags.is_avgift_basis,
         is_vacation_basis: flags.is_vacation_basis,
