@@ -124,12 +124,12 @@ function SuggestionsPage() {
     setDossierReload((k) => k + 1)
   }, [])
 
-  // First visit for a company whose books name counterparts nobody has
-  // registered: build the queue right away instead of asking for a click
-  // whose effect nobody could guess. Suggestions only, reversible.
+  // The books name counterparts the queue has not seen yet: build the
+  // suggestions right away instead of asking for a click whose effect nobody
+  // could guess. Once per visit, suggestions only, reversible.
   useEffect(() => {
     if (!register || autoRan.current || !canWrite || debounced) return
-    if (register.counts.suggested === 0 && register.counts.observed > 0) {
+    if (register.counts.observed > 0) {
       autoRan.current = true
       void refreshSuggestions(true)
     }
@@ -163,7 +163,9 @@ function SuggestionsPage() {
     setRefreshing(true)
     try {
       const summary = await post<{ created: number; attached: number }>('/api/parties/suggest')
-      if (auto) toast({ title: t('auto_created_title', { count: summary.created }), description: t('auto_created_description') })
+      if (auto) {
+        if (summary.created > 0) toast({ title: t('auto_created_title', { count: summary.created }), description: t('auto_created_description') })
+      }
       else toast({ title: t('refreshed_title'), description: t('refreshed_description', { created: summary.created, attached: summary.attached }) })
       reload()
     } catch {

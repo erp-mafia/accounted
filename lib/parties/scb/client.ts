@@ -65,7 +65,7 @@ export function nameQuery(raw: string): string {
     .replace(/^(levfakt|levfkt|lev\.?fakt\.?|leverantörsfaktura från\s*\d*|leverantörsfaktura|levbet\.?|kundbet\.?|kundfaktura|faktura från|faktura|kvitto|utgift|inköp)\s+/i, '')
     .replace(/[(),]/g, ' ')
     .replace(/\b\d{1,6}\b/g, ' ')
-    .replace(/\s+(ab|aktiebolag|hb|kb|publ|\(publ\))\.?\s*$/i, '')
+    .replace(/(\s+(?:ab|aktiebolag|hb|kb|publ|\(publ\)))+\.?\s*$/i, '')
     .replace(/'/g, '')
     .replace(/\s+/g, ' ')
     .trim()

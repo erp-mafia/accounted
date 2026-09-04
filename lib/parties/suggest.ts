@@ -18,6 +18,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { coreKey, displayNameFromVoucherText } from './ledger-key'
+import { extractNameCandidates, extractVatNumbers } from './name-extract'
 import { getObservedParties, type ObservedParty } from './observed'
 
 export interface IdentityEvidence {
@@ -105,12 +106,45 @@ export interface BuildResult {
   skipped: SuggestionSkip[]
 }
 
-function pickName(observed: ObservedParty, evidence: LedgerKeyEvidence | undefined): { display: string; legal?: string } {
+interface PickedName {
+  display: string
+  legal?: string
+  /** ISO 3166-1 alpha-2 read out of the voucher text, when it says. */
+  country?: string
+  /** The text points abroad: foreign legal form, country word or VAT prefix. */
+  foreign?: boolean
+}
+
+/** The voucher texts under a key, most common first, at most three. */
+function voucherTexts(observed: ObservedParty): string[] {
+  const out: string[] = []
+  for (const t of [observed.name, ...(observed.variants ?? [])]) {
+    const v = (t ?? '').trim()
+    if (v && !out.includes(v)) out.push(v)
+    if (out.length === 3) break
+  }
+  return out
+}
+
+function pickName(observed: ObservedParty, evidence: LedgerKeyEvidence | undefined): PickedName {
   // A printed supplier name from a document beats the voucher text, which is
   // upper-cased, truncated and prefixed by whatever the source system did.
   const printed = evidence?.names[0]?.name
   if (printed && printed.length >= 2) return { display: printed, legal: printed }
-  return { display: displayNameFromVoucherText(observed.name || observed.key) }
+  // Assistant-written descriptions bury the company in a sentence; a legal
+  // form or a country word in the text names it better than the head does.
+  const candidates = voucherTexts(observed).flatMap(extractNameCandidates)
+  const anchored =
+    candidates.find((c) => c.source === 'legal_form' && !c.foreign) ??
+    candidates.find((c) => c.source === 'legal_form') ??
+    candidates.find((c) => c.source === 'country')
+  if (anchored) return { display: anchored.name, ...(anchored.country ? { country: anchored.country } : {}), foreign: anchored.foreign }
+  const head = candidates.find((c) => c.source === 'head')
+  return {
+    display: displayNameFromVoucherText(observed.name || observed.key),
+    ...(head?.country ? { country: head.country } : {}),
+    ...(head?.foreign ? { foreign: true } : {}),
+  }
 }
 
 function identitiesFrom(evidence: LedgerKeyEvidence | undefined): SuggestionIdentity[] {
@@ -197,11 +231,30 @@ export function buildSuggestions(input: {
     if (name.legal) {
       facts.push({ field: 'legal_name', value: name.legal, source: 'document', reference: { docs: ev?.names[0]?.n ?? 0 } })
     }
+    // The texts themselves, so the registry picker can read a name out of
+    // them later without scanning the ledger again.
+    const texts = voucherTexts(o)
+    if (texts.length) {
+      facts.push({ field: 'voucher_text', value: texts, source: 'ledger', reference: { occurrences: o.occurrences } })
+    }
+    if (name.country) {
+      facts.push({ field: 'country', value: name.country, source: 'ledger', reference: { occurrences: o.occurrences } })
+    }
+    // A single foreign VAT number written in the text is the counterpart's
+    // (the company's own SE number is what people note next to it). Only on
+    // the expense side: a supplier's VAT number is informational, while a
+    // customer's steers reverse charge on outgoing invoices and must come
+    // from a document or the person, never from a text heuristic.
+    const textVats = [...new Set(texts.flatMap(extractVatNumbers).filter((v) => v.country !== 'SE').map((v) => v.vat))]
+    const textVat = textVats.length === 1 && o.expense_sek >= o.revenue_sek && o.expense_sek > 0 ? textVats[0] : undefined
+    if (textVat && !ev?.vat_numbers[0]?.vat) {
+      facts.push({ field: 'vat_number', value: textVat, source: 'ledger', reference: { occurrences: o.occurrences } })
+    }
 
     // Identities only when the hard key is unambiguous: a key that mixes two
     // org numbers would otherwise attach one supplier's bankgiro to another.
     const identities = orgs.length > 1 ? [] : identitiesFrom(ev)
-    const vat = ev?.vat_numbers[0]?.vat
+    const vat = ev?.vat_numbers[0]?.vat ?? textVat
 
     items.push({
       key: o.key,
