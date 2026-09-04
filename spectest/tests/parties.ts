@@ -154,7 +154,7 @@ export const pickInScb = env.test(
     expect(calls[0]?.value).toBe("Visma Spcs");
     expect(calls[1]?.endpoint).toBe("HamtaForetag");
     expect(calls[2]?.variable).toBe("OrgNr (10 siffror)");
-    expect(calls[2]?.value).toBe("165562529155");
+    expect(calls[2]?.value).toBe("5562529155");
 
     // The dossier shows the register's facts under one source line.
     await b.getByRole("button", { name: "Öppna Visma Spcs AB", exact: true }).click();
