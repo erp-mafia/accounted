@@ -6568,6 +6568,16 @@
     "status_overdue_days": "Overdue {days} d",
     "status_paid_date": "Paid {date}",
     "status_picker_aria": "Filter by status",
+    "group_picker_aria": "Group invoices",
+    "group_by": "Group",
+    "group_status": "Status",
+    "group_customer": "Customer",
+    "group_month": "Month",
+    "group_none": "No grouping",
+    "group_unknown": "Missing",
+    "section_drafts": "Drafts ({count})",
+    "section_awaiting": "Awaiting payment ({count})",
+    "section_settled": "Paid and settled ({count})",
     "coverage_notice": "Invoices before {date} may exist only as posted journal entries and are not shown in this list."
   },
   "notices": {

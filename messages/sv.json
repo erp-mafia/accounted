@@ -6568,6 +6568,16 @@
     "status_overdue_days": "Förfallen {days} dgr",
     "status_paid_date": "Betald {date}",
     "status_picker_aria": "Filtrera på status",
+    "group_picker_aria": "Gruppera fakturor",
+    "group_by": "Gruppera",
+    "group_status": "Status",
+    "group_customer": "Kund",
+    "group_month": "Månad",
+    "group_none": "Ingen gruppering",
+    "group_unknown": "Saknas",
+    "section_drafts": "Utkast ({count})",
+    "section_awaiting": "Väntar på betalning ({count})",
+    "section_settled": "Betalda och avslutade ({count})",
     "coverage_notice": "Fakturor före {date} kan ligga som bokförda verifikat och visas inte i den här listan."
   },
   "notices": {
