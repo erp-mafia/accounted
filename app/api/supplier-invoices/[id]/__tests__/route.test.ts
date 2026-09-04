@@ -7,7 +7,7 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -23,7 +23,7 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
-import { DELETE } from '../route'
+import { DELETE, GET } from '../route'
 
 describe('DELETE /api/supplier-invoices/[id]', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
@@ -217,5 +217,67 @@ describe('DELETE /api/supplier-invoices/[id]', () => {
 
     expect(status).toBe(200)
     expect(body.success).toBe(true)
+  })
+})
+
+describe('GET /api/supplier-invoices/[id]', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
+  })
+
+  function getRequest(id: string) {
+    return GET(
+      createMockRequest(`/api/supplier-invoices/${id}`, { method: 'GET' }),
+      createMockRouteParams({ id }),
+    )
+  }
+
+  it('returns 401 when not authenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: mockSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    expect((await getRequest('si-1')).status).toBe(401)
+  })
+
+  it('returns 404 when the invoice does not exist', async () => {
+    enqueue({ data: null, error: { message: 'not found' } })
+    expect((await getRequest('missing')).status).toBe(404)
+  })
+
+  it('hydrates the credited original of a credit note with a company-scoped lookup', async () => {
+    // credited_invoice_id is a self-reference, and a PostgREST embed on it
+    // resolved to the one-to-many side (an empty array), which the detail
+    // page rendered as "Krediterar: Ankomst #" with no number.
+    enqueue({
+      data: { id: 'cn-1', is_credit_note: true, credited_invoice_id: 'si-orig', items: [], payments: [] },
+      error: null,
+    })
+    enqueue({ data: { id: 'si-orig', supplier_invoice_number: '528285626420', arrival_number: 4 }, error: null })
+
+    const { status, body } = await parseJsonResponse(await getRequest('cn-1'))
+    expect(status).toBe(200)
+    expect(body.data.credited_original).toEqual({
+      id: 'si-orig',
+      supplier_invoice_number: '528285626420',
+      arrival_number: 4,
+    })
+    const eqCalls = findCalls('supplier_invoices', 'eq')
+    expect(eqCalls).toContainEqual(['id', 'si-orig'])
+    expect(eqCalls.filter((c) => c[0] === 'company_id')).toHaveLength(2)
+  })
+
+  it('leaves credited_original null on an ordinary invoice without a second query', async () => {
+    enqueue({ data: { id: 'si-1', is_credit_note: false, credited_invoice_id: null, items: [], payments: [] }, error: null })
+
+    const { status, body } = await parseJsonResponse(await getRequest('si-1'))
+    expect(status).toBe(200)
+    expect(body.data.credited_original).toBeNull()
+    expect(mockSupabase.from).toHaveBeenCalledTimes(1)
   })
 })

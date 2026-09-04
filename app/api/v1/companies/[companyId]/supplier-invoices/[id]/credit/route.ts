@@ -26,6 +26,10 @@ import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
+import {
+  SUPPLIER_CREDIT_NOTE_STATUS,
+  buildSupplierCreditNoteRow,
+} from '@/lib/supplier-invoices/credit-note'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events'
@@ -250,7 +254,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             supplier_invoice_number: `KREDIT-${typed.supplier_invoice_number}`,
             invoice_date: today,
             due_date: today,
-            status: 'registered',
+            status: SUPPLIER_CREDIT_NOTE_STATUS,
             currency: typed.currency,
             exchange_rate: typed.exchange_rate,
             subtotal: typed.subtotal,
@@ -281,32 +285,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // Insert credit-note row.
     const { data: creditNote, error: creditErr } = await ctx.supabase
       .from('supplier_invoices')
-      .insert({
-        user_id: ctx.userId,
-        company_id: ctx.companyId!,
-        supplier_id: typed.supplier_id,
-        arrival_number: arrivalNum,
-        supplier_invoice_number: `KREDIT-${typed.supplier_invoice_number}`,
-        invoice_date: today,
-        due_date: today,
-        status: 'registered',
-        currency: typed.currency,
-        exchange_rate: typed.exchange_rate,
-        vat_treatment: typed.vat_treatment,
-        reverse_charge: typed.reverse_charge,
-        subtotal: typed.subtotal,
-        subtotal_sek: typed.subtotal_sek,
-        vat_amount: typed.vat_amount,
-        vat_amount_sek: typed.vat_amount_sek,
-        total: typed.total,
-        total_sek: typed.total_sek,
-        remaining_amount: 0,
-        is_credit_note: true,
-        credited_invoice_id: typed.id,
-        // Copy the original's dimension bag so the credit-note verifikat nets
-        // against the same dimension cells in reports (dimensions PR7).
-        default_dimensions: typed.default_dimensions ?? {},
-      })
+      .insert(
+        buildSupplierCreditNoteRow(typed, {
+          userId: ctx.userId,
+          companyId: ctx.companyId!,
+          arrivalNumber: arrivalNum,
+          date: today,
+        }),
+      )
       .select(SI_RESPONSE_COLUMNS)
       .single()
 
