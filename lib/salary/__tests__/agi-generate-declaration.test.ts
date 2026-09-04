@@ -34,6 +34,7 @@ const RUN = {
   status: 'approved',
   period_year: 2026,
   period_month: 6,
+  payment_date: '2026-06-25',
   total_gross: 55000,
   total_tax: 12000,
   calculation_params: {},
@@ -123,6 +124,87 @@ const ARGS = {
 beforeEach(() => {
   vi.clearAllMocks()
   eventBus.clear()
+})
+
+describe('generateAgiDeclaration: redovisningsperiod follows the payout month (#2191)', () => {
+  it('declares an August run paid 25 September under 202609, in the XML and the stored row', async () => {
+    const { supabase, enqueueMany, findCall, findCalls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { ...RUN, period_month: 8, payment_date: '2026-09-25' } }, // salary_runs select
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [REGULAR_ROW] },
+      { data: [] }, // salary_absence_days
+      { data: null }, // agi_declarations maybeSingle (first generation)
+      { data: { id: 'agi-1' } }, // agi_declarations insert
+      { data: null }, // salary_runs update
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.periodYear).toBe(2026)
+    expect(result.periodMonth).toBe(9)
+    expect(result.xml).toContain('<gem:RedovisningsPeriod faltkod="006">202609</gem:RedovisningsPeriod>')
+
+    // The lookup and the stored declaration key on the payout month too, so
+    // the kvittens and skattekonto flows (which read agi_declarations) agree
+    // with what Skatteverket answers for.
+    const eqCalls = findCalls('agi_declarations', 'eq')
+    expect(eqCalls).toContainEqual(['period_month', 9])
+    expect(findCall('agi_declarations', 'insert')).toEqual([
+      expect.objectContaining({ period_year: 2026, period_month: 9, salary_run_id: 'run-1' }),
+    ])
+  })
+
+  it('refuses to overwrite another live run declared for the same payout month', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { ...RUN, period_month: 8, payment_date: '2026-09-25' } },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [REGULAR_ROW] },
+      { data: [] },
+      { data: { id: 'agi-other', salary_run_id: 'run-2' } }, // 202609 already declared by run-2
+      { data: { id: 'run-2', status: 'booked', period_year: 2026, period_month: 9 } },
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.code).toBe('AGI_PERIOD_CONFLICT')
+    expect(result.details).toMatchObject({ period: '2026-09', other_salary_run_id: 'run-2' })
+    expect(findCall('agi_declarations', 'update')).toBeUndefined()
+    expect(findCall('agi_declarations', 'insert')).toBeUndefined()
+  })
+
+  it('still treats a corrected run\'s declaration as the one to replace', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { ...RUN, period_month: 8, payment_date: '2026-09-25', is_correction: true, corrects_run_id: 'run-0' } },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [REGULAR_ROW] },
+      { data: [] },
+      { data: { id: 'agi-0', salary_run_id: 'run-0' } }, // declared by the run this one corrects
+      { data: null }, // agi_declarations update
+      { data: null }, // salary_runs update
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.isCorrection).toBe(true)
+    expect(findCall('agi_declarations', 'update')).toEqual([
+      expect.objectContaining({ is_correction: true, salary_run_id: 'run-1' }),
+    ])
+  })
 })
 
 describe('generateAgiDeclaration: F-skatt payee (FK131 only, issue #315)', () => {

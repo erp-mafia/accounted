@@ -184,6 +184,15 @@ describe('processOverdueReminders: credit-note filter', () => {
     expect(eqTerminal).toBeUndefined()
   })
 
+  it('only considers fakturor: proformas, delivery notes and quotes never get a påminnelse', async () => {
+    await processOverdueReminders()
+
+    const docTypeFilter = chainCalls.find(
+      (c) => c.method === 'eq' && c.args[0] === 'document_type',
+    )
+    expect(docTypeFilter?.args[1]).toBe('invoice')
+  })
+
   it('includes overdue in the allowlist so level-2 and level-3 reminders re-fire after the first reminder flips status', async () => {
     await processOverdueReminders()
     const inStatus = chainCalls.find(

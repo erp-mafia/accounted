@@ -25,13 +25,16 @@ describe('hasRequiredSellerVatNumber', () => {
     ).toBe(true)
   })
 
-  it('exempts credit notes, proformas, and delivery notes', () => {
+  it('exempts credit notes, proformas, quotes, and delivery notes', () => {
     const broken = { vat_registered: true, vat_number: null }
     expect(
       hasRequiredSellerVatNumber(broken, { credited_invoice_id: 'inv-0', document_type: 'invoice' }),
     ).toBe(true)
     expect(
       hasRequiredSellerVatNumber(broken, { credited_invoice_id: null, document_type: 'proforma' }),
+    ).toBe(true)
+    expect(
+      hasRequiredSellerVatNumber(broken, { credited_invoice_id: null, document_type: 'quote' }),
     ).toBe(true)
     expect(
       hasRequiredSellerVatNumber(broken, { credited_invoice_id: null, document_type: 'delivery_note' }),

@@ -683,7 +683,11 @@ export async function detectLedgerDuplicateVoucher(
       .select('id, date, amount, currency, cash_account_id, journal_entry_id')
       .eq('company_id', companyId)
       .in('journal_entry_id', entryIds),
-    supabase.from('invoice_payments').select('journal_entry_id').eq('company_id', companyId).in('journal_entry_id', entryIds),
+    supabase
+      .from('invoice_payments')
+      .select('journal_entry_id, transaction_id')
+      .eq('company_id', companyId)
+      .in('journal_entry_id', entryIds),
   ])
 
   type LinkedTxRow = {
@@ -712,9 +716,14 @@ export async function detectLedgerDuplicateVoucher(
     arr.push(r)
     linkedTxByEntry.set(r.journal_entry_id, arr)
   }
+  // Only a payment row that carries a bank transaction means "reconciled to
+  // a bank line". A row with transaction_id NULL is a manual / Stripe
+  // settlement (#2019): the bank line for that money is still to come, and
+  // this voucher must stay a twin candidate so the user is offered a link
+  // instead of a blind second booking.
   const paymentLinked = new Set<string>()
-  for (const r of (payLinks ?? []) as { journal_entry_id: string | null }[]) {
-    if (r.journal_entry_id) paymentLinked.add(r.journal_entry_id)
+  for (const r of (payLinks ?? []) as { journal_entry_id: string | null; transaction_id: string | null }[]) {
+    if (r.journal_entry_id && r.transaction_id) paymentLinked.add(r.journal_entry_id)
   }
 
   const survivors: { line: (typeof candidates)[number]; twinTransactionId: string | null }[] = []

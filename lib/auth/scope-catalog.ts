@@ -16,8 +16,8 @@ export const API_KEY_SCOPES = {
   'customers:write':    { label: 'Kunder: skriv',       description: 'Skapa och uppdatera kunder' },
   'articles:read':      { label: 'Artiklar: läs',       description: 'Lista artiklar i artikelregistret' },
   'articles:write':     { label: 'Artiklar: skriv',     description: 'Skapa och uppdatera artiklar' },
-  'invoices:read':      { label: 'Fakturor: läs',       description: 'Lista fakturor' },
-  'invoices:write':     { label: 'Fakturor: skriv',     description: 'Skapa, skicka, markera betald/skickad' },
+  'invoices:read':      { label: 'Fakturor: läs',       description: 'Lista fakturor och kundorder' },
+  'invoices:write':     { label: 'Fakturor: skriv',     description: 'Skapa, skicka, markera betald/skickad; kundorder (skapa, bekräfta, leverera, fakturera)' },
   'suppliers:read':     { label: 'Leverantörer: läs',   description: 'Lista leverantörer och leverantörsfakturor, hitta verifikat-kandidater' },
   'suppliers:write':    { label: 'Leverantörer: skriv', description: 'Skapa leverantörer; godkänn, kreditera, betal-länka och hantera leverantörsfakturor' },
   'reports:read':       { label: 'Rapporter: läs',      description: 'Kontoplan, huvudbok, balansräkning, resultaträkning, moms, KPI, reskontra, perioder, bankavstämning, SIE-export' },
@@ -260,6 +260,14 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_send_invoice:                    'invoices:write',
   gnubok_mark_invoice_as_paid:            'invoices:write',
   gnubok_mark_invoice_as_sent:            'invoices:write',
+  // Kundorder (sales orders): the pre-invoice document. Reads and staged
+  // writes ride the invoice scopes (an order exists only to become one).
+  gnubok_list_sales_orders:               'invoices:read',
+  gnubok_get_sales_order:                 'invoices:read',
+  gnubok_create_sales_order:              'invoices:write',
+  gnubok_transition_sales_order:          'invoices:write',
+  gnubok_register_sales_order_delivery:   'invoices:write',
+  gnubok_create_invoice_from_sales_order: 'invoices:write',
   // Recurring invoice schedules (staged template writes; no send/book at commit)
   gnubok_list_recurring_schedules:        'invoices:read',
   gnubok_create_recurring_schedule:       'invoices:write',
@@ -367,6 +375,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_link_supplier_invoice_to_voucher: 'suppliers:write',
   // Invoice conversion + crediting
   gnubok_convert_invoice:                 'invoices:write',
+  gnubok_set_quote_status:                'invoices:write',
   gnubok_credit_invoice:                  'invoices:write',
   // Phase 4: arbitrary-line bookkeeping primitives (high-risk, always staged)
   gnubok_create_voucher:                  'bookkeeping:write',

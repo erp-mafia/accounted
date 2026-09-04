@@ -313,10 +313,11 @@ export default function EmployeeTaxCard({
                 percentage for a bounded period. The engine only applies it when
                 BOTH dates are set, so both are required as soon as the user
                 edits the beslut (native `required`: both hosts render this
-                inside a <form>). A seeded beslut is never blocked on: the API
-                keeps valid_to optional, so a row stored that way must stay
-                editable elsewhere. The table fields stay visible above: they
-                apply again once the beslut expires. */}
+                inside a <form>). A seeded beslut is never blocked on: rows
+                stored before #2058 may still lack valid_to (every write path
+                now requires it), and such a row must stay editable elsewhere.
+                The table fields stay visible above: they apply again once the
+                beslut expires. */}
             <div className="space-y-2">
               <Label htmlFor="jamkning_percentage">
                 <InfoTooltip content={t('tax_jamkning_tooltip')}>

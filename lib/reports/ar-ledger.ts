@@ -83,6 +83,8 @@ export async function generateARLedger(
         .from('invoices')
         .select('*, customer:customers(id, name)')
         .eq('company_id', companyId)
+        // Proformas, delivery notes and quotes are never receivables.
+        .eq('document_type', 'invoice')
       query = isHistorical
         ? query.in('status', ['sent', 'overdue', 'credited', 'paid']).lte('invoice_date', asOfDate!)
         : query.in('status', ['sent', 'overdue', 'credited'])

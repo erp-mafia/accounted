@@ -4,10 +4,11 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { PRIVATE_NO_STORE_HEADERS, privateNoStore } from '@/lib/api/private-no-store'
 import { InvoicePDF, type InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
 import { getVatRules } from '@/lib/invoices/vat-rules'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { contentDisposition } from '@/lib/api/content-disposition'
-import type { InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
+import type { InvoiceItem, Customer, CompanySettings, Currency, InvoiceDocumentType } from '@/types'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { computeDeduction, computeInvoiceDeductionTotal, type DeductionType } from '@/lib/invoices/rot-rut-rules'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
@@ -81,9 +82,9 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
 }) => {
   const body = await request.json()
   const {
-    customer_id, invoice_date, due_date, delivery_date, currency, items, your_reference, our_reference,
+    customer_id, invoice_date, due_date, delivery_date, valid_until, currency, items, your_reference, our_reference,
     invoice_marking, notes,
-    document_type, invoice_number, payment_link_url,
+    document_type, invoice_number, payment_link_url, payment_cash_account_id,
     deduction_personnummer, deduction_housing_designation, deduction_apartment_number, deduction_brf_org_number,
   } = body
 
@@ -124,10 +125,24 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
     )
   }
 
+  // The chosen bank account (draft not yet saved): same validation as the
+  // create route, so the preview shows what the saved invoice will print.
+  const payeeChoice = await resolveInvoicePayeeChoice(
+    supabase,
+    companyId,
+    requestedCurrency as Currency,
+    typeof payment_cash_account_id === 'string' && payment_cash_account_id ? payment_cash_account_id : null,
+  )
+  if (!payeeChoice.ok) {
+    return privateNoStore(errorResponseFromCode(payeeChoice.code, log, { requestId, details: payeeChoice.details }))
+  }
+  const previewPayee = payeeChoice.fields.payment_details
+
   if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, {
     currency: requestedCurrency,
     document_type: docType,
     credited_invoice_id: null,
+    payment_details: previewPayee,
   })) {
     return privateNoStore(errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
       requestId,
@@ -202,7 +217,7 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
   }
 
   // VAT rules are customer-type-driven and only know the customer side.
-  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
+  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
 
   const isDeliveryNote = docType === 'delivery_note'
 
@@ -304,6 +319,11 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
     invoice_date: invoice_date || new Date().toISOString().split('T')[0],
     due_date: due_date || new Date().toISOString().split('T')[0],
     delivery_date: delivery_date || null,
+    // Quotes (offert): the expiry the PDF prints as "Giltig till". The write
+    // path mirrors it into due_date, so fall back to that for the preview.
+    valid_until: docType === 'quote'
+      ? ((typeof valid_until === 'string' && valid_until.trim()) || due_date || null)
+      : null,
     status: 'draft',
     currency: requestedCurrency,
     exchange_rate: null,
@@ -340,7 +360,7 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(
       company as CompanySettings,
       previewInvoice.currency,
-      { paymentAccountRequired: invoiceRequiresPaymentAccount(previewInvoice) },
+      { paymentAccountRequired: invoiceRequiresPaymentAccount(previewInvoice), payee: previewPayee },
     )
     const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, previewInvoice)
     const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(previewInvoice)

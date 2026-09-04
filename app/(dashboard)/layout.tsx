@@ -400,6 +400,8 @@ export default async function DashboardLayout({
   // mechanism as paysSalaries: UI gate only, never load-bearing for
   // correctness (dimensions plan §2).
   const dimensionsEnabled = settings?.dimensions_enabled ?? false
+  // Kundorder visibility: same UI-only gate as dimensionsEnabled.
+  const salesOrdersEnabled = settings?.sales_orders_enabled ?? false
   // Körjournal visibility: the settings toggle is the normal way in, existing
   // trips force the row on so already-created data stays reachable.
   const hasMileage = (settings?.mileage_enabled ?? false) || hasMileageTrips
@@ -586,6 +588,7 @@ export default async function DashboardLayout({
             entityType={entityType}
             paysSalaries={paysSalaries}
             dimensionsEnabled={dimensionsEnabled}
+            salesOrdersEnabled={salesOrdersEnabled}
             hasWebshop={hasWebshop}
             hasMileage={hasMileage}
             isSandbox={isSandbox}

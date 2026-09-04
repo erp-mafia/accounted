@@ -9,7 +9,13 @@
  * Usage:
  *   npx tsx scripts/issue-connector-key.ts --org 5561234567 --name "Byrå AB" \
  *       --instance https://bokforing.byra.se [--months 12] \
- *       [--scopes bank_sync,skatteverket,org_lookup,migration] [--notes "..."] --confirm
+ *       [--scopes bank_sync,skatteverket,org_lookup,migration,peppol] \
+ *       [--peppol-participants 5561234567,7350000000000] [--notes "..."] --confirm
+ *
+ * --peppol-participants lists the participant identifiers (org numbers, GLNs)
+ * the licensee may register and send as through Arcim's Peppol access point;
+ * the --org number is always allowed. Only issue the peppol scope where the
+ * Qvalia brokering terms permit it.
  *
  * Reads .env.local (which points at PRODUCTION in this repo: the script
  * refuses to write without --confirm and prints the target host first).
@@ -41,6 +47,11 @@ async function main(): Promise<void> {
   const scopes = (arg('scopes') ?? 'bank_sync,skatteverket').split(',').map((s) => s.trim()).filter(Boolean)
   const bankPerCompany = Number(arg('bank-connections-per-company') ?? '1')
   const skvPerCompany = Number(arg('skv-connections-per-company') ?? '1')
+  const peppolPerCompany = Number(arg('peppol-connections-per-company') ?? '1')
+  const peppolParticipants = (arg('peppol-participants') ?? '')
+    .split(',')
+    .map((v) => v.replace(/\s/g, ''))
+    .filter(Boolean)
   const syncMinInterval = Number(arg('sync-min-interval') ?? '0')
   const notes = arg('notes') ?? null
 
@@ -56,9 +67,15 @@ async function main(): Promise<void> {
   if (!Number.isInteger(months) || months <= 0 || months > 120) problems.push('--months must be an integer 1..120')
   const unknown = scopes.filter((s) => !(CONNECTOR_CAPABILITIES as readonly string[]).includes(s))
   if (unknown.length) problems.push(`unknown scopes: ${unknown.join(', ')} (allowed: ${CONNECTOR_CAPABILITIES.join(', ')})`)
-  for (const [name, v] of [['bank-connections-per-company', bankPerCompany], ['skv-connections-per-company', skvPerCompany]] as const) {
+  for (const [name, v] of [
+    ['bank-connections-per-company', bankPerCompany],
+    ['skv-connections-per-company', skvPerCompany],
+    ['peppol-connections-per-company', peppolPerCompany],
+  ] as const) {
     if (!Number.isFinite(v) || v < 0 || v > 100) problems.push(`--${name} must be 0..100`)
   }
+  const badParticipants = peppolParticipants.filter((v) => !/^[0-9]{6,20}$/.test(v))
+  if (badParticipants.length) problems.push(`--peppol-participants must be digit-only identifiers: ${badParticipants.join(', ')}`)
   if (!Number.isFinite(syncMinInterval) || syncMinInterval < 0) problems.push('--sync-min-interval must be >= 0 seconds')
   if (problems.length) {
     console.error(problems.map((p) => `  x ${p}`).join('\n'))
@@ -78,7 +95,8 @@ async function main(): Promise<void> {
   console.log(`Licensee:  ${name} (${org})`)
   console.log(`Instance:  ${new URL(instance).origin}`)
   console.log(`Scopes:    ${scopes.join(', ')}`)
-  console.log(`Limits:    ${bankPerCompany} bank + ${skvPerCompany} SKV connection(s)/company, min sync interval ${syncMinInterval}s`)
+  console.log(`Limits:    ${bankPerCompany} bank + ${skvPerCompany} SKV + ${peppolPerCompany} Peppol connection(s)/company, min sync interval ${syncMinInterval}s`)
+  console.log(`Peppol:    ${peppolParticipants.length ? peppolParticipants.join(', ') : '(own org number only)'}`)
   console.log(`Period:    until ${periodEnd.toISOString().slice(0, 10)} (${months} months)`)
   if (!flag('confirm')) {
     console.log('\nDry run. Re-run with --confirm to issue the key.')
@@ -101,8 +119,10 @@ async function main(): Promise<void> {
       limits: {
         bank_connections_per_company: Math.floor(bankPerCompany),
         skv_connections_per_company: Math.floor(skvPerCompany),
+        peppol_connections_per_company: Math.floor(peppolPerCompany),
         sync_min_interval_s: Math.floor(syncMinInterval),
       },
+      peppol_participants: peppolParticipants,
       notes,
     })
     .select('id')

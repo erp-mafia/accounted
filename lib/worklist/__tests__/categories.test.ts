@@ -9,6 +9,7 @@ import {
   countReconciliationDue,
   countSuggestedMatches,
   countSupplierInvoicesAwaitingApproval,
+  countUnbookedSkattekontoRows,
   countUnbookedTransactions,
   countVerifikatMissingDocument,
   listSuggestedMatches,
@@ -37,6 +38,25 @@ describe('countUnbookedTransactions', () => {
   it('soft-fails to 0 on query error', async () => {
     enqueue({ error: { message: 'boom' } })
     await expect(countUnbookedTransactions(supabase, COMPANY)).resolves.toBe(0)
+  })
+})
+
+describe('countUnbookedSkattekontoRows', () => {
+  it('counts only settled, unbooked, non-ignored skattekonto rows', async () => {
+    enqueue({ count: 3 })
+    await expect(countUnbookedSkattekontoRows(supabase, COMPANY)).resolves.toBe(3)
+    expect(mockSupabase.from).toHaveBeenCalledWith('skattekonto_transactions')
+    // Same predicate as the Transaktioner inbox: Skatteverket status 'booked'
+    // (upcoming charges have nothing to book), no verifikat, not ignored.
+    const eqCalls = findCalls('skattekonto_transactions', 'eq')
+    expect(eqCalls).toContainEqual(['status', 'booked'])
+    expect(eqCalls).toContainEqual(['is_ignored', false])
+    expect(findCall('skattekonto_transactions', 'is')).toEqual(['journal_entry_id', null])
+  })
+
+  it('soft-fails to 0 on query error', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(countUnbookedSkattekontoRows(supabase, COMPANY)).resolves.toBe(0)
   })
 })
 

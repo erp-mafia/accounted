@@ -225,27 +225,11 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: 'Anteckningen får vara högst 2000 tecken' }, { status: 400 })
     }
 
-    // Kontantprincipen guard (SFL 26 kap): the AGI derives its
-    // redovisningsperiod from period_year/period_month while the verifikat
-    // books on payment_date, so a payment date outside the run's period month
-    // would post the entries in one month and declare them in another. Same
-    // rule as lib/salary/update-run.ts and the v1 PATCH, including the
-    // grandfather clause: a run created with an out-of-period payment date
-    // may still be day-adjusted within that same month.
-    if (typeof updates.payment_date === 'string') {
-      const periodPrefix = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
-      const newMonth = updates.payment_date.slice(0, 7)
-      const currentMonth = String(run.payment_date).slice(0, 7)
-      if (newMonth !== periodPrefix && newMonth !== currentMonth) {
-        return NextResponse.json(
-          {
-            error:
-              'Utbetalningsdagen måste ligga i lönekörningens period: AGI redovisas per utbetalningsmånad.',
-          },
-          { status: 400 },
-        )
-      }
-    }
+    // The payment date may leave the run's period month: the AGI
+    // redovisningsperiod follows payment_date (kontantprincipen, #2191), so a
+    // run for August paid 25 September is declared in September, and the
+    // verifikat books on the same date. Same rule as lib/salary/update-run.ts
+    // and the v1 PATCH.
 
     // Optimistic lock on status='draft': a concurrent step advancing the run
     // (Beräkna → Till granskning in another tab) between the fetch above and

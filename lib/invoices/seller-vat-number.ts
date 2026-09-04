@@ -6,7 +6,7 @@ import type { CompanySettings, Invoice } from '@/types'
  * defective invoice and a defective input-VAT underlag for the buyer, so
  * issuance is gated the same way the payment account is.
  *
- * Proformas and delivery notes are not tax documents. Credit notes are
+ * Proformas, quotes (offert) and delivery notes are not tax documents. Credit notes are
  * exempted deliberately: an ändringsfaktura has its own mandatory-content
  * list (ML 17 kap. 22-23 §§: unambiguous reference to the original, the
  * change, own number and date, negative amounts, VAT per original rate)
@@ -20,6 +20,8 @@ export function invoiceRequiresSellerVatNumber(
   return !invoice.credited_invoice_id
     && invoice.document_type !== 'delivery_note'
     && invoice.document_type !== 'proforma'
+    // A quote is not a faktura under ML 17 kap.: no mandatory-content list applies.
+    && invoice.document_type !== 'quote'
 }
 
 export function hasRequiredSellerVatNumber(

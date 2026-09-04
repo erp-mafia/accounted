@@ -967,6 +967,12 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Counterparties and articles
   { name: 'customers', file: 'customers.json', orderBy: 'created_at' },
   { name: 'suppliers', file: 'suppliers.json', orderBy: 'created_at' },
+  // The party layer above customers and suppliers: identities, facts with
+  // provenance, payment identities and the human decisions that shaped them.
+  { name: 'parties', file: 'parties.json', orderBy: 'created_at' },
+  { name: 'party_facts', file: 'party_facts.json', orderBy: 'recorded_at' },
+  { name: 'party_identities', file: 'party_identities.json', orderBy: 'created_at' },
+  { name: 'party_decisions', file: 'party_decisions.json', orderBy: 'created_at' },
   { name: 'articles', file: 'articles.json', orderBy: 'created_at' },
   // Customer invoicing
   { name: 'invoices', file: 'invoices.json', orderBy: 'invoice_date' },
@@ -1060,10 +1066,22 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Webshop order rows are booking underlag (and carry customer personal
   // data), so they belong in the archive like transactions do.
   { name: 'webshop_orders', file: 'webshop_orders.json', orderBy: 'order_date' },
+  // Kundorder: non-ledger sales documents. Not räkenskapsinformation on
+  // their own, but the provenance of invoices created from them
+  // (invoices.sales_order_id / invoice_items.sales_order_item_id) points
+  // here, so a revisor reading the archive can follow the link.
+  { name: 'sales_orders', file: 'sales_orders.json', orderBy: 'order_date' },
+  // Direct dump (the coverage contract requires it for a table with its own
+  // company_id); the line's currency is the parent order's, one file over,
+  // joined by sales_order_id.
+  { name: 'sales_order_items', file: 'sales_order_items.json', orderBy: 'created_at' },
   { name: 'webshop_store_settings', file: 'webshop_store_settings.json' },
   { name: 'transaction_voucher_links', file: 'transaction_voucher_links.json' },
   { name: 'bank_file_imports', file: 'bank_file_imports.json', orderBy: 'created_at' },
   { name: 'cash_accounts', file: 'cash_accounts.json' },
+  // Which bank account customer invoices pay to, per currency; the payee
+  // fields themselves are columns on cash_accounts one file up.
+  { name: 'invoice_payee_defaults', file: 'invoice_payee_defaults.json' },
   { name: 'mapping_rules', file: 'mapping_rules.json' },
   { name: 'categorization_templates', file: 'categorization_templates.json' },
   { name: 'booking_template_library', file: 'booking_template_library.json' },
@@ -1195,6 +1213,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   // document_attachments when the underlying data is legally removed.
   document_integrity_checks:
     'WORM verification log (SHA-256 recompute outcomes); failures reach the archive via audit_log in revision/behandlingshistorik.json',
+  email_change_requests:
+    'per-user in-flight login-email change claim (migration 20260903083000); gates token re-issue, not räkenskapsinformation',
   event_log: '30-day TTL event bus log',
   extension_data: 'extension runtime state (includes this backup\'s own state)',
   idempotency_keys: 'infrastructure',

@@ -22,7 +22,6 @@ import {
   Menu,
   X,
   HelpCircle,
-  Building2,
   Wallet,
   TrendingUp,
   ClipboardCheck,
@@ -50,6 +49,8 @@ import {
   FolderArchive,
   ShoppingCart,
   Car,
+  ClipboardList,
+  Truck,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { BrandHomeLink } from '@/components/branding/BrandHomeLink'
@@ -88,6 +89,10 @@ interface DashboardNavProps {
   // switched on. Drives visibility of the Kostnadsställen & projekt row:
   // same mechanism as paysSalaries: fetched by the dashboard layout.
   dimensionsEnabled?: boolean
+  // Whether kundorder (company_settings.sales_orders_enabled) is switched on.
+  // Drives visibility of the Kundorder row: same mechanism as
+  // dimensionsEnabled, fetched by the dashboard layout.
+  salesOrdersEnabled?: boolean
   // Whether the company has a webshop hooked up (active WooCommerce/Shopify
   // connection, or existing webshop_orders rows). Drives visibility of the
   // Order row: same mechanism as paysSalaries, fetched by the layout.
@@ -117,6 +122,7 @@ type NavLabelKey =
   | 'invoice_inbox'
   | 'invoices'
   | 'sales_orders'
+  | 'webshop_orders'
   | 'customers'
   | 'articles'
   | 'supplier_invoices'
@@ -183,6 +189,10 @@ interface NavItem {
   // company_settings.dimensions_enabled (UI-visibility gate only; the pages
   // and APIs work regardless, dimensions plan §2).
   requiresDimensions?: boolean
+  // Kundorder surfaces: visible only when the company has opted in via
+  // company_settings.sales_orders_enabled (UI-visibility gate only; the
+  // pages and APIs work regardless).
+  requiresSalesOrders?: boolean
   // Webshop surfaces: visible only when the company has an active
   // WooCommerce/Shopify connection or already-imported order rows.
   // UI-visibility gate only; the page and APIs work regardless.
@@ -225,12 +235,14 @@ const navItems: NavItem[] = [
   { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'arbeta' },
   { href: '/reconciliation', labelKey: 'reconciliation', icon: Scale, group: 'arbeta' },
   { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'arbeta' },
+  // Kundorder: opt-in via the bookkeeping settings toggle (UI gate only).
+  { href: '/sales-orders', labelKey: 'sales_orders', icon: ClipboardList, group: 'arbeta', requiresSalesOrders: true },
   { href: '/invoices', labelKey: 'invoices', icon: ReceiptText, group: 'arbeta' },
   // Webshop orders: visible only for companies that actually have a webshop
   // hooked up (active WooCommerce/Shopify connection or existing order rows).
   // Deliberately NOT capability-gated: a company whose entitlement lapsed
   // must still reach its already-imported orders (accounting underlag).
-  { href: '/orders', labelKey: 'sales_orders', icon: ShoppingCart, group: 'arbeta', requiresWebshop: true, betaBadge: true },
+  { href: '/orders', labelKey: 'webshop_orders', icon: ShoppingCart, group: 'arbeta', requiresWebshop: true, betaBadge: true },
   { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'arbeta' },
   { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'arbeta', employerOnly: true },
   // Körjournal: hidden by default (most companies have no car); shows when
@@ -244,7 +256,7 @@ const navItems: NavItem[] = [
   // row. Anställda is a register (you edit an employee rarely, you run
   // payroll monthly), so it lives here while Löner stays in Arbeta.
   { href: '/customers', labelKey: 'customers', icon: Users, group: 'data', fold: 'register' },
-  { href: '/suppliers', labelKey: 'suppliers', icon: Building2, group: 'data', fold: 'register' },
+  { href: '/suppliers', labelKey: 'suppliers', icon: Truck, group: 'data', fold: 'register' },
   { href: '/articles', labelKey: 'articles', icon: Tag, group: 'data', fold: 'register' },
   { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'data', fold: 'register', employerOnly: true },
   { href: '/assets', labelKey: 'assets', icon: Package, group: 'data', fold: 'register' },
@@ -329,7 +341,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, hasWebshop = false, hasMileage = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, initialUiState }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, hasWebshop = false, hasMileage = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, initialUiState }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
@@ -497,9 +509,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   useEffect(() => {
     if (!company?.id) return
 
-    // Realtime keeps the badges live; a trailing debounce collapses event
-    // bursts (bulk booking / bulk approvals emit one event per row) into a
-    // single SWR revalidation instead of a request stampede.
+    // Realtime keeps the badges live (bank rows, skattekonto rows, staged
+    // operations); a trailing debounce collapses event bursts (bulk booking
+    // / bulk approvals emit one event per row) into a single SWR
+    // revalidation instead of a request stampede.
     let debounce: ReturnType<typeof setTimeout> | null = null
     const queueRefresh = () => {
       if (debounce) clearTimeout(debounce)
@@ -514,6 +527,16 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           event: '*',
           schema: 'public',
           table: 'transactions',
+          filter: `company_id=eq.${company.id}`,
+        },
+        queueRefresh,
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'skattekonto_transactions',
           filter: `company_id=eq.${company.id}`,
         },
         queueRefresh,
@@ -572,6 +595,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     // Dimension surfaces are hidden until the company opts in via the
     // bookkeeping settings toggle (company_settings.dimensions_enabled).
     if (item.requiresDimensions && !dimensionsEnabled) return false
+    if (item.requiresSalesOrders && !salesOrdersEnabled) return false
     // Webshop surfaces are hidden until a store is connected (or order rows
     // already exist from a since-disconnected store).
     if (item.requiresWebshop && !hasWebshop) return false

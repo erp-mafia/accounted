@@ -353,6 +353,60 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
   })
 
+  it('rejects a jämkning percentage without an end date (#2058)', async () => {
+    // The engine applies a beslut only when BOTH dates are set; the API used
+    // to accept this shape and store an inert beslut.
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: SAMPLE_EMPLOYEE, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await createEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees`, {
+        method: 'POST',
+        body: JSON.stringify({
+          ...validBody,
+          jamkning_percentage: 15,
+          jamkning_valid_from: '2026-01-01',
+        }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(JSON.stringify(body.error)).toContain('jamkning_valid_to')
+  })
+
+  it('accepts a complete jämkning beslut on create', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: SAMPLE_EMPLOYEE, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await createEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees`, {
+        method: 'POST',
+        body: JSON.stringify({
+          ...validBody,
+          jamkning_percentage: 15,
+          jamkning_valid_from: '2026-01-01',
+          jamkning_valid_to: '2026-12-31',
+        }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+  })
+
   it('returns 409 EMPLOYEE_DUPLICATE_PERSONNUMMER on 23505 (and does not echo the personnummer)', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
@@ -797,6 +851,87 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id', () => {
     const body = await res.json()
     expect(body.error.code).toBe('VALIDATION_ERROR')
     expect(body.error.details.field).toBe('jamkning_valid_from')
+  })
+
+  it('rejects a jämkning percentage without an end date (merged state, #2058)', async () => {
+    // Percentage + start date only: the engine would never apply it, so the
+    // route must refuse rather than store an inert beslut.
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: SAMPLE_EMPLOYEE, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ jamkning_percentage: 15, jamkning_valid_from: '2026-01-01' }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('jamkning_valid_to')
+    expect(body.error.details.message).toContain('slutdatum')
+  })
+
+  it('rejects clearing only the end date of a stored beslut', async () => {
+    const withJamkning = {
+      ...SAMPLE_EMPLOYEE,
+      jamkning_percentage: 15,
+      jamkning_valid_from: '2026-01-01',
+      jamkning_valid_to: '2026-12-31',
+    }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: withJamkning, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ jamkning_valid_to: null }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.details.field).toBe('jamkning_valid_to')
+  })
+
+  it('leaves a legacy row without valid_to editable in unrelated ways (touched gate)', async () => {
+    const legacy = {
+      ...SAMPLE_EMPLOYEE,
+      jamkning_percentage: 15,
+      jamkning_valid_from: '2026-01-01',
+      jamkning_valid_to: null,
+    }
+    const updated = { ...legacy, monthly_salary: 38000 }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: [{ data: legacy, error: null }, { data: updated, error: null }],
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ monthly_salary: 38000 }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(200)
   })
 
   it('rejects jamkning_valid_to before jamkning_valid_from', async () => {

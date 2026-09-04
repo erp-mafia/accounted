@@ -27,6 +27,16 @@ describe('invoicePdfFilename', () => {
       .toContain('Följesedel nr 42')
   })
 
+  it('labels a quote (offert) with its OF- number', () => {
+    expect(invoicePdfFilename({
+      companyName: 'Oppy',
+      customerName: 'Kund AB',
+      invoiceNumber: 'OF-001',
+      invoiceDate: '2026-09-02',
+      documentType: 'quote',
+    })).toBe('Oppy x Kund AB Offert nr OF-001 20260902.pdf')
+  })
+
   it('keeps drafts identifiable without inventing an invoice number', () => {
     expect(invoicePdfFilename({
       companyName: 'Oppy',

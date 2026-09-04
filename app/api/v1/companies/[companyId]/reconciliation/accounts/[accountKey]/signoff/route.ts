@@ -18,8 +18,8 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { AccountKeySchema, ReconciliationSignoffSchema } from '@/lib/reconciliation/schemas'
 import { listSignoffs } from '@/lib/reconciliation/signoff-store'
 import { ReconciliationSignoffError, signOffAccount } from '@/lib/reconciliation/signoff'
-import { ISO_DATE_RE } from '@/lib/invariants'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { ISO_DATE_RE } from '@/lib/invariants'
 
 const SignoffRequest = z.object({
   through_date: z.string().regex(ISO_DATE_RE),
@@ -186,7 +186,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; accountKey:
               : 'VALIDATION_ERROR'
         return v1ErrorResponseFromCode(v1Code, ctx.log, {
           requestId: ctx.requestId,
-          details: { code: err.code, message: getErrorMessage(err) },
+          details: { code: err.code, message: getErrorMessage(err), ...(err.details ? err.details : {}) },
         })
       }
       return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
