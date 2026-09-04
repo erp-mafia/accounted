@@ -49,7 +49,7 @@ const TRUNCATED = '[TRUNCATED]'
 // violations ("Failing row contains (..., SE45..., Anna Andersson, ...)").
 // No pattern-based redactor catches a payee name, so the payload is dropped
 // whole; the constraint name in `message` is the diagnostic anyway.
-const FAILING_ROW_PATTERN = /Failing row contains \(.*\)/s
+const FAILING_ROW_PATTERN = /Failing row contains \([\s\S]*\)/
 
 /**
  * Postgres/PostgREST error text (message, details, hint) can carry payment
