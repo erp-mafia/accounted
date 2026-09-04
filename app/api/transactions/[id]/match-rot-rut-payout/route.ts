@@ -105,6 +105,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       amount: transaction.amount,
       bankAccount,
       transactionId,
+      // Null for a free row, or the stale pointer of a reversed entry the
+      // guard above let through: the link CAS locks on exactly this value.
+      previousJournalEntryId: transaction.journal_entry_id,
     })
 
     if (!outcome.ok) {

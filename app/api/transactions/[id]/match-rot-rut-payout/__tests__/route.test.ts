@@ -177,7 +177,21 @@ describe('POST /api/transactions/[id]/match-rot-rut-payout', () => {
       amount: 3000,
       bankAccount: '1920',
       transactionId: TX_ID,
+      previousJournalEntryId: null,
     })
+  })
+
+  it('forwards a stale (non-live) pointer so the link CAS locks on it', async () => {
+    enqueue({ data: makeTxRow({ journal_entry_id: 'je-reversed' }) })
+    mockHasLiveLink.mockResolvedValue(false)
+    const response = await POST(makeReq(), routeParams)
+    expect(response.status).toBe(200)
+    expect(mockSettle).toHaveBeenCalledWith(
+      expect.anything(),
+      'user-1',
+      'company-1',
+      expect.objectContaining({ previousJournalEntryId: 'je-reversed' }),
+    )
   })
 
   it('maps service error codes onto the canonical envelope', async () => {

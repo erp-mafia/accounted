@@ -3162,6 +3162,7 @@
     "amounts_match": "The amount matches the request",
     "amounts_differ": "The amount differs from the request",
     "amount_diff": "Difference: {amount}",
+    "over_payout_blocked": "The amount exceeds what Skatteverket can pay out for this request, so it cannot be booked here. Book the transaction another way, or split it if it covers several requests.",
     "partial_requires_beslut": "A partial payout requires Skatteverket's decision (approved amount) to be recorded on the request first. Record the decision and try again, or book the transaction manually against account 1513.",
     "partial_with_beslut_note": "The payout is lower than the requested amount: the request is marked partially paid and the remainder stays on account 1513.",
     "target_settled_title": "The request is already paid out",

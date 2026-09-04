@@ -959,6 +959,20 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Utbetalningen kan bara bokföras för en inskickad begäran som inte redan är bokförd.',
     message_en: 'The payout can only be booked for a submitted request that is not already settled.',
   },
+  ROT_RUT_SETTLE_AMOUNT_EXCEEDS: {
+    httpStatus: 400,
+    message_sv:
+      'Beloppet kan inte bokföras mot begäran: det är större än begärt eller beslutat belopp. Bokför transaktionen på annat sätt.',
+    message_en:
+      'The amount cannot be booked against the request: it exceeds the requested or decided amount. Book the transaction another way.',
+  },
+  ROT_RUT_SETTLE_RACE: {
+    httpStatus: 409,
+    message_sv:
+      'Begäran hann redan bokföras som utbetald av en annan åtgärd. Verifikationen som skapades kan inte kopplas: kontrollera bokföringen på konto 1513.',
+    message_en:
+      'The request was already settled by another action. The voucher that was created could not be attached: check the bookkeeping on account 1513.',
+  },
   ROT_RUT_MATCH_NOT_INCOME: {
     httpStatus: 400,
     message_sv: 'Endast inbetalningar kan matchas mot en ROT/RUT-utbetalning från Skatteverket.',

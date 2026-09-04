@@ -60,6 +60,9 @@ export default function RotRutPayoutMatchDialog({
   // button fail.
   const isPartial = request ? txAmount < requestedTotal - 0.005 : false
   const partialBlocked = isPartial && request?.decided_total == null
+  // The service refuses more than Skatteverket can owe on this begäran: a
+  // larger row would drive 1513 negative. Block here too, with the reason.
+  const overBlocked = request ? txAmount > expected + 0.005 : false
   const currency = transaction?.currency || 'SEK'
 
   const typeLabel = request?.deduction_type === 'rut' ? 'RUT' : 'ROT'
@@ -144,6 +147,7 @@ export default function RotRutPayoutMatchDialog({
                 <div className="text-sm">
                   <p className="font-medium">{t('amounts_differ')}</p>
                   <p>{t('amount_diff', { amount: formatCurrency(diff, currency) })}</p>
+                  {overBlocked && <p className="mt-1">{t('over_payout_blocked')}</p>}
                   {partialBlocked && <p className="mt-1">{t('partial_requires_beslut')}</p>}
                   {isPartial && !partialBlocked && (
                     <p className="mt-1">{t('partial_with_beslut_note')}</p>
@@ -193,7 +197,7 @@ export default function RotRutPayoutMatchDialog({
           </Button>
           <Button
             onClick={onConfirm}
-            disabled={isConfirming || !request || targetBlocked || partialBlocked}
+            disabled={isConfirming || !request || targetBlocked || partialBlocked || overBlocked}
           >
             {isConfirming ? t('confirming') : t('confirm')}
           </Button>

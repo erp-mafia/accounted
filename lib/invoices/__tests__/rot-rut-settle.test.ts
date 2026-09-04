@@ -19,6 +19,11 @@ vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
   clearSettledInvoiceSuggestions: (...args: unknown[]) => mockClearSuggestions(...args),
 }))
 
+const mockPropagateUnderlag = vi.fn()
+vi.mock('@/lib/transactions/inbox-underlag', () => ({
+  propagateUnderlagForBookedTransaction: (...args: unknown[]) => mockPropagateUnderlag(...args),
+}))
+
 import { settleRotRutPayoutRequest } from '../rot-rut-settle'
 
 const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
@@ -86,6 +91,75 @@ describe('settleRotRutPayoutRequest', () => {
     })
     expect(outcome).toMatchObject({ ok: false, code: 'ROT_RUT_SETTLE_INVALID_STATE' })
     expect(mockCreatePayoutEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses a payout above the requested (or decided) amount before booking', async () => {
+    enqueue({ data: makeRequestRow() })
+    const over = await settleRotRutPayoutRequest(supabase, 'user-1', 'company-1', {
+      requestId: REQUEST_ID,
+      paymentDate: '2026-07-10',
+      amount: 12500,
+    })
+    expect(over).toEqual({
+      ok: false,
+      kind: 'code',
+      code: 'ROT_RUT_SETTLE_AMOUNT_EXCEEDS',
+      details: { amount: 12500, expected_amount: 3000, status: 'submitted' },
+    })
+
+    // With a beslut recorded, the beslut is the ceiling.
+    reset()
+    enqueue({ data: makeRequestRow({ decided_total: 2500 }) })
+    const overDecided = await settleRotRutPayoutRequest(supabase, 'user-1', 'company-1', {
+      requestId: REQUEST_ID,
+      paymentDate: '2026-07-10',
+      amount: 3000,
+    })
+    expect(overDecided).toMatchObject({ ok: false, code: 'ROT_RUT_SETTLE_AMOUNT_EXCEEDS' })
+    expect(mockCreatePayoutEntry).not.toHaveBeenCalled()
+  })
+
+  it('reports ROT_RUT_SETTLE_RACE when another settle attached first, keeping the voucher', async () => {
+    enqueue({ data: makeRequestRow() })
+    enqueue({ data: null }) // request CAS on settlement_journal_entry_id IS NULL matched 0 rows
+
+    const outcome = await settleRotRutPayoutRequest(supabase, 'user-1', 'company-1', {
+      requestId: REQUEST_ID,
+      paymentDate: '2026-07-10',
+      transactionId: TX_ID,
+    })
+
+    expect(outcome).toEqual({
+      ok: false,
+      kind: 'code',
+      code: 'ROT_RUT_SETTLE_RACE',
+      details: { journal_entry_id: 'je-1', request_id: REQUEST_ID },
+    })
+    expect(findCall('rot_rut_payout_requests', 'is')).toEqual(['settlement_journal_entry_id', null])
+    // The loser never touches the bank row.
+    expect(findCalls('transactions', 'update')).toEqual([])
+  })
+
+  it('locks the link on a stale pointer when the route passes one (issue #988 rows)', async () => {
+    enqueue({ data: makeRequestRow() })
+    enqueue({
+      data: makeRequestRow({ status: 'paid', settlement_journal_entry_id: 'je-1', decided_total: 3000 }),
+    })
+    enqueue({ data: [{ id: TX_ID }] })
+    enqueue({ data: [] })
+
+    const outcome = await settleRotRutPayoutRequest(supabase, 'user-1', 'company-1', {
+      requestId: REQUEST_ID,
+      paymentDate: '2026-07-10',
+      amount: 3000,
+      transactionId: TX_ID,
+      previousJournalEntryId: 'je-reversed',
+    })
+
+    expect(outcome.ok).toBe(true)
+    const eqCalls = findCalls('transactions', 'eq')
+    expect(eqCalls).toContainEqual(['journal_entry_id', 'je-reversed'])
+    expect(findCall('transactions', 'is')).toBeUndefined()
   })
 
   it('books the voucher, completes the request and mirrors decided_amount (headless)', async () => {

@@ -20,6 +20,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createRotRutPayoutEntry } from '@/lib/bookkeeping/rot-rut-entries'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
+import { roundOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('invoices/rot-rut-settle')
@@ -39,6 +41,14 @@ export interface SettleRotRutPayoutParams {
    * journal_entry_id IS NULL.
    */
   transactionId?: string
+  /**
+   * The transaction's journal_entry_id as the caller read it: null for a free
+   * row, or the STALE id of a reversed/cancelled entry the route judged not
+   * live (issue #988). The link CAS locks on exactly that value, so a stale
+   * pointer can be overwritten while a concurrent live link still turns the
+   * write into a no-op (same contract as link-journal-entry.ts).
+   */
+  previousJournalEntryId?: string | null
 }
 
 export interface SettledRotRutPayoutRequest {
@@ -55,6 +65,8 @@ export interface SettledRotRutPayoutRequest {
 export type SettleRotRutPayoutErrorCode =
   | 'ROT_RUT_REQUEST_NOT_FOUND'
   | 'ROT_RUT_SETTLE_INVALID_STATE'
+  | 'ROT_RUT_SETTLE_AMOUNT_EXCEEDS'
+  | 'ROT_RUT_SETTLE_RACE'
   | 'ROT_RUT_MATCH_TX_LINK_FAILED'
 
 export type SettleRotRutPayoutOutcome =
@@ -125,6 +137,20 @@ export async function settleRotRutPayoutRequest(
     }
   }
 
+  // Never book more than Skatteverket can owe on this begäran: a larger bank
+  // row (a moms/skattekonto refund, two begäran in one transfer) would drive
+  // 1513 into a credit balance and rewrite decided_total to the bank amount.
+  // The user books such a row another way; this path stays exact.
+  const expectedAmount = roundOre(Number(payoutRequest.decided_total ?? payoutRequest.requested_total))
+  if (amount > expectedAmount + 0.005) {
+    return {
+      ok: false,
+      kind: 'code',
+      code: 'ROT_RUT_SETTLE_AMOUNT_EXCEEDS',
+      details: { amount, expected_amount: expectedAmount, status: payoutRequest.status },
+    }
+  }
+
   // The voucher is the accounting record: engine failure must block.
   let journalEntryId: string
   try {
@@ -151,15 +177,20 @@ export async function settleRotRutPayoutRequest(
     update.decided_at = new Date().toISOString()
   }
 
+  // CAS on settlement_journal_entry_id IS NULL: two concurrent settles (two
+  // same-amount bank rows, or a headless call racing a match) must not both
+  // attach and credit 1513 twice. The loser's voucher already exists
+  // (immutable per BFL): say so loudly rather than overwrite the winner.
   const { data: updated, error: updateError } = await supabase
     .from('rot_rut_payout_requests')
     .update(update)
     .eq('company_id', companyId)
     .eq('id', params.requestId)
+    .is('settlement_journal_entry_id', null)
     .select(
       'id, name, deduction_type, status, requested_total, decided_total, decided_at, settlement_journal_entry_id',
     )
-    .single()
+    .maybeSingle()
 
   if (updateError) {
     // The voucher exists (immutable per BFL) but the request row didn't
@@ -170,12 +201,27 @@ export async function settleRotRutPayoutRequest(
     })
     return { ok: false, kind: 'error', error: updateError, stage: 'update' }
   }
+  if (!updated) {
+    log.error('rot/rut payout entry booked but request was settled concurrently', undefined, {
+      journalEntryId,
+      payoutRequestId: params.requestId,
+    })
+    return {
+      ok: false,
+      kind: 'code',
+      code: 'ROT_RUT_SETTLE_RACE',
+      details: { journal_entry_id: journalEntryId, request_id: params.requestId },
+    }
+  }
 
   if (params.transactionId) {
-    // Optimistic lock on journal_entry_id IS NULL: the route verified the row
-    // was free, but a concurrent booking between that read and this write must
-    // not be silently overwritten (same CAS contract as link-journal-entry.ts).
-    const { data: linkedRows, error: linkError } = await supabase
+    // Optimistic lock on the pointer the route read: null for a free row, or
+    // the stale id of a reversed entry (issue #988) that the route judged not
+    // live. A concurrent booking between that read and this write changes
+    // the pointer, so the write matches 0 rows instead of silently
+    // overwriting it (same CAS contract as link-journal-entry.ts).
+    const previousJournalEntryId = params.previousJournalEntryId ?? null
+    const txUpdate = supabase
       .from('transactions')
       .update({
         journal_entry_id: journalEntryId,
@@ -191,8 +237,10 @@ export async function settleRotRutPayoutRequest(
       })
       .eq('id', params.transactionId)
       .eq('company_id', companyId)
-      .is('journal_entry_id', null)
-      .select('id')
+    const { data: linkedRows, error: linkError } = await (previousJournalEntryId === null
+      ? txUpdate.is('journal_entry_id', null)
+      : txUpdate.eq('journal_entry_id', previousJournalEntryId)
+    ).select('id')
 
     if (linkError || !linkedRows || linkedRows.length === 0) {
       // Voucher booked and request settled, but the bank row is not linked:
@@ -211,6 +259,15 @@ export async function settleRotRutPayoutRequest(
         details: { journal_entry_id: journalEntryId, request_id: params.requestId },
       }
     }
+
+    // An utbetalningsbesked pinned on the bank row becomes the voucher's
+    // underlag (BFL 5 kap 6 §), as every other booking path does.
+    await propagateUnderlagForBookedTransaction(
+      supabase,
+      companyId,
+      params.transactionId,
+      journalEntryId,
+    )
 
     await logMatchEvent(supabase, userId, params.transactionId, 'matched', {
       matchConfidence: 1.0,

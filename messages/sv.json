@@ -3162,6 +3162,7 @@
     "amounts_match": "Beloppet stämmer med begäran",
     "amounts_differ": "Beloppet skiljer sig från begäran",
     "amount_diff": "Differens: {amount}",
+    "over_payout_blocked": "Beloppet är större än vad Skatteverket kan betala ut för denna begäran, så det kan inte bokföras här. Bokför transaktionen på annat sätt, eller dela upp den om den täcker flera begäran.",
     "partial_requires_beslut": "En delutbetalning kräver att Skatteverkets beslut registreras på begäran först (godkänt belopp). Registrera beslutet och försök igen, eller bokför transaktionen manuellt mot konto 1513.",
     "partial_with_beslut_note": "Utbetalningen är lägre än begärt belopp: begäran markeras som delvis utbetald och resten ligger kvar på konto 1513.",
     "target_settled_title": "Begäran är redan utbetald",
