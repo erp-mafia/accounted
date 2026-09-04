@@ -534,6 +534,7 @@ export async function getDossier(supabase: SupabaseClient, companyId: string, pa
       similar: similar.map((s) => ({ id: s.id, displayName: s.displayName })),
       defaultRoles: p.kind === 'person' ? ['customer'] : defaultRoles(stats),
       createdAt: p.created_at,
+      country: (facts.data as Array<{ field: string; value: unknown }> | null)?.find((f) => f.field === 'country' && typeof f.value === 'string')?.value as string | null ?? null,
     },
     facts: ((facts.data ?? []) as Array<Record<string, unknown>>).map((f) => ({
       id: f.id as string,
