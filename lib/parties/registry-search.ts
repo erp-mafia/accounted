@@ -28,6 +28,17 @@ export interface RegistryCandidatesResult extends ScbSearchResult {
   /** Every query the server tried or would try, best first. */
   queries: string[]
   foreign: ForeignReading | null
+  /**
+   * What the model read out of a text the rules could not anchor (a bank
+   * memo), when a model is configured. Shown as "läst ur verifikatet"; the
+   * search ran on it. Null when the rules found a name or no model answered.
+   */
+  aiRead: { name: string; country: string | null } | null
+}
+
+/** True when nothing in the texts anchored a name: only cleaned heads remain. */
+export function needsModelReading(plan: RegistryQueryPlan): boolean {
+  return plan.foreign === null && plan.candidates.every((c) => c.source === 'head')
 }
 
 export const MAX_REGISTRY_QUERIES = 3
