@@ -24,6 +24,7 @@ import { supabase } from "@specific.dev/spectest/components";
 import { enableBankingFake } from "./fakes/enable-banking";
 import { viesFake } from "./fakes/vies";
 import { skatteverketFake } from "./fakes/skatteverket";
+import { scbFake } from "./fakes/scb";
 
 /**
  * The project's own supabase/ folder: config.toml (auth rules, MFA, password
@@ -126,6 +127,14 @@ COPY --from=builder /app/public ./public
 RUN openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /app/eb-key.pem 2>/dev/null \\
  && base64 -w0 /app/eb-key.pem > /app/eb-key.b64 \\
  && rm /app/eb-key.pem
+
+# A throwaway client certificate for SCB, same reasoning: lib/parties/scb
+# needs a .pfx to be "configured" and to open its TLS connection; the fake
+# never inspects it.
+RUN openssl req -x509 -newkey rsa:2048 -nodes -keyout /app/scb-key.pem -out /app/scb-cert.pem -days 3650 -subj "/CN=e2e-scb" 2>/dev/null \\
+ && openssl pkcs12 -export -inkey /app/scb-key.pem -in /app/scb-cert.pem -out /app/scb.pfx -passout pass:e2e-scb 2>/dev/null \\
+ && base64 -w0 /app/scb.pfx > /app/scb-pfx.b64 \\
+ && rm /app/scb-key.pem /app/scb-cert.pem /app/scb.pfx
 `;
 
 export const env = defineEnvironment({
@@ -137,6 +146,7 @@ export const env = defineEnvironment({
     enableBanking: enableBankingFake,
     vies: viesFake,
     skatteverket: skatteverketFake,
+    scb: scbFake,
   },
 
   services: {
@@ -146,7 +156,8 @@ export const env = defineEnvironment({
       image: { type: "dockerfile", content: appDockerfile },
       // The signing key lives in a file in the image; export it before the
       // server starts so lib/jwt.ts finds it where it expects to.
-      command: "export ENABLE_BANKING_PRIVATE_KEY=$(cat /app/eb-key.b64) && node server.js",
+      command:
+        "export ENABLE_BANKING_PRIVATE_KEY=$(cat /app/eb-key.b64) SCB_API_CERT_PFX_BASE64=$(cat /app/scb-pfx.b64) && node server.js",
       env: {
         ...sb.appEnv,
         SUPABASE_SERVICE_ROLE_KEY: sb.serviceRoleKey,
@@ -182,6 +193,11 @@ export const env = defineEnvironment({
         // tokens are stored encrypted at rest; without this the callback
         // exchanges the code and then throws before persisting.
         SKATTEVERKET_TOKEN_ENCRYPTION_KEY: "e2e-skv-token-key",
+
+        // SCB's company register. No base URL: the client's default is the
+        // fake's hostname. The certificate comes from the image (see the
+        // Dockerfile); only its password is passed here.
+        SCB_API_CERT_PASSWORD: "e2e-scb",
 
         CRON_SECRET: "e2e-cron-secret",
       },
