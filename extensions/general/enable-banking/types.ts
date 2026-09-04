@@ -3,6 +3,10 @@
 export interface StoredAccount {
   uid: string
   iban?: string
+  // Swedish BBAN (clearing number + account number, no separator) when the
+  // ASPSP provided one. Display and invoice-payee prefill only: dedup keys
+  // stay IBAN-then-uid (see dedup_scope).
+  bban?: string
   name?: string
   currency: string
   balance?: number
@@ -40,20 +44,16 @@ export interface StoredAccount {
   // silent; cleared by the selection save when the user re-enables the
   // account.
   deselected_elsewhere?: boolean
+  // Widest transactions history window (whole days before date_to) this
+  // account's bank has ever ACCEPTED, stamped by lib/sync.ts after each
+  // successful fetch. ASPSP_ERROR is Enable Banking's generic wrapper for any
+  // upstream failure, so a rejected request cannot say whether the window was
+  // too wide or the bank is refusing right now. A window no wider than this
+  // has worked before, so a rejection of it is treated as the bank being
+  // unavailable instead of walking the whole narrowing ladder (issue #2202).
+  accepted_history_days?: number
 }
 
-// Re-export API types from the client
-export type {
-  ASPSP,
-  AuthMethod,
-  AuthResponse,
-  SessionResponse,
-  AccountInfo,
-  Balance,
-  BalanceResponse,
-  Transaction as EnableBankingTransaction,
-  TransactionsResponse,
-  TransactionsFetchStrategy,
-  Bank,
-  BankTransaction,
-} from './lib/api-client'
+// Re-exported from the client for lib/sync.ts; every other api-client type
+// is imported from './lib/api-client' directly.
+export type { TransactionsFetchStrategy } from './lib/api-client'

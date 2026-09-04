@@ -47,10 +47,6 @@ export class ProviderCallError extends Error {
   }
 }
 
-export function isProviderCallError(err: unknown): err is ProviderCallError {
-  return err instanceof ProviderCallError
-}
-
 interface ProviderCallOptions {
   /** Provider id ('fortnox', 'bokio', 'visma', etc.). */
   provider: string

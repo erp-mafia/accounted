@@ -17,6 +17,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { bulkBookMatchedInboxItems, categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
 import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
+import {
+  COUNTRY_CONSISTENCY_MESSAGES,
+  checkCountryConsistency,
+  defaultCountryForParty,
+  normalizeCountryCode,
+} from '@/lib/vat/country-codes'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import {
   resolveSupplierInvoiceExchangeRate,
@@ -53,6 +59,7 @@ import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-paym
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { booksInvoicesOnIssue, cashPartialBlockReason, supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
+import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
 import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import {
   canApproveSupplierInvoice,
@@ -60,6 +67,7 @@ import {
 } from '@/lib/supplier-invoices/lifecycle'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
+import { ISO_DATE_RE } from '@/lib/invariants/iso-date'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
@@ -82,11 +90,15 @@ import {
   createSupplierCreditNoteEntry,
   createSupplierInvoiceRegistrationEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
-import { linkInvoiceToVoucher } from '@/lib/invoices/voucher-matching'
+import { linkInvoiceToVoucher, type LinkInvoiceToVoucherResult } from '@/lib/invoices/voucher-matching'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
-import { linkSupplierInvoiceToVoucher } from '@/lib/invoices/supplier-voucher-matching'
+import {
+  linkSupplierInvoiceToVoucher,
+  type LinkSupplierInvoiceToVoucherResult,
+} from '@/lib/invoices/supplier-voucher-matching'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { recordInvoicePaymentRow, removeInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import {
   clearSettledBatchAllocationSuggestions,
@@ -124,7 +136,9 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { resolveInvoicePayeeChoice, resolveInvoiceSettlementAccount, snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import {
+  describeMissingInvoicePaymentAccount,
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
@@ -135,6 +149,7 @@ import {
   resolveInvoiceEmailRecipients,
 } from '@/lib/invoices/email-recipients'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { convertToInvoice } from '@/lib/invoices/convert-to-invoice'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
   recordManualInvoiceDelivery,
@@ -152,6 +167,17 @@ import { defaultRateForVatTreatment } from '@/lib/vat/account-vat-treatment'
 import { SetVoucherNoteParamsSchema } from '@/lib/pending-operations/schemas/voucher-note'
 import { IgnoreTransactionParamsSchema } from '@/lib/pending-operations/schemas/ignore-transaction'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
+import {
+  CreateInvoiceFromSalesOrderParamsSchema,
+  CreateSalesOrderParamsSchema,
+  RegisterSalesOrderDeliveryParamsSchema,
+  TransitionSalesOrderParamsSchema,
+} from '@/lib/pending-operations/schemas/sales-order'
+import { createSalesOrder } from '@/lib/sales-orders/write'
+import { transitionSalesOrder } from '@/lib/sales-orders/transitions'
+import { registerSalesOrderDelivery } from '@/lib/sales-orders/register-delivery'
+import { createInvoiceFromSalesOrder } from '@/lib/sales-orders/create-invoice-from-order'
+import type { ServiceFailure } from '@/lib/sales-orders/result'
 import { UpdateCompanySettingsParamsSchema } from '@/lib/pending-operations/schemas/company-settings'
 import { UpdateCustomerParamsSchema } from '@/lib/pending-operations/schemas/customer'
 import {
@@ -175,7 +201,7 @@ import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import { applyRecurringScheduleUpdate } from '@/lib/invoices/apply-recurring-schedule-update'
-import { BulkBookInboxSchema } from '@/lib/api/schemas'
+import { BulkBookInboxSchema, OpeningBalancesBulkSchema } from '@/lib/api/schemas'
 import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { isValidRevenueAccount } from '@/lib/articles/validate-revenue-account'
 import { z } from 'zod'
@@ -199,6 +225,7 @@ import type {
   CreditNote,
   CreateJournalEntryLineInput,
   JournalEntrySourceType,
+  FiscalPeriod,
 } from '@/types'
 
 const log = createLogger('pending-operations/commit')
@@ -298,6 +325,34 @@ async function recordSkippedInvoiceJournalEntry(
 }
 
 // ── Executors ────────────────────────────────────────────────────
+
+/**
+ * The company's booking context for invoice-shaped executors: accounting
+ * method and entity type with the engine defaults when the settings row is
+ * missing or the read fails (errors are deliberately ignored, as before).
+ */
+async function loadBookingContext(
+  supabase: SupabaseClient,
+  companyId: string
+): Promise<{ accountingMethod: AccountingMethod; entityType: EntityType }> {
+  const { data: settings } = await supabase
+    .from('company_settings').select('accounting_method, entity_type').eq('company_id', companyId).single()
+
+  return {
+    accountingMethod: (settings?.accounting_method as AccountingMethod) || 'accrual',
+    entityType: (settings?.entity_type as EntityType) || 'enskild_firma',
+  }
+}
+
+/**
+ * Catch-body shared by the ledger-writing executors: a BookkeepingError is
+ * rethrown so the dispatcher maps it to a structured code; anything else
+ * becomes a plain failure with the executor's fallback text and status.
+ */
+function failUnlessBookkeepingError(err: unknown, fallback: string, status: number): ExecutorResult {
+  if (isBookkeepingError(err)) throw err
+  return { error: err instanceof Error ? err.message : fallback, status }
+}
 
 type ExecutorResult = {
   data?: Record<string, unknown>
@@ -425,6 +480,31 @@ async function commitCreateCustomer(
     typeof params.payment_terms === 'number' ? params.payment_terms : undefined,
   )
 
+  // Country: ISO 3166-1 alpha-2, consistent with the type and VAT prefix.
+  // Staging already checked this; re-checked here so a tampered or
+  // pre-2026-09 pending_operations row cannot write a name or a
+  // contradiction (#2025, #2028).
+  const countryParam = typeof params.country === 'string' ? params.country.trim() : ''
+  const country = countryParam
+    ? normalizeCountryCode(countryParam)
+    : defaultCountryForParty(params.customer_type as string, (params.vat_number as string) || null)
+  if (!country) {
+    return {
+      error: countryParam
+        ? `country "${countryParam}" is not an ISO 3166-1 alpha-2 code or a known country name`
+        : 'country is required for this customer type',
+      status: 400,
+    }
+  }
+  const countryIssue = checkCountryConsistency({
+    partyType: params.customer_type as string,
+    country,
+    vatNumber: (params.vat_number as string) || null,
+  })
+  if (countryIssue) {
+    return { error: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv, status: 400 }
+  }
+
   const { data, error } = await supabase
     .from('customers')
     .insert({
@@ -441,7 +521,7 @@ async function commitCreateCustomer(
       address_line1: (params.address as string) || null,
       postal_code: (params.postal_code as string) || null,
       city: (params.city as string) || null,
-      country: (params.country as string) || 'Sweden',
+      country,
     })
     .select()
     .single()
@@ -490,13 +570,29 @@ async function commitUpdateCustomer(
   const { customer_id: customerId, changes } = validated
   const { data: current, error: currentError } = await supabase
     .from('customers')
-    .select('customer_type')
+    .select('customer_type, country, vat_number')
     .eq('id', customerId)
     .eq('company_id', companyId)
     .maybeSingle()
 
   if (currentError) return { error: currentError.message, status: 500 }
   if (!current) return { error: 'Customer not found', status: 404 }
+
+  // Country vs type vs VAT prefix on the row as it will end up (same check
+  // as staging; repeated here as the tamper gate), only when one of the
+  // three is part of the update.
+  const countryRuleTouched =
+    changes.customer_type !== undefined || changes.country !== undefined || changes.vat_number !== undefined
+  const countryIssue = countryRuleTouched
+    ? checkCountryConsistency({
+        partyType: changes.customer_type ?? current.customer_type,
+        country: changes.country ?? current.country,
+        vatNumber: changes.vat_number ?? current.vat_number,
+      })
+    : null
+  if (countryIssue) {
+    return { error: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv, status: 400 }
+  }
 
   // personal_number never travels in plaintext: staging validated the input
   // and stored AES-256-GCM ciphertext under personal_number_encrypted (see
@@ -609,7 +705,17 @@ async function commitUpdateCompanySettings(
     throw err
   }
 
-  const { data, error } = await supabase
+  // The bank columns mirror the default SEK payee account (migration
+  // 20260904010000): write the change through FIRST so a failure leaves
+  // nothing half-written, and the invoice PDF prints what the agent set.
+  try {
+    await propagateLegacyPayeeWrite(supabase, companyId, validated.changes)
+  } catch (err) {
+    log.error('update_company_settings: payee write-through failed', err as Error)
+    return { error: err instanceof Error ? err.message : 'Payee write-through failed', status: 500 }
+  }
+
+  const { data: row, error } = await supabase
     .from('company_settings')
     .update(validated.changes)
     .eq('company_id', companyId)
@@ -623,22 +729,23 @@ async function commitUpdateCompanySettings(
     return { error: error.message, status: 500 }
   }
 
+
   return {
     data: {
       company_id: companyId,
-      bank_name: data.bank_name ?? null,
-      clearing_number: data.clearing_number ?? null,
-      account_number: data.account_number ?? null,
-      bankgiro: data.bankgiro ?? null,
-      plusgiro: data.plusgiro ?? null,
-      swish: data.swish ?? null,
-      iban: data.iban ?? null,
-      bic: data.bic ?? null,
-      contact_person: data.default_our_reference ?? null,
-      email: data.email ?? null,
-      phone: data.phone ?? null,
-      website: data.website ?? null,
-      invoice_email_texts: data.invoice_email_texts ?? null,
+      bank_name: row.bank_name ?? null,
+      clearing_number: row.clearing_number ?? null,
+      account_number: row.account_number ?? null,
+      bankgiro: row.bankgiro ?? null,
+      plusgiro: row.plusgiro ?? null,
+      swish: row.swish ?? null,
+      iban: row.iban ?? null,
+      bic: row.bic ?? null,
+      contact_person: row.default_our_reference ?? null,
+      email: row.email ?? null,
+      phone: row.phone ?? null,
+      website: row.website ?? null,
+      invoice_email_texts: row.invoice_email_texts ?? null,
     },
   }
 }
@@ -1249,6 +1356,192 @@ async function commitIgnoreTransaction(
   }
 }
 
+// ── Kundorder (sales orders) ────────────────────────────────────────
+//
+// The four executors below never touch totals, VAT or the order state
+// machine themselves: they re-validate the staged params (ASVS V4.5) and
+// hand them to the lib/sales-orders service the cookie routes use, so the
+// MCP door and the web door produce identical rows and identical refusals.
+
+/** Zod failure on a staged row -> 400 with the first issue named. */
+function invalidStagedParams(err: unknown): ExecutorResult {
+  if (err instanceof z.ZodError) {
+    const issue = err.issues[0]
+    return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
+  }
+  throw err
+}
+
+/**
+ * Map a lib/sales-orders ServiceFailure onto the ExecutorResult contract.
+ * A coded failure carries the structured-error httpStatus (404/409 auto-
+ * reject the op, 400 fails it) and its Swedish message, with the service's
+ * details persisted so the approver sees WHICH line was refused; a raw DB
+ * failure is a 500 with the driver message.
+ */
+function salesOrderFailure(failure: ServiceFailure): ExecutorResult {
+  if ('code' in failure) {
+    const entry = getErrorEntry(failure.code)
+    return {
+      error: entry?.message_sv ?? failure.code,
+      errorCode: failure.code,
+      status: entry?.httpStatus ?? 400,
+      ...(failure.details ? { data: failure.details } : {}),
+    }
+  }
+  const dbMessage =
+    typeof failure.dbError === 'object' && failure.dbError !== null && 'message' in failure.dbError
+      ? String((failure.dbError as { message: unknown }).message)
+      : null
+  return { error: dbMessage || getErrorEntry('SALES_ORDER_CREATE_FAILED')?.message_sv || 'Kundordern kunde inte sparas.', status: 500 }
+}
+
+async function commitCreateSalesOrder(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  let validated
+  try {
+    validated = CreateSalesOrderParamsSchema.parse(params)
+  } catch (err) {
+    return invalidStagedParams(err)
+  }
+
+  const result = await createSalesOrder(supabase, { companyId, userId, input: validated })
+  if (!result.ok) return salesOrderFailure(result)
+
+  const { order } = result
+  return {
+    data: {
+      sales_order_id: order.id,
+      order_number: order.order_number,
+      status: order.status,
+      total: order.total,
+      currency: order.currency,
+    },
+  }
+}
+
+async function commitTransitionSalesOrder(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  let validated
+  try {
+    validated = TransitionSalesOrderParamsSchema.parse(params)
+  } catch (err) {
+    return invalidStagedParams(err)
+  }
+
+  // The service re-reads the order and refuses a transition the current
+  // status does not allow (compare-and-set), so an order that moved between
+  // staging and approval lands as SALES_ORDER_INVALID_STATE, never as a
+  // silent overwrite.
+  const result = await transitionSalesOrder(supabase, {
+    companyId,
+    orderId: validated.sales_order_id,
+    action: validated.action,
+  })
+  if (!result.ok) return salesOrderFailure(result)
+
+  const { order } = result
+  return {
+    data: {
+      sales_order_id: order.id,
+      order_number: order.order_number,
+      status: order.status,
+      action: validated.action,
+    },
+  }
+}
+
+async function commitRegisterSalesOrderDelivery(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  let validated
+  try {
+    validated = RegisterSalesOrderDeliveryParamsSchema.parse(params)
+  } catch (err) {
+    return invalidStagedParams(err)
+  }
+
+  const { sales_order_id: orderId, ...input } = validated
+  const result = await registerSalesOrderDelivery(supabase, { companyId, orderId, input })
+  if (!result.ok) return salesOrderFailure(result)
+
+  const { order } = result
+  return {
+    data: {
+      sales_order_id: order.id,
+      order_number: order.order_number,
+      status: order.status,
+      last_delivery_date: order.last_delivery_date,
+      delivery_progress: order.delivery_progress ?? null,
+    },
+  }
+}
+
+async function commitCreateInvoiceFromSalesOrder(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  let validated
+  try {
+    validated = CreateInvoiceFromSalesOrderParamsSchema.parse(params)
+  } catch (err) {
+    return invalidStagedParams(err)
+  }
+
+  // The service re-reads the order, re-picks the lines against the CURRENT
+  // invoiced quantities and builds the draft through buildInvoiceWriteData,
+  // so a line invoiced elsewhere between staging and approval is refused
+  // (SALES_ORDER_OVER_INVOICED / NOTHING_TO_INVOICE) instead of double-billed.
+  const { sales_order_id: orderId, ...input } = validated
+  const result = await createInvoiceFromSalesOrder(supabase, { companyId, userId, orderId, input })
+  if (!result.ok) return salesOrderFailure(result)
+
+  const { invoice, order } = result
+
+  // Same event the direct create_invoice executor emits, so extension
+  // handlers (webhooks, digests) see order-born drafts too.
+  const { data: completeInvoice } = await supabase
+    .from('invoices')
+    .select('*, customer:customers(*), items:invoice_items(*)')
+    .eq('id', invoice.id)
+    .single()
+  // Post-commit notification only: the draft already exists, so an event
+  // failure must not reject an operation whose write succeeded.
+  try {
+    await eventBus.emit({
+      type: 'invoice.created',
+      payload: { invoice: (completeInvoice ?? invoice) as Invoice, userId, companyId },
+    })
+  } catch {
+    // Non-critical
+  }
+
+  return {
+    data: {
+      invoice_id: invoice.id,
+      // Unnumbered draft: the F-series number is assigned on send.
+      invoice_number: invoice.invoice_number ?? null,
+      sales_order_id: order.id,
+      order_number: order.order_number,
+      order_status: order.status,
+      invoicing_progress: order.invoicing_progress ?? null,
+      total: invoice.total,
+      currency: invoice.currency,
+    },
+  }
+}
+
 async function commitCreateSupplier(
   supabase: SupabaseClient,
   userId: string,
@@ -1637,6 +1930,14 @@ async function commitCreateInvoice(
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
   const customerId = params.customer_id as string
+  // Offert (quote): own OF-series allocated at insert, never an F-number,
+  // never books, never emits invoice.created. Only 'quote' is honoured here;
+  // anything else stays an ordinary invoice (staged params are caller JSON).
+  const isQuote = params.document_type === 'quote'
+  const validUntil = typeof params.valid_until === 'string' ? params.valid_until : null
+  if (isQuote && (!validUntil || !ISO_DATE_RE.test(validUntil))) {
+    return { error: 'Giltig till (valid_until) krävs för en offert.', status: 400 }
+  }
   const items = params.items as Array<{
     description: string; quantity: number; unit: string; unit_price: number; vat_rate?: number
     discount_percent?: number | null
@@ -1661,14 +1962,14 @@ async function commitCreateInvoice(
     return { error: 'Customer not found: they may have been deleted.', status: 404 }
   }
 
-  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
+  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
   // Gate on the PERMITTED set, not the picker default, exactly like
   // buildInvoiceWriteData: the ML 6 kap. supplies taxed where they are performed
   // (hotel/restaurang 12%, persontransport and event admission 6%,
   // fastighetstjänst and korttidsuthyrning 25%) carry Swedish VAT even to a
   // foreign business customer. The default is still 0% (vatRules.rate is the
   // fallback below), so a Swedish rate only lands here when staged explicitly.
-  const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated)
+  const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country)
   const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
   // VAT registration gate (mirrors app/api/invoices/route.ts). A
@@ -1816,15 +2117,54 @@ async function commitCreateInvoice(
     }
   })()
 
+  // Quotes are numbered at insert from their own OF-series (see
+  // generate_quote_number); ensureInvoiceNumber must never run on one.
+  let quoteNumber: string | null = null
+  if (isQuote) {
+    const { data: allocated, error: quoteNumberError } = await supabase.rpc('generate_quote_number', {
+      p_company_id: companyId,
+    })
+    if (quoteNumberError || !allocated) {
+      return {
+        error:
+          getErrorEntry('INVOICE_CREATE_NUMBER_ASSIGN_FAILED')?.message_sv ??
+          'Offertnumret kunde inte tilldelas.',
+        errorCode: 'INVOICE_CREATE_NUMBER_ASSIGN_FAILED',
+        status: 500,
+      }
+    }
+    quoteNumber = allocated as string
+  }
+
+  // Which bank account the customer pays to; validated against the
+  // company's payee accounts (same rule as the web and v1 routes).
+  const payeeChoice = await resolveInvoicePayeeChoice(
+    supabase,
+    companyId,
+    currency as Currency,
+    typeof params.payment_cash_account_id === 'string' ? params.payment_cash_account_id : null,
+  )
+  if (!payeeChoice.ok) {
+    const entry = getErrorEntry(payeeChoice.code)
+    return { error: entry?.message_sv ?? payeeChoice.code, status: 400, data: payeeChoice.details }
+  }
+
   const { data: invoice, error: invoiceError } = await supabase
     .from('invoices')
     .insert({
       user_id: userId,
       company_id: companyId,
       customer_id: customerId,
-      invoice_number: null,
+      invoice_number: quoteNumber,
       invoice_date: invoiceDate,
-      due_date: (params.due_date as string) || null,
+      // A quote has no payment due date: due_date mirrors valid_until
+      // (build-invoice-write parity).
+      due_date: isQuote ? validUntil : (params.due_date as string) || null,
+      // Explicit keys, not a conditional spread: the phantom-column guard
+      // only reads literal payloads. NULLs on non-quotes satisfy the pairing CHECK.
+      document_type: isQuote ? 'quote' : 'invoice',
+      valid_until: isQuote ? validUntil : null,
+      quote_status: isQuote ? 'open' : null,
       currency,
       exchange_rate: exchangeRate,
       exchange_rate_date: exchangeRateDate,
@@ -1834,10 +2174,12 @@ async function commitCreateInvoice(
       vat_amount_sek: vatAmountSek,
       total,
       total_sek: totalSek,
-      // Fresh unpaid receivable: remaining_amount is what every payment
+      // A quote is an offer, not a claim: nothing is owed on it (parity with
+      // build-invoice-write). Otherwise a fresh unpaid receivable:
+      // remaining_amount is what every payment
       // surface reads as the open balance; leaving the NOT NULL DEFAULT 0
       // made every agent-created invoice look settled.
-      remaining_amount: total,
+      remaining_amount: isQuote ? 0 : total,
       paid_amount: 0,
       vat_treatment: notVatRegistered ? 'exempt' : vatRules.treatment,
       vat_rate: isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate),
@@ -1849,6 +2191,8 @@ async function commitCreateInvoice(
       notes: (params.notes as string) || null,
       payment_link_url: paymentLinkUrl,
       default_dimensions: defaultDimensions ?? {},
+      payment_cash_account_id: payeeChoice.fields.payment_cash_account_id,
+      payment_details: payeeChoice.fields.payment_details,
     })
     .select()
     .single()
@@ -1908,20 +2252,24 @@ async function commitCreateInvoice(
     return { error: itemsError.message, status: 500 }
   }
 
-  const { data: completeInvoice } = await supabase
-    .from('invoices')
-    .select('*, customer:customers(*), items:invoice_items(*)')
-    .eq('id', invoice.id)
-    .single()
+  // invoice.created is for real invoices only: a quote is an offer, not a
+  // claim, and has no downstream consumer obligation (v1 route parity).
+  if (!isQuote) {
+    const { data: completeInvoice } = await supabase
+      .from('invoices')
+      .select('*, customer:customers(*), items:invoice_items(*)')
+      .eq('id', invoice.id)
+      .single()
 
-  if (completeInvoice) {
-    await eventBus.emit({
-      type: 'invoice.created',
-      payload: { invoice: completeInvoice as Invoice, userId, companyId },
-    })
+    if (completeInvoice) {
+      await eventBus.emit({
+        type: 'invoice.created',
+        payload: { invoice: completeInvoice as Invoice, userId, companyId },
+      })
+    }
   }
 
-  return { data: { invoice_id: invoice.id, invoice_number: invoice.invoice_number } }
+  return { data: { invoice_id: invoice.id, invoice_number: invoice.invoice_number ?? quoteNumber } }
 }
 
 /**
@@ -1967,7 +2315,7 @@ async function commitUpdateInvoice(
   const { data: existing, error: fetchError } = await supabase
     .from('invoices')
     .select(
-      'id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, customer_id, document_type, invoice_date, due_date, delivery_date, currency, your_reference, our_reference, invoice_marking, notes, payment_link_url, payment_link_auto, ore_rounding, default_dimensions, deduction_personnummer_encrypted, deduction_personnummer_last4',
+      'id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, quote_status, customer_id, document_type, invoice_date, due_date, delivery_date, currency, your_reference, our_reference, invoice_marking, notes, payment_link_url, payment_link_auto, ore_rounding, default_dimensions, deduction_personnummer_encrypted, deduction_personnummer_last4',
     )
     .eq('id', invoiceId)
     .eq('company_id', companyId)
@@ -2028,7 +2376,7 @@ async function commitUpdateInvoice(
     const { data: itemRows, error: itemsFetchError } = await supabase
       .from('invoice_items')
       .select(
-        'line_type, description, quantity, unit, unit_price, discount_percent, vat_rate, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions',
+        'line_type, description, quantity, unit, unit_price, discount_percent, vat_rate, article_id, revenue_account, sales_order_item_id, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions',
       )
       .eq('invoice_id', invoiceId)
       .order('sort_order', { ascending: true })
@@ -2117,6 +2465,9 @@ async function commitUpdateInvoice(
 
   const replaced = await replaceInvoiceItems(supabase, invoiceId, build.items)
   if (!replaced.ok) {
+    if (replaced.stage === 'guard') {
+      return { error: replaced.messageSv, errorCode: replaced.code, status: 409 }
+    }
     return {
       error: `Fakturaraderna kunde inte skrivas om (${replaced.stage}): ${replaced.error.message}`,
       status: 500,
@@ -2155,6 +2506,14 @@ async function commitMarkInvoicePaid(
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
   if (invoice.credited_invoice_id) {
     return { error: 'Kreditfakturor kan inte markeras som betalda.', status: 409 }
+  }
+  // Parity with the dashboard mark-paid route: a quote is an offer, not a
+  // claim. Proformas keep working (a prepayment record with no verifikat).
+  if (invoice.document_type === 'quote') {
+    const entry = getErrorEntry('INVOICE_QUOTE_NOT_PAYABLE')
+    // 409 like the credit-note guard above: the dispatcher records it as
+    // rejected (a state refusal), not failed (an execution error).
+    return { error: entry?.message_sv ?? 'Only invoices can be paid.', errorCode: 'INVOICE_QUOTE_NOT_PAYABLE', status: 409 }
   }
   if (invoice.status !== 'sent' && invoice.status !== 'overdue') {
     return { error: 'Invoice can only be marked as paid when status is "sent" or "overdue"', status: 409 }
@@ -2252,11 +2611,7 @@ async function commitMarkInvoicePaid(
     }
   }
 
-  const { data: settings } = await supabase
-    .from('company_settings').select('accounting_method, entity_type').eq('company_id', companyId).single()
-
-  const accountingMethod = settings?.accounting_method || 'accrual'
-  const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+  const { accountingMethod, entityType } = await loadBookingContext(supabase, companyId)
   const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
   let journalEntryId: string | null = null
 
@@ -2310,14 +2665,19 @@ async function commitMarkInvoicePaid(
   }
 
   if (isRealInvoice) {
+    // Debit the bank account the invoice asked to be paid to (1930 when none
+    // was chosen): an agent marking a 1931-invoice paid must not land it on 1930.
+    const settlementAccountNumber = await resolveInvoiceSettlementAccount(supabase, companyId, invoice as Invoice)
     if (useCashEntry) {
       const je = await createInvoiceCashEntry(
-        supabase, companyId, userId, invoice as Invoice, paymentDate, entityType, invoice.customer?.name
+        supabase, companyId, userId, invoice as Invoice, paymentDate, entityType, invoice.customer?.name,
+        settlementAccountNumber,
       )
       journalEntryId = je?.id ?? null
     } else {
       const je = await createInvoicePaymentJournalEntry(
-        supabase, companyId, userId, invoice as Invoice, paymentDate, undefined, invoice.customer?.name
+        supabase, companyId, userId, invoice as Invoice, paymentDate, undefined, invoice.customer?.name,
+        undefined, settlementAccountNumber,
       )
       journalEntryId = je?.id ?? null
     }
@@ -2334,6 +2694,48 @@ async function commitMarkInvoicePaid(
         status: 422,
       }
     }
+  }
+
+  // AR sub-ledger row (#2019): the kontantmetod cut-off reads invoice_payments
+  // only, so a paid invoice without it is re-booked as a fordran at bokslut.
+  // Written before the CAS update so the failure branches undo it with the
+  // voucher. See lib/invoices/invoice-payment-row.ts.
+  let paymentRowId: string | null = null
+  if (isRealInvoice) {
+    const recorded = await recordInvoicePaymentRow(supabase, {
+      userId,
+      companyId,
+      invoice: {
+        id: invoiceId,
+        currency: invoice.currency,
+        exchange_rate: invoice.exchange_rate,
+        paid_amount: inv.paid_amount,
+      },
+      paymentDate,
+      newPaidAmount,
+      journalEntryId,
+    })
+    if (!recorded.ok) {
+      // Raw driver text stays server-side; the user gets the outcome only.
+      log.error('mark_invoice_paid: invoice_payments insert failed', undefined, {
+        invoiceId,
+        companyId,
+        error: recorded.error,
+      })
+      if (journalEntryId) {
+        await cancelOrphanedPaymentEntry(
+          supabase, companyId, userId, journalEntryId,
+          'Automatiskt makulerad: betalningsraden kunde inte sparas efter bokförd betalning',
+        )
+      }
+      return {
+        error:
+          'Betalningen kunde inte registreras i reskontran. ' +
+          'Verifikationen har makulerats och fakturan har inte markerats som betald.',
+        status: 500,
+      }
+    }
+    paymentRowId = recorded.id
   }
 
   const paidAt = newStatus === 'paid' ? paidAtFromDate(paymentDate) : null
@@ -2355,6 +2757,7 @@ async function commitMarkInvoicePaid(
   if (updateError) {
     // The payment voucher already posted but the invoice row did not flip;
     // cancel the orphan so the GL doesn't diverge from the sub-ledger.
+    await removeInvoicePaymentRow(supabase, companyId, paymentRowId)
     if (journalEntryId) {
       await cancelOrphanedPaymentEntry(
         supabase, companyId, userId, journalEntryId,
@@ -2368,6 +2771,7 @@ async function commitMarkInvoicePaid(
     // Race lost: the invoice was settled concurrently between our read and
     // write. Cancel the orphaned payment voucher and document the gap rather
     // than leaving a double booking.
+    await removeInvoicePaymentRow(supabase, companyId, paymentRowId)
     if (journalEntryId) {
       await cancelOrphanedPaymentEntry(
         supabase, companyId, userId, journalEntryId,
@@ -2470,11 +2874,18 @@ async function commitSendInvoice(
   if (companyError || !company) return { error: 'Company settings missing', status: 500 }
 
   const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
+  // Freeze the chosen bank account's payee at issue (no-op without a choice).
+  const payeeSnapshot = await snapshotInvoicePayee(supabase, companyId, invoice as Invoice)
+  if (!payeeSnapshot.ok) {
+    return {
+      error: getErrorEntry(payeeSnapshot.code)?.message_sv ?? 'Bankkontot på fakturan kan inte längre användas.',
+      status: 400,
+    }
+  }
+  ;(invoice as Invoice).payment_details = payeeSnapshot.payee
   if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
     return {
-      error:
-        getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')?.message_sv
-        ?? 'Betalningskonto saknas för fakturans valuta.',
+      error: describeMissingInvoicePaymentAccount((invoice as Invoice).currency).sv,
       status: 400,
     }
   }
@@ -2528,7 +2939,7 @@ async function commitSendInvoice(
       const preflight = await prepareInvoicePdfRender(
         company as CompanySettings,
         (invoice as Invoice).currency,
-        { paymentAccountRequired },
+        { paymentAccountRequired, payee: (invoice as Invoice).payment_details ?? null },
       )
       await renderToBuffer(
         InvoicePDF({
@@ -2585,7 +2996,7 @@ async function commitSendInvoice(
   const { branding, company: renderCompany } = await prepareInvoicePdfRender(
     company as CompanySettings,
     renderableInvoice.currency,
-    { paymentAccountRequired },
+    { paymentAccountRequired, payee: (invoice as Invoice).payment_details ?? null },
   )
   const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
   const pdfBuffer = await renderToBuffer(
@@ -2727,11 +3138,17 @@ async function commitMarkInvoiceSent(
 
   if (settingsError || !settings) return { error: 'Company settings missing', status: 500 }
 
+  const payeeSnapshot = await snapshotInvoicePayee(supabase, companyId, invoice as Invoice)
+  if (!payeeSnapshot.ok) {
+    return {
+      error: getErrorEntry(payeeSnapshot.code)?.message_sv ?? 'Bankkontot på fakturan kan inte längre användas.',
+      status: 400,
+    }
+  }
+  ;(invoice as Invoice).payment_details = payeeSnapshot.payee
   if (!hasRequiredInvoicePaymentAccount(settings as CompanySettings, invoice as Invoice)) {
     return {
-      error:
-        getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')?.message_sv
-        ?? 'Betalningskonto saknas för fakturans valuta.',
+      error: describeMissingInvoicePaymentAccount((invoice as Invoice).currency).sv,
       status: 400,
     }
   }
@@ -2824,6 +3241,18 @@ async function commitMatchTransactionInvoice(
   if (invoice.credited_invoice_id) {
     return { error: 'Kreditfakturor kan inte registreras som betalda.', status: 409 }
   }
+  // Parity with the dashboard match route (MATCH_INVOICE_NOT_INVOICE_TYPE):
+  // proformas, delivery notes and quotes carry no receivable to settle.
+  if (invoice.document_type && invoice.document_type !== 'invoice') {
+    const entry = getErrorEntry('MATCH_INVOICE_NOT_INVOICE_TYPE')
+    return {
+      error: entry?.message_sv ?? 'Only invoices can be matched to a transaction.',
+      errorCode: 'MATCH_INVOICE_NOT_INVOICE_TYPE',
+      // 409 like the credit-note guard above: the dispatcher records it as
+      // rejected (a state refusal), not failed (an execution error).
+      status: 409,
+    }
+  }
   if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
     return { error: 'Invoice is not in a matchable state', status: 409 }
   }
@@ -2914,11 +3343,7 @@ async function commitMatchTransactionInvoice(
   // (BookkeepingDatabaseError on a failed cash_accounts lookup), and a throw
   // here must reject the op with NOTHING posted. Behavior-preserving on the
   // happy path: these are pure reads.
-  const { data: settings } = await supabase
-    .from('company_settings').select('accounting_method, entity_type').eq('company_id', companyId).single()
-
-  const accountingMethod = settings?.accounting_method || 'accrual'
-  const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+  const { accountingMethod, entityType } = await loadBookingContext(supabase, companyId)
 
   // Route on invoice state, not the company's current setting. Mirror of
   // the match-invoice route fix: see that handler for the full rationale.
@@ -3140,35 +3565,22 @@ async function commitMatchTransactionInvoice(
   return { data: { invoice_status: newStatus, paid_amount: newPaidAmount, journal_entry_id: journalEntryId } }
 }
 
-async function commitLinkInvoiceVoucher(
-  supabase: SupabaseClient,
-  userId: string,
-  companyId: string,
-  params: Record<string, unknown>
-): Promise<ExecutorResult> {
-  const invoiceId = params.invoice_id as string | undefined
-  const journalEntryId = params.journal_entry_id as string | undefined
-  const notes = (params.notes as string | undefined) ?? undefined
+type VoucherLinkOutcome =
+  | { ok: true; result: LinkInvoiceToVoucherResult | LinkSupplierInvoiceToVoucherResult }
+  | { ok: false; code: string }
 
-  if (!invoiceId || !journalEntryId) {
-    return { error: 'invoice_id and journal_entry_id are required', status: 400 }
-  }
-
-  const outcome = await linkInvoiceToVoucher(supabase, userId, companyId, {
-    invoiceId,
-    journalEntryId,
-    notes,
-  })
-
+/**
+ * Map a voucher-link outcome (customer or supplier invoice) to the executor
+ * result. 404/409 are auto-rejected by the dispatcher (the user can re-stage
+ * with adjusted inputs); 400 surfaces as a normal failure so the UI can
+ * explain what went wrong.
+ */
+function voucherLinkOutcomeToResult(outcome: VoucherLinkOutcome): ExecutorResult {
   if (!outcome.ok) {
     const entry = getErrorEntry(outcome.code)
-    const httpStatus = entry?.httpStatus ?? 500
-    // 404/409 are auto-rejected by the dispatcher (the user can re-stage with
-    // adjusted inputs); 400 surfaces as a normal failure so the UI can
-    // explain what went wrong.
     return {
       error: entry?.message_en ?? outcome.code,
-      status: httpStatus,
+      status: entry?.httpStatus ?? 500,
     }
   }
 
@@ -3183,6 +3595,47 @@ async function commitLinkInvoiceVoucher(
       reconciled_transaction_id: outcome.result.reconciledTransactionId,
     },
   }
+}
+
+async function commitLinkInvoiceVoucher(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const invoiceId = params.invoice_id as string | undefined
+  const journalEntryId = params.journal_entry_id as string | undefined
+  const notes = (params.notes as string | undefined) ?? undefined
+
+  if (!invoiceId || !journalEntryId) {
+    return { error: 'invoice_id and journal_entry_id are required', status: 400 }
+  }
+
+  // Only a faktura carries a receivable to settle (parity with the dashboard
+  // link route and the match executors); the RPC validates status only.
+  const { data: docRow } = await supabase
+    .from('invoices')
+    .select('document_type')
+    .eq('id', invoiceId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  const docType = (docRow as { document_type?: string | null } | null)?.document_type
+  if (docType && docType !== 'invoice') {
+    const entry = getErrorEntry('MATCH_INVOICE_NOT_INVOICE_TYPE')
+    return {
+      error: entry?.message_sv ?? 'Only invoices can be linked to a payment voucher.',
+      errorCode: 'MATCH_INVOICE_NOT_INVOICE_TYPE',
+      status: 409,
+    }
+  }
+
+  const outcome = await linkInvoiceToVoucher(supabase, userId, companyId, {
+    invoiceId,
+    journalEntryId,
+    notes,
+  })
+
+  return voucherLinkOutcomeToResult(outcome)
 }
 
 async function commitLinkSupplierInvoiceVoucher(
@@ -3205,30 +3658,35 @@ async function commitLinkSupplierInvoiceVoucher(
     notes,
   })
 
-  if (!outcome.ok) {
-    const entry = getErrorEntry(outcome.code)
-    // 404/409 are auto-rejected by the dispatcher (the user can re-stage with
-    // adjusted inputs); 400 surfaces as a normal failure so the UI can explain.
-    return {
-      error: entry?.message_en ?? outcome.code,
-      status: entry?.httpStatus ?? 500,
-    }
-  }
-
-  return {
-    data: {
-      invoice_status: outcome.result.invoiceStatus,
-      paid_amount: outcome.result.paidAmount,
-      remaining_amount: outcome.result.remainingAmount,
-      payment_amount: outcome.result.paymentAmount,
-      payment_id: outcome.result.paymentId,
-      journal_entry_id: outcome.result.journalEntryId,
-      reconciled_transaction_id: outcome.result.reconciledTransactionId,
-    },
-  }
+  return voucherLinkOutcomeToResult(outcome)
 }
 
 // ── Stream 1 Phase 1 + follow-up executors ───────────────────────
+
+/**
+ * Close / lock / unlock share one shape: require fiscal_period_id, run the
+ * period-service transition, answer with the period id plus the timestamp
+ * the transition set (closed_at or locked_at), and turn any throw into a
+ * 400 with the service's message.
+ */
+async function runPeriodTransition(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>,
+  transition: (supabase: SupabaseClient, companyId: string, userId: string, id: string) => Promise<FiscalPeriod>,
+  timestampKey: 'closed_at' | 'locked_at',
+  fallback: string
+): Promise<ExecutorResult> {
+  const id = params.fiscal_period_id as string
+  if (!id) return { error: 'fiscal_period_id is required', status: 400 }
+  try {
+    const period = await transition(supabase, companyId, userId, id)
+    return { data: { period_id: period.id, [timestampKey]: period[timestampKey] } }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : fallback, status: 400 }
+  }
+}
 
 async function commitClosePeriod(
   supabase: SupabaseClient,
@@ -3236,14 +3694,7 @@ async function commitClosePeriod(
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
-  const id = params.fiscal_period_id as string
-  if (!id) return { error: 'fiscal_period_id is required', status: 400 }
-  try {
-    const period = await closePeriod(supabase, companyId, userId, id)
-    return { data: { period_id: period.id, closed_at: period.closed_at } }
-  } catch (err) {
-    return { error: err instanceof Error ? err.message : 'Close failed', status: 400 }
-  }
+  return runPeriodTransition(supabase, userId, companyId, params, closePeriod, 'closed_at', 'Close failed')
 }
 
 async function commitLockPeriod(
@@ -3252,14 +3703,7 @@ async function commitLockPeriod(
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
-  const id = params.fiscal_period_id as string
-  if (!id) return { error: 'fiscal_period_id is required', status: 400 }
-  try {
-    const period = await lockPeriod(supabase, companyId, userId, id)
-    return { data: { period_id: period.id, locked_at: period.locked_at } }
-  } catch (err) {
-    return { error: err instanceof Error ? err.message : 'Lock failed', status: 400 }
-  }
+  return runPeriodTransition(supabase, userId, companyId, params, lockPeriod, 'locked_at', 'Lock failed')
 }
 
 async function commitUnlockPeriod(
@@ -3268,14 +3712,7 @@ async function commitUnlockPeriod(
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
-  const id = params.fiscal_period_id as string
-  if (!id) return { error: 'fiscal_period_id is required', status: 400 }
-  try {
-    const period = await unlockPeriod(supabase, companyId, userId, id)
-    return { data: { period_id: period.id, locked_at: period.locked_at } }
-  } catch (err) {
-    return { error: err instanceof Error ? err.message : 'Unlock failed', status: 400 }
-  }
+  return runPeriodTransition(supabase, userId, companyId, params, unlockPeriod, 'locked_at', 'Unlock failed')
 }
 
 async function commitUncategorizeTransaction(
@@ -3291,8 +3728,7 @@ async function commitUncategorizeTransaction(
   try {
     await reverseEntry(supabase, companyId, userId, journalEntryId)
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'Reversal failed', status: 500 }
+    return failUnlessBookkeepingError(err, 'Reversal failed', 500)
   }
 
   const { error: updateError } = await supabase
@@ -3719,8 +4155,7 @@ async function commitRunYearEnd(
       },
     }
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'Year-end failed', status: 400 }
+    return failUnlessBookkeepingError(err, 'Year-end failed', 400)
   }
 }
 
@@ -3834,11 +4269,7 @@ async function commitPostKontantmetodCutoff(
     if (err instanceof KontantmetodCutoffPartialError) {
       throw new PartialCommitError(err.message, err.postedIds, err.cause)
     }
-    if (isBookkeepingError(err)) throw err
-    return {
-      error: err instanceof Error ? err.message : 'Kontantmetodens bokslutsavgränsning misslyckades',
-      status: 400,
-    }
+    return failUnlessBookkeepingError(err, 'Kontantmetodens bokslutsavgränsning misslyckades', 400)
   }
 }
 
@@ -3856,8 +4287,7 @@ async function commitSetOpeningBalances(
     const entry = await generateOpeningBalances(supabase, companyId, userId, closedId, nextId)
     return { data: { opening_balance_entry_id: entry.id } }
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'Opening balances failed', status: 400 }
+    return failUnlessBookkeepingError(err, 'Opening balances failed', 400)
   }
 }
 
@@ -3879,8 +4309,7 @@ async function commitRunCurrencyRevaluation(
         : { entry_id: null, items_revalued: 0, message: 'No foreign-currency items to revalue' },
     }
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'Revaluation failed', status: 400 }
+    return failUnlessBookkeepingError(err, 'Revaluation failed', 400)
   }
 }
 
@@ -3913,8 +4342,7 @@ async function commitPostAnnualDepreciation(
       },
     }
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'Depreciation posting failed', status: 400 }
+    return failUnlessBookkeepingError(err, 'Depreciation posting failed', 400)
   }
 }
 
@@ -4520,8 +4948,7 @@ async function commitCreditSupplierInvoice(
       }
     } catch (err) {
       await supabase.from('supplier_invoices').delete().eq('id', creditNote.id).eq('company_id', companyId)
-      if (isBookkeepingError(err)) throw err
-      return { error: err instanceof Error ? err.message : 'Failed to book credit note', status: 500 }
+      return failUnlessBookkeepingError(err, 'Failed to book credit note', 500)
     }
   }
 
@@ -4663,14 +5090,7 @@ async function commitCreditInvoice(
     .eq('id', creditNote.id)
     .single()
 
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('entity_type, accounting_method')
-    .eq('company_id', companyId)
-    .single()
-
-  const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
-  const accountingMethod = (settings?.accounting_method as AccountingMethod) || 'accrual'
+  const { accountingMethod, entityType } = await loadBookingContext(supabase, companyId)
 
   // Resolve the original verifikation reference so the credit-note JE can
   // point back to the corrected entry per BFL 5 kap. 5 §. We tolerate
@@ -4814,91 +5234,24 @@ async function commitConvertInvoice(
   const id = params.invoice_id as string
   if (!id) return { error: 'invoice_id is required', status: 400 }
 
-  const { data: proforma, error: proformaError } = await supabase
-    .from('invoices').select('*, items:invoice_items(*)').eq('id', id).eq('company_id', companyId).single()
+  // Shared with POST /api/invoices/[id]/convert: proforma or quote to
+  // invoice, F-number allocated last, source cancelled (proforma) or
+  // accepted (quote).
+  const result = await convertToInvoice({ supabase, userId, companyId, sourceId: id })
 
-  if (proformaError || !proforma) return { error: 'Proformafakturan hittades inte', status: 404 }
-  if (proforma.document_type !== 'proforma') {
-    return { error: 'Endast proformafakturor kan konverteras', status: 400 }
-  }
-  if (proforma.status === 'cancelled') {
-    return { error: 'Denna proformafaktura har redan makuleras', status: 409 }
-  }
-
-  const { data: invoice, error: invoiceError } = await supabase
-    .from('invoices')
-    .insert({
-      user_id: userId,
-      company_id: companyId,
-      customer_id: proforma.customer_id,
-      invoice_number: null,
-      invoice_date: new Date().toISOString().split('T')[0],
-      due_date: proforma.due_date,
-      currency: proforma.currency,
-      exchange_rate: proforma.exchange_rate,
-      exchange_rate_date: proforma.exchange_rate_date,
-      subtotal: proforma.subtotal,
-      subtotal_sek: proforma.subtotal_sek,
-      vat_amount: proforma.vat_amount,
-      vat_amount_sek: proforma.vat_amount_sek,
-      total: proforma.total,
-      remaining_amount: proforma.total,
-      paid_amount: 0,
-      total_sek: proforma.total_sek,
-      vat_treatment: proforma.vat_treatment,
-      vat_rate: proforma.vat_rate,
-      moms_ruta: proforma.moms_ruta,
-      reverse_charge_text: proforma.reverse_charge_text,
-      your_reference: proforma.your_reference,
-      our_reference: proforma.our_reference,
-      notes: proforma.notes,
-      document_type: 'invoice',
-      converted_from_id: id,
-      // Dimensions PR7: the converted invoice books with the proforma's bag.
-      default_dimensions: proforma.default_dimensions ?? {},
-    })
-    .select()
-    .single()
-
-  if (invoiceError) return { error: invoiceError.message, status: 500 }
-
-  try {
-    await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
-  } catch (err) {
-    await supabase.from('invoices').delete().eq('id', invoice.id)
-    return { error: err instanceof Error ? err.message : 'Failed to assign invoice number', status: 500 }
-  }
-
-  const items = (proforma.items ?? []).map((item: Record<string, unknown>) => ({
-    invoice_id: invoice.id,
-    sort_order: item.sort_order,
-    line_type: item.line_type ?? 'product',
-    description: item.description,
-    quantity: item.quantity,
-    unit: item.unit,
-    unit_price: item.unit_price,
-    line_total: item.line_total,
-    // Preserve per-line VAT and any article/revenue-account override from the
-    // proforma so the converted invoice books exactly as the proforma showed
-    // (mixed rates + per-article accounts both rely on these per-line fields).
-    vat_rate: item.vat_rate ?? 0,
-    vat_amount: item.vat_amount ?? 0,
-    revenue_account: item.revenue_account ?? null,
-    article_id: item.article_id ?? null,
-    dimensions: item.dimensions ?? {},
-  }))
-
-  if (items.length > 0) {
-    const { error: itemsError } = await supabase.from('invoice_items').insert(items)
-    if (itemsError) {
-      await supabase.from('invoices').delete().eq('id', invoice.id)
-      return { error: itemsError.message, status: 500 }
+  if (!result.ok) {
+    if (result.code === 'INVOICE_CONVERT_FAILED') {
+      return { error: result.cause.message, errorCode: result.code, status: 500 }
+    }
+    const entry = getErrorEntry(result.code)
+    return {
+      error: entry?.message_sv ?? result.code,
+      errorCode: result.code,
+      status: entry?.httpStatus ?? 400,
     }
   }
 
-  await supabase.from('invoices').update({ status: 'cancelled' }).eq('id', id)
-
-  return { data: { invoice_id: invoice.id, invoice_number: invoice.invoice_number } }
+  return { data: { invoice_id: result.invoice.id, invoice_number: result.invoice.invoice_number } }
 }
 
 async function commitImportSie(
@@ -4962,8 +5315,7 @@ async function commitImportSie(
       },
     }
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'SIE import failed', status: 500 }
+    return failUnlessBookkeepingError(err, 'SIE import failed', 500)
   }
 }
 
@@ -5219,8 +5571,7 @@ async function commitCreateVoucher(
       },
     }
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'Failed to create voucher', status: 500 }
+    return failUnlessBookkeepingError(err, 'Failed to create voucher', 500)
   }
 }
 
@@ -5312,8 +5663,7 @@ async function commitCorrectEntry(
       },
     }
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'Failed to correct entry', status: 500 }
+    return failUnlessBookkeepingError(err, 'Failed to correct entry', 500)
   }
 }
 
@@ -5397,8 +5747,7 @@ async function commitReverseEntry(
       },
     }
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    return { error: err instanceof Error ? err.message : 'Failed to reverse entry', status: 500 }
+    return failUnlessBookkeepingError(err, 'Failed to reverse entry', 500)
   }
 }
 
@@ -5600,7 +5949,6 @@ async function commitUpdatePayslipLine(
 
   try {
     const { updatePayslipLine } = await import('@/lib/salary/payslip-lines')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await updatePayslipLine(supabase, {
       companyId,
       salaryRunId,
@@ -5645,7 +5993,6 @@ async function commitSetRunSalary(
 
   try {
     const { setRunEmployeeSalary } = await import('@/lib/salary/run-employees')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await setRunEmployeeSalary(supabase, {
       companyId,
       salaryRunId,
@@ -5689,7 +6036,6 @@ async function commitUpdateSalaryRun(
 
   try {
     const { updateDraftSalaryRun } = await import('@/lib/salary/update-run')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await updateDraftSalaryRun(supabase, {
       companyId,
       salaryRunId,
@@ -5727,7 +6073,6 @@ async function commitCreateEmployee(
 ): Promise<ExecutorResult> {
   try {
     const { createEmployee } = await import('@/lib/salary/employee-commands')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await createEmployee(supabase, {
       companyId,
       userId,
@@ -5764,7 +6109,6 @@ async function commitUpdateEmployee(
 
   try {
     const { updateEmployee } = await import('@/lib/salary/employee-commands')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await updateEmployee(supabase, { companyId, employeeId, patch })
     if (!result.ok) {
       const entry = getErrorEntry(result.code)
@@ -5799,7 +6143,6 @@ async function commitRegisterAbsence(
 
   try {
     const { upsertAbsenceRange } = await import('@/lib/salary/absence')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await upsertAbsenceRange(supabase, {
       companyId,
       employeeId,
@@ -5859,7 +6202,6 @@ async function commitBookSalaryRun(
 
   try {
     const { advanceAndBookSalaryRun } = await import('@/lib/salary/book-run')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await advanceAndBookSalaryRun(supabase, {
       companyId,
       userId,
@@ -5915,7 +6257,6 @@ async function commitDeleteAbsence(
 
   try {
     const { deleteAbsenceRange } = await import('@/lib/salary/absence')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await deleteAbsenceRange(supabase, {
       companyId,
       employeeId,
@@ -5969,13 +6310,11 @@ async function commitSetEmployeeOpeningBalances(
   }
 
   try {
-    const { OpeningBalancesBulkSchema } = await import('@/lib/api/schemas')
     const parsed = OpeningBalancesBulkSchema.safeParse({ items })
     if (!parsed.success) {
       return { error: 'Ogiltiga ingående saldon i den godkända operationen', status: 400 }
     }
     const { setOpeningBalancesBulk } = await import('@/lib/salary/opening-balances')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await setOpeningBalancesBulk(supabase, {
       companyId,
       userId,
@@ -6017,7 +6356,6 @@ async function commitVacationYearClose(
 
   try {
     const { commitVacationYearClose: runClose } = await import('@/lib/salary/semesterberedning')
-    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
     const result = await runClose(supabase, companyId, userId, yearStart, { bookAdjustment })
     if (!result.ok) {
       const entry = getErrorEntry(result.code)
@@ -6052,20 +6390,25 @@ async function commitVacationYearClose(
 // Error, which the dispatcher catch releases back to 'pending'; a non-recoverable
 // failure becomes a plain { error, status } that rejects the op.
 
-function getSkatteverketServices(): SkatteverketCommitServices {
-  const services = extensionRegistry.get('skatteverket')?.services as
-    | Partial<SkatteverketCommitServices>
-    | undefined
-  if (!services?.commitSubmitVatDeclaration || !services?.commitSubmitAgi) {
-    // Extension absent or not wired. Recoverable: leave the op pending so a
-    // re-enable + re-approve works without re-staging.
+/**
+ * Resolve the Skatteverket extension's services and require the given keys
+ * to be wired. Extension absent or not wired is recoverable: the op is left
+ * pending so a re-enable + re-approve works without re-staging.
+ */
+function requireSkatteverketServices<T extends object>(keys: ReadonlyArray<keyof T>): T {
+  const services = extensionRegistry.get('skatteverket')?.services as Partial<T> | undefined
+  if (!services || keys.some((key) => !services[key])) {
     throw new SkatteverketRecoverableError(
       'Skatteverket-integrationen är inte tillgänglig.',
       'EXTENSION_DISABLED',
       503,
     )
   }
-  return services as SkatteverketCommitServices
+  return services as T
+}
+
+function getSkatteverketServices(): SkatteverketCommitServices {
+  return requireSkatteverketServices<SkatteverketCommitServices>(['commitSubmitVatDeclaration', 'commitSubmitAgi'])
 }
 
 function handleSkvSubmitResult(result: SkvSubmitResult): ExecutorResult {
@@ -6118,19 +6461,7 @@ async function commitSubmitAgi(
 // work (or fail recoverable) independently of the SKV filing services.
 
 function getSkattekontoBookingService(): SkattekontoBookingCommitService {
-  const services = extensionRegistry.get('skatteverket')?.services as
-    | Partial<SkattekontoBookingCommitService>
-    | undefined
-  if (!services?.commitBookSkattekontoRows) {
-    // Extension absent or not wired. Recoverable: leave the op pending so a
-    // re-enable + re-approve works without re-staging.
-    throw new SkatteverketRecoverableError(
-      'Skatteverket-integrationen är inte tillgänglig.',
-      'EXTENSION_DISABLED',
-      503,
-    )
-  }
-  return services as SkattekontoBookingCommitService
+  return requireSkatteverketServices<SkattekontoBookingCommitService>(['commitBookSkattekontoRows'])
 }
 
 async function commitBookSkattekontoRows(
@@ -6782,6 +7113,18 @@ async function commitPendingOperationInner(
         break
       case 'ignore_transaction':
         result = await commitIgnoreTransaction(supabase, companyId, pendingOp.params)
+        break
+      case 'create_sales_order':
+        result = await commitCreateSalesOrder(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'transition_sales_order':
+        result = await commitTransitionSalesOrder(supabase, companyId, pendingOp.params)
+        break
+      case 'register_sales_order_delivery':
+        result = await commitRegisterSalesOrderDelivery(supabase, companyId, pendingOp.params)
+        break
+      case 'create_invoice_from_sales_order':
+        result = await commitCreateInvoiceFromSalesOrder(supabase, userId, companyId, pendingOp.params)
         break
       case 'create_dimension_value':
         result = await commitCreateDimensionValue(supabase, userId, companyId, pendingOp.params)

@@ -49,4 +49,3 @@ export async function refreshBjornLundenToken(): Promise<TokenResponse> {
   return fetchBjornLundenToken(clientId, clientSecret);
 }
 
-export const storeBjornLundenToken = refreshBjornLundenToken;

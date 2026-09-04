@@ -1,3 +1,4 @@
+import { formatOrgNumber } from '@/lib/utils'
 import {
   Document,
   Page,
@@ -5,7 +6,7 @@ import {
   View,
   StyleSheet,
 } from '@react-pdf/renderer'
-import { pdfNumberText } from '@/lib/pdf/number-text'
+import { pdfNumberText, formatDateSv } from '@/lib/pdf/number-text'
 import type { KassaflodesanalysReport } from './kassaflodesanalys'
 import type { CompanySettings } from '@/types'
 
@@ -171,19 +172,6 @@ function formatAmount(n: number): string {
       maximumFractionDigits: 2,
     }).format(n),
   )
-}
-
-function formatOrgNumber(orgNumber: string): string {
-  const cleaned = orgNumber.replace(/\D/g, '')
-  if (cleaned.length === 10) {
-    return `${cleaned.slice(0, 6)}-${cleaned.slice(6)}`
-  }
-  return orgNumber
-}
-
-function formatDateSv(iso: string): string {
-  if (!iso) return ''
-  return new Date(iso).toLocaleDateString('sv-SE')
 }
 
 interface KassaflodePDFProps {

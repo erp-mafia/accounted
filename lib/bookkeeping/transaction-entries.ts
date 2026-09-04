@@ -1,4 +1,5 @@
 import { createJournalEntry, findFiscalPeriod } from './engine'
+import { resolveCashAccountVoucherSeries } from './cash-account-voucher-series'
 import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
 import { coerceDimensionsBag } from './dimension-resolver'
 import { extractNetAmount, extractVatAmount } from './vat-entries'
@@ -338,6 +339,14 @@ export async function createTransactionJournalEntry(
     ? [baseDescription, ...extraParts].filter(Boolean).join(' · ').slice(0, 500)
     : baseDescription
 
+  // The transaction's bank account may carry its own verifikationsserie;
+  // undefined lets the engine fall back to the per-source-type default.
+  const voucherSeries = await resolveCashAccountVoucherSeries(
+    supabase,
+    companyId,
+    transaction.cash_account_id,
+  )
+
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
     entry_date: entryDate,
@@ -345,6 +354,7 @@ export async function createTransactionJournalEntry(
     source_type: 'bank_transaction',
     source_id: transaction.id,
     lines,
+    ...(voucherSeries ? { voucher_series: voucherSeries } : {}),
   }
 
   return createJournalEntry(supabase, companyId, userId, input)

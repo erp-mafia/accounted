@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse, after } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { createLogger } from '@/lib/logger'
-import { createSession, type AccountInfo } from '@/extensions/general/enable-banking/lib/api-client'
+import { createSession, extractBban, type AccountInfo } from '@/extensions/general/enable-banking/lib/api-client'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
 import { eventBus } from '@/lib/events/bus'
 import {
@@ -20,6 +20,10 @@ import { supersedeSiblingConnections } from '@/extensions/general/enable-banking
 import { getBankConnectionErrorMessage } from '@/lib/errors/get-error-message'
 import { renderFinalizeShell, renderFinalizeRedirect } from './finalize-page'
 import { isConnectorState, verifyConnectorState } from '@/lib/connect/hosted/state'
+import {
+  requireFlowInitiator,
+  FLOW_INITIATOR_MISMATCH_MESSAGE,
+} from '@/lib/auth/oauth-flow-binding'
 
 // This route emits bank_connection.consent_granted / .cash_account_mirror_failed
 // (ASVS V16 / GDPR Art.30 audit events). ensureInitialized() must run at module
@@ -269,6 +273,31 @@ export async function GET(request: Request) {
     )
   }
 
+  // The state token proves this callback belongs to a flow we started; it
+  // says nothing about WHO is completing it. Bind the completion to the
+  // initiator's own cookie session before any finalize work: otherwise a
+  // victim lured into approving a consent someone else started would have
+  // their bank accounts attached to that someone's company. The connector
+  // branch above is exempt on purpose (server-to-server, HMAC-verified).
+  const initiator = await requireFlowInitiator(request, pendingConnection.user_id, {
+    flow: 'enable-banking.callback',
+  })
+  if (!initiator.ok) {
+    if (initiator.reason === 'no_session') {
+      // Session expired mid-flow: sign in and the callback re-runs with the
+      // same code + state. Nothing on the row changes.
+      return initiator.response
+    }
+    // A different user completed it. Refuse without exchanging the code and
+    // without touching the row: it keeps waiting for its initiator and the
+    // stale-pending cleanup reaps it if nobody comes back.
+    const params = new URLSearchParams({
+      bank_error: FLOW_INITIATOR_MISMATCH_MESSAGE,
+      ...(pendingConnection.bank_name ? { bank_name: pendingConnection.bank_name } : {}),
+    })
+    return NextResponse.redirect(`${baseUrl}/settings/banking?${params.toString()}`)
+  }
+
   // Kick the finalize work off eagerly, decoupled from the response stream:
   // if the user closes the tab mid-stream, the stream is cancelled but this
   // promise keeps running, so the session persistence, cash-account mirror
@@ -441,6 +470,7 @@ async function finalizeConnection(
     return {
       uid: account.uid,
       iban: account.account_id?.iban,
+      bban: extractBban(account),
       name: account.name || account.product,
       currency: account.currency,
       // Carry the user's earlier choice for an account we have seen before;
@@ -798,6 +828,7 @@ async function finalizeConnection(
         currency: account.currency,
         ledger_account: targetLedger,
         iban: account.iban ?? null,
+        bban: account.bban ?? null,
         name: account.name ?? null,
         enabled: account.enabled ?? true,
         reuse_cash_account_id: reuseCashAccountId,

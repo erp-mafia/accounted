@@ -2,6 +2,7 @@ import { after } from 'next/server'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { extractInvoiceFields, emptyResult, fetchOwnCompanyIdentity } from './extract-invoice-fields'
 import { mirrorExtractionToDocument } from './mirror-extraction'
+import type { InboxKindHint } from './resend-inbound'
 import { getAiStatus } from '@/lib/ai'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -11,6 +12,7 @@ import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import type { InvoiceExtractionResult } from '@/types'
 import { PDFDocument } from 'pdf-lib'
 import path from 'node:path'
+import { escapeHtml } from '@/lib/email/user-text'
 
 // Verdicts decidable before touching the file. `ai_unconfigured` is the
 // deployment-level "no AI backend" state (self-host without a key), distinct
@@ -138,15 +140,6 @@ export const UPLOAD_ALLOWED_MIME_TYPES = new Set([
 // inbound webhook, where the preview surfaces render it fully sandboxed.
 export const EMAIL_ALLOWED_MIME_TYPES = new Set([...UPLOAD_ALLOWED_MIME_TYPES, 'text/html'])
 
-function escapeHtml(raw: string): string {
-  return raw
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
-
 /**
  * Wrap HTML in a minimal document shell unless it already is a full document.
  * Mail bodies are usually fragments (a bare <div>/<table>); the document
@@ -191,6 +184,10 @@ export interface EmailMeta {
   bodyText?: string | null
   resendEmailId?: string | null
   resendAttachmentId?: string | null
+  // Sender-declared document kind from the +lev / +ver plus-address tag.
+  // Lands in its own column (not extracted_data) so re-extraction cannot
+  // overwrite what the sender said.
+  kindHint?: InboxKindHint | null
 }
 
 // Chat-channel provenance (whatsapp-inbox extension). When present, the inbox
@@ -454,6 +451,7 @@ export async function processArchivedDocument(
         email_body_text: emailMeta?.bodyText || null,
         resend_email_id: emailMeta?.resendEmailId || null,
         resend_attachment_id: emailMeta?.resendAttachmentId || null,
+        kind_hint: emailMeta?.kindHint ?? null,
         raw_email_payload: emailMeta?.messageId
           ? { messageId: emailMeta.messageId, filename: file.name }
           : null,
@@ -548,6 +546,7 @@ export async function processArchivedDocument(
       email_body_text: emailMeta?.bodyText || null,
       resend_email_id: emailMeta?.resendEmailId || null,
       resend_attachment_id: emailMeta?.resendAttachmentId || null,
+      kind_hint: emailMeta?.kindHint ?? null,
       raw_email_payload: emailMeta?.messageId
         ? { messageId: emailMeta.messageId, filename: file.name }
         : null,

@@ -9,7 +9,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  * session id, SKV access token) is hashed; the value never rests here.
  */
 
-export type ConnectorService = 'bank' | 'skatteverket'
+export type ConnectorService = 'bank' | 'skatteverket' | 'peppol'
 
 export function hashHandle(handle: string): string {
   return crypto.createHash('sha256').update(handle).digest('hex')
@@ -23,24 +23,6 @@ export interface LedgerRow {
   provider: string | null
   account_uids: string[]
   status: 'pending' | 'active' | 'revoked'
-}
-
-/** Active connections for one company under one key and service. Enforces the per-company limit. */
-export async function countActiveConnections(
-  supabase: SupabaseClient,
-  keyId: string,
-  service: ConnectorService,
-  companyRef: string,
-): Promise<number> {
-  const { count, error } = await supabase
-    .from('connector_connections')
-    .select('id', { count: 'exact', head: true })
-    .eq('connector_key_id', keyId)
-    .eq('service', service)
-    .eq('company_ref', companyRef)
-    .eq('status', 'active')
-  if (error) throw new Error(`ledger count failed: ${error.message}`)
-  return count ?? 0
 }
 
 /**

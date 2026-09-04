@@ -9,6 +9,25 @@ const isBuildPlaceholder = url?.startsWith('__')
 const safeUrl = isBuildPlaceholder ? 'https://placeholder.supabase.co' : url
 const safeKey = isBuildPlaceholder ? 'placeholder' : key
 
+/**
+ * Cookie-session client for server components, server actions and routes.
+ *
+ * Cookie encoding stays the default `user-and-tokens` on purpose.
+ * @supabase/ssr 0.12 offers an experimental `cookies.encode: 'tokens-only'`
+ * that keeps the user object out of the cookie, but auth-js then substitutes a
+ * THROWING proxy for `session.user` wherever no user store holds it: every
+ * fresh server request (app/api/mcp-oauth/authorize/route.ts calls
+ * `mfa.getAuthenticatorAssuranceLevel()`, which reads `session.user.factors`)
+ * and, in the browser, every `getSession().user` read after a session minted
+ * by the server-side PKCE callback (reset-password, SendInvoiceDialog) until
+ * the next token refresh. The trust problem is solved at the consumers
+ * instead: lib/supabase/middleware.ts and lib/auth/require-auth.ts never read
+ * MFA state off the cookie's user object (factors come from getUser() or
+ * listFactors(), the level from signature-verified claims). Switch the
+ * encoding only together with those call sites, and identically here, in
+ * client.ts and in middleware.ts: @supabase/ssr requires the two sides to
+ * match.
+ */
 export async function createClient() {
   const cookieStore = await cookies()
 

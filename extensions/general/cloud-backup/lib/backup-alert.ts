@@ -15,6 +15,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getEmailService } from '@/lib/email/service'
 import { createLogger } from '@/lib/logger'
 import { resolveMemberEmail } from '@/lib/notifications/member-email'
+import { escapeHtml } from '@/lib/email/user-text'
 
 const log = createLogger('cloud-backup-alert')
 
@@ -127,11 +128,3 @@ async function fetchCompanyName(
   return (data?.company_name as string) || 'ditt företag'
 }
 
-function escapeHtml(input: string): string {
-  return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}

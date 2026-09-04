@@ -3,6 +3,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { calculatePeriodDates, formatPeriodLabel } from './period-dates'
 import { calculateVatDeclaration } from './vat-declaration'
+import { normalizeCountryCode } from '@/lib/vat/country-codes'
 
 /**
  * Periodisk sammanställning (EC Sales List / SKV 5740).
@@ -263,7 +264,10 @@ export async function generatePeriodiskSammanstallning(
       continue
     }
 
-    const isoCountry = (customer.country ?? '').trim().toUpperCase()
+    // Rows written before 2026-09 may still hold a country name the
+    // backfill could not map; a name the register knows becomes its code, an
+    // unknown one is kept as typed so the warning names it.
+    const isoCountry = normalizeCountryCode(customer.country) ?? (customer.country ?? '').trim().toUpperCase()
     const vatCountry = isoCountry ? toVatCountryCode(isoCountry) : ''
     const rawVat = customer.vat_number ?? ''
     const normalizedVat = normalizeVatNumber(rawVat)

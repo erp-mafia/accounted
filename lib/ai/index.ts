@@ -1,29 +1,18 @@
-import { getAiStatus, readAiConfig, type ResolvedAiConfig } from './config'
+import { readAiConfig, type ResolvedAiConfig } from './config'
 import { createAnthropicFamilyService } from './services/anthropic-family'
 import { createOpenAICompatibleService } from './services/openai-compatible'
 import type { AiService } from './types'
 
 export type {
-  AiCapabilities,
   AiChatTurn,
   AiDocumentInput,
   AiImageMediaType,
-  AiPdfMode,
-  AiProviderKind,
   AiService,
   AiToolDef,
-  AiStatus,
   AiTier,
-  AiUsage,
-  ExtractFromDocumentRequest,
-  ExtractFromDocumentResult,
   ExtractionSkipReason,
-  GenerateStructuredRequest,
-  GenerateStructuredResult,
-  GenerateTextRequest,
-  GenerateTextResult,
 } from './types'
-export { getAiStatus, readAiConfig, resolveTierModel } from './config'
+export { getAiStatus, readAiConfig } from './config'
 export { extractJsonObject } from './json'
 
 // One service per resolved configuration. Keyed on the non-secret parts of
@@ -60,9 +49,4 @@ export function getAiService(): AiService {
       : createAnthropicFamilyService(cfg)
   cached = { key, service }
   return service
-}
-
-/** Tests only: drop the cached service so the next call re-reads the environment. */
-export function resetAiServiceForTests(): void {
-  cached = null
 }

@@ -5,10 +5,6 @@ import { roundOre } from '@/lib/money'
  *  bokfört värde plus årets anskaffningar minus årets försäljningar. */
 export const OVERAVSKRIVNING_30_RULE = 0.7
 
-/** 20-rule (kompletteringsregel, IL 18 kap 17 §): restvärde minst 0 % efter
- *  5 år (20 % avskrivning per år, raklinje). */
-export const OVERAVSKRIVNING_20_RULE_YEARS = 5
-
 export interface Compute30RuleInput {
   /** IB skattemässigt värde maskiner & inventarier. */
   openingBookValue: number
@@ -20,6 +16,8 @@ export interface Compute30RuleInput {
   fiscalPeriodMonths?: number
 }
 
+/** 20-rule (kompletteringsregel, IL 18 kap 17 §): restvärde minst 0 % efter
+ *  5 år (20 % avskrivning per år, raklinje), hence the five-slot input. */
 export interface Compute20RuleInput {
   /** Anskaffningskostnad per anskaffningsår, från innevarande år minus 4 till
    *  innevarande år. Index 0 = innevarande år. */

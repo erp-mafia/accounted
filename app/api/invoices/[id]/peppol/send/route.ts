@@ -7,6 +7,7 @@ import { ensureInitialized } from '@/lib/init'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { issueAndBookInvoice, type IssueAndBookResult } from '@/lib/invoices/issue-and-book-invoice'
 import { hasRequiredInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
+import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import {
   PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID,
   PEPPOL_BIS_BILLING_PROFILE_ID,
@@ -149,6 +150,16 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // A draft is issued (numbered, marked sent, booked) after the network
     // accepts it. Refuse up front what issuance would refuse afterwards, so an
     // invoice never reaches the buyer and then fails to book.
+    if (wasDraft) {
+      const payeeSnapshot = await snapshotInvoicePayee(supabase, companyId, invoice)
+      if (!payeeSnapshot.ok) {
+        return privateNoStore(errorResponseFromCode(payeeSnapshot.code, log, {
+          requestId,
+          details: payeeSnapshot.details,
+        }))
+      }
+      invoice.payment_details = payeeSnapshot.payee
+    }
     if (wasDraft && !hasRequiredInvoicePaymentAccount(company, invoice)) {
       return privateNoStore(errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
         requestId,

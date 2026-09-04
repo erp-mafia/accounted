@@ -265,21 +265,6 @@ export interface TICFiscalYear {
 }
 
 /**
- * v2 `/companies/{id}/accounting-periods` returns
- * `CompanyAccountingPeriod_Dto[]`: history of period-end changes
- * (e.g. shifted year-end). Useful as a "this company changed its books"
- * indicator during onboarding.
- */
-export interface TICAccountingPeriod {
-  companyAccountingPeriodId?: number
-  companyId?: number
-  endingDatePriorToChange?: string | null
-  endingDateAfterChange?: string | null
-  firstSeenAtUtc?: string | null
-  lastUpdatedAtUtc?: string | null
-}
-
-/**
  * v2 `/companies/{id}/payrolls` returns a wrapper with two arrays.
  * `payroll2` is the modern per-period breakdown with deviation vs the
  * annual-report personnel-cost line; `payrolls` is the legacy

@@ -34,6 +34,3 @@ export const UpdateRecurringScheduleParamsSchema = z
     changes: RecurringScheduleChangesSchema,
   })
   .strict()
-
-export type CreateRecurringScheduleParams = z.infer<typeof CreateRecurringScheduleParamsSchema>
-export type UpdateRecurringScheduleParams = z.infer<typeof UpdateRecurringScheduleParamsSchema>

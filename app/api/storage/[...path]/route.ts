@@ -1,7 +1,12 @@
 import { createLogger } from '@/lib/logger'
+import { createServiceClient } from '@/lib/supabase/server'
+import { contentDisposition } from '@/lib/api/content-disposition'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import {
+  OPAQUE_DOCUMENT_CSP,
   STORAGE_PROXY_ROUTE,
+  documentKeyFromProxyPath,
+  inlineSafeMimeType,
   readBodyWithCap,
   resolveUpstreamStorageUrl,
 } from '@/lib/core/documents/storage-proxy'
@@ -16,6 +21,15 @@ import {
  * sandboxes. The MCP tools now hand out URLs under this route instead (see
  * lib/core/documents/storage-proxy.ts), and this handler forwards them to
  * Storage unchanged.
+ *
+ * What the browser is told about the bytes is NOT taken from Storage. The
+ * object's Content-Type and Content-Disposition are whatever the uploader
+ * declared on PUT, and the proxy serves anonymous visitors on the app
+ * origin: relaying them would let an HTML or SVG upload run scripts with our
+ * origin's authority. Downloads are therefore served as opaque attachments
+ * (application/octet-stream + OPAQUE_DOCUMENT_CSP) unless the object is a
+ * document whose DB-validated mime type is natively inline-safe (PDF, raster
+ * images), in which case that type is served.
  *
  * Auth: deliberately NOT withRouteContext. The caller is a sandbox with no
  * session, and the signed token in the query string is the credential:
@@ -51,10 +65,10 @@ const REQUEST_HEADERS_FORWARDED = [
   'if-modified-since',
 ] as const
 
+// Deliberately without content-type and content-disposition: both are
+// uploader-declared object metadata (see the module comment).
 const RESPONSE_HEADERS_FORWARDED = [
-  'content-type',
   'content-length',
-  'content-disposition',
   'content-range',
   'accept-ranges',
   'cache-control',
@@ -84,6 +98,85 @@ function objectPathOf(request: Request): string {
   return pathname.startsWith(prefix) ? pathname.slice(prefix.length) : ''
 }
 
+interface ServedDocument {
+  /** Canonical inline-safe type from the document row, or null when the row is missing or its type is not inline-safe. */
+  mimeType: string | null
+  fileName: string | null
+}
+
+/**
+ * Look up the document row behind a proxied download key. Runs only after
+ * Storage has accepted the signed token, so the caller has already proven
+ * access to exactly this object; the row adds nothing they could not read
+ * from the bytes. Every failure (no row, DB error, unsafe type) falls back
+ * to the opaque default rather than trusting anything else.
+ */
+async function lookupServedDocument(objectPath: string): Promise<ServedDocument> {
+  const key = documentKeyFromProxyPath(objectPath)
+  if (!key) return { mimeType: null, fileName: null }
+  try {
+    const { data, error } = await createServiceClient()
+      .from('document_attachments')
+      .select('mime_type, file_name')
+      .eq('storage_path', key)
+      .limit(1)
+    if (error) {
+      log.warn('storage proxy document lookup failed', { message: error.message })
+      return { mimeType: null, fileName: null }
+    }
+    const row = (data as { mime_type: string | null; file_name: string | null }[] | null)?.[0]
+    if (!row) return { mimeType: null, fileName: null }
+    return { mimeType: inlineSafeMimeType(row.mime_type), fileName: row.file_name }
+  } catch (error) {
+    log.warn('storage proxy document lookup threw', { message: (error as Error).message })
+    return { mimeType: null, fileName: null }
+  }
+}
+
+/** Last segment of the object key, decoded, as the filename of last resort. */
+function fileNameFromObjectPath(objectPath: string): string {
+  const last = objectPath.split('/').pop() ?? ''
+  try {
+    return decodeURIComponent(last) || 'download'
+  } catch {
+    return last || 'download'
+  }
+}
+
+/**
+ * Decide Content-Type / Content-Disposition / CSP for a GET or HEAD from
+ * what the database says about the object, never from Storage's echo of
+ * the uploader's metadata. Storage's own `?download[=name]` convention is
+ * honoured for the disposition and filename so callers see the same
+ * behaviour they got from the raw signed URL.
+ */
+async function servedContentHeaders(
+  objectPath: string,
+  search: URLSearchParams,
+  upstreamOk: boolean,
+): Promise<Record<string, string>> {
+  const served = upstreamOk
+    ? await lookupServedDocument(objectPath)
+    : { mimeType: null, fileName: null }
+  const downloadParam = search.get('download')
+  const fileName = downloadParam || served.fileName || fileNameFromObjectPath(objectPath)
+
+  if (served.mimeType) {
+    return {
+      'Content-Type': served.mimeType,
+      'Content-Disposition': contentDisposition(
+        downloadParam === null ? 'inline' : 'attachment',
+        fileName,
+      ),
+    }
+  }
+  return {
+    'Content-Type': 'application/octet-stream',
+    'Content-Disposition': contentDisposition('attachment', fileName),
+    'Content-Security-Policy': OPAQUE_DOCUMENT_CSP,
+  }
+}
+
 function rejected(reason: 'unsupported_path' | 'missing_token' | 'storage_unconfigured') {
   const code =
     reason === 'unsupported_path'
@@ -96,7 +189,8 @@ function rejected(reason: 'unsupported_path' | 'missing_token' | 'storage_unconf
 
 async function proxy(request: Request, method: 'GET' | 'HEAD' | 'PUT'): Promise<Response> {
   const url = new URL(request.url)
-  const resolved = resolveUpstreamStorageUrl(objectPathOf(request), url.searchParams)
+  const objectPath = objectPathOf(request)
+  const resolved = resolveUpstreamStorageUrl(objectPath, url.searchParams)
   if (!resolved.ok) return rejected(resolved.reason)
 
   const headers = new Headers()
@@ -143,6 +237,16 @@ async function proxy(request: Request, method: 'GET' | 'HEAD' | 'PUT'): Promise<
   }
   // Never let a served document be sniffed into something executable.
   responseHeaders.set('X-Content-Type-Options', 'nosniff')
+
+  if (method === 'PUT') {
+    // Storage answers an upload with its own small JSON envelope ({ Key }),
+    // not object bytes, so its type is safe to relay.
+    const upstreamType = upstream.headers.get('content-type')
+    if (upstreamType) responseHeaders.set('Content-Type', upstreamType)
+  } else {
+    const served = await servedContentHeaders(objectPath, url.searchParams, upstream.ok)
+    for (const [key, value] of Object.entries(served)) responseHeaders.set(key, value)
+  }
 
   return new Response(method === 'HEAD' ? null : upstream.body, {
     status: upstream.status,

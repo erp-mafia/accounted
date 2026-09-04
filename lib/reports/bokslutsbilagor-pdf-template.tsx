@@ -1,3 +1,4 @@
+import { formatOrgNumber } from '@/lib/utils'
 import { Document, Page, StyleSheet, Text, View } from '@react-pdf/renderer'
 import type { BilagaAccount, BilagaChecklistItem, BokslutsbilagorReport } from '@/lib/reports/bokslutsbilagor-types'
 import { formatStockholmTimestamp } from '@/lib/reports/behandlingshistorik'
@@ -70,11 +71,6 @@ const NUMBER = new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximu
 
 function amount(n: number | null): string {
   return n == null ? '-' : pdfText(NUMBER.format(n))
-}
-
-function formatOrgNumber(orgNumber: string): string {
-  const cleaned = orgNumber.replace(/\D/g, '')
-  return cleaned.length === 10 ? `${cleaned.slice(0, 6)}-${cleaned.slice(6)}` : orgNumber
 }
 
 const STATE_LABEL: Record<BilagaChecklistItem['state'], string> = {

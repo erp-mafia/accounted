@@ -30,6 +30,7 @@
  */
 
 import { roundOre } from '@/lib/money'
+import { lastDayOfMonth, pad2 } from './date-utils'
 import { FALLBACK_TAX_TABLES_2026 } from '@/lib/salary/tax-tables-fallback'
 import { getLineItemAccount } from '@/lib/salary/account-mapping'
 import type { SalaryLineItemType } from '@/types'
@@ -155,18 +156,9 @@ export const SANDBOX_EMPLOYEE_LAST_NAMES = {
 // Date helpers (pure: every one takes its reference date as an argument)
 // ============================================================
 
-function pad2(n: number): string {
-  return String(n).padStart(2, '0')
-}
-
 /** Local-calendar YYYY-MM-DD, same convention as route.ts's toDateStr. */
 function toDateString(year: number, month: number, day: number): string {
   return `${year}-${pad2(month)}-${pad2(day)}`
-}
-
-/** Last calendar day of a 1-12 month. */
-function lastDayOfMonth(year: number, month: number): number {
-  return new Date(year, month, 0).getDate()
 }
 
 /**

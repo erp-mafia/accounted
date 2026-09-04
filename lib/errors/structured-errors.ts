@@ -35,6 +35,14 @@ export interface StructuredErrorEntry {
    * locked) MUST stay false: retrying won't change the outcome.
    */
   retryable?: boolean
+  /**
+   * When true, the thrower composes the Swedish message at runtime (a date,
+   * an amount) and getErrorMessage() passes that message through verbatim;
+   * message_sv is only the static fallback for an envelope that carries no
+   * message. Without this flag a registered code always resolves to
+   * message_sv, which would drop the runtime detail.
+   */
+  thrown_message_sv?: boolean
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -1143,12 +1151,36 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Företagsinställningar saknas.',
     message_en: 'Company settings are missing.',
   },
+  INVOICE_SEND_PAYMENT_ACCOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Bankkontot som fakturan ska betalas till kan inte längre användas: det är avstängt, borttaget från kundfakturor eller saknar uppgifter för fakturans valuta. Välj ett annat konto på fakturan eller uppdatera kontot under Inställningar → Fakturering.',
+    message_en: 'The bank account this invoice is to be paid to can no longer be used: it is disabled, no longer shown on customer invoices, or lacks details for the invoice currency. Pick another account on the invoice or update the account under Inställningar → Fakturering (Settings → Invoicing).',
+    remediation: {
+      description: 'Välj ett annat bankkonto på fakturan, eller återaktivera kontot och fyll i dess betaluppgifter under Inställningar → Fakturering.',
+    },
+  },
+  INVOICE_PAYEE_SNAPSHOT_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Betaluppgifterna kunde inte sparas på fakturan. Fakturan skickades inte; försök igen.',
+    message_en: 'The payment details could not be saved on the invoice. The invoice was not sent; try again.',
+  },
+  INVOICE_PAYEE_ACCOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Bankkontot kan inte användas som betalningsmottagare på fakturan: det tillhör inte företaget, visas inte på kundfakturor eller saknar uppgifter för fakturans valuta.',
+    message_en: 'The bank account cannot be the payee on this invoice: it does not belong to the company, is not shown on customer invoices, or lacks details for the invoice currency.',
+    remediation: {
+      description: 'Välj ett av företagets bankkonton som är markerat "Visas på fakturor" och har betaluppgifter för fakturans valuta.',
+    },
+  },
   INVOICE_SEND_PAYMENT_ACCOUNT_MISSING: {
     httpStatus: 400,
-    message_sv: 'Fakturan saknar ett betalningskonto för vald valuta. Lägg till kontot under Inställningar → Fakturering innan du skapar PDF-filen eller skickar fakturan.',
-    message_en: 'The invoice has no payment account for its currency. Add the account under Inställningar → Fakturering (Settings → Invoicing) before generating the PDF or sending the invoice.',
+    // Currency-neutral by necessity (the registry has no details). Surfaces
+    // that know the invoice currency say exactly what is missing through
+    // describeMissingInvoicePaymentAccount() (lib/invoices/payment-accounts.ts).
+    message_sv: 'Fakturan saknar betalningsuppgifter för sin valuta: bankgiro, plusgiro, Swish eller bankkonto för SEK, IBAN för andra valutor. Lägg till dem under Inställningar → Fakturering innan du skapar PDF-filen eller skickar fakturan.',
+    message_en: 'The invoice has no payment details for its currency: bankgiro, plusgiro, Swish or a bank account for SEK, an IBAN for other currencies. Add them under Inställningar → Fakturering (Settings → Invoicing) before generating the PDF or sending the invoice.',
     remediation: {
-      description: 'Lägg till ett betalningskonto med IBAN för fakturans valuta under Inställningar → Fakturering.',
+      description: 'Lägg till betalningsuppgifter för fakturans valuta under Inställningar → Fakturering: bankgiro, plusgiro, Swish eller bankkonto för SEK, IBAN för andra valutor.',
     },
   },
   INVOICE_SEND_VAT_NUMBER_MISSING: {
@@ -1205,6 +1237,59 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Fakturan kan inte markeras som betald i nuvarande status.',
     message_en: 'Invoice is not in a payable status.',
+  },
+  INVOICE_QUOTE_NOT_PAYABLE: {
+    httpStatus: 400,
+    message_sv: 'En offert kan inte betalas. Skapa en faktura från offerten först.',
+    message_en: 'A quote cannot be paid. Convert it to an invoice first.',
+    remediation: {
+      description: 'Convert the accepted quote with POST /api/invoices/{id}/convert, then register the payment on the invoice.',
+    },
+  },
+  INVOICE_NOT_A_QUOTE: {
+    httpStatus: 400,
+    message_sv: 'Dokumentet är inte en offert.',
+    message_en: 'This document is not a quote.',
+  },
+  INVOICE_QUOTE_NOT_DECIDABLE: {
+    httpStatus: 400,
+    message_sv: 'Makulerade offerter kan inte accepteras eller avböjas.',
+    message_en: 'A cancelled quote cannot be accepted or declined.',
+  },
+  INVOICE_QUOTE_ALREADY_INVOICED: {
+    httpStatus: 409,
+    message_sv: 'Offerten är redan fakturerad och kan inte ändras.',
+    message_en: 'This quote has already been invoiced and can no longer change.',
+  },
+  INVOICE_CONVERT_NOT_CONVERTIBLE: {
+    httpStatus: 400,
+    message_sv: 'Endast proformafakturor och offerter kan omvandlas till faktura.',
+    message_en: 'Only proforma invoices and quotes can be converted to an invoice.',
+  },
+  INVOICE_CONVERT_SOURCE_CANCELLED: {
+    httpStatus: 409,
+    message_sv: 'Dokumentet är makulerat och kan inte omvandlas.',
+    message_en: 'This document is cancelled and cannot be converted.',
+  },
+  INVOICE_CONVERT_SOURCE_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Dokumentet ändrades samtidigt (makulerat, omvandlat eller beslutat på annat sätt). Ladda om och försök igen.',
+    message_en: 'The document changed concurrently (cancelled, converted or decided elsewhere). Reload and try again.',
+  },
+  INVOICE_QUOTE_CHANGED_CONCURRENTLY: {
+    httpStatus: 409,
+    message_sv: 'Offerten ändrades samtidigt (fakturerad, makulerad eller beslutad på annat sätt). Ladda om och försök igen.',
+    message_en: 'The quote changed concurrently (invoiced, cancelled or decided elsewhere). Reload and try again.',
+  },
+  INVOICE_CONVERT_QUOTE_DECLINED: {
+    httpStatus: 409,
+    message_sv: 'Offerten är avböjd. Markera den som accepterad innan du skapar en faktura.',
+    message_en: 'The quote was declined. Mark it accepted before creating an invoice.',
+  },
+  INVOICE_UPDATE_DOCUMENT_TYPE_LOCKED: {
+    httpStatus: 400,
+    message_sv: 'Dokumenttypen kan inte ändras på en offert eller följesedel: numret hör till serien. Skapa ett nytt dokument i stället.',
+    message_en: 'The document type of a quote or delivery note cannot change: its number belongs to that series. Create a new document instead.',
   },
   INVOICE_PAYMENT_CONFIRMATION_NOT_PAID: {
     httpStatus: 409,
@@ -1361,9 +1446,110 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Detta dokument är inte en offert.',
     message_en: 'This document is not a quote.',
   },
+  // Kundorder (sales orders): lib/sales-orders/*, app/api/sales-orders/*
+  SALES_ORDER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Kundordern hittades inte.',
+    message_en: 'The sales order was not found.',
+  },
+  SALES_ORDER_INVALID_STATE: {
+    httpStatus: 409,
+    message_sv: 'Kundordern har inte en status som tillåter den här åtgärden.',
+    message_en: 'The sales order is not in a state that allows this action.',
+  },
+  SALES_ORDER_NOT_EDITABLE: {
+    httpStatus: 409,
+    message_sv: 'Kundordern kan bara ändras medan den är utkast eller bekräftad.',
+    message_en: 'A sales order can only be edited while it is a draft or confirmed.',
+  },
+  SALES_ORDER_HAS_INVOICES: {
+    httpStatus: 409,
+    message_sv: 'Kundordern kan inte makuleras: det finns fakturor som skapats från den. Makulera eller kreditera fakturorna först.',
+    message_en: 'The sales order cannot be cancelled: invoices have been created from it. Cancel or credit those invoices first.',
+  },
+  SALES_ORDER_LINE_NOT_FOUND: {
+    httpStatus: 400,
+    message_sv: 'En angiven orderrad finns inte på kundordern.',
+    message_en: 'A referenced line does not exist on the sales order.',
+  },
+  SALES_ORDER_OVER_INVOICED: {
+    httpStatus: 409,
+    message_sv: 'Angivet antal överstiger vad som återstår att fakturera på orderraden.',
+    message_en: 'The requested quantity exceeds what remains to be invoiced on the order line.',
+  },
+  SALES_ORDER_OVER_DELIVERED: {
+    httpStatus: 400,
+    message_sv: 'Levererat antal kan inte överstiga beställt antal.',
+    message_en: 'Delivered quantity cannot exceed the ordered quantity.',
+  },
+  SALES_ORDER_QUANTITY_BELOW_INVOICED: {
+    httpStatus: 409,
+    message_sv: 'Antalet på en orderrad kan inte sänkas under det som redan fakturerats.',
+    message_en: 'An order line quantity cannot be lowered below what has already been invoiced.',
+  },
+  SALES_ORDER_NOTHING_TO_INVOICE: {
+    httpStatus: 409,
+    message_sv: 'Det finns inget kvar att fakturera på kundordern.',
+    message_en: 'There is nothing left to invoice on the sales order.',
+  },
+  SALES_ORDER_CUSTOMER_MISSING: {
+    httpStatus: 409,
+    message_sv: 'Kundordern saknar kund. Ange en kund innan du fakturerar.',
+    message_en: 'The sales order has no customer. Set a customer before invoicing.',
+  },
+  SALES_ORDER_CREATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kundordern kunde inte sparas.',
+    message_en: 'The sales order could not be saved.',
+  },
+  SALES_ORDER_LINE_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'En orderrad med fakturerat eller levererat antal kan inte tas bort.',
+    message_en: 'An order line with invoiced or delivered quantity cannot be removed.',
+  },
+  SALES_ORDER_SOURCE_NOT_PROFORMA: {
+    httpStatus: 400,
+    message_sv: 'Bara en proformafaktura kan omvandlas till kundorder.',
+    message_en: 'Only a proforma invoice can be converted into a sales order.',
+  },
+  SALES_ORDER_SOURCE_UNSUPPORTED_LINES: {
+    httpStatus: 400,
+    message_sv: 'Proformafakturan innehåller rader som inte kan föras över till en kundorder (ROT/RUT-avdrag, periodisering eller negativt antal). Skapa kundordern manuellt.',
+    message_en: 'The proforma has lines that cannot be carried into a sales order (ROT/RUT deduction, accrual period or negative quantity). Create the sales order manually.',
+  },
+  SALES_ORDER_CUSTOMER_VAT_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Kundens momsuppgifter (kundtyp eller VAT-nummer) har ändrats sedan kundordern prissattes. Öppna och spara kundordern igen så att momssatserna kontrolleras innan du fakturerar.',
+    message_en: 'The customer VAT facts (customer type or VAT number validation) changed after the sales order was priced. Open and save the order again so the VAT rates are re-checked before invoicing.',
+  },
+  INVOICE_UPDATE_DROPS_ORDER_LINK: {
+    httpStatus: 409,
+    message_sv: 'Fakturan är skapad från en kundorder och ändringen skulle tappa kopplingen till orderraderna. Skicka med sales_order_item_id på raderna, eller makulera fakturan och skapa en ny från kundordern.',
+    message_en: 'The invoice was created from a sales order and this edit would drop the link to its order lines. Keep sales_order_item_id on the lines, or cancel the invoice and create a new one from the order.',
+  },
+  SALES_ORDER_SOURCE_ALREADY_CONVERTED: {
+    httpStatus: 409,
+    message_sv: 'Proformafakturan har redan omvandlats till en kundorder.',
+    message_en: 'The proforma has already been converted into a sales order.',
+  },
   // POST /api/invoices/{id}/peppol/send. The Access Point is an environment
   // decision (PEPPOL_TRANSPORT_PROVIDER + adapter credentials); the product
   // never pretends to send when no adapter is switched on.
+  SCB_NOT_CONFIGURED: {
+    httpStatus: 503,
+    message_sv: 'Uppslag mot SCB:s företagsregister är inte aktiverat i den här miljön.',
+    message_en: 'Lookups against the SCB business register are not enabled in this environment.',
+  },
+  SCB_LOOKUP_FAILED: {
+    httpStatus: 502,
+    message_sv: 'SCB:s företagsregister svarade inte. Försök igen om en stund.',
+    message_en: 'The SCB business register did not answer. Try again shortly.',
+  },
+  SCB_NOT_A_LEGAL_PERSON: {
+    httpStatus: 400,
+    message_sv: 'Uppgifter hämtas bara för juridiska personer, inte för enskilda firmor.',
+    message_en: 'Details are fetched for legal persons only, not for sole traders.',
+  },
   PEPPOL_TRANSPORT_UNAVAILABLE: {
     httpStatus: 503,
     message_sv: 'Peppol-utskick är inte aktiverat i den här miljön. En avtalad Peppol-operatör måste vara konfigurerad.',
@@ -1986,6 +2172,48 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
   },
 }
 
+/**
+ * Agent-triggered PSD2 sync (v1 bank-connections sync + MCP gnubok_sync_bank).
+ * Emitted by extensions/general/enable-banking/lib/trigger-sync.ts.
+ */
+const BANK_SYNC: Record<string, StructuredErrorEntry> = {
+  BANK_SYNC_NOT_ACTIVE: {
+    httpStatus: 409,
+    message_sv: 'Bankanslutningen är inte aktiv och kan inte synkas. Förnya den med BankID i webbläsaren.',
+    message_en: 'The bank connection is not active and cannot be synced. It needs BankID re-authorisation in a browser.',
+    remediation: {
+      description: 'Give the user the connect_url from gnubok_connect_bank (or GET /bank-connections); only they can re-authorise with BankID.',
+      tool: 'gnubok_connect_bank',
+    },
+  },
+  BANK_SYNC_NO_ACCOUNTS: {
+    httpStatus: 409,
+    message_sv: 'Inga konton är valda för synkning. Aktivera minst ett konto under Inställningar, Bank.',
+    message_en: 'No accounts are selected for syncing. The user must enable at least one under Settings, Bank.',
+  },
+  BANK_SYNC_COOLDOWN: {
+    httpStatus: 429,
+    message_sv: 'Anslutningen synkades nyligen. Vänta tills next_allowed_at innan du synkar igen.',
+    message_en: 'This connection was synced recently. Wait until next_allowed_at before syncing again; the data you have is already fresh.',
+    retryable: true,
+  },
+  BANK_SESSION_EXPIRED: {
+    httpStatus: 409,
+    message_sv: 'Bankanslutningen har löpt ut. Förnya anslutningen med BankID för att fortsätta synka.',
+    message_en: 'The bank session has expired. The connection is now marked expired; only the user can renew it with BankID in a browser.',
+    remediation: {
+      description: 'Give the user the connect_url from gnubok_connect_bank (or GET /bank-connections). Do not retry: no API call can revive a dead consent.',
+      tool: 'gnubok_connect_bank',
+    },
+  },
+  BANK_SYNC_FAILED: {
+    httpStatus: 502,
+    message_sv: 'Banksynkningen misslyckades. Försök igen om en stund, eller förnya anslutningen om felet kvarstår.',
+    message_en: 'The bank sync failed upstream. Retry after the cooldown; if it keeps failing the user should renew the connection.',
+    retryable: true,
+  },
+}
+
 const SKATTEKONTO_FILE: Record<string, StructuredErrorEntry> = {
   SKATTEKONTO_FILE_NO_FILE: {
     httpStatus: 400,
@@ -2567,6 +2795,11 @@ const ARTICLE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The org number looks like a Swedish personal identity number. Save the customer as an individual instead, so the number is stored protected and masked in lists.',
   },
+  CUSTOMER_COUNTRY_MISMATCH: {
+    httpStatus: 400,
+    message_sv: 'Landet stämmer inte med kundtypen eller VAT-numrets landsprefix.',
+    message_en: 'The country does not agree with the customer type or the VAT number\'s country prefix.',
+  },
   CUSTOMER_PERSONAL_NUMBER_CONFLICT: {
     httpStatus: 400,
     message_sv:
@@ -2966,8 +3199,11 @@ const SALARY: Record<string, StructuredErrorEntry> = {
   // month, the run itself belongs in that period.
   SALARY_RUN_PAYMENT_DATE_OUTSIDE_PERIOD: {
     httpStatus: 400,
-    message_sv: 'Utbetalningsdagen måste ligga i lönekörningens period: AGI redovisas per utbetalningsmånad. Skapa en lönekörning för rätt period i stället.',
-    message_en: 'The payment date must fall within the salary run\'s period month: the AGI is declared per payment month. Create a salary run for the correct period instead.',
+    // No longer raised (#2191): the AGI period follows payment_date, so a
+    // payout in another month is legal. Kept so clients mapping the code
+    // keep compiling.
+    message_sv: 'Utbetalningsdagen måste ligga i lönekörningens period.',
+    message_en: 'The payment date must fall within the salary run\'s period month.',
   },
   SALARY_RUN_DELETE_NOT_DRAFT: {
     httpStatus: 400,
@@ -3018,6 +3254,13 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'AGI kan endast genereras för lönekörningar i status review, approved, paid, booked eller corrected.',
     message_en: 'AGI can only be generated for salary runs in review, approved, paid, booked, or corrected status.',
+  },
+  AGI_PERIOD_CONFLICT: {
+    httpStatus: 409,
+    message_sv:
+      'En annan lönekörning är redan deklarerad för samma redovisningsperiod (utbetalningsmånad). En arbetsgivardeklaration per månad ska omfatta alla utbetalningar den månaden: slå ihop körningarna eller rätta den befintliga deklarationen.',
+    message_en:
+      'Another salary run is already declared for the same reporting period (payout month). One employer declaration per month must cover every payment made that month: merge the runs or correct the existing declaration.',
   },
   AGI_INCOMPLETE_DATA: {
     httpStatus: 400,
@@ -3923,6 +4166,31 @@ const DIMENSION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Dimensionen kunde inte uppdateras.',
     message_en: 'Failed to update dimension.',
   },
+  DIMENSION_SYSTEM_DELETE: {
+    httpStatus: 400,
+    message_sv: 'Systemdimensioner (kostnadsställe och projekt) kan inte tas bort: avaktivera dem istället.',
+    message_en: 'System dimensions (kostnadsställe/projekt) cannot be deleted: archive (inactivate) them instead.',
+  },
+  // The DB registry guard (enforce_dimension_registry_guards) raises when any
+  // posted/reversed line is tagged with the dimension's number, and the value
+  // retention trigger fires on the cascade to dimension_values. Routes surface
+  // the trigger's own Swedish message via `messageSv`.
+  DIMENSION_REFERENCED: {
+    httpStatus: 409,
+    message_sv:
+      'Dimensionen används på bokförda verifikat och kan inte tas bort: avaktivera den istället.',
+    message_en:
+      'The dimension is referenced by posted vouchers and cannot be deleted: archive (inactivate) it instead.',
+    remediation: {
+      description:
+        'Archive the dimension instead: PATCH /api/dimensions/[id] with { "is_active": false }. Numbers tagged on posted lines are retained for the BFL 7-year period.',
+    },
+  },
+  DIMENSION_DELETE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Dimensionen kunde inte tas bort.',
+    message_en: 'Failed to delete dimension.',
+  },
   DIMENSION_VALUE_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Dimensionsvärdet kunde inte hittas.',
@@ -4132,6 +4400,84 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Reconciliation sign-off (lib/reconciliation/signoff.ts)
+// ─────────────────────────────────────────────────────────────────
+
+// Policy refusals from signOffAccount / reopenSignoff. Shipped as-is on the
+// dashboard, v1 and MCP surfaces before this registry knew them, so the code
+// names stay. The thrower's Swedish text is the message (thrown_message_sv):
+// before that, getErrorMessage() fell through to its generic fallback and the
+// user read "Något gick fel. Försök igen." for a refused sign-off.
+const RECONCILIATION_SIGNOFF: Record<string, StructuredErrorEntry> = {
+  INVALID_DATE: {
+    httpStatus: 400,
+    message_sv: 'Ogiltigt datum. Ange ÅÅÅÅ-MM-DD.',
+    message_en: 'Invalid date. Use YYYY-MM-DD.',
+    thrown_message_sv: true,
+  },
+  DATE_IN_FUTURE: {
+    httpStatus: 400,
+    message_sv: 'Du kan inte stämma av framåt i tiden.',
+    message_en: 'The through date cannot be in the future.',
+    thrown_message_sv: true,
+  },
+  NOT_FETCHED_THROUGH: {
+    httpStatus: 400,
+    message_sv: 'Skattekontot är inte hämtat t.o.m. det datumet. Hämta igen innan du stämmer av ett senare datum.',
+    message_en: 'The skattekonto has not been fetched through that date. Fetch it again before signing off a later date.',
+    thrown_message_sv: true,
+  },
+  OUTSIDE_UNKNOWN: {
+    httpStatus: 400,
+    message_sv: 'Saldot utanför bokföringen är okänt, så kontot kan inte stämmas av. Hämta det först, eller signera med en notering.',
+    message_en: 'The outside balance is unknown, so the account cannot be reconciled. Fetch it first, or sign with force and a note.',
+    thrown_message_sv: true,
+  },
+  NOT_RECONCILED: {
+    httpStatus: 400,
+    message_sv: 'Kontot har en oförklarad differens. Koppla eller bokför raderna först, eller signera med en notering.',
+    message_en: 'The account has an unexplained difference. Link or book the rows first, or sign with force and a note.',
+    thrown_message_sv: true,
+  },
+  NOTE_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Skriv en rad om varför du signerar trots att allt inte är förklarat.',
+    message_en: 'A note is required when signing with force.',
+    thrown_message_sv: true,
+  },
+  ALREADY_SIGNED_OFF: {
+    httpStatus: 409,
+    message_sv: 'Kontot är redan avstämt t.o.m. ett senare datum. Öppna den signeringen igen om du vill ändra.',
+    message_en: 'The account is already signed off through that date or later. Reopen that sign-off to change it.',
+    thrown_message_sv: true,
+  },
+  SIGNOFF_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Signeringen hittades inte.',
+    message_en: 'The sign-off was not found.',
+    thrown_message_sv: true,
+  },
+  ALREADY_REOPENED: {
+    httpStatus: 409,
+    message_sv: 'Signeringen är redan öppnad igen.',
+    message_en: 'The sign-off is already reopened.',
+    thrown_message_sv: true,
+  },
+  SIGNOFF_RACE: {
+    httpStatus: 409,
+    message_sv: 'Kontot signerades precis av någon annan. Ladda om.',
+    message_en: 'Someone else just changed this sign-off. Reload and try again.',
+    thrown_message_sv: true,
+  },
+  EXTERNAL_BALANCE_NOT_ALLOWED: {
+    httpStatus: 400,
+    message_sv: 'Kontot har redan en sanning utanför bokföringen (bank, Skatteverket, reskontra eller beräkning). Ange inget saldo manuellt; signera med en notering om något avviker.',
+    message_en: 'The account already has an outside truth (bank, Skatteverket, ledger or calculation). Do not state a balance; sign with a note if something differs.',
+    thrown_message_sv: true,
+  },
+}
+
 const NODE_SYSTEM: Record<string, StructuredErrorEntry> = {
   ECONNREFUSED: NETWORK_TRANSIENT_ENTRY,
   ECONNRESET: NETWORK_TRANSIENT_ENTRY,
@@ -4169,6 +4515,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...TAX_DECL,
   ...SIE_IMPORT,
   ...BANK_FILE,
+  ...BANK_SYNC,
   ...SKATTEKONTO_FILE,
   ...OPENING_BALANCE_IMPORT,
   ...REGISTER_IMPORT,
@@ -4188,6 +4535,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...ASSETS,
   ...DIMENSION,
   ...WEBSHOP_ORDERS,
+  ...RECONCILIATION_SIGNOFF,
   ...NODE_SYSTEM,
 }
 

@@ -6,9 +6,11 @@
  * because component logic has no tests in this repo.
  */
 
-import { fetchWithTimeout, isTimeoutError } from '@/lib/http/fetch-with-timeout'
-import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import type { ActionFailure } from '@/lib/browser/action-failure'
+import {
+  panelRequest,
+  type PanelRequestOptions,
+  type PanelRequestResult,
+} from '@/lib/browser/panel-request'
 
 /**
  * Deadline for the quick calls (status, toggle, disconnect). Connect probes
@@ -27,77 +29,14 @@ export const SHOPIFY_CONNECT_TIMEOUT_MS = 120_000
  */
 export const SHOPIFY_SYNC_TIMEOUT_MS = 310_000
 
-export type ShopifyRequestResult<T> =
-  /** 2xx. `data` is null when the body was not readable JSON. */
-  | { ok: true; data: T | null }
-  | ActionFailure
+export type ShopifyRequestResult<T> = PanelRequestResult<T>
+export type ShopifyRequestOptions = PanelRequestOptions
 
-export interface ShopifyRequestOptions {
-  url: string
-  method?: 'GET' | 'POST' | 'DELETE'
-  body?: unknown
-  locale?: ErrorLocale
-  timeoutMs?: number
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
-}
-
-/** The one sentence for a non-2xx; route copy wins over the generic map. */
-export function serverErrorMessage(
-  body: unknown,
-  status: number,
-  locale: ErrorLocale,
-): string {
-  if (isRecord(body)) {
-    if (locale === 'en' && typeof body.error_en === 'string' && body.error_en.trim()) {
-      return body.error_en.trim()
-    }
-    if (typeof body.error === 'string' && body.error.trim()) {
-      return body.error.trim()
-    }
-  }
-  return getErrorMessage(body, { statusCode: status, locale })
-}
+export { serverErrorMessage } from '@/lib/browser/panel-request'
 
 /** Call one of the panel's endpoints and report exactly why it failed. */
-export async function shopifyRequest<T>({
-  url,
-  method = 'POST',
-  body,
-  locale = 'sv',
-  timeoutMs = SHOPIFY_ACTION_TIMEOUT_MS,
-}: ShopifyRequestOptions): Promise<ShopifyRequestResult<T>> {
-  try {
-    const res = await fetchWithTimeout(
-      url,
-      body === undefined
-        ? { method }
-        : {
-            method,
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-          },
-      { timeoutMs, description: `${method} ${url}` },
-    )
-
-    const payload = await res.json().catch(() => null)
-
-    if (!res.ok) {
-      return {
-        ok: false,
-        reason: 'server',
-        status: res.status,
-        message: serverErrorMessage(payload, res.status, locale),
-      }
-    }
-
-    return { ok: true, data: payload as T | null }
-  } catch (err) {
-    if (isTimeoutError(err)) return { ok: false, reason: 'timeout' }
-    return { ok: false, reason: 'network', message: getErrorMessage(err, { locale }) }
-  }
+export function shopifyRequest<T>(options: ShopifyRequestOptions): Promise<ShopifyRequestResult<T>> {
+  return panelRequest<T>({ timeoutMs: SHOPIFY_ACTION_TIMEOUT_MS, ...options })
 }
 
 /** Success body of POST /api/extensions/ext/shopify/sync. */

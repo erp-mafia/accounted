@@ -168,5 +168,3 @@ export const CreateSupplierParamsSchema = z
 // An EU supplier below its national registration threshold has no VAT number at
 // all, so requiring one refused legitimate suppliers on the staged/agent path
 // while the dashboard form created the very same company without complaint.
-
-export type CreateSupplierParams = z.infer<typeof CreateSupplierParamsSchema>

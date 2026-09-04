@@ -4,7 +4,12 @@ import useSWR from 'swr'
 import { createClient } from '@/lib/supabase/client'
 
 export interface WorklistBadges {
-  /** Unbooked bank transactions: same predicate as lib/worklist countUnbookedTransactions. */
+  /**
+   * Rows waiting in the Transaktioner inbox: unbooked bank transactions
+   * (lib/worklist countUnbookedTransactions) plus unbooked skattekonto rows
+   * (countUnbookedSkattekontoRows). The badge sits on /transactions, which
+   * lists both, so the number must cover both (#2180).
+   */
   uncategorized: number
   /** Agent-staged operations awaiting review: same predicate as countPendingOperations. */
   pendingOperations: number
@@ -26,12 +31,19 @@ export function useWorklistBadges(companyId: string | null | undefined) {
     companyId ? ['worklist-badges', companyId] : null,
     async ([, id]: [string, string]) => {
       const supabase = createClient()
-      const [tx, ops] = await Promise.all([
+      const [tx, skv, ops] = await Promise.all([
         supabase
           .from('transactions')
           .select('id', { count: 'exact', head: true })
           .eq('company_id', id)
           .is('is_business', null)
+          .eq('is_ignored', false),
+        supabase
+          .from('skattekonto_transactions')
+          .select('id', { count: 'exact', head: true })
+          .eq('company_id', id)
+          .eq('status', 'booked')
+          .is('journal_entry_id', null)
           .eq('is_ignored', false),
         supabase
           .from('pending_operations')
@@ -40,7 +52,7 @@ export function useWorklistBadges(companyId: string | null | undefined) {
           .eq('status', 'pending'),
       ])
       return {
-        uncategorized: tx.error ? 0 : (tx.count ?? 0),
+        uncategorized: (tx.error ? 0 : (tx.count ?? 0)) + (skv.error ? 0 : (skv.count ?? 0)),
         pendingOperations: ops.error ? 0 : (ops.count ?? 0),
       }
     },

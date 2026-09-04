@@ -1,5 +1,7 @@
 import { type SupabaseClient } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { toRedovisare12 } from '@/lib/invariants/org-number'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('skatteverket-connection-store')
@@ -230,7 +232,84 @@ export async function listVerifiedCompanies(
   return (data ?? []) as Array<{ company_id: string; org_number: string; created_by: string | null }>
 }
 
-/** Test hook: reset the memoized service client. */
-export function __resetConnectionStoreForTests(): void {
-  _serviceClient = null
+/**
+ * Every connection row for an environment, for the ombudsregister sync. The
+ * caller decides what a row's status means ('revoked' rows are the tenant's
+ * own disconnect and are skipped there). Paginated through fetchAllRows on a
+ * stable (created_at, id) order so nothing past PostgREST's 1000-row page is
+ * silently left stale. The select is spelled out rather than reusing
+ * CONNECTION_COLUMNS so the phantom-column scanner can check it.
+ */
+export async function listConnections(environment: SkvEnvironment): Promise<SkvCompanyConnection[]> {
+  try {
+    const client = getServiceClient()
+    return await fetchAllRows<SkvCompanyConnection>(({ from, to }) =>
+      client
+        .from('skatteverket_company_connections')
+        .select('id, company_id, environment, org_number, status, lasombud_status, lasombud_checked_at, moms_ombud_status, moms_ombud_checked_at, verified_at, last_probe_at, last_probe_detail, last_error')
+        .eq('environment', environment)
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to)
+    )
+  } catch (error) {
+    log.warn('listConnections failed', {
+      environment,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return []
+  }
+}
+
+/**
+ * Org numbers (12-digit redovisare form) claimed by MORE than one live
+ * (non-archived) company. Org-number reuse is allowed in the product and
+ * tenant isolation is the boundary, but the ombud path binds Skatteverket's
+ * system-credential access to an org number: while two tenants claim the
+ * same one, neither may be marked granted, or a tenant that typed a victim's
+ * public org number would inherit the victim's grant. Verify, deep link and
+ * the nightly sync all consult this.
+ */
+export async function findContestedOrgNumbers(): Promise<Set<string>> {
+  const client = getServiceClient()
+  type SettingsRow = { company_id: string; org_number: string | null; entity_type: string | null }
+  type ArchivedRow = { id: string }
+  const [settings, archived] = await Promise.all([
+    fetchAllRows<SettingsRow>(({ from, to }) =>
+      client
+        .from('company_settings')
+        .select('company_id, org_number, entity_type')
+        .not('org_number', 'is', null)
+        .order('company_id', { ascending: true })
+        .range(from, to)
+    ),
+    fetchAllRows<ArchivedRow>(({ from, to }) =>
+      client
+        .from('companies')
+        .select('id')
+        .not('archived_at', 'is', null)
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
+  ])
+  const archivedIds = new Set(archived.map((row) => row.id))
+  const claimants = new Map<string, number>()
+  for (const row of settings) {
+    if (!row.org_number || archivedIds.has(row.company_id)) continue
+    let redovisare: string
+    try {
+      redovisare = toRedovisare12(row.org_number, row.entity_type === 'enskild_firma' ? 'enskild_firma' : 'aktiebolag')
+    } catch {
+      continue
+    }
+    claimants.set(redovisare, (claimants.get(redovisare) ?? 0) + 1)
+  }
+  const contested = new Set<string>()
+  for (const [orgNumber, count] of claimants) if (count > 1) contested.add(orgNumber)
+  return contested
+}
+
+/** True when more than one live company claims this 12-digit org number. */
+export async function isOrgNumberContested(orgNumber: string): Promise<boolean> {
+  return (await findContestedOrgNumbers()).has(orgNumber)
 }

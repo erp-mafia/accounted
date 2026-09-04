@@ -277,11 +277,27 @@ describe('detectSkvDisconnected', () => {
     })
   })
 
-  it('stays quiet while the token is expired but still refreshable', async () => {
+  it('fires on a token expired hours ago even though a refresh token is still stored (dead 65-minute session)', async () => {
     enqueue({
       data: {
         status: 'active',
         expires_at: '2026-08-19T10:00:00Z',
+        refresh_token: 'ciphertext',
+        refresh_count: 3,
+        last_error_at: null,
+      },
+    })
+    await expect(detectSkvDisconnected(supabase, USER, COMPANY, NOW)).resolves.toMatchObject({
+      id: 'skv_disconnected:expired@2026-08-19T10:00:00Z',
+    })
+  })
+
+  it('stays quiet while the token is expired but inside the refresh window', async () => {
+    enqueue({
+      data: {
+        status: 'active',
+        // Three minutes past access-token expiry: the 65-minute refresh token still works.
+        expires_at: '2026-08-19T11:57:00Z',
         refresh_token: 'ciphertext',
         refresh_count: 3,
         last_error_at: null,

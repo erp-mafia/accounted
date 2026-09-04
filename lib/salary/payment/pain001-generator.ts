@@ -30,6 +30,7 @@
  * the salary journal entry. Subject to 7-year retention.
  */
 
+import { escapeXml } from '@/lib/xml/escape'
 import { splitDomesticBankAccount } from './bank-account'
 
 export interface Pain001CompanyData {
@@ -187,15 +188,6 @@ export function generatePain001(
 // ============================================================
 // Helpers
 // ============================================================
-
-function escapeXml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
-}
 
 /** Format number as decimal with 2 decimal places (ISO 20022 requires dot separator) */
 function formatDecimal(amount: number): string {

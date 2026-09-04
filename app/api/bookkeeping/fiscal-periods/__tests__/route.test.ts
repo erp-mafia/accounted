@@ -369,6 +369,38 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     expect(body.warnings).toBeUndefined()
   })
 
+  // Regression (issue #2237): a company that imported 2024+ from Fortnox and
+  // then backfilled its FIRST räkenskapsår by hand was refused because the
+  // first year started mid-month (2022-07-22, the registration date). The
+  // 1st-of-month rule (BFL 3 kap. 1 §) binds subsequent years only; "first"
+  // means no existing period starts earlier, exactly as the DB trigger
+  // enforce_first_of_month_for_subsequent_periods defines it.
+  it('allows a mid-month start when the new period becomes the earliest (first räkenskapsår backfilled after an import)', async () => {
+    buildMockSupabase({
+      allPeriods: [
+        { id: 'p2024', period_start: '2024-01-01', period_end: '2024-12-31', is_closed: false },
+        { id: 'p2025', period_start: '2025-01-01', period_end: '2025-12-31', is_closed: false },
+      ],
+      overlapping: [],
+    })
+    const req = createMockRequest({ name: '2022/2023', period_start: '2022-07-22', period_end: '2023-12-31' })
+    const res = await POST(req, { params: Promise.resolve({}) })
+    expect(res.status).toBe(200)
+  })
+
+  it('still rejects a mid-month start for a period that is not the earliest', async () => {
+    buildMockSupabase({
+      allPeriods: [{ id: 'p2024', period_start: '2024-01-01', period_end: '2024-12-31', is_closed: false }],
+    })
+    const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-15', period_end: '2025-12-31' })
+    const res = await POST(req, { params: Promise.resolve({}) })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toMatch(/1st of a month/)
+    // The refusal explains the rule instead of only saying no.
+    expect(body.error).toMatch(/first fiscal year may start mid-month/)
+  })
+
   // Regression (2026-06-16): a company with FY 2024 + FY 2026 but no
   // FY 2025 could not create the missing year: the old code only allowed
   // chaining before the earliest or after the latest period. A period that

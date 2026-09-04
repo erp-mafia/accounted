@@ -170,6 +170,34 @@ describe('findMatchingInvoices', () => {
     expect(result).toEqual([])
   })
 
+  it('never proposes a quote or proforma: the candidate query is scoped to fakturor', async () => {
+    const queued = createQueuedMockSupabase()
+    queued.enqueue({ data: [], error: null })
+    const tx = makeTransaction({ amount: 12500 })
+
+    await findMatchingInvoices(queued.supabase as never, 'company-1', tx)
+
+    expect(queued.findCalls('invoices', 'eq')).toContainEqual(['document_type', 'invoice'])
+  })
+
+  it('breaks a confidence tie in favour of the invoice that asked to be paid to the account the money landed on', async () => {
+    const tx = makeTransaction({ amount: 12500, description: 'Betalning', merchant_name: null, cash_account_id: 'ca-1931' })
+    const base = { total: 12500, status: 'sent' as const, remaining_amount: 12500, currency: 'SEK' as const }
+    mockResult({
+      data: [
+        { ...makeInvoice({ id: 'inv-default', invoice_number: 'F-1', ...base }), payment_cash_account_id: null },
+        { ...makeInvoice({ id: 'inv-1931', invoice_number: 'F-2', ...base }), payment_cash_account_id: 'ca-1931' },
+      ],
+      error: null,
+    })
+
+    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    expect(result).toHaveLength(2)
+    // Same score for both (exact amount, no customer name): scores untouched.
+    expect(result[0].confidence).toBe(result[1].confidence)
+    expect(result[0].invoice.id).toBe('inv-1931')
+  })
+
   it('matches by OCR reference with confidence 0.99', async () => {
     const tx = makeTransaction({ amount: 12500, reference: 'F-2024001' })
     mockResult({

@@ -20,6 +20,7 @@ export type AuthEmailActionType =
   | 'email_change'
   | 'email_change_current'
   | 'reauthentication'
+  | 'bankid_signup'
 
 interface AuthEmailContent {
   subject: string
@@ -75,6 +76,20 @@ const CONTENT: Record<AuthEmailActionType, AuthEmailContent> = {
     heading: 'Din verifieringskod',
     body: (appName) => `Ange koden nedan för att bekräfta din identitet hos ${appName}.`,
     cta: '',
+  },
+  // Sent by the BankID signup (extensions/general/tic) to the address the
+  // person typed, and again when a still-unconfirmed identity tries to log
+  // in. Not a Supabase hook type: the link is minted by generateLink and only
+  // ever travels by mail. The copy says plainly that the account was opened
+  // with BankID and that ignoring the mail leaves it inactive, so a stranger
+  // whose address was typed by mistake (or on purpose) is not nudged into
+  // activating someone else's BankID login.
+  bankid_signup: {
+    subject: 'Bekräfta din e-postadress',
+    heading: 'Bekräfta din e-postadress',
+    body: (appName) =>
+      `Ett konto hos ${appName} har skapats med BankID och den här e-postadressen. Klicka på knappen nedan för att bekräfta att adressen är din och aktivera kontot. Om det inte var du som skapade kontot kan du bortse från det här meddelandet: kontot förblir inaktivt och kan inte användas för att logga in.`,
+    cta: 'Bekräfta e-postadress',
   },
 }
 

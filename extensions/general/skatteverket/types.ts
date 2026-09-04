@@ -68,12 +68,6 @@ export interface SkatteverketInlamnatResponse {
   signerare?: string   // Personnummer of signer
 }
 
-/** Response from fetching decisions */
-export interface SkatteverketBeslutatResponse {
-  beslutsdatum?: string
-  momsBeslut?: SkatteverketMomsuppgift
-}
-
 /** Stored token pair (decrypted form) */
 export interface SkatteverketTokens {
   access_token: string
@@ -82,13 +76,6 @@ export interface SkatteverketTokens {
   refresh_count: number
   scope: string
 }
-
-/** Declaration submission status tracking */
-export type DeclarationStatus =
-  | 'draft_saved'
-  | 'draft_locked'
-  | 'signed'
-  | 'decided'
 
 // ── AGI (Arbetsgivardeklaration) types ──────────────────────────
 //
@@ -232,20 +219,6 @@ export interface SkatteverketAGIKontrollsvarFel {
   felmeddelande?: string
 }
 
-export interface SkatteverketSubmission {
-  id: string
-  user_id: string
-  redovisare: string         // 12-digit org/personnummer
-  redovisningsperiod: string // YYYYMM
-  status: DeclarationStatus
-  kvittensnummer: string | null
-  signeringslank: string | null
-  kontrollresultat: SkatteverketKontrollResultat | null
-  momsuppgift: SkatteverketMomsuppgift
-  created_at: string
-  updated_at: string
-}
-
 // ── Skattekonto (tax account) types ────────────────────────────
 //
 // Field names match Skatteverket's Skattekonto API v2.1.0 JSON schema.
@@ -323,8 +296,6 @@ export interface SkatteverketFel {
 // code continues to import from this module for backwards compatibility.
 export type {
   StoredSkattekontoTransaction,
-  SkattekontoMatchSuggestion,
-  SkattekontoBookingSuggestion,
   SkattekontoTransactionWithSuggestion,
 } from '@/types/skatteverket'
 

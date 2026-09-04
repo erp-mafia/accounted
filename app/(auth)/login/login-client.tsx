@@ -255,6 +255,12 @@ export function LoginClient({
       return
     }
 
+    if (result.error === 'email_unconfirmed') {
+      // The BankID identity exists but its e-mail was never confirmed: the
+      // server re-sent the confirmation mail and explains what to do.
+      setFormError({ kind: 'bankid', message: result.message ?? tAuth('bankid_email_unconfirmed') })
+      return
+    }
     if (result.error) {
       setFormError({ kind: 'bankid', message: tAuth('login_failed_bankid') })
       return

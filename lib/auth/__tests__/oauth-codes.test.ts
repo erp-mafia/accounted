@@ -133,3 +133,13 @@ describe('hashAuthCode', () => {
     expect(hash1).toBe(hash2)
   })
 })
+
+describe('verifyPkce with a missing challenge', () => {
+  it('never verifies when the code was minted without a code_challenge', () => {
+    // /authorize does not reject a missing code_challenge; it mints the code
+    // with an empty one. That must stay unexchangeable, otherwise a
+    // custom-scheme (cursor://) hijacker could skip PKCE entirely.
+    expect(verifyPkce('any-verifier', '')).toBe(false)
+    expect(verifyPkce('', '')).toBe(false)
+  })
+})

@@ -9,6 +9,7 @@ import {
   currencyColumn,
   dateColumn,
   xlsxFilename,
+  parseCellDate,
 } from '@/lib/reports/xlsx-export'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -22,13 +23,6 @@ interface FlatRow {
   debit: number
   credit: number
   balance: number
-}
-
-function toDate(s: string): Date | string {
-  // Preserve original ISO string in the cell if parsing fails (avoids NaN
-  // dates polluting the workbook).
-  const d = new Date(s)
-  return isNaN(d.getTime()) ? s : d
 }
 
 export const GET = withRouteContext('report.general_ledger.xlsx', async (request, { supabase, companyId }) => {
@@ -96,7 +90,9 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
         rows.push({
           account_number: acc.account_number,
           account_name: acc.account_name,
-          date: toDate(line.date),
+          // Preserve the original ISO string in the cell if parsing fails (avoids
+          // NaN dates polluting the workbook).
+          date: parseCellDate(line.date) ?? line.date,
           voucher: `${line.voucher_series}${line.voucher_number}`,
           description: line.description,
           source_type: line.source_type,

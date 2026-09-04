@@ -37,9 +37,9 @@ import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 
 /**
  * Confidence floor for surfacing an unmatched item as a probable underlag.
- * Deliberately above core-receipt-matcher's MIN_MATCH_CONFIDENCE (0.4): that
- * floor governs a picker where a human reads a ranked list and judges, whereas
- * a candidate named here is read by an agent that will reason from it. A wrong
+ * Deliberately stricter than the receipt picker, which ranks candidates without
+ * a hard floor: there a human reads a ranked list and judges, whereas a
+ * candidate named here is read by an agent that will reason from it. A wrong
  * receipt on the wrong transaction is a mis-booking, so this surface trades
  * recall for precision and leaves the rest to the picker.
  */

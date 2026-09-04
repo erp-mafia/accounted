@@ -16,7 +16,8 @@ import { created, ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { readV1JsonBody } from '@/lib/api/v1/body'
 import { generateWebhookSecret } from '@/lib/webhooks/signing'
 import { validateWebhookUrl } from '@/lib/webhooks/url-guard'
 import { API_V1_VERSION } from '@/lib/api/v1/version'
@@ -193,28 +194,12 @@ registerEndpoint({
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'webhooks.create',
   async (request, ctx) => {
-    let rawBody: unknown
-    try {
-      rawBody = await request.json()
-    } catch {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'body', message: 'Body is not valid JSON.' },
-      })
-    }
+    const rawBodyResult = await readV1JsonBody(request, ctx)
+    if (!rawBodyResult.ok) return rawBodyResult.response
+    const rawBody = rawBodyResult.body
 
     const parsed = CreateWebhookSchema.safeParse(rawBody)
-    if (!parsed.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: parsed.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
-    }
+    if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const body = parsed.data
 
     // Elevated-scope check for high-sensitivity payloads. Subscribing to

@@ -1,6 +1,7 @@
 import { decryptPersonnummer } from '../personnummer'
 import { isOrgNumberShaped } from '@/lib/invariants/org-number'
 import { truncateToWholeKronor } from '@/lib/money'
+import { escapeXml } from '@/lib/xml/escape'
 
 /**
  * AGI XML generator: Arbetsgivardeklaration på individnivå.
@@ -578,10 +579,6 @@ export function generateAGIXml(
     //   - VAB and parental leave are reported via the top-level
     //     <Franvarouppgift> section (FK820-827) as per-event date records,
     //     not as per-IU day counts. Not implemented in this generator yet.
-    void emp.sickDays
-    void emp.vabDays
-    void emp.parentalDays
-
     lines.push('      </gem:IU>')
     lines.push('    </gem:Blankettinnehall>')
     lines.push('  </gem:Blankett>')
@@ -683,15 +680,6 @@ export function buildIndividuppgifterSnapshot(
 // ============================================================
 // Helpers
 // ============================================================
-
-function escapeXml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
-}
 
 // AGI amounts are stated in whole kronor with the öre dropped (öretal
 // bortfaller, SFF 2011:1261 22 kap. 1 §): truncation, never rounding.

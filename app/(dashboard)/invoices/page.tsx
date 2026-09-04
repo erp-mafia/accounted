@@ -30,6 +30,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import {
   sortInvoiceList,
   type InvoiceListSort,
@@ -45,6 +46,8 @@ import {
   Repeat,
   FileInput,
   FileDown,
+  FileText,
+  FileClock,
 } from 'lucide-react'
 import { StartCard } from '@/components/dashboard/StartCard'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -87,7 +90,7 @@ const CREATE_MODES = ['faktura', 'aterkommande', 'sjalvfaktura'] as const
 
 // Main views (concept seg) and the low-frequency views behind "Fler …".
 const SEG_TABS = ['all', 'unpaid', 'overdue', 'draft'] as const
-const MORE_TABS = ['paid', 'proforma', 'delivery_note', 'credit', 'cancelled'] as const
+const MORE_TABS = ['paid', 'proforma', 'quote', 'delivery_note', 'credit', 'cancelled'] as const
 const ALL_TABS = [...SEG_TABS, ...MORE_TABS]
 type ListTab = (typeof SEG_TABS)[number] | (typeof MORE_TABS)[number]
 
@@ -114,6 +117,7 @@ function matchesListTab(invoice: Invoice, tab: ListTab): boolean {
     (tab === 'paid' && invoice.status === 'paid') ||
     (tab === 'credit' && isCreditNote) ||
     (tab === 'proforma' && docType === 'proforma' && invoice.status !== 'cancelled') ||
+    (tab === 'quote' && docType === 'quote' && invoice.status !== 'cancelled') ||
     (tab === 'delivery_note' &&
       docType === 'delivery_note' &&
       invoice.status !== 'cancelled') ||
@@ -128,6 +132,7 @@ const TAB_LABEL_KEYS: Record<ListTab, string> = {
   draft: 'tab_draft',
   paid: 'tab_paid',
   proforma: 'tab_proforma',
+  quote: 'tab_quote',
   delivery_note: 'tab_delivery_note',
   credit: 'tab_credit',
   cancelled: 'tab_cancelled',
@@ -242,6 +247,12 @@ export default function InvoicesPage() {
   const copyFromId = searchParams.get('copy')
   const showNewInvoice = searchParams.has('new') || copyFromId !== null
   const openSelfBilled = searchParams.has('self')
+  // ?quote=1 preselects the offert document type ("Ny offert" split entry);
+  // ?proforma=1 the proforma type ("Ny proformafaktura" split entry, #2217:
+  // proforma existed but only behind the collapsed Förval panel inside the
+  // editor, so a user coming from Fortnox concluded it did not exist).
+  const openQuote = searchParams.has('quote')
+  const openProforma = searchParams.has('proforma')
   const showRotRutPayout = searchParams.has('rot-rut')
   // Open/close handlers rewrite only their own keys: a hardcoded '/invoices'
   // would destroy the ?status= view write-back (and any other params) every
@@ -257,6 +268,8 @@ export default function InvoicesPage() {
       invoicesUrl((p) => {
         p.delete('new')
         p.delete('self')
+        p.delete('quote')
+        p.delete('proforma')
         p.delete('copy')
       }),
       { scroll: false },
@@ -268,6 +281,22 @@ export default function InvoicesPage() {
       invoicesUrl((p) => {
         p.set('new', '1')
         p.set('self', '1')
+      }),
+      { scroll: false },
+    )
+  const openNewQuote = () =>
+    router.push(
+      invoicesUrl((p) => {
+        p.set('new', '1')
+        p.set('quote', '1')
+      }),
+      { scroll: false },
+    )
+  const openNewProforma = () =>
+    router.push(
+      invoicesUrl((p) => {
+        p.set('new', '1')
+        p.set('proforma', '1')
       }),
       { scroll: false },
     )
@@ -504,6 +533,24 @@ export default function InvoicesPage() {
       onSelect: () => openNewInvoice(),
     },
     {
+      key: 'offert',
+      label: t('create_quote'),
+      icon: FileText,
+      description: t('create_quote_desc'),
+      disabled: !canWrite,
+      disabledTitle: t('viewer_disabled_tooltip'),
+      onSelect: () => openNewQuote(),
+    },
+    {
+      key: 'proforma',
+      label: t('create_proforma'),
+      icon: FileClock,
+      description: t('create_proforma_desc'),
+      disabled: !canWrite,
+      disabledTitle: t('viewer_disabled_tooltip'),
+      onSelect: () => openNewProforma(),
+    },
+    {
       key: 'aterkommande',
       label: t('create_recurring'),
       icon: Repeat,
@@ -535,6 +582,20 @@ export default function InvoicesPage() {
     if (invoice.status === 'credited') {
       return { label: t('status_credited'), exception: true, variant: 'secondary' }
     }
+    // Offert: the decision (or derived expiry) is the status. Open and
+    // accepted are the normal states; declined and expired deviate.
+    const quoteStatus =
+      (invoice as Invoice & { document_type?: string }).document_type === 'quote'
+        ? effectiveQuoteStatus(invoice)
+        : null
+    if (quoteStatus === 'expired') {
+      return { label: t('quote_status_expired'), exception: true, variant: 'warning' }
+    }
+    if (quoteStatus === 'declined') {
+      return { label: t('quote_status_declined'), exception: true, variant: 'secondary' }
+    }
+    if (quoteStatus === 'accepted') return { label: t('quote_status_accepted') }
+    if (quoteStatus === 'open') return { label: t('quote_status_open') }
     if (invoice.status === 'draft') {
       const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
       const isUnsent =
@@ -772,11 +833,13 @@ export default function InvoicesPage() {
                   activeTab === 'all'
                     ? docType === 'proforma'
                       ? t('badge_proforma')
-                      : docType === 'delivery_note'
-                        ? t('badge_delivery_note')
-                        : invoice.is_self_billed
-                          ? t('badge_self_billed')
-                          : null
+                      : docType === 'quote'
+                        ? t('badge_quote')
+                        : docType === 'delivery_note'
+                          ? t('badge_delivery_note')
+                          : invoice.is_self_billed
+                            ? t('badge_self_billed')
+                            : null
                     : null
                 return (
                   <tr
@@ -832,9 +895,13 @@ export default function InvoicesPage() {
                       </span>
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
-                      {invoice.due_date && !isCreditNote && invoice.status !== 'draft'
-                        ? formatDate(invoice.due_date)
-                        : ''}
+                      {docType === 'quote'
+                        ? invoice.valid_until
+                          ? formatDate(invoice.valid_until)
+                          : ''
+                        : invoice.due_date && !isCreditNote && invoice.status !== 'draft'
+                          ? formatDate(invoice.due_date)
+                          : ''}
                     </td>
                     <td
                       className={cn(
@@ -885,6 +952,7 @@ export default function InvoicesPage() {
           open
           copyFromId={copyFromId}
           selfBilled={openSelfBilled}
+          documentType={openQuote ? 'quote' : openProforma ? 'proforma' : undefined}
           onOpenChange={(open) => {
             if (!open) closeNewInvoice()
           }}

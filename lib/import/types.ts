@@ -193,14 +193,6 @@ export interface AccountMapping {
 }
 
 /**
- * Account mapping context for the mapper
- */
-export interface MappingContext {
-  sourceAccounts: SIEAccount[]
-  existingMappings?: Map<string, AccountMapping>
-}
-
-/**
  * SIE import record (matches database table)
  */
 export interface SIEImport {
@@ -241,39 +233,6 @@ export interface SIEAccountMappingRecord {
   match_type: AccountMatchType
   created_at: string
   updated_at: string
-}
-
-/**
- * Options for executing an import
- */
-export interface ImportOptions {
-  // The parsed SIE data
-  parsed: ParsedSIEFile
-
-  // Account mappings to use
-  mappings: AccountMapping[]
-
-  // Whether to create a new fiscal period
-  createFiscalPeriod: boolean
-
-  // Whether to import opening balances as a journal entry
-  importOpeningBalances: boolean
-
-  // Whether to import transactions (SIE4 only)
-  importTransactions: boolean
-
-  // Voucher series to use for imported entries
-  voucherSeries?: string
-
-  // Voucher series for the opening-balance (Ingående balanser) entry.
-  // Defaults to a series the file's own vouchers do not use (see
-  // lib/import/opening-balance-defaults.ts) so the IB voucher never shifts
-  // the numbering of the file's series (issue #1882).
-  openingBalanceSeries?: string
-
-  // Opt-in: mark imported verifikat as "Inget underlag krävs" so a migration
-  // doesn't flood "Att hantera: saknade underlag". OFF by default.
-  markImportedNoDocRequired?: boolean
 }
 
 /**
@@ -495,17 +454,3 @@ export interface MigrationDocumentation {
  * Wizard step state
  */
 export type ImportWizardStep = 'upload' | 'preview' | 'mapping' | 'review' | 'result'
-
-/**
- * Full wizard state
- */
-export interface ImportWizardState {
-  step: ImportWizardStep
-  file: File | null
-  parsed: ParsedSIEFile | null
-  mappings: AccountMapping[]
-  preview: ImportPreview | null
-  importResult: ImportResult | null
-  isLoading: boolean
-  error: string | null
-}

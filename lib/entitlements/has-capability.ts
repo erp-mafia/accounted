@@ -1,3 +1,4 @@
+import { chunk as chunksOf } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { isSelfHosted } from '@/lib/env/public-flags'
@@ -8,6 +9,7 @@ import {
   type MultiUserAccess,
   type MultiUserGrantRow,
 } from './multi-user-state'
+import { isUuid } from '@/lib/invariants/uuid'
 
 /**
  * Entitlement gate: the single primitive behind the paywall ("non-payer loses
@@ -99,25 +101,13 @@ function isPaywallBypassed(): boolean {
   return isDevBypass()
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-/**
- * Only server-resolved UUIDs may be interpolated into the PostgREST `.or()`
- * filter below: commas/dots/parens are filter syntax. companyId/teamId always
- * come from the DB, but we validate at this boundary as defense in depth.
- */
-function isUuid(v: string): boolean {
-  return UUID_RE.test(v)
-}
+// Only server-resolved UUIDs may be interpolated into the PostgREST `.or()`
+// filter below: commas/dots/parens are filter syntax. companyId/teamId always
+// come from the DB, but we validate with isUuid at this boundary as defense
+// in depth.
 
 const CAPABILITY_SCOPE_CHUNK_SIZE = 100
 
-function chunksOf<T>(values: T[], size: number): T[][] {
-  const chunks: T[][] = []
-  for (let index = 0; index < values.length; index += size) {
-    chunks.push(values.slice(index, index + size))
-  }
-  return chunks
-}
 
 function grantIsActive(expiresAt: string | null, now: number): boolean {
   return expiresAt === null || new Date(expiresAt).getTime() > now
@@ -610,12 +600,4 @@ export async function getCompanyEntitlements(
     trialExpiredAt,
     multiUser,
   }
-}
-
-/** Capability list only; see getCompanyEntitlements for the full shape. */
-export async function getCompanyCapabilities(
-  supabase: SupabaseClient,
-  companyId: string,
-): Promise<CapabilityKey[]> {
-  return (await getCompanyEntitlements(supabase, companyId)).capabilities
 }

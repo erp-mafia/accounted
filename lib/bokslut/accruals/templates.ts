@@ -1,15 +1,7 @@
-import type { AccrualProposal } from './types'
-import {
-  proposeManualAccrued,
-  proposeManualPrepaid,
-  proposeRevenueDeferral,
-  proposeAccruedInterest,
-  proposeAccruedUtility,
-} from './accrual-detector'
-
 /**
- * Pre-filled patterns the wizard offers as one-click templates. Each maps
- * to one of the proposeManual* / proposeAccrued* helpers in
+ * Pre-filled patterns the wizard offers as one-click templates. Each names
+ * the engine side (prepaid / accrued / deferred revenue / ...) that the
+ * wizard maps onto the proposeManual* / proposeAccrued* helpers in
  * accrual-detector.ts. The wizard renders these as "Lägg till" buttons.
  *
  * BAS account choices follow the standard 2026 chart:
@@ -17,8 +9,8 @@ import {
  *   - 29xx upplupna kostnader (accrued expenses + förutbetalda intäkter)
  *   - 2970 förutbetalda intäkter (deferred revenue specifically)
  *
- * Adding a new template means: 1) extend this array, 2) add a wrapper in
- * accrual-detector if needed, 3) the wizard picks it up automatically.
+ * Adding a new template means: 1) extend this array, 2) the wizard picks
+ * it up automatically.
  */
 
 export type PeriodiseringTemplateKind =
@@ -95,69 +87,3 @@ export const PERIODISERING_TEMPLATES: PeriodiseringTemplate[] = [
     expense_account: '5020',
   },
 ]
-
-export interface TemplateApplyParams {
-  amount: number
-  description: string
-  closingDate: string
-  /** Caller-overridable account numbers. Falls back to template defaults. */
-  prepaidAccount?: string
-  expenseAccount?: string
-  deferredAccount?: string
-  revenueAccount?: string
-  accruedAccount?: string
-}
-
-/**
- * Build an AccrualProposal from a template + caller-supplied amount/desc.
- * Throws if the template kind is unknown or the resulting accounts violate
- * the 17xx/29xx range checks in the underlying engine functions.
- */
-export function applyTemplate(
-  template: PeriodiseringTemplate,
-  params: TemplateApplyParams,
-): AccrualProposal | null {
-  const { amount, description, closingDate } = params
-  switch (template.side) {
-    case 'prepaid':
-      return proposeManualPrepaid({
-        amount,
-        description,
-        closingDate,
-        prepaidAccount: params.prepaidAccount ?? template.prepaid_account!,
-        expenseAccount: params.expenseAccount ?? template.expense_account!,
-      })
-    case 'accrued':
-      return proposeManualAccrued({
-        amount,
-        description,
-        closingDate,
-        accruedAccount: params.accruedAccount ?? template.accrued_account!,
-        expenseAccount: params.expenseAccount ?? template.expense_account!,
-      })
-    case 'deferred_revenue':
-      return proposeRevenueDeferral({
-        amount,
-        description,
-        closingDate,
-        deferredAccount: params.deferredAccount ?? template.deferred_account!,
-        revenueAccount: params.revenueAccount ?? template.revenue_account!,
-      })
-    case 'accrued_interest':
-      return proposeAccruedInterest({
-        amount,
-        description,
-        closingDate,
-        accruedAccount: params.accruedAccount ?? template.accrued_account!,
-        expenseAccount: params.expenseAccount ?? template.expense_account!,
-      })
-    case 'accrued_utility':
-      return proposeAccruedUtility({
-        amount,
-        description,
-        closingDate,
-        accruedAccount: params.accruedAccount ?? template.accrued_account!,
-        expenseAccount: params.expenseAccount ?? template.expense_account!,
-      })
-  }
-}

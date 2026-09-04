@@ -336,6 +336,55 @@ describe('signOffAccount', () => {
     ).rejects.toMatchObject({ code: 'SIGNOFF_RACE' })
   })
 
+  it('judges a bank account from the start of the fiscal period that covers the date', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // A September-to-August company: judging from 1 January would drop the
+    // opening balance and the autumn movements the page window includes.
+    enqueue({ data: { period_start: '2025-09-01' } })
+    statusMock.mockResolvedValue(
+      status({ account_key: 'bank:11111111-1111-4111-8111-111111111111', kind: 'bank', account_number: '1930', as_of: '2026-09-02T10:00:00Z' }),
+    )
+    await signOffAccount(
+      supabase as never,
+      COMPANY,
+      USER,
+      'bank:11111111-1111-4111-8111-111111111111',
+      { through_date: '2026-08-31' },
+      { today: '2026-09-02' },
+    )
+    expect(statusMock).toHaveBeenCalledWith(supabase, COMPANY, 'bank:11111111-1111-4111-8111-111111111111', {
+      today: '2026-09-02',
+      windowFrom: '2025-09-01',
+      windowTo: '2026-08-31',
+    })
+  })
+
+  it('leaves the window default alone when no fiscal period covers the date, and never for non-bank keys', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await signOffAccount(
+      supabase as never,
+      COMPANY,
+      USER,
+      'bank:11111111-1111-4111-8111-111111111111',
+      { through_date: '2026-07-31' },
+      { today: TODAY },
+    )
+    expect(statusMock).toHaveBeenLastCalledWith(supabase, COMPANY, 'bank:11111111-1111-4111-8111-111111111111', {
+      today: TODAY,
+      windowTo: '2026-07-31',
+    })
+    await signOffAccount(supabase as never, COMPANY, USER, 'skattekonto', { through_date: '2026-07-31' }, { today: TODAY })
+    expect(statusMock).toHaveBeenLastCalledWith(supabase, COMPANY, 'skattekonto', { today: TODAY, windowTo: '2026-07-31' })
+  })
+
+  it('names the unexplained amount on a NOT_RECONCILED refusal so a dialog can show it', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    statusMock.mockResolvedValue(status({ unexplained_difference: 53717, is_reconciled: false }))
+    await expect(
+      signOffAccount(supabase as never, COMPANY, USER, 'skattekonto', { through_date: '2026-07-31' }, { today: TODAY }),
+    ).rejects.toMatchObject({ code: 'NOT_RECONCILED', details: { unexplained_difference: 53717 } })
+  })
+
   it('404s (null) when the status says the account does not exist for the company', async () => {
     const { supabase } = createQueuedMockSupabase()
     statusMock.mockResolvedValue(null)

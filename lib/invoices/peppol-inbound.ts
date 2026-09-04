@@ -12,7 +12,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { roundOre } from '@/lib/money'
-import { sha256Hex } from '@/lib/invoices/peppol-delivery'
+import { describeError, sha256Hex } from '@/lib/invoices/peppol-delivery'
 import {
   parseUblJsonDocument,
   type PeppolInboundDocument,
@@ -86,10 +86,6 @@ function cleanIsoDate(value: string | null): string | null {
 
 function roundMoney(value: number | null): number | null {
   return value === null ? null : roundOre(value)
-}
-
-function describeError(err: unknown): string {
-  return (err instanceof Error ? err.message : String(err)).slice(0, 500)
 }
 
 /** Company for a recipient identifier, via a live registration; null when nobody is registered. */

@@ -182,5 +182,3 @@ function classifyAddress(address: string): AddressClass {
   if (/^fe[89ab]/.test(v6)) return 'link_local_address'
   return 'public'
 }
-
-export const __TESTING__ = { classifyAddress }

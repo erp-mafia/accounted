@@ -28,25 +28,11 @@ import {
 import type { VatDeclarationCheck } from '@/lib/reports/vat-declaration-checks'
 import type { RcBasisGap } from '@/lib/reports/rc-basis-gaps'
 import type { VatPeriodType } from '@/types'
-import { formatDate } from '@/lib/utils'
+import { formatAmount, formatDate } from '@/lib/utils'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { cn } from '@/lib/utils'
-
-function formatAmount(amount: number): string {
-  return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
-
-/** API responses use the canonical envelope; error may be a string or an object. */
-function apiErrorMessage(json: unknown, fallback: string): string {
-  const err = (json as { error?: unknown } | null)?.error
-  if (typeof err === 'string') return err
-  if (err && typeof err === 'object') {
-    const message = (err as { message?: unknown }).message
-    if (typeof message === 'string') return message
-  }
-  return fallback
-}
+import { apiErrorMessage } from './api-error'
 
 type SupplierType = 'eu_business' | 'non_eu_business' | 'swedish_business'
 type SupplyType = 'service' | 'goods'

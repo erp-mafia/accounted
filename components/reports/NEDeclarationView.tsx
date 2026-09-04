@@ -10,16 +10,7 @@ import {
   formatWholeKronor,
 } from '@/components/reports/DeclarationRutaRow'
 import type { NEDeclaration } from '@/lib/reports/ne-bilaga/types'
-
-/** API errors may be a plain string or the canonical { code, message } envelope. */
-function parseApiError(error: unknown, fallback: string): string {
-  if (typeof error === 'string') return error
-  if (error && typeof error === 'object') {
-    const message = (error as { message?: unknown }).message
-    if (typeof message === 'string') return message
-  }
-  return fallback
-}
+import { parseApiError } from './api-error'
 
 export function NEDeclarationView({ periodId }: { periodId: string }) {
   // Fetch outcome tagged with the key it was requested under: switching

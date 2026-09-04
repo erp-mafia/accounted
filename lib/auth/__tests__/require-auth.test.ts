@@ -31,12 +31,33 @@ const MOCK_USER = {
   created_at: '2026-01-01T00:00:00Z',
 }
 
+const VERIFIED_TOTP = { id: 'f1', status: 'verified', factor_type: 'totp' }
+const UNVERIFIED_TOTP = { id: 'f2', status: 'unverified', factor_type: 'totp' }
+
+/** listFactors() payload: `all` carries everything, the typed arrays only verified ones. */
+function factorList(...factors: Array<typeof VERIFIED_TOTP>) {
+  return {
+    data: {
+      all: factors,
+      totp: factors.filter((f) => f.status === 'verified'),
+      phone: [],
+      webauthn: [],
+    },
+    error: null,
+  }
+}
+
 type MockAuth = Record<string, unknown>
 
 function useSupabase(auth: MockAuth) {
   const supabase = { auth }
   vi.mocked(createClient).mockResolvedValue(supabase as never)
   return supabase
+}
+
+function enableMfa() {
+  vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+  vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
 }
 
 describe('requireAuth', () => {
@@ -142,53 +163,179 @@ describe('requireAuth', () => {
     expect(getUser).not.toHaveBeenCalled()
   })
 
-  it('returns 403 when MFA is required and AAL2 is not verified', async () => {
-    vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
-    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
-    const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
-    const getAuthenticatorAssuranceLevel = vi.fn().mockResolvedValue({
-      data: { currentLevel: 'aal1', nextLevel: 'aal2' },
-      error: null,
+  describe('MFA gate', () => {
+    beforeEach(() => {
+      enableMfa()
+      vi.spyOn(console, 'error').mockImplementation(() => {})
     })
-    useSupabase({ getClaims, mfa: { getAuthenticatorAssuranceLevel } })
 
-    const result = await requireAuth()
-
-    expect(result.user).toBeNull()
-    expect(result.error?.status).toBe(403)
-    const body = await result.error?.json()
-    expect(body).toEqual({ error: 'MFA verification required' })
-  })
-
-  it('skips the MFA check for bankid_linked users', async () => {
-    vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
-    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
-    const claims = { ...CLAIMS, app_metadata: { provider: 'email', bankid_linked: true } }
-    const getClaims = vi.fn().mockResolvedValue({ data: { claims }, error: null })
-    const getAuthenticatorAssuranceLevel = vi.fn()
-    useSupabase({ getClaims, mfa: { getAuthenticatorAssuranceLevel } })
-
-    const result = await requireAuth()
-
-    expect(result.error).toBeNull()
-    expect(result.user?.id).toBe('user-1')
-    expect(getAuthenticatorAssuranceLevel).not.toHaveBeenCalled()
-  })
-
-  it('passes when MFA is required and the session is already AAL2', async () => {
-    vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
-    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
-    const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
-    const getAuthenticatorAssuranceLevel = vi.fn().mockResolvedValue({
-      data: { currentLevel: 'aal2', nextLevel: 'aal2' },
-      error: null,
+    afterEach(() => {
+      vi.restoreAllMocks()
     })
-    useSupabase({ getClaims, mfa: { getAuthenticatorAssuranceLevel } })
 
-    const result = await requireAuth()
+    it('returns 403 for an AAL1 session when the auth server reports a verified factor', async () => {
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
+      const listFactors = vi.fn().mockResolvedValue(factorList(VERIFIED_TOTP))
+      useSupabase({ getClaims, mfa: { listFactors } })
 
-    expect(result.error).toBeNull()
-    expect(result.user?.id).toBe('user-1')
-    expect(getAuthenticatorAssuranceLevel).toHaveBeenCalledTimes(1)
+      const result = await requireAuth()
+
+      expect(result.user).toBeNull()
+      expect(result.error?.status).toBe(403)
+      const body = await result.error?.json()
+      expect(body).toEqual({ error: 'MFA verification required' })
+      expect(listFactors).toHaveBeenCalledTimes(1)
+    })
+
+    it('never consults the cookie-derived assurance level', async () => {
+      // The attack: the sb-*-auth-token cookie is unsigned JSON, so the
+      // password holder strips `user.factors` and the local
+      // getAuthenticatorAssuranceLevel() reports nextLevel aal1 ("no MFA
+      // enrolled"). The gate must decide on the server's answer instead.
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
+      const getAuthenticatorAssuranceLevel = vi.fn().mockResolvedValue({
+        data: { currentLevel: 'aal1', nextLevel: 'aal1' },
+        error: null,
+      })
+      const listFactors = vi.fn().mockResolvedValue(factorList(VERIFIED_TOTP))
+      useSupabase({ getClaims, mfa: { getAuthenticatorAssuranceLevel, listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error?.status).toBe(403)
+      expect(getAuthenticatorAssuranceLevel).not.toHaveBeenCalled()
+    })
+
+    it('passes an AAL2 session on the verified claims alone (no listFactors round trip)', async () => {
+      const claims = { ...CLAIMS, aal: 'aal2' }
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims }, error: null })
+      const listFactors = vi.fn()
+      const getAuthenticatorAssuranceLevel = vi.fn()
+      useSupabase({ getClaims, mfa: { listFactors, getAuthenticatorAssuranceLevel } })
+
+      const result = await requireAuth()
+
+      expect(result.error).toBeNull()
+      expect(result.user?.id).toBe('user-1')
+      expect(listFactors).not.toHaveBeenCalled()
+      expect(getAuthenticatorAssuranceLevel).not.toHaveBeenCalled()
+    })
+
+    it('passes an AAL1 session when the auth server reports no verified factor', async () => {
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
+      const listFactors = vi.fn().mockResolvedValue(factorList())
+      useSupabase({ getClaims, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error).toBeNull()
+      expect(result.user?.id).toBe('user-1')
+      expect(listFactors).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not count an unverified (enrolment in progress) factor as a step-up target', async () => {
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
+      const listFactors = vi.fn().mockResolvedValue(factorList(UNVERIFIED_TOTP))
+      useSupabase({ getClaims, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error).toBeNull()
+    })
+
+    it('reads a verified phone factor from the typed array when `all` is absent', async () => {
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
+      const listFactors = vi.fn().mockResolvedValue({
+        data: { phone: [{ id: 'p1', status: 'verified', factor_type: 'phone' }] },
+        error: null,
+      })
+      useSupabase({ getClaims, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error?.status).toBe(403)
+    })
+
+    it('treats a session whose verified claims carry no aal as not assured', async () => {
+      const { aal: _aal, ...claims } = CLAIMS
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims }, error: null })
+      const listFactors = vi.fn().mockResolvedValue(factorList(VERIFIED_TOTP))
+      useSupabase({ getClaims, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error?.status).toBe(403)
+    })
+
+    it('fails closed when listFactors returns an error', async () => {
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
+      const listFactors = vi.fn().mockResolvedValue({
+        data: null,
+        error: { name: 'AuthApiError', message: 'upstream unavailable' },
+      })
+      useSupabase({ getClaims, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error?.status).toBe(403)
+    })
+
+    it('fails closed when listFactors throws', async () => {
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
+      const listFactors = vi.fn().mockRejectedValue(new Error('network down'))
+      useSupabase({ getClaims, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error?.status).toBe(403)
+    })
+
+    it('fails closed when the client exposes no mfa API at all', async () => {
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
+      useSupabase({ getClaims })
+
+      const result = await requireAuth()
+
+      expect(result.error?.status).toBe(403)
+    })
+
+    it('asks listFactors on the getUser fallback path and refuses a verified factor', async () => {
+      // No verified claims exist here (getClaims failed), so the level is
+      // unknown: a verified factor means the session must be refused.
+      const getClaims = vi.fn().mockRejectedValue(new Error('jwks fetch failed'))
+      const getUser = vi.fn().mockResolvedValue({ data: { user: MOCK_USER }, error: null })
+      const listFactors = vi.fn().mockResolvedValue(factorList(VERIFIED_TOTP))
+      useSupabase({ getClaims, getUser, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error?.status).toBe(403)
+      expect(listFactors).toHaveBeenCalledTimes(1)
+    })
+
+    it('passes a factor-less user on the getUser fallback path', async () => {
+      const getUser = vi.fn().mockResolvedValue({ data: { user: MOCK_USER }, error: null })
+      const listFactors = vi.fn().mockResolvedValue(factorList())
+      useSupabase({ getUser, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error).toBeNull()
+      expect(result.user?.id).toBe('user-1')
+      expect(listFactors).toHaveBeenCalledTimes(1)
+    })
+
+    it('skips the MFA check for bankid_linked users', async () => {
+      const claims = { ...CLAIMS, app_metadata: { provider: 'email', bankid_linked: true } }
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims }, error: null })
+      const listFactors = vi.fn()
+      useSupabase({ getClaims, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error).toBeNull()
+      expect(result.user?.id).toBe('user-1')
+      expect(listFactors).not.toHaveBeenCalled()
+    })
   })
 })

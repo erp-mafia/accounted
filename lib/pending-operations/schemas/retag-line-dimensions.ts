@@ -56,5 +56,3 @@ export const RetagLineDimensionsParamsSchema = z
     filter_summary: z.string().max(500).optional(),
   })
   .strict()
-
-export type RetagLineDimensionsParams = z.infer<typeof RetagLineDimensionsParamsSchema>

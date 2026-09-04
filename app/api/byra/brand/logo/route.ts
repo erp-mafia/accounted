@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { detectFileMagic } from '@/lib/core/documents/document-service'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createServiceClient } from '@/lib/supabase/server'
 import { requireByraBrandAccess } from '@/lib/byra/brand-access'
@@ -23,7 +24,14 @@ import { LOGO_UPLOAD_MAX_BYTES, LOGO_UPLOAD_MAX_MB } from '@/lib/invoices/brandi
  * instance that handled the write.
  */
 
-const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/svg+xml', 'image/webp']
+// Raster formats only, decided by the file's magic bytes (detectFileMagic),
+// never by the client-declared Content-Type: the logos bucket is PUBLIC and a
+// scripted SVG on a public URL is a script-capable document.
+const LOGO_TYPE_EXTENSIONS: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+}
 
 async function purgeLogoFiles(
   serviceClient: ReturnType<typeof createServiceClient>,
@@ -60,12 +68,6 @@ export async function POST(request: Request) {
   if (!file) {
     return NextResponse.json({ error: 'Ingen fil angiven' }, { status: 400 })
   }
-  if (!ALLOWED_TYPES.includes(file.type)) {
-    return NextResponse.json(
-      { error: 'Otillåten filtyp. Tillåtna: PNG, JPG, SVG, WebP.' },
-      { status: 400 },
-    )
-  }
   if (file.size > LOGO_UPLOAD_MAX_BYTES) {
     return NextResponse.json(
       { error: `Filen är för stor (max ${LOGO_UPLOAD_MAX_MB} MB).` },
@@ -74,20 +76,21 @@ export async function POST(request: Request) {
   }
 
   const buffer = Buffer.from(await file.arrayBuffer())
-  const mimeToExt: Record<string, string> = {
-    'image/png': 'png',
-    'image/jpeg': 'jpg',
-    'image/svg+xml': 'svg',
-    'image/webp': 'webp',
+  const detectedType = detectFileMagic(new Uint8Array(buffer))
+  const ext = detectedType ? LOGO_TYPE_EXTENSIONS[detectedType] : undefined
+  if (!detectedType || !ext) {
+    return NextResponse.json(
+      { error: 'Otillåten filtyp. Tillåtna: PNG, JPG, WebP.' },
+      { status: 400 },
+    )
   }
-  const ext = mimeToExt[file.type] ?? 'png'
   const storagePath = `byra/${teamId}/logo-${Date.now()}.${ext}`
 
   await purgeLogoFiles(serviceClient, teamId)
 
   const { error: uploadError } = await serviceClient.storage
     .from('logos')
-    .upload(storagePath, buffer, { contentType: file.type, upsert: true })
+    .upload(storagePath, buffer, { contentType: detectedType, upsert: true })
   if (uploadError) {
     return NextResponse.json(
       { error: `Uppladdning misslyckades: ${getUserErrorMessage(uploadError)}` },

@@ -20,6 +20,10 @@
 import { formatCurrency } from '@/lib/utils'
 // Pure module (no next/server): safe for the client bundles this file lives in.
 import { formatDimensionValidationIssues } from '@/lib/bookkeeping/dimension-errors'
+import {
+  describeMissingInvoicePaymentAccount,
+  isInvoicePaymentAccountCurrency,
+} from '@/lib/invoices/payment-accounts'
 import { getErrorEntry, hasErrorEntry } from './structured-errors'
 
 type ErrorContext =
@@ -182,10 +186,97 @@ function tryMatchKnownError(message: string): string | null {
 }
 
 /**
- * Simple heuristic to detect already-translated Swedish messages.
- * If the message contains common Swedish words/patterns, pass it through.
+ * Swedish tokens that mark a sentence as Swedish. STRONG ones are
+ * unambiguous (never English, rare in technical output) and count 2 on their
+ * own; WEAK ones are common function words that also exist in English or are
+ * too short to be decisive ("till", "den", "det") and count 1 each. Words
+ * that are plainly English as well ("under", "men", "om", "en", "vi") are
+ * left out on purpose, so an English framework message cannot score on them.
  */
-function isSwedishUserMessage(message: string): boolean {
+const SWEDISH_STRONG_WORDS = [
+  'och', 'att', 'inte', 'är', 'ska', 'finns', 'ingen', 'inget', 'inga', 'redan',
+  'bara', 'hos', 'från', 'eller', 'utan', 'också', 'endast', 'ännu', 'igen',
+  'kunde', 'gick', 'går', 'måste', 'får', 'saknas', 'lyckades', 'misslyckades',
+  'bifogad', 'svarade',
+]
+const SWEDISH_WEAK_WORDS = [
+  'för', 'med', 'till', 'det', 'den', 'ett', 'av', 'på', 'som', 'har', 'kan',
+  'när', 'över', 'mot', 'vid', 'efter', 'innan', 'alla', 'sedan', 'här', 'där',
+  'din', 'ditt', 'dina', 'denna', 'detta', 'dessa', 'minst', 'högst',
+]
+// The strong list is probed with .test(), so it must NOT be global: a global
+// regex keeps lastIndex between calls and silently fails the next message.
+// The weak list is iterated with matchAll(), which requires the g flag and
+// clones the regex per call.
+const wordListRe = (words: string[], flags: string) =>
+  new RegExp(`(^|[^\\p{L}])(${words.join('|')})(?=$|[^\\p{L}])`, flags)
+const SWEDISH_STRONG_RE = wordListRe(SWEDISH_STRONG_WORDS, 'iu')
+const SWEDISH_WEAK_RE = wordListRe(SWEDISH_WEAK_WORDS, 'giu')
+
+/**
+ * Signs that a string is a technical leak rather than a sentence written for
+ * the user: stack frames, file:line references, JS/Node error vocabulary,
+ * Postgres/PostgREST/SQL fragments, JSON, URLs. A message carrying any of
+ * these is never shown raw, whatever language it is in.
+ */
+const TECHNICAL_LEAK_PATTERNS: RegExp[] = [
+  /\bat \S+ \(/, // stack frame: "at fn (file:1:2)"
+  /\.(?:ts|tsx|js|mjs|cjs):\d+/, // file:line
+  /\b(?:TypeError|ReferenceError|SyntaxError|RangeError|EvalError)\b/,
+  /cannot read propert/i,
+  /is not a function\b/i,
+  /is not defined\b/i,
+  /\bundefined\b/,
+  /\bNaN\b/,
+  /\bPGRST\d+/,
+  /\bSQLSTATE\b/,
+  /violates .*constraint/i,
+  /duplicate key value/i,
+  /relation "/i,
+  /column "/i,
+  /syntax error at/i,
+  /\bE(?:CONN\w+|TIMEDOUT|NOTFOUND|PIPE|HOSTUNREACH)\b/,
+  /fetch failed/i,
+  /unexpected token/i,
+  /\{\s*"/, // JSON object start
+  /https?:\/\//,
+]
+
+/**
+ * Whether a free-text string reads as a Swedish sentence written for the user
+ * (issue #2086): it carries å/ä/ö or Swedish words, and shows no sign of
+ * being a technical leak (see TECHNICAL_LEAK_PATTERNS). Scoring: å/ä/ö or
+ * any STRONG word counts 2, each distinct WEAK word 1, pass at 2. So "Inget
+ * skattekonto är registrerat hos Skatteverket." and "Kopplingen misslyckades."
+ * pass; "Failed to fetch customer", "Redirect till /login" and
+ * "TypeError: x is not a function" do not.
+ */
+export function looksLikeUserFacingSwedish(message: string): boolean {
+  const text = message.trim()
+  if (!text) return false
+  if (TECHNICAL_LEAK_PATTERNS.some((p) => p.test(text))) return false
+  if (/[åäöÅÄÖ]/.test(text)) return true
+  if (SWEDISH_STRONG_RE.test(text)) return true
+  const weak = new Set<string>()
+  for (const m of text.matchAll(SWEDISH_WEAK_RE)) weak.add(m[2].toLowerCase())
+  return weak.size >= 2
+}
+
+/**
+ * Whether a route's free-text `error` / `message` string is a user-facing
+ * Swedish message that should be shown as-is.
+ *
+ * Two ways in. The keyword list below is the original test; it stays because
+ * callers rely on the odd tokens it lets through (e.g. "session"). It was also
+ * the ONLY test until issue #2086: a correct sentence without one of the ~30
+ * keywords ("Inget skattekonto är registrerat hos Skatteverket.") was dropped
+ * and replaced with the generic HTTP-500 text, whose "försök igen senare"
+ * advice was wrong for the case. 155 of the 631 message_sv strings in
+ * structured-errors.ts failed the keyword test. looksLikeUserFacingSwedish is
+ * the second way in, and a registry-wide test pins that every message_sv
+ * passes one of the two.
+ */
+export function isSwedishUserMessage(message: string): boolean {
   const swedishPatterns = [
     /kunde inte/i,
     /kan inte/i,
@@ -221,7 +312,7 @@ function isSwedishUserMessage(message: string): boolean {
     /verifikation/i,
     /importera|importen/i,
   ]
-  return swedishPatterns.some((p) => p.test(message))
+  return swedishPatterns.some((p) => p.test(message)) || looksLikeUserFacingSwedish(message)
 }
 
 /**
@@ -350,6 +441,20 @@ export function getErrorMessage(
         message_en?: unknown
         account_numbers?: unknown
         details?: unknown
+      }
+
+      // Say what is missing for THIS invoice's currency: on a SEK invoice the
+      // registry's currency-neutral text read as a foreign-currency account
+      // when the gap was the company's bankgiro (#2126). Before the English
+      // registry shortcut on purpose: both locales get the specific text.
+      if (structured.code === 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING') {
+        // Own local name on purpose: the sek-labelled-amount guard keys
+        // currency reads by owner path, and `details` is also the owner of
+        // the SEK-only journal totals formatted further down.
+        const paymentDetails = structured.details as { currency?: unknown } | undefined
+        if (isInvoicePaymentAccountCurrency(paymentDetails?.currency)) {
+          return pick(describeMissingInvoicePaymentAccount(paymentDetails.currency), locale)
+        }
       }
 
       // For English UI, return the registry's English message for any known
@@ -501,9 +606,11 @@ export function getErrorMessage(
         // Known codes without a dynamic branch above (e.g. CANNOT_REVERSE_STORNO)
         // carry raw English engine messages: prefer the registry's Swedish
         // message so no typed code surfaces English in a Swedish UI.
+        // A code flagged thrown_message_sv composes its Swedish text at the
+        // throw site (a date, an amount): that text wins over the static entry.
         if (locale === 'sv' && typeof structured.code === 'string' && !isSwedishUserMessage(structured.message)) {
           const entry = getErrorEntry(structured.code)
-          if (entry?.message_sv) return entry.message_sv
+          if (entry?.message_sv && !entry.thrown_message_sv) return entry.message_sv
         }
         return structured.message
       }

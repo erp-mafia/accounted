@@ -181,6 +181,60 @@ describe('POST /api/v1/companies/:companyId/invoices/bulk-create', () => {
     expect(body.data.summary.succeeded).toBe(0)
   })
 
+  // A quote needs its own OF-number, valid_until and quote_status, none of
+  // which the bulk path assigns, so the item is refused before any DB access
+  // and the sibling invoice in the same batch still succeeds.
+  it('refuses a quote item per item without inserting, other items unaffected', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: VALID_CUSTOMER, error: null },
+      invoices: { data: { id: 'inv-1', invoice_number: null, status: 'draft', total: 1250 }, error: null },
+      invoice_items: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await bulkCreate(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/bulk-create`, {
+        invoices: [
+          {
+            customer_id: CUSTOMER_ID,
+            document_type: 'quote',
+            invoice_date: '2026-09-02',
+            due_date: '2026-10-02',
+            valid_until: '2026-10-02',
+            currency: 'SEK',
+            items: [SAMPLE_ITEM('Offert')],
+          },
+          {
+            customer_id: CUSTOMER_ID,
+            invoice_date: '2026-09-02',
+            due_date: '2026-10-02',
+            currency: 'SEK',
+            items: [SAMPLE_ITEM('B')],
+          },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.results[0].ok).toBe(false)
+    expect(body.data.results[0].request_index).toBe(0)
+    expect(body.data.results[0].error.code).toBe('VALIDATION_ERROR')
+    expect(body.data.results[0].error.details).toEqual({
+      field: 'document_type',
+      message: 'Quotes are not supported by bulk-create; use POST /invoices with document_type quote.',
+    })
+    expect(body.data.results[1].ok).toBe(true)
+    expect(body.data.summary).toEqual({ total: 2, succeeded: 1, failed: 1 })
+
+    // Only the invoice item touched the customers and invoices tables.
+    const tables = supabase.from.mock.calls.map((c) => c[0])
+    expect(tables.filter((t) => t === 'customers')).toHaveLength(1)
+    expect(tables.filter((t) => t === 'invoices')).toHaveLength(1)
+  })
+
   // A validated EU business: the picker default is 0% (huvudregeln, ML 6 kap.
   // 34 §), but the ML 6 kap. supplies taxed where they are performed carry
   // Swedish VAT to that same customer, so the gate reads getPermittedVatRates.

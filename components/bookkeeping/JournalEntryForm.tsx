@@ -113,6 +113,13 @@ interface Props {
    */
   extraBody?: Record<string, unknown>
   duplicateMatchTransaction?: DuplicateMatchTransaction
+  /** Embedded variant only: show the series picker anyway. The series is
+   *  seeded from the server (source type + cash account override) so the
+   *  dialog and the booking route can never disagree. */
+  seriesPicker?: boolean
+  /** Bank account the entry is booked from; its voucher_series override
+   *  (Inställningar → Bokföring) seeds the picker. */
+  cashAccountId?: string | null
   /** Fired after the duplicate guard's match action links the transaction to
    *  the existing voucher (no new entry was created). */
   onDuplicateMatched?: (journalEntryId: string) => void
@@ -140,6 +147,8 @@ export default function JournalEntryForm({
   onUpdated,
   extraBody,
   duplicateMatchTransaction,
+  seriesPicker,
+  cashAccountId,
   onDuplicateMatched,
 }: Props) {
   const { canWrite } = useCanWrite()
@@ -181,6 +190,14 @@ export default function JournalEntryForm({
     initialLines ?? [{ ...BLANK_LINE }, { ...BLANK_LINE }]
   )
   const [voucherSeries, setVoucherSeries] = useState(initialVoucherSeries ?? 'A')
+  // Embedded forms show the picker only on request (bank transaction dialog).
+  const showSeries = !embedded || !!seriesPicker
+  // Whether voucherSeries is authoritative. The standalone form seeds it from
+  // company settings; the embedded picker asks the server once (source type +
+  // cash account override) and marks it resolved, or when the user picks. Until
+  // then the submit omits voucher_series so the route resolves it itself: an
+  // unresolved 'A' must never override the bank account's own series.
+  const [seriesResolved, setSeriesResolved] = useState(!embedded)
   // The source_type the entry will be committed with. Seeded from the prop
   // (undefined -> 'manual' for the standalone form). Applying a booking template
   // whose category maps to a dedicated source type (e.g. VAT -> vat_settlement)
@@ -359,7 +376,7 @@ export default function JournalEntryForm({
   // Read-only hint; the actual number is reserved atomically at commit time,
   // so this may shift by one if another entry lands first.
   useEffect(() => {
-    if (embedded || !entryDate || !voucherSeries) {
+    if (!showSeries || !entryDate || !voucherSeries) {
       setNextVoucherNumber(null)
       return
     }
@@ -367,13 +384,29 @@ export default function JournalEntryForm({
     // Keyed on the entry date rather than the resolved period so the preview
     // fires as soon as the series is known: the route resolves the period
     // from the date itself, which is exactly how selectedPeriod is derived.
-    const qs = new URLSearchParams({ date: entryDate, series: voucherSeries })
+    // Before the embedded picker is resolved, ask by source type + cash
+    // account instead of by series: the route answers with the series the
+    // booking would actually get, and that seeds the picker.
+    const qs = new URLSearchParams({ date: entryDate })
+    if (seriesResolved) {
+      qs.set('series', voucherSeries)
+    } else {
+      if (sourceType) qs.set('source_type', sourceType)
+      if (cashAccountId) qs.set('cash_account_id', cashAccountId)
+    }
     fetch(`/api/bookkeeping/voucher-sequences/next?${qs}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((body) => {
         if (cancelled) return
         const next = body?.data?.next
         setNextVoucherNumber(typeof next === 'number' ? next : null)
+        if (!seriesResolved && body) {
+          const resolved = body?.data?.series
+          if (typeof resolved === 'string' && /^[A-Z]$/.test(resolved)) {
+            setVoucherSeries(resolved)
+          }
+          setSeriesResolved(true)
+        }
       })
       .catch(() => {
         if (!cancelled) setNextVoucherNumber(null)
@@ -381,7 +414,7 @@ export default function JournalEntryForm({
     return () => {
       cancelled = true
     }
-  }, [embedded, entryDate, voucherSeries])
+  }, [showSeries, seriesResolved, entryDate, voucherSeries, sourceType, cashAccountId])
 
   // Fetch exchange rate from Riksbanken when currency changes
   const fetchRate = useCallback(async (currency: Currency) => {
@@ -1042,7 +1075,9 @@ export default function JournalEntryForm({
         description,
         source_type: effectiveSourceType,
         source_id: sourceId,
-        voucher_series: voucherSeries || 'A',
+        // Omitted while an embedded picker is still unresolved: see
+        // seriesResolved. Endpoints that do not declare the key strip it.
+        ...(seriesResolved ? { voucher_series: voucherSeries || 'A' } : {}),
         notes: notes || undefined,
         lines: entryLines,
         // Set only when retrying past the booking-time duplicate guard (see
@@ -1056,7 +1091,7 @@ export default function JournalEntryForm({
       }),
     })
     return (await throwOnStructuredError(res)) as { data?: { id?: string; voucher_series?: string; voucher_number?: number }; journal_entry_id?: string }
-  }, [lines, rate, entryCurrency, computedForeignAmount, t, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, notes, extraBody])
+  }, [lines, rate, entryCurrency, computedForeignAmount, t, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, seriesResolved, notes, extraBody])
 
   const { runSubmit, dialog: activationDialog, confirm: confirmActivation, cancel: cancelActivation } =
     useSubmitWithAccountActivation(postJournalEntry)
@@ -1410,13 +1445,19 @@ export default function JournalEntryForm({
               className="mt-1 h-8"
             />
           </div>
-          {!embedded && (
+          {showSeries && (
             // Closed list, not free text: the letters carry fixed meanings
             // (A = redovisning, B = kundfakturor, ...) and a typo here silently
             // starts a new series with its own number sequence.
             <div className="w-full sm:w-72">
               <Label className="text-xs text-muted-foreground">{t('series')}</Label>
-              <Select value={voucherSeries} onValueChange={(v) => setVoucherSeries(v)}>
+              <Select
+                value={voucherSeries}
+                onValueChange={(v) => {
+                  setVoucherSeries(v)
+                  setSeriesResolved(true)
+                }}
+              >
                 <SelectTrigger className="mt-1 h-8">
                   <SelectValue />
                 </SelectTrigger>
