@@ -1,14 +1,23 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import type { ScbCandidate, ScbSearchResult } from '@/lib/parties/scb/client'
+import type { ScbCandidate } from '@/lib/parties/scb/client'
+import type { RegistryCandidatesResult } from '@/lib/parties/registry-search'
 import { formatOrgNumber } from '@/lib/utils'
+
+function regionName(code: string, locale: string): string {
+  try {
+    return new Intl.DisplayNames([locale], { type: 'region' }).of(code) ?? code
+  } catch {
+    return code
+  }
+}
 
 /**
  * "SCB hittar två företag som liknar Adobe Systems Software, vilket menar
@@ -33,8 +42,9 @@ export function ScbPickerDialog({
 }) {
   const t = useTranslations('parties')
   const tCommon = useTranslations('common')
+  const locale = useLocale()
   const [query, setQuery] = useState('')
-  const [loaded, setLoaded] = useState<{ key: string; result: ScbSearchResult | null; failed: boolean } | null>(null)
+  const [loaded, setLoaded] = useState<{ key: string; result: RegistryCandidatesResult | null; failed: boolean } | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
 
   const key = `${partyId}:${query.trim()}`
@@ -49,7 +59,7 @@ export function ScbPickerDialog({
       try {
         const params = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ''
         const res = await fetch(`/api/parties/${partyId}/enrich/candidates${params}`, { signal: ctrl.signal })
-        const json = (await res.json()) as { data?: ScbSearchResult }
+        const json = (await res.json()) as { data?: RegistryCandidatesResult }
         if (!cancelled) setLoaded({ key, result: res.ok ? (json.data ?? null) : null, failed: !res.ok })
       } catch {
         if (!cancelled) setLoaded({ key, result: null, failed: true })
@@ -64,6 +74,10 @@ export function ScbPickerDialog({
 
   const result = current?.result ?? null
   const candidates = result?.candidates ?? []
+  const foreign = !query.trim() && result?.foreign ? result.foreign : null
+  const foreignPlace = foreign?.country ? ` (${regionName(foreign.country, locale)})` : ''
+  // Other readings of the voucher text, offered when the one used found nothing.
+  const alternates = result && candidates.length === 0 && !query.trim() ? result.queries.filter((q) => q !== result.query) : []
   const chosen = candidates.find((c) => c.orgNumber === selected) ?? null
 
   return (
@@ -76,12 +90,25 @@ export function ScbPickerDialog({
               ? result.truncated
                 ? t('picker_too_many', { count: result.total, query: result.query })
                 : candidates.length === 0
-                  ? t('picker_none', { query: result.query })
+                  ? foreign
+                    ? t('picker_foreign', { name: foreign.name, place: foreignPlace })
+                    : t('picker_none', { query: result.query })
                   : t('picker_found', { count: candidates.length, query: result.query })
               : t('picker_body', { name: partyName })}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
+          {foreign && candidates.length === 0 && !loading ? <p className="text-sm text-muted-foreground">{t('picker_foreign_hint')}</p> : null}
+          {alternates.length > 0 && !loading ? (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>{t('picker_try_instead')}</span>
+              {alternates.map((q) => (
+                <Button key={q} type="button" variant="outline" size="sm" onClick={() => setQuery(q)}>
+                  {q}
+                </Button>
+              ))}
+            </div>
+          ) : null}
           <Input
             value={query}
             onChange={(e) => {
