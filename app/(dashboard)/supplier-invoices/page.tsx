@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { Fragment, useMemo, useState, useEffect, useRef } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
+import { groupRows } from '@/lib/lists/group-rows'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -145,8 +146,30 @@ function SortableHeader({
   )
 }
 
+
+// Row grouping (same pattern as the customer invoice list): 'none' (the flat
+// list) is the default; the other modes are opt-in via ?group=, and 'status'
+// reproduces the payment-queue sections.
+/** Mirrors PAYABLE_STATUSES in lib/invoices/bulk-reconcile-supplier-vouchers.ts:
+ *  a partially paid invoice still belongs in the payment queue. */
+const AWAITING_PAYMENT_STATUSES = ['registered', 'approved', 'overdue', 'partially_paid']
+const isAwaitingPayment = (status: string | null | undefined) =>
+  !!status && AWAITING_PAYMENT_STATUSES.includes(status)
+const STATUS_SECTION_ORDER = ['awaiting', 'settled'] as const
+/** Sentinel bucket for rows with no supplier or no date. */
+const UNKNOWN_GROUP_KEY = 'unknown'
+const GROUP_MODES = ['status', 'supplier', 'month', 'none'] as const
+type GroupMode = (typeof GROUP_MODES)[number]
+const GROUP_LABEL_KEYS: Record<GroupMode, string> = {
+  status: 'group_status',
+  supplier: 'group_supplier',
+  month: 'group_month',
+  none: 'group_none',
+}
+
 export default function SupplierInvoicesPage() {
   const t = useTranslations('supplier_invoices')
+  const locale = useLocale()
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
   const router = useRouter()
@@ -158,6 +181,10 @@ export default function SupplierInvoicesPage() {
   const [searchTerm, setSearchTerm] = useState('')
   // null = the API's default order (förfallodatum stigande).
   const [sort, setSort] = useState<SupplierInvoiceListSort | null>(null)
+  const [groupMode, setGroupMode] = useState<GroupMode>(() => {
+    const param = searchParams.get('group')
+    return param && GROUP_MODES.includes(param as never) ? (param as GroupMode) : 'none'
+  })
   // Fiscal-year scope (convention 8): null = all years.
   const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
   const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
@@ -271,6 +298,7 @@ export default function SupplierInvoicesPage() {
     return matchesTab && matchesSearch && matchesFy
   })
 
+
   // Tri-state cycle: asc → desc → back to the API default (due date asc).
   const updateSort = (column: SupplierInvoiceListSortColumn) => {
     setSort((current) => {
@@ -281,11 +309,91 @@ export default function SupplierInvoicesPage() {
 
   const sortedInvoices = sort ? sortSupplierInvoiceList(filteredInvoices, sort) : filteredInvoices
 
-  // Detail-pager context: the list as rendered (filtered + sorted), written
-  // when the user navigates into a row.
+  // Grouping: bucket the sorted rows through the shared helper and flatten
+  // back so paging, range selection and the detail pager walk the exact
+  // rendered order. Order is never touched here: for a payment queue the
+  // API's forfallodatum-ascending default is the order that matters (what
+  // falls due first goes first), and an active column sort governs the rest.
+  const { orderedInvoices, rowGroupKeys, groupMeta } = useMemo(() => {
+    const keys = new Map<string, string | null>()
+    if (groupMode === 'none') {
+      for (const inv of sortedInvoices) keys.set(inv.id, null)
+      return {
+        orderedInvoices: sortedInvoices,
+        rowGroupKeys: keys,
+        groupMeta: new Map<string, { label: string; count: number }>(),
+      }
+    }
+    const grouped =
+      groupMode === 'status'
+        ? groupRows(sortedInvoices, {
+            keyOf: (inv) => {
+              const key = isAwaitingPayment(inv.status) ? 'awaiting' : 'settled'
+              return { key, label: key }
+            },
+            order: STATUS_SECTION_ORDER,
+          })
+        : groupMode === 'supplier'
+          ? groupRows(sortedInvoices, {
+              keyOf: (inv) => {
+                const label = inv.supplier?.name ?? UNKNOWN_GROUP_KEY
+                // Bucket by id, not display name: two suppliers can share one.
+                return { key: inv.supplier_id ?? label, label }
+              },
+              order: (a, b) => a.label.localeCompare(b.label, 'sv'),
+            })
+          : groupRows(sortedInvoices, {
+              keyOf: (inv) => {
+                const key = (inv.invoice_date ?? '').slice(0, 7) || UNKNOWN_GROUP_KEY
+                return { key, label: key }
+              },
+              order: (a, b) => b.key.localeCompare(a.key),
+            })
+    const flat: typeof sortedInvoices = []
+    for (const entry of grouped.rows) {
+      keys.set(entry.row.id, entry.groupKey)
+      flat.push(entry.row)
+    }
+    return { orderedInvoices: flat, rowGroupKeys: keys, groupMeta: grouped.meta }
+  }, [groupMode, sortedInvoices])
+  // Status sections only earn headers when there is more than one of them;
+  // supplier/month grouping is an explicit ask, so headers always show.
+  const showGroupHeaders = groupMode !== 'none' && (groupMode !== 'status' || groupMeta.size > 1)
+
+  const monthFormatter = useMemo(
+    () => new Intl.DateTimeFormat(locale === 'en' ? 'en-GB' : 'sv-SE', { month: 'long', year: 'numeric' }),
+    [locale],
+  )
+  function groupHeaderLabel(key: string): string {
+    const meta = groupMeta.get(key)
+    const count = meta?.count ?? 0
+    if (groupMode === 'status') {
+      return key === 'awaiting' ? t('section_awaiting', { count }) : t('section_settled', { count })
+    }
+    if (groupMode === 'month' && key !== UNKNOWN_GROUP_KEY) {
+      const label = monthFormatter.format(new Date(`${key}-01T00:00:00`))
+      return `${label.charAt(0).toLocaleUpperCase('sv-SE')}${label.slice(1)} (${count})`
+    }
+    if (key === UNKNOWN_GROUP_KEY) return `${t('group_unknown')} (${count})`
+    return `${meta?.label ?? key} (${count})`
+  }
+
+  const updateGroup = (mode: GroupMode) => {
+    setGroupMode(mode)
+    const params = new URLSearchParams(searchParams.toString())
+    // Flat is the default, so it owns the URL-less state; every other mode
+    // is written out so it round-trips through reload and back-navigation.
+    if (mode === 'none') params.delete('group')
+    else params.set('group', mode)
+    const qs = params.toString()
+    router.replace(qs ? `/supplier-invoices?${qs}` : '/supplier-invoices', { scroll: false })
+  }
+
+  // Detail-pager context: the list as rendered (filtered + sectioned +
+  // sorted), written when the user navigates into a row.
   const rememberListContext = () => {
     writeListContext(listContextKey('supplier-invoices', company?.id), {
-      ids: sortedInvoices.map((inv) => inv.id),
+      ids: orderedInvoices.map((inv) => inv.id),
     })
   }
 
@@ -298,9 +406,10 @@ export default function SupplierInvoicesPage() {
   const allSelectableSelected =
     selectableInvoices.length > 0 && selectableInvoices.every((inv) => selectedIds.has(inv.id))
 
-  // Ranges walk the selectable rows in rendered (sorted) order.
+  // Ranges walk the selectable rows in rendered order: sorted, then sectioned
+  // by the active grouping, which is what the user sees on screen.
   const range = useRangeSelect({
-    visibleIds: sortedInvoices.filter(isBatchSelectable).map((inv) => inv.id),
+    visibleIds: orderedInvoices.filter(isBatchSelectable).map((inv) => inv.id),
     selectedIds,
     setSelectedIds,
   })
@@ -409,6 +518,16 @@ export default function SupplierInvoicesPage() {
                 : tab === 'to_pay' && toPayCount > 0
                   ? String(toPayCount)
                   : undefined,
+          }))}
+        />
+        <ContextPicker
+          value={groupMode}
+          onChange={(id) => updateGroup(id as GroupMode)}
+          ariaLabel={t('group_picker_aria')}
+          triggerLabel={`${t('group_by')} · ${t(GROUP_LABEL_KEYS[groupMode])}`}
+          items={GROUP_MODES.map((mode) => ({
+            id: mode,
+            label: t(GROUP_LABEL_KEYS[mode]),
           }))}
         />
         <ToolbarSearch
@@ -560,7 +679,7 @@ export default function SupplierInvoicesPage() {
               </tr>
             </thead>
             <tbody className="stagger-enter">
-              {sortedInvoices.map((inv) => {
+              {orderedInvoices.map((inv, rowIndex) => {
                 const chipVariant = STATUS_VARIANTS[inv.status] || 'secondary'
                 const chipLabel =
                   inv.status === 'paid' && inv.paid_at
@@ -573,9 +692,28 @@ export default function SupplierInvoicesPage() {
                 const canApprove =
                   canApproveSupplierInvoice(inv) && !inv.is_credit_note && canWrite
                 const selectable = canWrite && isBatchSelectable(inv)
+                // Same shape as the customer list: the section header is a
+                // sibling row decided from the previous row's key.
+                const groupKey = rowGroupKeys.get(inv.id) ?? null
+                const prevKey =
+                  rowIndex > 0 ? rowGroupKeys.get(orderedInvoices[rowIndex - 1].id) ?? null : undefined
+                const showHeader = showGroupHeaders && groupKey !== null && groupKey !== prevKey
                 return (
+                  <Fragment key={inv.id}>
+                    {showHeader && (
+                      <tr data-no-stagger>
+                        <td
+                          colSpan={canWrite ? 9 : 8}
+                          className={cn(
+                            'border-b border-border px-1 pb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground',
+                            rowIndex === 0 ? 'pt-4' : 'pt-6',
+                          )}
+                        >
+                          {groupHeaderLabel(groupKey)}
+                        </td>
+                      </tr>
+                    )}
                   <tr
-                    key={inv.id}
                     className={cn(
                       'group cursor-pointer transition-colors duration-150 hover:bg-secondary/35',
                       selectedIds.has(inv.id) && 'bg-secondary/40',
@@ -672,6 +810,7 @@ export default function SupplierInvoicesPage() {
                       )}
                     </td>
                   </tr>
+                  </Fragment>
                 )
               })}
             </tbody>
